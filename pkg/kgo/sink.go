@@ -1350,25 +1350,79 @@ type recBuf struct {
 	purged bool
 }
 
-// bufferRecord usually buffers a record, but does not if abortOnNewBatch is
-// true and if this function would create a new batch.
-//
-// This returns whether the promised record was processed or not (buffered or
-// immediately errored).
-func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
-	recBuf.mu.Lock()
-	defer recBuf.mu.Unlock()
-
+func (recBuf *recBuf) prebuffer(pr promisedRec) bool {
 	// We truncate to milliseconds to avoid some accumulated rounding error
 	// problems (see IBM/sarama#1455)
 	if pr.Timestamp.IsZero() {
 		pr.Timestamp = time.Now()
 	}
 	pr.Timestamp = pr.Timestamp.Truncate(time.Millisecond)
-	pr.Partition = recBuf.partition // set now, for the hook below
+	pr.Partition = recBuf.partition // set now, for the hook
 
 	if recBuf.purged {
 		recBuf.cl.producer.promiseRecord(pr, errPurged)
+		return true
+	}
+	return false
+}
+
+// bufferSyncRecord is relatively the same logic as bufferRecord minus linger
+// logic and draining, but we buffer into the provided batch. If a new batch
+// needs to be created for the record (and abortOnNewBatch is false), the new
+// batch is returned.
+func (recBuf *recBuf) bufferSyncRecord(pr promisedRec, abortOnNewBatch bool, batch *recBatch) (newBatch *recBatch, processed bool) {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+
+	if recBuf.prebuffer(pr) {
+		return nil, true
+	}
+
+	hook := func() {
+		recBuf.buffered.Add(1)
+		if recBuf.cl.producer.hooks != nil && len(recBuf.cl.producer.hooks.partitioned) > 0 {
+			for _, h := range recBuf.cl.producer.hooks.partitioned {
+				h.OnProduceRecordPartitioned(pr.Record, recBuf.sink.nodeID)
+			}
+		}
+	}
+
+	produceVersion := recBuf.sink.produceVersion.Load()
+	if batch != nil {
+		appended, _ := batch.tryBuffer(pr, produceVersion, recBuf.maxRecordBatchBytes, false)
+		if appended {
+			hook()
+			return nil, true
+		}
+	}
+
+	newBatch = recBuf.newRecordBatch()
+	appended, aborted := newBatch.tryBuffer(pr, produceVersion, recBuf.maxRecordBatchBytes, abortOnNewBatch)
+
+	switch {
+	case aborted: // not processed
+		recBuf.cl.prsPool.put(newBatch.records)
+		return nil, false
+	case appended: // appended
+		hook()
+		return newBatch, true
+	default: // processed as failure
+		recBuf.cl.prsPool.put(newBatch.records)
+		recBuf.cl.producer.promiseRecord(pr, kerr.MessageTooLarge)
+		return nil, true
+	}
+}
+
+// bufferRecord usually buffers a record, but does not if abortOnNewBatch is
+// true and if this function would create a new batch.
+//
+// This returns whether the promised record was processed or not (buffered or
+// immediately errored, vs aborted is not processed).
+func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+
+	if recBuf.prebuffer(pr) {
 		return true
 	}
 

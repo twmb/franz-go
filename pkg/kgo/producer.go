@@ -307,7 +307,9 @@ func (rs ProduceResults) First() (*Record, error) {
 // in depth description of how producing works.
 //
 // This function simply produces all records in one range loop and waits for
-// them all to be produced before returning.
+// them all to be produced before returning. If you want to produce large
+// batches of messages at once for higher performance, consider
+// [ProduceSyncBatch].
 func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults {
 	var (
 		wg      sync.WaitGroup
@@ -322,6 +324,185 @@ func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults
 	for _, r := range rs {
 		cl.Produce(ctx, r, promise)
 	}
+	wg.Wait()
+
+	return results
+}
+
+// ProduceSyncBatch synchronously produces batches of records. See the
+// [Produce] documentation for an in depth description of how producing works.
+//
+// This function can result in higher throughput than [Produce], but has a few
+// downsides:
+//
+//   - This function bypasses any [MaxBufferedRecords] and [MaxBufferedBytes] checks,
+//     instead building local batches of all records and immediately enqueueing all
+//     batches to be flushed.
+//
+//   - Some partitioners (any that implements [TopicPartitionerOnNewBatch]) are
+//     implemented to keep historical state of the last partitioned records;
+//     because batches are locally built before flushing, concurrent calls of this
+//     function can result in records being misdirected (rather than r1 and r2
+//     going to b1, and r3 and r4 going to b2, concurrent produce batch requests of
+//     r1,r2 and r3,r4 could result in r1,r3 and r2,r4 batching, or in the worst
+//     case, four batches).
+//
+//   - The final batch written is likely a partial batch and could have more
+//     records added if async producing with linger.
+//
+// While this function can be 50% faster than producing batches with [Produce],
+// you should benchmark when considering whether to use this function.
+func (cl *Client) ProduceSyncBatch(ctx context.Context, rs ...*Record) ProduceResults {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var (
+		wg      sync.WaitGroup
+		results = make(ProduceResults, 0, len(rs))
+		promise = func(r *Record, err error) {
+			results = append(results, ProduceResult{r, err})
+			wg.Done()
+		}
+
+		allN     int64
+		allSize  int64
+		tbatches = make(map[string]map[int32][]*recBatch)
+
+		// We assume that mostly all records will be produced to the
+		// same topic. We try to load the partition info only once.
+		// We keep only a 1-lookback cache via variables; any topic
+		// in the records triggers a new lookup.
+		//
+		// lastTopic is the topic we just looked at, all variables
+		// that follow in the block are the 1-lookback "cache".
+		lastTopic string
+		parts     *topicPartitions
+		partsData *topicPartitionsData
+		pbatches  map[int32][]*recBatch
+		lastP     int32
+		batches   []*recBatch
+
+		waitingTopics   int
+		waitingAt       int
+		waitingTopicsCh chan struct{}
+		partLoadRec     = promisedRec{
+			ctx: ctx,
+			promise: func(_ *Record, err error) {
+				waitingTopicsCh <- struct{}{}
+			},
+		}
+	)
+
+	wg.Add(len(rs))
+build:
+	lastTopic = ""
+	for i, r := range rs[waitingAt:] {
+		if r == nil {
+			// If any record errors for any reason before we produce,
+			// the promise is already called. We may loop back to the
+			// start after topic lookups . We nil the index to easily
+			// handle looping on records that may already be finished.
+			continue
+		}
+
+		// precheck sets the topic and pre-fails any record due to
+		// invalid size, transactional but not in one, etc.
+		userSize, shouldProduce := cl.producePrecheck(ctx, r, promise)
+		if !shouldProduce {
+			rs[i] = nil
+			continue
+		}
+
+		if r.Topic != lastTopic {
+			lastTopic = r.Topic
+
+			if partLoadRec.Record == nil {
+				partLoadRec.Record = &Record{Key: fakeSyncRecKey}
+				if waitingTopicsCh == nil {
+					waitingTopicsCh = make(chan struct{}, len(rs))
+				}
+			}
+			partLoadRec.Topic = r.Topic
+			partLoadRec.Context = r.Context
+
+			parts, partsData = cl.partitionsForTopicProduce(partLoadRec)
+			if parts == nil {
+				if waitingTopics == 0 {
+					waitingAt = i // resume here once all waits finish
+				}
+				waitingTopics++
+				partLoadRec.Record = nil // clear local copy for if a new topic load is needed
+				continue
+			}
+
+			pbatches = tbatches[r.Topic]
+			lastP = -1
+			if pbatches == nil {
+				pbatches = make(map[int32][]*recBatch)
+				tbatches[r.Topic] = pbatches
+			}
+		}
+
+		if waitingTopics > 0 {
+			continue
+		}
+
+		pr := promisedRec{ctx, promise, r}
+		if partsData.loadErr != nil && !kerr.IsRetriable(partsData.loadErr) {
+			cl.producer.promiseRecordBeforeBuf(pr, partsData.loadErr)
+			rs[i] = nil
+			continue
+		}
+
+		allN++
+		allSize += userSize
+
+		// With our own partitioning, we save all batches locally
+		// before enqueueing them en masse.
+		cl.doPartition(parts, partsData, pr, func(pick *topicPartition, pr promisedRec, abortOnNewBatch bool) bool {
+			if pick.records.partition != lastP {
+				batches = pbatches[pick.records.partition]
+			}
+			var batch *recBatch
+			if len(batches) > 0 {
+				batch = batches[len(batches)-1]
+			}
+			newBatch, processed := pick.records.bufferSyncRecord(pr, abortOnNewBatch, batch)
+			if newBatch != nil {
+				batches = append(batches, newBatch)
+				pbatches[pick.records.partition] = batches
+			}
+			return processed
+		})
+	}
+	if waitingTopics > 0 {
+		for i := 0; i < waitingTopics; i++ {
+			<-waitingTopicsCh
+			waitingTopics--
+		}
+		goto build
+	}
+
+	// Just before actually producing everything, fix the accounting.
+	cl.producer.mu.Lock()
+	cl.producer.bufferedRecords += allN
+	cl.producer.bufferedBytes += allSize
+	cl.producer.mu.Unlock()
+
+	for _, pbatches := range tbatches {
+		for _, batches := range pbatches {
+			for _, batch := range batches {
+				recBuf := batch.owner
+				recBuf.mu.Lock()
+				recBuf.batches = append(recBuf.batches, batch)
+				recBuf.lockedStopLinger()
+				recBuf.sink.maybeDrain()
+				recBuf.mu.Unlock()
+			}
+		}
+	}
+
 	wg.Wait()
 
 	return results
@@ -441,20 +622,9 @@ func (cl *Client) Produce(
 	cl.produce(ctx, r, promise, true)
 }
 
-func (cl *Client) produce(
-	ctx context.Context,
-	r *Record,
-	promise func(*Record, error),
-	block bool,
-) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (cl *Client) producePrecheck(ctx context.Context, r *Record, promise func(*Record, error)) (userSize int64, shouldProduce bool) {
 	if r.Context == nil {
 		r.Context = ctx
-	}
-	if promise == nil {
-		promise = noPromise
 	}
 	if r.Topic == "" || cl.cfg.defaultProduceTopicAlways {
 		r.Topic = cl.cfg.defaultProduceTopic
@@ -470,16 +640,36 @@ func (cl *Client) produce(
 	// We can now fail the rec after the buffered hook.
 	if r.Topic == "" {
 		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, errNoTopic)
-		return
+		return 0, false
 	}
 	if cl.cfg.txnID != nil && !p.producingTxn.Load() {
 		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, errNotInTransaction)
-		return
+		return 0, false
 	}
 
-	userSize := r.userSize()
+	userSize = r.userSize()
 	if cl.cfg.maxBufferedBytes > 0 && userSize > cl.cfg.maxBufferedBytes {
 		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, kerr.MessageTooLarge)
+		return 0, false
+	}
+	return userSize, true
+}
+
+func (cl *Client) produce(
+	ctx context.Context,
+	r *Record,
+	promise func(*Record, error),
+	block bool,
+) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if promise == nil {
+		promise = noPromise
+	}
+
+	userSize, shouldProduce := cl.producePrecheck(ctx, r, promise)
+	if !shouldProduce {
 		return
 	}
 
@@ -487,6 +677,8 @@ func (cl *Client) produce(
 	// configured limits. We try to keep the logic tight since this is
 	// effectively a global lock around producing.
 	var (
+		p = &cl.producer
+
 		nextBufRecs, nextBufBytes int64
 		overMaxRecs, overMaxBytes bool
 
@@ -686,10 +878,36 @@ func (cl *Client) loadPartsAndPartition(pr promisedRec) {
 	if parts == nil { // saved in unknownTopics
 		return
 	}
-	cl.doPartition(parts, partsData, pr)
+	cl.doPartition(parts, partsData, pr, asyncOnPick)
 }
 
-func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitionsData, pr promisedRec) {
+// Used for sync batch producing, if any topic does not exist when we want to
+// partition en masse, we trigger async topic lookups and wait before we
+// progress to creating bulk batches. The caller uses a promise to wait for all
+// loads. We do not send this fake record through any normal buffering or
+// unbuffering.
+var fakeSyncRecKey = []byte{0}
+
+// filterSyncAndPartition is called after a metadata load; if the load was
+// triggered by a fake sync record, we promise without partitioning.
+func (cl *Client) filterSyncAndPartition(parts *topicPartitions, partsData *topicPartitionsData, pr promisedRec) {
+	if len(pr.Record.Key) > 0 && &pr.Record.Key[0] == &fakeSyncRecKey[0] {
+		pr.promise(nil, partsData.loadErr)
+		return
+	}
+	cl.doPartition(parts, partsData, pr, asyncOnPick)
+}
+
+func asyncOnPick(pick *topicPartition, pr promisedRec, abortOnNewBatch bool) bool {
+	return pick.records.bufferRecord(pr, abortOnNewBatch) // KIP-480
+}
+
+func (cl *Client) doPartition(
+	parts *topicPartitions,
+	partsData *topicPartitionsData,
+	pr promisedRec,
+	onPick func(pick *topicPartition, pr promisedRec, abortOnNewBatch bool) bool,
+) {
 	if partsData.loadErr != nil && !kerr.IsRetriable(partsData.loadErr) {
 		cl.producer.promiseRecord(pr, partsData.loadErr)
 		return
@@ -730,7 +948,7 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 
 	onNewBatch, _ := parts.partitioner.(TopicPartitionerOnNewBatch)
 	abortOnNewBatch := onNewBatch != nil
-	processed := partition.records.bufferRecord(pr, abortOnNewBatch) // KIP-480
+	processed := onPick(partition, pr, abortOnNewBatch) // KIP-480
 	if !processed {
 		onNewBatch.OnNewBatch()
 
@@ -746,7 +964,7 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 			return
 		}
 		partition = mapping[pick]
-		partition.records.bufferRecord(pr, false) // KIP-480
+		onPick(partition, pr, false)
 	}
 }
 

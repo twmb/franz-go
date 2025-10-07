@@ -436,7 +436,7 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 		})
 	} else {
 		for _, pr := range unknown.buffered {
-			cl.doPartition(l, lv, pr)
+			cl.filterSyncAndPartition(l, lv, pr)
 		}
 	}
 }
