@@ -436,7 +436,7 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 		})
 	} else {
 		for _, pr := range unknown.buffered {
-			cl.doPartitionRecord(l, lv, pr)
+			cl.doPartition(l, lv, pr)
 		}
 	}
 }

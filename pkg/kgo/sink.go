@@ -136,7 +136,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 
 		recBuf.batchDrainIdx++
 		recBuf.seq = incrementSequence(recBuf.seq, int32(len(batch.records)))
-		moreToDrain = moreToDrain || recBuf.tryStopLingerForDraining()
+		moreToDrain = recBuf.tryStopLingerForDraining() || moreToDrain
 		recBuf.mu.Unlock()
 
 		txnBuilder.add(recBuf)
@@ -306,9 +306,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		}
 	}()
 
-	// We could have been triggered from a metadata update even though the
-	// user is not producing at all. If we have no buffered records, let's
-	// avoid potentially creating a producer ID.
+	// We could have some spurious produce calls while wrapping up.
 	if s.cl.BufferedProduceRecords() == 0 {
 		return false
 	}
@@ -415,7 +413,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// sequence numbers using our new producer ID, which will then again
 	// fail with OOOSN.
 	req, txnReq, moreToDrain := s.createReq(id, epoch)
-	if len(req.batches) == 0 { // everything was failing or lingering
+	if len(req.batches) == 0 { // everything was failing or lingering, or what is buffered is in flight already
 		return moreToDrain
 	}
 
@@ -1392,9 +1390,11 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 
 		switch {
 		case aborted: // not processed
+			recBuf.cl.prsPool.put(newBatch.records)
 			return false
 		case appended: // we return true below
 		default: // processed as failure
+			recBuf.cl.prsPool.put(newBatch.records)
 			recBuf.cl.producer.promiseRecord(pr, kerr.MessageTooLarge)
 			return true
 		}
@@ -1413,14 +1413,13 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		if newBatch && !onDrainBatch ||
 			// If this is the first batch, try lingering; if
 			// we cannot, we are being flushed and must drain.
-			onDrainBatch && !recBuf.lockedMaybeStartLinger() {
+			onDrainBatch && !recBuf.lockedMaybeLinger() {
 			recBuf.lockedStopLinger()
 			recBuf.sink.maybeDrain()
 		}
 	}
 
 	recBuf.buffered.Add(1)
-
 	if recBuf.cl.producer.hooks != nil && len(recBuf.cl.producer.hooks.partitioned) > 0 {
 		for _, h := range recBuf.cl.producer.hooks.partitioned {
 			h.OnProduceRecordPartitioned(pr.Record, recBuf.sink.nodeID)
@@ -1438,19 +1437,23 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 // lingering, then we are flushing and also indicate there is more to drain.
 func (recBuf *recBuf) tryStopLingerForDraining() bool {
 	recBuf.lockedStopLinger()
-	canLinger := recBuf.cl.cfg.linger == 0
+	canLinger := recBuf.cl.cfg.linger != 0
 	moreToDrain := !canLinger && len(recBuf.batches) > recBuf.batchDrainIdx ||
 		canLinger && (len(recBuf.batches) > recBuf.batchDrainIdx+1 ||
-			len(recBuf.batches) == recBuf.batchDrainIdx+1 && !recBuf.lockedMaybeStartLinger())
+			len(recBuf.batches) == recBuf.batchDrainIdx+1 && !recBuf.lockedMaybeLinger())
 	return moreToDrain
 }
 
 // Begins a linger timer unless the producer is being flushed.
-func (recBuf *recBuf) lockedMaybeStartLinger() bool {
+func (recBuf *recBuf) lockedMaybeLinger() bool {
 	if recBuf.cl.producer.flushing.Load() > 0 || recBuf.cl.producer.blocked.Load() > 0 {
 		return false
 	}
-	recBuf.lingering = time.AfterFunc(recBuf.cl.cfg.linger, recBuf.sink.maybeDrain)
+	if recBuf.lingering == nil {
+		recBuf.lingering = time.AfterFunc(recBuf.cl.cfg.linger, func() {
+			recBuf.sink.maybeDrain()
+		})
+	}
 	return true
 }
 
@@ -1751,7 +1754,12 @@ func (b *recBatch) decInflight() {
 		return
 	}
 	recBuf.inflightOnSink = nil
-	if recBuf.batchDrainIdx != len(recBuf.batches) {
+
+	nbufBatches := len(recBuf.batches) - recBuf.batchDrainIdx
+	if recBuf.cl.cfg.linger == 0 && nbufBatches > 0 ||
+		nbufBatches > 1 ||
+		nbufBatches == 1 && !recBuf.lockedMaybeLinger() {
+		recBuf.lockedStopLinger()
 		recBuf.sink.maybeDrain()
 	}
 }

@@ -41,6 +41,11 @@ var (
 	linger              = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
 	batchMaxBytes       = flag.Int("batch-max-bytes", 1000000, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
 
+	batchRecs  = flag.Int("batch-recs", 1, "number of records to create before produce calls")
+	psync      = flag.Bool("psync", false, "produce synchronously")
+
+	pgoros = flag.Int("pgoros", 1, "number of goroutines concurrently spawn to produce")
+
 	logLevel = flag.String("log-level", "", "if non-empty, use a basic logger with this log level (debug, info, warn, error)")
 
 	consume = flag.Bool("consume", false, "if true, consume rather than produce")
@@ -223,23 +228,8 @@ func main() {
 
 	go printRate()
 
-	switch *consume {
-	case false:
-		var num int64
-		for {
-			cl.Produce(context.Background(), newRecord(num), func(r *kgo.Record, err error) {
-				if *useStaticValue {
-					staticPool.Put(r)
-				} else if *poolProduce {
-					p.Put(r)
-				}
-				chk(err, "produce error: %v", err)
-				atomic.AddInt64(&rateRecs, 1)
-				atomic.AddInt64(&rateBytes, int64(*recordBytes))
-			})
-			num++
-		}
-	case true:
+	switch {
+	case *consume:
 		for {
 			fetches := cl.PollFetches(context.Background())
 			fetches.EachError(func(t string, p int32, err error) {
@@ -254,6 +244,61 @@ func main() {
 			atomic.AddInt64(&rateRecs, recs)
 			atomic.AddInt64(&rateBytes, bytes)
 		}
+	case !*psync:
+		var num atomic.Int64
+		for range *pgoros {
+			go func() {
+				var recs []*kgo.Record
+				for {
+					recs = recs[:0]
+					for range *batchRecs {
+						recs = append(recs, newRecord(num.Add(1)))
+					}
+					for _, r := range recs {
+						cl.Produce(context.Background(), r, func(r *kgo.Record, err error) {
+							if *useStaticValue {
+								staticPool.Put(r)
+							} else if *poolProduce {
+								p.Put(r)
+							}
+							chk(err, "produce error: %v", err)
+							atomic.AddInt64(&rateRecs, 1)
+							atomic.AddInt64(&rateBytes, int64(*recordBytes))
+						})
+					}
+				}
+			}()
+		}
+		select {}
+	default:
+		var num atomic.Int64
+		for range *pgoros {
+			go func() {
+				var recs []*kgo.Record
+				for {
+					recs = recs[:0]
+					for range *batchRecs {
+						recs = append(recs, newRecord(num.Add(1)))
+					}
+
+					ress := cl.ProduceSync(context.Background(), recs...)
+					go func() {
+						for _, res := range ress {
+							r, err := res.Record, res.Err
+							if *useStaticValue {
+								staticPool.Put(r)
+							} else if *poolProduce {
+								p.Put(r)
+							}
+							chk(err, "produce error: %v", err)
+							atomic.AddInt64(&rateRecs, 1)
+							atomic.AddInt64(&rateBytes, int64(*recordBytes))
+						}
+					}()
+				}
+			}()
+		}
+		select {}
 	}
 }
 

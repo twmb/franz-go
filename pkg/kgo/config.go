@@ -281,10 +281,9 @@ func (cfg *cfg) validate() error {
 
 		// For batches, we want at least 512 (reasonable), and the
 		// upper limit is the max num when a uvarint transitions from 4
-		// to 5 bytes. The upper limit is also more than reasonable
-		// (256MiB).
+		// to 5 bytes. The upper limit is also more than reasonable (1G).
 		{name: "max record batch bytes", v: int64(cfg.maxRecordBatchBytes), allowed: 512, badcmp: i64lt},
-		{name: "max record batch bytes", v: int64(cfg.maxRecordBatchBytes), allowed: 256 << 20, badcmp: i64gt},
+		{name: "max record batch bytes", v: int64(cfg.maxRecordBatchBytes), allowed: 1 << 30, badcmp: i64gt},
 
 		// We do not want the broker write bytes to be less than the
 		// record batch bytes, nor the read bytes to be less than what
@@ -1202,17 +1201,8 @@ func ProducerOnDataLossDetected(fn func(string, int32)) ProducerOpt {
 // ProducerLinger sets how long individual topic partitions will linger waiting
 // for more records before triggering a request to be built.
 //
-// Note that this option should only be used in low volume producers. The only
-// benefit of lingering is to potentially build a larger batch to reduce cpu
-// usage on the brokers if you have many producers all producing small amounts.
-//
 // If a produce request is triggered by any topic partition, all partitions
 // with a possible batch to be sent are used and all lingers are reset.
-//
-// As mentioned, the linger is specific to topic partition. A high volume
-// producer will likely be producing to many partitions; it is both unnecessary
-// to linger in this case and inefficient because the client will have many
-// timers running (and stopping and restarting) unnecessarily.
 func ProducerLinger(linger time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.linger = linger }}
 }
