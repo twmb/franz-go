@@ -2611,7 +2611,7 @@ type mappedMetadataTopic struct {
 // exist.
 func (cl *Client) maybeDeleteMappedMetadata(unknownTopic bool, ts ...string) (shouldRetry bool) {
 	if len(ts) == 0 {
-		return
+		return shouldRetry
 	}
 
 	var min time.Duration

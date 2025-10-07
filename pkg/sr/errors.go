@@ -183,16 +183,12 @@ func IsNotFoundError(code int) bool {
 	return code >= 40401 && code <= 40409
 }
 
-
 // IsInvalidRequestError returns true if the error code indicates an invalid request.
 func IsInvalidRequestError(code int) bool {
 	return code >= 42201 && code <= 42211
 }
 
-
 // IsServerError returns true if the error code indicates a server-side error.
 func IsServerError(code int) bool {
 	return code >= 50001 && code <= 50005
 }
-
-

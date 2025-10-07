@@ -388,7 +388,7 @@ func deserializeUserData(userdata []byte, base []topicPartition) (memberPlan []t
 	if b.Complete() != nil {
 		memberPlan = memberPlan[:0]
 	}
-	return
+	return memberPlan, generation
 }
 
 // assignUnassignedAndInitGraph is a long function that assigns unassigned

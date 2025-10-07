@@ -1278,7 +1278,7 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 			g.cfg.logger.Log(LogLevelInfo, "join returned UnknownMemberID, rejoining without a member id", "group", g.cfg.group)
 			return true, "", nil, nil
 		}
-		return // Request retries as necessary, so this must be a failure
+		return restart, protocol, plan, err // Request retries as necessary, so this must be a failure
 	}
 	g.memberGen.store(resp.MemberID, resp.Generation)
 
@@ -1354,7 +1354,7 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 			"leader", false,
 		)
 	}
-	return
+	return restart, protocol, plan, err
 }
 
 type strptr struct {
