@@ -1438,7 +1438,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 // lingering, then we are flushing and also indicate there is more to drain.
 func (recBuf *recBuf) tryStopLingerForDraining() bool {
 	recBuf.lockedStopLinger()
-	canLinger := recBuf.cl.cfg.linger == 0
+	canLinger := recBuf.cl.cfg.linger != 0
 	moreToDrain := !canLinger && len(recBuf.batches) > recBuf.batchDrainIdx ||
 		canLinger && (len(recBuf.batches) > recBuf.batchDrainIdx+1 ||
 			len(recBuf.batches) == recBuf.batchDrainIdx+1 && !recBuf.lockedMaybeStartLinger())
