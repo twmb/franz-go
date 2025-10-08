@@ -7,6 +7,8 @@ ConfigResourceType int8 (
   2: TOPIC
   4: BROKER
   8: BROKER_LOGGER
+  16: CLIENT_METRICS
+  32: GROUP_CONFIG
 )
 
 // Where a config entry is from. If there are no config synonyms,
@@ -24,6 +26,10 @@ ConfigSource int8 (
   5: DEFAULT_CONFIG
   // Broker logger; see KIP-412.
   6: DYNAMIC_BROKER_LOGGER_CONFIG
+  // Client metrics; see KIP-714 / Kafka commit a53147e7d90.
+  7: CLIENT_METRICS_CONFIG
+  // Group configs; see KAFKA-14511 / Kafka commit bbdf79e1b4f>
+  8: GROUP_CONFIG
 )
 
 // A configuration data type.
@@ -144,5 +150,8 @@ ControlRecordKeyType int8 (
   0: ABORT
   1: COMMIT
   2: QUORUM_REASSIGNMENT
-  3: LEADER_CHANGE
+  3: SNAPSHOT_HEADER
+  4: SNAPSHOT_FOOTER
+  5: KRAFT_VERSION
+  6: KRAFT_VOTERS
 )

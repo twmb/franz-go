@@ -13,7 +13,7 @@
 //
 // Version 15 adds the ReplicaState which includes new field ReplicaEpoch and
 // the ReplicaID, and deprecates the old ReplicaID (KIP-903).
-FetchRequest => key 1, max version 17, flexible v12+
+FetchRequest => key 1, max version 18, flexible v12+
   // The cluster ID, if known. This is used to validate metadata fetches
   // prior to broker registration.
   ClusterID: nullable-string(null) // tag 0
@@ -89,6 +89,11 @@ FetchRequest => key 1, max version 17, flexible v12+
       // The directory ID of the follower fetching. This is not relevant for
       // clients; see KIP-853.
       ReplicaDirectoryID: uuid // tag 0
+      // The high-watermark known by the replica. -1 if the high-watermark is
+      // not known and 9223372036854775807 if the feature is not supported.
+      // For KIP-1166; not relevant for clients. Should not have forced a
+      // version bump in the protocol...
+      HighWatermark: int64(9223372036854775807) // tag 1
   // ForgottenTopics contains topics and partitions that a fetch session
   // wants to remove from its session.
   //

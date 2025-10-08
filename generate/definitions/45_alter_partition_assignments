@@ -2,8 +2,11 @@
 // Kafka 2.4.0, is a request to reassign partitions to certain brokers.
 //
 // ACL wise, this requires ALTER on CLUSTER.
-AlterPartitionAssignmentsRequest => key 45, max version 0, flexible v0+, admin
+AlterPartitionAssignmentsRequest => key 45, max version 1, flexible v0+, admin
   TimeoutMillis(60000)
+  // The option indicating whether changing the replication factor of any given
+  // partition as part of this request is a valid move.
+  AllowReplicationFactorChange: bool(true) // v1+
   // Topics are topics for which to reassign partitions of.
   Topics: [=>]
     // Topic is a topic to reassign the partitions of.
@@ -19,6 +22,9 @@ AlterPartitionAssignmentsRequest => key 45, max version 0, flexible v0+, admin
 // AlterPartitionAssignmentsResponse is returned for an AlterPartitionAssignmentsRequest.
 AlterPartitionAssignmentsResponse =>
   ThrottleMillis
+  // The option indicating whether changing the replication factor of any given
+  // partition as part of the request was allowed.
+  AllowReplicationFactorChange: bool(true) // v1+
   // ErrorCode is any global (applied to all partitions) error code.
   ErrorCode: int16
   // ErrorMessage is any global (applied to all partitions) error message.

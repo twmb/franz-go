@@ -1,5 +1,5 @@
 // For KIP-664, ListTransactionsRequest lists transactions.
-ListTransactionsRequest => key 66, max version 1, flexible v0+
+ListTransactionsRequest => key 66, max version 2, flexible v0+
   // The transaction states to filter by: if empty, all transactions are
   // returned; if non-empty, then only transactions matching one of the
   // filtered states will be returned.
@@ -14,6 +14,11 @@ ListTransactionsRequest => key 66, max version 1, flexible v0+
   // returned; otherwise, only transactions running longer than this duration
   // will be returned.
   DurationFilterMillis: int64(-1) // v1+
+  // The transactional ID regular expression pattern to filter by: if it is
+  // empty or null, all transactions are returned; otherwise then only the
+  // transactions matching the given regular expression will be returned.
+  // Uses re2 syntax.
+  TransactionalIDPattern: nullable-string // v2+
 
 // ListTransactionsResponse is a response to a ListTransactionsRequest.
 ListTransactionsResponse =>
@@ -24,6 +29,9 @@ ListTransactionsResponse =>
   //
   // COORDINATOR_NOT_AVAILABLE is returned if the coordinator receiving this
   // request is shutting down.
+  //
+  // INVALID_REGULAR_EXPRESSION is returned if using an invalid regex in
+  // the request's transactional id pattern field.
   ErrorCode: int16
   // Set of state filters provided in the request which were unknown to the
   // transaction coordinator.
