@@ -1,0 +1,56 @@
+// DescribeShareGroupOffsetsRequest is a request to describe share group offsets.
+DescribeShareGroupOffsetsRequest => key 90, max version 0, flexible v0+
+  // Groups are the groups to describe offsets for.
+  Groups: [=>]
+    // GroupID is the group identifier.
+    GroupID: string
+    // Topics are the topics to describe offsets for, or null for all
+    // topic-partitions.
+    Topics: nullable[=>]
+      // Topic is the topic name.
+      Topic: string
+      // Partitions are the partitions.
+      Partitions: [int32]
+
+// DescribeShareGroupOffsetsResponse is a response for a DescribeShareGroupOffsetsRequest.
+//
+// Supported errors:
+// - GROUP_AUTHORIZATION_FAILED (version 0+)
+// - TOPIC_AUTHORIZATION_FAILED (version 0+)
+// - NOT_COORDINATOR (version 0+)
+// - COORDINATOR_NOT_AVAILABLE (version 0+)
+// - COORDINATOR_LOAD_IN_PROGRESS (version 0+)
+// - GROUP_ID_NOT_FOUND (version 0+)
+// - INVALID_REQUEST (version 0+)
+// - UNKNOWN_SERVER_ERROR (version 0+)
+DescribeShareGroupOffsetsResponse =>
+  ThrottleMillis
+  // Groups are the results for each group.
+  Groups: [=>]
+    // GroupID is the group identifier.
+    GroupID: string
+    // Topics are the results for each topic.
+    Topics: [=>]
+      // Topic is the topic name.
+      Topic: string
+      // TopicID is the unique topic ID.
+      TopicID: uuid
+      // Partitions are the partition results.
+      Partitions: [=>]
+        // Partition is the partition index.
+        Partition: int32
+        // StartOffset is the share-partition start offset.
+        StartOffset: int64
+        // LeaderEpoch is the leader epoch of the partition.
+        LeaderEpoch: int32
+        // ErrorCode is the partition-level error code, or 0 if there was no
+        // error.
+        ErrorCode: int16
+        // ErrorMessage is the partition-level error message, or null if there
+        // was no error.
+        ErrorMessage: nullable-string
+    // ErrorCode is the group-level error code, or 0 if there was no error.
+    ErrorCode: int16
+    // ErrorMessage is the group-level error message, or null if there was no
+    // error.
+    ErrorMessage: nullable-string

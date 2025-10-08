@@ -1,0 +1,55 @@
+// WriteShareGroupStateRequest is a request to write share group state.
+WriteShareGroupStateRequest => key 85, max version 0, flexible v0+
+  // GroupID is the group identifier.
+  GroupID: string
+  // Topics are the data for the topics.
+  Topics: [=>]
+    // TopicID is the topic identifier.
+    TopicID: uuid
+    // Partitions are the data for the partitions.
+    Partitions: [=>]
+      // Partition is the partition index.
+      Partition: int32
+      // StateEpoch is the state epoch of the share-partition.
+      StateEpoch: int32
+      // LeaderEpoch is the leader epoch of the share-partition.
+      LeaderEpoch: int32
+      // StartOffset is the share-partition start offset, or -1 if the start
+      // offset is not being written.
+      StartOffset: int64
+      // StateBatches are the state batches for the share-partition.
+      StateBatches: [=>]
+        // FirstOffset is the first offset of this state batch.
+        FirstOffset: int64
+        // LastOffset is the last offset of this state batch.
+        LastOffset: int64
+        // DeliveryState is the delivery state -
+        // 0:Available,2:Acked,4:Archived.
+        DeliveryState: int8
+        // DeliveryCount is the delivery count.
+        DeliveryCount: int16
+
+// WriteShareGroupStateResponse is a response for a WriteShareGroupStateRequest.
+//
+// Supported errors:
+// - NOT_COORDINATOR (version 0+)
+// - COORDINATOR_NOT_AVAILABLE (version 0+)
+// - COORDINATOR_LOAD_IN_PROGRESS (version 0+)
+// - GROUP_ID_NOT_FOUND (version 0+)
+// - UNKNOWN_TOPIC_OR_PARTITION (version 0+)
+// - FENCED_LEADER_EPOCH (version 0+)
+// - FENCED_STATE_EPOCH (version 0+)
+// - INVALID_REQUEST (version 0+)
+WriteShareGroupStateResponse =>
+  // Topics are the write results.
+  Topics: [=>]
+    // TopicID is the topic identifier.
+    TopicID: uuid
+    // Partitions are the results for the partitions.
+    Partitions: [=>]
+      // Partition is the partition index.
+      Partition: int32
+      // ErrorCode is the error code, or 0 if there was no error.
+      ErrorCode: int16
+      // ErrorMessage is the error message, or null if there was no error.
+      ErrorMessage: nullable-string

@@ -1,0 +1,36 @@
+// DeleteShareGroupStateRequest is a request to delete share group state.
+DeleteShareGroupStateRequest => key 86, max version 0, flexible v0+
+  // GroupID is the group identifier.
+  GroupID: string
+  // Topics are the data for the topics.
+  Topics: [=>]
+    // TopicID is the topic identifier.
+    TopicID: uuid
+    // Partitions are the data for the partitions.
+    Partitions: [=>]
+      // Partition is the partition index.
+      Partition: int32
+
+// DeleteShareGroupStateResponse is a response for a DeleteShareGroupStateRequest.
+//
+// Supported errors:
+// - NOT_COORDINATOR (version 0+)
+// - COORDINATOR_NOT_AVAILABLE (version 0+)
+// - COORDINATOR_LOAD_IN_PROGRESS (version 0+)
+// - GROUP_ID_NOT_FOUND (version 0+)
+// - UNKNOWN_TOPIC_OR_PARTITION (version 0+)
+// - FENCED_STATE_EPOCH (version 0+)
+// - INVALID_REQUEST (version 0+)
+DeleteShareGroupStateResponse =>
+  // Topics are the delete results.
+  Topics: [=>]
+    // TopicID is the topic identifier.
+    TopicID: uuid
+    // Partitions are the results for the partitions.
+    Partitions: [=>]
+      // Partition is the partition index.
+      Partition: int32
+      // ErrorCode is the error code, or 0 if there was no error.
+      ErrorCode: int16
+      // ErrorMessage is the error message, or null if there was no error.
+      ErrorMessage: nullable-string

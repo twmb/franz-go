@@ -1,0 +1,132 @@
+// ShareFetchRequest is a request to fetch records from share groups.
+//
+// Version 0 was used for early access of KIP-932 in Apache Kafka 4.0 but
+// removed in Apacke Kafka 4.1.
+//
+// Version 1 is the initial stable version (KIP-932).
+ShareFetchRequest => key 78, max version 1, flexible v0+
+  // GroupID is the group identifier.
+  GroupID: nullable-string
+  // MemberID is the member ID.
+  MemberID: nullable-string
+  // ShareSessionEpoch is the current share session epoch: 0 to open a share
+  // session; -1 to close it; otherwise increments for consecutive requests.
+  ShareSessionEpoch: int32
+  // MaxWaitMillis is the maximum time in milliseconds to wait for the
+  // response.
+  MaxWaitMillis: int32
+  // MinBytes is the minimum bytes to accumulate in the response.
+  MinBytes: int32
+  // MaxBytes is the maximum bytes to fetch. See KIP-74 for cases where this
+  // limit may not be honored.
+  MaxBytes: int32(0x7fffffff)
+  // MaxRecords is the maximum number of records to fetch. This limit can be
+  // exceeded for alignment of batch boundaries.
+  MaxRecords: int32 // v1+
+  // BatchSize is the optimal number of records for batches of acquired
+  // records and acknowledgements.
+  BatchSize: int32 // v1+
+  // Topics are the topics to fetch.
+  Topics: [=>]
+    // TopicID is the unique topic ID.
+    TopicID: uuid
+    // Partitions are the partitions to fetch.
+    Partitions: [=>]
+      // Partition is the partition index.
+      Partition: int32
+      // PartitionMaxBytes is the maximum bytes to fetch from this partition.
+      // 0 when only acknowledgement with no fetching is required. See KIP-74
+      // for cases where this limit may not be honored.
+      PartitionMaxBytes: int32
+      // AcknowledgementBatches are record batches to acknowledge.
+      AcknowledgementBatches: [=>]
+        // FirstOffset is the first offset of batch of records to acknowledge.
+        FirstOffset: int64
+        // LastOffset is the last offset (inclusive) of batch of records to
+        // acknowledge.
+        LastOffset: int64
+        // AcknowledgeTypes is an array of acknowledge types -
+        // 0:Gap,1:Accept,2:Release,3:Reject.
+        AcknowledgeTypes: [int8]
+  // ForgottenTopicsData are the partitions to remove from this share session.
+  ForgottenTopicsData: [=>]
+    // TopicID is the unique topic ID.
+    TopicID: uuid
+    // Partitions are the partitions indexes to forget.
+    Partitions: [int32]
+
+// ShareFetchResponse is a response for a ShareFetchRequest.
+ShareFetchResponse =>
+  ThrottleMillis
+  // ErrorCode is the top-level response error code.
+  //
+  // Supported errors for ErrorCode and AcknowledgeErrorCode:
+  // - GROUP_AUTHORIZATION_FAILED (version 0+)
+  // - TOPIC_AUTHORIZATION_FAILED (version 0+)
+  // - SHARE_SESSION_NOT_FOUND (version 0+)
+  // - INVALID_SHARE_SESSION_EPOCH (version 0+)
+  // - UNKNOWN_TOPIC_OR_PARTITION (version 0+)
+  // - NOT_LEADER_OR_FOLLOWER (version 0+)
+  // - UNKNOWN_TOPIC_ID (version 0+)
+  // - INVALID_RECORD_STATE (version 0+) - only for AcknowledgeErrorCode
+  // - KAFKA_STORAGE_ERROR (version 0+)
+  // - CORRUPT_MESSAGE (version 0+)
+  // - INVALID_REQUEST (version 0+)
+  // - UNKNOWN_SERVER_ERROR (version 0+)
+  ErrorCode: int16
+  // ErrorMessage is the top-level error message, or null if there was no
+  // error.
+  ErrorMessage: nullable-string
+  // AcquisitionLockTimeoutMillis is the time in milliseconds for which the
+  // acquired records are locked.
+  AcquisitionLockTimeoutMillis: int32 // v1+
+  // Topics are the response topics.
+  Topics: [=>]
+    // TopicID is the unique topic ID.
+    TopicID: uuid
+    // Partitions are the topic partitions.
+    Partitions: [=>]
+      // Partition is the partition index.
+      Partition: int32
+      // ErrorCode is the fetch error code, or 0 if there was no fetch error.
+      ErrorCode: int16
+      // ErrorMessage is the fetch error message, or null if there was no
+      // fetch error.
+      ErrorMessage: nullable-string
+      // AcknowledgeErrorCode is the acknowledge error code, or 0 if there was
+      // no acknowledge error.
+      AcknowledgeErrorCode: int16
+      // AcknowledgeErrorMessage is the acknowledge error message, or null if
+      // there was no acknowledge error.
+      AcknowledgeErrorMessage: nullable-string
+      // CurrentLeader is the current leader of the partition.
+      CurrentLeader: =>
+        // LeaderID is the ID of the current leader or -1 if the leader is
+        // unknown.
+        LeaderID: int32
+        // LeaderEpoch is the latest known leader epoch.
+        LeaderEpoch: int32
+      // Records is the record data.
+      Records: nullable-bytes
+      // AcquiredRecords are the acquired records.
+      AcquiredRecords: [=>]
+        // FirstOffset is the earliest offset in this batch of acquired
+        // records.
+        FirstOffset: int64
+        // LastOffset is the last offset of this batch of acquired records.
+        LastOffset: int64
+        // DeliveryCount is the delivery count of this batch of acquired
+        // records.
+        DeliveryCount: int16
+  // NodeEndpoints are endpoints for all current leaders enumerated in
+  // PartitionData with error NOT_LEADER_OR_FOLLOWER.
+  NodeEndpoints: [=>]
+    // NodeID is the ID of the associated node.
+    NodeID: int32
+    // Host is the node's hostname.
+    Host: string
+    // Port is the node's port.
+    Port: int32
+    // Rack is the rack of the node, or null if it has not been assigned to a
+    // rack.
+    Rack: nullable-string
