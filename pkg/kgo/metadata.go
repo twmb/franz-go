@@ -568,6 +568,7 @@ func (mp metadataPartition) newPartition(cl *Client, isProduce bool) *topicParti
 		p.records = &recBuf{
 			cl:                  cl,
 			topic:               mp.topic,
+			topicID:             mp.topicID,
 			partition:           mp.partition,
 			maxRecordBatchBytes: cl.maxRecordBatchBytesForTopic(mp.topic),
 			recBufsIdx:          -1,

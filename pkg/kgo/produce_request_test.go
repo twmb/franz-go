@@ -276,155 +276,157 @@ func TestPromisedRecAppendTo(t *testing.T) {
 
 func TestRecBatchAppendTo(t *testing.T) {
 	t.Parallel()
-	// golden, uncompressed
-	kbatch := kmsg.RecordBatch{
-		FirstOffset:          0,
-		Length:               0, // set below,
-		PartitionLeaderEpoch: -1,
-		Magic:                2,
-		CRC:                  0,      // fill below
-		Attributes:           0x0010, // transactional bit set
-		LastOffsetDelta:      1,
-		FirstTimestamp:       20,
-		MaxTimestamp:         24, // recBatch timestamp delta will be 4
-		ProducerID:           12,
-		ProducerEpoch:        11,
-		FirstSequence:        10,
-		NumRecords:           2,
-		Records: append(
-			(&kmsg.Record{
-				Length:         1,
-				TimestampDelta: 2,
-				OffsetDelta:    0, // must be zero
-				Key:            []byte("key 1"),
-				Value:          []byte("value 1"),
-				Headers: []kmsg.Header{
-					{Key: "header key 1", Value: []byte("header value 1")},
-					{Key: "header key 2", Value: []byte("header value 2")},
-				},
-			}).AppendTo(nil),
-			(&kmsg.Record{
-				Length:         3,
-				TimestampDelta: 4,
-				OffsetDelta:    1, // must be one
-				Key:            []byte("key 2"),
-				Value:          []byte("value 2"),
-			}).AppendTo(nil)...),
-	}
-
-	// input
-	ourBatch := seqRecBatch{
-		seq: 10,
-		recBatch: &recBatch{
-			firstTimestamp:    20,
-			maxTimestampDelta: 4,
-			records: []promisedRec{
-				{
-					Record: &Record{
-						Key:   []byte("key 1"),
-						Value: []byte("value 1"),
-						Headers: []RecordHeader{
-							{"header key 1", []byte("header value 1")},
-							{"header key 2", []byte("header value 2")},
-						},
-						LeaderEpoch: 1,
-						Offset:      2,
+	for _, version := range []int16{9, 10, 11, 12, 13, 99} {
+		// golden, uncompressed
+		kbatch := kmsg.RecordBatch{
+			FirstOffset:          0,
+			Length:               0, // set below,
+			PartitionLeaderEpoch: -1,
+			Magic:                2,
+			CRC:                  0,      // fill below
+			Attributes:           0x0010, // transactional bit set
+			LastOffsetDelta:      1,
+			FirstTimestamp:       20,
+			MaxTimestamp:         24, // recBatch timestamp delta will be 4
+			ProducerID:           12,
+			ProducerEpoch:        11,
+			FirstSequence:        10,
+			NumRecords:           2,
+			Records: append(
+				(&kmsg.Record{
+					Length:         1,
+					TimestampDelta: 2,
+					OffsetDelta:    0, // must be zero
+					Key:            []byte("key 1"),
+					Value:          []byte("value 1"),
+					Headers: []kmsg.Header{
+						{Key: "header key 1", Value: []byte("header value 1")},
+						{Key: "header key 2", Value: []byte("header value 2")},
 					},
-				},
-				{
-					Record: &Record{
-						Key:         []byte("key 2"),
-						Value:       []byte("value 2"),
-						LeaderEpoch: 3,
-						Offset:      4,
+				}).AppendTo(nil),
+				(&kmsg.Record{
+					Length:         3,
+					TimestampDelta: 4,
+					OffsetDelta:    1, // must be one
+					Key:            []byte("key 2"),
+					Value:          []byte("value 2"),
+				}).AppendTo(nil)...),
+		}
+
+		// input
+		ourBatch := seqRecBatch{
+			seq: 10,
+			recBatch: &recBatch{
+				firstTimestamp:    20,
+				maxTimestampDelta: 4,
+				records: []promisedRec{
+					{
+						Record: &Record{
+							Key:   []byte("key 1"),
+							Value: []byte("value 1"),
+							Headers: []RecordHeader{
+								{"header key 1", []byte("header value 1")},
+								{"header key 2", []byte("header value 2")},
+							},
+							LeaderEpoch: 1,
+							Offset:      2,
+						},
+					},
+					{
+						Record: &Record{
+							Key:         []byte("key 2"),
+							Value:       []byte("value 2"),
+							LeaderEpoch: 3,
+							Offset:      4,
+						},
 					},
 				},
 			},
-		},
-	}
-
-	version := int16(99)
-	ourBatch.wireLength = 4 + int32(len(kbatch.AppendTo(nil))) // length prefix; required for flexible versioning
-
-	// After compression, we fix the length & crc on kbatch.
-	fixFields := func() {
-		rawBatch := kbatch.AppendTo(nil)
-		kbatch.Length = int32(len(rawBatch[8+4:]))                       // skip first offset (int64) and length
-		kbatch.CRC = int32(crc32.Checksum(rawBatch[8+4+4+1+4:], crc32c)) // skip thru crc
-	}
-
-	var compressor Compressor
-	var checkNum int
-	check := func() {
-		exp := kbatch.AppendTo(nil)
-		gotFull, _ := ourBatch.appendTo(nil, version, 12, 11, true, compressor)
-		lengthPrefix := 4
-		ourBatchSize := (&kbin.Reader{Src: gotFull}).Int32()
-		if version >= 9 {
-			r := &kbin.Reader{Src: gotFull}
-			ourBatchSize = int32(r.Uvarint()) - 1
-			lengthPrefix = len(gotFull) - len(r.Src)
 		}
-		got := gotFull[lengthPrefix:]
-		if ourBatchSize != int32(len(got)) {
-			t.Errorf("check %d: incorrect record prefixing written length %d != actual %d", checkNum, ourBatchSize, len(got))
+
+		ourBatch.wireLength = 4 + int32(len(kbatch.AppendTo(nil))) // length prefix; required for flexible versioning
+
+		// After compression, we fix the length & crc on kbatch.
+		fixFields := func() {
+			rawBatch := kbatch.AppendTo(nil)
+			kbatch.Length = int32(len(rawBatch[8+4:]))                       // skip first offset (int64) and length
+			kbatch.CRC = int32(crc32.Checksum(rawBatch[8+4+4+1+4:], crc32c)) // skip thru crc
 		}
+
+		var compressor Compressor
+		var checkNum int
+		check := func() {
+			exp := kbatch.AppendTo(nil)
+			gotFull, _ := ourBatch.appendTo(nil, version, 12, 11, true, compressor)
+			lengthPrefix := 4
+			ourBatchSize := (&kbin.Reader{Src: gotFull}).Int32()
+			if version >= 9 {
+				r := &kbin.Reader{Src: gotFull}
+				ourBatchSize = int32(r.Uvarint()) - 1
+				lengthPrefix = len(gotFull) - len(r.Src)
+			}
+			got := gotFull[lengthPrefix:]
+			if ourBatchSize != int32(len(got)) {
+				t.Errorf("check %d: incorrect record prefixing written length %d != actual %d", checkNum, ourBatchSize, len(got))
+			}
+
+			if !bytes.Equal(got, exp) {
+				t.Errorf("check %d: got != exp\n%v\n%v\n", checkNum, got, exp)
+			}
+			checkNum++
+		}
+
+		// ***Uncompressed record batch check***
+
+		fixFields()
+		check()
+
+		// ***Compressed record batch check***
+
+		compressor, _ = DefaultCompressor(CompressionCodec{codec: 2}) // snappy
+		{
+			kbatch.Attributes |= 0x0002 // snappy
+			w := byteBuffers.Get().(*bytes.Buffer)
+			w.Reset()
+			kbatch.Records, _ = compressor.Compress(w, kbatch.Records)
+		}
+
+		fixFields()
+		check()
+
+		// ***As a produce request***
+		txid := "tx"
+		kmsgReq := kmsg.ProduceRequest{
+			Version:       version,
+			TransactionID: &txid,
+			Acks:          -1,
+			TimeoutMillis: 1000,
+			Topics: []kmsg.ProduceRequestTopic{{
+				Topic:   "topic",
+				TopicID: [16]byte{1: 1, 4: 4, 15: 15},
+				Partitions: []kmsg.ProduceRequestTopicPartition{{
+					Partition: 1,
+					Records:   kbatch.AppendTo(nil),
+				}},
+			}},
+		}
+		ourReq := produceRequest{
+			version:       version,
+			txnID:         &txid,
+			acks:          -1,
+			timeout:       1000,
+			producerID:    12,
+			producerEpoch: 11,
+			compressor:    compressor,
+		}
+		ourReq.batches.addSeqBatch("topic", [16]byte{1: 1, 4: 4, 15: 15}, 1, ourBatch)
+
+		exp := kmsgReq.AppendTo(nil)
+		got := ourReq.AppendTo(nil)
 
 		if !bytes.Equal(got, exp) {
-			t.Errorf("check %d: got != exp\n%v\n%v\n", checkNum, got, exp)
+			t.Errorf("produce request: got != exp\n%v\n%v\n", got, exp)
 		}
-		checkNum++
-	}
-
-	// ***Uncompressed record batch check***
-
-	fixFields()
-	check()
-
-	// ***Compressed record batch check***
-
-	compressor, _ = DefaultCompressor(CompressionCodec{codec: 2}) // snappy
-	{
-		kbatch.Attributes |= 0x0002 // snappy
-		w := byteBuffers.Get().(*bytes.Buffer)
-		w.Reset()
-		kbatch.Records, _ = compressor.Compress(w, kbatch.Records)
-	}
-
-	fixFields()
-	check()
-
-	// ***As a produce request***
-	txid := "tx"
-	kmsgReq := kmsg.ProduceRequest{
-		Version:       version,
-		TransactionID: &txid,
-		Acks:          -1,
-		TimeoutMillis: 1000,
-		Topics: []kmsg.ProduceRequestTopic{{
-			Topic: "topic",
-			Partitions: []kmsg.ProduceRequestTopicPartition{{
-				Partition: 1,
-				Records:   kbatch.AppendTo(nil),
-			}},
-		}},
-	}
-	ourReq := produceRequest{
-		version:       version,
-		txnID:         &txid,
-		acks:          -1,
-		timeout:       1000,
-		producerID:    12,
-		producerEpoch: 11,
-		compressor:    compressor,
-	}
-	ourReq.batches.addSeqBatch("topic", 1, ourBatch)
-
-	exp := kmsgReq.AppendTo(nil)
-	got := ourReq.AppendTo(nil)
-
-	if !bytes.Equal(got, exp) {
-		t.Errorf("produce request: got != exp\n%v\n%v\n", got, exp)
 	}
 }
 
@@ -575,7 +577,7 @@ func TestMessageSetAppendTo(t *testing.T) {
 		timeout:    1000,
 		compressor: compressor,
 	}
-	ourReq.batches.addSeqBatch("topic", 1, ourBatch)
+	ourReq.batches.addSeqBatch("topic", [16]byte{}, 1, ourBatch)
 
 	exp := kmsgReq.AppendTo(nil)
 	got := ourReq.AppendTo(nil)
@@ -625,12 +627,12 @@ func BenchmarkAppendBatch(b *testing.B) {
 			},
 		},
 	}
-	ourReq.batches.addSeqBatch("topic 1", 1, ourBatch)
-	ourReq.batches.addSeqBatch("topic 1", 2, ourBatch)
-	ourReq.batches.addSeqBatch("topic 1", 3, ourBatch)
-	ourReq.batches.addSeqBatch("topic 1", 4, ourBatch)
-	ourReq.batches.addSeqBatch("topic 2", 1, ourBatch)
-	ourReq.batches.addSeqBatch("topic 2", 2, ourBatch)
+	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 1, ourBatch)
+	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 2, ourBatch)
+	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 3, ourBatch)
+	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 4, ourBatch)
+	ourReq.batches.addSeqBatch("topic 2", [16]byte{}, 1, ourBatch)
+	ourReq.batches.addSeqBatch("topic 2", [16]byte{}, 2, ourBatch)
 
 	buf := make([]byte, 10<<10) // broker's reuse input buffers, so we do so here as well
 	for _, pair := range []struct {
