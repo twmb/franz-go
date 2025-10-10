@@ -117,6 +117,15 @@ func (cl *Client) FindTxnCoordinators(ctx context.Context, txnIDs ...string) Fin
 	return cl.findCoordinators(ctx, 1, txnIDs...)
 }
 
+// FindShareCoordinators returns the coordinator for all requested share groups.
+// Share group names have the format "groupId:topicId:partition".
+// This requires Kafka 3.9+.
+//
+// This may return *ShardErrors or *AuthError.
+func (cl *Client) FindShareCoordinators(ctx context.Context, shareGroups ...string) FindCoordinatorResponses {
+	return cl.findCoordinators(ctx, 2, shareGroups...)
+}
+
 func (cl *Client) findCoordinators(ctx context.Context, kind int8, names ...string) FindCoordinatorResponses {
 	resps := make(FindCoordinatorResponses)
 	if len(names) == 0 {
@@ -956,4 +965,94 @@ func (cl *Client) OffetForLeaderEpoch(ctx context.Context, r OffsetForLeaderEpoc
 		}
 		return nil
 	})
+}
+
+/////////////////////
+// UPDATE FEATURES //
+/////////////////////
+
+// FeatureUpdate represents a request to update a single feature.
+type FeatureUpdate struct {
+	Feature         string // Feature is the name of the finalized feature to update.
+	MaxVersionLevel int16  // MaxVersionLevel is the new maximum version level for the feature. A value >= 1 is valid. A value < 1 requests deletion of the feature.
+	UpgradeType     int8   // UpgradeType determines which type of upgrade: 1 = upgrade only (default), 2 = safe downgrades only (lossless), 3 = unsafe downgrades (lossy). Only used in v1+.
+}
+
+// FeatureUpdateResult contains the result of updating a single feature.
+type FeatureUpdateResult struct {
+	Feature string // Feature is the name of the finalized feature.
+	Err     error  // Err is non-nil if this feature could not be updated.
+}
+
+// UpdatedFeatures contains the results of updating features.
+type UpdatedFeatures map[string]FeatureUpdateResult
+
+// Sorted returns all feature update results sorted by feature name.
+func (u UpdatedFeatures) Sorted() []FeatureUpdateResult {
+	s := make([]FeatureUpdateResult, 0, len(u))
+	for _, r := range u {
+		s = append(s, r)
+	}
+	sort.Slice(s, func(i, j int) bool { return s[i].Feature < s[j].Feature })
+	return s
+}
+
+// Error iterates over all results and returns the first error encountered, if any.
+func (u UpdatedFeatures) Error() error {
+	for _, r := range u {
+		if r.Err != nil {
+			return r.Err
+		}
+	}
+	return nil
+}
+
+// UpdateFeatures updates broker-wide finalized features (KIP-584, Kafka 2.7+).
+//
+// UpgradeType values: 1 = upgrade only (default), 2 = safe downgrades only (lossless),
+// 3 = unsafe downgrades (lossy).
+//
+// If validateOnly is true, the request is validated but not performed (only against Kafka 3.3+!).
+//
+// This may return *AuthError.
+func (cl *Client) UpdateFeatures(ctx context.Context, validateOnly bool, updates ...FeatureUpdate) (UpdatedFeatures, error) {
+	if len(updates) == 0 {
+		return nil, errors.New("no features specified")
+	}
+
+	req := kmsg.NewPtrUpdateFeaturesRequest()
+	req.TimeoutMillis = cl.timeoutMillis
+	req.ValidateOnly = validateOnly
+	for _, u := range updates {
+		reqUpdate := kmsg.NewUpdateFeaturesRequestFeatureUpdate()
+		reqUpdate.Feature = u.Feature
+		reqUpdate.MaxVersionLevel = u.MaxVersionLevel
+		reqUpdate.UpgradeType = u.UpgradeType
+		req.FeatureUpdates = append(req.FeatureUpdates, reqUpdate)
+	}
+
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := maybeAuthErr(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+
+	updated := make(UpdatedFeatures)
+	for _, r := range resp.Results {
+		if err := maybeAuthErr(r.ErrorCode); err != nil {
+			return nil, err
+		}
+		updated[r.Feature] = FeatureUpdateResult{
+			Feature: r.Feature,
+			Err:     kerr.ErrorForCode(r.ErrorCode),
+		}
+	}
+
+	return updated, nil
 }

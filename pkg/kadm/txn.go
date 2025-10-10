@@ -491,9 +491,24 @@ func (ls ListedTransactions) TransactionalIDs() []string {
 //
 // This may return *ShardErrors or *AuthError.
 func (cl *Client) ListTransactions(ctx context.Context, producerIDs []int64, filterStates []string) (ListedTransactions, error) {
+	return cl.ListTransactionsByTxPattern(ctx, producerIDs, filterStates, "")
+}
+
+// ListTransactions returns all transactions and their states in the cluster.
+// Filter states can be used to return transactions only in the requested
+// states. By default, this returns all transactions you have DESCRIBE access
+// to. Producer IDs can be specified to filter for transactions from the given
+// producer. TxIDPatterns, a re2 regular expression, is used to further filter
+// by transactional ID. This requires Kafka 4.1+.
+//
+// This may return *ShardErrors or *AuthError.
+func (cl *Client) ListTransactionsByTxPattern(ctx context.Context, producerIDs []int64, filterStates []string, txIDPattern string) (ListedTransactions, error) {
 	req := kmsg.NewPtrListTransactionsRequest()
 	req.ProducerIDFilters = producerIDs
 	req.StateFilters = filterStates
+	if txIDPattern != "" {
+		req.TransactionalIDPattern = &txIDPattern
+	}
 	shards := cl.cl.RequestSharded(ctx, req)
 	list := make(ListedTransactions)
 	return list, shardErrEachBroker(req, shards, func(b BrokerDetail, kr kmsg.Response) error {
