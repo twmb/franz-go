@@ -734,6 +734,8 @@ func NewOffsetCommitKey() OffsetCommitKey {
 //
 // KAFKA-7437 commit 9f7267dd2f, proposed in KIP-320 and included in 2.1.0
 // released version 3.
+//
+// KAFKA-19141 commit 199772a included in 4.1.0 released version 4.
 type OffsetCommitValue struct {
 	// Version is which encoding version this value is using.
 	Version int16
@@ -753,11 +755,19 @@ type OffsetCommitValue struct {
 	// ExpireTimestamp, introduced in v1 and dropped in v2 with KIP-111,
 	// is when this commit expires.
 	ExpireTimestamp int64 // v1-v1
+
+	// TopicID is the topic id of the committed offset
+	TopicID [16]byte // tag 0
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
 }
 
 func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 4
+	_ = isFlexible
 	{
 		v := v.Version
 		dst = kbin.AppendInt16(dst, v)
@@ -772,7 +782,11 @@ func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Metadata
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	{
 		v := v.CommitTimestamp
@@ -781,6 +795,25 @@ func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
 	if version >= 1 && version <= 1 {
 		v := v.ExpireTimestamp
 		dst = kbin.AppendInt64(dst, v)
+	}
+	if isFlexible {
+		var toEncode []uint32
+		if v.TopicID != [16]byte{} {
+			toEncode = append(toEncode, 0)
+		}
+		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
+		for _, tag := range toEncode {
+			switch tag {
+			case 0:
+				{
+					v := v.TopicID
+					dst = kbin.AppendUvarint(dst, 0)
+					dst = kbin.AppendUvarint(dst, 16)
+					dst = kbin.AppendUuid(dst, v)
+				}
+			}
+		}
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -799,6 +832,8 @@ func (v *OffsetCommitValue) readFrom(src []byte, unsafe bool) error {
 	v.Version = b.Int16()
 	version := v.Version
 	_ = version
+	isFlexible := version >= 4
+	_ = isFlexible
 	s := v
 	{
 		v := b.Int64()
@@ -811,9 +846,17 @@ func (v *OffsetCommitValue) readFrom(src []byte, unsafe bool) error {
 	{
 		var v string
 		if unsafe {
-			v = b.UnsafeString()
+			if isFlexible {
+				v = b.UnsafeCompactString()
+			} else {
+				v = b.UnsafeString()
+			}
 		} else {
-			v = b.String()
+			if isFlexible {
+				v = b.CompactString()
+			} else {
+				v = b.String()
+			}
 		}
 		s.Metadata = v
 	}
@@ -825,8 +868,24 @@ func (v *OffsetCommitValue) readFrom(src []byte, unsafe bool) error {
 		v := b.Int64()
 		s.ExpireTimestamp = v
 	}
+	if isFlexible {
+		for i := b.Uvarint(); i > 0; i-- {
+			switch key := b.Uvarint(); key {
+			default:
+				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
+			case 0:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+				v := b.Uuid()
+				s.TopicID = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return b.Complete()
 }
+func (v *OffsetCommitValue) IsFlexible() bool { return v.Version >= 4 }
 
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to OffsetCommitValue.
