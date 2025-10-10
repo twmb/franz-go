@@ -12825,7 +12825,7 @@ type FindCoordinatorRequest struct {
 	CoordinatorKey string // v0-v3
 
 	// CoordinatorType is the type that key is. Groups are type 0,
-	// transactional IDs are type 1.
+	// transactional IDs are type 1, share groups are 2.
 	CoordinatorType int8 // v1+
 
 	// CoordinatorKeys contains all keys to find the coordinator for.
