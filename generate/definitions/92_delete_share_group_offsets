@@ -1,0 +1,41 @@
+// DeleteShareGroupOffsetsRequest is a request to delete share group offsets.
+DeleteShareGroupOffsetsRequest => key 92, max version 0, flexible v0+
+  // GroupID is the group identifier.
+  GroupID: string
+  // Topics are the topics to delete offsets for.
+  Topics: [=>]
+    // Topic is the topic name.
+    Topic: string
+
+// DeleteShareGroupOffsetsResponse is a response for a DeleteShareGroupOffsetsRequest.
+//
+// Supported errors:
+// - GROUP_AUTHORIZATION_FAILED (version 0+)
+// - TOPIC_AUTHORIZATION_FAILED (version 0+)
+// - NOT_COORDINATOR (version 0+)
+// - COORDINATOR_NOT_AVAILABLE (version 0+)
+// - COORDINATOR_LOAD_IN_PROGRESS (version 0+)
+// - GROUP_ID_NOT_FOUND (version 0+)
+// - NON_EMPTY_GROUP (version 0+)
+// - KAFKA_STORAGE_ERROR (version 0+)
+// - INVALID_REQUEST (version 0+)
+// - UNKNOWN_SERVER_ERROR (version 0+)
+// - UNKNOWN_TOPIC_OR_PARTITION (version 0+)
+DeleteShareGroupOffsetsResponse =>
+  ThrottleMillis
+  // ErrorCode is the top-level error code, or 0 if there was no error.
+  ErrorCode: int16
+  // ErrorMessage is the top-level error message, or null if there was no
+  // error.
+  ErrorMessage: nullable-string
+  // Topics are the results for each topic.
+  Topics: [=>]
+    // Topic is the topic name.
+    Topic: string
+    // TopicID is the unique topic ID.
+    TopicID: uuid
+    // ErrorCode is the topic-level error code, or 0 if there was no error.
+    ErrorCode: int16
+    // ErrorMessage is the topic-level error message, or null if there was no
+    // error.
+    ErrorMessage: nullable-string

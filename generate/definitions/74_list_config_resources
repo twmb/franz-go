@@ -1,0 +1,19 @@
+// ListConfigResourcesRequest, introduced in KIP-1000 and renamed
+// in KIP-1142 allows you to list config resources.
+//
+// This was renamed from ListClientMetricsResources in Kafka 4.1.
+ListConfigResourcesRequest => key 74, max version 1, flexible v0+
+  // The list of resource type. If the list is empty, it uses default supported
+  // config resource types.
+  ResourceTypes: [int8] // v1+
+
+
+ListConfigResourcesResponse =>
+  ThrottleMillis
+  ErrorCode: int16
+  // Each client metrics resource in the response.
+  ConfigResources: [=>]
+    // The resource name.
+    Name: string
+    // The resource type.
+    Type: int8(16) // v1+

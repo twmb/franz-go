@@ -6,7 +6,7 @@
 // Note that the special client ID "__admin_client" will allow you to produce
 // records to internal topics. This is generally recommended if you want to
 // break your Kafka cluster.
-ProduceRequest => key 0, max version 12, flexible v9+
+ProduceRequest => key 0, max version 13, flexible v9+
   // TransactionID is the transaction ID to use for this request, allowing for
   // exactly once semantics.
   TransactionID: nullable-string // v3+
@@ -22,7 +22,9 @@ ProduceRequest => key 0, max version 12, flexible v9+
   // Topics is an array of topics to send record batches to.
   Topics: [=>]
     // Topic is a topic to send record batches to.
-    Topic: string
+    Topic: string // v0-v12
+    // TopicID is the uuid of the topic to produce records to.
+    TopicID: uuid // v13+
     // Partitions is an array of partitions to send record batches to.
     Partitions: [=>]
       // Partition is a partition to send a record batch to.
@@ -40,7 +42,9 @@ ProduceResponse =>
   // to.
   Topics: [=>]
     // Topic is the topic this response pertains to.
-    Topic: string
+    Topic: string // v0-v12
+    // TopicID is the uuid of the topic produced to.
+    TopicID: uuid // v13+
     // Partitions is an array of responses for the partition's that
     // batches were sent to.
     Partitions: [=>]
@@ -123,6 +127,8 @@ ProduceResponse =>
       // means data loss. Before, there could be confusion on if the broker
       // actually rotated the partition out of existence (this is why
       // UNKNOWN_PRODUCER_ID was introduced).
+      //
+      // UNKNOWN_TOPIC_ID is returned if producing to an unknown topic ID.
       ErrorCode: int16
       // BaseOffset is the offset that the records in the produce request began
       // at in the partition.

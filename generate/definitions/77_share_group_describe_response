@@ -1,0 +1,68 @@
+// ShareGroupDescribeRequest is a request to describe share groups.
+//
+// Version 0 was used for early access of KIP-932 in Apache Kafka 4.0 but
+// removed in Apacke Kafka 4.1.
+//
+// Version 1 is the initial stable version (KIP-932).
+ShareGroupDescribeRequest => key 77, max version 1, flexible v0+
+  // GroupIDs are the IDs of the groups to describe.
+  GroupIDs: [string]
+  // IncludeAuthorizedOperations is whether to include authorized operations.
+  IncludeAuthorizedOperations: bool
+
+// ShareGroupDescribeResponse is a response for a ShareGroupDescribeRequest.
+ShareGroupDescribeResponse =>
+  ThrottleMillis
+  // Groups contains each described group.
+  Groups: [=>]
+    // ErrorCode is the describe error, or 0 if there was no error.
+    //
+    // Supported errors:
+    // - GROUP_AUTHORIZATION_FAILED (version 0+)
+    // - TOPIC_AUTHORIZATION_FAILED (version 1+)
+    // - NOT_COORDINATOR (version 0+)
+    // - COORDINATOR_NOT_AVAILABLE (version 0+)
+    // - COORDINATOR_LOAD_IN_PROGRESS (version 0+)
+    // - INVALID_GROUP_ID (version 0+)
+    // - GROUP_ID_NOT_FOUND (version 0+)
+    // - INVALID_REQUEST (version 0+)
+    ErrorCode: int16
+    // ErrorMessage is an optional message if there is an error.
+    ErrorMessage: nullable-string
+    // GroupID is the group ID string.
+    GroupID: string
+    // GroupState is the group state string, or the empty string.
+    GroupState: string
+    // GroupEpoch is the group epoch.
+    GroupEpoch: int32
+    // AssignmentEpoch is the assignment epoch.
+    AssignmentEpoch: int32
+    // Assignor is the selected assignor.
+    Assignor: string
+    // Members are the members.
+    Members: [=>]
+      // MemberID is the member ID.
+      MemberID: string
+      // RackID is the member rack ID.
+      RackID: nullable-string
+      // MemberEpoch is the current member epoch.
+      MemberEpoch: int32
+      // ClientID is the client ID.
+      ClientID: string
+      // ClientHost is the client host.
+      ClientHost: string
+      // SubscribedTopicNames are the subscribed topic names.
+      SubscribedTopicNames: [string]
+      // Assignment is the current assignment.
+      Assignment: =>
+        // TopicPartitions are the assigned topic-partitions to the member.
+        TopicPartitions: [=>]
+          // TopicID is the topic ID.
+          TopicID: uuid
+          // Topic is the topic name.
+          Topic: string
+          // Partitions are the partitions.
+          Partitions: [int32]
+    // AuthorizedOperations is a 32-bit bitfield to represent authorized
+    // operations for this group.
+    AuthorizedOperations: int32(-2147483648)

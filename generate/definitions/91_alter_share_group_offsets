@@ -1,0 +1,49 @@
+// AlterShareGroupOffsetsRequest is a request to alter share group offsets.
+AlterShareGroupOffsetsRequest => key 91, max version 0, flexible v0+
+  // GroupID is the group identifier.
+  GroupID: string
+  // Topics are the topics to alter offsets for.
+  Topics: [=>]
+    // Topic is the topic name.
+    Topic: string
+    // Partitions are each partition to alter offsets for.
+    Partitions: [=>]
+      // Partition is the partition index.
+      Partition: int32
+      // StartOffset is the share-partition start offset.
+      StartOffset: int64
+
+// AlterShareGroupOffsetsResponse is a response for an AlterShareGroupOffsetsRequest.
+//
+// Supported errors:
+// - GROUP_AUTHORIZATION_FAILED (version 0+)
+// - TOPIC_AUTHORIZATION_FAILED (version 0+)
+// - NOT_COORDINATOR (version 0+)
+// - COORDINATOR_NOT_AVAILABLE (version 0+)
+// - COORDINATOR_LOAD_IN_PROGRESS (version 0+)
+// - GROUP_ID_NOT_FOUND (version 0+)
+// - NON_EMPTY_GROUP (version 0+)
+// - KAFKA_STORAGE_ERROR (version 0+)
+// - INVALID_REQUEST (version 0+)
+// - UNKNOWN_SERVER_ERROR (version 0+)
+AlterShareGroupOffsetsResponse =>
+  ThrottleMillis
+  // ErrorCode is the top-level error code, or 0 if there was no error.
+  ErrorCode: int16
+  // ErrorMessage is the top-level error message, or null if there was no
+  // error.
+  ErrorMessage: nullable-string
+  // Topics are the results for each topic.
+  Topics: [=>]
+    // Topic is the topic name.
+    Topic: string
+    // TopicID is the unique topic ID.
+    TopicID: uuid
+    // Partitions are the partition results.
+    Partitions: [=>]
+      // Partition is the partition index.
+      Partition: int32
+      // ErrorCode is the error code, or 0 if there was no error.
+      ErrorCode: int16
+      // ErrorMessage is the error message, or null if there was no error.
+      ErrorMessage: nullable-string

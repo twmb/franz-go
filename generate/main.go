@@ -413,7 +413,15 @@ func validateMaxVersions(top, on *Struct) {
 		if f.MaxVersion > top.MaxVersion {
 			die("field %s max version %d > containing struct %s max version %d", f.FieldName, f.MaxVersion, top.Name, top.MaxVersion)
 		}
-		if substruct, ok := f.Type.(Struct); ok {
+		t := f.Type
+		for {
+			array, ok := t.(Array)
+			if !ok {
+				break
+			}
+			t = array.Inner
+		}
+		if substruct, ok := t.(Struct); ok {
 			validateMaxVersions(top, &substruct)
 		}
 	}
