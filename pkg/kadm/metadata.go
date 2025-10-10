@@ -85,7 +85,7 @@ type TopicDetail struct {
 	IsInternal bool             // IsInternal is whether the topic is an internal topic.
 	Partitions PartitionDetails // Partitions contains details about the topic's partitions.
 
-	AuthorizedOperations []ACLOperation // AuthorizedOperations contains operations the requesting client is allowed to perform on this topic.
+	AuthorizedOperations []ACLOperation // AuthorizedOperations contains operations the requesting client is allowed to perform on this topic (requires [WithAuthorizedOps]).
 
 	Err error // Err is non-nil if the topic could not be loaded.
 }
@@ -189,7 +189,7 @@ type Metadata struct {
 	Controller           int32          // Controller is the node ID of the controller broker, if available, otherwise -1.
 	Brokers              BrokerDetails  // Brokers contains broker details, sorted by default.
 	Topics               TopicDetails   // Topics contains topic details.
-	AuthorizedOperations []ACLOperation // AuthorizedOperations contains operations the requesting client is allowed to perform, if the client has Describe permissions on the cluster.
+	AuthorizedOperations []ACLOperation // AuthorizedOperations contains operations the requesting client is allowed to perform, if the client has Describe permissions on the cluster (requires [WithAuthorizedOps]).
 }
 
 func int32s(is []int32) []int32 {
@@ -229,8 +229,17 @@ func (cl *Client) Metadata(
 
 func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) (Metadata, error) {
 	req := kmsg.NewPtrMetadataRequest()
-	req.IncludeClusterAuthorizedOperations = true
-	req.IncludeTopicAuthorizedOperations = ctx.Value(&includeAuthOps) != nil
+
+	fn := func() (*kmsg.MetadataResponse, error) {
+		return cl.cl.RequestCachedMetadata(ctx, req, 0)
+	}
+	if ctx.Value(&includeAuthOps) != nil { // cached metadata does not query auth
+		req.IncludeClusterAuthorizedOperations = true
+		req.IncludeTopicAuthorizedOperations = true
+		fn = func() (*kmsg.MetadataResponse, error) {
+			return req.RequestWith(ctx, cl.cl)
+		}
+	}
 	for _, t := range topics {
 		rt := kmsg.NewMetadataRequestTopic()
 		rt.Topic = kmsg.StringPtr(t)
@@ -239,7 +248,7 @@ func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) 
 	if noTopics {
 		req.Topics = []kmsg.MetadataRequestTopic{}
 	}
-	resp, err := req.RequestWith(ctx, cl.cl)
+	resp, err := fn()
 	if err != nil {
 		return Metadata{}, err
 	}
