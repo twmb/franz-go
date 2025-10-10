@@ -264,3 +264,113 @@ func TestConfluentHeader(t *testing.T) {
 		t.Errorf("got %v != exp ErrBadHeader", err)
 	}
 }
+
+func TestSerdeRegistrationChecks(t *testing.T) {
+	type testStruct1 struct {
+		Field1 string `json:"field1"`
+	}
+	type testStruct2 struct {
+		Field2 string `json:"field2"`
+	}
+	type testStruct3 struct {
+		Field3 string `json:"field3"`
+	}
+
+	serde := NewSerde(
+		EncodeFn(json.Marshal),
+		DecodeFn(json.Unmarshal),
+	)
+
+	// Test IsIDRegistered with unregistered ID
+	if serde.IsIDRegistered(1) {
+		t.Error("expected ID 1 to not be registered")
+	}
+
+	// Test IsTypeRegistered with unregistered type
+	if serde.IsTypeRegistered(testStruct1{}) {
+		t.Error("expected testStruct1 to not be registered")
+	}
+
+	// Register a schema
+	serde.Register(1, testStruct1{}, GenerateFn(func() any { return new(testStruct1) }))
+
+	// Test IsIDRegistered with registered ID
+	if !serde.IsIDRegistered(1) {
+		t.Error("expected ID 1 to be registered")
+	}
+
+	// Test IsTypeRegistered with registered type
+	if !serde.IsTypeRegistered(testStruct1{}) {
+		t.Error("expected testStruct1 to be registered")
+	}
+
+	// Test GetRegisteredIDs
+	ids := serde.GetRegisteredIDs()
+	if len(ids) != 1 || ids[0] != 1 {
+		t.Errorf("expected registered IDs [1], got %v", ids)
+	}
+
+	// Test GetRegisteredTypes
+	types := serde.GetRegisteredTypes()
+	if len(types) != 1 || types[0] != reflect.TypeOf(testStruct1{}) {
+		t.Errorf("expected registered types [%v], got %v", reflect.TypeOf(testStruct1{}), types)
+	}
+
+	// Test with schema that has no decode function (should not be considered registered for decoding)
+	serde.Register(2, testStruct2{}) // No GenerateFn, but still has decode function from defaults
+
+	if !serde.IsIDRegistered(2) {
+		t.Error("expected ID 2 to be registered for decoding (has decode function from defaults)")
+	}
+
+	// But it should be registered for encoding
+	if !serde.IsIDRegisteredForEncoding(2) {
+		t.Error("expected ID 2 to be registered for encoding")
+	}
+
+	if !serde.IsTypeRegistered(testStruct2{}) {
+		t.Error("expected testStruct2 to be registered for encoding")
+	}
+
+	// Test with indexed schema
+	serde.Register(3, testStruct3{}, Index(0), GenerateFn(func() any { return new(testStruct3) }))
+
+	// Note: ID 3 with index is not registered at root level, so it won't be found by IsIDRegistered
+	// This is expected behavior for indexed schemas
+
+	// Test multiple registrations
+	ids = serde.GetRegisteredIDs()
+	expectedIDs := []int{1, 2} // Only IDs 1 and 2 are registered at root level
+	if len(ids) != len(expectedIDs) {
+		t.Errorf("expected %d registered IDs, got %d: %v", len(expectedIDs), len(ids), ids)
+	}
+
+	// Test GetRegisteredIDsForDecoding
+	decodingIDs := serde.GetRegisteredIDsForDecoding()
+	expectedDecodingIDs := []int{1, 2} // Both IDs 1 and 2 have decode functions
+	if len(decodingIDs) != len(expectedDecodingIDs) {
+		t.Errorf("expected %d registered IDs for decoding, got %d: %v", len(expectedDecodingIDs), len(decodingIDs), decodingIDs)
+	}
+
+	// Check that all expected IDs are present
+	idMap := make(map[int]bool)
+	for _, id := range ids {
+		idMap[id] = true
+	}
+	for _, expectedID := range []int{1, 2} { // Only IDs 1 and 2 are registered at root level
+		if !idMap[expectedID] {
+			t.Errorf("expected ID %d to be registered", expectedID)
+		}
+	}
+
+	// Check decoding IDs
+	decodingIDMap := make(map[int]bool)
+	for _, id := range decodingIDs {
+		decodingIDMap[id] = true
+	}
+	for _, expectedID := range expectedDecodingIDs {
+		if !decodingIDMap[expectedID] {
+			t.Errorf("expected ID %d to be registered for decoding", expectedID)
+		}
+	}
+}
