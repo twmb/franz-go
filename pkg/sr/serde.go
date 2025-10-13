@@ -540,7 +540,7 @@ func (s *Serde) IsIDRegisteredForEncoding(id int) bool {
 	return t.exists && (t.encode != nil || t.appendEncode != nil)
 }
 
-// GetRegisteredIDForEncoding returns a slice of all registered schema IDs for decoding.
+// GetRegisteredIDForEncoding returns a slice of all registered schema IDs for encoding.
 func (s *Serde) GetRegisteredIDForEncoding() []int {
 	ids := s.loadIDs()
 	result := make([]int, 0, len(ids))
