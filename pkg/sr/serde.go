@@ -518,66 +518,48 @@ func (*ConfluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, err
 
 type bReader struct{ b []byte }
 
-// IsIDRegistered returns true if the given schema ID is registered and has
+// IsIDRegisteredForDecoding returns true if the given schema ID is registered and has
 // a decode function available.
-func (s *Serde) IsIDRegistered(id int) bool {
+func (s *Serde) IsIDRegisteredForDecoding(id int) bool {
 	ids := s.loadIDs()
-	t := ids[id]
+	t, isPresent := ids[id]
+	if !isPresent {
+		return false
+	}
 	return t.exists && t.decode != nil
 }
 
-// IsIDRegisteredForDecoding returns true if the given schema ID is registered
-// and has a decode function available.
-func (s *Serde) IsIDRegisteredForDecoding(id int) bool {
-	return s.IsIDRegistered(id)
-}
-
 // IsIDRegisteredForEncoding returns true if the given schema ID is registered
-// (regardless of whether it has a decode function).
+// and has an encode function available.
 func (s *Serde) IsIDRegisteredForEncoding(id int) bool {
 	ids := s.loadIDs()
-	t := ids[id]
-	return t.exists
+	t, isPresent := ids[id]
+	if !isPresent {
+		return false
+	}
+	return t.exists && (t.encode != nil || t.appendEncode != nil)
 }
 
-// IsTypeRegistered returns true if the given type is registered and has
-// an encode function available.
-func (s *Serde) IsTypeRegistered(v any) bool {
-	t, ok := s.loadTypes()[reflect.TypeOf(v)]
-	return ok && (t.encode != nil || t.appendEncode != nil)
-}
-
-// GetRegisteredIDs returns a slice of all registered schema IDs (for encoding).
-func (s *Serde) GetRegisteredIDs() []int {
+// GetRegisteredIDForEncoding returns a slice of all registered schema IDs for decoding.
+func (s *Serde) GetRegisteredIDForEncoding() []int {
 	ids := s.loadIDs()
 	result := make([]int, 0, len(ids))
 	for id, t := range ids {
-		if t.exists {
+		if t.exists && (t.encode != nil || t.appendEncode != nil) {
 			result = append(result, id)
 		}
 	}
 	return result
 }
 
-// GetRegisteredIDsForDecoding returns a slice of all registered schema IDs
-// that have decode functions available.
-func (s *Serde) GetRegisteredIDsForDecoding() []int {
+// GetRegisteredIDForDecoding returns a slice of all registered schema IDs for decoding.
+func (s *Serde) GetRegisteredIDForDecoding() []int {
 	ids := s.loadIDs()
 	result := make([]int, 0, len(ids))
 	for id, t := range ids {
 		if t.exists && t.decode != nil {
 			result = append(result, id)
 		}
-	}
-	return result
-}
-
-// GetRegisteredTypes returns a slice of all registered types.
-func (s *Serde) GetRegisteredTypes() []reflect.Type {
-	types := s.loadTypes()
-	result := make([]reflect.Type, 0, len(types))
-	for t := range types {
-		result = append(result, t)
 	}
 	return result
 }

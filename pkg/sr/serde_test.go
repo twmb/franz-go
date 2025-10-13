@@ -282,54 +282,50 @@ func TestSerdeRegistrationChecks(t *testing.T) {
 	)
 
 	// Test IsIDRegistered with unregistered ID
-	if serde.IsIDRegistered(1) {
+	if serde.IsIDRegisteredForDecoding(1) {
 		t.Error("expected ID 1 to not be registered")
 	}
 
-	// Test IsTypeRegistered with unregistered type
-	if serde.IsTypeRegistered(testStruct1{}) {
-		t.Error("expected testStruct1 to not be registered")
+	// Test IsIDRegisteredForEncoding with unregistered type
+	if serde.IsIDRegisteredForEncoding(1) {
+		t.Error("expected ID 1 to not be registered for encoding")
 	}
 
 	// Register a schema
 	serde.Register(1, testStruct1{}, GenerateFn(func() any { return new(testStruct1) }))
 
 	// Test IsIDRegistered with registered ID
-	if !serde.IsIDRegistered(1) {
+	if !serde.IsIDRegisteredForDecoding(1) {
 		t.Error("expected ID 1 to be registered")
 	}
 
-	// Test IsTypeRegistered with registered type
-	if !serde.IsTypeRegistered(testStruct1{}) {
-		t.Error("expected testStruct1 to be registered")
+	// Test IsIDRegisteredForEncoding with registered ID
+	if !serde.IsIDRegisteredForEncoding(1) {
+		t.Error("expected ID 1 to be registered for encoding")
 	}
 
-	// Test GetRegisteredIDs
-	ids := serde.GetRegisteredIDs()
-	if len(ids) != 1 || ids[0] != 1 {
-		t.Errorf("expected registered IDs [1], got %v", ids)
+	// Test GetRegisteredIDForEncoding
+	encodingIDs := serde.GetRegisteredIDForEncoding()
+	if len(encodingIDs) != 1 || encodingIDs[0] != 1 {
+		t.Errorf("expected encoding IDs [1], got %v", encodingIDs)
 	}
 
-	// Test GetRegisteredTypes
-	types := serde.GetRegisteredTypes()
-	if len(types) != 1 || types[0] != reflect.TypeOf(testStruct1{}) {
-		t.Errorf("expected registered types [%v], got %v", reflect.TypeOf(testStruct1{}), types)
+	// Test GetRegisteredIDForDecoding
+	decodingIDs := serde.GetRegisteredIDForDecoding()
+	if len(decodingIDs) != 1 || decodingIDs[0] != 1 {
+		t.Errorf("expected decoding IDs [1], got %v", decodingIDs)
 	}
 
 	// Test with schema that has no decode function (should not be considered registered for decoding)
 	serde.Register(2, testStruct2{}) // No GenerateFn, but still has decode function from defaults
 
-	if !serde.IsIDRegistered(2) {
+	if !serde.IsIDRegisteredForDecoding(2) {
 		t.Error("expected ID 2 to be registered for decoding (has decode function from defaults)")
 	}
 
 	// But it should be registered for encoding
 	if !serde.IsIDRegisteredForEncoding(2) {
 		t.Error("expected ID 2 to be registered for encoding")
-	}
-
-	if !serde.IsTypeRegistered(testStruct2{}) {
-		t.Error("expected testStruct2 to be registered for encoding")
 	}
 
 	// Test with indexed schema
@@ -339,31 +335,30 @@ func TestSerdeRegistrationChecks(t *testing.T) {
 	// This is expected behavior for indexed schemas
 
 	// Test multiple registrations
-	ids = serde.GetRegisteredIDs()
-	expectedIDs := []int{1, 2} // Only IDs 1 and 2 are registered at root level
-	if len(ids) != len(expectedIDs) {
-		t.Errorf("expected %d registered IDs, got %d: %v", len(expectedIDs), len(ids), ids)
+	encodingIDs = serde.GetRegisteredIDForEncoding()
+	expectedEncodingIDs := []int{1, 2} // Both IDs 1 and 2 have encode functions
+	if len(encodingIDs) != len(expectedEncodingIDs) {
+		t.Errorf("expected %d encoding IDs, got %d: %v", len(expectedEncodingIDs), len(encodingIDs), encodingIDs)
 	}
 
-	// Test GetRegisteredIDsForDecoding
-	decodingIDs := serde.GetRegisteredIDsForDecoding()
+	decodingIDs = serde.GetRegisteredIDForDecoding()
 	expectedDecodingIDs := []int{1, 2} // Both IDs 1 and 2 have decode functions
 	if len(decodingIDs) != len(expectedDecodingIDs) {
-		t.Errorf("expected %d registered IDs for decoding, got %d: %v", len(expectedDecodingIDs), len(decodingIDs), decodingIDs)
+		t.Errorf("expected %d decoding IDs, got %d: %v", len(expectedDecodingIDs), len(decodingIDs), decodingIDs)
 	}
 
-	// Check that all expected IDs are present
-	idMap := make(map[int]bool)
-	for _, id := range ids {
-		idMap[id] = true
+	// Check that all expected encoding IDs are present
+	encodingIDMap := make(map[int]bool)
+	for _, id := range encodingIDs {
+		encodingIDMap[id] = true
 	}
-	for _, expectedID := range []int{1, 2} { // Only IDs 1 and 2 are registered at root level
-		if !idMap[expectedID] {
-			t.Errorf("expected ID %d to be registered", expectedID)
+	for _, expectedID := range expectedEncodingIDs {
+		if !encodingIDMap[expectedID] {
+			t.Errorf("expected ID %d to be registered for encoding", expectedID)
 		}
 	}
 
-	// Check decoding IDs
+	// Check that all expected decoding IDs are present
 	decodingIDMap := make(map[int]bool)
 	for _, id := range decodingIDs {
 		decodingIDMap[id] = true
