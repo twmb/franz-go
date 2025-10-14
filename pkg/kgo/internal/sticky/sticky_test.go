@@ -1637,6 +1637,165 @@ func Test_stickyBalanceStrategy_Plan_ConflictingPreviousAssignments(t *testing.T
 	testPlanUsage(t, plan, topics, nil)
 }
 
+func Test_EnsurePartitionsAssignedToHighestGeneration(t *testing.T) {
+	t.Parallel()
+
+	topics := map[string]int32{
+		"topic":  3,
+		"topic2": 3,
+		"topic3": 3,
+	}
+
+	currentGeneration := 10
+
+	members := []GroupMember{
+		{
+			ID:     "consumer1",
+			Topics: []string{"topic", "topic2", "topic3"},
+			UserData: newUD().
+				assign("topic", 0).
+				assign("topic2", 0).
+				assign("topic3", 0).
+				setGeneration(currentGeneration).
+				encode(),
+		},
+		{
+			ID:     "consumer2",
+			Topics: []string{"topic", "topic2", "topic3"},
+			UserData: newUD().
+				assign("topic", 1).
+				assign("topic2", 1).
+				assign("topic3", 1).
+				setGeneration(currentGeneration - 1).
+				encode(),
+		},
+		{
+			ID:     "consumer3",
+			Topics: []string{"topic", "topic2", "topic3"},
+			UserData: newUD().
+				assign("topic2", 1). // Conflicts with consumer2 (lower generation, loses)
+				assign("topic3", 0). // Conflicts with consumer1 (lower generation, loses)
+				assign("topic3", 2). // No conflict
+				setGeneration(currentGeneration - 2).
+				encode(),
+		},
+	}
+
+	plan := Balance(members, topics)
+
+	// Due to generation-based conflict resolution:
+	// - consumer1 keeps all 3 (highest generation) = 3 sticky
+	// - consumer2 keeps all 3 (second highest) = 3 sticky
+	// - consumer3 loses topic2-1 and topic3-0, keeps only topic3-2 = 1 sticky
+	// Total expected sticky: 7
+	balance := map[int]resultOptions{
+		3: {[]string{"consumer1", "consumer2", "consumer3"}, 3},
+	}
+
+	testStickyResult(t, plan, members, 7, balance)
+	testPlanUsage(t, plan, topics, nil)
+}
+
+func Test_NoReassignmentOnCurrentMembers(t *testing.T) {
+	t.Parallel()
+
+	topics := map[string]int32{
+		"topic":  3,
+		"topic1": 3,
+		"topic2": 3,
+		"topic3": 3,
+	}
+
+	currentGeneration := 10
+
+	members := []GroupMember{
+		{
+			ID:     "consumer1",
+			Topics: []string{"topic", "topic2", "topic3", "topic1"},
+			UserData: newUD().
+				setGeneration(-1). // DEFAULT_GENERATION
+				encode(),
+		},
+		{
+			ID:     "consumer2",
+			Topics: []string{"topic", "topic2", "topic3", "topic1"},
+			UserData: newUD().
+				assign("topic", 0).
+				assign("topic2", 0).
+				assign("topic1", 0).
+				setGeneration(currentGeneration - 1).
+				encode(),
+		},
+		{
+			ID:     "consumer3",
+			Topics: []string{"topic", "topic2", "topic3", "topic1"},
+			UserData: newUD().
+				assign("topic3", 2).
+				assign("topic2", 2).
+				assign("topic1", 1).
+				setGeneration(currentGeneration - 2).
+				encode(),
+		},
+		{
+			ID:     "consumer4",
+			Topics: []string{"topic", "topic2", "topic3", "topic1"},
+			UserData: newUD().
+				assign("topic3", 1).
+				assign("topic", 1, 2).
+				setGeneration(currentGeneration - 3).
+				encode(),
+		},
+	}
+
+	plan := Balance(members, topics)
+
+	// All existing assignments should be preserved (9 partitions already assigned)
+	// Consumer1 gets the remaining 3 unassigned partitions
+	testEqualDivvy(t, plan, 9, members)
+	testPlanUsage(t, plan, topics, nil)
+}
+
+func Test_OwnedPartitionsInvalidatedForConsumerWithMultipleGeneration(t *testing.T) {
+	t.Parallel()
+
+	topics := map[string]int32{
+		"topic":  3,
+		"topic2": 3,
+	}
+
+	currentGeneration := 10
+
+	members := []GroupMember{
+		{
+			ID:     "consumer1",
+			Topics: []string{"topic", "topic2"},
+			UserData: newUD().
+				assign("topic", 0).
+				assign("topic2", 1).
+				assign("topic", 1).
+				setGeneration(currentGeneration).
+				encode(),
+		},
+		{
+			ID:     "consumer2",
+			Topics: []string{"topic", "topic2"},
+			UserData: newUD().
+				assign("topic", 0).  // Conflicts with consumer1
+				assign("topic2", 1). // Conflicts with consumer1
+				assign("topic2", 2).
+				setGeneration(currentGeneration - 2).
+				encode(),
+		},
+	}
+
+	plan := Balance(members, topics)
+
+	// Consumer1 has higher generation so keeps conflicting partitions
+	// Both should get 3 partitions each for balance
+	testEqualDivvy(t, plan, 4, members)
+	testPlanUsage(t, plan, topics, nil)
+}
+
 func TestLarge(t *testing.T) {
 	t.Parallel()
 	{
