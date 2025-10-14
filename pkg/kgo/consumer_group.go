@@ -2029,9 +2029,11 @@ func (g *groupConsumer) updateCommitted(
 	for i := range resp.Topics {
 		reqTopic := &req.Topics[i]
 		respTopic := &resp.Topics[i]
-		topic := g.uncommitted[respTopic.Topic]
-		if topic == nil || // just in case
-			reqTopic.Topic != respTopic.Topic || // bad kafka
+		topic, exists := g.uncommitted[respTopic.Topic]
+		if !exists {
+			continue // just in case; concurrent rebalance lost the topic while commit was in flight
+		}
+		if reqTopic.Topic != respTopic.Topic || // bad kafka
 			len(reqTopic.Partitions) != len(respTopic.Partitions) { // same
 			g.cfg.logger.Log(LogLevelError, fmt.Sprintf("broker replied to our OffsetCommitRequest incorrectly! Topic at request index %d: %s, reply at index: %s; num partitions on request topic: %d, in reply: %d, we cannot handle this!", i, reqTopic.Topic, respTopic.Topic, len(reqTopic.Partitions), len(respTopic.Partitions)), "group", g.cfg.group)
 			continue
