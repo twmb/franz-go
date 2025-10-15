@@ -55,6 +55,23 @@ var (
 	npartitionsAt int64
 )
 
+func wait(tb testing.TB, dur time.Duration, cond func() error) {
+	tb.Helper()
+
+	start := time.Now()
+	for {
+		err := cond()
+		if err == nil {
+			return
+		}
+		if time.Since(start) > dur {
+			tb.Error(err)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 type slowConn struct {
 	net.Conn
 }
