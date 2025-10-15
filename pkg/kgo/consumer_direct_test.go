@@ -87,9 +87,16 @@ func TestConsumeTopicRetrieval_Many(t *testing.T) {
 func TestConsumeRegex(t *testing.T) {
 	t.Parallel()
 
+	pfx := randsha()[:16] + "-"
+
 	// Create test topics
 	var cleanup []func()
-	for _, name := range []string{"test-include-1", "test-include-2", "test-exclude-1", "test-exclude-2"} {
+	for _, name := range []string{
+		pfx + "include-1",
+		pfx + "include-2",
+		pfx + "exclude-1",
+		pfx + "exclude-2",
+	} {
 		_, c := tmpNamedTopicPartitions(t, name, 1)
 		cleanup = append(cleanup, c)
 	}
@@ -100,21 +107,23 @@ func TestConsumeRegex(t *testing.T) {
 	}()
 
 	cl, _ := newTestClient(
-		ConsumeTopics(".*"),                     // Match all test-* topics
-		ConsumeExcludeTopics("test-exclude-.*"), // Exclude test-exclude-* topics
+		ConsumeTopics(pfx+".*"),                // Match all pfx-* topics
+		ConsumeExcludeTopics(pfx+"exclude-.*"), // Exclude pfx-exclude-* topics
 		ConsumeRegex(),
 	)
 	defer cl.Close()
 	cl.triggerUpdateMetadataNow("querying metadata for consumer initialization")
-	time.Sleep(100 * time.Millisecond)
-
-	topics := cl.GetConsumeTopics()
-	if len(topics) != 2 {
-		t.Fatalf("expected 2 topics, got %v", topics)
-	}
+	var topics []string
+	wait(t, 5*time.Second, func() error {
+		topics = cl.GetConsumeTopics()
+		if len(topics) != 2 {
+			return fmt.Errorf("expected 2 topics, got %v", topics)
+		}
+		return nil
+	})
 	for _, topic := range topics {
-		if !strings.HasPrefix(topic, "test-include-") {
-			t.Fatalf("expected to see test-include-*, got %v", topic)
+		if !strings.HasPrefix(topic, pfx+"include-") {
+			t.Fatalf("expected to see %sinclude-*, got %v", pfx, topic)
 		}
 	}
 }
