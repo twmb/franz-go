@@ -20,6 +20,6 @@ do
     if [[ $(pwd) == *"/franz-go/examples/"* ]]; then
         lang="$maxlang"
     fi
-    go mod edit -go=$lang; go mod tidy
+    go get -u ./...; go mod edit -go=$lang; go mod tidy
     popd > /dev/null
 done
