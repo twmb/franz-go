@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"maps"
@@ -17,6 +18,10 @@ import (
 /////////////
 // HELPERS // -- ugly types to eliminate the toil of nil maps and lookups
 /////////////
+
+func strtid(tid [16]byte) string {
+	return base64.RawURLEncoding.EncodeToString(tid[:])
+}
 
 func dupmsi32(m map[string]int32) map[string]int32 {
 	d := make(map[string]int32, len(m))

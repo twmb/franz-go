@@ -2296,7 +2296,7 @@ func (f *fetchRequest) MaxVersion() int16 {
 	if f.disableIDs || f.session.disableIDs {
 		return 12
 	}
-	return 17
+	return 18
 }
 func (f *fetchRequest) SetVersion(v int16) { f.version = v }
 func (f *fetchRequest) GetVersion() int16  { return f.version }
