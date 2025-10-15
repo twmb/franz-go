@@ -1066,9 +1066,9 @@ func b41() *release {
 	now.addkey(86) // 0 delete share group state
 	now.addkey(87) // 0 read share group state summary
 
-	now.addkey(90) // e3e4c179592, then KAFKA-16720 952113e8e0e KIP-932
-	now.addkey(91) // KAFKA-16717 6a6b80215d8 KIP-932
-	now.addkey(92) // KAFKA-16718 63229a768ce KIP-932
+	now.addkey(90) // 0 describe share group offsets e3e4c179592, then KAFKA-16720 952113e8e0e KIP-932
+	now.addkey(91) // 0 alter share group offsets KAFKA-16717 6a6b80215d8 KIP-932
+	now.addkey(92) // 0 delete share group offsets KAFKA-16718 63229a768ce KIP-932
 
 	return now
 }
