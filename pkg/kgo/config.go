@@ -551,6 +551,7 @@ func defaultCfg() cfg {
 		produceTimeout:      10 * time.Second,
 		recordRetries:       math.MaxInt64, // effectively unbounded
 		maxUnknownFailures:  4,
+		linger:              10 * time.Millisecond,
 		partitioner:         UniformBytesPartitioner(64<<10, true, true, nil),
 		txnBackoff:          20 * time.Millisecond,
 
