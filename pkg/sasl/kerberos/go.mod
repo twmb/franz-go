@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/jcmturner/gokrb5/v8 v8.4.4
-	github.com/twmb/franz-go v1.18.1
+	github.com/twmb/franz-go v1.19.5
 )
 
 require (
@@ -13,6 +13,6 @@ require (
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
 	github.com/jcmturner/gofork v1.7.6 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
-	golang.org/x/crypto v0.38.0 // indirect
-	golang.org/x/net v0.40.0 // indirect
+	golang.org/x/crypto v0.43.0 // indirect
+	golang.org/x/net v0.46.0 // indirect
 )
