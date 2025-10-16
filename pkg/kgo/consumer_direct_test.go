@@ -112,9 +112,9 @@ func TestConsumeRegex(t *testing.T) {
 		ConsumeRegex(),
 	)
 	defer cl.Close()
-	cl.triggerUpdateMetadataNow("querying metadata for consumer initialization")
 	var topics []string
 	wait(t, 5*time.Second, func() error {
+		cl.triggerUpdateMetadataNow("querying metadata for consumer initialization")
 		topics = cl.GetConsumeTopics()
 		if len(topics) != 2 {
 			return fmt.Errorf("expected 2 topics, got %v", topics)
