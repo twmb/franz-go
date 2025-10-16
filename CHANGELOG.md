@@ -14,6 +14,10 @@ check them out! `kfake` supports many Kafka features, but transactions are still
 All franz-go tests except transaction based tests pass against a kfake "cluster",
 so odds are, it'll work for you.
 
+There are a few external contributors this release to features, docs, bugs, and
+internal improvements. If I do not call you out below directly, please know I'm
+thankful for your contributions!
+
 ## Behavior changes
 
 * This library now lingers by default for 10ms. You can switch back to 0ms
@@ -29,7 +33,7 @@ so odds are, it'll work for you.
   specifically only on a cluster that is transitioning from not using topic IDs
   to using topic IDs, and only if the transition is implemented 100% correctly.
   This bug has existed for years and was only encountered during the recent addition
-  of topic IDs to Redpanda. See [`645f1126`](https://github.com/twmb/franz-go/commit/645f1126) for more detauls.
+  of topic IDs to Redpanda. See [`645f1126`](https://github.com/twmb/franz-go/commit/645f1126) for more details.
 
 * The loop that determines whether more batches exist to be produced had its
   conditional backwards. This was hidden forever due to other minor logic flaws
