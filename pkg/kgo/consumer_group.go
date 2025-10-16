@@ -315,20 +315,20 @@ func (c *consumer) initGroup() {
 		left: make(chan struct{}),
 	}
 	c.g = g
-	if !g.cfg.setCommitCallback {
+	if g.cfg.commitCallback == nil {
 		g.cfg.commitCallback = g.defaultCommitCallback
 	}
 
 	if g.cfg.txnID == nil {
 		// We only override revoked / lost if they were not explicitly
 		// set by options.
-		if !g.cfg.setRevoked {
+		if g.cfg.onRevoked == nil {
 			g.cfg.onRevoked = g.defaultRevoke
 		}
 		// For onLost, we do not want to commit in onLost, so we
 		// explicitly set onLost to an empty function to avoid the
 		// fallback to onRevoked.
-		if !g.cfg.setLost {
+		if g.cfg.onLost == nil {
 			g.cfg.onLost = func(context.Context, *Client, map[string][]int32) {}
 		}
 	} else {
