@@ -273,10 +273,17 @@ func (c *consumer) waitAndAddRebalance() {
 	if !c.cl.cfg.blockRebalanceOnPoll {
 		return
 	}
+	var blockedCalled bool
 	c.pollWaitMu.Lock()
 	defer c.pollWaitMu.Unlock()
 	c.pollWaitState += 1 << 32
 	for c.pollWaitState&math.MaxUint32 != 0 {
+		if !blockedCalled {
+			if c.cl.cfg.onBlocked != nil {
+				c.cl.cfg.onBlocked(c.cl.ctx, c.cl)
+			}
+			blockedCalled = true
+		}
 		c.pollWaitC.Wait()
 	}
 }
@@ -720,9 +727,6 @@ func (c *consumer) purgeTopics(topics []string) {
 	for _, topic := range topics {
 		purgeAssignments[topic] = nil
 	}
-
-	c.waitAndAddRebalance()
-	defer c.unaddRebalance()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

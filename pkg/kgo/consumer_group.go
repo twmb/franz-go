@@ -315,20 +315,20 @@ func (c *consumer) initGroup() {
 		left: make(chan struct{}),
 	}
 	c.g = g
-	if !g.cfg.setCommitCallback {
+	if g.cfg.commitCallback == nil {
 		g.cfg.commitCallback = g.defaultCommitCallback
 	}
 
 	if g.cfg.txnID == nil {
 		// We only override revoked / lost if they were not explicitly
 		// set by options.
-		if !g.cfg.setRevoked {
+		if g.cfg.onRevoked == nil {
 			g.cfg.onRevoked = g.defaultRevoke
 		}
 		// For onLost, we do not want to commit in onLost, so we
 		// explicitly set onLost to an empty function to avoid the
 		// fallback to onRevoked.
-		if !g.cfg.setLost {
+		if g.cfg.onLost == nil {
 			g.cfg.onLost = func(context.Context, *Client, map[string][]int32) {}
 		}
 	} else {
@@ -2029,9 +2029,11 @@ func (g *groupConsumer) updateCommitted(
 	for i := range resp.Topics {
 		reqTopic := &req.Topics[i]
 		respTopic := &resp.Topics[i]
-		topic := g.uncommitted[respTopic.Topic]
-		if topic == nil || // just in case
-			reqTopic.Topic != respTopic.Topic || // bad kafka
+		topic, exists := g.uncommitted[respTopic.Topic]
+		if !exists {
+			continue // just in case; concurrent rebalance lost the topic while commit was in flight
+		}
+		if reqTopic.Topic != respTopic.Topic || // bad kafka
 			len(reqTopic.Partitions) != len(respTopic.Partitions) { // same
 			g.cfg.logger.Log(LogLevelError, fmt.Sprintf("broker replied to our OffsetCommitRequest incorrectly! Topic at request index %d: %s, reply at index: %s; num partitions on request topic: %d, in reply: %d, we cannot handle this!", i, reqTopic.Topic, respTopic.Topic, len(reqTopic.Partitions), len(respTopic.Partitions)), "group", g.cfg.group)
 			continue

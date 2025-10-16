@@ -95,15 +95,14 @@ type cfg struct {
 	maxBrokerWriteBytes int32
 	maxBrokerReadBytes  int32
 
-	allowAutoTopicCreation bool
-
 	metadataMaxAge time.Duration
 	metadataMinAge time.Duration
 
 	sasls []sasl.Mechanism
 
-	disableClientMetrics bool
-	userMetrics          func() iter.Seq[Metric]
+	allowAutoTopicCreation bool
+	disableClientMetrics   bool
+	userMetrics            func() iter.Seq[Metric]
 
 	hooks hooks
 	pools pools
@@ -186,16 +185,12 @@ type cfg struct {
 	onAssigned func(context.Context, *Client, map[string][]int32)
 	onRevoked  func(context.Context, *Client, map[string][]int32)
 	onLost     func(context.Context, *Client, map[string][]int32)
+	onBlocked  func(context.Context, *Client)
 	onFetched  func(context.Context, *Client, *kmsg.OffsetFetchResponse) error
 
 	adjustOffsetsBeforeAssign func(ctx context.Context, offsets map[string]map[int32]Offset) (map[string]map[int32]Offset, error)
 
 	blockRebalanceOnPoll bool
-
-	setAssigned       bool
-	setRevoked        bool
-	setLost           bool
-	setCommitCallback bool
 
 	autocommitDisable  bool // true if autocommit was disabled or we are transactional
 	autocommitGreedy   bool
@@ -412,10 +407,10 @@ func (cfg *cfg) validate() error {
 	if cfg.autocommitGreedy && cfg.autocommitMarks {
 		return errors.New("cannot enable both greedy autocommitting and marked autocommitting")
 	}
-	if (cfg.autocommitGreedy || cfg.autocommitDisable || cfg.autocommitMarks || cfg.setCommitCallback) && len(cfg.group) == 0 {
+	if (cfg.autocommitGreedy || cfg.autocommitDisable || cfg.autocommitMarks || cfg.commitCallback != nil) && len(cfg.group) == 0 {
 		return errors.New("invalid autocommit options specified when a group was not specified")
 	}
-	if (cfg.setLost || cfg.setRevoked || cfg.setAssigned) && len(cfg.group) == 0 {
+	if (cfg.onLost != nil || cfg.onRevoked != nil || cfg.onAssigned != nil) && len(cfg.group) == 0 {
 		return errors.New("invalid group partition assigned/revoked/lost functions set when a group was not specified")
 	}
 
@@ -1766,22 +1761,17 @@ func RequireStableFetchOffsets() GroupOpt {
 //
 // If you use this option, you should ensure that you always process records
 // quickly, and that your OnPartitions{Assigned,Revoked,Lost} callbacks are
-// fast. It is recommended you also use PollRecords rather than PollFetches so
-// that you can bound how many records you process at once. You must always
-// AllowRebalances when you are done processing the records you received. Only
-// rebalances that lose partitions are blocked; rebalances that are strictly
-// net additions or non-modifications do not block (the On callbacks are always
-// blocked so that you can ensure their serialization).
+// fast. If your record processing may be slow, it is recommended you also use
+// PollRecords rather than PollFetches so that you can bound how many records
+// you process at once. You must always AllowRebalances when you are done
+// processing the records you received. Only rebalances that lose partitions
+// are blocked; rebalances that are strictly net additions or non-modifications
+// do not block (the On callbacks are always blocked so that you can ensure
+// their serialization).
 //
-// This function can largely replace any commit logic you may want to do in
-// OnPartitionsRevoked.
-//
-// Lastly, note that this actually blocks any rebalance from calling
-// OnPartitions{Assigned,Revoked,Lost}. If you are using a cooperative
-// rebalancer such as CooperativeSticky, a rebalance can begin right before you
-// poll, and you will still receive records because no partitions are lost yet.
-// The in-progress rebalance only blocks if you are assigned new partitions or
-// if any of your partitions are revoked.
+// You can use [OnPartitionsCallbackBlocked] as a signal that a rebalance WANTS
+// to happen, but you are currently blocking it, and that you need to either
+// finish processing or abort processing to allow the rebalance to continue.
 func BlockRebalanceOnPoll() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.blockRebalanceOnPoll = true }}
 }
@@ -1822,7 +1812,7 @@ func AdjustFetchOffsetsFn(adjustOffsetsBeforeAssign func(context.Context, map[st
 // records. If you want to ensure this function is called serially with
 // processing, consider the BlockRebalanceOnPoll option.
 func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][]int32)) GroupOpt {
-	return groupOpt{func(cfg *cfg) { cfg.onAssigned, cfg.setAssigned = onAssigned, true }}
+	return groupOpt{func(cfg *cfg) { cfg.onAssigned = onAssigned }}
 }
 
 // OnPartitionsRevoked sets the function to be called once this group member
@@ -1854,7 +1844,7 @@ func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][
 // This function is called if a "fatal" group error is encountered and you have
 // not set [OnPartitionsLost]. See OnPartitionsLost for more details.
 func OnPartitionsRevoked(onRevoked func(context.Context, *Client, map[string][]int32)) GroupOpt {
-	return groupOpt{func(cfg *cfg) { cfg.onRevoked, cfg.setRevoked = onRevoked, true }}
+	return groupOpt{func(cfg *cfg) { cfg.onRevoked = onRevoked }}
 }
 
 // OnPartitionsLost sets the function to be called on "fatal" group errors,
@@ -1873,7 +1863,16 @@ func OnPartitionsRevoked(onRevoked func(context.Context, *Client, map[string][]i
 // records. If you want to ensure this function is called serially with
 // processing, consider the BlockRebalanceOnPoll option.
 func OnPartitionsLost(onLost func(context.Context, *Client, map[string][]int32)) GroupOpt {
-	return groupOpt{func(cfg *cfg) { cfg.onLost, cfg.setLost = onLost, true }}
+	return groupOpt{func(cfg *cfg) { cfg.onLost = onLost }}
+}
+
+// OnPartitionsCallbackBlocked sets a function to be called just before any
+// [OnPartitionsAssigned], [OnPartitionsRevoked], or [OnPartitionsLost]
+// callbacks are blocked from [BlockRebalanceOnPoll]. You can use this as a
+// signal in your processing function to hurry up and unblock rebalancing
+// before your group member is kicked from the group at the session timeout.
+func OnPartitionsCallbackBlocked(fn func(context.Context, *Client)) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.onBlocked = fn }}
 }
 
 // OnOffsetsFetched sets a function to be called after offsets have been
@@ -1987,11 +1986,7 @@ func GroupProtocol(protocol string) GroupOpt {
 // AutoCommitCallback sets the callback to use if autocommitting is enabled.
 // This overrides the default callback that logs errors and continues.
 func AutoCommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)) GroupOpt {
-	return groupOpt{func(cfg *cfg) {
-		if fn != nil {
-			cfg.commitCallback, cfg.setCommitCallback = fn, true
-		}
-	}}
+	return groupOpt{func(cfg *cfg) { cfg.commitCallback = fn }}
 }
 
 // !!! Only uncomment once we trust the broker implementation!
