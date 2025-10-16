@@ -3,9 +3,9 @@ module aws_msk_iam
 go 1.25.0
 
 require (
-	github.com/aws/aws-sdk-go v1.55.7
-	github.com/twmb/franz-go v1.18.1
-	github.com/twmb/franz-go/pkg/kmsg v1.11.2
+	github.com/aws/aws-sdk-go v1.55.8
+	github.com/twmb/franz-go v1.19.5
+	github.com/twmb/franz-go/pkg/kmsg v1.12.0
 )
 
 require (
