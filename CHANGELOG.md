@@ -1,3 +1,93 @@
+v1.20.0
+===
+
+This is a comparatively small minor release that adds support for Kafka 4.1,
+adds three new APIs, fixes four bugs (read below to gauge importance), has a
+few improvements, and **switches the client from a default of 0ms linger to a
+default of 10ms linger**.
+
+Also of note: a new `srfake` package has been created so you can run a fake
+Schema Registry server in your CI tests (thank you [@weeco](https://github.com/weeco)).
+This complements the existing `kfake` package that allows you to run a fake
+in-memory Kafka "cluster" for unit testing. If you did not know of either of these,
+check them out! `kfake` supports many Kafka features, but transactions are still WIP.
+All franz-go tests except transaction based tests pass against a kfake "cluster",
+so odds are, it'll work for you.
+
+## Behavior changes
+
+* This library now lingers by default for 10ms. You can switch back to 0ms
+  lingering by adding `kgo.ProducerLinger(10*time.Millisecond)` to your options
+  when initializing the client. The original theory for 0ms linger was more of
+  a theory, and years of practice has shown that even a tiny linger can be
+  beneficial to the throughput and batching of clients.
+  See [#1072](https://github.com/twmb/franz-go/issues/1072) for more details.
+
+## Bug fixes
+
+* Metadata refreshes could panic if a very specific flow of events happened,
+  specifically only on a cluster that is transitioning from not using topic IDs
+  to using topic IDs, and only if the transition is implemented 100% correctly.
+  This bug has existed for years and was only encountered during the recent addition
+  of topic IDs to Redpanda. See [`645f1126`](https://github.com/twmb/franz-go/commit/645f1126) for more detauls.
+
+* The loop that determines whether more batches exist to be produced had its
+  conditional backwards. This was hidden forever due to other minor logic flaws
+  that caused the "do more batches exist?" check to occur more than it should
+  have, so the bug caused no problems. The "do more batches exist?" checks have
+  been improved and the conditional has been fixed.
+
+* The internal linger timers fired way more than they needed to, causing
+  batches to be cut WAY more frequently than they needed to when using
+  lingering. The logic here has been fixed, so lingering should actually run
+  its full time now and batches should be bigger.
+
+* Azure resets connections when speaking ApiVersions v4. v1.19 of this library
+  detected this resetting and after 3 attempts, downgrades to ApiVersions v3.
+  However, the connection reset error is different when running on Windows.
+  The code has been improved to detect the proper syscall when this library
+  is running on Windows. Thanks [@axw](https://github.com/axw)!
+
+## Improvements
+
+* Previously, producing was limited to 5 inflight requests per broker even if
+  you disabled idempotence and bumped the number. The inflight limit is now
+  unbounded. Thanks [@pracucci](https://github.com/pracucci)!
+
+## Features
+
+* `OnPartitionsCallbackBlocked` now exists so that, if you are using
+  `BlockRebalanceOnPoll`, you can be notified that a rebalance is desired. If
+  your record processing function is slow, this allows you to interrupt your
+  batch processing (if possible), wrap up committing, and allow a rebalance
+  _before_ your client is kicked from the group.
+
+* `ConsumeExcludeTopics`, if you are using regex consuming, allows you to have
+  a higher-priority set of regular expressions to exclude topics from being
+  consumed. This is useful if you want to consume everything _except_ a set of
+  topics (for example, if you are replicating topics from one cluster to
+  another). Thanks [@mmatczuk](https://github.com/mmatczuk)!
+
+* `Fetches.RecordsAll` now exists to return a Go iterator for use in range loops.
+  Thanks [@narqo](https://github.com/narqo)!
+ 
+## Relevant commits
+
+- [`1844d216`](https://github.com/twmb/franz-go/commit/1844d216) **feature** kgo: add OnPartitionsCallbackBlocked
+- [`157580fd`](https://github.com/twmb/franz-go/commit/157580fd) kgo.RequestSharded: support ConsumerGroupDescribe, ShareGroupDescribe
+- [`f176953e`](https://github.com/twmb/franz-go/commit/f176953e) **behavior change** kgo lingering: default to 10ms
+- [`679f7c3d`](https://github.com/twmb/franz-go/commit/679f7c3d) kgo: add support for produce v13
+- [`f7f61420`](https://github.com/twmb/franz-go/commit/f7f61420) generate: new definitions for share requests
+- [`32997347`](https://github.com/twmb/franz-go/commit/32997347) generate: new non-share protocols for kafka 4.1
+- [`be947c20`](https://github.com/twmb/franz-go/commit/be947c20) bench: add -batch-recs, -psync, -pgoros
+- [`0b1dbf0c`](https://github.com/twmb/franz-go/commit/0b1dbf0c) **bugfix** kgo: multiple linger fixes
+- [`2ea3251d`](https://github.com/twmb/franz-go/commit/2ea3251d) **bugfix** sink: fix old bug determining whether more batches should be produced
+- [`195bed84`](https://github.com/twmb/franz-go/commit/195bed84) **feature** kgo: add ConsumeExcludeTopics
+- [`645f9d4b`](https://github.com/twmb/franz-go/commit/645f9d4b) **bugfix** Check errno for (WSA)ECONNRESET
+- [`645f1126`](https://github.com/twmb/franz-go/commit/645f1126) **bugfix** kgo: fix panic in metadata updates from inconsistent broker state
+- [`612f26b6`](https://github.com/twmb/franz-go/commit/612f26b6) **feature** kgo: add Fetches.RecordsAll to return a Go native iterator
+- [`ce2bcd18`](https://github.com/twmb/franz-go/commit/ce2bcd18) **improvement** kgo: use unlimited ring buffers in the Produce path, allowing >5 inflight requests
+
 v1.19.5
 ===
 
