@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9
-	github.com/twmb/franz-go v1.19.5
+	github.com/twmb/franz-go v1.20.0
 	github.com/twmb/franz-go/plugin/kgmetrics v1.0.0
 )
 

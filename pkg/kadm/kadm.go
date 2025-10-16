@@ -141,6 +141,7 @@ func (cl *Client) Close() {
 // have timeout fields:
 //
 //	Produce
+//	ListOffsets (Kafka 4+, relevant for tiered storage listing)
 //	CreateTopics
 //	DeleteTopics
 //	DeleteRecords

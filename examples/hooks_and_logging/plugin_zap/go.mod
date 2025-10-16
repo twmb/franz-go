@@ -3,7 +3,7 @@ module dropin_zap
 go 1.25.0
 
 require (
-	github.com/twmb/franz-go v1.19.5
+	github.com/twmb/franz-go v1.20.0
 	github.com/twmb/franz-go/plugin/kzap v1.1.2
 	go.uber.org/zap v1.27.0
 )
