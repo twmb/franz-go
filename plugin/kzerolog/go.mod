@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/rs/zerolog v1.34.0
-	github.com/twmb/franz-go v1.19.5
+	github.com/twmb/franz-go v1.20.0
 )
 
 require (

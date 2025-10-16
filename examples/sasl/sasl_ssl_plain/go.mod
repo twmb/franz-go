@@ -2,7 +2,7 @@ module sasl_ssl_plain
 
 go 1.25.0
 
-require github.com/twmb/franz-go v1.19.5
+require github.com/twmb/franz-go v1.20.0
 
 require (
 	github.com/klauspost/compress v1.18.0 // indirect

@@ -3,7 +3,7 @@ module github.com/twmb/franz-go/plugin/kzap
 go 1.24.0
 
 require (
-	github.com/twmb/franz-go v1.19.5
+	github.com/twmb/franz-go v1.20.0
 	go.uber.org/zap v1.27.0
 )
 

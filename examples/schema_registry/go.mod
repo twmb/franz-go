@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/hamba/avro/v2 v2.30.0
-	github.com/twmb/franz-go v1.19.5
+	github.com/twmb/franz-go v1.20.0
 	github.com/twmb/franz-go/pkg/sr v1.5.0
 )
 

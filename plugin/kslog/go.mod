@@ -2,7 +2,7 @@ module github.com/twmb/franz-go/plugin/kslog
 
 go 1.24.0
 
-require github.com/twmb/franz-go v1.19.5
+require github.com/twmb/franz-go v1.20.0
 
 require (
 	github.com/klauspost/compress v1.18.0 // indirect
