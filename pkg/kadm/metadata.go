@@ -420,6 +420,23 @@ func (cl *Client) ListCommittedOffsets(ctx context.Context, topics ...string) (L
 	return cl.listOffsets(ctx, 1, -1, topics)
 }
 
+// ListMaxTimestampOffsets returns the offsets for the record with the largest
+// timestamp for each partition in each requested topic. In Kafka terms, this
+// returns the offset of the record with the maximum timestamp. If no topics
+// are specified, all topics are listed. If a requested topic does not exist,
+// no offsets for it are listed and it is not present in the response.
+//
+// This uses timestamp -3 and requires Kafka 3.0+ (KIP-734). In older Kafka
+// versions, this will return unexpected results.
+//
+// If any topics being listed do not exist, a special -1 partition is added
+// to the response with the expected error code kerr.UnknownTopicOrPartition.
+//
+// This may return *ShardErrors.
+func (cl *Client) ListMaxTimestampOffsets(ctx context.Context, topics ...string) (ListedOffsets, error) {
+    return cl.listOffsets(ctx, 0, -3, topics)
+}
+
 // ListOffsetsAfterMilli returns the first offsets at or after the requested
 // millisecond timestamp. Unlike listing start/end/committed offsets, offsets
 // returned from this function also include the timestamp of the offset. If no
