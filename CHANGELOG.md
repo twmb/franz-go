@@ -21,7 +21,7 @@ thankful for your contributions!
 ## Behavior changes
 
 * This library now lingers by default for 10ms. You can switch back to 0ms
-  lingering by adding `kgo.ProducerLinger(0*time.Millisecond)` to your options
+  lingering by adding `kgo.ProducerLinger(0)` to your options
   when initializing the client. The original theory for 0ms linger was more of
   a theory, and years of practice has shown that even a tiny linger can be
   beneficial to the throughput and batching of clients.
