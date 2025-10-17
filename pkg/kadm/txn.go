@@ -116,7 +116,7 @@ func (ds DescribedProducersPartitions) Sorted() []DescribedProducersPartition {
 	return all
 }
 
-// SortedProducer returns all producers sorted first by partition, then by producer ID.
+// SortedProducers returns all producers sorted first by partition, then by producer ID.
 func (ds DescribedProducersPartitions) SortedProducers() []DescribedProducer {
 	var all []DescribedProducer
 	ds.EachProducer(func(d DescribedProducer) {
@@ -167,7 +167,7 @@ func (ds DescribedProducersTopics) Sorted() []DescribedProducersTopic {
 	return all
 }
 
-// Sorted returns the described partitions sorted by topic and partition.
+// SortedPartitions returns the described partitions sorted by topic and partition.
 func (ds DescribedProducersTopics) SortedPartitions() []DescribedProducersPartition {
 	var all []DescribedProducersPartition
 	ds.EachPartition(func(d DescribedProducersPartition) {
@@ -180,7 +180,7 @@ func (ds DescribedProducersTopics) SortedPartitions() []DescribedProducersPartit
 	return all
 }
 
-// SortedProducer returns all producers sorted first by partition, then by producer ID.
+// SortedProducers returns all producers sorted first by partition, then by producer ID.
 func (ds DescribedProducersTopics) SortedProducers() []DescribedProducer {
 	var all []DescribedProducer
 	ds.EachProducer(func(d DescribedProducer) {
@@ -200,7 +200,7 @@ func (ds DescribedProducersTopics) Each(fn func(DescribedProducersTopic)) {
 	}
 }
 
-// EachPartitions calls fn for all topic partitions.
+// EachPartition calls fn for all topic partitions.
 func (ds DescribedProducersTopics) EachPartition(fn func(DescribedProducersPartition)) {
 	for _, d := range ds {
 		for _, p := range d.Partitions {
@@ -350,9 +350,9 @@ func (ds DescribedTransactions) Each(fn func(DescribedTransaction)) {
 //
 // If the transaction does not exist, this returns
 // kerr.TransactionalIDNotFound.
-func (rs DescribedTransactions) On(txnID string, fn func(*DescribedTransaction) error) (DescribedTransaction, error) {
-	if len(rs) > 0 {
-		r, ok := rs[txnID]
+func (ds DescribedTransactions) On(txnID string, fn func(*DescribedTransaction) error) (DescribedTransaction, error) {
+	if len(ds) > 0 {
+		r, ok := ds[txnID]
 		if ok {
 			if fn == nil {
 				return r, nil
@@ -494,7 +494,7 @@ func (cl *Client) ListTransactions(ctx context.Context, producerIDs []int64, fil
 	return cl.ListTransactionsByTxPattern(ctx, producerIDs, filterStates, "")
 }
 
-// ListTransactions returns all transactions and their states in the cluster.
+// ListTransactionsByTxPattern returns all transactions and their states in the cluster.
 // Filter states can be used to return transactions only in the requested
 // states. By default, this returns all transactions you have DESCRIBE access
 // to. Producer IDs can be specified to filter for transactions from the given
@@ -640,7 +640,7 @@ type TxnMarkersResponse struct {
 	Topics     TxnMarkersTopicResponses // Topics contains the topics that markers were written for, for this ProducerID.
 }
 
-// TxnMarkersResponse contains per-partition-ID responses to a WriteTxnMarkers
+// TxnMarkersResponses contains per-partition-ID responses to a WriteTxnMarkers
 // request.
 type TxnMarkersResponses map[int64]TxnMarkersResponse
 
