@@ -15,10 +15,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  golangci:
+  golangci-root:
     if: github.repository == 'twmb/franz-go'
     runs-on: ubuntu-latest
-    name: "golangci-lint on amd64"
+    name: "golangci-lint-root on amd64"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -26,6 +26,21 @@ jobs:
           go-version: 'stable'
       - uses: golangci/golangci-lint-action@v7
         with:
+          version: latest
+          args: --timeout=5m
+
+  golangci-kadm:
+    if: github.repository == 'twmb/franz-go'
+    runs-on: ubuntu-latest
+    name: "golangci-lint-kadm on amd64"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          working-directory: pkg/kadm
           version: latest
           args: --timeout=5m
 
