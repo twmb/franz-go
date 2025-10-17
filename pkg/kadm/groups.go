@@ -196,9 +196,9 @@ func (ds DescribedGroups) Sorted() []DescribedGroup {
 // original map (because slices are pointers).
 //
 // If the group does not exist, this returns kerr.GroupIDNotFound.
-func (rs DescribedGroups) On(group string, fn func(*DescribedGroup) error) (DescribedGroup, error) {
-	if len(rs) > 0 {
-		r, ok := rs[group]
+func (ds DescribedGroups) On(group string, fn func(*DescribedGroup) error) (DescribedGroup, error) {
+	if len(ds) > 0 {
+		r, ok := ds[group]
 		if ok {
 			if fn == nil {
 				return r, nil
@@ -220,7 +220,7 @@ func (ds DescribedGroups) Error() error {
 	return nil
 }
 
-// Topics returns a sorted list of all group names.
+// Names returns a sorted list of all group names.
 func (ds DescribedGroups) Names() []string {
 	all := make([]string, 0, len(ds))
 	for g := range ds {
@@ -271,7 +271,7 @@ func (cl *Client) ListGroups(ctx context.Context, filterStates ...string) (Liste
 	return cl.ListGroupsByType(ctx, nil, filterStates...)
 }
 
-// ListGroups returns all groups in the cluster, filtered by the given group
+// ListGroupsByType returns all groups in the cluster, filtered by the given group
 // type (classic, consumer, share, streams). Filter states can be used to
 // further filter by the current group state. Requires Kafka 3.8+.
 //
@@ -443,9 +443,9 @@ func (ds DeleteGroupResponses) Sorted() []DeleteGroupResponse {
 // well; any modifications within fn are modifications on the returned copy.
 //
 // If the group does not exist, this returns kerr.GroupIDNotFound.
-func (rs DeleteGroupResponses) On(group string, fn func(*DeleteGroupResponse) error) (DeleteGroupResponse, error) {
-	if len(rs) > 0 {
-		r, ok := rs[group]
+func (ds DeleteGroupResponses) On(group string, fn func(*DeleteGroupResponse) error) (DeleteGroupResponse, error) {
+	if len(ds) > 0 {
+		r, ok := ds[group]
 		if ok {
 			if fn == nil {
 				return r, nil
@@ -458,8 +458,8 @@ func (rs DeleteGroupResponses) On(group string, fn func(*DeleteGroupResponse) er
 
 // Error iterates over all groups and returns the first error encountered, if
 // any.
-func (rs DeleteGroupResponses) Error() error {
-	for _, r := range rs {
+func (ds DeleteGroupResponses) Error() error {
+	for _, r := range ds {
 		if r.Err != nil {
 			return r.Err
 		}
@@ -616,7 +616,6 @@ func (cl *Client) LeaveGroup(ctx context.Context, b *LeaveGroupBuilder) (LeaveGr
 	req.Group = b.group
 	for _, id := range b.instanceIDs {
 		m := kmsg.NewLeaveGroupRequestMember()
-		id := id
 		m.InstanceID = id
 		m.Reason = b.reason
 		req.Members = append(req.Members, m)
@@ -700,7 +699,7 @@ func (os OffsetResponses) KOffsets() map[string]map[int32]kgo.Offset {
 	return os.Offsets().KOffsets()
 }
 
-// DeleteFunc keeps only the offsets for which fn returns true.
+// KeepFunc keeps only the offsets for which fn returns true.
 func (os OffsetResponses) KeepFunc(fn func(OffsetResponse) bool) {
 	for t, ps := range os {
 		for p, o := range ps {
@@ -1031,7 +1030,7 @@ func (r FetchOffsetsResponse) CommittedPartitions() TopicsSet {
 	return r.Fetched.Partitions()
 }
 
-// FetchOFfsetsResponses contains responses for many fetch offsets requests.
+// FetchOffsetsResponses contains responses for many fetch offsets requests.
 type FetchOffsetsResponses map[string]FetchOffsetsResponse
 
 // EachError calls fn for every response that as a non-nil error.
@@ -1177,7 +1176,7 @@ func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchO
 type DeleteOffsetsResponses map[string]map[int32]error
 
 // Lookup returns the response at t and p and whether it exists.
-func (ds DeleteOffsetsResponses) Lookup(t string, p int32) (error, bool) {
+func (ds DeleteOffsetsResponses) Lookup(t string, p int32) (error, bool) { //nolint:revive // error comes first, it is what it is
 	if len(ds) == 0 {
 		return nil, false
 	}
@@ -1409,7 +1408,7 @@ type DescribedGroupLag struct {
 	FetchErr    error // FetchErr is the error returned from fetching offsets, if any.
 }
 
-// Err returns the first of DescribeErr or FetchErr that is non-nil.
+// Error returns the first of DescribeErr or FetchErr that is non-nil.
 func (l *DescribedGroupLag) Error() error {
 	if l.DescribeErr != nil {
 		return l.DescribeErr
@@ -1779,7 +1778,6 @@ func CalculateGroupLagWithStartOffsets(
 					Lag:       lag,
 					Err:       perr,
 				}
-
 			}
 		}
 

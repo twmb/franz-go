@@ -93,7 +93,7 @@ type TopicDetail struct {
 // TopicDetails contains details for topics as returned by a metadata response.
 type TopicDetails map[string]TopicDetail
 
-// Topics returns a sorted list of all topic names.
+// Names returns a sorted list of all topic names.
 func (ds TopicDetails) Names() []string {
 	all := make([]string, 0, len(ds))
 	for t := range ds {
@@ -429,15 +429,16 @@ func (cl *Client) ListEndOffsets(ctx context.Context, topics ...string) (ListedO
 // to the response with the expected error code kerr.UnknownTopicOrPartition.
 //
 // This may return *ShardErrors.
-func (cl *Client) LastMaxTimestampOffsets(ctx context.Context, topics ...string) (ListedOffsets, error) {
+func (cl *Client) ListMaxTimestampOffsets(ctx context.Context, topics ...string) (ListedOffsets, error) {
 	return cl.listOffsets(ctx, 0, -3, topics)
 }
 
-// ListStartOffsets returns the start (oldest) offsets for each partition in
-// each requested topic on the broker's disk, rather than in the cloud (i.e. if
-// you are using tiered storage). If no topics are specified, all topics are
-// listed. If a requested topic does not exist, no offsets for it are listed
-// and it is not present in the response. This requires Kafka 3.4+.
+// ListLocalLogStartOffsets returns the start (oldest) offsets for each
+// partition in each requested topic on the broker's disk, rather than in the
+// cloud (i.e. if you are using tiered storage). If no topics are specified,
+// all topics are listed. If a requested topic does not exist, no offsets for
+// it are listed and it is not present in the response. This requires Kafka
+// 3.4+.
 //
 // If any topics being listed do not exist, a special -1 partition is added to
 // the response with the expected error code kerr.UnknownTopicOrPartition.

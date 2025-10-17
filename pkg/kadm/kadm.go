@@ -326,7 +326,7 @@ func (os Offsets) DeleteFunc(fn func(o Offset) bool) {
 	os.KeepFunc(func(o Offset) bool { return !fn(o) })
 }
 
-// Topics returns the set of topics and partitions currently used in these
+// TopicsSet returns the set of topics and partitions currently used in these
 // offsets.
 func (os Offsets) TopicsSet() TopicsSet {
 	s := make(TopicsSet)
@@ -501,7 +501,7 @@ func (s TopicsSet) Merge(other TopicsSet) {
 	}
 }
 
-// Merge topics merges topic names into this set.
+// MergeTopics topics merges topic names into this set.
 func (s TopicsSet) MergeTopics(ts []string) {
 	for _, t := range ts {
 		s.Add(t)

@@ -184,7 +184,7 @@ type AlterConfig struct {
 	Value *string       // Value is the value to use when altering, if any.
 }
 
-// AlteredConfigsResponse contains the response for an individual alteration.
+// AlterConfigsResponse contains the response for an individual alteration.
 type AlterConfigsResponse struct {
 	Name       string // Name is the name of this resource (topic name or broker number).
 	Err        error  // Err is non-nil if the config could not be altered.
@@ -331,12 +331,12 @@ func (cl *Client) alterConfigs(
 // All prior configuration is lost.
 //
 // This may return *ShardErrors. You may consider checking
-// ValidateAlterTopicConfigs before using this method.
+// ValidateAlterTopicConfigsState before using this method.
 func (cl *Client) AlterTopicConfigsState(ctx context.Context, configs []AlterConfig, topics ...string) (AlterConfigsResponses, error) {
 	return cl.alterConfigsState(ctx, false, configs, kmsg.ConfigResourceTypeTopic, topics)
 }
 
-// ValidateAlterTopicConfigs validates an AlterTopicConfigsState for the given
+// ValidateAlterTopicConfigsState validates an AlterTopicConfigsState for the given
 // topics.
 //
 // This returns exactly what AlterTopicConfigsState returns, but does not
@@ -345,7 +345,7 @@ func (cl *Client) ValidateAlterTopicConfigsState(ctx context.Context, configs []
 	return cl.alterConfigsState(ctx, true, configs, kmsg.ConfigResourceTypeTopic, topics)
 }
 
-// AlterBrokerConfigs alters the full state of broker configurations. If
+// AlterBrokerConfigsState alters the full state of broker configurations. If
 // broker are specified, this updates each specific broker. If no brokers are
 // specified, this updates whole-cluster broker configuration values.
 // All prior configuration is lost.
@@ -363,10 +363,10 @@ func (cl *Client) AlterBrokerConfigsState(ctx context.Context, configs []AlterCo
 	return cl.alterConfigsState(ctx, false, configs, kmsg.ConfigResourceTypeBroker, names)
 }
 
-// ValidateAlterBrokerConfigs validates an AlterBrokerconfigsState for the
+// ValidateAlterBrokerConfigsState validates an AlterBrokerconfigsState for the
 // given brokers.
 //
-// This returns exactly what AlterBrokerConfigs returns, but does not actually
+// This returns exactly what AlterBrokerConfigsState returns, but does not actually
 // alter configurations.
 func (cl *Client) ValidateAlterBrokerConfigsState(ctx context.Context, configs []AlterConfig, brokers ...int32) (AlterConfigsResponses, error) {
 	var names []string

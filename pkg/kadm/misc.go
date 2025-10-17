@@ -204,14 +204,14 @@ func (v *BrokerApiVersions) KeyVersions(key int16) (min, max int16, exists bool)
 	return vs.min, vs.max, exists
 }
 
-// KeyVersions returns the broker's min version for an API key and whether this
+// KeyMinVersion returns the broker's min version for an API key and whether this
 // broker supports the request.
 func (v *BrokerApiVersions) KeyMinVersion(key int16) (min int16, exists bool) {
 	min, _, exists = v.KeyVersions(key)
 	return min, exists
 }
 
-// KeyVersions returns the broker's max version for an API key and whether this
+// KeyMaxVersion returns the broker's max version for an API key and whether this
 // broker supports the request.
 func (v *BrokerApiVersions) KeyMaxVersion(key int16) (max int16, exists bool) {
 	_, max, exists = v.KeyVersions(key)
@@ -244,7 +244,7 @@ func (v *BrokerApiVersions) VersionGuess(opt ...kversion.VersionGuessOpt) string
 	return kversion.FromApiVersionsResponse(v.raw).VersionGuess(opt...)
 }
 
-// BrokerApiVersions contains API versions for all brokers that are reachable
+// BrokersApiVersions contains API versions for all brokers that are reachable
 // from a metadata response.
 type BrokersApiVersions map[int32]BrokerApiVersions
 
@@ -277,7 +277,6 @@ func (cl *Client) ApiVersions(ctx context.Context) (BrokersApiVersions, error) {
 	var wg sync.WaitGroup
 	vs := make(BrokersApiVersions, len(m.Brokers))
 	for _, n := range m.Brokers.NodeIDs() {
-		n := n
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -378,7 +377,7 @@ type DescribedClientQuota struct {
 	Values ClientQuotaValues // Values contains the quota valies for this entity.
 }
 
-// DescribedClientQuota contains client quotas that were described.
+// DescribedClientQuotas contains client quotas that were described.
 type DescribedClientQuotas []DescribedClientQuota
 
 // DescribeClientQuotas describes client quotas. If strict is true, the
@@ -741,10 +740,8 @@ func (cl *Client) AlterUserSCRAMs(ctx context.Context, del []DeleteSCRAM, upsert
 				return nil, fmt.Errorf("user %s: unknown mechanism, unable to generate password", u.User)
 			}
 			upsert[i] = u
-		} else {
-			if len(u.Salt) == 0 || len(u.SaltedPassword) == 0 {
-				return nil, fmt.Errorf("user %s: must specify either a password or a salt and salted password", u.User)
-			}
+		} else if len(u.Salt) == 0 || len(u.SaltedPassword) == 0 {
+			return nil, fmt.Errorf("user %s: must specify either a password or a salt and salted password", u.User)
 		}
 	}
 
@@ -920,13 +917,18 @@ type OffsetForLeaderEpoch struct {
 // OffsetForLeaderEpochRequest.
 type OffsetsForLeaderEpochs map[string]map[int32]OffsetForLeaderEpoch
 
+// Deprecated: this function was a typo of OffsetForLeaderEpoch.
+func (cl *Client) OffetForLeaderEpoch(ctx context.Context, r OffsetForLeaderEpochRequest) (OffsetsForLeaderEpochs, error) {
+	return cl.OffsetForLeaderEpoch(ctx, r)
+}
+
 // OffsetForLeaderEpoch requests end offsets for the requested leader epoch in
 // partitions in the request. This is a relatively advanced and client internal
 // request, for more details, see the doc comments on the OffsetForLeaderEpoch
 // type.
 //
 // This may return *ShardErrors or *AuthError.
-func (cl *Client) OffetForLeaderEpoch(ctx context.Context, r OffsetForLeaderEpochRequest) (OffsetsForLeaderEpochs, error) {
+func (cl *Client) OffsetForLeaderEpoch(ctx context.Context, r OffsetForLeaderEpochRequest) (OffsetsForLeaderEpochs, error) {
 	req := kmsg.NewPtrOffsetForLeaderEpochRequest()
 	for t, ps := range r {
 		rt := kmsg.NewOffsetForLeaderEpochRequestTopic()
