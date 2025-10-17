@@ -518,6 +518,52 @@ func (*ConfluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, err
 
 type bReader struct{ b []byte }
 
+// IsIDRegisteredForDecoding returns true if the given schema ID is registered and has
+// a decode function available.
+func (s *Serde) IsIDRegisteredForDecoding(id int) bool {
+	ids := s.loadIDs()
+	t, isPresent := ids[id]
+	if !isPresent {
+		return false
+	}
+	return t.exists && t.decode != nil
+}
+
+// IsIDRegisteredForEncoding returns true if the given schema ID is registered
+// and has an encode function available.
+func (s *Serde) IsIDRegisteredForEncoding(id int) bool {
+	ids := s.loadIDs()
+	t, isPresent := ids[id]
+	if !isPresent {
+		return false
+	}
+	return t.exists && (t.encode != nil || t.appendEncode != nil)
+}
+
+// GetRegisteredIDForEncoding returns a slice of all registered schema IDs for encoding.
+func (s *Serde) GetRegisteredIDForEncoding() []int {
+	ids := s.loadIDs()
+	result := make([]int, 0, len(ids))
+	for id, t := range ids {
+		if t.exists && (t.encode != nil || t.appendEncode != nil) {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+// GetRegisteredIDForDecoding returns a slice of all registered schema IDs for decoding.
+func (s *Serde) GetRegisteredIDForDecoding() []int {
+	ids := s.loadIDs()
+	result := make([]int, 0, len(ids))
+	for id, t := range ids {
+		if t.exists && t.decode != nil {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
 func (b *bReader) ReadByte() (byte, error) {
 	if len(b.b) > 0 {
 		r := b.b[0]
