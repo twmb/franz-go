@@ -1296,7 +1296,7 @@ func (cl *Client) Request(ctx context.Context, req kmsg.Request) (kmsg.Response,
 // set to true. This function cannot be used to request topics via TopicID;
 // the direct topic name must be used.
 func (cl *Client) RequestCachedMetadata(ctx context.Context, req *kmsg.MetadataRequest, limit time.Duration) (*kmsg.MetadataResponse, error) {
-	topics := make([]string, 0, len(req.Topics))
+	var topics []string
 	for _, t := range req.Topics {
 		if t.Topic == nil || *t.Topic == "" {
 			return nil, errors.New("unable to request cached metadata with a missing topic name (topic IDs are not supported)")
@@ -2690,7 +2690,7 @@ func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string, useC
 		intoMapped = make(map[string]mappedMetadataTopic)
 	}
 
-	_, _, err := cl.fetchMetadataForTopics(ctx, false, needed, intoMapped)
+	_, _, err := cl.fetchMetadataForTopics(ctx, topics == nil, needed, intoMapped)
 	return intoMapped, err
 }
 

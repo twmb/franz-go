@@ -591,4 +591,7 @@ func TestIssue1142(t *testing.T) {
 	if len(resp.Brokers) != 1 {
 		t.Fatalf("expected 1 broker, got %d", len(resp.Brokers))
 	}
+	if len(resp.Topics.Names()) != 1 {
+		t.Fatalf("expected 1 topic, got %d", len(resp.Topics.Names()))
+	}
 }
