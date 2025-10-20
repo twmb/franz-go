@@ -31,7 +31,7 @@ thankful for your contributions!
 
 * Metadata refreshes could panic if a very specific flow of events happened,
   specifically only on a cluster that is transitioning from not using topic IDs
-  to using topic IDs, and only if the transition is implemented 100% correctly.
+  to using topic IDs, and only if the transition is not implemented 100% correctly.
   This bug has existed for years and was only encountered during the recent addition
   of topic IDs to Redpanda. See [`645f1126`](https://github.com/twmb/franz-go/commit/645f1126) for more details.
 
