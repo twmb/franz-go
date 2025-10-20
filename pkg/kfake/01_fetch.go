@@ -150,6 +150,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	}()
 
 	var batchesAdded int
+	nbytes = 0
 full:
 	for _, rt := range req.Topics {
 		for _, rp := range rt.Partitions {
