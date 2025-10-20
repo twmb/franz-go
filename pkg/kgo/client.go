@@ -2682,7 +2682,7 @@ func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string, useC
 	needed := topics
 	if useCache {
 		intoMapped, needed = cl.fetchCachedMappedMetadata(limit, topics...)
-		if len(needed) == 0 {
+		if intoMapped != nil && len(needed) == 0 {
 			return intoMapped, nil
 		}
 	}
