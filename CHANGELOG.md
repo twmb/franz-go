@@ -1,3 +1,18 @@
+v1.20.1
+===
+
+This small patchfix release fixes a longstanding bug in `RequestCachedMetadata`,
+which became a problem now that kadm is using it by default: if no metadata was
+cached and you requested all topics, no metadata request would be issued and
+you'd get no valid response. Thank you [@countableSet](https://github.com/countableSet)
+for the find and fix. **All users of kfake v1.12 should bump their franz-go dep**.
+
+This also adds the two new 1.20 config options to `OptValues`, and a big doc
+comment hinting to add new config opts going forward.
+
+- [`1087d3c7`](https://github.com/twmb/franz-go/commit/1087d3c7) kgo: add new opts to OptValues && big doc to do so going forward...
+- [`cad283f0`](https://github.com/twmb/franz-go/commit/cad283f0) **bugfix** kgo: fix for empty fetch mapped metadata (#1143)
+
 v1.20.0
 ===
 
