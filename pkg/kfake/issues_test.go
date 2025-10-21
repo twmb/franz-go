@@ -549,3 +549,49 @@ func TestIssueTimestampInclusivity(t *testing.T) {
 		}
 	}
 }
+
+func TestIssue1142(t *testing.T) {
+	const testTopic = "foo"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SleepOutOfOrder(),
+		SeedTopics(1, testTopic),
+		AllowAutoTopicCreation(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	client, err := kadm.NewOptClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.AllowAutoTopicCreation(),
+		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
+	)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	resp, err := client.BrokerMetadata(ctx)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	if resp.Cluster != "kfake" {
+		t.Fatalf("expected cluster kfake, got %s", resp.Cluster)
+	}
+	if resp.Controller != 0 {
+		t.Fatalf("expected controller 0, got %d", resp.Controller)
+	}
+	if len(resp.Brokers) != 1 {
+		t.Fatalf("expected 1 broker, got %d", len(resp.Brokers))
+	}
+	if len(resp.Topics.Names()) != 1 {
+		t.Fatalf("expected 1 topic, got %d", len(resp.Topics.Names()))
+	}
+}
