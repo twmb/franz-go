@@ -577,7 +577,7 @@ func TestIssue1142(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	resp, err := client.BrokerMetadata(ctx)
+	resp, err := client.Metadata(ctx)
 	if err != nil {
 		t.Fatal(err)
 		return
