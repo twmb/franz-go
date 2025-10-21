@@ -5,7 +5,7 @@ This small patchfix release fixes a longstanding bug in `RequestCachedMetadata`,
 which became a problem now that kadm is using it by default: if no metadata was
 cached and you requested all topics, no metadata request would be issued and
 you'd get no valid response. Thank you [@countableSet](https://github.com/countableSet)
-for the find and fix. **All users of kfake v1.12 should bump their franz-go dep**.
+for the find and fix. **All users of kadm v1.12 should bump their franz-go dep**.
 
 This also adds the two new 1.20 config options to `OptValues`, and a big doc
 comment hinting to add new config opts going forward.
