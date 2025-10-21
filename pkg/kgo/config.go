@@ -19,6 +19,12 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl"
 )
 
+////////////////////////////////////////////////////////
+// NOTE:                                              //
+// NOTE: Make sure new configs are added to OptValues //
+// NOTE:                                              //
+////////////////////////////////////////////////////////
+
 // Opt is an option to configure a client.
 type Opt interface {
 	apply(*cfg)

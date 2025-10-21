@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"maps"
 	"math"
 	"math/rand"
 	"net"
@@ -359,6 +360,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.decompressor}
 	case namefn(ConsumeRegex):
 		return []any{cfg.regex}
+	case namefn(ConsumeExcludeTopics):
+		return []any{slices.Collect(maps.Keys(cfg.excludeTopics))}
 	case namefn(ConsumeStartOffset):
 		return []any{cfg.startOffset}
 	case namefn(ConsumeResetOffset):
@@ -425,6 +428,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.onLost}
 	case namefn(OnPartitionsRevoked):
 		return []any{cfg.onRevoked}
+	case namefn(OnPartitionsCallbackBlocked):
+		return []any{cfg.onBlocked}
 	case namefn(RebalanceTimeout):
 		return []any{cfg.rebalanceTimeout}
 	case namefn(RequireStableFetchOffsets):
