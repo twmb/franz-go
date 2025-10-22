@@ -2658,6 +2658,9 @@ func (cl *Client) maybeDeleteMappedMetadata(unknownTopic bool, ts ...string) (sh
 // is ListOffsets. Likely, ListOffsets for the same topic will be issued back
 // to back, so not caching for so long is ok.
 func (cl *Client) fetchCachedMappedMetadata(limit time.Duration, ts ...string) (map[string]mappedMetadataTopic, []string) {
+	if len(ts) == 0 {
+		return nil, nil
+	}
 	cl.mappedMetaMu.Lock()
 	defer cl.mappedMetaMu.Unlock()
 	if len(cl.mappedMeta) == 0 {
@@ -2665,11 +2668,9 @@ func (cl *Client) fetchCachedMappedMetadata(limit time.Duration, ts ...string) (
 	}
 	cached := make(map[string]mappedMetadataTopic)
 	needed := ts[:0]
-
 	if limit <= 0 {
 		limit = cl.cfg.metadataMinAge
 	}
-
 	for _, t := range ts {
 		tcached, exists := cl.mappedMeta[t]
 		if exists && time.Since(tcached.when) < limit {
@@ -2688,7 +2689,7 @@ func (cl *Client) fetchCachedMappedMetadata(limit time.Duration, ts ...string) (
 func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string, useCache bool, limit time.Duration) (map[string]mappedMetadataTopic, error) {
 	var intoMapped map[string]mappedMetadataTopic
 	needed := topics
-	if useCache {
+	if useCache && len(topics) > 0 {
 		intoMapped, needed = cl.fetchCachedMappedMetadata(limit, topics...)
 		// If intoMapped is nil, we have no cached topics at all and
 		// need to force a metadata load to satisfy broker/controller
