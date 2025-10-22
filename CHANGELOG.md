@@ -5,10 +5,15 @@ This small patchfix release fixes a longstanding bug in `RequestCachedMetadata`,
 which became a problem now that kadm is using it by default: if no metadata was
 cached and you requested all topics, no metadata request would be issued and
 you'd get no valid response. Thank you [@countableSet](https://github.com/countableSet)
-for the find and fix. **All users of kadm v1.12 should bump their franz-go dep**.
+for the find and fix.
 
 This also adds the two new 1.20 config options to `OptValues`, and a big doc
 comment hinting to add new config opts going forward.
+
+**NOTE** Follow up testing showed there are still more long-standing bugs with
+`RequestCachedMetadata`.  Usage of that function has been reverted from kadm
+for the time being (which is, in the open source ecosystem, the only place this
+function was ever used). **All users of kadm v1.17.0 should bump to v1.17.1**.
 
 - [`1087d3c7`](https://github.com/twmb/franz-go/commit/1087d3c7) kgo: add new opts to OptValues && big doc to do so going forward...
 - [`cad283f0`](https://github.com/twmb/franz-go/commit/cad283f0) **bugfix** kgo: fix for empty fetch mapped metadata (#1143)
