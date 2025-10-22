@@ -230,16 +230,8 @@ func (cl *Client) Metadata(
 func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) (Metadata, error) {
 	req := kmsg.NewPtrMetadataRequest()
 
-	fn := func() (*kmsg.MetadataResponse, error) {
-		return cl.cl.RequestCachedMetadata(ctx, req, 0)
-	}
-	if ctx.Value(&includeAuthOps) != nil { // cached metadata does not query auth
-		req.IncludeClusterAuthorizedOperations = true
-		req.IncludeTopicAuthorizedOperations = true
-		fn = func() (*kmsg.MetadataResponse, error) {
-			return req.RequestWith(ctx, cl.cl)
-		}
-	}
+	req.IncludeClusterAuthorizedOperations = true
+	req.IncludeTopicAuthorizedOperations = ctx.Value(&includeAuthOps) != nil
 	for _, t := range topics {
 		rt := kmsg.NewMetadataRequestTopic()
 		rt.Topic = kmsg.StringPtr(t)
@@ -248,7 +240,7 @@ func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) 
 	if noTopics {
 		req.Topics = []kmsg.MetadataRequestTopic{}
 	}
-	resp, err := fn()
+	resp, err := req.RequestWith(ctx, cl.cl)
 	if err != nil {
 		return Metadata{}, err
 	}
