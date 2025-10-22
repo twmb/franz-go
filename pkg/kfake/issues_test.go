@@ -2,7 +2,6 @@ package kfake
 
 import (
 	"context"
-	"os"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -393,7 +392,6 @@ func TestIssue906(t *testing.T) {
 		kgo.ConsumeTopics("^foo.*"),
 		kgo.ConsumeRegex(),
 		kgo.AllowAutoTopicCreation(),
-		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -567,7 +565,6 @@ func TestIssue1142(t *testing.T) {
 	client, err := kadm.NewOptClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
 		kgo.AllowAutoTopicCreation(),
-		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -577,21 +574,23 @@ func TestIssue1142(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	resp, err := client.Metadata(ctx)
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
-	if resp.Cluster != "kfake" {
-		t.Fatalf("expected cluster kfake, got %s", resp.Cluster)
-	}
-	if resp.Controller != 0 {
-		t.Fatalf("expected controller 0, got %d", resp.Controller)
-	}
-	if len(resp.Brokers) != 1 {
-		t.Fatalf("expected 1 broker, got %d", len(resp.Brokers))
-	}
-	if len(resp.Topics.Names()) != 1 {
-		t.Fatalf("expected 1 topic, got %d", len(resp.Topics.Names()))
+	for i := 0; i < 2; i++ {
+		resp, err := client.Metadata(ctx)
+		if err != nil {
+			t.Fatal(err)
+			return
+		}
+		if resp.Cluster != "kfake" {
+			t.Fatalf("expected cluster kfake, got %s", resp.Cluster)
+		}
+		if resp.Controller != 0 {
+			t.Fatalf("expected controller 0, got %d", resp.Controller)
+		}
+		if len(resp.Brokers) != 1 {
+			t.Fatalf("expected 1 broker, got %d", len(resp.Brokers))
+		}
+		if len(resp.Topics.Names()) != 1 {
+			t.Fatalf("expected 1 topic, got %d", len(resp.Topics.Names()))
+		}
 	}
 }
