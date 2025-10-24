@@ -1,3 +1,18 @@
+v1.20.2
+===
+
+This patch release fixes a field-access data race that has been around forever.
+Specifically, if a partition was moving from one broker to another via a
+metadata update at the same time a linger timer fired, there was a data race
+reading a pointer that was being written. Most 64 bit systems don't experience
+corruption with this type of race, so the code would execute fine _but_ you may
+have the old sink start draining when the new sink should have.
+
+This also further improves some linger logic.
+
+- [`73c16c1d`](https://github.com/twmb/franz-go/commit/73c16c1d) kgo: do not trigger draining early if a partition moves sinks while lingering
+- [`d5066143`](https://github.com/twmb/franz-go/commit/d5066143) kgo: fix data race when the linger timer fires
+
 v1.20.1
 ===
 
