@@ -85,19 +85,19 @@ out:
 		return resp, nil
 	}
 
-	pid := c.pids.getpid(req.ProducerID)
-	if pid == nil {
+	pidinf := c.pids.getpid(req.ProducerID)
+	if pidinf == nil {
 		doneall(kerr.InvalidProducerIDMapping.Code)
 		return resp, nil
 	}
-	if pid.epoch != req.ProducerEpoch {
+	if pidinf.epoch != req.ProducerEpoch {
 		doneall(kerr.InvalidProducerEpoch.Code)
 		return resp, nil
 	}
 
 	for _, rt := range req.Topics {
 		for _, rp := range rt.Partitions {
-			pid.addPart(rt.Topic, rp)
+			pidinf.addTxPart(rt.Topic, rp)
 		}
 	}
 

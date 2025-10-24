@@ -150,7 +150,7 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 			}
 
 			txnal := attrs&0xfff0 != 0
-			seqs, window := c.pids.get(b.ProducerID, rt.Topic, rp.Partition)
+			pidinf, window := c.pids.get(b.ProducerID, rt.Topic, rp.Partition)
 			if txnal && window == nil {
 				donep(rt, rp, kerr.InvalidTxnState.Code)
 				continue
@@ -160,10 +160,10 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 			case window == nil && be != -1:
 				donep(rt, rp, kerr.InvalidTxnState.Code)
 				continue
-			case window != nil && be < seqs.epoch:
+			case window != nil && be < pidinf.epoch:
 				donep(rt, rp, kerr.FencedLeaderEpoch.Code)
 				continue
-			case window != nil && be > seqs.epoch:
+			case window != nil && be > pidinf.epoch:
 				donep(rt, rp, kerr.UnknownLeaderEpoch.Code)
 				continue
 			}
@@ -180,7 +180,7 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 			lso := pd.logStartOffset
 			batchptr := pd.pushBatch(len(rp.Records), b, txnal)
 			if txnal {
-				seqs.batches = append(seqs.batches, batchptr)
+				pidinf.txBatches = append(pidinf.txBatches, batchptr)
 			}
 			sp := donep(rt, rp, 0)
 			sp.BaseOffset = baseOffset

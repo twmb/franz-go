@@ -45,16 +45,13 @@ type (
 		epoch            int32 // current epoch
 		maxTimestamp     int64 // current max timestamp in all batches
 		nbytes           int64
+		inTx             bool
 
-		// abortedTxns
 		rf        int8
 		leader    *broker
 		followers followers
 
 		watch map[*watchFetch]struct{}
-
-		openPids      map[int64]int64 // pid => start offset
-		openPidStarts []int64         // offset
 
 		createdAt time.Time
 	}
@@ -68,7 +65,7 @@ type (
 
 		// For list offsets, we may need to return the first offset
 		// after a given requested timestamp. Client provided
-		// timestamps gan go forwards and backwards. We answer list
+		// timestamps can go forwards and backwards. We answer list
 		// offsets with a binary search: even if this batch has a small
 		// timestamp, this is produced _after_ a potentially higher
 		// timestamp, so it is after it in the list offset response.
@@ -83,6 +80,10 @@ type (
 		aborted bool
 	}
 )
+
+func (b *partBatch) pid() (int64, int16) {
+	return b.ProducerID, b.ProducerEpoch
+}
 
 func (fs followers) has(b *broker) bool {
 	for _, f := range fs {
@@ -149,6 +150,9 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 }
 
 // Returns a pointer to the new batch.
+// If transactional, we mark ourselves in a tx.
+// Finishing a tx clears the inTx state on pd, but also re-sets it if needed.
+// If we are not in a tx, we can bump the stable offset here.
 func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool) *partBatch {
 	maxEarlierTimestamp := b.FirstTimestamp
 	if maxEarlierTimestamp < pd.maxTimestamp {
@@ -160,10 +164,15 @@ func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool) *partBa
 	b.PartitionLeaderEpoch = pd.epoch
 	pd.batches = append(pd.batches, partBatch{b, nbytes, pd.epoch, maxEarlierTimestamp, inTx, false})
 	pd.highWatermark += int64(b.NumRecords)
-	pd.lastStableOffset += int64(b.NumRecords) // TODO
+	if inTx {
+		pd.inTx = true
+	}
+	if !pd.inTx {
+		pd.lastStableOffset += int64(b.NumRecords)
+	}
 	pd.nbytes += int64(nbytes)
 	for w := range pd.watch {
-		w.push(pd.t, pd.p, nbytes)
+		w.push(pd, nbytes)
 	}
 	return &pd.batches[len(pd.batches)-1]
 }
