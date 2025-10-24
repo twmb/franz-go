@@ -34,6 +34,6 @@ func (c *Cluster) handleEndTxn(b *broker, kreq kmsg.Request) (kmsg.Response, err
 		resp.ErrorCode = kerr.InvalidTxnState.Code
 		return resp, nil
 	}
-	pid.finishTx(req.Commit)
+	pid.endTx(req.Commit)
 	return resp, nil
 }

@@ -19,52 +19,51 @@ import (
 
 // TODO
 //
-// * Add heap of last use, add index to pidseq, and remove pidseq as they
+// * Add heap of last use, add index to pidwindow, and remove pidwindow as they
 // exhaust max # of pids configured.
 //
 // * Wrap epochs
 
 type (
 	pids struct {
-		ids map[int64]*pidseqs
+		ids map[int64]*pidinfo
 
-		txs      map[*pidseqs]struct{}
+		txs      map[*pidinfo]struct{}
 		txNotify chan struct{}
 		c        *Cluster
 	}
 
 	// Sequence IDs for a given individual producer ID.
-	pidseqs struct {
+	pidinfo struct {
 		pids *pids
 
-		id    int64
-		epoch int16
-		seqs  tps[pidseq]
+		id      int64
+		epoch   int16
+		windows tps[pidwindow] // topic/partition 5-window pid sequences
 
-		name          string
-		txnal         bool
-		timeoutMillis int32
-		parts         tps[struct{}] // partitions in the transaction, if transactional
-		txStart       time.Time
-		inTx          bool
-		batches       []*partBatch
-		partDatas     map[*partData]struct{}
+		txid      string
+		txTimeout int32          // millis
+		txParts   tps[*partData] // partitions in the transaction, if transactional
+		txBatches []*partBatch   // batches in the transaction
+		txStart   time.Time
+
+		inTx bool
 	}
 
 	// Sequence ID window, and where the start is.
-	pidseq struct {
+	pidwindow struct {
 		seq [5]int32
 		at  uint8
 	}
 )
 
-func (pids *pids) pushTx(pid *pidseqs) {
+func (pids *pids) pushTx(pidinf *pidinfo) {
 	if pids.txs == nil {
-		pids.txs = make(map[*pidseqs]struct{})
+		pids.txs = make(map[*pidinfo]struct{})
 		pids.txNotify = make(chan struct{}, 1)
 	}
-	pids.txs[pid] = struct{}{}
-	pid.inTx = true
+	pids.txs[pidinf] = struct{}{}
+	pidinf.inTx = true
 
 	if len(pids.txs) > 1 {
 		select {
@@ -77,14 +76,14 @@ func (pids *pids) pushTx(pid *pidseqs) {
 	go func() {
 		var exit bool
 		for !exit {
-			var minPid *pidseqs
+			var minPid *pidinfo
 			var minExpire time.Time
 			pids.c.admin(func() {
-				for pid := range pids.txs {
-					timeout := time.Duration(pid.timeoutMillis) * time.Millisecond
-					expire := pid.txStart.Add(timeout)
+				for pidinf := range pids.txs {
+					timeout := time.Duration(pidinf.txTimeout) * time.Millisecond
+					expire := pidinf.txStart.Add(timeout)
 					if minPid == nil || expire.Before(minExpire) {
-						minPid = pid
+						minPid = pidinf
 						minExpire = expire
 					}
 				}
@@ -109,7 +108,7 @@ func (pids *pids) pushTx(pid *pidseqs) {
 				if _, ok := pids.txs[minPid]; !ok {
 					return
 				}
-				minPid.finishTx(false)
+				minPid.endTx(false)
 				minPid.epoch++
 				delete(pids.txs, minPid)
 				exit = len(pids.txs) == 0
@@ -118,42 +117,42 @@ func (pids *pids) pushTx(pid *pidseqs) {
 	}()
 }
 
-func (pids *pids) getpid(id int64) *pidseqs {
+func (pids *pids) getpid(id int64) *pidinfo {
 	if pids.ids == nil {
 		return nil
 	}
-	seqs := pids.ids[id]
-	return seqs
+	pidinf := pids.ids[id]
+	return pidinf
 }
 
-// Returns the pidseqs for this pid, and the idempotent-5 window for this
+// Returns the pidinfo for this pid, and the idempotent-5 window for this
 // specific toppar. If this is transactional and the toppar has not been added
 // to the txn, returns nil.
-func (pids *pids) get(id int64, t string, p int32) (*pidseqs, *pidseq) {
+func (pids *pids) get(id int64, t string, p int32) (*pidinfo, *pidwindow) {
 	if pids.ids == nil {
 		return nil, nil
 	}
-	seqs := pids.ids[id]
-	if seqs == nil {
+	pidinf := pids.ids[id]
+	if pidinf == nil {
 		return nil, nil
 	}
-	if seqs.txnal && !seqs.parts.checkp(t, p) {
+	if pidinf.txid != "" && !pidinf.txParts.checkp(t, p) {
 		return nil, nil
 	}
-	return seqs, seqs.seqs.mkpDefault(t, p)
+	return pidinf, pidinf.windows.mkpDefault(t, p)
 }
 
-func (pids *pids) create(txid *string, timeoutMillis int32) (int64, int16) {
+func (pids *pids) create(txidp *string, txTimeout int32) (int64, int16) {
 	if pids.ids == nil {
-		pids.ids = make(map[int64]*pidseqs)
+		pids.ids = make(map[int64]*pidinfo)
 	}
 	var id int64
-	var name string
-	if txid != nil {
+	var txid string
+	if txidp != nil {
 		hasher := fnv.New64()
-		hasher.Write([]byte(*txid))
+		hasher.Write([]byte(*txidp))
 		id = int64(hasher.Sum64()) & math.MaxInt64
-		name = *txid
+		txid = *txidp
 	} else {
 		for {
 			id = int64(rand.Uint64()) & math.MaxInt64
@@ -162,38 +161,37 @@ func (pids *pids) create(txid *string, timeoutMillis int32) (int64, int16) {
 			}
 		}
 	}
-	pid, exists := pids.ids[id]
+	pidinf, exists := pids.ids[id]
 	if exists {
-		pid.epoch++
-		return id, pid.epoch
+		pidinf.epoch++
+		return id, pidinf.epoch
 	}
-	pid = &pidseqs{
-		pids:          pids,
-		id:            id,
-		name:          name,
-		txnal:         txid != nil,
-		timeoutMillis: timeoutMillis,
+	pidinf = &pidinfo{
+		pids:      pids,
+		id:        id,
+		txid:      txid,
+		txTimeout: txTimeout,
 	}
-	pids.ids[id] = pid
+	pids.ids[id] = pidinf
 	return id, 0
 }
 
-func (pid *pidseqs) finishTx(commit bool) {
+func (pidinf *pidinfo) endTx(commit bool) {
 	defer func() {
-		pid.parts = nil
-		pid.txStart = time.Time{}
-		pid.inTx = false
+		pidinf.txParts = nil
+		pidinf.txStart = time.Time{}
+		pidinf.inTx = false
 		if !commit {
-			for _, batch := range pid.batches {
+			for _, batch := range pidinf.txBatches {
 				batch.inTx = false
 				batch.aborted = true
 			}
 		}
-		pid.batches = nil
-		delete(pid.pids.txs, pid)
-		if len(pid.pids.txs) == 0 {
+		pidinf.txBatches = nil
+		delete(pidinf.pids.txs, pidinf)
+		if len(pidinf.pids.txs) == 0 {
 			select {
-			case pid.pids.txNotify <- struct{}{}:
+			case pidinf.pids.txNotify <- struct{}{}:
 			default:
 			}
 		}
@@ -216,8 +214,8 @@ func (pid *pidseqs) finishTx(commit bool) {
 		LastOffsetDelta:      0,
 		FirstTimestamp:       now,
 		MaxTimestamp:         now,
-		ProducerID:           pid.id,
-		ProducerEpoch:        pid.epoch,
+		ProducerID:           pidinf.id,
+		ProducerEpoch:        pidinf.epoch,
 		FirstSequence:        -1,
 		NumRecords:           1,
 		Records:              rec.AppendTo(nil),
@@ -226,25 +224,21 @@ func (pid *pidseqs) finishTx(commit bool) {
 	b.Length = int32(len(benc) - 12)
 	b.CRC = int32(crc32.Checksum(benc[21:], crc32c))
 
-	pid.parts.each(func(t string, p int32, _ *struct{}) {
-		pd, ok := pid.pids.c.data.tps.getp(t, p)
-		if !ok {
-			return // topic deleted while in txn?
-		}
-		pd.pushBatch(len(benc), b, true)
+	pidinf.txParts.each(func(t string, p int32, pd **partData) {
+		(*pd).pushBatch(len(benc), b, true)
 	})
 }
 
-func (pid *pidseqs) addPart(t string, p int32) {
-	pid.parts.mkpDefault(t, p)
-	if len(pid.parts) > 1 {
+func (pidinf *pidinfo) addTxPart(t string, p int32) {
+	pidinf.txParts.mkpDefault(t, p)
+	if len(pidinf.txParts) > 1 {
 		return
 	}
-	pid.txStart = time.Now()
-	pid.pids.pushTx(pid)
+	pidinf.txStart = time.Now()
+	pidinf.pids.pushTx(pidinf)
 }
 
-func (s *pidseq) pushAndValidate(firstSeq, numRecs int32) (ok, dup bool) {
+func (s *pidwindow) pushAndValidate(firstSeq, numRecs int32) (ok, dup bool) {
 	// If there is no pid, we do not do duplicate detection.
 	if s == nil {
 		return true, false
