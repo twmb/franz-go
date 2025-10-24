@@ -253,7 +253,7 @@ func (p *producer) purgeTopics(topics []string) {
 			// they may have been produced. This is the duplicate
 			// risk a user runs when purging.
 			//
-			// We do not need to lock for `r.sink` access becaus
+			// We do not need to lock for `r.sink` access because
 			// this is ran in a blocking metadata fn, meaning the
 			// sink cannot change. We do not WANT to lock because
 			// r.mu => r.sink.recBufsMu would cause lock inversion.
