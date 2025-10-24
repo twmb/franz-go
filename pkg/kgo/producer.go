@@ -252,6 +252,11 @@ func (p *producer) purgeTopics(topics []string) {
 			// after they will no longer belong in the batch, but
 			// they may have been produced. This is the duplicate
 			// risk a user runs when purging.
+			//
+			// We do not need to lock for `r.sink` access becaus
+			// this is ran in a blocking metadata fn, meaning the
+			// sink cannot change. We do not WANT to lock because
+			// r.mu => r.sink.recBufsMu would cause lock inversion.
 			r.sink.removeRecBuf(r)
 
 			// Once abandonded, we now need to fail anything that
