@@ -54,7 +54,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 			}
 			for _, rp := range rt.Partitions {
 				pd, ok := t[rp.Partition]
-				if !ok || pd.createdAt.After(creq.at) {
+				if !ok {
 					continue
 				}
 				if pd.leader != creq.cc.b && !pd.followers.has(creq.cc.b) {
@@ -90,10 +90,11 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	deadline := creq.at.Add(wait)
 	if w == nil && !returnEarly && nbytes < int(req.MinBytes) && time.Now().Before(deadline) {
 		w := &watchFetch{
-			need:     int(req.MinBytes) - nbytes,
-			needp:    needp,
-			deadline: deadline,
-			creq:     creq,
+			need:          int(req.MinBytes) - nbytes,
+			needp:         needp,
+			deadline:      deadline,
+			readCommitted: readCommitted,
+			creq:          creq,
 		}
 		w.cb = func() {
 			select {
@@ -108,7 +109,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 			}
 			for _, rp := range rt.Partitions {
 				pd, ok := t[rp.Partition]
-				if !ok || pd.createdAt.After(creq.at) {
+				if !ok {
 					continue
 				}
 				pd.watch[w] = struct{}{}
@@ -214,7 +215,6 @@ full:
 type watchFetch struct {
 	need     int
 	needp    tps[int]
-	txwait   tps[int64]
 	deadline time.Time
 	creq     *clientReq
 
@@ -222,20 +222,23 @@ type watchFetch struct {
 	cb func()
 	t  *time.Timer
 
+	readCommitted bool
+
 	once    sync.Once
 	cleaned bool
 }
 
-func (w *watchFetch) push(t string, p int32, nbytes int) {
+// TODO We need to watch for pushes...
+// If in tx, ignore -- tx ender will let us know all batches that were finished
+
+func (w *watchFetch) push(pd *partData, nbytes int) {
+	if w.readCommitted && pd.inTx {
+		return
+	}
 	w.need -= nbytes
-	needp, _ := w.needp.getp(t, p)
+	needp, _ := w.needp.getp(pd.t, pd.p)
 	if needp != nil {
 		*needp -= nbytes
-	}
-	if *w.txwait.getpDefault(t, p) != 0 {
-		// If we are waiting for a commit, then new batches do not
-		// matter.
-		return
 	}
 	if w.need <= 0 || needp != nil && *needp <= 0 {
 		w.do()
