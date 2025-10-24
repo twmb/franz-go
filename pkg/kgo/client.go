@@ -1193,6 +1193,8 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 	// safely stop sinks and sources, as no more will be made.
 	<-cl.metadone
 
+	// We do not need a lock in `sink` and `source` access because,
+	// with the metadata loop done, partition migration will not occur.
 	for _, sns := range cl.sinksAndSources {
 		sns.sink.maybeDrain()     // awaken anything in backoff
 		sns.source.maybeConsume() // same

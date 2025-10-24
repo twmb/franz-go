@@ -1461,9 +1461,7 @@ func (recBuf *recBuf) lockedMaybeLinger() bool {
 		return false
 	}
 	if recBuf.lingering == nil {
-		recBuf.lingering = time.AfterFunc(recBuf.cl.cfg.linger, func() {
-			recBuf.sink.maybeDrain()
-		})
+		recBuf.lingering = time.AfterFunc(recBuf.cl.cfg.linger, recBuf.unlingerAndManuallyDrain)
 	}
 	return true
 }
