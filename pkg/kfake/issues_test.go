@@ -280,9 +280,14 @@ func TestIssue905(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	chkfs := func(fs kgo.Fetches) {
+	chkfs := func(fs kgo.Fetches, expOffset int64) {
 		if fs.NumRecords() != 1 {
 			t.Errorf("got %d records != exp 1", fs.NumRecords())
+		} else {
+			r := fs.Records()[0]
+			if r.Offset != expOffset {
+				t.Errorf("got offset %d != exp %d", r.Offset, expOffset)
+			}
 		}
 		if len(fs.Errors()) != 0 {
 			t.Errorf("got fetch errors: %v", fs.Errors())
@@ -296,7 +301,7 @@ func TestIssue905(t *testing.T) {
 	{
 		allowFollower <- struct{}{}
 		fs := cl.PollFetches(ctx)
-		chkfs(fs)
+		chkfs(fs, 0)
 		if lr := leaderReqs.Load(); lr != 1 {
 			t.Errorf("stage 1 leader reqs %d != exp 1", lr)
 		}
@@ -313,23 +318,23 @@ func TestIssue905(t *testing.T) {
 	}
 	{
 		fs := cl.PollFetches(ctx)
-		chkfs(fs)
+		chkfs(fs, 1)
 		if lr := leaderReqs.Load(); lr != 1 {
 			t.Errorf("stage 2 leader reqs %d != exp 1", lr)
 		}
 		if fr := followerReqs.Load(); fr != 2 {
 			t.Errorf("stage 2 follower reqs reqs %d != exp 2", fr)
 		}
-		allowFollower <- struct{}{} // again allow a background buffered fetch; this one will notice we need to redir back to follower
 	}
 
-	// Poll again. This is buffered, and the NEXT one should go back
-	// to the leader again.
+	// Poll again. This should go back to the leader, then the follower
+	// again.
 	{
+		allowFollower <- struct{}{}
 		fs := cl.PollFetches(ctx)
-		chkfs(fs)
-		if lr := leaderReqs.Load(); lr != 1 {
-			t.Errorf("stage 3 leader reqs %d != exp 1", lr)
+		chkfs(fs, 2)
+		if lr := leaderReqs.Load(); lr != 2 {
+			t.Errorf("stage 3 leader reqs %d != exp 2", lr)
 		}
 		if fr := followerReqs.Load(); fr != 3 {
 			t.Errorf("stage 3 follower reqs reqs %d != exp 3", fr)
@@ -337,15 +342,25 @@ func TestIssue905(t *testing.T) {
 		close(allowFollower) // allow all reqs; the next check is our last
 	}
 
-	// We now expect leader finally before the follower again.
+	// We should stay with the follower, no more leader.
 	{
 		fs := cl.PollFetches(ctx)
-		chkfs(fs)
+		chkfs(fs, 3)
 		if lr := leaderReqs.Load(); lr != 2 {
 			t.Errorf("stage 4 leader reqs %d != exp 2", lr)
 		}
 		if fr := followerReqs.Load(); fr != 4 {
 			t.Errorf("stage 4 follower reqs reqs %d != exp 4", fr)
+		}
+	}
+	{
+		fs := cl.PollFetches(ctx)
+		chkfs(fs, 4)
+		if lr := leaderReqs.Load(); lr != 2 {
+			t.Errorf("stage 5 leader reqs %d != exp 2", lr)
+		}
+		if fr := followerReqs.Load(); fr != 5 {
+			t.Errorf("stage 5 follower reqs reqs %d != exp 5", fr)
 		}
 	}
 
