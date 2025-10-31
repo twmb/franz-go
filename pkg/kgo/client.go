@@ -2560,7 +2560,6 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 				if err != nil &&
 					(pinnedOld ||
 						!noRetries && notTimedOut && (shouldRetry || shouldRetryNext) && cl.waitTries(ctx, backoff)) {
-
 					// Non-reshardable re-requests just jump back to the
 					// top where the broker is loaded. This is the case on
 					// requests where the original request is split to

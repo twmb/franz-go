@@ -220,7 +220,7 @@ func getSeedBrokers() Opt {
 	return SeedBrokers(strings.Split(seeds, ",")...)
 }
 
-var loggerNum atomicI64
+var loggerNum atomic.Int64
 
 var testLogLevel = func() LogLevel {
 	level := strings.ToLower(os.Getenv("KGO_LOG_LEVEL"))
@@ -420,7 +420,7 @@ type testConsumer struct {
 
 	expBody []byte // what every record body should be
 
-	consumed atomicU64 // shared atomically
+	consumed atomic.Uint64 // shared atomically
 
 	wg sync.WaitGroup
 	mu sync.Mutex

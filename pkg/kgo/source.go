@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kbin"
@@ -98,7 +99,7 @@ type cursor struct {
 	topicID   [16]byte
 	partition int32
 
-	unknownIDFails atomicI32
+	unknownIDFails atomic.Int32
 
 	keepControl bool // whether to keep control records
 
@@ -133,7 +134,7 @@ type cursor struct {
 	//
 	// The used state is exclusively updated by either building a fetch
 	// request or when the source is stopped.
-	useState atomicBool
+	useState atomic.Bool
 
 	topicPartitionData // updated in metadata when session is stopped
 
