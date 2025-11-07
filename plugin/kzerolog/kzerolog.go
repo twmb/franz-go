@@ -47,7 +47,7 @@ func (l *Logger) Level() kgo.LogLevel {
 
 // Log is for the kgo.Logger interface.
 func (l *Logger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
-	l.zl.WithLevel(logLevelToZerolog(level)).Fields(keyvals).Msg(msg)
+	l.zl.WithLevel(logLevelToZerolog(level)).Fields(keyvals).CallerSkipFrame(2).Msg(msg)
 }
 
 func logLevelToZerolog(level kgo.LogLevel) zerolog.Level {
