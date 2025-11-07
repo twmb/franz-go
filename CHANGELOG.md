@@ -1,3 +1,25 @@
+v1.20.3
+===
+
+This patch release fixes one bug that has existed since 1.19.0 and improves
+retry behavior on dial failures.
+
+The bug: 1.19 introduced code to, when follower fetching, re-check the
+preferred replica from the leader every 30 minutes (every `RecheckPreferredReplicaInterval`).
+The logic switched back to a leader _after_ handling a fetch response, using
+the offset that the fetch _request_ was issued with. The client would give you
+data that it just fetched, go back to the leader, and then get redirected back
+to the follower using the offset from before the fetch it just gave you.
+You would then receive a bit of duplicate data as the pre-fetch offset is
+re-fetched. This is no longer the case.
+
+The improvement: on sharded requests (certain requests that may need to be
+split and sent to many brokers), dial errors were not retried. They are now
+retried.
+
+- [`d5085e90`](https://github.com/twmb/franz-go/commit/d5085e90) kgo: retry dial errors on sharded requests if possible
+- [`70c81779`](https://github.com/twmb/franz-go/commit/70c81779) kgo source: expired old preferred replicas while creating req, not handling resp
+
 v1.20.2
 ===
 
