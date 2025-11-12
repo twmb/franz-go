@@ -188,10 +188,10 @@ func (v *brokerVersions) minVersion(key int16) int16 {
 	return -1
 }
 
-func newBrokerVersions() *brokerVersions {
+func newBrokerVersions(capacity int) *brokerVersions {
 	v := &brokerVersions{
-		maxVers:  make(map[int16]int16),
-		minVers:  make(map[int16]int16),
+		maxVers:  make(map[int16]int16, capacity),
+		minVers:  make(map[int16]int16, capacity),
 		features: make(map[string]int16),
 	}
 	return v
@@ -754,7 +754,7 @@ func (cxn *brokerCxn) init(isProduceCxn bool, tries int) error {
 		} else {
 			// We have a max versions, and it indicates no support
 			// for ApiVersions. We just store a default empty map.
-			cxn.b.storeVersions(newBrokerVersions())
+			cxn.b.storeVersions(newBrokerVersions(0))
 		}
 	}
 
@@ -854,7 +854,7 @@ start:
 		return errors.New("ApiVersions response invalidly contained no ApiKeys")
 	}
 
-	v := newBrokerVersions()
+	v := newBrokerVersions(len(resp.ApiKeys))
 	for _, key := range resp.ApiKeys {
 		v.maxVers[key.ApiKey] = key.MaxVersion
 		v.minVers[key.ApiKey] = key.MinVersion
