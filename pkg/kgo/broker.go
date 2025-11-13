@@ -683,6 +683,7 @@ func (b *broker) reapConnections(idleTimeout time.Duration) (total int) {
 // connect connects to the broker's addr, returning the new connection.
 func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 	if err := ctx.Err(); err != nil {
+		// Best-effort check for context errors and return early for a more descriptive error
 		return nil, fmt.Errorf("context error before opening connection to broker: %w", err)
 	}
 	b.cl.cfg.logger.Log(LogLevelDebug, "opening connection to broker", "addr", b.addr, "broker", logID(b.meta.NodeID))
