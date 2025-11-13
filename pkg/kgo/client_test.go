@@ -236,7 +236,7 @@ func TestPingContextCanceled(t *testing.T) {
 	cl, _ := newTestClient()
 	defer cl.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := cl.Ping(ctx)
 	if !strings.Contains(err.Error(), "context error before opening connection to broker: ") {
