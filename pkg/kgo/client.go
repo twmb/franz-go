@@ -615,9 +615,11 @@ func (cl *Client) Ping(ctx context.Context) error {
 			if lastErr = err; lastErr == nil {
 				cl.updateMetadataBrokers(resp.(*kmsg.MetadataResponse))
 				return nil
-			} else if ctx.Err() != nil {
+			} else if isContextErr(lastErr) && ctx.Err() != nil {
 				// No point in trying the next broker if context is done
-				// as it will create noise in OnBrokerConnect hook
+				// as it will create noise in OnBrokerConnect hook.
+				// Check both lastErr and ctx.Err() to avoid race condition
+				// where context error happens immediately after waitResp.
 				return lastErr
 			}
 		}
