@@ -265,7 +265,7 @@ func TestConfluentHeader(t *testing.T) {
 	}
 }
 
-func TestSerdeRegistrationChecks(t *testing.T) {
+func TestIsRegistered(t *testing.T) {
 	type testStruct1 struct {
 		Field1 string `json:"field1"`
 	}
@@ -276,96 +276,124 @@ func TestSerdeRegistrationChecks(t *testing.T) {
 		Field3 string `json:"field3"`
 	}
 
-	serde := NewSerde(
-		EncodeFn(json.Marshal),
-		DecodeFn(json.Unmarshal),
-	)
+	serde := NewSerde()
 
-	// Test IsIDRegistered with unregistered ID
-	if serde.IsIDRegisteredForDecoding(1) {
+	// Test unregistered ID
+	if serde.IsRegistered(1) {
 		t.Error("expected ID 1 to not be registered")
 	}
 
-	// Test IsIDRegisteredForEncoding with unregistered type
-	if serde.IsIDRegisteredForEncoding(1) {
-		t.Error("expected ID 1 to not be registered for encoding")
-	}
+	// Register ID 1 with all functions
+	serde.Register(1, testStruct1{},
+		EncodeFn(json.Marshal),
+		AppendEncodeFn(func(b []byte, v any) ([]byte, error) {
+			bb, err := json.Marshal(v)
+			if err != nil {
+				return b, err
+			}
+			return append(b, bb...), nil
+		}),
+		DecodeFn(json.Unmarshal),
+		GenerateFn(func() any { return new(testStruct1) }),
+	)
 
-	// Register a schema
-	serde.Register(1, testStruct1{}, GenerateFn(func() any { return new(testStruct1) }))
-
-	// Test IsIDRegistered with registered ID
-	if !serde.IsIDRegisteredForDecoding(1) {
+	// Test registered ID without options (should return true if exists)
+	if !serde.IsRegistered(1) {
 		t.Error("expected ID 1 to be registered")
 	}
 
-	// Test IsIDRegisteredForEncoding with registered ID
-	if !serde.IsIDRegisteredForEncoding(1) {
-		t.Error("expected ID 1 to be registered for encoding")
+	// Test registered ID with EncodeFn option
+	if !serde.IsRegistered(1, EncodeFn) {
+		t.Error("expected ID 1 to have EncodeFn")
 	}
 
-	// Test GetRegisteredIDForEncoding
-	encodingIDs := serde.GetRegisteredIDForEncoding()
-	if len(encodingIDs) != 1 || encodingIDs[0] != 1 {
-		t.Errorf("expected encoding IDs [1], got %v", encodingIDs)
+	// Test registered ID with AppendEncodeFn option
+	if !serde.IsRegistered(1, AppendEncodeFn) {
+		t.Error("expected ID 1 to have AppendEncodeFn")
 	}
 
-	// Test GetRegisteredIDForDecoding
-	decodingIDs := serde.GetRegisteredIDForDecoding()
-	if len(decodingIDs) != 1 || decodingIDs[0] != 1 {
-		t.Errorf("expected decoding IDs [1], got %v", decodingIDs)
+	// Test registered ID with DecodeFn option
+	if !serde.IsRegistered(1, DecodeFn) {
+		t.Error("expected ID 1 to have DecodeFn")
 	}
 
-	// Test with schema that has no decode function (should not be considered registered for decoding)
-	serde.Register(2, testStruct2{}) // No GenerateFn, but still has decode function from defaults
-
-	if !serde.IsIDRegisteredForDecoding(2) {
-		t.Error("expected ID 2 to be registered for decoding (has decode function from defaults)")
+	// Test registered ID with GenerateFn option
+	if !serde.IsRegistered(1, GenerateFn) {
+		t.Error("expected ID 1 to have GenerateFn")
 	}
 
-	// But it should be registered for encoding
-	if !serde.IsIDRegisteredForEncoding(2) {
-		t.Error("expected ID 2 to be registered for encoding")
+	// Test multiple options - all should be true
+	if !serde.IsRegistered(1, EncodeFn, DecodeFn, GenerateFn) {
+		t.Error("expected ID 1 to have EncodeFn, DecodeFn, and GenerateFn")
 	}
 
-	// Test with indexed schema
-	serde.Register(3, testStruct3{}, Index(0), GenerateFn(func() any { return new(testStruct3) }))
-
-	// Note: ID 3 with index is not registered at root level, so it won't be found by IsIDRegistered
-	// This is expected behavior for indexed schemas
-
-	// Test multiple registrations
-	encodingIDs = serde.GetRegisteredIDForEncoding()
-	expectedEncodingIDs := []int{1, 2} // Both IDs 1 and 2 have encode functions
-	if len(encodingIDs) != len(expectedEncodingIDs) {
-		t.Errorf("expected %d encoding IDs, got %d: %v", len(expectedEncodingIDs), len(encodingIDs), encodingIDs)
+	// Test with string option names
+	if !serde.IsRegistered(1, "EncodeFn") {
+		t.Error("expected ID 1 to have EncodeFn when checked with string")
 	}
 
-	decodingIDs = serde.GetRegisteredIDForDecoding()
-	expectedDecodingIDs := []int{1, 2} // Both IDs 1 and 2 have decode functions
-	if len(decodingIDs) != len(expectedDecodingIDs) {
-		t.Errorf("expected %d decoding IDs, got %d: %v", len(expectedDecodingIDs), len(decodingIDs), decodingIDs)
+	// Register ID 2 with only EncodeFn
+	serde.Register(2, testStruct2{}, EncodeFn(json.Marshal))
+
+	// Test ID 2 has EncodeFn
+	if !serde.IsRegistered(2, EncodeFn) {
+		t.Error("expected ID 2 to have EncodeFn")
 	}
 
-	// Check that all expected encoding IDs are present
-	encodingIDMap := make(map[int]bool)
-	for _, id := range encodingIDs {
-		encodingIDMap[id] = true
-	}
-	for _, expectedID := range expectedEncodingIDs {
-		if !encodingIDMap[expectedID] {
-			t.Errorf("expected ID %d to be registered for encoding", expectedID)
-		}
+	// Test ID 2 does not have DecodeFn
+	if serde.IsRegistered(2, DecodeFn) {
+		t.Error("expected ID 2 to not have DecodeFn")
 	}
 
-	// Check that all expected decoding IDs are present
-	decodingIDMap := make(map[int]bool)
-	for _, id := range decodingIDs {
-		decodingIDMap[id] = true
+	// Test ID 2 does not have GenerateFn
+	if serde.IsRegistered(2, GenerateFn) {
+		t.Error("expected ID 2 to not have GenerateFn")
 	}
-	for _, expectedID := range expectedDecodingIDs {
-		if !decodingIDMap[expectedID] {
-			t.Errorf("expected ID %d to be registered for decoding", expectedID)
-		}
+
+	// Test ID 2 with multiple options where one is missing
+	if serde.IsRegistered(2, EncodeFn, DecodeFn) {
+		t.Error("expected ID 2 to not have both EncodeFn and DecodeFn")
+	}
+
+	// Register ID 3 with only DecodeFn and GenerateFn
+	serde.Register(3, testStruct3{},
+		DecodeFn(json.Unmarshal),
+		GenerateFn(func() any { return new(testStruct3) }),
+	)
+
+	// Test ID 3 does not have EncodeFn
+	if serde.IsRegistered(3, EncodeFn) {
+		t.Error("expected ID 3 to not have EncodeFn")
+	}
+
+	// Test ID 3 has DecodeFn
+	if !serde.IsRegistered(3, DecodeFn) {
+		t.Error("expected ID 3 to have DecodeFn")
+	}
+
+	// Test ID 3 has GenerateFn
+	if !serde.IsRegistered(3, GenerateFn) {
+		t.Error("expected ID 3 to have GenerateFn")
+	}
+
+	// Test ID 3 has both DecodeFn and GenerateFn
+	if !serde.IsRegistered(3, DecodeFn, GenerateFn) {
+		t.Error("expected ID 3 to have both DecodeFn and GenerateFn")
+	}
+
+	// Test non-existent ID with options
+	if serde.IsRegistered(99, EncodeFn) {
+		t.Error("expected ID 99 to not be registered")
+	}
+
+	// Test registered ID without any functions (should still return true if exists)
+	serde.Register(4, testStruct1{})
+	if !serde.IsRegistered(4) {
+		t.Error("expected ID 4 to be registered (exists but no functions)")
+	}
+
+	// Test registered ID 4 without functions, checking for EncodeFn
+	if serde.IsRegistered(4, EncodeFn) {
+		t.Error("expected ID 4 to not have EncodeFn")
 	}
 }
