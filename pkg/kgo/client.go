@@ -615,6 +615,9 @@ func (cl *Client) Ping(ctx context.Context) error {
 			if lastErr = err; lastErr == nil {
 				cl.updateMetadataBrokers(resp.(*kmsg.MetadataResponse))
 				return nil
+			} else if ctx.Err() != nil {
+				// No point in trying the next broker if context is done
+				return lastErr
 			}
 		}
 	}
