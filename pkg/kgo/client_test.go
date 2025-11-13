@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -226,6 +227,20 @@ func TestPing(t *testing.T) {
 	err := cl.Ping(ctx)
 	if err != nil {
 		t.Errorf("unable to ping: %v", err)
+	}
+}
+
+func TestPingContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	cl, _ := newTestClient()
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	cancel()
+	err := cl.Ping(ctx)
+	if !strings.Contains(err.Error(), "context error before opening connection to broker: ") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
