@@ -3,6 +3,7 @@ package kfake
 import (
 	"context"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -607,5 +608,123 @@ func TestIssue1142(t *testing.T) {
 		if len(resp.Topics.Names()) != 1 {
 			t.Fatalf("expected 1 topic, got %d", len(resp.Topics.Names()))
 		}
+	}
+}
+
+// TestIssue1167 reproduces a race condition in preferred replica fetching
+// where cursor.source is accessed concurrently without synchronization.
+//
+// The race occurs between concurrent move() calls:
+//   - Goroutine A: move() writes cursor.source (source.go:271)
+//   - Goroutine B: move()'s deferred allowUsable() reads cursor.source (source.go:210)
+//
+// Multiple goroutines can call move() concurrently on the same cursor when
+// fetch responses return PreferredReadReplica, causing cursors to migrate
+// between sources.
+func TestIssue1167(t *testing.T) {
+	const (
+		testTopic        = "test-topic"
+		producedMessages = 100
+	)
+
+	// Create kfake cluster with 2 brokers to enable replica migration
+	c, err := NewCluster(
+		NumBrokers(2),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Produce messages to the topic
+	func() {
+		cl, err := kgo.NewClient(
+			kgo.DefaultProduceTopic(testTopic),
+			kgo.SeedBrokers(c.ListenAddrs()...),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+
+		for i := 0; i < producedMessages; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			err := cl.ProduceSync(ctx, kgo.StringRecord(strconv.Itoa(i))).FirstErr()
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}()
+
+	// Set up follower for the partition
+	ti := c.TopicInfo(testTopic)
+	pi := c.PartitionInfo(testTopic, 0)
+	follower := (pi.Leader + 1) % 2
+	c.SetFollowers(testTopic, 0, []int32{follower})
+
+	// Control fetch responses to ALWAYS return preferred replicas
+	// This will trigger cursor migrations on EVERY fetch to maximize race likelihood
+	c.ControlKey(1, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+
+		req := kreq.(*kmsg.FetchRequest)
+		if req.Version < 11 {
+			t.Fatal("unable to run test with fetch requests < v11")
+		}
+
+		resp := req.ResponseKind().(*kmsg.FetchResponse)
+		rt := kmsg.NewFetchResponseTopic()
+		rt.Topic = testTopic
+		rt.TopicID = ti.TopicID
+		rp := kmsg.NewFetchResponseTopicPartition()
+
+		resp.Topics = append(resp.Topics, rt)
+		rtp := &resp.Topics[0]
+		rtp.Partitions = append(rtp.Partitions, rp)
+		rpp := &rtp.Partitions[0]
+
+		rpp.Partition = 0
+		rpp.ErrorCode = 0
+		rpp.HighWatermark = pi.HighWatermark
+		rpp.LastStableOffset = pi.LastStableOffset
+		rpp.LogStartOffset = 0
+
+		// Always return the other broker as preferred replica
+		// This forces continuous back-and-forth migrations
+		if c.CurrentNode() == pi.Leader {
+			rpp.PreferredReadReplica = follower
+		} else {
+			rpp.PreferredReadReplica = pi.Leader
+		}
+
+		return resp, nil, true
+	})
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	start := time.Now()
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cl, err := kgo.NewClient(
+				kgo.SeedBrokers(c.ListenAddrs()...),
+				kgo.ConsumeTopics(testTopic),
+				kgo.Rack("test-rack"),                 // Enable rack-aware consuming
+				kgo.DisableFetchSessions(),            // Force more fetch requests
+				kgo.FetchMaxWait(10*time.Millisecond), // Minimum allowed
+			)
+			if err != nil {
+				t.Errorf("consumer: failed to create client: %v", err)
+				return
+			}
+			defer cl.Close()
+
+			for time.Since(start) < 3*time.Second {
+				_ = cl.PollFetches(nil)
+			}
+		}()
 	}
 }
