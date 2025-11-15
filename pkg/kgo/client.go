@@ -2488,9 +2488,13 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		}
 
 		for i := range issues {
-			myIssue := issues[i]
-			var isPinned bool
-			ctx := ctx // loop local context, in case we override by pinning
+			var (
+				myIssue     = issues[i]
+				isPinned    bool
+				ctx         = ctx         // loop local context, in case we override by pinning
+				avoidBroker = avoidBroker // same
+				tries       = try.tries   // same
+			)
 			if isPinned = myIssue.pin != nil; isPinned {
 				ctx = context.WithValue(ctx, ctxPinReq, myIssue.pin)
 			}
@@ -2500,7 +2504,6 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 				continue
 			}
 
-			tries := try.tries
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
