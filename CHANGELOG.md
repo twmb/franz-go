@@ -1,3 +1,22 @@
+v1.20.4
+===
+
+This patch release contains fixes for two data races: one new one introduced in
+1.20.3 with sharded requests (a super obvious oversight in retrospect..) and a
+fix for a hard to encounter race that has existed for years when using
+preferred read replicas (via setting the `kgo.Rack` option while consuming).
+
+There are also improvements by [@carsonip](https://github.com/carsonip) to log
+context errors less and to return earlier when pinging if the context is
+expired, and an improvement by [@rockwotj](https://github.com/rockwotj) to
+support arbitrary Kafka messages (i.e., custom requests).
+
+- [`cdd0316a`](https://github.com/twmb/franz-go/commit/cdd0316a) kgo: source.fetch stop fetching again when context is done
+- [`d0350d13`](https://github.com/twmb/franz-go/commit/d0350d13) **bugfix** kgo: fix sharded-request "minor" data race introduced in 1.20.3
+- [`566201c3`](https://github.com/twmb/franz-go/commit/566201c3) **bugfix** kgo: fix data race with replica fetching / moving; kfake: add test
+- [`4e4ff88f`](https://github.com/twmb/franz-go/commit/4e4ff88f) kgo: Do not try next broker in Client.Ping if context is done
+- [`60b8d5b5`](https://github.com/twmb/franz-go/commit/60b8d5b5) kgo: support arbitrary Kafka RPCs
+
 v1.20.3
 ===
 
