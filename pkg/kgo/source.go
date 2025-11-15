@@ -871,6 +871,11 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 
 	select {
 	case <-requested:
+		// As `select` is pseudo-random when both cases are ready,
+		// check for context error in this branch to avoid retrying immediately with a failed context.
+		if isContextErr(err) && ctx.Err() != nil {
+			return fetched
+		}
 		fetched = true
 	case <-ctx.Done():
 		return fetched
