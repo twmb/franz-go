@@ -101,6 +101,11 @@ func (gs groupState) String() string {
 	}
 }
 
+var emptyMemberAssignment = func() []byte {
+	var assignment kmsg.ConsumerMemberAssignment
+	return assignment.AppendTo(nil)
+}()
+
 func (c *Cluster) coordinator(id string) *broker {
 	gen := c.coordinatorGen.Load()
 	n := hashString(fmt.Sprintf("%d", gen)+"\x00\x00"+id) % uint64(len(c.bs))
@@ -759,7 +764,7 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 	case groupStable: // member saw join and is now finally calling sync
 		resp.ProtocolType = kmsg.StringPtr(g.protocolType)
 		resp.Protocol = kmsg.StringPtr(g.protocol)
-		resp.MemberAssignment = m.assignment
+		resp.MemberAssignment = ensureMemberAssignment(m)
 	}
 	return resp
 }
@@ -1046,7 +1051,7 @@ func (g *group) completeLeaderSync(req *kmsg.SyncGroupRequest) {
 		if !ok {
 			continue
 		}
-		m.assignment = a.MemberAssignment
+		m.assignment = assignmentOrEmpty(a.MemberAssignment)
 	}
 	for _, m := range g.members {
 		if m.waitingReply.empty() {
@@ -1055,7 +1060,7 @@ func (g *group) completeLeaderSync(req *kmsg.SyncGroupRequest) {
 		resp := m.waitingReply.kreq.ResponseKind().(*kmsg.SyncGroupResponse)
 		resp.ProtocolType = kmsg.StringPtr(g.protocolType)
 		resp.Protocol = kmsg.StringPtr(g.protocol)
-		resp.MemberAssignment = m.assignment
+		resp.MemberAssignment = ensureMemberAssignment(m)
 		g.reply(m.waitingReply, resp, m)
 	}
 	g.state = groupStable
@@ -1209,6 +1214,18 @@ members:
 		panic("inconsistent group protocol within saved members")
 	}
 	return metadata
+}
+
+func assignmentOrEmpty(b []byte) []byte {
+	if len(b) == 0 {
+		return append([]byte(nil), emptyMemberAssignment...)
+	}
+	return b
+}
+
+func ensureMemberAssignment(m *groupMember) []byte {
+	m.assignment = assignmentOrEmpty(m.assignment)
+	return m.assignment
 }
 
 func (g *group) reply(creq *clientReq, kresp kmsg.Response, m *groupMember) {
