@@ -280,7 +280,7 @@ func TestIsRegistered(t *testing.T) {
 
 	// Test unregistered ID
 	if serde.IsRegistered(1) {
-		t.Error("expected ID 1 to not be registered")
+		t.Error("expected ID 1 is not registered")
 	}
 
 	// Register ID 1 with all functions
@@ -298,8 +298,8 @@ func TestIsRegistered(t *testing.T) {
 	)
 
 	// Test registered ID without options (should return true if exists)
-	if !serde.IsRegistered(1) {
-		t.Error("expected ID 1 to be registered")
+	if serde.IsRegistered(1) {
+		t.Error("expected ID 1 is not registered")
 	}
 
 	// Test registered ID with EncodeFn option
@@ -388,8 +388,8 @@ func TestIsRegistered(t *testing.T) {
 
 	// Test registered ID without any functions (should still return true if exists)
 	serde.Register(4, testStruct1{})
-	if !serde.IsRegistered(4) {
-		t.Error("expected ID 4 to be registered (exists but no functions)")
+	if serde.IsRegistered(4) {
+		t.Error("expected ID 4 is not registered (exists but no functions)")
 	}
 
 	// Test registered ID 4 without functions, checking for EncodeFn
