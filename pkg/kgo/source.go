@@ -782,6 +782,17 @@ func (s *source) loopFetch() {
 		case session.desireFetch() <- canFetch:
 		}
 
+		// Perform another last minute best-effort check on session context
+		// to avoid calling fetch just because it passed all the
+		// above and following selects by chance due to pseudo-random select behavior.
+		select {
+		case <-session.ctx.Done(): // single case
+			session.cancelFetchCh <- canFetch
+			s.fetchState.hardFinish()
+			return
+		default:
+		}
+
 		select {
 		case <-session.ctx.Done():
 			session.cancelFetchCh <- canFetch
