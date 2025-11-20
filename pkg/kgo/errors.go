@@ -64,10 +64,15 @@ func isRetryableBrokerErr(err error) bool {
 	// we can retry that. Same for ErrClosed.
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
 		// If the FIRST read is EOF, that is usually not a good sign,
-		// often it's from bad SASL. We err on the side of pessimism
-		// and do not retry.
+		// often it's from bad SASL. If we have failed EOF 3x in a row,
+		// We err on the side of pessimism and do not retry.
 		if ee := (*ErrFirstReadEOF)(nil); errors.As(err, &ee) {
-			return false
+			if ee.fail {
+				fmt.Println("NOT RETRYABLE, AT 3")
+				return false
+			} else {
+				fmt.Println("retryable, NOT AT 3")
+			}
 		}
 		return true
 	}
@@ -240,6 +245,7 @@ var (
 type ErrFirstReadEOF struct {
 	kind uint8
 	err  error
+	fail bool
 }
 
 type errProducerIDLoadFail struct {
