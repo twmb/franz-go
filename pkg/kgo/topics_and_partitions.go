@@ -957,5 +957,5 @@ func (css *consumerSessionStopper) maybeRestart() {
 	}
 	session := css.cl.consumer.startNewSession(css.tpsPrior)
 	defer session.decWorker()
-	css.reloadOffsets.loadWithSession(session, "resuming reload offsets after session stopped for cursor migrating in metadata")
+	css.reloadOffsets.loadWithSession(session)
 }
