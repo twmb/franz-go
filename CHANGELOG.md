@@ -1,3 +1,27 @@
+v1.20.5
+===
+
+This fixes a commit in 1.20.4 that accidentally broke client metrics (KIP-714)
+and inadvertently made a log spammy. In addition to the fix, a few logs around
+client metrics have been reduced in severity.
+
+The new-as-of-1.20 `OnPartitionsCallbackBlocked` is now called in a goroutine,
+reducing the chance that you accidentally run into a deadlock based on how you
+structure handling the hook.
+
+Deps have been bumped to eliminate any security scanners that flag on CVEs
+(even though this is a library and you can bump the dep in your own binary).
+
+The `kgo.Fetches.Errors` doc has been expanded to account for previously
+undocumented errors, and updates guidance on what's retryable vs what is not.
+validating leader epoch changes.
+
+- [`e86bb6c9`](https://github.com/twmb/franz-go/commit/e86bb6c9) kgo: `info=>debug` for a few logs in client metrics
+- [`7c7ca2b4`](https://github.com/twmb/franz-go/commit/7c7ca2b4) kgo: call OnPartitionsCallbackBlocked concurrently
+- [`ebf29a4a`](https://github.com/twmb/franz-go/commit/ebf29a4a) all: bump deps
+- [`97b4a1d4`](https://github.com/twmb/franz-go/commit/97b4a1d4) kgo.Fetches.Errors doc: clarify && expand for two undoc'd errors
+- [`13ea38e3`](https://github.com/twmb/franz-go/commit/13ea38e3) **bug** kgo: fix remaining usage of kgo.maxVers/kgo.maxVersion
+
 v1.20.4
 ===
 
