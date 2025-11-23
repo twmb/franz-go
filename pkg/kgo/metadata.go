@@ -136,12 +136,12 @@ func (cl *Client) waitmeta(ctx context.Context, wait time.Duration, why string) 
 	cl.metawait.c.Broadcast()
 }
 
-func (cl *Client) triggerUpdateMetadata(must bool, why string) bool {
+func (cl *Client) triggerUpdateMetadata(must bool, why string) {
 	if !must {
 		cl.metawait.mu.Lock()
 		defer cl.metawait.mu.Unlock()
 		if time.Since(cl.metawait.lastUpdate) < cl.cfg.metadataMinAge {
-			return false
+			return
 		}
 	}
 
@@ -149,7 +149,6 @@ func (cl *Client) triggerUpdateMetadata(must bool, why string) bool {
 	case cl.updateMetadataCh <- why:
 	default:
 	}
-	return true
 }
 
 func (cl *Client) triggerUpdateMetadataNow(why string) {
