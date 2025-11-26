@@ -1,8 +1,42 @@
 package kgo
 
 import (
+	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestPromises(t *testing.T) {
+	ctx := context.Background()
+	cl, err := NewClient()
+	if err != nil {
+		panic(err)
+	}
+
+	var promised atomic.Int64
+	var finished atomic.Int64
+
+	p := &cl.producer
+	for range 8 {
+		go func() {
+			for {
+				promise := func(*Record, error) {
+					finished.Add(1)
+				}
+				r := new(Record)
+				p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, ErrMaxBuffered)
+				promised.Add(1)
+			}
+		}()
+	}
+
+	for {
+		fmt.Println("promised", promised.Load(), "finished", finished.Load())
+		time.Sleep(time.Second)
+	}
+}
 
 func TestRing(t *testing.T) {
 	t.Run("push multiple elements and then drop them", func(t *testing.T) {
