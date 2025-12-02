@@ -20,7 +20,7 @@ validating leader epoch changes.
 - [`7c7ca2b4`](https://github.com/twmb/franz-go/commit/7c7ca2b4) kgo: call OnPartitionsCallbackBlocked concurrently
 - [`ebf29a4a`](https://github.com/twmb/franz-go/commit/ebf29a4a) all: bump deps
 - [`97b4a1d4`](https://github.com/twmb/franz-go/commit/97b4a1d4) kgo.Fetches.Errors doc: clarify && expand for two undoc'd errors
-- [`13ea38e3`](https://github.com/twmb/franz-go/commit/13ea38e3) **bug** kgo: fix remaining usage of kgo.maxVers/kgo.maxVersion
+- [`13ea38e3`](https://github.com/twmb/franz-go/commit/13ea38e3) **bug** kgo: fix remaining usage of kgo.maxVers/kgo.maxVersion (thanks [@vincentbernat](https://github.com/vincentbernat)!)
 
 v1.20.4
 ===
