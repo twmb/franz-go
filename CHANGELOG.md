@@ -14,7 +14,6 @@ Deps have been bumped to eliminate any security scanners that flag on CVEs
 
 The `kgo.Fetches.Errors` doc has been expanded to account for previously
 undocumented errors, and updates guidance on what's retryable vs what is not.
-validating leader epoch changes.
 
 - [`e86bb6c9`](https://github.com/twmb/franz-go/commit/e86bb6c9) kgo: `info=>debug` for a few logs in client metrics
 - [`7c7ca2b4`](https://github.com/twmb/franz-go/commit/7c7ca2b4) kgo: call OnPartitionsCallbackBlocked concurrently
