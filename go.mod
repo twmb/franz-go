@@ -3,7 +3,7 @@ module github.com/twmb/franz-go
 go 1.24.0
 
 require (
-	github.com/klauspost/compress v1.18.1
+	github.com/klauspost/compress v1.18.2
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/twmb/franz-go/pkg/kmsg v1.12.0
 	golang.org/x/crypto v0.45.0
