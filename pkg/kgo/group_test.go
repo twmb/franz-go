@@ -174,6 +174,9 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 			}
 		}
 
+		// We poll multiple times here while rebalancing is blocked.
+		// This used to deadlock consumers, with the group stuck rebalancing
+		// for a long time before eventually stabilizing.
 		for range 4 {
 			// We poll with a short timeout so that we do not hang waiting
 			// at the end if another consumer hit the limit.
