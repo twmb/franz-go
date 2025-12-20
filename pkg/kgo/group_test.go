@@ -174,70 +174,81 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 			}
 		}
 
-		// We poll with a short timeout so that we do not hang waiting
-		// at the end if another consumer hit the limit.
-		//
-		// If the host is slow, the context could be canceled immediately
-		// before we poll.
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		fetches := cl.PollRecords(ctx, 100)
-		cancel()
-		if err := fetches.Err(); err == context.DeadlineExceeded || err == context.Canceled || err == ErrClientClosed {
-			if consumed := int(c.consumed.Load()); consumed == testRecordLimit {
+		// We poll multiple times here while rebalancing is blocked.
+		// This used to deadlock consumers, with the group stuck rebalancing
+		// for a long time before eventually stabilizing.
+		for range 4 {
+			// We poll with a short timeout so that we do not hang waiting
+			// at the end if another consumer hit the limit.
+			//
+			// If the host is slow, the context could be canceled immediately
+			// before we poll.
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			fetches := cl.PollRecords(ctx, 25)
+			cancel()
+
+			if err := fetches.Err(); err == context.DeadlineExceeded || err == context.Canceled || err == ErrClientClosed {
+				if consumed := int(c.consumed.Load()); consumed == testRecordLimit {
+					return
+				} else if consumed > testRecordLimit {
+					panic(fmt.Sprintf("invalid: consumed too much from %s (group %s)", c.consumeFrom, c.group))
+				}
+				if fetches.NumRecords() == 0 {
+					continue
+				} else {
+					c.errCh <- fmt.Errorf("poll got err %s but also unexpectedly received %d records", err, fetches.NumRecords())
+					return
+				}
+			}
+			if fetchErrs := fetches.Errors(); len(fetchErrs) > 0 {
+				c.errCh <- fmt.Errorf("poll got unexpected errs: %v", fetchErrs)
 				return
-			} else if consumed > testRecordLimit {
-				panic(fmt.Sprintf("invalid: consumed too much from %s (group %s)", c.consumeFrom, c.group))
 			}
-			if fetches.NumRecords() > 0 {
-				c.errCh <- fmt.Errorf("poll got err %s but also unexpectedly received %d records", err, fetches.NumRecords())
+
+			if etlsBeforeQuit >= 0 && netls >= etlsBeforeQuit {
+				return
 			}
-			continue
-		}
-		if fetchErrs := fetches.Errors(); len(fetchErrs) > 0 {
-			c.errCh <- fmt.Errorf("poll got unexpected errs: %v", fetchErrs)
+
+			for r := range fetches.RecordsAll() {
+				keyNum, err := strconv.Atoi(string(r.Key))
+				if err != nil {
+					c.errCh <- err
+					return
+				}
+				if !bytes.Equal(r.Value, c.expBody) {
+					c.errCh <- fmt.Errorf("body not what was expected")
+					return
+				}
+
+				c.mu.Lock()
+				if _, exists := c.partOffsets[partOffset{r.Partition, r.Offset}]; exists {
+					c.errCh <- fmt.Errorf("saw double offset t %s p%do%d", r.Topic, r.Partition, r.Offset)
+					c.mu.Unlock()
+					return
+				}
+				c.partOffsets[partOffset{r.Partition, r.Offset}] = struct{}{}
+				c.part2key[r.Partition] = append(c.part2key[r.Partition], keyNum)
+				c.mu.Unlock()
+
+				c.consumed.Add(1)
+
+				cl.Produce(
+					context.Background(),
+					&Record{
+						Topic: c.produceTo,
+						Key:   r.Key,
+						Value: r.Value,
+					},
+					func(_ *Record, err error) {
+						if err != nil {
+							c.errCh <- fmt.Errorf("unexpected etl produce err: %v", err)
+						}
+					},
+				)
+				r.Recycle()
+			}
 		}
 
-		if etlsBeforeQuit >= 0 && netls >= etlsBeforeQuit {
-			return
-		}
 		netls++
-
-		for r := range fetches.RecordsAll() {
-			keyNum, err := strconv.Atoi(string(r.Key))
-			if err != nil {
-				c.errCh <- err
-			}
-			if !bytes.Equal(r.Value, c.expBody) {
-				c.errCh <- fmt.Errorf("body not what was expected")
-			}
-
-			c.mu.Lock()
-			// check dup
-			if _, exists := c.partOffsets[partOffset{r.Partition, r.Offset}]; exists {
-				c.errCh <- fmt.Errorf("saw double offset t %s p%do%d", r.Topic, r.Partition, r.Offset)
-			}
-			c.partOffsets[partOffset{r.Partition, r.Offset}] = struct{}{}
-
-			// save key for later for all-keys-consumed validation
-			c.part2key[r.Partition] = append(c.part2key[r.Partition], keyNum)
-			c.mu.Unlock()
-
-			c.consumed.Add(1)
-
-			cl.Produce(
-				context.Background(),
-				&Record{
-					Topic: c.produceTo,
-					Key:   r.Key,
-					Value: r.Value,
-				},
-				func(_ *Record, err error) {
-					if err != nil {
-						c.errCh <- fmt.Errorf("unexpected etl produce err: %v", err)
-					}
-				},
-			)
-			r.Recycle() // should be a no-op since we are not using pooling
-		}
 	}
 }
