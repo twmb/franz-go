@@ -195,10 +195,9 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 				}
 				if fetches.NumRecords() == 0 {
 					continue
-				} else {
-					c.errCh <- fmt.Errorf("poll got err %s but also unexpectedly received %d records", err, fetches.NumRecords())
-					return
 				}
+				c.errCh <- fmt.Errorf("poll got err %s but also unexpectedly received %d records", err, fetches.NumRecords())
+				return
 			}
 			if fetchErrs := fetches.Errors(); len(fetchErrs) > 0 {
 				c.errCh <- fmt.Errorf("poll got unexpected errs: %v", fetchErrs)
