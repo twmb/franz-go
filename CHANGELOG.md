@@ -1,3 +1,24 @@
+v1.20.6
+===
+
+This patch release has two improvements.
+
+Previously, you could not use poll functions multiple times if using
+`BlockRebalanceOnPoll`, because rebalancing had a higher lock priority than
+polling and would block all further poll calls. This has been changed to allow
+you to call poll as much as you want until you `AllowRebalance`. Thanks
+[@KiKoS0](https://github.com/KiKoS0)!
+
+If brokers indicated they supported epochs, but then used -1 everywhere for
+that epoch, `Mark` functions would ignore records being marked and you would
+never commit progress. This was due to the client defaulting to a 0 epoch
+internally (and not using it if the broker did not support it), meaning -1
+would be ignored. Brokers that use indicate support but use -1 are now
+supported. This was only found to be a problem against Azure Event Hubs.
+
+- [`7cd5ea65`](https://github.com/twmb/franz-go/commit/7cd5ea65) kgo: fix mark <=> epoch interaction, make epoch handling more resilient
+- [`94fd8622`](https://github.com/twmb/franz-go/commit/94fd8622) kgo: fix deadlock when polling multiple times while blocked from a rebalance
+
 v1.20.5
 ===
 
