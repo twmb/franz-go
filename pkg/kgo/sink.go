@@ -771,6 +771,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 				batch,
 				req.producerID,
 				req.producerEpoch,
+				tmetrics[partition],
 			)
 			if retry {
 				reqRetry.addSeqBatch(topic, tid, partition, batch)
@@ -810,6 +811,7 @@ func (s *sink) handleReqRespBatch(
 	batch seqRecBatch,
 	producerID int64,
 	producerEpoch int16,
+	batchMetrics ProduceBatchMetrics,
 ) (retry, didProduce bool) {
 	batch.owner.mu.Lock()
 	defer batch.owner.mu.Unlock()
@@ -867,6 +869,9 @@ func (s *sink) handleReqRespBatch(
 	}
 
 	err := kerr.ErrorForCode(rp.ErrorCode)
+	if errors.Is(err, kerr.MessageTooLarge) {
+		err = fmt.Errorf("%w (uncompressed_bytes=%d, compressed_bytes=%d).", err, batchMetrics.UncompressedBytes, batchMetrics.CompressedBytes)
+	}
 	failUnknown := batch.owner.checkUnknownFailLimit(err)
 	switch {
 	case err == kerr.ConcurrentTransactions:
@@ -1406,7 +1411,9 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		case appended: // we return true below
 		default: // processed as failure
 			recBuf.cl.prsPool.put(newBatch.records)
-			recBuf.cl.producer.promiseRecord(pr, kerr.MessageTooLarge)
+			recBuf.cl.producer.promiseRecord(pr,
+				fmt.Errorf("%w (uncompressed_bytes=%d).", kerr.MessageTooLarge, pr.userSize()),
+			)
 			return true
 		}
 
@@ -1973,13 +1980,13 @@ func (cl *Client) baseProduceRequestLength() int32 {
 		2 + // int16 version
 		4 + // int32 correlation ID
 		2 // int16 client ID len (always non flexible)
-		// empty tag section skipped; see below
+	    // empty tag section skipped; see below
 
 	const produceRequestBaseOverhead int32 = 2 + // int16 transactional ID len (flexible or not, since we cap at 16382)
 		2 + // int16 acks
 		4 + // int32 timeout
 		4 // int32 topics non-flexible array length
-		// empty tag section skipped; see below
+	    // empty tag section skipped; see below
 
 	baseLength := messageRequestOverhead + produceRequestBaseOverhead
 	if cl.cfg.id != nil {
@@ -2166,9 +2173,7 @@ func (p *produceRequest) IsFlexible() bool   { return p.version >= 9 }
 func (p *produceRequest) AppendTo(dst []byte) []byte {
 	flexible := p.IsFlexible()
 
-	if p.hasHook {
-		p.metrics = make(map[string]map[int32]ProduceBatchMetrics)
-	}
+	p.metrics = make(map[string]map[int32]ProduceBatchMetrics)
 
 	if p.version >= 3 {
 		if flexible {
@@ -2200,10 +2205,8 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 		}
 
 		var tmetrics map[int32]ProduceBatchMetrics
-		if p.hasHook {
-			tmetrics = make(map[int32]ProduceBatchMetrics)
-			p.metrics[topic] = tmetrics
-		}
+		tmetrics = make(map[int32]ProduceBatchMetrics)
+		p.metrics[topic] = tmetrics
 
 		for partition, batch := range partitions {
 			dst = kbin.AppendInt32(dst, partition)
@@ -2226,9 +2229,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 				dst, pmetrics = batch.appendTo(dst, p.version, p.producerID, p.producerEpoch, p.txnID != nil, p.compressor)
 			}
 			batch.mu.Unlock()
-			if p.hasHook {
-				tmetrics[partition] = pmetrics
-			}
+			tmetrics[partition] = pmetrics
 			if flexible {
 				dst = append(dst, 0)
 			}
