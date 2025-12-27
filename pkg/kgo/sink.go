@@ -88,7 +88,6 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		producerID:    id,
 		producerEpoch: epoch,
 
-		hasHook:    s.cl.producer.hasHookBatchWritten,
 		compressor: s.cl.cfg.compressor,
 
 		wireLength:      s.cl.baseProduceRequestLength(), // start length with no topics
@@ -1788,7 +1787,6 @@ type produceRequest struct {
 	//
 	// We use this in handleReqResp for the OnProduceHook.
 	metrics produceMetrics
-	hasHook bool
 
 	compressor Compressor
 
