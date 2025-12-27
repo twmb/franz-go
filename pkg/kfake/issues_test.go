@@ -85,7 +85,7 @@ func TestIssue885(t *testing.T) {
 	follower := (pi.Leader + 1) % 2
 	c.SetFollowers(testTopic, 0, []int32{follower})
 
-	c.ControlKey(1, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
 
 		req := kreq.(*kmsg.FetchRequest)
@@ -221,7 +221,7 @@ func TestIssue905(t *testing.T) {
 
 	var leaderReqs, followerReqs atomic.Int32
 	allowFollower := make(chan struct{}, 1)
-	c.ControlKey(1, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
 
 		req := kreq.(*kmsg.FetchRequest)
@@ -666,7 +666,7 @@ func TestIssue1167(t *testing.T) {
 
 	// Control fetch responses to ALWAYS return preferred replicas
 	// This will trigger cursor migrations on EVERY fetch to maximize race likelihood
-	c.ControlKey(1, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
 
 		req := kreq.(*kmsg.FetchRequest)
