@@ -396,7 +396,7 @@ func forEachBatchRecord(batch kmsg.RecordBatch, cb func(kmsg.Record) error) erro
 // BatchRecord returns the raw kmsg.Record's within a record batch, or an error
 // if they could not be processed.
 func BatchRecords(b kmsg.RecordBatch) ([]kmsg.Record, error) {
-	var rs kmsg.Record
+	var rs []kmsg.Record
 	err := forEachBatchRecord(b, func(r kmsg.Record) error {
 		rs = append(rs, r)
 		return nil
