@@ -129,6 +129,11 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		sp := kmsg.NewFetchResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
+		// Encode empty record sets as an empty-but-present byte slice rather
+		// than null. A nil slice would be serialized as a length of -1 (or 0
+		// in the compact-nullable form), which some clients (for example,
+		// librdkafka) interpret as an invalid MessageSet size.
+		sp.RecordBatches = make([]byte, 0)
 		st := donet(t, id, 0)
 		st.Partitions = append(st.Partitions, sp)
 		return &st.Partitions[len(st.Partitions)-1]
