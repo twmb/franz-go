@@ -439,9 +439,9 @@ Missing from above but included in librdkafka is:
 - [KIP-85](https://cwiki.apache.org/confluence/display/KAFKA/KIP-85%3A+Dynamic+JAAS+configuration+for+Kafka+clients), which does not seem relevant for franz-go
 - [KIP-92](https://cwiki.apache.org/confluence/display/KAFKA/KIP-92+-+Add+per+partition+lag+metrics+to+KafkaConsumer) for consumer lag metrics, which is better suited for an external system via the admin api
 - [KIP-223](https://cwiki.apache.org/confluence/display/KAFKA/KIP-223+-+Add+per-topic+min+lead+and+per-partition+lead+metrics+to+KafkaConsumer) for more metrics
-- [KIP-235](https://cwiki.apache.org/confluence/display/KAFKA/KIP-235%3A+Add+DNS+alias+support+for+secured+connection), which is confusing but may be implement via a custom dialer and custom kerberos?
+- [KIP-235](https://cwiki.apache.org/confluence/display/KAFKA/KIP-235%3A+Add+DNS+alias+support+for+secured+connection), which is confusing but may be implemented via a custom dialer and custom kerberos?
 - [KIP-359](https://cwiki.apache.org/confluence/display/KAFKA/KIP-359%3A+Verify+leader+epoch+in+produce+requests) to verify leader epoch when producing; this is easy to support but actually is not implemented in Kafka yet
 - [KIP-421](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=100829515) for dynamic values in configs; librdkafka mentions it does not support it, and neither does franz-go for the same reason (we do not use a config file)
 - [KIP-436](https://cwiki.apache.org/confluence/display/KAFKA/KIP-436%3A+Add+a+metric+indicating+start+time) is about yet another metric
 - [KIP-517](https://cwiki.apache.org/confluence/display/KAFKA/KIP-517%3A+Add+consumer+metrics+to+observe+user+poll+behavior), more metrics
-- [KIP-881](https://cwiki.apache.org/confluence/display/KAFKA/KIP-881%3A+Rack-aware+Partition+Assignment+for+Kafka+Consumers), rack aware rebalancing: probably useful, but the implementation is not clear, and the motiviation is confusing with follower fetching and whether to consider replicas while rebalancing
+- [KIP-881](https://cwiki.apache.org/confluence/display/KAFKA/KIP-881%3A+Rack-aware+Partition+Assignment+for+Kafka+Consumers), rack aware rebalancing: probably useful, but the implementation is not clear, and the motivation is confusing with follower fetching and whether to consider replicas while rebalancing

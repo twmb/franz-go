@@ -217,7 +217,7 @@ func (cl *Client) OptValue(opt any) any {
 // TransactionalID, and InstanceID) -- this function will return the string
 // value of the option but also whether the option is non-nil. Boolean options
 // are returned as a single-element slice with the bool value. Variadic inputs
-// are returned as a signle slice. If the input option does not exist, this
+// are returned as a single slice. If the input option does not exist, this
 // returns nil.
 //
 //	var (
@@ -661,7 +661,7 @@ func (cl *Client) PurgeTopicsFromClient(topics ...string) {
 	if len(topics) == 0 {
 		return
 	}
-	sort.Strings(topics)           // for logging in the functions
+	sort.Strings(topics) // for logging in the functions
 	cl.blockingMetadataFn(func() { // make reasoning about concurrency easier
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -1578,7 +1578,7 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 	// below because this handles two group requests, which we do not want
 	// to fall into the handleCoordinatorReq logic.
 	switch t := req.(type) {
-	case *kmsg.ListOffsetsRequest, // key 2
+	case *kmsg.ListOffsetsRequest,            // key 2
 		*kmsg.OffsetFetchRequest,             // key 9
 		*kmsg.FindCoordinatorRequest,         // key 10
 		*kmsg.DescribeGroupsRequest,          // key 15
@@ -1597,7 +1597,7 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 		*kmsg.DescribeTransactionsRequest,    // key 65
 		*kmsg.ListTransactionsRequest,        // key 66
 		*kmsg.ConsumerGroupDescribeRequest,   // key 69
-		*kmsg.ShareGroupDescribeRequest:      // key 77
+		*kmsg.ShareGroupDescribeRequest: // key 77
 		return cl.handleShardedReq(ctx, req)
 
 	case *kmsg.MetadataRequest:
