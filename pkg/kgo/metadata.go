@@ -508,7 +508,7 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	return retryWhy, nil
 }
 
-// We use a special structure to repesent metadata before we *actually* convert
+// We use a special structure to represent metadata before we *actually* convert
 // it to topicPartitionsData. This helps avoid any pointer reuse problems
 // because we want to keep the client's producer and consumer maps completely
 // independent.  If we just returned map[string]*topicPartitionsData, we could
@@ -650,7 +650,7 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 		})
 		for i := range topicMeta.Partitions {
 			if got := topicMeta.Partitions[i].Partition; got != int32(i) {
-				mt.loadErr = fmt.Errorf("kafka did not reply with a comprensive set of partitions for a topic; we expected partition %d but saw %d", i, got)
+				mt.loadErr = fmt.Errorf("kafka did not reply with a comprehensive set of partitions for a topic; we expected partition %d but saw %d", i, got)
 				break
 			}
 		}

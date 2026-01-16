@@ -532,7 +532,7 @@ func newBufPool() bufPool {
 func (p bufPool) get() []byte  { return (*p.p.Get().(*[]byte))[:0] }
 func (p bufPool) put(b []byte) { p.p.Put(&b) }
 
-// loadConection returns the broker's connection, creating it if necessary
+// loadConnection returns the broker's connection, creating it if necessary
 // and returning an error of if that fails.
 func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerCxn, error) {
 	var (

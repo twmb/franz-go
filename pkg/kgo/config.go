@@ -818,7 +818,7 @@ func RetryTimeout(t time.Duration) Opt {
 //
 // The function is called with the request key that is being retried. While it
 // is not expected that the request key will be used, including it gives users
-// the opportinuty to have different retry timeouts for different keys.
+// the opportunity to have different retry timeouts for different keys.
 //
 // If the function returns zero, there is no retry timeout.
 //
@@ -838,7 +838,7 @@ func AllowAutoTopicCreation() Opt {
 // BrokerMaxWriteBytes upper bounds the number of bytes written to a broker
 // connection in a single write, overriding the default 100MiB.
 //
-// This number corresponds to the a broker's socket.request.max.bytes, which
+// This number corresponds to the broker's socket.request.max.bytes, which
 // defaults to 100MiB.
 //
 // The only Kafka request that could come reasonable close to hitting this
@@ -1397,8 +1397,8 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 //
 //	at start?                         => start at the log start offset
 //	at end?                           => start at the log end offset
-//	at exact?                         => start at the an exact offset (3 means offset 3)
-//	relative?                         => start at the the above, + / - the relative amount
+//	at exact?                         => start at an exact offset (3 means offset 3)
+//	relative?                         => start at the above, + / - the relative amount
 //	exact/relative are out of bounds? => start at the nearest boundary (start or end)
 //	after millisec?                   => start at first offset after millisec if one exists, else log end offset
 //
@@ -1440,8 +1440,8 @@ func ConsumeStartOffset(offset Offset) ConsumerOpt {
 //
 //	at start?                         => reset to the log start offset
 //	at end?                           => reset to the log end offset
-//	at exact?                         => reset to the an exact offset (3 means offset 3)
-//	relative?                         => reset to the the above, + / - the relative amount
+//	at exact?                         => reset to an exact offset (3 means offset 3)
+//	relative?                         => reset to the above, + / - the relative amount
 //	exact/relative are out of bounds? => reset to the nearest boundary (start or end)
 //	after millisec?                   => reset to the first offset after millisec if one exists, else the log end offset
 //

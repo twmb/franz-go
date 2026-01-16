@@ -1367,7 +1367,7 @@ type ProcessFetchPartitionOpts struct {
 	// as [KeepControlRecords].
 	KeepControlRecords bool
 
-	// DisableFetchCRCValidation opts out of validating the CRC prefixing
+	// DisableCRCValidation opts out of validating the CRC prefixing
 	// every batch. This should only be true if your broker does not
 	// properly support CRCs.
 	DisableCRCValidation bool

@@ -797,7 +797,7 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 	cl.triggerUpdateMetadataNow("from AddConsumeTopics")
 }
 
-// GetConsumeTopics retrives a list of current topics being consumed.
+// GetConsumeTopics retrieves a list of current topics being consumed.
 func (cl *Client) GetConsumeTopics() []string {
 	c := &cl.consumer
 	if c.g == nil && c.d == nil {
@@ -1151,7 +1151,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 
 			// First, if the request is exact, get rid of the relative
 			// portion. We are modifying a copy of the offset, i.e. we
-			// are appropriately not modfying 'assignments' itself.
+			// are appropriately not modifying 'assignments' itself.
 			if offset.at >= 0 {
 				offset.at += offset.relative
 				if offset.at < 0 {
@@ -1761,7 +1761,7 @@ func (c *consumer) startNewSession(tps *topicsPartitions) *consumerSession {
 		sns.source.maybeConsume()
 	})
 
-	// At this point, any source that was not consuming becauase it saw the
+	// At this point, any source that was not consuming because it saw the
 	// session was stopped has been notified to potentially start consuming
 	// again. The session is alive.
 
@@ -1769,7 +1769,7 @@ func (c *consumer) startNewSession(tps *topicsPartitions) *consumerSession {
 }
 
 // This function is responsible for issuing ListOffsets or
-// OffsetForLeaderEpoch. These requests's responses  are only handled within
+// OffsetForLeaderEpoch. These requests's responses are only handled within
 // the context of a consumer session.
 func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, why string) {
 	defer s.decWorker()

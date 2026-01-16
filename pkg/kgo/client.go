@@ -217,7 +217,7 @@ func (cl *Client) OptValue(opt any) any {
 // TransactionalID, and InstanceID) -- this function will return the string
 // value of the option but also whether the option is non-nil. Boolean options
 // are returned as a single-element slice with the bool value. Variadic inputs
-// are returned as a signle slice. If the input option does not exist, this
+// are returned as a single slice. If the input option does not exist, this
 // returns nil.
 //
 //	var (
