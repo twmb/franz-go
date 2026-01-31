@@ -5,39 +5,19 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TODO
-
 func init() { regKey(22, 0, 4) }
 
-func (c *Cluster) handleInitProducerID(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
-	var (
-		req  = kreq.(*kmsg.InitProducerIDRequest)
-		resp = req.ResponseKind().(*kmsg.InitProducerIDResponse)
-	)
+func (c *Cluster) handleInitProducerID(creq *clientReq) (kmsg.Response, error) {
+	req := creq.kreq.(*kmsg.InitProducerIDRequest)
 
 	if err := checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 
-	if req.TransactionalID != nil {
-		txid := *req.TransactionalID
-		if txid == "" {
-			resp.ErrorCode = kerr.InvalidRequest.Code
-			return resp, nil
-		}
-		coordinator := c.coordinator(txid)
-		if b != coordinator {
-			resp.ErrorCode = kerr.NotCoordinator.Code
-			return resp, nil
-		}
-		if req.TransactionTimeoutMillis < 0 { // TODO transaction.max.timeout.ms
-			resp.ErrorCode = kerr.InvalidTransactionTimeout.Code
-			return resp, nil
-		}
+	if c.pids.handleInitProducerID(creq) {
+		return nil, nil
 	}
-
-	id, epoch := c.pids.create(req.TransactionalID, req.TransactionTimeoutMillis)
-	resp.ProducerID = id
-	resp.ProducerEpoch = epoch
+	resp := req.ResponseKind().(*kmsg.InitProducerIDResponse)
+	resp.ErrorCode = kerr.UnknownServerError.Code
 	return resp, nil
 }

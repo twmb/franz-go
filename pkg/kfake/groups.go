@@ -143,7 +143,7 @@ func (gs *groups) newGroup(name string) *group {
 		pending:   make(map[string]*groupMember),
 		protocols: make(map[string]int),
 		reqCh:     make(chan *clientReq),
-		controlCh: make(chan func()),
+		controlCh: make(chan func(), 10), // Buffered to prevent blocking on send
 		quitCh:    make(chan struct{}),
 	}
 }

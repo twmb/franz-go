@@ -12,7 +12,6 @@ import (
 
 // TODO
 // * Leaders
-// * Support txns
 // * Multiple batches in one produce
 // * Compact
 
@@ -149,39 +148,86 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 				continue
 			}
 
-			txnal := attrs&0xfff0 != 0
-			pidinf, window := c.pids.get(b.ProducerID, rt.Topic, rp.Partition)
-			if txnal && window == nil {
-				donep(rt, rp, kerr.InvalidTxnState.Code)
+			txnal := attrs&0x0010 != 0
+
+			// Transactional batches must have a valid producer ID
+			if txnal && b.ProducerID < 0 {
+				donep(rt, rp, kerr.InvalidProducerIDMapping.Code)
 				continue
 			}
-			be := b.ProducerEpoch
-			switch {
-			case window == nil && be != -1:
-				donep(rt, rp, kerr.InvalidTxnState.Code)
-				continue
-			case window != nil && be < pidinf.epoch:
-				donep(rt, rp, kerr.FencedLeaderEpoch.Code)
-				continue
-			case window != nil && be > pidinf.epoch:
-				donep(rt, rp, kerr.UnknownLeaderEpoch.Code)
-				continue
+
+			var errCode int16
+			var dup bool
+			var baseOffset, lso int64
+
+			// Validate and push batch. For idempotent/transactional produces,
+			// we do this inside waitControl to synchronize with the txn loop.
+			if b.ProducerID >= 0 {
+				c.pids.init()
+				c.pids.waitControl(func() {
+					pidinf, window := c.pids.get(b.ProducerID, rt.Topic, rp.Partition)
+
+					if txnal && window == nil {
+						errCode = kerr.InvalidTxnState.Code
+						return
+					}
+
+					switch {
+					case window == nil && b.ProducerEpoch != -1:
+						errCode = kerr.InvalidTxnState.Code
+					case window != nil && b.ProducerEpoch < pidinf.epoch:
+						errCode = kerr.FencedLeaderEpoch.Code
+					case window != nil && b.ProducerEpoch > pidinf.epoch:
+						errCode = kerr.UnknownLeaderEpoch.Code
+					default:
+						var seqOk bool
+						seqOk, dup = window.pushAndValidate(b.FirstSequence, b.NumRecords)
+						if !seqOk {
+							errCode = kerr.OutOfOrderSequenceNumber.Code
+						}
+					}
+					if errCode != 0 || dup {
+						return
+					}
+
+					// Validation passed, push the batch
+					baseOffset = pd.highWatermark
+					lso = pd.logStartOffset
+
+					// For transactional batches, determine txnFirstOffset
+					var txnFirstOffset int64
+					if txnal {
+						ptr := pidinf.txPartFirstOffsets.mkp(rt.Topic, rp.Partition, func() *int64 {
+							v := int64(-1)
+							return &v
+						})
+						if *ptr == -1 {
+							*ptr = baseOffset
+						}
+						txnFirstOffset = *ptr
+					}
+
+					batchptr := pd.pushBatch(len(rp.Records), b, txnal, txnFirstOffset)
+					if txnal {
+						pidinf.txBatches = append(pidinf.txBatches, batchptr)
+					}
+				})
+			} else {
+				// Non-idempotent produce, no pids validation needed
+				baseOffset = pd.highWatermark
+				lso = pd.logStartOffset
+				pd.pushBatch(len(rp.Records), b, txnal, 0)
 			}
-			ok, dup := window.pushAndValidate(b.FirstSequence, b.NumRecords)
-			if !ok {
-				donep(rt, rp, kerr.OutOfOrderSequenceNumber.Code)
+
+			if errCode != 0 {
+				donep(rt, rp, errCode)
 				continue
 			}
 			if dup {
 				donep(rt, rp, 0)
 				continue
 			}
-			baseOffset := pd.highWatermark
-			lso := pd.logStartOffset
-			batchptr := pd.pushBatch(len(rp.Records), b, txnal)
-			if txnal {
-				pidinf.txBatches = append(pidinf.txBatches, batchptr)
-			}
+
 			sp := donep(rt, rp, 0)
 			sp.BaseOffset = baseOffset
 			sp.LogAppendTime = logAppendTime

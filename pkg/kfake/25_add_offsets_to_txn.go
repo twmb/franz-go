@@ -5,19 +5,19 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func init() { regKey(24, 0, 3) }
+func init() { regKey(25, 0, 3) }
 
-func (c *Cluster) handleAddPartitionsToTxn(creq *clientReq) (kmsg.Response, error) {
-	req := creq.kreq.(*kmsg.AddPartitionsToTxnRequest)
+func (c *Cluster) handleAddOffsetsToTxn(creq *clientReq) (kmsg.Response, error) {
+	req := creq.kreq.(*kmsg.AddOffsetsToTxnRequest)
 
 	if err := checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 
-	if c.pids.handleAddPartitionsToTxn(creq) {
+	if c.pids.handleAddOffsetsToTxn(creq) {
 		return nil, nil
 	}
-	resp := req.ResponseKind().(*kmsg.AddPartitionsToTxnResponse)
+	resp := req.ResponseKind().(*kmsg.AddOffsetsToTxnResponse)
 	resp.ErrorCode = kerr.UnknownServerError.Code
 	return resp, nil
 }
