@@ -233,6 +233,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 				sb := kmsg.NewFetchResponseBroker()
 				sb.NodeID = b.node
 				sb.Host, sb.Port = b.hostport()
+				sb.Rack = &brokerRack
 				resp.Brokers = append(resp.Brokers, sb)
 			}
 		}
@@ -257,6 +258,16 @@ full:
 			p.CurrentLeader.LeaderEpoch = pd.epoch
 			includeBrokers = true
 			continue
+		}
+		// CurrentLeaderEpoch validation (KIP-320, v9+)
+		if le := fp.currentEpoch; le != -1 {
+			if le < pd.epoch {
+				donep(fp.topic, fp.topicID, fp.partition, kerr.FencedLeaderEpoch.Code)
+				continue
+			} else if le > pd.epoch {
+				donep(fp.topic, fp.topicID, fp.partition, kerr.UnknownLeaderEpoch.Code)
+				continue
+			}
 		}
 		sp := donep(fp.topic, fp.topicID, fp.partition, 0)
 		sp.HighWatermark = pd.highWatermark

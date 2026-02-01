@@ -8,11 +8,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TODO
-// * Leaders
-// * Multiple batches in one produce
-// * Compact
-
 func init() { regKey(0, 3, 13) }
 
 func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
@@ -32,23 +27,26 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 		return nil, err
 	}
 
-	donep := func(t kmsg.ProduceRequestTopic, p kmsg.ProduceRequestTopicPartition, errCode int16) *kmsg.ProduceResponseTopicPartition {
+	donep := func(t kmsg.ProduceRequestTopic, p kmsg.ProduceRequestTopicPartition, errCode int16, errMsg string) *kmsg.ProduceResponseTopicPartition {
 		sp := kmsg.NewProduceResponseTopicPartition()
 		sp.Partition = p.Partition
 		sp.ErrorCode = errCode
+		if req.Version >= 8 && errMsg != "" {
+			sp.ErrorMessage = &errMsg
+		}
 		ps := tdone[id(t)]
 		ps = append(ps, sp)
 		tdone[id(t)] = ps
 		return &ps[len(ps)-1]
 	}
-	donet := func(t kmsg.ProduceRequestTopic, errCode int16) {
+	donet := func(t kmsg.ProduceRequestTopic, errCode int16, errMsg string) {
 		for _, p := range t.Partitions {
-			donep(t, p, errCode)
+			donep(t, p, errCode, errMsg)
 		}
 	}
-	donets := func(errCode int16) {
+	donets := func(errCode int16, errMsg string) {
 		for _, t := range req.Topics {
-			donet(t, errCode)
+			donet(t, errCode, errMsg)
 		}
 	}
 	var includeBrokers bool
@@ -65,6 +63,7 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 				sb := kmsg.NewProduceResponseBroker()
 				sb.NodeID = b.node
 				sb.Host, sb.Port = b.hostport()
+				sb.Rack = &brokerRack
 				resp.Brokers = append(resp.Brokers, sb)
 			}
 		}
@@ -74,7 +73,7 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 	switch req.Acks {
 	case -1, 0, 1:
 	default:
-		donets(kerr.InvalidRequiredAcks.Code)
+		donets(kerr.InvalidRequiredAcks.Code, "Invalid required acks.")
 		return toresp(), nil
 	}
 
@@ -83,53 +82,60 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 		if req.Version >= 13 {
 			topic, ok := c.data.id2t[rt.TopicID]
 			if !ok {
-				donet(rt, kerr.UnknownTopicID.Code)
+				donet(rt, kerr.UnknownTopicID.Code, "Unknown topic ID.")
 				continue
 			}
 			rt.Topic = topic
 		}
+		maxMessageBytes := c.data.maxMessageBytes(rt.Topic)
 		for _, rp := range rt.Partitions {
 			pd, ok := c.data.tps.getp(rt.Topic, rp.Partition)
 			if !ok {
-				donep(rt, rp, kerr.UnknownTopicOrPartition.Code)
+				donep(rt, rp, kerr.UnknownTopicOrPartition.Code, "Unknown topic or partition.")
 				continue
 			}
 			if pd.leader != b {
-				p := donep(rt, rp, kerr.NotLeaderForPartition.Code)
+				p := donep(rt, rp, kerr.NotLeaderForPartition.Code, "Not leader for partition.")
 				p.CurrentLeader.LeaderID = pd.leader.node
 				p.CurrentLeader.LeaderEpoch = pd.epoch
 				includeBrokers = true
 				continue
 			}
 
+			// Check message size before parsing
+			if len(rp.Records) > maxMessageBytes {
+				donep(rt, rp, kerr.MessageTooLarge.Code, "The message is too large.")
+				continue
+			}
+
 			var b kmsg.RecordBatch
 			if err := b.ReadFrom(rp.Records); err != nil {
-				donep(rt, rp, kerr.CorruptMessage.Code)
+				donep(rt, rp, kerr.CorruptMessage.Code, "Corrupt message.")
 				continue
 			}
 			if b.FirstOffset != 0 {
-				donep(rt, rp, kerr.CorruptMessage.Code)
+				donep(rt, rp, kerr.CorruptMessage.Code, "First offset in batch must be zero.")
 				continue
 			}
 			if int(b.Length) != len(rp.Records)-12 {
-				donep(rt, rp, kerr.CorruptMessage.Code)
+				donep(rt, rp, kerr.CorruptMessage.Code, "Batch length mismatch.")
 				continue
 			}
 			if b.PartitionLeaderEpoch != -1 {
-				donep(rt, rp, kerr.CorruptMessage.Code)
+				donep(rt, rp, kerr.CorruptMessage.Code, "Partition leader epoch must be -1.")
 				continue
 			}
 			if b.Magic != 2 {
-				donep(rt, rp, kerr.CorruptMessage.Code)
+				donep(rt, rp, kerr.CorruptMessage.Code, "Unsupported message format version.")
 				continue
 			}
 			if b.CRC != int32(crc32.Checksum(rp.Records[21:], crc32c)) { // crc starts at byte 21
-				donep(rt, rp, kerr.CorruptMessage.Code)
+				donep(rt, rp, kerr.CorruptMessage.Code, "CRC mismatch.")
 				continue
 			}
 			attrs := uint16(b.Attributes)
 			if attrs&0x0007 > 4 {
-				donep(rt, rp, kerr.CorruptMessage.Code)
+				donep(rt, rp, kerr.CorruptMessage.Code, "Invalid compression type.")
 				continue
 			}
 			logAppendTime := int64(-1)
@@ -139,7 +145,7 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 				logAppendTime = now
 			}
 			if b.LastOffsetDelta != b.NumRecords-1 {
-				donep(rt, rp, kerr.CorruptMessage.Code)
+				donep(rt, rp, kerr.CorruptMessage.Code, "Last offset delta mismatch.")
 				continue
 			}
 
@@ -147,7 +153,7 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 
 			// Transactional batches must have a valid producer ID
 			if txnal && b.ProducerID < 0 {
-				donep(rt, rp, kerr.InvalidProducerIDMapping.Code)
+				donep(rt, rp, kerr.InvalidProducerIDMapping.Code, "Invalid producer ID mapping for transactional batch.")
 				continue
 			}
 
@@ -223,15 +229,15 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 			}
 
 			if errCode != 0 {
-				donep(rt, rp, errCode)
+				donep(rt, rp, errCode, "")
 				continue
 			}
 			if dup {
-				donep(rt, rp, 0)
+				donep(rt, rp, 0, "")
 				continue
 			}
 
-			sp := donep(rt, rp, 0)
+			sp := donep(rt, rp, 0, "")
 			sp.BaseOffset = baseOffset
 			sp.LogAppendTime = logAppendTime
 			sp.LogStartOffset = lso

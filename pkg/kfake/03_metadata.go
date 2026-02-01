@@ -19,6 +19,7 @@ func (c *Cluster) handleMetadata(kreq kmsg.Request) (kmsg.Response, error) {
 		sb := kmsg.NewMetadataResponseBroker()
 		sb.NodeID = b.node
 		sb.Host, sb.Port = b.hostport()
+		sb.Rack = &brokerRack
 		resp.Brokers = append(resp.Brokers, sb)
 	}
 

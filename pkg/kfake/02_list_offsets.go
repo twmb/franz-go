@@ -74,6 +74,16 @@ func (c *Cluster) handleListOffsets(b *broker, kreq kmsg.Request) (kmsg.Response
 				} else {
 					sp.Offset = pd.highWatermark
 				}
+			case -3:
+				// KIP-734: Return offset and timestamp of record with max timestamp
+				if pd.maxTimestampBatchIdx < 0 {
+					sp.Offset = -1
+					sp.Timestamp = -1
+				} else {
+					batch := pd.batches[pd.maxTimestampBatchIdx]
+					sp.Offset = batch.FirstOffset + int64(batch.LastOffsetDelta)
+					sp.Timestamp = batch.MaxTimestamp
+				}
 			default:
 				// returns the index of the first batch _after_ the requested timestamp
 				idx, _ := sort.Find(len(pd.batches), func(idx int) int {

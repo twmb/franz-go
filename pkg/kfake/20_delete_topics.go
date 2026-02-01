@@ -58,7 +58,9 @@ func (c *Cluster) handleDeleteTopics(b *broker, kreq kmsg.Request) (kmsg.Respons
 			delete(c.data.tps, td.topic)
 			delete(c.data.id2t, td.id)
 			delete(c.data.t2id, td.topic)
-
+			delete(c.data.treplicas, td.topic)
+			delete(c.data.tcfgs, td.topic)
+			delete(c.data.tnorms, normalizeTopicName(td.topic))
 		}
 	}()
 	for _, rt := range req.Topics {

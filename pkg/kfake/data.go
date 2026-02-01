@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -27,10 +28,11 @@ type (
 		c   *Cluster
 		tps tps[partData]
 
-		id2t      map[uuid]string               // topic IDs => topic name
-		t2id      map[string]uuid               // topic name => topic IDs
-		treplicas map[string]int                // topic name => # replicas
-		tcfgs     map[string]map[string]*string // topic name => config name => config value
+		id2t           map[uuid]string               // topic IDs => topic name
+		t2id           map[string]uuid               // topic name => topic IDs
+		treplicas      map[string]int                // topic name => # replicas
+		tcfgs          map[string]map[string]*string // topic name => config name => config value
+		tnorms map[string]string             // normalized name (. replaced with _) => topic name
 	}
 
 	partData struct {
@@ -44,9 +46,12 @@ type (
 		logStartOffset   int64
 		earliestTxOffset int64 // earliest offset of uncommitted transaction, -1 if none
 		epoch            int32 // current epoch
-		maxTimestamp     int64 // current max timestamp in all batches
+		maxTimestamp     int64 // max FirstTimestamp seen (for maxEarlierTimestamp optimization)
 		nbytes           int64
 		inTx             bool
+
+		// For ListOffsets timestamp -3 (KIP-734): track the batch with max timestamp
+		maxTimestampBatchIdx int // index of batch with highest MaxTimestamp, -1 if none
 
 		rf        int8
 		leader    *broker
@@ -99,6 +104,12 @@ func (fs followers) has(b *broker) bool {
 	return false
 }
 
+// normalizeTopicName normalizes a topic name for collision detection.
+// Kafka considers topics that differ only in . vs _ as colliding.
+func normalizeTopicName(t string) string {
+	return strings.ReplaceAll(t, ".", "_")
+}
+
 func (d *data) mkt(t string, nparts, nreplicas int, configs map[string]*string) {
 	if d.tps != nil {
 		if _, exists := d.tps[t]; exists {
@@ -126,6 +137,7 @@ func (d *data) mkt(t string, nparts, nreplicas int, configs map[string]*string) 
 	d.id2t[id] = t
 	d.t2id[t] = id
 	d.treplicas[t] = nreplicas
+	d.tnorms[normalizeTopicName(t)] = t
 	if configs != nil {
 		d.tcfgs[t] = configs
 	}
@@ -145,12 +157,13 @@ func (c *Cluster) noLeader() *broker {
 func (c *Cluster) newPartData(p int32) func() *partData {
 	return func() *partData {
 		return &partData{
-			p:                p,
-			dir:              defLogDir,
-			earliestTxOffset: -1,
-			leader:           c.bs[rand.Intn(len(c.bs))],
-			watch:            make(map[*watchFetch]struct{}),
-			createdAt:        time.Now(),
+			p:                    p,
+			dir:                  defLogDir,
+			earliestTxOffset:     -1,
+			maxTimestampBatchIdx: -1,
+			leader:               c.bs[rand.Intn(len(c.bs))],
+			watch:                make(map[*watchFetch]struct{}),
+			createdAt:            time.Now(),
 		}
 	}
 }
@@ -169,6 +182,13 @@ func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool, txnFirs
 	}
 	b.FirstOffset = pd.highWatermark
 	b.PartitionLeaderEpoch = pd.epoch
+
+	// Track max timestamp batch for ListOffsets -3 (KIP-734)
+	newIdx := len(pd.batches) // index this batch will have after append
+	if pd.maxTimestampBatchIdx < 0 || b.MaxTimestamp >= pd.batches[pd.maxTimestampBatchIdx].MaxTimestamp {
+		pd.maxTimestampBatchIdx = newIdx
+	}
+
 	pd.batches = append(pd.batches, &partBatch{
 		RecordBatch:         b,
 		nbytes:              nbytes,
@@ -402,6 +422,34 @@ var configDefaults = map[string]string{
 }
 
 const defLogDir = "/mem/kfake"
+
+var brokerRack = "krack"
+
+// maxMessageBytes returns the max.message.bytes for a topic, falling back to
+// broker config then defaults.
+func (d *data) maxMessageBytes(t string) int {
+	// Check topic-level config first
+	if tcfg, ok := d.tcfgs[t]; ok {
+		if v, ok := tcfg["max.message.bytes"]; ok && v != nil {
+			if n, err := strconv.Atoi(*v); err == nil {
+				return n
+			}
+		}
+	}
+	// Check broker-level config (message.max.bytes maps to max.message.bytes)
+	if v, ok := d.c.bcfgs["message.max.bytes"]; ok && v != nil {
+		if n, err := strconv.Atoi(*v); err == nil {
+			return n
+		}
+	}
+	// Fall back to default
+	if v, ok := configDefaults["max.message.bytes"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return 1048588 // Kafka default
+}
 
 func staticConfig(s ...string) func(*string) bool {
 	return func(v *string) bool {

@@ -127,10 +127,11 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		sleeping: make(map[*clientConn]*bsleep),
 
 		data: data{
-			id2t:      make(map[uuid]string),
-			t2id:      make(map[string]uuid),
-			treplicas: make(map[string]int),
-			tcfgs:     make(map[string]map[string]*string),
+			id2t:           make(map[uuid]string),
+			t2id:           make(map[string]uuid),
+			treplicas:      make(map[string]int),
+			tcfgs:          make(map[string]map[string]*string),
+			tnorms: make(map[string]string),
 		},
 		bcfgs: make(map[string]*string),
 
