@@ -7,6 +7,20 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// IncrementalAlterConfigs: v0-1
+//
+// Supported resource types:
+// * BROKER (2)
+// * TOPIC (4)
+//
+// Supported operations:
+// * SET (0)
+// * DELETE (1)
+//
+// Version notes:
+// * v0: Initial version
+// * v1: Flexible versions
+
 func init() { regKey(44, 0, 1) }
 
 func (c *Cluster) handleIncrementalAlterConfigs(b *broker, kreq kmsg.Request) (kmsg.Response, error) {

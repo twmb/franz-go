@@ -8,6 +8,22 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// Produce: v3-13
+//
+// Behavior:
+// * Writes are immediate - TimeoutMillis is ignored (no replication to wait on)
+// * Only RecordBatch format is supported (v3+), not MessageSets (v0-2)
+// * All batch-level validation is performed (CRC, attributes, sequences, etc.)
+// * Idempotent and transactional produces are fully supported
+//
+// Version notes:
+// * v3: RecordBatch format, transactions
+// * v5: LogStartOffset in response
+// * v8: ErrorMessage in response (KIP-467)
+// * v9: Flexible versions
+// * v12: KIP-890 implicit partition addition for transactions
+// * v13: TopicID in request/response (KIP-516)
+
 func init() { regKey(0, 3, 13) }
 
 func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, error) {

@@ -5,6 +5,18 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// FindCoordinator: v0-6
+//
+// Supports coordinator types:
+// * 0: Group coordinator
+// * 1: Transaction coordinator
+//
+// Version notes:
+// * v1: CoordinatorType, ThrottleMillis
+// * v3: Flexible versions
+// * v4: Multiple coordinator keys in single request (KIP-699)
+// * v6: Share groups (KIP-932) - coordinator type 2, not implemented
+
 func init() { regKey(10, 0, 6) }
 
 func (c *Cluster) handleFindCoordinator(kreq kmsg.Request) (kmsg.Response, error) {

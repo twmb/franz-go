@@ -7,6 +7,14 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// AlterUserSCRAMCredentials: v0
+//
+// Behavior:
+// * Must be sent to the controller
+// * Creates, updates, or deletes SCRAM credentials for users
+// * Supports SCRAM-SHA-256 (mechanism 1) and SCRAM-SHA-512 (mechanism 2)
+// * Iterations must be between 4096 and 16384
+
 func init() { regKey(51, 0, 0) }
 
 func (c *Cluster) handleAlterUserSCRAMCredentials(b *broker, kreq kmsg.Request) (kmsg.Response, error) {

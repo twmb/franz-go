@@ -4,6 +4,19 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// DescribeLogDirs: v0-4
+//
+// Behavior:
+// * Returns log directory info for requested partitions
+// * If Topics is null, returns all partitions
+// * Returns in-memory size tracking, not actual disk usage
+//
+// Version notes:
+// * v1: ThrottleMillis
+// * v2: Flexible versions
+// * v3: TotalBytes, UsableBytes
+// * v4: No changes
+
 func init() { regKey(35, 0, 4) }
 
 func (c *Cluster) handleDescribeLogDirs(b *broker, kreq kmsg.Request) (kmsg.Response, error) {

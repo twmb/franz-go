@@ -613,6 +613,9 @@ func (g *group) manage(detachNew func()) {
 	}
 }
 
+// The group manage loop does not block: it sends to respCh which eventually
+// writes; but that write is fast. There is no long-blocking code in the manage
+// loop.
 func (g *group) waitControl(fn func()) bool {
 	wait := make(chan struct{})
 	wfn := func() { fn(); close(wait) }

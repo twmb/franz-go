@@ -5,9 +5,20 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TODO
+// CreateTopics: v0-7
 //
-// * Return InvalidTopicException when names collide
+// Behavior:
+// * Must be sent to the controller
+// * ReplicaAssignment not supported (returns InvalidReplicaAssignment)
+// * Topic name collision detection: topics that differ only in . vs _ are rejected
+// * ValidateOnly (v1+): performs validation without creating topics
+//
+// Version notes:
+// * v1: ValidateOnly, ErrorMessage in response
+// * v2: ThrottleMillis
+// * v4: Creation defaults (KIP-464) - using broker defaults for -1 values
+// * v5: Configs in response (KIP-525), flexible versions
+// * v7: TopicID in response
 
 func init() { regKey(19, 0, 7) }
 

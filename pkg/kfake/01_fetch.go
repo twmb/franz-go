@@ -10,8 +10,9 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// Behavior:
+// Fetch: v4-18
 //
+// Behavior:
 // * If topic does not exist, we hang
 // * Topic created while waiting is not returned in final response
 // * If any partition is on a different broker, we return immediately
@@ -30,6 +31,17 @@ import (
 // * Sessions allow incremental fetches where clients only send changed partitions
 // * We track session state per broker and merge with request to get full partition list
 // * We always return full results (not incremental diffs) which is compliant behavior
+//
+// Version notes:
+// * v4: RecordBatch format, IsolationLevel, LastStableOffset, AbortedTransactions
+// * v5: LogStartOffset (KIP-107)
+// * v7: Fetch sessions (KIP-227)
+// * v9: CurrentLeaderEpoch for epoch fencing (KIP-320)
+// * v11: Rack in request (KIP-392) - ignored
+// * v12: LastFetchedEpoch for divergence detection - not implemented
+// * v13: TopicID (KIP-516)
+// * v15: ReplicaState (KIP-903) - broker-only, ignored
+// * v18: HighWatermark tag (KIP-1166) - broker-only, ignored
 
 func init() { regKey(1, 4, 18) }
 

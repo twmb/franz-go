@@ -5,6 +5,13 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// Heartbeat: v0-4
+//
+// Version notes:
+// * v1: ThrottleMillis
+// * v3: InstanceID for static membership (KIP-345) - not implemented
+// * v4: Flexible versions
+
 func init() { regKey(12, 0, 4) }
 
 func (c *Cluster) handleHeartbeat(creq *clientReq) (kmsg.Response, error) {

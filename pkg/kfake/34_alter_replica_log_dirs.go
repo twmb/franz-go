@@ -5,6 +5,16 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// AlterReplicaLogDirs: v0-2
+//
+// Behavior:
+// * Sets the log directory for partitions
+// * kfake stores the directory but doesn't actually move data
+//
+// Version notes:
+// * v1: ThrottleMillis
+// * v2: Flexible versions
+
 func init() { regKey(34, 0, 2) }
 
 func (c *Cluster) handleAlterReplicaLogDirs(b *broker, kreq kmsg.Request) (kmsg.Response, error) {

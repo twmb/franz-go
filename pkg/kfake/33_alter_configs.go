@@ -7,6 +7,22 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// AlterConfigs: v0-2
+//
+// Supported resource types:
+// * BROKER (2)
+// * TOPIC (4)
+//
+// Behavior:
+// * Replaces all configs with the provided set (non-incremental)
+// * ValidateOnly mode supported
+//
+// Version notes:
+// * v1: ThrottleMillis
+// * v2: Flexible versions
+//
+// Note: Deprecated in favor of IncrementalAlterConfigs (44)
+
 func init() { regKey(33, 0, 2) }
 
 func (c *Cluster) handleAlterConfigs(b *broker, kreq kmsg.Request) (kmsg.Response, error) {

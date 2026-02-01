@@ -5,6 +5,25 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// Metadata: v0-13
+//
+// Behavior:
+// * Null topics returns all topics (v1+)
+// * Empty topics returns no topics
+// * AllowAutoTopicCreation is respected if cluster config allows it
+// * Topics can be requested by name or by ID (v10+)
+//
+// Version notes:
+// * v1: ControllerID, IsInternal, Rack
+// * v2: ClusterID
+// * v4: AllowAutoTopicCreation
+// * v5: OfflineReplicas
+// * v7: LeaderEpoch
+// * v8: AuthorizedOperations (ACLs) - not implemented
+// * v9: Flexible versions
+// * v10: TopicID
+// * v13: Top-level ErrorCode for rebootstrapping (KIP-1102) - not implemented
+
 func init() { regKey(3, 0, 13) }
 
 func (c *Cluster) handleMetadata(kreq kmsg.Request) (kmsg.Response, error) {

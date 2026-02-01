@@ -7,6 +7,18 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// DescribeConfigs: v0-4
+//
+// Supported resource types:
+// * BROKER (2)
+// * TOPIC (4)
+//
+// Version notes:
+// * v1: ConfigSynonyms in response
+// * v2: ThrottleMillis
+// * v3: ConfigDocumentation in response
+// * v4: Flexible versions
+
 func init() { regKey(32, 0, 4) }
 
 func (c *Cluster) handleDescribeConfigs(b *broker, kreq kmsg.Request) (kmsg.Response, error) {

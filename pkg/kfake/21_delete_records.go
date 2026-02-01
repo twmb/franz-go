@@ -5,9 +5,15 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TODO
+// DeleteRecords: v0-2
 //
-// * Return InvalidTopicException when names collide
+// Behavior:
+// * Advances log start offset for partitions
+// * Offset -1 means delete up to high watermark
+//
+// Version notes:
+// * v1: ThrottleMillis
+// * v2: Flexible versions
 
 func init() { regKey(21, 0, 2) }
 

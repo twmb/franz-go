@@ -5,6 +5,11 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// OffsetDelete: v0
+//
+// Behavior:
+// * Deletes committed offsets for a group
+
 func init() { regKey(47, 0, 0) }
 
 func (c *Cluster) handleOffsetDelete(creq *clientReq) (kmsg.Response, error) {

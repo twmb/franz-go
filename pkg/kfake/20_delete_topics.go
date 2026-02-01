@@ -5,6 +5,19 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// DeleteTopics: v0-6
+//
+// Behavior:
+// * Must be sent to the controller
+// * Deletes topics by name (v0-5) or by name/ID (v6+)
+// * Wakes any watching fetchers on deletion
+//
+// Version notes:
+// * v1: ThrottleMillis
+// * v4: Flexible versions
+// * v5: ErrorMessage in response
+// * v6: Topics array with TopicID support
+
 func init() { regKey(20, 0, 6) }
 
 func (c *Cluster) handleDeleteTopics(b *broker, kreq kmsg.Request) (kmsg.Response, error) {

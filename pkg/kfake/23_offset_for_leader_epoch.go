@@ -7,6 +7,17 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// OffsetForLeaderEpoch: v3-4
+//
+// Behavior:
+// * Returns the end offset for a given leader epoch
+// * Used by clients to detect log truncation (KIP-320)
+// * Only supports consumer replica ID (-1)
+//
+// Version notes:
+// * v3: CurrentLeaderEpoch for fencing
+// * v4: Flexible versions
+
 func init() { regKey(23, 3, 4) }
 
 func (c *Cluster) handleOffsetForLeaderEpoch(b *broker, kreq kmsg.Request) (kmsg.Response, error) {

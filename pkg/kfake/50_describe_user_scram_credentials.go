@@ -5,6 +5,13 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// DescribeUserSCRAMCredentials: v0
+//
+// Behavior:
+// * Returns SCRAM credential info for requested users
+// * If Users is null, returns all users with SCRAM credentials
+// * Supports SCRAM-SHA-256 (mechanism 1) and SCRAM-SHA-512 (mechanism 2)
+
 func init() { regKey(50, 0, 0) }
 
 func (c *Cluster) handleDescribeUserSCRAMCredentials(kreq kmsg.Request) (kmsg.Response, error) {

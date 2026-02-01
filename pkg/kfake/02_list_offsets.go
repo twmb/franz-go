@@ -7,6 +7,22 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// ListOffsets: v0-10
+//
+// Timestamp special values:
+// * -2: Earliest offset (log start offset)
+// * -1: Latest offset (high watermark or LSO depending on isolation level)
+// * -3: Max timestamp offset (KIP-734, v7+)
+//
+// Version notes:
+// * v2: IsolationLevel for read_committed
+// * v4: CurrentLeaderEpoch for fencing, LeaderEpoch in response
+// * v6: Flexible versions
+// * v7: Timestamp -3 for max timestamp (KIP-734)
+// * v8: Timestamp -4 for local log start (KIP-405) - tiered storage, not implemented
+// * v9: Timestamp -5 for remote storage offset (KIP-1005) - tiered storage, not implemented
+// * v10: TimeoutMillis for remote storage lookups - not implemented
+
 func init() { regKey(2, 0, 10) }
 
 func (c *Cluster) handleListOffsets(b *broker, kreq kmsg.Request) (kmsg.Response, error) {

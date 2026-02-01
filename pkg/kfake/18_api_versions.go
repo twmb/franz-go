@@ -9,6 +9,18 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// ApiVersions: v0-4
+//
+// Behavior:
+// * Returns all registered API keys and their version ranges
+// * Advertises transaction.version feature for KIP-890 support
+// * Auto-downgrades to v0 response on unknown version
+//
+// Version notes:
+// * v1: ThrottleMillis
+// * v3: ClientSoftwareName, ClientSoftwareVersion, flexible versions
+// * v3+: FinalizedFeatures, SupportedFeatures (KIP-584)
+
 func init() { regKey(18, 0, 4) }
 
 func (c *Cluster) handleApiVersions(kreq kmsg.Request) (kmsg.Response, error) {

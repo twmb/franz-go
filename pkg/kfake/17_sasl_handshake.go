@@ -5,6 +5,15 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// SASLHandshake: v1
+//
+// Supported mechanisms:
+// * PLAIN
+// * SCRAM-SHA-256
+// * SCRAM-SHA-512
+//
+// Note: v0 is not supported (v0 uses implicit auth after handshake)
+
 func init() { regKey(17, 1, 1) }
 
 func (c *Cluster) handleSASLHandshake(creq *clientReq) (kmsg.Response, error) {

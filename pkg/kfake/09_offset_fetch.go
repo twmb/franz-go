@@ -4,6 +4,16 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// OffsetFetch: v0-9
+//
+// Version notes:
+// * v2: Topics nullable to fetch all
+// * v5: LeaderEpoch in response
+// * v6: Flexible versions
+// * v7: RequireStable (KIP-447) - not implemented
+// * v8: Multiple groups support in single request
+// * v9: MemberID, MemberEpoch for new consumer protocol (KIP-848) - not implemented
+
 func init() { regKey(9, 0, 9) }
 
 func (c *Cluster) handleOffsetFetch(creq *clientReq) (kmsg.Response, error) {

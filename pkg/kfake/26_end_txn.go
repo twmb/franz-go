@@ -5,6 +5,19 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// EndTxn: v0-5
+//
+// Behavior:
+// * Commits or aborts an ongoing transaction
+// * Marks batches as committed/aborted, writes control batch
+// * Applies staged offset commits on commit, discards on abort
+// * Recalculates LSO for read_committed consumers
+//
+// Version notes:
+// * v2: ThrottleMillis
+// * v3: Flexible versions
+// * v5: Returns new ProducerEpoch for KIP-890 epoch bumping
+
 func init() { regKey(26, 0, 5) }
 
 func (c *Cluster) handleEndTxn(creq *clientReq) (kmsg.Response, error) {

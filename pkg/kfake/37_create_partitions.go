@@ -5,6 +5,18 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// CreatePartitions: v0-3
+//
+// Behavior:
+// * Must be sent to the controller
+// * Only supports increasing partition count, not decreasing
+// * Assignment not supported (returns InvalidReplicaAssignment)
+//
+// Version notes:
+// * v1: ThrottleMillis
+// * v2: Flexible versions
+// * v3: No changes
+
 func init() { regKey(37, 0, 3) }
 
 func (c *Cluster) handleCreatePartitions(b *broker, kreq kmsg.Request) (kmsg.Response, error) {

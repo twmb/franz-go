@@ -7,6 +7,17 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// SASLAuthenticate: v0-2
+//
+// Supported mechanisms:
+// * PLAIN
+// * SCRAM-SHA-256
+// * SCRAM-SHA-512
+//
+// Version notes:
+// * v1: SessionLifetimeMs in response
+// * v2: Flexible versions
+
 func init() { regKey(36, 0, 2) }
 
 func (c *Cluster) handleSASLAuthenticate(creq *clientReq) (kmsg.Response, error) {
