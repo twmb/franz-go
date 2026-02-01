@@ -1079,6 +1079,245 @@ func TestTransactionOffsetCommit(t *testing.T) {
 	}
 }
 
+// TestReadCommittedMinBytes verifies that readCommitted consumers respect MinBytes
+// when transactions commit. Specifically:
+// 1. Uncommitted transactional data should NOT satisfy MinBytes
+// 2. When a transaction commits, the committed bytes should now count toward MinBytes
+// 3. If committed bytes satisfy MinBytes, the watcher should fire
+//
+// This test uses ControlKey to intercept fetch requests and verify timing behavior.
+func TestReadCommittedMinBytes(t *testing.T) {
+	t.Parallel()
+	const testTopic = "minbytes-test"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Create a transactional producer
+	producer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.TransactionalID("test-txn-minbytes"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
+
+	// TEST 1: Committed data should satisfy MinBytes immediately
+	t.Log("Test 1: Committed data satisfies MinBytes immediately")
+
+	// Produce and commit a transaction
+	if err := producer.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.ProduceSync(ctx, &kgo.Record{Value: []byte("committed-data")}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify LSO advanced
+	pi := c.PartitionInfo(testTopic, 0)
+	if pi.LastStableOffset != pi.HighWatermark {
+		t.Fatalf("LSO should equal HWM after commit: LSO=%d, HWM=%d", pi.LastStableOffset, pi.HighWatermark)
+	}
+	t.Logf("After commit: HWM=%d, LSO=%d", pi.HighWatermark, pi.LastStableOffset)
+
+	// Create a readCommitted consumer - should get data immediately
+	consumer1, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		kgo.FetchMinBytes(1),
+		kgo.FetchMaxWait(5*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	fetches := consumer1.PollFetches(ctx)
+	elapsed := time.Since(start)
+	consumer1.Close()
+
+	if errs := fetches.Errors(); len(errs) > 0 {
+		t.Fatalf("fetch errors: %v", errs)
+	}
+	if fetches.NumRecords() != 1 {
+		t.Fatalf("expected 1 record, got %d", fetches.NumRecords())
+	}
+	if elapsed > time.Second {
+		t.Errorf("Test 1: fetch took too long: %v (expected immediate)", elapsed)
+	}
+	t.Logf("Test 1 passed: got committed data in %v", elapsed)
+
+	// TEST 2: Uncommitted data should NOT satisfy MinBytes
+	t.Log("Test 2: Uncommitted data should not satisfy MinBytes")
+
+	// Record current HWM before new transaction
+	hwmBeforeTxn := c.PartitionInfo(testTopic, 0).HighWatermark
+
+	// Start a new transaction but don't commit
+	if err := producer.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.ProduceSync(ctx, &kgo.Record{Value: []byte("uncommitted-data")}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	// LSO should not have advanced
+	pi = c.PartitionInfo(testTopic, 0)
+	if pi.LastStableOffset != hwmBeforeTxn {
+		t.Errorf("LSO should not advance for uncommitted txn: LSO=%d, expected=%d", pi.LastStableOffset, hwmBeforeTxn)
+	}
+	t.Logf("After uncommitted produce: HWM=%d, LSO=%d", pi.HighWatermark, pi.LastStableOffset)
+
+	// Create a readCommitted consumer starting after committed data
+	// Use a short context timeout to verify it waits
+	shortCtx, shortCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	consumer2, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		kgo.FetchMinBytes(1),
+		kgo.FetchMaxWait(5*time.Second),
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+			testTopic: {0: kgo.NewOffset().At(hwmBeforeTxn)},
+		}),
+	)
+	if err != nil {
+		shortCancel()
+		t.Fatal(err)
+	}
+
+	start = time.Now()
+	fetches = consumer2.PollFetches(shortCtx)
+	elapsed = time.Since(start)
+	shortCancel()
+	consumer2.Close()
+
+	// Should have waited until context timeout since no committed data
+	if elapsed < 400*time.Millisecond {
+		t.Errorf("Test 2: fetch returned too quickly: %v (expected ~500ms wait)", elapsed)
+	}
+	if fetches.NumRecords() > 0 {
+		t.Errorf("Test 2: readCommitted should not see uncommitted data, got %d records", fetches.NumRecords())
+	}
+	t.Logf("Test 2 passed: waited %v for uncommitted data (expected ~500ms)", elapsed)
+
+	// TEST 3: After commit, the waiting consumer should get data
+	// This is the key test for the MinBytes fix
+	t.Log("Test 3: After commit, readCommitted consumer should get data")
+
+	// Start a consumer that will wait
+	consumer3, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		kgo.FetchMinBytes(1),
+		kgo.FetchMaxWait(5*time.Second),
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+			testTopic: {0: kgo.NewOffset().At(hwmBeforeTxn)},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Poll in background
+	fetchDone := make(chan struct{})
+	var fetchResult kgo.Fetches
+	var fetchElapsed time.Duration
+	go func() {
+		start := time.Now()
+		fetchResult = consumer3.PollFetches(ctx)
+		fetchElapsed = time.Since(start)
+		close(fetchDone)
+	}()
+
+	// Give the consumer time to establish the watch
+	time.Sleep(200 * time.Millisecond)
+
+	// Now commit the transaction
+	commitStart := time.Now()
+	if err := producer.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Transaction committed at %v", time.Since(commitStart))
+
+	// Wait for the fetch to complete
+	select {
+	case <-fetchDone:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for fetch after commit")
+	}
+	consumer3.Close()
+
+	// The fetch should have returned shortly after commit, not waiting for full MaxWait
+	if fetchElapsed > 2*time.Second {
+		t.Errorf("Test 3: fetch took too long after commit: %v (expected <2s)", fetchElapsed)
+	}
+	if fetchResult.NumRecords() != 1 {
+		t.Errorf("Test 3: expected 1 record after commit, got %d", fetchResult.NumRecords())
+	}
+	t.Logf("Test 3 passed: got data %v after starting fetch (commit woke the watcher)", fetchElapsed)
+
+	// TEST 4: Verify read_uncommitted sees data immediately (baseline)
+	t.Log("Test 4: read_uncommitted should see uncommitted data immediately")
+
+	// Start another uncommitted transaction
+	if err := producer.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.ProduceSync(ctx, &kgo.Record{Value: []byte("more-uncommitted")}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	newHWM := c.PartitionInfo(testTopic, 0).HighWatermark
+	newLSO := c.PartitionInfo(testTopic, 0).LastStableOffset
+
+	// read_uncommitted consumer should see the data immediately
+	consumer4, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
+		kgo.FetchMinBytes(1),
+		kgo.FetchMaxWait(5*time.Second),
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+			testTopic: {0: kgo.NewOffset().At(newLSO)}, // start at LSO, which is before HWM
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start = time.Now()
+	fetches = consumer4.PollFetches(ctx)
+	elapsed = time.Since(start)
+	consumer4.Close()
+
+	if elapsed > time.Second {
+		t.Errorf("Test 4: read_uncommitted took too long: %v", elapsed)
+	}
+	if fetches.NumRecords() == 0 {
+		t.Errorf("Test 4: read_uncommitted should see uncommitted data, HWM=%d LSO=%d", newHWM, newLSO)
+	}
+	t.Logf("Test 4 passed: read_uncommitted got data in %v", elapsed)
+
+	// Cleanup
+	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Logf("cleanup abort: %v", err)
+	}
+}
+
 // TestGroupRebalanceOnNonLeaderMetadataChange tests that a rebalance is triggered
 // when a non-leader member rejoins with changed metadata.
 //

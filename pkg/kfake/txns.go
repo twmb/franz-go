@@ -42,6 +42,10 @@ type (
 		// Used for AbortedTransactions in fetch response.
 		txPartFirstOffsets tps[int64]
 
+		// Track bytes per partition for this transaction.
+		// Used to count committed bytes for readCommitted watchers.
+		txPartBytes tps[int]
+
 		txStart time.Time
 		inTx    bool
 	}
@@ -719,10 +723,14 @@ func (pidinf *pidinfo) endTx(commit bool) {
 		pidinf.txParts.each(func(t string, p int32, pd *partData) {
 			pd.pushBatch(len(benc), b, false, 0) // control record is not itself transactional
 			pd.recalculateLSO()
-			// Wake up any fetch waiters waiting for committed data
-			for w := range pd.watch {
-				if w.readCommitted {
-					w.do()
+			// Count the now-committed bytes for readCommitted watchers.
+			// These bytes were skipped in push() because pd.inTx was true.
+			txnBytes, _ := pidinf.txPartBytes.getp(t, p)
+			if txnBytes != nil && *txnBytes > 0 {
+				for w := range pd.watch {
+					if w.readCommitted {
+						w.addBytes(pd, *txnBytes)
+					}
 				}
 			}
 		})
@@ -759,6 +767,7 @@ func (pidinf *pidinfo) endTx(commit bool) {
 	pidinf.txGroups = nil
 	pidinf.txOffsets = nil
 	pidinf.txPartFirstOffsets = nil
+	pidinf.txPartBytes = nil
 	pidinf.txStart = time.Time{}
 	pidinf.inTx = false
 

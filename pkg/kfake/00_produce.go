@@ -235,6 +235,9 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 					batchptr := pd.pushBatch(len(rp.Records), b, txnal, txnFirstOffset)
 					if txnal {
 						pidinf.txBatches = append(pidinf.txBatches, batchptr)
+						// Track bytes for readCommitted watcher accounting at commit time
+						bytesPtr := pidinf.txPartBytes.mkp(rt.Topic, rp.Partition, func() *int { return new(int) })
+						*bytesPtr += len(rp.Records)
 					}
 				})
 			} else {

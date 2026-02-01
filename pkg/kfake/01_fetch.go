@@ -373,9 +373,18 @@ type watchFetch struct {
 }
 
 func (w *watchFetch) push(pd *partData, nbytes int) {
+	// For readCommitted consumers, skip counting bytes from uncommitted transactional batches.
+	// These bytes will be counted when the transaction commits via addBytes.
 	if w.readCommitted && pd.inTx {
 		return
 	}
+	w.addBytes(pd, nbytes)
+}
+
+// addBytes counts nbytes toward MinBytes satisfaction for a partition.
+// Called by push() for normal produces, and directly from txns.go when
+// a transaction commits (to count previously-skipped transactional bytes).
+func (w *watchFetch) addBytes(pd *partData, nbytes int) {
 	w.need -= nbytes
 	needp, _ := w.needp.getp(pd.t, pd.p)
 	if needp != nil {
