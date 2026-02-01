@@ -43,11 +43,12 @@ type (
 		sleeping       map[*clientConn]*bsleep
 		controlSleep   chan sleepChs
 
-		data   data
-		pids   pids
-		groups groups
-		sasls  sasls
-		bcfgs  map[string]*string
+		data          data
+		pids          pids
+		groups        groups
+		sasls         sasls
+		bcfgs         map[string]*string
+		fetchSessions fetchSessions
 
 		die  chan struct{}
 		dead atomic.Bool
@@ -344,7 +345,7 @@ outer:
 			if w.cleaned {
 				continue // already cleaned up, this is an extraneous timer fire
 			}
-			w.cleanup(c)
+			w.cleanup()
 			creq = w.creq
 		}
 

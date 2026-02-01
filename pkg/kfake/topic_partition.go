@@ -2,6 +2,12 @@ package kfake
 
 import "sort"
 
+// tp is a simple topic+partition key for use in maps.
+type tp struct {
+	t string
+	p int32
+}
+
 type tps[V any] map[string]map[int32]*V
 
 func (tps *tps[V]) checkp(t string, p int32) bool {
