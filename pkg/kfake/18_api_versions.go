@@ -66,13 +66,22 @@ func (c *Cluster) handleApiVersions(kreq kmsg.Request) (kmsg.Response, error) {
 	}
 
 	// KIP-890: Advertise transaction.version feature so clients know they
-	// can use v5+ EndTxn with epoch bumping.
-	resp.FinalizedFeaturesEpoch = 1
-	resp.FinalizedFeatures = []kmsg.ApiVersionsResponseFinalizedFeature{{
-		Name:            "transaction.version",
-		MaxVersionLevel: 2,
-		MinVersionLevel: 0,
-	}}
+	// can use v5+ EndTxn with epoch bumping. Only advertise if Produce v12+
+	// is supported (required for implicit partition addition).
+	produceMax := apiVersionsKeys[0].MaxVersion
+	if c.cfg.maxVersions != nil {
+		if cfgMax, ok := c.cfg.maxVersions.LookupMaxKeyVersion(0); ok && cfgMax < produceMax {
+			produceMax = cfgMax
+		}
+	}
+	if produceMax >= 12 {
+		resp.FinalizedFeaturesEpoch = 1
+		resp.FinalizedFeatures = []kmsg.ApiVersionsResponseFinalizedFeature{{
+			Name:            "transaction.version",
+			MaxVersionLevel: 2,
+			MinVersionLevel: 0,
+		}}
+	}
 
 	return resp, nil
 }
