@@ -1,8 +1,7 @@
 package kfake
 
 import (
-	"net"
-	"strconv"
+	"sort"
 	"sync"
 	"time"
 
@@ -17,11 +16,14 @@ import (
 // * If any partition is on a different broker, we return immediately
 // * Out of range fetch causes early return
 // * Raw bytes of batch counts against wait bytes
-
-// Compare:
 //
-// We want 100 messages, 50 are not in txn, 50 are: do we hang?
-// We want msg that is currently in txn, other partitions not in txn: do we hang?
+// For read_committed (IsolationLevel=1):
+// * We only count stable bytes (inTx=false) toward MinBytes - this includes
+//   committed txn batches, aborted txn batches, and non-txn batches
+// * Uncommitted txn batches (inTx=true) are not counted and not returned
+// * MinBytes is evaluated across all partitions, so stable data from
+//   other partitions can satisfy MinBytes even if one partition is all in-txn
+// * When a transaction commits/aborts, waiting read_committed fetches are woken
 
 func init() { regKey(1, 4, 18) }
 
@@ -149,11 +151,8 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		if includeBrokers {
 			for _, b := range c.bs {
 				sb := kmsg.NewFetchResponseBroker()
-				h, p, _ := net.SplitHostPort(b.ln.Addr().String())
-				p32, _ := strconv.Atoi(p)
 				sb.NodeID = b.node
-				sb.Host = h
-				sb.Port = int32(p32)
+				sb.Host, sb.Port = b.hostport()
 				resp.Brokers = append(resp.Brokers, sb)
 			}
 		}
@@ -192,6 +191,11 @@ full:
 				sp.ErrorCode = kerr.OffsetOutOfRange.Code
 				continue
 			}
+
+			// Track aborted transactions per producer. The kgo client expects
+			// AbortedTransactions to be sorted by FirstOffset per producer.
+			var abortedByProducer map[int64][]int64
+
 			var pbytes int
 			for _, b := range pd.batches[i:] {
 				if readCommitted && b.inTx {
@@ -204,7 +208,39 @@ full:
 					break
 				}
 				batchesAdded++
+
+				// Track aborted transactions in returned batches
+				if readCommitted && req.Version >= 4 && b.aborted {
+					if abortedByProducer == nil {
+						abortedByProducer = make(map[int64][]int64)
+					}
+					// Only add if we haven't seen this txnFirstOffset for this producer
+					offsets := abortedByProducer[b.ProducerID]
+					found := false
+					for _, o := range offsets {
+						if o == b.txnFirstOffset {
+							found = true
+							break
+						}
+					}
+					if !found {
+						abortedByProducer[b.ProducerID] = append(offsets, b.txnFirstOffset)
+					}
+				}
+
 				sp.RecordBatches = b.AppendTo(sp.RecordBatches)
+			}
+
+			// Add aborted transactions for read_committed consumers
+			// Sorted by FirstOffset per producer (as expected by kgo client)
+			for producerID, offsets := range abortedByProducer {
+				sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
+				for _, firstOffset := range offsets {
+					at := kmsg.NewFetchResponseTopicPartitionAbortedTransaction()
+					at.ProducerID = producerID
+					at.FirstOffset = firstOffset
+					sp.AbortedTransactions = append(sp.AbortedTransactions, at)
+				}
 			}
 		}
 	}
@@ -227,9 +263,6 @@ type watchFetch struct {
 	once    sync.Once
 	cleaned bool
 }
-
-// TODO We need to watch for pushes...
-// If in tx, ignore -- tx ender will let us know all batches that were finished
 
 func (w *watchFetch) push(pd *partData, nbytes int) {
 	if w.readCommitted && pd.inTx {

@@ -1,9 +1,6 @@
 package kfake
 
 import (
-	"net"
-	"strconv"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -49,12 +46,8 @@ func (c *Cluster) handleFindCoordinator(kreq kmsg.Request) (kmsg.Response, error
 		}
 
 		b := c.coordinator(key)
-		host, port, _ := net.SplitHostPort(b.ln.Addr().String())
-		iport, _ := strconv.Atoi(port)
-
 		sc.NodeID = b.node
-		sc.Host = host
-		sc.Port = int32(iport)
+		sc.Host, sc.Port = b.hostport()
 	}
 
 	return resp, nil

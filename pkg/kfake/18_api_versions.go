@@ -35,6 +35,15 @@ func (c *Cluster) handleApiVersions(kreq kmsg.Request) (kmsg.Response, error) {
 	})
 	resp.ApiKeys = apiVersionsSorted
 
+	// KIP-890: Advertise transaction.version feature so clients know they
+	// can use v5+ EndTxn with epoch bumping.
+	resp.FinalizedFeaturesEpoch = 1
+	resp.FinalizedFeatures = []kmsg.ApiVersionsResponseFinalizedFeature{{
+		Name:            "transaction.version",
+		MaxVersionLevel: 2,
+		MinVersionLevel: 0,
+	}}
+
 	return resp, nil
 }
 

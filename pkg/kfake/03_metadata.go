@@ -1,9 +1,6 @@
 package kfake
 
 import (
-	"net"
-	"strconv"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -20,11 +17,8 @@ func (c *Cluster) handleMetadata(kreq kmsg.Request) (kmsg.Response, error) {
 
 	for _, b := range c.bs {
 		sb := kmsg.NewMetadataResponseBroker()
-		h, p, _ := net.SplitHostPort(b.ln.Addr().String())
-		p32, _ := strconv.Atoi(p)
 		sb.NodeID = b.node
-		sb.Host = h
-		sb.Port = int32(p32)
+		sb.Host, sb.Port = b.hostport()
 		resp.Brokers = append(resp.Brokers, sb)
 	}
 

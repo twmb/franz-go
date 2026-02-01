@@ -77,6 +77,12 @@ type (
 	}
 )
 
+func (b *broker) hostport() (string, int32) {
+	h, p, _ := net.SplitHostPort(b.ln.Addr().String())
+	p32, _ := strconv.Atoi(p)
+	return h, int32(p32)
+}
+
 // MustCluster is like NewCluster, but panics on error.
 func MustCluster(opts ...Opt) *Cluster {
 	c, err := NewCluster(opts...)
@@ -132,6 +138,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	c.data.c = c
 	c.groups.c = c
 	c.pids.c = c
+	c.pids.ids = make(map[int64]*pidinfo)
 	var err error
 	defer func() {
 		if err != nil {
@@ -392,13 +399,17 @@ outer:
 		case kmsg.DeleteRecords:
 			kresp, err = c.handleDeleteRecords(creq.cc.b, kreq)
 		case kmsg.InitProducerID:
-			kresp, err = c.handleInitProducerID(creq.cc.b, kreq)
+			kresp, err = c.handleInitProducerID(creq)
 		case kmsg.OffsetForLeaderEpoch:
 			kresp, err = c.handleOffsetForLeaderEpoch(creq.cc.b, kreq)
 		case kmsg.AddPartitionsToTxn:
-			kresp, err = c.handleAddPartitionsToTxn(creq.cc.b, kreq)
+			kresp, err = c.handleAddPartitionsToTxn(creq)
+		case kmsg.AddOffsetsToTxn:
+			kresp, err = c.handleAddOffsetsToTxn(creq)
 		case kmsg.EndTxn:
-			kresp, err = c.handleEndTxn(creq.cc.b, kreq)
+			kresp, err = c.handleEndTxn(creq)
+		case kmsg.TxnOffsetCommit:
+			kresp, err = c.handleTxnOffsetCommit(creq)
 		case kmsg.DescribeConfigs:
 			kresp, err = c.handleDescribeConfigs(creq.cc.b, kreq)
 		case kmsg.AlterConfigs:

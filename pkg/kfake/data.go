@@ -34,7 +34,7 @@ type (
 	}
 
 	partData struct {
-		batches []partBatch
+		batches []*partBatch
 		t       string
 		p       int32
 		dir     string
@@ -42,6 +42,7 @@ type (
 		highWatermark    int64
 		lastStableOffset int64
 		logStartOffset   int64
+		earliestTxOffset int64 // earliest offset of uncommitted transaction, -1 if none
 		epoch            int32 // current epoch
 		maxTimestamp     int64 // current max timestamp in all batches
 		nbytes           int64
@@ -78,6 +79,10 @@ type (
 
 		// Filled retroactively, if true, the pid aborted this batch.
 		aborted bool
+
+		// For aborted transactions: the first offset of this transaction
+		// on this partition. Used for AbortedTransactions in fetch response.
+		txnFirstOffset int64
 	}
 )
 
@@ -140,11 +145,12 @@ func (c *Cluster) noLeader() *broker {
 func (c *Cluster) newPartData(p int32) func() *partData {
 	return func() *partData {
 		return &partData{
-			p:         p,
-			dir:       defLogDir,
-			leader:    c.bs[rand.Intn(len(c.bs))],
-			watch:     make(map[*watchFetch]struct{}),
-			createdAt: time.Now(),
+			p:                p,
+			dir:              defLogDir,
+			earliestTxOffset: -1,
+			leader:           c.bs[rand.Intn(len(c.bs))],
+			watch:            make(map[*watchFetch]struct{}),
+			createdAt:        time.Now(),
 		}
 	}
 }
@@ -153,7 +159,8 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 // If transactional, we mark ourselves in a tx.
 // Finishing a tx clears the inTx state on pd, but also re-sets it if needed.
 // If we are not in a tx, we can bump the stable offset here.
-func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool) *partBatch {
+// txnFirstOffset is the first offset of this transaction on this partition (0 if not transactional).
+func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool, txnFirstOffset int64) *partBatch {
 	maxEarlierTimestamp := b.FirstTimestamp
 	if maxEarlierTimestamp < pd.maxTimestamp {
 		maxEarlierTimestamp = pd.maxTimestamp
@@ -162,10 +169,22 @@ func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool) *partBa
 	}
 	b.FirstOffset = pd.highWatermark
 	b.PartitionLeaderEpoch = pd.epoch
-	pd.batches = append(pd.batches, partBatch{b, nbytes, pd.epoch, maxEarlierTimestamp, inTx, false})
+	pd.batches = append(pd.batches, &partBatch{
+		RecordBatch:         b,
+		nbytes:              nbytes,
+		epoch:               pd.epoch,
+		maxEarlierTimestamp: maxEarlierTimestamp,
+		inTx:                inTx,
+		aborted:             false,
+		txnFirstOffset:      txnFirstOffset,
+	})
 	pd.highWatermark += int64(b.NumRecords)
 	if inTx {
 		pd.inTx = true
+		// Track the earliest uncommitted transaction offset
+		if pd.earliestTxOffset == -1 {
+			pd.earliestTxOffset = b.FirstOffset
+		}
 	}
 	if !pd.inTx {
 		pd.lastStableOffset += int64(b.NumRecords)
@@ -174,7 +193,7 @@ func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool) *partBa
 	for w := range pd.watch {
 		w.push(pd, nbytes)
 	}
-	return &pd.batches[len(pd.batches)-1]
+	return pd.batches[len(pd.batches)-1]
 }
 
 // index: the batch index the offset is in, if the offset is found
@@ -196,7 +215,7 @@ func (pd *partData) searchOffset(o int64) (index int, found bool, atEnd bool) {
 	}
 
 	index, found = sort.Find(len(pd.batches), func(idx int) int {
-		b := &pd.batches[idx]
+		b := pd.batches[idx]
 		if o < b.FirstOffset {
 			return -1
 		}
@@ -217,6 +236,30 @@ func (pd *partData) trimLeft() {
 		}
 		pd.batches = pd.batches[1:]
 		pd.nbytes -= int64(b0.nbytes)
+	}
+}
+
+// recalculateLSO recalculates the last stable offset.
+func (pd *partData) recalculateLSO() {
+	// Find the earliest uncommitted transaction
+	earliestUncommitted := int64(-1)
+	for _, b := range pd.batches {
+		if b.inTx && !b.aborted {
+			earliestUncommitted = b.FirstOffset
+			break
+		}
+	}
+
+	if earliestUncommitted == -1 {
+		// No uncommitted transactions, LSO = HWM
+		pd.lastStableOffset = pd.highWatermark
+		pd.earliestTxOffset = -1
+		pd.inTx = false
+	} else {
+		// LSO is at the start of the earliest uncommitted transaction
+		pd.lastStableOffset = earliestUncommitted
+		pd.earliestTxOffset = earliestUncommitted
+		pd.inTx = true
 	}
 }
 
