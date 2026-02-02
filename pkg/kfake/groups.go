@@ -420,6 +420,11 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 			sg.ErrorCode = kerr.Code
 			continue
 		}
+		// KIP-447: If RequireStable is set, check for pending transactional offsets
+		if req.RequireStable && gs.c.pids.hasUnstableOffsets(rg.Group) {
+			sg.ErrorCode = kerr.UnstableOffsetCommit.Code
+			continue
+		}
 		g, ok := gs.gs[rg.Group]
 		if !ok {
 			sg.ErrorCode = kerr.GroupIDNotFound.Code

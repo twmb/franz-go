@@ -163,6 +163,25 @@ func (pids *pids) handleTxnOffsetCommit(creq *clientReq) bool {
 	}
 }
 
+// hasUnstableOffsets returns true if any active transaction has pending
+// (uncommitted) offset commits for the given group. Used for KIP-447
+// RequireStable support in OffsetFetch.
+func (pids *pids) hasUnstableOffsets(group string) bool {
+	if pids.reqCh == nil {
+		return false
+	}
+	var unstable bool
+	pids.waitControl(func() {
+		for pidinf := range pids.txs {
+			if _, hasGroup := pidinf.txOffsets[group]; hasGroup {
+				unstable = true
+				return
+			}
+		}
+	})
+	return unstable
+}
+
 // manage is the central loop for processing transaction requests and timeouts.
 // Similar to groups.go's manage loop pattern.
 func (pids *pids) manage() {

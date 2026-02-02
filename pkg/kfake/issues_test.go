@@ -1629,3 +1629,201 @@ func TestTransactionAbortedMetadata(t *testing.T) {
 		}
 	}
 }
+
+// TestKIP447RequireStable verifies that OffsetFetch with RequireStable=true
+// returns UNSTABLE_OFFSET_COMMIT when there are pending transactional offset commits.
+func TestKIP447RequireStable(t *testing.T) {
+	t.Parallel()
+	const (
+		testTopic = "kip447-test"
+		groupID   = "kip447-group"
+		txnID     = "kip447-txn"
+	)
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Create a client and use kadm to commit an offset, which creates the group
+	adminClient, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adm := kadm.NewClient(adminClient)
+
+	// Commit an initial offset to create the group
+	offsets := kadm.Offsets{}
+	offsets.Add(kadm.Offset{Topic: testTopic, Partition: 0, At: 0})
+	err = adm.CommitAllOffsets(ctx, groupID, offsets)
+	if err != nil {
+		t.Fatalf("CommitAllOffsets failed: %v", err)
+	}
+	t.Log("Initial offset committed, group created")
+	adminClient.Close()
+
+	// Create a raw client for transaction operations
+	rawClient, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawClient.Close()
+
+	// Step 1: InitProducerID to get a producer ID for our transaction
+	initReq := kmsg.NewInitProducerIDRequest()
+	txnIDStr := txnID
+	initReq.TransactionalID = &txnIDStr
+	initReq.TransactionTimeoutMillis = 60000
+	initResp, err := initReq.RequestWith(ctx, rawClient)
+	if err != nil {
+		t.Fatalf("InitProducerID failed: %v", err)
+	}
+	if initResp.ErrorCode != 0 {
+		t.Fatalf("InitProducerID error: %v", kerr.ErrorForCode(initResp.ErrorCode))
+	}
+	pid := initResp.ProducerID
+	epoch := initResp.ProducerEpoch
+	t.Logf("Got producer ID %d, epoch %d", pid, epoch)
+
+	// Step 2: AddOffsetsToTxn to register the group with the transaction
+	addOffsetsReq := kmsg.NewAddOffsetsToTxnRequest()
+	addOffsetsReq.TransactionalID = txnID
+	addOffsetsReq.ProducerID = pid
+	addOffsetsReq.ProducerEpoch = epoch
+	addOffsetsReq.Group = groupID
+	addOffsetsResp, err := addOffsetsReq.RequestWith(ctx, rawClient)
+	if err != nil {
+		t.Fatalf("AddOffsetsToTxn failed: %v", err)
+	}
+	if addOffsetsResp.ErrorCode != 0 {
+		t.Fatalf("AddOffsetsToTxn error: %v", kerr.ErrorForCode(addOffsetsResp.ErrorCode))
+	}
+	t.Log("AddOffsetsToTxn succeeded")
+
+	// Step 3: TxnOffsetCommit to stage offset commits (not yet committed)
+	txnCommitReq := kmsg.NewTxnOffsetCommitRequest()
+	txnCommitReq.TransactionalID = txnID
+	txnCommitReq.Group = groupID
+	txnCommitReq.ProducerID = pid
+	txnCommitReq.ProducerEpoch = epoch
+	txnCommitReq.Generation = -1 // Simple consumer, not in active group session
+	txnCommitReq.MemberID = ""
+	topic := kmsg.NewTxnOffsetCommitRequestTopic()
+	topic.Topic = testTopic
+	part := kmsg.NewTxnOffsetCommitRequestTopicPartition()
+	part.Partition = 0
+	part.Offset = 5
+	topic.Partitions = append(topic.Partitions, part)
+	txnCommitReq.Topics = append(txnCommitReq.Topics, topic)
+	txnCommitResp, err := txnCommitReq.RequestWith(ctx, rawClient)
+	if err != nil {
+		t.Fatalf("TxnOffsetCommit failed: %v", err)
+	}
+	if len(txnCommitResp.Topics) > 0 && len(txnCommitResp.Topics[0].Partitions) > 0 {
+		if ec := txnCommitResp.Topics[0].Partitions[0].ErrorCode; ec != 0 {
+			t.Fatalf("TxnOffsetCommit partition error: %v", kerr.ErrorForCode(ec))
+		}
+	}
+	t.Log("TxnOffsetCommit staged offset 5")
+
+	// Test 1: OffsetFetch with RequireStable=true should return UNSTABLE_OFFSET_COMMIT
+	t.Log("Test 1: OffsetFetch with RequireStable=true during pending transaction")
+
+	// Use v8+ format with Groups field to work with auto-negotiated versions
+	fetchReq := kmsg.NewOffsetFetchRequest()
+	fetchReq.RequireStable = true
+	rg := kmsg.NewOffsetFetchRequestGroup()
+	rg.Group = groupID
+	rgt := kmsg.NewOffsetFetchRequestGroupTopic()
+	rgt.Topic = testTopic
+	rgt.Partitions = []int32{0}
+	rg.Topics = append(rg.Topics, rgt)
+	fetchReq.Groups = append(fetchReq.Groups, rg)
+
+	// Use a short timeout context to avoid retries eating up time
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+	fetchResp, err := fetchReq.RequestWith(ctx1, rawClient)
+	cancel1()
+	if err != nil {
+		t.Fatalf("OffsetFetch failed: %v", err)
+	}
+
+	// Check for UNSTABLE_OFFSET_COMMIT error in the group response
+	if len(fetchResp.Groups) == 0 {
+		t.Fatal("Test 1: no groups in response")
+	}
+	if fetchResp.Groups[0].ErrorCode != kerr.UnstableOffsetCommit.Code {
+		t.Errorf("Test 1: expected UNSTABLE_OFFSET_COMMIT (88), got error code %d", fetchResp.Groups[0].ErrorCode)
+	} else {
+		t.Log("Test 1 passed: got UNSTABLE_OFFSET_COMMIT as expected")
+	}
+
+	// Test 2: OffsetFetch with RequireStable=false should succeed (even with pending txn)
+	t.Log("Test 2: OffsetFetch with RequireStable=false during pending transaction")
+	fetchReq.RequireStable = false
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	fetchResp, err = fetchReq.RequestWith(ctx2, rawClient)
+	cancel2()
+	if err != nil {
+		t.Fatalf("OffsetFetch failed: %v", err)
+	}
+	if len(fetchResp.Groups) == 0 {
+		t.Fatal("Test 2: no groups in response")
+	}
+	if fetchResp.Groups[0].ErrorCode != 0 {
+		t.Errorf("Test 2: expected no error, got error code %d", fetchResp.Groups[0].ErrorCode)
+	} else {
+		t.Log("Test 2 passed: RequireStable=false succeeded")
+	}
+
+	// Step 4: EndTxn to commit the transaction
+	endReq := kmsg.NewEndTxnRequest()
+	endReq.TransactionalID = txnID
+	endReq.ProducerID = pid
+	endReq.ProducerEpoch = epoch
+	endReq.Commit = true
+	endResp, err := endReq.RequestWith(ctx, rawClient)
+	if err != nil {
+		t.Fatalf("EndTxn failed: %v", err)
+	}
+	if endResp.ErrorCode != 0 {
+		t.Fatalf("EndTxn error: %v", kerr.ErrorForCode(endResp.ErrorCode))
+	}
+	t.Log("Transaction committed")
+
+	// Test 3: OffsetFetch with RequireStable=true should now succeed
+	t.Log("Test 3: OffsetFetch with RequireStable=true after transaction committed")
+	fetchReq.RequireStable = true
+	ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
+	fetchResp, err = fetchReq.RequestWith(ctx3, rawClient)
+	cancel3()
+	if err != nil {
+		t.Fatalf("OffsetFetch failed: %v", err)
+	}
+	if len(fetchResp.Groups) == 0 {
+		t.Fatal("Test 3: no groups in response")
+	}
+	if fetchResp.Groups[0].ErrorCode != 0 {
+		t.Errorf("Test 3: expected no error after commit, got error code %d", fetchResp.Groups[0].ErrorCode)
+	} else {
+		t.Log("Test 3 passed: RequireStable=true succeeded after commit")
+	}
+
+	// Verify the committed offset is correct
+	if len(fetchResp.Groups[0].Topics) == 0 || len(fetchResp.Groups[0].Topics[0].Partitions) == 0 {
+		t.Fatal("no partitions in response")
+	}
+	offset := fetchResp.Groups[0].Topics[0].Partitions[0].Offset
+	if offset != 5 {
+		t.Errorf("expected committed offset 5, got %d", offset)
+	} else {
+		t.Log("Test 4 passed: committed offset is correct")
+	}
+}
