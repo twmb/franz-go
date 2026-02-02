@@ -1744,10 +1744,11 @@ func RequireStableFetchOffsets() GroupOpt {
 }
 
 // BlockRebalanceOnPoll switches the client to block rebalances whenever you
-// poll until you explicitly call AllowRebalance. This option also ensures that
-// any OnPartitions{Assigned,Revoked,Lost} callbacks are only called when you
-// allow rebalances; they cannot be called if you have polled and are
-// processing records.
+// receive a non-empty result from polling until you explicitly call
+// AllowRebalance. This option also ensures that any
+// OnPartitions{Assigned,Revoked,Lost} callbacks are only called when you allow
+// rebalances; they cannot be called if you have polled and are processing
+// records.
 //
 // By default, a consumer group is managed completely independently of
 // consuming. A rebalance may occur at any moment. If you poll records, and

@@ -442,10 +442,12 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	c.g.undirtyUncommitted()
 
 	// If the user gave us a canceled context, we bail immediately after
-	// un-dirty-ing marked records.
+	// un-dirty-ing marked records. We still need to add a poller to block
+	// rebalances if configured, since we are returning a fetch.
 	if ctx != nil {
 		select {
 		case <-ctx.Done():
+			c.waitAndAddPoller()
 			return NewErrFetch(ctx.Err())
 		default:
 		}
@@ -551,9 +553,11 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	select {
 	case <-cl.ctx.Done():
 		exit()
+		c.waitAndAddPoller()
 		return NewErrFetch(ErrClientClosed)
 	case <-ctx.Done():
 		exit()
+		c.waitAndAddPoller()
 		return NewErrFetch(ctx.Err())
 	case <-done:
 	}
