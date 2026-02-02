@@ -91,7 +91,7 @@ func (cc *clientConn) read() {
 			kmsg.SkipTags(&reader)
 		}
 		if err := kreq.ReadFrom(reader.Src); err != nil {
-			cc.c.cfg.logger.Logf(LogLevelDebug, "client %s unable to parse request: %v", who, err)
+			cc.c.cfg.logger.Logf(LogLevelDebug, "client %s unable to parse request (key=%d, version=%d): %v", who, key, version, err)
 			return
 		}
 
@@ -151,21 +151,17 @@ func (cc *clientConn) write() {
 			return
 		}
 
-		// Size, corr, and empty tag section if flexible: 9 bytes max.
-		buf = append(buf[:0], 0, 0, 0, 0, 0, 0, 0, 0, 0)
+		buf = append(buf[:0], 0, 0, 0, 0, 0, 0, 0, 0) // size (4) + correlation ID (4)
+		if resp.kresp.IsFlexible() && resp.kresp.Key() != 18 {
+			buf = append(buf, 0) // empty tagged fields section
+		}
 		buf = resp.kresp.AppendTo(buf)
 
-		start := 0
-		l := len(buf) - 4
-		if !resp.kresp.IsFlexible() || resp.kresp.Key() == 18 {
-			l--
-			start++
-		}
-		binary.BigEndian.PutUint32(buf[start:], uint32(l))
-		binary.BigEndian.PutUint32(buf[start+4:], uint32(resp.corr))
+		binary.BigEndian.PutUint32(buf[:4], uint32(len(buf)-4))
+		binary.BigEndian.PutUint32(buf[4:8], uint32(resp.corr))
 
 		go func() {
-			_, err := cc.conn.Write(buf[start:])
+			_, err := cc.conn.Write(buf)
 			writeCh <- err
 		}()
 

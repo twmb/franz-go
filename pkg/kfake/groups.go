@@ -101,6 +101,18 @@ func (gs groupState) String() string {
 	}
 }
 
+// emptyConsumerAssignment is a pre-serialized empty ConsumerMemberAssignment.
+// Used to ensure followers in a "consumer" protocol group always receive a
+// syntactically valid assignment blob even when the leader assigns them nothing.
+// Technically, the broker should pass through whatever bytes the leader sends
+// (including empty), but some clients fail to decode an empty assignment.
+// We only apply this workaround for the "consumer" protocol type since other
+// protocol types may use entirely different assignment formats.
+var emptyConsumerAssignment = func() []byte {
+	var assignment kmsg.ConsumerMemberAssignment
+	return assignment.AppendTo(nil)
+}()
+
 func (c *Cluster) coordinator(id string) *broker {
 	gen := c.coordinatorGen.Load()
 	n := hashString(fmt.Sprintf("%d", gen)+"\x00\x00"+id) % uint64(len(c.bs))
@@ -1137,7 +1149,7 @@ func (g *group) completeLeaderSync(req *kmsg.SyncGroupRequest) {
 		if !ok {
 			continue
 		}
-		m.assignment = a.MemberAssignment
+		m.assignment = g.assignmentOrEmpty(a.MemberAssignment)
 	}
 	for _, m := range g.members {
 		if m.waitingReply.empty() {
@@ -1150,6 +1162,16 @@ func (g *group) completeLeaderSync(req *kmsg.SyncGroupRequest) {
 		g.reply(m.waitingReply, resp, m)
 	}
 	g.state = groupStable
+}
+
+// assignmentOrEmpty returns the assignment bytes, or a pre-serialized empty
+// ConsumerMemberAssignment if the assignment is empty and this is a "consumer"
+// protocol group. This ensures followers always receive a decodable assignment.
+func (g *group) assignmentOrEmpty(assignment []byte) []byte {
+	if len(assignment) == 0 && g.protocolType == "consumer" {
+		return append([]byte(nil), emptyConsumerAssignment...)
+	}
+	return assignment
 }
 
 func (g *group) updateHeartbeat(m *groupMember) {
