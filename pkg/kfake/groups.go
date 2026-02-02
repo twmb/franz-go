@@ -397,7 +397,7 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 		rg := kmsg.NewOffsetFetchRequestGroup()
 		rg.Group = req.Group
 		if req.Topics != nil {
-			rg.Topics = make([]kmsg.OffsetFetchRequestGroupTopic, len(req.Topics))
+			rg.Topics = make([]kmsg.OffsetFetchRequestGroupTopic, 0, len(req.Topics))
 		}
 		for _, t := range req.Topics {
 			rt := kmsg.NewOffsetFetchRequestGroupTopic()
@@ -743,14 +743,14 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 		g.updateMemberAndRebalance(m, creq, req)
 	case groupCompletingRebalance:
 		if m.sameJoin(req) {
-			g.fillJoinResp(req, resp)
+			g.fillJoinResp(m.memberID, resp)
 			return resp, true
 		}
 		g.updateMemberAndRebalance(m, creq, req)
 	case groupStable:
 		if g.leader != req.MemberID && m.sameJoin(req) {
 			// Non-leader with same metadata - no change needed
-			g.fillJoinResp(req, resp)
+			g.fillJoinResp(m.memberID, resp)
 			return resp, true
 		}
 		g.updateMemberAndRebalance(m, creq, req)
@@ -1122,7 +1122,7 @@ func (g *group) completeRebalance() {
 		}
 		req := m.join
 		resp := req.ResponseKind().(*kmsg.JoinGroupResponse)
-		g.fillJoinResp(req, resp)
+		g.fillJoinResp(m.memberID, resp)
 		g.reply(m.waitingReply, resp, m)
 	}
 }
@@ -1273,13 +1273,13 @@ func (m *groupMember) sameJoin(req *kmsg.JoinGroupRequest) bool {
 	return true
 }
 
-func (g *group) fillJoinResp(req *kmsg.JoinGroupRequest, resp *kmsg.JoinGroupResponse) {
+func (g *group) fillJoinResp(memberID string, resp *kmsg.JoinGroupResponse) {
 	resp.Generation = g.generation
 	resp.ProtocolType = kmsg.StringPtr(g.protocolType)
 	resp.Protocol = kmsg.StringPtr(g.protocol)
 	resp.LeaderID = g.leader
-	resp.MemberID = req.MemberID
-	if g.leader == req.MemberID {
+	resp.MemberID = memberID
+	if g.leader == memberID {
 		resp.Members = g.joinResponseMetadata()
 	}
 }
