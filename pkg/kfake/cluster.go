@@ -439,6 +439,10 @@ outer:
 			kresp, err = c.handleDeleteGroups(creq)
 		case kmsg.IncrementalAlterConfigs:
 			kresp, err = c.handleIncrementalAlterConfigs(creq)
+		case kmsg.AlterPartitionAssignments:
+			kresp, err = c.handleAlterPartitionAssignments(creq)
+		case kmsg.ListPartitionReassignments:
+			kresp, err = c.handleListPartitionReassignments(creq)
 		case kmsg.OffsetDelete:
 			kresp, err = c.handleOffsetDelete(creq)
 		case kmsg.DescribeUserSCRAMCredentials:
