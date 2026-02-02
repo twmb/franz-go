@@ -49,6 +49,7 @@ type (
 		sasls         sasls
 		acls          clusterACLs
 		bcfgs         map[string]*string
+		quotas        map[string]quotaEntry
 		fetchSessions fetchSessions
 
 		die  chan struct{}
@@ -134,7 +135,8 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			tcfgs:     make(map[string]map[string]*string),
 			tnorms:    make(map[string]string),
 		},
-		bcfgs: make(map[string]*string),
+		bcfgs:  make(map[string]*string),
+		quotas: make(map[string]quotaEntry),
 
 		die: make(chan struct{}),
 	}
@@ -457,6 +459,10 @@ outer:
 			kresp, err = c.handleDescribeTransactions(creq)
 		case kmsg.ListTransactions:
 			kresp, err = c.handleListTransactions(creq)
+		case kmsg.DescribeClientQuotas:
+			kresp, err = c.handleDescribeClientQuotas(creq)
+		case kmsg.AlterClientQuotas:
+			kresp, err = c.handleAlterClientQuotas(creq)
 		default:
 			err = fmt.Errorf("unhandled key %v", k)
 		}
