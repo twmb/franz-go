@@ -477,7 +477,7 @@ func TestIssueTimestampInclusivity(t *testing.T) {
 			offset += 1
 			r3 := kgo.StringRecord(strconv.Itoa(offset))
 			r3.Timestamp = time.UnixMilli(10_000 + int64(offset))
-			err := cl.ProduceSync(context.TODO(), r1, r2, r3).FirstErr()
+			err := cl.ProduceSync(context.Background(), r1, r2, r3).FirstErr()
 			cancel()
 			if err != nil {
 				t.Fatal(err)
