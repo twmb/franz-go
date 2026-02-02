@@ -881,7 +881,14 @@ func (cxn *brokerCxn) sasl() error {
 	req := kmsg.NewPtrSASLHandshakeRequest()
 
 start:
-	if mechanism.Name() != "GSSAPI" && v.maxVersion(req.Key()) >= 0 {
+	// KIP-152 establishes the modern SASL flow: ApiVersions, then
+	// SaslHandshake, then SaslAuthenticate for all mechanisms. The
+	// legacy raw GSSAPI flow (where GSSAPI clients could skip the
+	// handshake) only worked when GSSAPI bytes were the *first* packet
+	// on the connection. Since we send ApiVersions first, we must send
+	// SaslHandshake for all mechanisms including GSSAPI. KIP-896 removed
+	// support for the legacy raw GSSAPI protocol entirely in Kafka 4.0.
+	if v.maxVersion(req.Key()) >= 0 {
 		req.Mechanism = mechanism.Name()
 		req.Version = v.maxVersion(req.Key())
 		cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing SASLHandshakeRequest", "broker", logID(cxn.b.meta.NodeID))
@@ -977,32 +984,31 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			// request; see usage below for why.
 			prereq = time.Now()
 			corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr := cxn.writeRequest(nil, time.Now(), req)
-
-			// As mentioned above, we could have one final write
-			// without reading a response back (kerberos). If this
-			// is the case, we need to e2e.
-			if writeErr != nil || done {
+			if writeErr != nil {
 				cxn.hookWriteE2E(req.Key(), bytesWritten, writeWait, timeToWrite, writeErr)
-				if writeErr != nil {
-					return writeErr
-				}
+				return writeErr
 			}
-			if !done {
-				rawResp, err := cxn.readResponse(nil, req.Key(), req.GetVersion(), corrID, req.IsFlexible(), rt, bytesWritten, writeWait, timeToWrite, readEnqueue)
-				if err != nil {
-					return err
-				}
-				resp := req.ResponseKind().(*kmsg.SASLAuthenticateResponse)
-				if err = resp.ReadFrom(rawResp); err != nil {
-					return err
-				}
 
-				if err := errCodeMessage(resp.ErrorCode, resp.ErrorMessage); err != nil {
-					return err
-				}
-				challenge = resp.SASLAuthBytes
-				lifetimeMillis = resp.SessionLifetimeMillis
+			// Unlike the raw SASL path, SaslAuthenticate always has
+			// a response for every request. Per KIP-152, "server
+			// always sends a response to each SASL_AUTHENTICATE
+			// request". We must read this response even when the
+			// SASL session is complete to avoid leaving data in the
+			// connection buffer.
+			rawResp, err := cxn.readResponse(nil, req.Key(), req.GetVersion(), corrID, req.IsFlexible(), rt, bytesWritten, writeWait, timeToWrite, readEnqueue)
+			if err != nil {
+				return err
 			}
+			resp := req.ResponseKind().(*kmsg.SASLAuthenticateResponse)
+			if err = resp.ReadFrom(rawResp); err != nil {
+				return err
+			}
+
+			if err := errCodeMessage(resp.ErrorCode, resp.ErrorMessage); err != nil {
+				return err
+			}
+			challenge = resp.SASLAuthBytes
+			lifetimeMillis = resp.SessionLifetimeMillis
 		}
 
 		clientWrite = nil
