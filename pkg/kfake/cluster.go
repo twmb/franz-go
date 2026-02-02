@@ -43,7 +43,9 @@ type (
 		sasls         sasls
 		acls          clusterACLs
 		bcfgs         map[string]*string
-		quotas        map[string]quotaEntry
+		quotas      map[string]quotaEntry
+		telem       map[[16]byte]int32
+		telemNextID int32
 		fetchSessions fetchSessions
 
 		die  chan struct{}
@@ -131,6 +133,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		},
 		bcfgs:  make(map[string]*string),
 		quotas: make(map[string]quotaEntry),
+		telem:  make(map[[16]byte]int32),
 
 		die: make(chan struct{}),
 	}
@@ -457,6 +460,10 @@ outer:
 			kresp, err = c.handleDescribeClientQuotas(creq)
 		case kmsg.AlterClientQuotas:
 			kresp, err = c.handleAlterClientQuotas(creq)
+		case kmsg.GetTelemetrySubscriptions:
+			kresp, err = c.handleGetTelemetrySubscriptions(creq)
+		case kmsg.PushTelemetry:
+			kresp, err = c.handlePushTelemetry(creq)
 		default:
 			err = fmt.Errorf("unhandled key %v", k)
 		}
