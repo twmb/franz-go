@@ -19,7 +19,7 @@ import (
 // * v4: AllowAutoTopicCreation
 // * v5: OfflineReplicas
 // * v7: LeaderEpoch
-// * v8: AuthorizedOperations (ACLs) - not implemented
+// * v8: AuthorizedOperations (ACLs)
 // * v9: Flexible versions
 // * v10: TopicID
 // * v13: Top-level ErrorCode for rebootstrapping (KIP-1102) - not implemented
@@ -60,6 +60,9 @@ func (c *Cluster) handleMetadata(creq *clientReq) (kmsg.Response, error) {
 		}
 		st.TopicID = id
 		st.ErrorCode = errCode
+		if req.IncludeTopicAuthorizedOperations {
+			st.AuthorizedOperations = c.topicAuthorizedOps(creq, t)
+		}
 		resp.Topics = append(resp.Topics, st)
 		return &resp.Topics[len(resp.Topics)-1]
 	}
@@ -137,6 +140,10 @@ func (c *Cluster) handleMetadata(creq *clientReq) (kmsg.Response, error) {
 				okp(topic, id, p, pd)
 			}
 		}
+	}
+
+	if req.IncludeClusterAuthorizedOperations {
+		resp.AuthorizedOperations = c.clusterAuthorizedOps(creq)
 	}
 
 	return resp, nil

@@ -231,3 +231,58 @@ func (c *Cluster) anyAllowedACL(creq *clientReq, resourceType kmsg.ACLResourceTy
 	}
 	return c.acls.anyAllowed(principal(user), creq.clientHost(), resourceType, op)
 }
+
+// Authorized operations support for IncludeAuthorizedOperations fields.
+// Returns a bitfield where each bit position corresponds to kmsg.ACLOperation(i).
+
+var (
+	clusterOps = []kmsg.ACLOperation{
+		kmsg.ACLOperationRead,
+		kmsg.ACLOperationWrite,
+		kmsg.ACLOperationCreate,
+		kmsg.ACLOperationDelete,
+		kmsg.ACLOperationAlter,
+		kmsg.ACLOperationDescribe,
+		kmsg.ACLOperationClusterAction,
+		kmsg.ACLOperationDescribeConfigs,
+		kmsg.ACLOperationAlterConfigs,
+		kmsg.ACLOperationIdempotentWrite,
+	}
+	topicOps = []kmsg.ACLOperation{
+		kmsg.ACLOperationRead,
+		kmsg.ACLOperationWrite,
+		kmsg.ACLOperationCreate,
+		kmsg.ACLOperationDelete,
+		kmsg.ACLOperationAlter,
+		kmsg.ACLOperationDescribe,
+		kmsg.ACLOperationDescribeConfigs,
+		kmsg.ACLOperationAlterConfigs,
+	}
+	groupOps = []kmsg.ACLOperation{
+		kmsg.ACLOperationRead,
+		kmsg.ACLOperationDelete,
+		kmsg.ACLOperationDescribe,
+	}
+)
+
+func (c *Cluster) clusterAuthorizedOps(creq *clientReq) int32 {
+	return c.authorizedOps(creq, aclClusterName, kmsg.ACLResourceTypeCluster, clusterOps)
+}
+
+func (c *Cluster) topicAuthorizedOps(creq *clientReq, topic string) int32 {
+	return c.authorizedOps(creq, topic, kmsg.ACLResourceTypeTopic, topicOps)
+}
+
+func (c *Cluster) groupAuthorizedOps(creq *clientReq, group string) int32 {
+	return c.authorizedOps(creq, group, kmsg.ACLResourceTypeGroup, groupOps)
+}
+
+func (c *Cluster) authorizedOps(creq *clientReq, resource string, resourceType kmsg.ACLResourceType, ops []kmsg.ACLOperation) int32 {
+	var bitfield int32
+	for _, op := range ops {
+		if c.allowedACL(creq, resource, resourceType, op) {
+			bitfield |= 1 << int32(op)
+		}
+	}
+	return bitfield
+}

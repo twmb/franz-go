@@ -307,6 +307,9 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 			if req.Version >= 6 {
 				sg.ErrorCode = kerr.GroupIDNotFound.Code
 			}
+			if req.IncludeAuthorizedOperations {
+				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
+			}
 			continue
 		}
 		if !g.waitControl(func() {
@@ -331,6 +334,9 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 				}
 				sg.Members = append(sg.Members, sm)
 
+			}
+			if req.IncludeAuthorizedOperations {
+				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
 			}
 		}) {
 			sg.State = groupDead.String()
