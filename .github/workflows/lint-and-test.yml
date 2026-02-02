@@ -62,6 +62,25 @@ jobs:
       - uses: actions/checkout@v4
       - run: cd pkg/sr && go work init ../.. . && go test .
 
+  integration-test-kfake:
+    if: github.repository == 'twmb/franz-go'
+    runs-on: ubuntu-latest
+    name: "integration test kfake ${{ matrix.version }}"
+    container: golang:latest
+    strategy:
+      matrix:
+        version: ["0.11.0", "1.1", "2.8", "3.8", "3.9", "4.1"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start kfake and run tests
+        run: |
+          (cd pkg/kfake && go work init . ../.. ../kadm ../kmsg && go run main.go --as-version ${{ matrix.version }}) &
+          sleep 2
+          go test -timeout 5m ./...
+        env:
+          KGO_TEST_RF: 1
+          KGO_SEEDS: 127.0.0.1:9092
+
   integration-test-kafka:
     if: github.repository == 'twmb/franz-go'
     runs-on: ubuntu-latest
