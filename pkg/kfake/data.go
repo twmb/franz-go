@@ -17,7 +17,7 @@ import (
 // TODO
 //
 // * Write to disk, if configured.
-// * When transactional, wait to send out data until txn committed or aborted.
+// * Support modifying config values changing cluster behavior
 
 var noID uuid
 
@@ -287,8 +287,6 @@ func (pd *partData) recalculateLSO() {
 // CONFIGS //
 /////////////
 
-// TODO support modifying config values changing cluster behavior
-
 // brokerConfigs calls fn for all:
 //   - static broker configs (read only)
 //   - default configs
@@ -419,6 +417,28 @@ var configDefaults = map[string]string{
 	"log.retention.bytes":        "-1",
 	"log.retention.ms":           "604800000",
 	"message.max.bytes":          "1048588",
+}
+
+// configTypes maps config names to their data types for DescribeConfigs v3+.
+var configTypes = map[string]kmsg.ConfigType{
+	"broker.id":                  kmsg.ConfigTypeInt,
+	"broker.rack":                kmsg.ConfigTypeString,
+	"cleanup.policy":             kmsg.ConfigTypeList,
+	"compression.type":           kmsg.ConfigTypeString,
+	"default.replication.factor": kmsg.ConfigTypeInt,
+	"fetch.max.bytes":            kmsg.ConfigTypeInt,
+	"log.dir":                    kmsg.ConfigTypeString,
+	"log.message.timestamp.type": kmsg.ConfigTypeString,
+	"log.retention.bytes":        kmsg.ConfigTypeLong,
+	"log.retention.ms":           kmsg.ConfigTypeLong,
+	"max.message.bytes":          kmsg.ConfigTypeInt,
+	"message.max.bytes":          kmsg.ConfigTypeInt,
+	"message.timestamp.type":     kmsg.ConfigTypeString,
+	"min.insync.replicas":        kmsg.ConfigTypeInt,
+	"retention.bytes":            kmsg.ConfigTypeLong,
+	"retention.ms":               kmsg.ConfigTypeLong,
+	"sasl.enabled.mechanisms":    kmsg.ConfigTypeList,
+	"super.users":                kmsg.ConfigTypeList,
 }
 
 const defLogDir = "/mem/kfake"

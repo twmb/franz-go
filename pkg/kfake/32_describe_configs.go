@@ -16,7 +16,7 @@ import (
 // Version notes:
 // * v1: ConfigSynonyms in response
 // * v2: ThrottleMillis
-// * v3: ConfigDocumentation in response
+// * v3: ConfigType and ConfigDocumentation in response
 // * v4: Flexible versions
 
 func init() { regKey(32, 0, 4) }
@@ -51,6 +51,7 @@ func (c *Cluster) handleDescribeConfigs(creq *clientReq) (kmsg.Response, error) 
 			rc.ReadOnly = rc.Source == kmsg.ConfigSourceStaticBrokerConfig
 			rc.IsDefault = rc.Source == kmsg.ConfigSourceDefaultConfig || rc.Source == kmsg.ConfigSourceStaticBrokerConfig
 			rc.IsSensitive = sensitive
+			rc.ConfigType = configTypes[k] // v3+: defaults to 0 (UNKNOWN) if not in map
 
 			// We walk configs from static to default to dynamic,
 			// if this config already exists previously, we move

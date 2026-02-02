@@ -14,12 +14,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TODO
-//
-// * Add raft and make the brokers independent
-//
-// * Support multiple replicas -- we just pass this through
-
 type (
 
 	// Cluster is a mock Kafka broker cluster.
