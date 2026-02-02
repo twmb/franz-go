@@ -477,7 +477,7 @@ func TestIssueTimestampInclusivity(t *testing.T) {
 			offset += 1
 			r3 := kgo.StringRecord(strconv.Itoa(offset))
 			r3.Timestamp = time.UnixMilli(10_000 + int64(offset))
-			err := cl.ProduceSync(context.TODO(), r1, r2, r3).FirstErr()
+			err := cl.ProduceSync(context.Background(), r1, r2, r3).FirstErr()
 			cancel()
 			if err != nil {
 				t.Fatal(err)
@@ -726,5 +726,1104 @@ func TestIssue1167(t *testing.T) {
 				_ = cl.PollFetches(nil)
 			}
 		}()
+	}
+}
+
+func TestTransactionCommit(t *testing.T) {
+	t.Parallel()
+	const testTopic = "txn-test"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Test basic transaction commit flow
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.TransactionalID("test-txn"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	// Produce messages in a transaction
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := cl.ProduceSync(ctx, kgo.StringRecord("msg-"+strconv.Itoa(i))).FirstErr(); err != nil {
+			t.Fatalf("failed to produce: %v", err)
+		}
+	}
+
+	// Commit the transaction
+	if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatalf("failed to commit transaction: %v", err)
+	}
+
+	// Verify read_committed consumer sees the messages
+	consumer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+
+	var consumed int
+	for consumed < 3 {
+		fs := consumer.PollFetches(ctx)
+		if errs := fs.Errors(); len(errs) > 0 {
+			t.Fatalf("fetch errors: %v", errs)
+		}
+		consumed += fs.NumRecords()
+	}
+
+	if consumed != 3 {
+		t.Errorf("expected 3 committed messages, got %d", consumed)
+	}
+}
+
+func TestTransactionAbort(t *testing.T) {
+	t.Parallel()
+	const testTopic = "txn-abort-test"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Test transaction abort flow
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.TransactionalID("test-txn-abort"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	// Produce messages in a transaction
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := cl.ProduceSync(ctx, kgo.StringRecord("aborted-"+strconv.Itoa(i))).FirstErr(); err != nil {
+			t.Fatalf("failed to produce: %v", err)
+		}
+	}
+
+	// Abort the transaction
+	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("failed to abort transaction: %v", err)
+	}
+
+	// Produce non-transactional messages after the abort
+	nonTxnProducer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nonTxnProducer.Close()
+
+	for i := 0; i < 2; i++ {
+		if err := nonTxnProducer.ProduceSync(ctx, kgo.StringRecord("committed-"+strconv.Itoa(i))).FirstErr(); err != nil {
+			t.Fatalf("failed to produce non-txn: %v", err)
+		}
+	}
+
+	// Verify read_committed consumer sees only the non-aborted messages
+	consumer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+
+	var consumed int
+	var records []string
+	for consumed < 2 {
+		fs := consumer.PollFetches(ctx)
+		if errs := fs.Errors(); len(errs) > 0 {
+			t.Fatalf("fetch errors: %v", errs)
+		}
+		fs.EachRecord(func(r *kgo.Record) {
+			records = append(records, string(r.Value))
+		})
+		consumed += fs.NumRecords()
+	}
+
+	// Verify we only got the committed messages, not the aborted ones
+	if consumed != 2 {
+		t.Errorf("expected 2 committed messages, got %d", consumed)
+	}
+	for _, rec := range records {
+		if len(rec) >= 7 && rec[:7] == "aborted" {
+			t.Errorf("read_committed consumer saw aborted message: %s", rec)
+		}
+	}
+}
+
+func TestTransactionReadUncommitted(t *testing.T) {
+	t.Parallel()
+	const testTopic = "txn-uncommitted-test"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Start a read_uncommitted consumer first
+	consumer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+
+	// Produce messages in a transaction but don't commit yet
+	producer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.TransactionalID("test-txn-uncommitted"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
+
+	if err := producer.BeginTransaction(); err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := producer.ProduceSync(ctx, kgo.StringRecord("msg-"+strconv.Itoa(i))).FirstErr(); err != nil {
+			t.Fatalf("failed to produce: %v", err)
+		}
+	}
+
+	// Read_uncommitted consumer should see the uncommitted messages immediately
+	var consumed int
+	for consumed < 3 {
+		fs := consumer.PollFetches(ctx)
+		if errs := fs.Errors(); len(errs) > 0 {
+			t.Fatalf("fetch errors: %v", errs)
+		}
+		consumed += fs.NumRecords()
+	}
+
+	if consumed != 3 {
+		t.Errorf("expected read_uncommitted to see 3 messages, got %d", consumed)
+	}
+
+	// Clean up - abort the transaction
+	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("failed to abort transaction: %v", err)
+	}
+}
+
+func TestTransactionOffsetCommit(t *testing.T) {
+	t.Parallel()
+	const (
+		inputTopic  = "txn-input"
+		outputTopic = "txn-output"
+		groupID     = "txn-group"
+	)
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, inputTopic, outputTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Produce some input messages first
+	producer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(inputTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 5; i++ {
+		if err := producer.ProduceSync(ctx, kgo.StringRecord("input-"+strconv.Itoa(i))).FirstErr(); err != nil {
+			t.Fatalf("failed to produce input: %v", err)
+		}
+	}
+	producer.Close()
+
+	// Test transactional consume-transform-produce pattern
+	txnClient, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(groupID),
+		kgo.ConsumeTopics(inputTopic),
+		kgo.TransactionalID("test-txn-offsets"),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer txnClient.Close()
+
+	// Begin transaction
+	if err := txnClient.BeginTransaction(); err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+
+	// Consume and transform
+	fs := txnClient.PollFetches(ctx)
+	if errs := fs.Errors(); len(errs) > 0 {
+		t.Fatalf("fetch errors: %v", errs)
+	}
+
+	consumed := fs.NumRecords()
+	if consumed == 0 {
+		t.Fatal("expected to consume some records")
+	}
+
+	// Produce transformed records
+	iter := fs.RecordIter()
+	for !iter.Done() {
+		rec := iter.Next()
+		outRec := &kgo.Record{
+			Topic: outputTopic,
+			Value: append([]byte("transformed-"), rec.Value...),
+		}
+		if err := txnClient.ProduceSync(ctx, outRec).FirstErr(); err != nil {
+			t.Fatalf("failed to produce output: %v", err)
+		}
+	}
+
+	// Commit offsets and transaction together
+	if err := txnClient.CommitRecords(ctx, fs.Records()...); err != nil {
+		t.Fatalf("failed to commit offsets: %v", err)
+	}
+
+	if err := txnClient.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatalf("failed to commit transaction: %v", err)
+	}
+
+	// Verify the offsets were committed
+	adm := kadm.NewClient(txnClient)
+	offsets, err := adm.FetchOffsets(ctx, groupID)
+	if err != nil {
+		t.Fatalf("failed to fetch offsets: %v", err)
+	}
+
+	offset, ok := offsets.Lookup(inputTopic, 0)
+	if !ok {
+		t.Fatal("offset not found for input topic")
+	}
+
+	if offset.At != int64(consumed) {
+		t.Errorf("expected committed offset %d, got %d", consumed, offset.At)
+	}
+
+	// Verify output messages are readable
+	outConsumer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(outputTopic),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outConsumer.Close()
+
+	outFs := outConsumer.PollFetches(ctx)
+	if outFs.NumRecords() != consumed {
+		t.Errorf("expected %d output records, got %d", consumed, outFs.NumRecords())
+	}
+}
+
+// TestReadCommittedMinBytes verifies that readCommitted consumers respect MinBytes
+// when transactions commit. Specifically:
+// 1. Uncommitted transactional data should NOT satisfy MinBytes
+// 2. When a transaction commits, the committed bytes should now count toward MinBytes
+// 3. If committed bytes satisfy MinBytes, the watcher should fire
+//
+// This test uses ControlKey to intercept fetch requests and verify timing behavior.
+func TestReadCommittedMinBytes(t *testing.T) {
+	t.Parallel()
+	const testTopic = "minbytes-test"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Create a transactional producer
+	producer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.TransactionalID("test-txn-minbytes"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
+
+	// TEST 1: Committed data should satisfy MinBytes immediately
+	t.Log("Test 1: Committed data satisfies MinBytes immediately")
+
+	// Produce and commit a transaction
+	if err := producer.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.ProduceSync(ctx, &kgo.Record{Value: []byte("committed-data")}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify LSO advanced
+	pi := c.PartitionInfo(testTopic, 0)
+	if pi.LastStableOffset != pi.HighWatermark {
+		t.Fatalf("LSO should equal HWM after commit: LSO=%d, HWM=%d", pi.LastStableOffset, pi.HighWatermark)
+	}
+	t.Logf("After commit: HWM=%d, LSO=%d", pi.HighWatermark, pi.LastStableOffset)
+
+	// Create a readCommitted consumer - should get data immediately
+	consumer1, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		kgo.FetchMinBytes(1),
+		kgo.FetchMaxWait(5*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	fetches := consumer1.PollFetches(ctx)
+	elapsed := time.Since(start)
+	consumer1.Close()
+
+	if errs := fetches.Errors(); len(errs) > 0 {
+		t.Fatalf("fetch errors: %v", errs)
+	}
+	if fetches.NumRecords() != 1 {
+		t.Fatalf("expected 1 record, got %d", fetches.NumRecords())
+	}
+	if elapsed > time.Second {
+		t.Errorf("Test 1: fetch took too long: %v (expected immediate)", elapsed)
+	}
+	t.Logf("Test 1 passed: got committed data in %v", elapsed)
+
+	// TEST 2: Uncommitted data should NOT satisfy MinBytes
+	t.Log("Test 2: Uncommitted data should not satisfy MinBytes")
+
+	// Record current HWM before new transaction
+	hwmBeforeTxn := c.PartitionInfo(testTopic, 0).HighWatermark
+
+	// Start a new transaction but don't commit
+	if err := producer.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.ProduceSync(ctx, &kgo.Record{Value: []byte("uncommitted-data")}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	// LSO should not have advanced
+	pi = c.PartitionInfo(testTopic, 0)
+	if pi.LastStableOffset != hwmBeforeTxn {
+		t.Errorf("LSO should not advance for uncommitted txn: LSO=%d, expected=%d", pi.LastStableOffset, hwmBeforeTxn)
+	}
+	t.Logf("After uncommitted produce: HWM=%d, LSO=%d", pi.HighWatermark, pi.LastStableOffset)
+
+	// Create a readCommitted consumer starting after committed data
+	// Use a short context timeout to verify it waits
+	shortCtx, shortCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	consumer2, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		kgo.FetchMinBytes(1),
+		kgo.FetchMaxWait(5*time.Second),
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+			testTopic: {0: kgo.NewOffset().At(hwmBeforeTxn)},
+		}),
+	)
+	if err != nil {
+		shortCancel()
+		t.Fatal(err)
+	}
+
+	start = time.Now()
+	fetches = consumer2.PollFetches(shortCtx)
+	elapsed = time.Since(start)
+	shortCancel()
+	consumer2.Close()
+
+	// Should have waited until context timeout since no committed data
+	if elapsed < 400*time.Millisecond {
+		t.Errorf("Test 2: fetch returned too quickly: %v (expected ~500ms wait)", elapsed)
+	}
+	if fetches.NumRecords() > 0 {
+		t.Errorf("Test 2: readCommitted should not see uncommitted data, got %d records", fetches.NumRecords())
+	}
+	t.Logf("Test 2 passed: waited %v for uncommitted data (expected ~500ms)", elapsed)
+
+	// TEST 3: After commit, the waiting consumer should get data
+	// This is the key test for the MinBytes fix
+	t.Log("Test 3: After commit, readCommitted consumer should get data")
+
+	// Start a consumer that will wait
+	consumer3, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		kgo.FetchMinBytes(1),
+		kgo.FetchMaxWait(5*time.Second),
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+			testTopic: {0: kgo.NewOffset().At(hwmBeforeTxn)},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Poll in background
+	fetchDone := make(chan struct{})
+	var fetchResult kgo.Fetches
+	var fetchElapsed time.Duration
+	go func() {
+		start := time.Now()
+		fetchResult = consumer3.PollFetches(ctx)
+		fetchElapsed = time.Since(start)
+		close(fetchDone)
+	}()
+
+	// Give the consumer time to establish the watch
+	time.Sleep(200 * time.Millisecond)
+
+	// Now commit the transaction
+	commitStart := time.Now()
+	if err := producer.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Transaction committed at %v", time.Since(commitStart))
+
+	// Wait for the fetch to complete
+	select {
+	case <-fetchDone:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for fetch after commit")
+	}
+	consumer3.Close()
+
+	// The fetch should have returned shortly after commit, not waiting for full MaxWait
+	if fetchElapsed > 2*time.Second {
+		t.Errorf("Test 3: fetch took too long after commit: %v (expected <2s)", fetchElapsed)
+	}
+	if fetchResult.NumRecords() != 1 {
+		t.Errorf("Test 3: expected 1 record after commit, got %d", fetchResult.NumRecords())
+	}
+	t.Logf("Test 3 passed: got data %v after starting fetch (commit woke the watcher)", fetchElapsed)
+
+	// TEST 4: Verify read_uncommitted sees data immediately (baseline)
+	t.Log("Test 4: read_uncommitted should see uncommitted data immediately")
+
+	// Start another uncommitted transaction
+	if err := producer.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.ProduceSync(ctx, &kgo.Record{Value: []byte("more-uncommitted")}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	newHWM := c.PartitionInfo(testTopic, 0).HighWatermark
+	newLSO := c.PartitionInfo(testTopic, 0).LastStableOffset
+
+	// read_uncommitted consumer should see the data immediately
+	consumer4, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
+		kgo.FetchMinBytes(1),
+		kgo.FetchMaxWait(5*time.Second),
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+			testTopic: {0: kgo.NewOffset().At(newLSO)}, // start at LSO, which is before HWM
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start = time.Now()
+	fetches = consumer4.PollFetches(ctx)
+	elapsed = time.Since(start)
+	consumer4.Close()
+
+	if elapsed > time.Second {
+		t.Errorf("Test 4: read_uncommitted took too long: %v", elapsed)
+	}
+	if fetches.NumRecords() == 0 {
+		t.Errorf("Test 4: read_uncommitted should see uncommitted data, HWM=%d LSO=%d", newHWM, newLSO)
+	}
+	t.Logf("Test 4 passed: read_uncommitted got data in %v", elapsed)
+
+	// Cleanup
+	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Logf("cleanup abort: %v", err)
+	}
+}
+
+// TestGroupRebalanceOnNonLeaderMetadataChange tests that a rebalance is triggered
+// when a non-leader member rejoins with changed metadata.
+//
+// This test directly sends JoinGroup requests to verify the server behavior.
+func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
+	t.Parallel()
+	const testTopic = "rebalance-test"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(2, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	groupID := "test-group-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+
+	// Create a client for sending raw requests
+	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	// Helper to send JoinGroup and get response
+	joinGroup := func(memberID string, metadata []byte) (*kmsg.JoinGroupResponse, error) {
+		req := kmsg.NewJoinGroupRequest()
+		req.Group = groupID
+		req.MemberID = memberID
+		req.ProtocolType = "consumer"
+		req.SessionTimeoutMillis = 30000
+		req.RebalanceTimeoutMillis = 60000
+		proto := kmsg.NewJoinGroupRequestProtocol()
+		proto.Name = "cooperative-sticky"
+		proto.Metadata = metadata
+		req.Protocols = append(req.Protocols, proto)
+		resp, err := req.RequestWith(ctx, cl)
+		return resp, err
+	}
+
+	// Helper to send SyncGroup
+	syncGroup := func(memberID string, gen int32, isLeader bool, assignment []byte) (*kmsg.SyncGroupResponse, error) {
+		req := kmsg.NewSyncGroupRequest()
+		req.Group = groupID
+		req.MemberID = memberID
+		req.Generation = gen
+		if isLeader {
+			// Leader sends assignments for all members
+			assign := kmsg.NewSyncGroupRequestGroupAssignment()
+			assign.MemberID = memberID
+			assign.MemberAssignment = assignment
+			req.GroupAssignment = append(req.GroupAssignment, assign)
+		}
+		resp, err := req.RequestWith(ctx, cl)
+		return resp, err
+	}
+
+	metadataV1 := []byte{0, 1, 2, 3} // Initial metadata
+	metadataV2 := []byte{0, 1, 2, 4} // Changed metadata (simulates partition revocation)
+	assignment := []byte{0, 0, 0, 0} // Dummy assignment
+
+	// Step 1: m1 joins, gets MemberIDRequired, rejoins with ID
+	t.Log("Step 1: m1 initial join")
+	resp1, err := joinGroup("", metadataV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp1.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("expected MemberIDRequired, got %v", kerr.ErrorForCode(resp1.ErrorCode))
+	}
+	m1ID := resp1.MemberID
+	t.Logf("m1 ID: %s", m1ID)
+
+	// Step 2: m1 rejoins with ID, becomes leader
+	t.Log("Step 2: m1 rejoins with ID")
+	resp1, err = joinGroup(m1ID, metadataV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp1.ErrorCode != 0 {
+		t.Fatalf("m1 join error: %v", kerr.ErrorForCode(resp1.ErrorCode))
+	}
+	if resp1.LeaderID != m1ID {
+		t.Fatalf("expected m1 to be leader, got %s", resp1.LeaderID)
+	}
+	gen1 := resp1.Generation
+	t.Logf("m1 is leader, generation %d", gen1)
+
+	// Step 3: m1 syncs as leader
+	t.Log("Step 3: m1 syncs")
+	syncResp, err := syncGroup(m1ID, gen1, true, assignment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if syncResp.ErrorCode != 0 {
+		t.Fatalf("m1 sync error: %v", kerr.ErrorForCode(syncResp.ErrorCode))
+	}
+
+	// Step 4: m2 joins (initial)
+	t.Log("Step 4: m2 initial join")
+	resp2, err := joinGroup("", metadataV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp2.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("expected MemberIDRequired for m2, got %v", kerr.ErrorForCode(resp2.ErrorCode))
+	}
+	m2ID := resp2.MemberID
+	t.Logf("m2 ID: %s", m2ID)
+
+	// Step 5: m2 rejoins with ID, triggering rebalance
+	// Both m1 and m2 must join concurrently for rebalance to complete
+	t.Log("Step 5: m1 and m2 join concurrently (m2 triggers rebalance)")
+	var wg sync.WaitGroup
+	var resp1Rebalance, resp2Rebalance *kmsg.JoinGroupResponse
+	var err1, err2 error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		resp1Rebalance, err1 = joinGroup(m1ID, metadataV1)
+	}()
+	go func() {
+		defer wg.Done()
+		resp2Rebalance, err2 = joinGroup(m2ID, metadataV1)
+	}()
+	wg.Wait()
+
+	if err1 != nil {
+		t.Logf("m1 rejoin error: %v", err1)
+	}
+	if err2 != nil {
+		t.Logf("m2 join error: %v", err2)
+	}
+	if resp1Rebalance == nil {
+		t.Fatal("m1 rejoin returned nil response")
+	}
+	resp1 = resp1Rebalance
+	resp2 = resp2Rebalance
+
+	gen2 := resp1.Generation
+	t.Logf("After rebalance: generation %d, m1 leader=%v", gen2, resp1.LeaderID == m1ID)
+
+	// Sync both members
+	_, _ = syncGroup(m1ID, gen2, resp1.LeaderID == m1ID, assignment)
+	if resp2 != nil {
+		_, _ = syncGroup(m2ID, gen2, resp2.LeaderID == m2ID, assignment)
+	}
+
+	// Now group should be Stable with m1 as leader, m2 as follower
+	// Generation should be 2
+
+	// Step 7: THE CRITICAL TEST
+	// m2 (non-leader) rejoins with CHANGED metadata while group is Stable
+	// With the bug: m2 would get the same generation back (no rebalance)
+	// With the fix: a new rebalance should be triggered, requiring both to rejoin
+	t.Log("Step 7: m2 (non-leader) rejoins with CHANGED metadata")
+
+	// Use a short timeout context to detect if rebalance was triggered
+	// If the bug exists, m2's JoinGroup returns immediately with same generation
+	// If fixed, m2's JoinGroup triggers rebalance and waits for m1
+	shortCtx, shortCancel := context.WithTimeout(ctx, time.Second)
+
+	joinGroupShort := func(memberID string, metadata []byte) (*kmsg.JoinGroupResponse, error) {
+		req := kmsg.NewJoinGroupRequest()
+		req.Group = groupID
+		req.MemberID = memberID
+		req.ProtocolType = "consumer"
+		req.SessionTimeoutMillis = 30000
+		req.RebalanceTimeoutMillis = 60000
+		proto := kmsg.NewJoinGroupRequestProtocol()
+		proto.Name = "cooperative-sticky"
+		proto.Metadata = metadata
+		req.Protocols = append(req.Protocols, proto)
+		return req.RequestWith(shortCtx, cl)
+	}
+
+	resp2, err = joinGroupShort(m2ID, metadataV2)
+	shortCancel()
+
+	if err != nil && err.Error() == "context deadline exceeded" {
+		// CORRECT behavior: rebalance was triggered, JoinGroup is waiting for m1
+		t.Log("CORRECT: m2's changed metadata triggered rebalance (JoinGroup is waiting)")
+
+		// Complete the rebalance by having both rejoin
+		var resp2Final *kmsg.JoinGroupResponse
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = joinGroup(m1ID, metadataV1)
+		}()
+		go func() {
+			defer wg.Done()
+			resp2Final, _ = joinGroup(m2ID, metadataV2)
+		}()
+		wg.Wait()
+
+		if resp2Final != nil && resp2Final.Generation > gen2 {
+			t.Logf("CORRECT: Rebalance completed, new generation %d", resp2Final.Generation)
+		}
+	} else if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	} else if resp2 != nil && resp2.Generation == gen2 && resp2.ErrorCode == 0 {
+		// BUG: server returned same generation without triggering rebalance
+		t.Errorf("BUG: m2 rejoined with changed metadata but got same generation %d (no rebalance triggered)", gen2)
+	} else if resp2 != nil {
+		t.Logf("Response: gen=%d, err=%v", resp2.Generation, kerr.ErrorForCode(resp2.ErrorCode))
+	}
+}
+
+func TestTransactionAbortedMetadata(t *testing.T) {
+	t.Parallel()
+	const testTopic = "txn-aborted-metadata-test"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Produce and abort a transaction
+	producer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.TransactionalID("test-txn-metadata"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
+
+	if err := producer.BeginTransaction(); err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := producer.ProduceSync(ctx, kgo.StringRecord("aborted-"+strconv.Itoa(i))).FirstErr(); err != nil {
+			t.Fatalf("failed to produce: %v", err)
+		}
+	}
+
+	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("failed to abort transaction: %v", err)
+	}
+
+	// Produce committed messages after the abort to verify filtering
+	nonTxnProducer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nonTxnProducer.Close()
+
+	for i := 0; i < 2; i++ {
+		if err := nonTxnProducer.ProduceSync(ctx, kgo.StringRecord("committed-"+strconv.Itoa(i))).FirstErr(); err != nil {
+			t.Fatalf("failed to produce non-txn: %v", err)
+		}
+	}
+
+	// Verify partition info shows LSO advanced after abort
+	pi := c.PartitionInfo(testTopic, 0)
+	if pi.LastStableOffset != pi.HighWatermark {
+		t.Errorf("LSO should equal HWM after abort, got LSO=%d HWM=%d", pi.LastStableOffset, pi.HighWatermark)
+	}
+
+	// Verify read_committed consumer sees only committed messages, not aborted ones
+	consumer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+
+	var consumed int
+	var records []string
+	for consumed < 2 {
+		fs := consumer.PollFetches(ctx)
+		if errs := fs.Errors(); len(errs) > 0 {
+			t.Fatalf("fetch errors: %v", errs)
+		}
+		fs.EachRecord(func(r *kgo.Record) {
+			records = append(records, string(r.Value))
+		})
+		consumed += fs.NumRecords()
+	}
+
+	// Verify we only got committed messages
+	if consumed != 2 {
+		t.Errorf("expected 2 committed messages, got %d", consumed)
+	}
+	for _, rec := range records {
+		if len(rec) >= 7 && rec[:7] == "aborted" {
+			t.Errorf("read_committed consumer saw aborted message: %s", rec)
+		}
+	}
+}
+
+// TestKIP447RequireStable verifies that OffsetFetch with RequireStable=true
+// returns UNSTABLE_OFFSET_COMMIT when there are pending transactional offset commits.
+func TestKIP447RequireStable(t *testing.T) {
+	t.Parallel()
+	const (
+		testTopic = "kip447-test"
+		groupID   = "kip447-group"
+		txnID     = "kip447-txn"
+	)
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Create a client and use kadm to commit an offset, which creates the group
+	adminClient, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adm := kadm.NewClient(adminClient)
+
+	// Commit an initial offset to create the group
+	offsets := kadm.Offsets{}
+	offsets.Add(kadm.Offset{Topic: testTopic, Partition: 0, At: 0})
+	err = adm.CommitAllOffsets(ctx, groupID, offsets)
+	if err != nil {
+		t.Fatalf("CommitAllOffsets failed: %v", err)
+	}
+	t.Log("Initial offset committed, group created")
+	adminClient.Close()
+
+	// Create a raw client for transaction operations
+	rawClient, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawClient.Close()
+
+	// Step 1: InitProducerID to get a producer ID for our transaction
+	initReq := kmsg.NewInitProducerIDRequest()
+	txnIDStr := txnID
+	initReq.TransactionalID = &txnIDStr
+	initReq.TransactionTimeoutMillis = 60000
+	initResp, err := initReq.RequestWith(ctx, rawClient)
+	if err != nil {
+		t.Fatalf("InitProducerID failed: %v", err)
+	}
+	if initResp.ErrorCode != 0 {
+		t.Fatalf("InitProducerID error: %v", kerr.ErrorForCode(initResp.ErrorCode))
+	}
+	pid := initResp.ProducerID
+	epoch := initResp.ProducerEpoch
+	t.Logf("Got producer ID %d, epoch %d", pid, epoch)
+
+	// Step 2: AddOffsetsToTxn to register the group with the transaction
+	addOffsetsReq := kmsg.NewAddOffsetsToTxnRequest()
+	addOffsetsReq.TransactionalID = txnID
+	addOffsetsReq.ProducerID = pid
+	addOffsetsReq.ProducerEpoch = epoch
+	addOffsetsReq.Group = groupID
+	addOffsetsResp, err := addOffsetsReq.RequestWith(ctx, rawClient)
+	if err != nil {
+		t.Fatalf("AddOffsetsToTxn failed: %v", err)
+	}
+	if addOffsetsResp.ErrorCode != 0 {
+		t.Fatalf("AddOffsetsToTxn error: %v", kerr.ErrorForCode(addOffsetsResp.ErrorCode))
+	}
+	t.Log("AddOffsetsToTxn succeeded")
+
+	// Step 3: TxnOffsetCommit to stage offset commits (not yet committed)
+	txnCommitReq := kmsg.NewTxnOffsetCommitRequest()
+	txnCommitReq.TransactionalID = txnID
+	txnCommitReq.Group = groupID
+	txnCommitReq.ProducerID = pid
+	txnCommitReq.ProducerEpoch = epoch
+	txnCommitReq.Generation = -1 // Simple consumer, not in active group session
+	txnCommitReq.MemberID = ""
+	topic := kmsg.NewTxnOffsetCommitRequestTopic()
+	topic.Topic = testTopic
+	part := kmsg.NewTxnOffsetCommitRequestTopicPartition()
+	part.Partition = 0
+	part.Offset = 5
+	topic.Partitions = append(topic.Partitions, part)
+	txnCommitReq.Topics = append(txnCommitReq.Topics, topic)
+	txnCommitResp, err := txnCommitReq.RequestWith(ctx, rawClient)
+	if err != nil {
+		t.Fatalf("TxnOffsetCommit failed: %v", err)
+	}
+	if len(txnCommitResp.Topics) > 0 && len(txnCommitResp.Topics[0].Partitions) > 0 {
+		if ec := txnCommitResp.Topics[0].Partitions[0].ErrorCode; ec != 0 {
+			t.Fatalf("TxnOffsetCommit partition error: %v", kerr.ErrorForCode(ec))
+		}
+	}
+	t.Log("TxnOffsetCommit staged offset 5")
+
+	// Test 1: OffsetFetch with RequireStable=true should return UNSTABLE_OFFSET_COMMIT
+	t.Log("Test 1: OffsetFetch with RequireStable=true during pending transaction")
+
+	// Use v8+ format with Groups field to work with auto-negotiated versions
+	fetchReq := kmsg.NewOffsetFetchRequest()
+	fetchReq.RequireStable = true
+	rg := kmsg.NewOffsetFetchRequestGroup()
+	rg.Group = groupID
+	rgt := kmsg.NewOffsetFetchRequestGroupTopic()
+	rgt.Topic = testTopic
+	rgt.Partitions = []int32{0}
+	rg.Topics = append(rg.Topics, rgt)
+	fetchReq.Groups = append(fetchReq.Groups, rg)
+
+	// Use a short timeout context to avoid retries eating up time
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+	fetchResp, err := fetchReq.RequestWith(ctx1, rawClient)
+	cancel1()
+	if err != nil {
+		t.Fatalf("OffsetFetch failed: %v", err)
+	}
+
+	// Check for UNSTABLE_OFFSET_COMMIT error in the group response
+	if len(fetchResp.Groups) == 0 {
+		t.Fatal("Test 1: no groups in response")
+	}
+	if fetchResp.Groups[0].ErrorCode != kerr.UnstableOffsetCommit.Code {
+		t.Errorf("Test 1: expected UNSTABLE_OFFSET_COMMIT (88), got error code %d", fetchResp.Groups[0].ErrorCode)
+	} else {
+		t.Log("Test 1 passed: got UNSTABLE_OFFSET_COMMIT as expected")
+	}
+
+	// Test 2: OffsetFetch with RequireStable=false should succeed (even with pending txn)
+	t.Log("Test 2: OffsetFetch with RequireStable=false during pending transaction")
+	fetchReq.RequireStable = false
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	fetchResp, err = fetchReq.RequestWith(ctx2, rawClient)
+	cancel2()
+	if err != nil {
+		t.Fatalf("OffsetFetch failed: %v", err)
+	}
+	if len(fetchResp.Groups) == 0 {
+		t.Fatal("Test 2: no groups in response")
+	}
+	if fetchResp.Groups[0].ErrorCode != 0 {
+		t.Errorf("Test 2: expected no error, got error code %d", fetchResp.Groups[0].ErrorCode)
+	} else {
+		t.Log("Test 2 passed: RequireStable=false succeeded")
+	}
+
+	// Step 4: EndTxn to commit the transaction
+	endReq := kmsg.NewEndTxnRequest()
+	endReq.TransactionalID = txnID
+	endReq.ProducerID = pid
+	endReq.ProducerEpoch = epoch
+	endReq.Commit = true
+	endResp, err := endReq.RequestWith(ctx, rawClient)
+	if err != nil {
+		t.Fatalf("EndTxn failed: %v", err)
+	}
+	if endResp.ErrorCode != 0 {
+		t.Fatalf("EndTxn error: %v", kerr.ErrorForCode(endResp.ErrorCode))
+	}
+	t.Log("Transaction committed")
+
+	// Test 3: OffsetFetch with RequireStable=true should now succeed
+	t.Log("Test 3: OffsetFetch with RequireStable=true after transaction committed")
+	fetchReq.RequireStable = true
+	ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
+	fetchResp, err = fetchReq.RequestWith(ctx3, rawClient)
+	cancel3()
+	if err != nil {
+		t.Fatalf("OffsetFetch failed: %v", err)
+	}
+	if len(fetchResp.Groups) == 0 {
+		t.Fatal("Test 3: no groups in response")
+	}
+	if fetchResp.Groups[0].ErrorCode != 0 {
+		t.Errorf("Test 3: expected no error after commit, got error code %d", fetchResp.Groups[0].ErrorCode)
+	} else {
+		t.Log("Test 3 passed: RequireStable=true succeeded after commit")
+	}
+
+	// Verify the committed offset is correct
+	if len(fetchResp.Groups[0].Topics) == 0 || len(fetchResp.Groups[0].Topics[0].Partitions) == 0 {
+		t.Fatal("no partitions in response")
+	}
+	offset := fetchResp.Groups[0].Topics[0].Partitions[0].Offset
+	if offset != 5 {
+		t.Errorf("expected committed offset 5, got %d", offset)
+	} else {
+		t.Log("Test 4 passed: committed offset is correct")
 	}
 }

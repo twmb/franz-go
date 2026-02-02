@@ -14,12 +14,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TODO
-//
-// * Add raft and make the brokers independent
-//
-// * Support multiple replicas -- we just pass this through
-
 type (
 
 	// Cluster is a mock Kafka broker cluster.
@@ -43,11 +37,16 @@ type (
 		sleeping       map[*clientConn]*bsleep
 		controlSleep   chan sleepChs
 
-		data   data
-		pids   pids
-		groups groups
-		sasls  sasls
-		bcfgs  map[string]*string
+		data          data
+		pids          pids
+		groups        groups
+		sasls         sasls
+		acls          clusterACLs
+		bcfgs         map[string]*string
+		quotas      map[string]quotaEntry
+		telem       map[[16]byte]int32
+		telemNextID int32
+		fetchSessions fetchSessions
 
 		die  chan struct{}
 		dead atomic.Bool
@@ -76,6 +75,12 @@ type (
 		handled bool
 	}
 )
+
+func (b *broker) hostport() (string, int32) {
+	h, p, _ := net.SplitHostPort(b.ln.Addr().String())
+	p32, _ := strconv.Atoi(p)
+	return h, int32(p32)
+}
 
 // MustCluster is like NewCluster, but panics on error.
 func MustCluster(opts ...Opt) *Cluster {
@@ -124,13 +129,18 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			t2id:      make(map[string]uuid),
 			treplicas: make(map[string]int),
 			tcfgs:     make(map[string]map[string]*string),
+			tnorms:    make(map[string]string),
 		},
-		bcfgs: make(map[string]*string),
+		bcfgs:  make(map[string]*string),
+		quotas: make(map[string]quotaEntry),
+		telem:  make(map[[16]byte]int32),
 
 		die: make(chan struct{}),
 	}
 	c.data.c = c
 	c.groups.c = c
+	c.pids.c = c
+	c.pids.ids = make(map[int64]*pidinfo)
 	var err error
 	defer func() {
 		if err != nil {
@@ -200,6 +210,10 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 	for t, p := range seedTopics {
 		c.data.mkt(t, int(p), -1, nil)
+	}
+
+	for _, a := range cfg.seedACLs {
+		c.acls.add(a)
 	}
 
 	go c.run()
@@ -336,7 +350,7 @@ outer:
 			if w.cleaned {
 				continue // already cleaned up, this is an extraneous timer fire
 			}
-			w.cleanup(c)
+			w.cleanup()
 			creq = w.creq
 		}
 
@@ -355,19 +369,19 @@ outer:
 		kreq = creq.kreq
 		switch k := kmsg.Key(kreq.Key()); k {
 		case kmsg.Produce:
-			kresp, err = c.handleProduce(creq.cc.b, kreq)
+			kresp, err = c.handleProduce(creq)
 		case kmsg.Fetch:
 			kresp, err = c.handleFetch(creq, w)
 		case kmsg.ListOffsets:
-			kresp, err = c.handleListOffsets(creq.cc.b, kreq)
+			kresp, err = c.handleListOffsets(creq)
 		case kmsg.Metadata:
-			kresp, err = c.handleMetadata(kreq)
+			kresp, err = c.handleMetadata(creq)
 		case kmsg.OffsetCommit:
 			kresp, err = c.handleOffsetCommit(creq)
 		case kmsg.OffsetFetch:
 			kresp, err = c.handleOffsetFetch(creq)
 		case kmsg.FindCoordinator:
-			kresp, err = c.handleFindCoordinator(kreq)
+			kresp, err = c.handleFindCoordinator(creq)
 		case kmsg.JoinGroup:
 			kresp, err = c.handleJoinGroup(creq)
 		case kmsg.Heartbeat:
@@ -385,37 +399,71 @@ outer:
 		case kmsg.ApiVersions:
 			kresp, err = c.handleApiVersions(kreq)
 		case kmsg.CreateTopics:
-			kresp, err = c.handleCreateTopics(creq.cc.b, kreq)
+			kresp, err = c.handleCreateTopics(creq)
 		case kmsg.DeleteTopics:
-			kresp, err = c.handleDeleteTopics(creq.cc.b, kreq)
+			kresp, err = c.handleDeleteTopics(creq)
 		case kmsg.DeleteRecords:
-			kresp, err = c.handleDeleteRecords(creq.cc.b, kreq)
+			kresp, err = c.handleDeleteRecords(creq)
 		case kmsg.InitProducerID:
-			kresp, err = c.handleInitProducerID(kreq)
+			kresp, err = c.handleInitProducerID(creq)
 		case kmsg.OffsetForLeaderEpoch:
-			kresp, err = c.handleOffsetForLeaderEpoch(creq.cc.b, kreq)
+			kresp, err = c.handleOffsetForLeaderEpoch(creq)
+		case kmsg.AddPartitionsToTxn:
+			kresp, err = c.handleAddPartitionsToTxn(creq)
+		case kmsg.AddOffsetsToTxn:
+			kresp, err = c.handleAddOffsetsToTxn(creq)
+		case kmsg.EndTxn:
+			kresp, err = c.handleEndTxn(creq)
+		case kmsg.TxnOffsetCommit:
+			kresp, err = c.handleTxnOffsetCommit(creq)
+		case kmsg.DescribeACLs:
+			kresp, err = c.handleDescribeACLs(creq)
+		case kmsg.CreateACLs:
+			kresp, err = c.handleCreateACLs(creq)
+		case kmsg.DeleteACLs:
+			kresp, err = c.handleDeleteACLs(creq)
 		case kmsg.DescribeConfigs:
-			kresp, err = c.handleDescribeConfigs(creq.cc.b, kreq)
+			kresp, err = c.handleDescribeConfigs(creq)
 		case kmsg.AlterConfigs:
-			kresp, err = c.handleAlterConfigs(creq.cc.b, kreq)
+			kresp, err = c.handleAlterConfigs(creq)
 		case kmsg.AlterReplicaLogDirs:
-			kresp, err = c.handleAlterReplicaLogDirs(creq.cc.b, kreq)
+			kresp, err = c.handleAlterReplicaLogDirs(creq)
 		case kmsg.DescribeLogDirs:
-			kresp, err = c.handleDescribeLogDirs(creq.cc.b, kreq)
+			kresp, err = c.handleDescribeLogDirs(creq)
 		case kmsg.SASLAuthenticate:
 			kresp, err = c.handleSASLAuthenticate(creq)
 		case kmsg.CreatePartitions:
-			kresp, err = c.handleCreatePartitions(creq.cc.b, kreq)
+			kresp, err = c.handleCreatePartitions(creq)
 		case kmsg.DeleteGroups:
 			kresp, err = c.handleDeleteGroups(creq)
 		case kmsg.IncrementalAlterConfigs:
-			kresp, err = c.handleIncrementalAlterConfigs(creq.cc.b, kreq)
+			kresp, err = c.handleIncrementalAlterConfigs(creq)
+		case kmsg.AlterPartitionAssignments:
+			kresp, err = c.handleAlterPartitionAssignments(creq)
+		case kmsg.ListPartitionReassignments:
+			kresp, err = c.handleListPartitionReassignments(creq)
 		case kmsg.OffsetDelete:
 			kresp, err = c.handleOffsetDelete(creq)
 		case kmsg.DescribeUserSCRAMCredentials:
-			kresp, err = c.handleDescribeUserSCRAMCredentials(kreq)
+			kresp, err = c.handleDescribeUserSCRAMCredentials(creq)
 		case kmsg.AlterUserSCRAMCredentials:
-			kresp, err = c.handleAlterUserSCRAMCredentials(creq.cc.b, kreq)
+			kresp, err = c.handleAlterUserSCRAMCredentials(creq)
+		case kmsg.DescribeCluster:
+			kresp, err = c.handleDescribeCluster(creq)
+		case kmsg.DescribeProducers:
+			kresp, err = c.handleDescribeProducers(creq)
+		case kmsg.DescribeTransactions:
+			kresp, err = c.handleDescribeTransactions(creq)
+		case kmsg.ListTransactions:
+			kresp, err = c.handleListTransactions(creq)
+		case kmsg.DescribeClientQuotas:
+			kresp, err = c.handleDescribeClientQuotas(creq)
+		case kmsg.AlterClientQuotas:
+			kresp, err = c.handleAlterClientQuotas(creq)
+		case kmsg.GetTelemetrySubscriptions:
+			kresp, err = c.handleGetTelemetrySubscriptions(creq)
+		case kmsg.PushTelemetry:
+			kresp, err = c.handlePushTelemetry(creq)
 		default:
 			err = fmt.Errorf("unhandled key %v", k)
 		}

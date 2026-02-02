@@ -4,7 +4,7 @@ name: i386
 
 on:
   push:
-    branches: ["*"]
+    branches: ["master"]
     paths-ignore:
       - '**/*.md'
   pull_request:

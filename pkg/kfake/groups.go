@@ -143,7 +143,7 @@ func (gs *groups) newGroup(name string) *group {
 		pending:   make(map[string]*groupMember),
 		protocols: make(map[string]int),
 		reqCh:     make(chan *clientReq),
-		controlCh: make(chan func()),
+		controlCh: make(chan func(), 10), // Buffered to prevent blocking on send
 		quitCh:    make(chan struct{}),
 	}
 }
@@ -253,6 +253,10 @@ func (gs *groups) handleList(creq *clientReq) *kmsg.ListGroupsResponse {
 		if g.c.coordinator(g.name).node != creq.cc.b.node {
 			continue
 		}
+		// ACL check: DESCRIBE on Group - filter out groups without permission
+		if !g.c.allowedACL(creq, g.name, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
+			continue
+		}
 		g.waitControl(func() {
 			if states != nil {
 				if _, ok := states[g.state.String()]; !ok {
@@ -288,6 +292,11 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 
 	for _, rg := range req.Groups {
 		sg := doneg(rg)
+		// ACL check: DESCRIBE on Group
+		if !gs.c.allowedACL(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
+			sg.ErrorCode = kerr.GroupAuthorizationFailed.Code
+			continue
+		}
 		if kerr := gs.c.validateGroup(creq, rg); kerr != nil {
 			sg.ErrorCode = kerr.Code
 			continue
@@ -297,6 +306,9 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 			sg.State = groupDead.String()
 			if req.Version >= 6 {
 				sg.ErrorCode = kerr.GroupIDNotFound.Code
+			}
+			if req.IncludeAuthorizedOperations {
+				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
 			}
 			continue
 		}
@@ -323,6 +335,9 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 				sg.Members = append(sg.Members, sm)
 
 			}
+			if req.IncludeAuthorizedOperations {
+				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
+			}
 		}) {
 			sg.State = groupDead.String()
 		}
@@ -343,6 +358,11 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 
 	for _, rg := range req.Groups {
 		sg := doneg(rg)
+		// ACL check: DELETE on Group
+		if !gs.c.allowedACL(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete) {
+			sg.ErrorCode = kerr.GroupAuthorizationFailed.Code
+			continue
+		}
 		if kerr := gs.c.validateGroup(creq, rg); kerr != nil {
 			sg.ErrorCode = kerr.Code
 			continue
@@ -377,7 +397,7 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 		rg := kmsg.NewOffsetFetchRequestGroup()
 		rg.Group = req.Group
 		if req.Topics != nil {
-			rg.Topics = make([]kmsg.OffsetFetchRequestGroupTopic, len(req.Topics))
+			rg.Topics = make([]kmsg.OffsetFetchRequestGroupTopic, 0, len(req.Topics))
 		}
 		for _, t := range req.Topics {
 			rt := kmsg.NewOffsetFetchRequestGroupTopic()
@@ -416,8 +436,18 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 
 	for _, rg := range req.Groups {
 		sg := doneg(rg.Group)
+		// ACL check: DESCRIBE on Group
+		if !gs.c.allowedACL(creq, rg.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
+			sg.ErrorCode = kerr.GroupAuthorizationFailed.Code
+			continue
+		}
 		if kerr := gs.c.validateGroup(creq, rg.Group); kerr != nil {
 			sg.ErrorCode = kerr.Code
+			continue
+		}
+		// KIP-447: If RequireStable is set, check for pending transactional offsets
+		if req.RequireStable && gs.c.pids.hasUnstableOffsets(rg.Group) {
+			sg.ErrorCode = kerr.UnstableOffsetCommit.Code
 			continue
 		}
 		g, ok := gs.gs[rg.Group]
@@ -471,6 +501,12 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 	req := creq.kreq.(*kmsg.OffsetDeleteRequest)
 	resp := req.ResponseKind().(*kmsg.OffsetDeleteResponse)
+
+	// ACL check: DELETE on Group
+	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete) {
+		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+		return resp
+	}
 
 	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
 		resp.ErrorCode = kerr.Code
@@ -613,6 +649,9 @@ func (g *group) manage(detachNew func()) {
 	}
 }
 
+// The group manage loop does not block: it sends to respCh which eventually
+// writes; but that write is fast. There is no long-blocking code in the manage
+// loop.
 func (g *group) waitControl(fn func()) bool {
 	wait := make(chan struct{})
 	wfn := func() { fn(); close(wait) }
@@ -645,6 +684,10 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 
 	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
 		resp.ErrorCode = kerr.Code
+		return resp, false
+	}
+	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
+		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
 		return resp, false
 	}
 	if req.InstanceID != nil {
@@ -700,13 +743,14 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 		g.updateMemberAndRebalance(m, creq, req)
 	case groupCompletingRebalance:
 		if m.sameJoin(req) {
-			g.fillJoinResp(req, resp)
+			g.fillJoinResp(m.memberID, resp)
 			return resp, true
 		}
 		g.updateMemberAndRebalance(m, creq, req)
 	case groupStable:
-		if g.leader != req.MemberID || m.sameJoin(req) {
-			g.fillJoinResp(req, resp)
+		if g.leader != req.MemberID && m.sameJoin(req) {
+			// Non-leader with same metadata - no change needed
+			g.fillJoinResp(m.memberID, resp)
 			return resp, true
 		}
 		g.updateMemberAndRebalance(m, creq, req)
@@ -721,6 +765,10 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 
 	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
 		resp.ErrorCode = kerr.Code
+		return resp
+	}
+	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
+		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
 		return resp
 	}
 	if req.InstanceID != nil {
@@ -774,6 +822,10 @@ func (g *group) handleHeartbeat(creq *clientReq) kmsg.Response {
 		resp.ErrorCode = kerr.Code
 		return resp
 	}
+	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
+		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+		return resp
+	}
 	if req.InstanceID != nil {
 		resp.ErrorCode = kerr.InvalidGroupID.Code
 		return resp
@@ -808,6 +860,10 @@ func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 
 	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
 		resp.ErrorCode = kerr.Code
+		return resp
+	}
+	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
+		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
 		return resp
 	}
 	if req.Version < 3 {
@@ -856,6 +912,34 @@ func fillOffsetCommit(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResp
 	}
 }
 
+// fillOffsetCommitWithACL fills the response with per-topic ACL checks.
+// Returns topics that passed ACL check.
+func (g *group) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse) []kmsg.OffsetCommitRequestTopic {
+	var allowed []kmsg.OffsetCommitRequestTopic
+	for _, t := range req.Topics {
+		st := kmsg.NewOffsetCommitResponseTopic()
+		st.Topic = t.Topic
+		if !g.c.allowedACL(creq, t.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
+			for _, p := range t.Partitions {
+				sp := kmsg.NewOffsetCommitResponseTopicPartition()
+				sp.Partition = p.Partition
+				sp.ErrorCode = kerr.TopicAuthorizationFailed.Code
+				st.Partitions = append(st.Partitions, sp)
+			}
+		} else {
+			allowed = append(allowed, t)
+			for _, p := range t.Partitions {
+				sp := kmsg.NewOffsetCommitResponseTopicPartition()
+				sp.Partition = p.Partition
+				sp.ErrorCode = 0
+				st.Partitions = append(st.Partitions, sp)
+			}
+		}
+		resp.Topics = append(resp.Topics, st)
+	}
+	return allowed
+}
+
 // Handles a commit.
 func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse, bool) {
 	req := creq.kreq.(*kmsg.OffsetCommitRequest)
@@ -865,6 +949,13 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 		fillOffsetCommit(req, resp, kerr.Code)
 		return resp, false
 	}
+
+	// ACL check: READ on GROUP (if denied, fail all topics)
+	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
+		fillOffsetCommit(req, resp, kerr.GroupAuthorizationFailed.Code)
+		return resp, false
+	}
+
 	if req.InstanceID != nil {
 		fillOffsetCommit(req, resp, kerr.InvalidGroupID.Code)
 		return resp, false
@@ -901,7 +992,8 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 		fillOffsetCommit(req, resp, kerr.GroupIDNotFound.Code)
 		return resp, true
 	case groupEmpty:
-		for _, t := range req.Topics {
+		allowed := g.fillOffsetCommitWithACL(creq, req, resp)
+		for _, t := range allowed {
 			for _, p := range t.Partitions {
 				g.commits.set(t.Topic, p.Partition, offsetCommit{
 					offset:      p.Offset,
@@ -910,9 +1002,9 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 				})
 			}
 		}
-		fillOffsetCommit(req, resp, 0)
 	case groupPreparingRebalance, groupStable:
-		for _, t := range req.Topics {
+		allowed := g.fillOffsetCommitWithACL(creq, req, resp)
+		for _, t := range allowed {
 			for _, p := range t.Partitions {
 				g.commits.set(t.Topic, p.Partition, offsetCommit{
 					offset:      p.Offset,
@@ -921,7 +1013,6 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 				})
 			}
 		}
-		fillOffsetCommit(req, resp, 0)
 		g.updateHeartbeat(m)
 	case groupCompletingRebalance:
 		fillOffsetCommit(req, resp, kerr.RebalanceInProgress.Code)
@@ -1031,7 +1122,7 @@ func (g *group) completeRebalance() {
 		}
 		req := m.join
 		resp := req.ResponseKind().(*kmsg.JoinGroupResponse)
-		g.fillJoinResp(req, resp)
+		g.fillJoinResp(m.memberID, resp)
 		g.reply(m.waitingReply, resp, m)
 	}
 }
@@ -1182,13 +1273,13 @@ func (m *groupMember) sameJoin(req *kmsg.JoinGroupRequest) bool {
 	return true
 }
 
-func (g *group) fillJoinResp(req *kmsg.JoinGroupRequest, resp *kmsg.JoinGroupResponse) {
+func (g *group) fillJoinResp(memberID string, resp *kmsg.JoinGroupResponse) {
 	resp.Generation = g.generation
 	resp.ProtocolType = kmsg.StringPtr(g.protocolType)
 	resp.Protocol = kmsg.StringPtr(g.protocol)
 	resp.LeaderID = g.leader
-	resp.MemberID = req.MemberID
-	if g.leader == req.MemberID {
+	resp.MemberID = memberID
+	if g.leader == memberID {
 		resp.Members = g.joinResponseMetadata()
 	}
 }

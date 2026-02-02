@@ -5,17 +5,26 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TODO
+// DeleteRecords: v0-2
 //
-// * Return InvalidTopicException when names collide
+// Behavior:
+// * Advances log start offset for partitions
+// * Offset -1 means delete up to high watermark
+//
+// Version notes:
+// * v1: ThrottleMillis
+// * v2: Flexible versions
 
 func init() { regKey(21, 0, 2) }
 
-func (c *Cluster) handleDeleteRecords(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.DeleteRecordsRequest)
+func (c *Cluster) handleDeleteRecords(creq *clientReq) (kmsg.Response, error) {
+	var (
+		b   = creq.cc.b
+		req = creq.kreq.(*kmsg.DeleteRecordsRequest)
+	)
 	resp := req.ResponseKind().(*kmsg.DeleteRecordsResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 
@@ -40,6 +49,12 @@ func (c *Cluster) handleDeleteRecords(b *broker, kreq kmsg.Request) (kmsg.Respon
 	}
 
 	for _, rt := range req.Topics {
+		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDelete) {
+			for _, rp := range rt.Partitions {
+				donep(rt.Topic, rp.Partition, kerr.TopicAuthorizationFailed.Code)
+			}
+			continue
+		}
 		ps, ok := c.data.tps.gett(rt.Topic)
 		for _, rp := range rt.Partitions {
 			if !ok {
