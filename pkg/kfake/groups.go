@@ -708,7 +708,8 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 		}
 		g.updateMemberAndRebalance(m, creq, req)
 	case groupStable:
-		if g.leader != req.MemberID || m.sameJoin(req) {
+		if g.leader != req.MemberID && m.sameJoin(req) {
+			// Non-leader with same metadata - no change needed
 			g.fillJoinResp(req, resp)
 			return resp, true
 		}

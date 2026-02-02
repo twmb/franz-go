@@ -1079,6 +1079,220 @@ func TestTransactionOffsetCommit(t *testing.T) {
 	}
 }
 
+// TestGroupRebalanceOnNonLeaderMetadataChange tests that a rebalance is triggered
+// when a non-leader member rejoins with changed metadata.
+//
+// This test directly sends JoinGroup requests to verify the server behavior.
+func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
+	t.Parallel()
+	const testTopic = "rebalance-test"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(2, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	groupID := "test-group-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+
+	// Create a client for sending raw requests
+	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	// Helper to send JoinGroup and get response
+	joinGroup := func(memberID string, metadata []byte) (*kmsg.JoinGroupResponse, error) {
+		req := kmsg.NewJoinGroupRequest()
+		req.Group = groupID
+		req.MemberID = memberID
+		req.ProtocolType = "consumer"
+		req.SessionTimeoutMillis = 30000
+		req.RebalanceTimeoutMillis = 60000
+		proto := kmsg.NewJoinGroupRequestProtocol()
+		proto.Name = "cooperative-sticky"
+		proto.Metadata = metadata
+		req.Protocols = append(req.Protocols, proto)
+		resp, err := req.RequestWith(ctx, cl)
+		return resp, err
+	}
+
+	// Helper to send SyncGroup
+	syncGroup := func(memberID string, gen int32, isLeader bool, assignment []byte) (*kmsg.SyncGroupResponse, error) {
+		req := kmsg.NewSyncGroupRequest()
+		req.Group = groupID
+		req.MemberID = memberID
+		req.Generation = gen
+		if isLeader {
+			// Leader sends assignments for all members
+			assign := kmsg.NewSyncGroupRequestGroupAssignment()
+			assign.MemberID = memberID
+			assign.MemberAssignment = assignment
+			req.GroupAssignment = append(req.GroupAssignment, assign)
+		}
+		resp, err := req.RequestWith(ctx, cl)
+		return resp, err
+	}
+
+	metadataV1 := []byte{0, 1, 2, 3} // Initial metadata
+	metadataV2 := []byte{0, 1, 2, 4} // Changed metadata (simulates partition revocation)
+	assignment := []byte{0, 0, 0, 0} // Dummy assignment
+
+	// Step 1: m1 joins, gets MemberIDRequired, rejoins with ID
+	t.Log("Step 1: m1 initial join")
+	resp1, err := joinGroup("", metadataV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp1.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("expected MemberIDRequired, got %v", kerr.ErrorForCode(resp1.ErrorCode))
+	}
+	m1ID := resp1.MemberID
+	t.Logf("m1 ID: %s", m1ID)
+
+	// Step 2: m1 rejoins with ID, becomes leader
+	t.Log("Step 2: m1 rejoins with ID")
+	resp1, err = joinGroup(m1ID, metadataV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp1.ErrorCode != 0 {
+		t.Fatalf("m1 join error: %v", kerr.ErrorForCode(resp1.ErrorCode))
+	}
+	if resp1.LeaderID != m1ID {
+		t.Fatalf("expected m1 to be leader, got %s", resp1.LeaderID)
+	}
+	gen1 := resp1.Generation
+	t.Logf("m1 is leader, generation %d", gen1)
+
+	// Step 3: m1 syncs as leader
+	t.Log("Step 3: m1 syncs")
+	syncResp, err := syncGroup(m1ID, gen1, true, assignment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if syncResp.ErrorCode != 0 {
+		t.Fatalf("m1 sync error: %v", kerr.ErrorForCode(syncResp.ErrorCode))
+	}
+
+	// Step 4: m2 joins (initial)
+	t.Log("Step 4: m2 initial join")
+	resp2, err := joinGroup("", metadataV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp2.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("expected MemberIDRequired for m2, got %v", kerr.ErrorForCode(resp2.ErrorCode))
+	}
+	m2ID := resp2.MemberID
+	t.Logf("m2 ID: %s", m2ID)
+
+	// Step 5: m2 rejoins with ID, triggering rebalance
+	// Both m1 and m2 must join concurrently for rebalance to complete
+	t.Log("Step 5: m1 and m2 join concurrently (m2 triggers rebalance)")
+	var wg sync.WaitGroup
+	var resp1Rebalance, resp2Rebalance *kmsg.JoinGroupResponse
+	var err1, err2 error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		resp1Rebalance, err1 = joinGroup(m1ID, metadataV1)
+	}()
+	go func() {
+		defer wg.Done()
+		resp2Rebalance, err2 = joinGroup(m2ID, metadataV1)
+	}()
+	wg.Wait()
+
+	if err1 != nil {
+		t.Logf("m1 rejoin error: %v", err1)
+	}
+	if err2 != nil {
+		t.Logf("m2 join error: %v", err2)
+	}
+	if resp1Rebalance == nil {
+		t.Fatal("m1 rejoin returned nil response")
+	}
+	resp1 = resp1Rebalance
+	resp2 = resp2Rebalance
+
+	gen2 := resp1.Generation
+	t.Logf("After rebalance: generation %d, m1 leader=%v", gen2, resp1.LeaderID == m1ID)
+
+	// Sync both members
+	_, _ = syncGroup(m1ID, gen2, resp1.LeaderID == m1ID, assignment)
+	if resp2 != nil {
+		_, _ = syncGroup(m2ID, gen2, resp2.LeaderID == m2ID, assignment)
+	}
+
+	// Now group should be Stable with m1 as leader, m2 as follower
+	// Generation should be 2
+
+	// Step 7: THE CRITICAL TEST
+	// m2 (non-leader) rejoins with CHANGED metadata while group is Stable
+	// With the bug: m2 would get the same generation back (no rebalance)
+	// With the fix: a new rebalance should be triggered, requiring both to rejoin
+	t.Log("Step 7: m2 (non-leader) rejoins with CHANGED metadata")
+
+	// Use a short timeout context to detect if rebalance was triggered
+	// If the bug exists, m2's JoinGroup returns immediately with same generation
+	// If fixed, m2's JoinGroup triggers rebalance and waits for m1
+	shortCtx, shortCancel := context.WithTimeout(ctx, time.Second)
+
+	joinGroupShort := func(memberID string, metadata []byte) (*kmsg.JoinGroupResponse, error) {
+		req := kmsg.NewJoinGroupRequest()
+		req.Group = groupID
+		req.MemberID = memberID
+		req.ProtocolType = "consumer"
+		req.SessionTimeoutMillis = 30000
+		req.RebalanceTimeoutMillis = 60000
+		proto := kmsg.NewJoinGroupRequestProtocol()
+		proto.Name = "cooperative-sticky"
+		proto.Metadata = metadata
+		req.Protocols = append(req.Protocols, proto)
+		return req.RequestWith(shortCtx, cl)
+	}
+
+	resp2, err = joinGroupShort(m2ID, metadataV2)
+	shortCancel()
+
+	if err != nil && err.Error() == "context deadline exceeded" {
+		// CORRECT behavior: rebalance was triggered, JoinGroup is waiting for m1
+		t.Log("CORRECT: m2's changed metadata triggered rebalance (JoinGroup is waiting)")
+
+		// Complete the rebalance by having both rejoin
+		var resp2Final *kmsg.JoinGroupResponse
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = joinGroup(m1ID, metadataV1)
+		}()
+		go func() {
+			defer wg.Done()
+			resp2Final, _ = joinGroup(m2ID, metadataV2)
+		}()
+		wg.Wait()
+
+		if resp2Final != nil && resp2Final.Generation > gen2 {
+			t.Logf("CORRECT: Rebalance completed, new generation %d", resp2Final.Generation)
+		}
+	} else if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	} else if resp2 != nil && resp2.Generation == gen2 && resp2.ErrorCode == 0 {
+		// BUG: server returned same generation without triggering rebalance
+		t.Errorf("BUG: m2 rejoined with changed metadata but got same generation %d (no rebalance triggered)", gen2)
+	} else if resp2 != nil {
+		t.Logf("Response: gen=%d, err=%v", resp2.Generation, kerr.ErrorForCode(resp2.ErrorCode))
+	}
+}
+
 func TestTransactionAbortedMetadata(t *testing.T) {
 	t.Parallel()
 	const testTopic = "txn-aborted-metadata-test"
