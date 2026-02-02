@@ -451,6 +451,12 @@ outer:
 			kresp, err = c.handleAlterUserSCRAMCredentials(creq)
 		case kmsg.DescribeCluster:
 			kresp, err = c.handleDescribeCluster(creq)
+		case kmsg.DescribeProducers:
+			kresp, err = c.handleDescribeProducers(creq)
+		case kmsg.DescribeTransactions:
+			kresp, err = c.handleDescribeTransactions(creq)
+		case kmsg.ListTransactions:
+			kresp, err = c.handleListTransactions(creq)
 		default:
 			err = fmt.Errorf("unhandled key %v", k)
 		}
