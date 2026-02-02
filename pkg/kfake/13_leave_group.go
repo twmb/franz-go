@@ -19,7 +19,7 @@ func (c *Cluster) handleLeaveGroup(creq *clientReq) (kmsg.Response, error) {
 	req := creq.kreq.(*kmsg.LeaveGroupRequest)
 	resp := req.ResponseKind().(*kmsg.LeaveGroupResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

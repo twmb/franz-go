@@ -22,7 +22,7 @@ func init() { regKey(28, 0, 5) }
 func (c *Cluster) handleTxnOffsetCommit(creq *clientReq) (kmsg.Response, error) {
 	req := creq.kreq.(*kmsg.TxnOffsetCommitRequest)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

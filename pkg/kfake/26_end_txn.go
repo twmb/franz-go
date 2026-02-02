@@ -23,7 +23,7 @@ func init() { regKey(26, 0, 5) }
 func (c *Cluster) handleEndTxn(creq *clientReq) (kmsg.Response, error) {
 	req := creq.kreq.(*kmsg.EndTxnRequest)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

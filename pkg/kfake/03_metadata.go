@@ -30,7 +30,7 @@ func (c *Cluster) handleMetadata(kreq kmsg.Request) (kmsg.Response, error) {
 	req := kreq.(*kmsg.MetadataRequest)
 	resp := req.ResponseKind().(*kmsg.MetadataResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

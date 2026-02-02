@@ -24,7 +24,7 @@ func (c *Cluster) handleOffsetForLeaderEpoch(b *broker, kreq kmsg.Request) (kmsg
 	req := kreq.(*kmsg.OffsetForLeaderEpochRequest)
 	resp := req.ResponseKind().(*kmsg.OffsetForLeaderEpochResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

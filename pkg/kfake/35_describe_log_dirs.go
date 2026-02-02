@@ -23,7 +23,7 @@ func (c *Cluster) handleDescribeLogDirs(b *broker, kreq kmsg.Request) (kmsg.Resp
 	req := kreq.(*kmsg.DescribeLogDirsRequest)
 	resp := req.ResponseKind().(*kmsg.DescribeLogDirsResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

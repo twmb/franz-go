@@ -23,7 +23,7 @@ func (c *Cluster) handleAlterUserSCRAMCredentials(b *broker, kreq kmsg.Request) 
 		resp = req.ResponseKind().(*kmsg.AlterUserSCRAMCredentialsResponse)
 	)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

@@ -21,7 +21,7 @@ func init() { regKey(25, 0, 4) }
 func (c *Cluster) handleAddOffsetsToTxn(creq *clientReq) (kmsg.Response, error) {
 	req := creq.kreq.(*kmsg.AddOffsetsToTxnRequest)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

@@ -21,7 +21,7 @@ func (c *Cluster) handleAlterReplicaLogDirs(b *broker, kreq kmsg.Request) (kmsg.
 	req := kreq.(*kmsg.AlterReplicaLogDirsRequest)
 	resp := req.ResponseKind().(*kmsg.AlterReplicaLogDirsResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

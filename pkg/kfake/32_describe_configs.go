@@ -25,7 +25,7 @@ func (c *Cluster) handleDescribeConfigs(b *broker, kreq kmsg.Request) (kmsg.Resp
 	req := kreq.(*kmsg.DescribeConfigsRequest)
 	resp := req.ResponseKind().(*kmsg.DescribeConfigsResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

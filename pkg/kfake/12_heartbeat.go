@@ -18,7 +18,7 @@ func (c *Cluster) handleHeartbeat(creq *clientReq) (kmsg.Response, error) {
 	req := creq.kreq.(*kmsg.HeartbeatRequest)
 	resp := req.ResponseKind().(*kmsg.HeartbeatResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

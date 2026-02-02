@@ -22,7 +22,7 @@ func init() { regKey(24, 0, 5) }
 func (c *Cluster) handleAddPartitionsToTxn(creq *clientReq) (kmsg.Response, error) {
 	req := creq.kreq.(*kmsg.AddPartitionsToTxnRequest)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

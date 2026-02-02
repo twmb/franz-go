@@ -20,7 +20,7 @@ func (c *Cluster) handleDescribeUserSCRAMCredentials(kreq kmsg.Request) (kmsg.Re
 		resp = req.ResponseKind().(*kmsg.DescribeUserSCRAMCredentialsResponse)
 	)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

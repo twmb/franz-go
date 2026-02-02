@@ -29,7 +29,7 @@ func (c *Cluster) handleListOffsets(b *broker, kreq kmsg.Request) (kmsg.Response
 	req := kreq.(*kmsg.ListOffsetsRequest)
 	resp := req.ResponseKind().(*kmsg.ListOffsetsResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

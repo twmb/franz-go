@@ -17,7 +17,7 @@ func init() { regKey(16, 0, 5) }
 func (c *Cluster) handleListGroups(creq *clientReq) (kmsg.Response, error) {
 	req := creq.kreq.(*kmsg.ListGroupsRequest)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

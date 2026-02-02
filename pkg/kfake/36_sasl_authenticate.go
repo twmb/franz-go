@@ -24,7 +24,7 @@ func (c *Cluster) handleSASLAuthenticate(creq *clientReq) (kmsg.Response, error)
 	req := creq.kreq.(*kmsg.SASLAuthenticateRequest)
 	resp := req.ResponseKind().(*kmsg.SASLAuthenticateResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

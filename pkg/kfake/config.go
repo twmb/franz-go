@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"net"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 // Opt is an option to configure a client.
@@ -39,6 +41,8 @@ type cfg struct {
 	listenFn func(network, address string) (net.Listener, error)
 
 	sleepOutOfOrder bool
+
+	maxVersions *kversion.Versions
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
@@ -131,4 +135,13 @@ func SeedTopics(partitions int32, ts ...string) Opt {
 // advance when you know another request is actively being handled.
 func SleepOutOfOrder() Opt {
 	return opt{func(cfg *cfg) { cfg.sleepOutOfOrder = true }}
+}
+
+// MaxVersions sets the maximum API versions the cluster will advertise and
+// accept. This can be used to simulate older Kafka versions. For each request
+// key, the cluster will use the minimum of its implemented max version and the
+// version specified in the provided Versions. If a key is not present in the
+// provided Versions, requests for that key will be rejected.
+func MaxVersions(v *kversion.Versions) Opt {
+	return opt{func(cfg *cfg) { cfg.maxVersions = v }}
 }

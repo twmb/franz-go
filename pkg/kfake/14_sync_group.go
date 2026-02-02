@@ -19,7 +19,7 @@ func (c *Cluster) handleSyncGroup(creq *clientReq) (kmsg.Response, error) {
 	req := creq.kreq.(*kmsg.SyncGroupRequest)
 	resp := req.ResponseKind().(*kmsg.SyncGroupResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

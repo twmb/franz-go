@@ -23,7 +23,7 @@ func (c *Cluster) handleCreatePartitions(b *broker, kreq kmsg.Request) (kmsg.Res
 	req := kreq.(*kmsg.CreatePartitionsRequest)
 	resp := req.ResponseKind().(*kmsg.CreatePartitionsResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

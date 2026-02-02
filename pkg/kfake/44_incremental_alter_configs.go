@@ -27,7 +27,7 @@ func (c *Cluster) handleIncrementalAlterConfigs(b *broker, kreq kmsg.Request) (k
 	req := kreq.(*kmsg.IncrementalAlterConfigsRequest)
 	resp := req.ResponseKind().(*kmsg.IncrementalAlterConfigsResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

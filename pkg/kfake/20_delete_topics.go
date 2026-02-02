@@ -24,7 +24,7 @@ func (c *Cluster) handleDeleteTopics(b *broker, kreq kmsg.Request) (kmsg.Respons
 	req := kreq.(*kmsg.DeleteTopicsRequest)
 	resp := req.ResponseKind().(*kmsg.DeleteTopicsResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

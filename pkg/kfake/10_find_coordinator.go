@@ -23,7 +23,7 @@ func (c *Cluster) handleFindCoordinator(kreq kmsg.Request) (kmsg.Response, error
 	req := kreq.(*kmsg.FindCoordinatorRequest)
 	resp := req.ResponseKind().(*kmsg.FindCoordinatorResponse)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 

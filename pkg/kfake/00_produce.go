@@ -39,7 +39,7 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 		id = func(t kmsg.ProduceRequestTopic) tpid { return tpid{t.Topic, t.TopicID} }
 	)
 
-	if err := checkReqVersion(req.Key(), req.Version); err != nil {
+	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
 
