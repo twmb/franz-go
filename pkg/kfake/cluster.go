@@ -47,6 +47,7 @@ type (
 		pids          pids
 		groups        groups
 		sasls         sasls
+		acls          clusterACLs
 		bcfgs         map[string]*string
 		fetchSessions fetchSessions
 
@@ -127,11 +128,11 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		sleeping: make(map[*clientConn]*bsleep),
 
 		data: data{
-			id2t:           make(map[uuid]string),
-			t2id:           make(map[string]uuid),
-			treplicas:      make(map[string]int),
-			tcfgs:          make(map[string]map[string]*string),
-			tnorms: make(map[string]string),
+			id2t:      make(map[uuid]string),
+			t2id:      make(map[string]uuid),
+			treplicas: make(map[string]int),
+			tcfgs:     make(map[string]map[string]*string),
+			tnorms:    make(map[string]string),
 		},
 		bcfgs: make(map[string]*string),
 
@@ -210,6 +211,10 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 	for t, p := range seedTopics {
 		c.data.mkt(t, int(p), -1, nil)
+	}
+
+	for _, a := range cfg.seedACLs {
+		c.acls.add(a)
 	}
 
 	go c.run()
@@ -365,19 +370,19 @@ outer:
 		kreq = creq.kreq
 		switch k := kmsg.Key(kreq.Key()); k {
 		case kmsg.Produce:
-			kresp, err = c.handleProduce(creq.cc.b, kreq)
+			kresp, err = c.handleProduce(creq)
 		case kmsg.Fetch:
 			kresp, err = c.handleFetch(creq, w)
 		case kmsg.ListOffsets:
-			kresp, err = c.handleListOffsets(creq.cc.b, kreq)
+			kresp, err = c.handleListOffsets(creq)
 		case kmsg.Metadata:
-			kresp, err = c.handleMetadata(kreq)
+			kresp, err = c.handleMetadata(creq)
 		case kmsg.OffsetCommit:
 			kresp, err = c.handleOffsetCommit(creq)
 		case kmsg.OffsetFetch:
 			kresp, err = c.handleOffsetFetch(creq)
 		case kmsg.FindCoordinator:
-			kresp, err = c.handleFindCoordinator(kreq)
+			kresp, err = c.handleFindCoordinator(creq)
 		case kmsg.JoinGroup:
 			kresp, err = c.handleJoinGroup(creq)
 		case kmsg.Heartbeat:
@@ -395,15 +400,15 @@ outer:
 		case kmsg.ApiVersions:
 			kresp, err = c.handleApiVersions(kreq)
 		case kmsg.CreateTopics:
-			kresp, err = c.handleCreateTopics(creq.cc.b, kreq)
+			kresp, err = c.handleCreateTopics(creq)
 		case kmsg.DeleteTopics:
-			kresp, err = c.handleDeleteTopics(creq.cc.b, kreq)
+			kresp, err = c.handleDeleteTopics(creq)
 		case kmsg.DeleteRecords:
-			kresp, err = c.handleDeleteRecords(creq.cc.b, kreq)
+			kresp, err = c.handleDeleteRecords(creq)
 		case kmsg.InitProducerID:
 			kresp, err = c.handleInitProducerID(creq)
 		case kmsg.OffsetForLeaderEpoch:
-			kresp, err = c.handleOffsetForLeaderEpoch(creq.cc.b, kreq)
+			kresp, err = c.handleOffsetForLeaderEpoch(creq)
 		case kmsg.AddPartitionsToTxn:
 			kresp, err = c.handleAddPartitionsToTxn(creq)
 		case kmsg.AddOffsetsToTxn:
@@ -412,28 +417,34 @@ outer:
 			kresp, err = c.handleEndTxn(creq)
 		case kmsg.TxnOffsetCommit:
 			kresp, err = c.handleTxnOffsetCommit(creq)
+		case kmsg.DescribeACLs:
+			kresp, err = c.handleDescribeACLs(creq)
+		case kmsg.CreateACLs:
+			kresp, err = c.handleCreateACLs(creq)
+		case kmsg.DeleteACLs:
+			kresp, err = c.handleDeleteACLs(creq)
 		case kmsg.DescribeConfigs:
-			kresp, err = c.handleDescribeConfigs(creq.cc.b, kreq)
+			kresp, err = c.handleDescribeConfigs(creq)
 		case kmsg.AlterConfigs:
-			kresp, err = c.handleAlterConfigs(creq.cc.b, kreq)
+			kresp, err = c.handleAlterConfigs(creq)
 		case kmsg.AlterReplicaLogDirs:
-			kresp, err = c.handleAlterReplicaLogDirs(creq.cc.b, kreq)
+			kresp, err = c.handleAlterReplicaLogDirs(creq)
 		case kmsg.DescribeLogDirs:
-			kresp, err = c.handleDescribeLogDirs(creq.cc.b, kreq)
+			kresp, err = c.handleDescribeLogDirs(creq)
 		case kmsg.SASLAuthenticate:
 			kresp, err = c.handleSASLAuthenticate(creq)
 		case kmsg.CreatePartitions:
-			kresp, err = c.handleCreatePartitions(creq.cc.b, kreq)
+			kresp, err = c.handleCreatePartitions(creq)
 		case kmsg.DeleteGroups:
 			kresp, err = c.handleDeleteGroups(creq)
 		case kmsg.IncrementalAlterConfigs:
-			kresp, err = c.handleIncrementalAlterConfigs(creq.cc.b, kreq)
+			kresp, err = c.handleIncrementalAlterConfigs(creq)
 		case kmsg.OffsetDelete:
 			kresp, err = c.handleOffsetDelete(creq)
 		case kmsg.DescribeUserSCRAMCredentials:
-			kresp, err = c.handleDescribeUserSCRAMCredentials(kreq)
+			kresp, err = c.handleDescribeUserSCRAMCredentials(creq)
 		case kmsg.AlterUserSCRAMCredentials:
-			kresp, err = c.handleAlterUserSCRAMCredentials(creq.cc.b, kreq)
+			kresp, err = c.handleAlterUserSCRAMCredentials(creq)
 		default:
 			err = fmt.Errorf("unhandled key %v", k)
 		}

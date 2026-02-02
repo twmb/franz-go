@@ -20,9 +20,12 @@ import (
 
 func init() { regKey(23, 3, 4) }
 
-func (c *Cluster) handleOffsetForLeaderEpoch(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.OffsetForLeaderEpochRequest)
-	resp := req.ResponseKind().(*kmsg.OffsetForLeaderEpochResponse)
+func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, error) {
+	var (
+		b    = creq.cc.b
+		req  = creq.kreq.(*kmsg.OffsetForLeaderEpochRequest)
+		resp = req.ResponseKind().(*kmsg.OffsetForLeaderEpochResponse)
+	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
@@ -49,6 +52,12 @@ func (c *Cluster) handleOffsetForLeaderEpoch(b *broker, kreq kmsg.Request) (kmsg
 	}
 
 	for _, rt := range req.Topics {
+		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+			for _, rp := range rt.Partitions {
+				donep(rt.Topic, rp.Partition, kerr.TopicAuthorizationFailed.Code)
+			}
+			continue
+		}
 		ps, ok := c.data.tps.gett(rt.Topic)
 		for _, rp := range rt.Partitions {
 			if req.ReplicaID != -1 {

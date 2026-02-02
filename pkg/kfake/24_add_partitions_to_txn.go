@@ -26,6 +26,34 @@ func (c *Cluster) handleAddPartitionsToTxn(creq *clientReq) (kmsg.Response, erro
 		return nil, err
 	}
 
+	errResp := func(errCode int16) *kmsg.AddPartitionsToTxnResponse {
+		resp := req.ResponseKind().(*kmsg.AddPartitionsToTxnResponse)
+		for _, rt := range req.Topics {
+			st := kmsg.NewAddPartitionsToTxnResponseTopic()
+			st.Topic = rt.Topic
+			for _, p := range rt.Partitions {
+				sp := kmsg.NewAddPartitionsToTxnResponseTopicPartition()
+				sp.Partition = p
+				sp.ErrorCode = errCode
+				st.Partitions = append(st.Partitions, sp)
+			}
+			resp.Topics = append(resp.Topics, st)
+		}
+		return resp
+	}
+
+	// ACL check: WRITE on TxnID
+	if !c.allowedACL(creq, req.TransactionalID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite) {
+		return errResp(kerr.TransactionalIDAuthorizationFailed.Code), nil
+	}
+
+	// ACL check: WRITE on each Topic
+	for _, rt := range req.Topics {
+		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationWrite) {
+			return errResp(kerr.TopicAuthorizationFailed.Code), nil
+		}
+	}
+
 	if c.pids.handleAddPartitionsToTxn(creq) {
 		return nil, nil
 	}

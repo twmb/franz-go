@@ -17,12 +17,32 @@ import (
 
 func init() { regKey(34, 0, 2) }
 
-func (c *Cluster) handleAlterReplicaLogDirs(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.AlterReplicaLogDirsRequest)
-	resp := req.ResponseKind().(*kmsg.AlterReplicaLogDirsResponse)
+func (c *Cluster) handleAlterReplicaLogDirs(creq *clientReq) (kmsg.Response, error) {
+	var (
+		req  = creq.kreq.(*kmsg.AlterReplicaLogDirsRequest)
+		resp = req.ResponseKind().(*kmsg.AlterReplicaLogDirsResponse)
+	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
+	}
+
+	if !c.allowedClusterACL(creq, kmsg.ACLOperationAlter) {
+		// Return cluster authorization failed for all partitions
+		for _, rd := range req.Dirs {
+			for _, t := range rd.Topics {
+				st := kmsg.NewAlterReplicaLogDirsResponseTopic()
+				st.Topic = t.Topic
+				for _, p := range t.Partitions {
+					sp := kmsg.NewAlterReplicaLogDirsResponseTopicPartition()
+					sp.Partition = p
+					sp.ErrorCode = kerr.ClusterAuthorizationFailed.Code
+					st.Partitions = append(st.Partitions, sp)
+				}
+				resp.Topics = append(resp.Topics, st)
+			}
+		}
+		return resp, nil
 	}
 
 	tidx := make(map[string]int)

@@ -27,6 +27,13 @@ func (c *Cluster) handleEndTxn(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
+	// ACL check: WRITE on TxnID
+	if !c.allowedACL(creq, req.TransactionalID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite) {
+		resp := req.ResponseKind().(*kmsg.EndTxnResponse)
+		resp.ErrorCode = kerr.TransactionalIDAuthorizationFailed.Code
+		return resp, nil
+	}
+
 	if c.pids.handleEndTxn(creq) {
 		return nil, nil
 	}

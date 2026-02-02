@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -19,12 +20,19 @@ import (
 
 func init() { regKey(35, 0, 4) }
 
-func (c *Cluster) handleDescribeLogDirs(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.DescribeLogDirsRequest)
-	resp := req.ResponseKind().(*kmsg.DescribeLogDirsResponse)
+func (c *Cluster) handleDescribeLogDirs(creq *clientReq) (kmsg.Response, error) {
+	var (
+		req  = creq.kreq.(*kmsg.DescribeLogDirsRequest)
+		resp = req.ResponseKind().(*kmsg.DescribeLogDirsResponse)
+	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
+	}
+
+	if !c.allowedClusterACL(creq, kmsg.ACLOperationDescribe) {
+		resp.ErrorCode = kerr.ClusterAuthorizationFailed.Code
+		return resp, nil
 	}
 
 	totalSpace := make(map[string]int64)

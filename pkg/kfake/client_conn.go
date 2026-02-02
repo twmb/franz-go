@@ -19,6 +19,7 @@ type (
 
 		saslStage saslStage
 		s0        *scramServer0
+		user      string // authenticated user, set after SASL completes
 	}
 
 	clientReq struct {

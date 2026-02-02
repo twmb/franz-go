@@ -26,17 +26,19 @@ import (
 
 func init() { regKey(0, 3, 13) }
 
-func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
+func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
+	var (
+		b    = creq.cc.b
+		req  = creq.kreq.(*kmsg.ProduceRequest)
+		resp = req.ResponseKind().(*kmsg.ProduceResponse)
+	)
 	type tpid struct {
 		t  string
 		id [16]byte
 	}
 	var (
-		req   = kreq.(*kmsg.ProduceRequest)
-		resp  = req.ResponseKind().(*kmsg.ProduceResponse)
 		tdone = make(map[tpid][]kmsg.ProduceResponseTopicPartition)
-
-		id = func(t kmsg.ProduceRequestTopic) tpid { return tpid{t.Topic, t.TopicID} }
+		id    = func(t kmsg.ProduceRequestTopic) tpid { return tpid{t.Topic, t.TopicID} }
 	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
@@ -102,6 +104,10 @@ func (c *Cluster) handleProduce(b *broker, kreq kmsg.Request) (kmsg.Response, er
 				continue
 			}
 			rt.Topic = topic
+		}
+		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationWrite) {
+			donet(rt, kerr.TopicAuthorizationFailed.Code, kerr.TopicAuthorizationFailed.Message)
+			continue
 		}
 		maxMessageBytes := c.data.maxMessageBytes(rt.Topic)
 		for _, rp := range rt.Partitions {

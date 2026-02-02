@@ -22,13 +22,19 @@ import (
 
 func init() { regKey(19, 0, 7) }
 
-func (c *Cluster) handleCreateTopics(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.CreateTopicsRequest)
+func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
+	var (
+		b   = creq.cc.b
+		req = creq.kreq.(*kmsg.CreateTopicsRequest)
+	)
 	resp := req.ResponseKind().(*kmsg.CreateTopicsResponse)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
 	}
+
+	// Check if user has CREATE on CLUSTER (allows creating any topic)
+	clusterCreate := c.allowedClusterACL(creq, kmsg.ACLOperationCreate)
 
 	donet := func(t string, errCode int16) *kmsg.CreateTopicsResponseTopic {
 		st := kmsg.NewCreateTopicsResponseTopic()
@@ -64,6 +70,11 @@ func (c *Cluster) handleCreateTopics(b *broker, kreq kmsg.Request) (kmsg.Respons
 	}
 
 	for _, rt := range req.Topics {
+		// ACL check: cluster CREATE or topic CREATE
+		if !clusterCreate && !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationCreate) {
+			donet(rt.Topic, kerr.TopicAuthorizationFailed.Code)
+			continue
+		}
 		if _, ok := c.data.tps.gett(rt.Topic); ok {
 			donet(rt.Topic, kerr.TopicAlreadyExists.Code)
 			continue

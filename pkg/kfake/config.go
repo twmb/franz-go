@@ -5,6 +5,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
 )
 
@@ -43,6 +44,10 @@ type cfg struct {
 	sleepOutOfOrder bool
 
 	maxVersions *kversion.Versions
+
+	enableACLs bool
+	superusers map[string]struct{}
+	seedACLs   []acl
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
@@ -108,8 +113,16 @@ func EnableSASL() Opt {
 // Note that PLAIN superusers cannot be deleted.
 // SCRAM superusers can be modified with AlterUserScramCredentials.
 // If you delete all SASL users, the kfake cluster will be unusable.
+//
+// Superusers bypass all ACL checks when ACLs are enabled.
 func Superuser(method, user, pass string) Opt {
-	return opt{func(cfg *cfg) { cfg.sasls[struct{ m, u string }{method, user}] = pass }}
+	return opt{func(cfg *cfg) {
+		cfg.sasls[struct{ m, u string }{method, user}] = pass
+		if cfg.superusers == nil {
+			cfg.superusers = make(map[string]struct{})
+		}
+		cfg.superusers[user] = struct{}{}
+	}}
 }
 
 // TLS enables TLS for the cluster, using the provided TLS config for
@@ -144,4 +157,60 @@ func SleepOutOfOrder() Opt {
 // provided Versions, requests for that key will be rejected.
 func MaxVersions(v *kversion.Versions) Opt {
 	return opt{func(cfg *cfg) { cfg.maxVersions = v }}
+}
+
+// EnableACLs enables ACL checking. When enabled, all requests are checked
+// against ACLs. By default, no ACLs exist, so all requests will be denied
+// unless you configure superusers (via Superuser option) and then add ACLs
+// via CreateACLs as that user.
+func EnableACLs() Opt {
+	return opt{func(cfg *cfg) { cfg.enableACLs = true }}
+}
+
+// ACL defines an ACL entry for seeding the cluster.
+type ACL struct {
+	// Principal in "User:<name>" format. When used with User(), this field
+	// is ignored and forced to "User:<username>".
+	Principal string
+	// Resource type: kmsg.ACLResourceTypeTopic, Group, Cluster, TransactionalId
+	Resource kmsg.ACLResourceType
+	// Name of the resource (topic name, group name, "*" for cluster, etc.)
+	Name string
+	// Pattern type: kmsg.ACLResourcePatternTypeLiteral or Prefixed
+	Pattern kmsg.ACLResourcePatternType
+	// Operation: kmsg.ACLOperationRead, Write, Create, Delete, Alter, Describe, etc.
+	Operation kmsg.ACLOperation
+	// Allow true for ALLOW, false for DENY
+	Allow bool
+	// Host to allow/deny from, defaults to "*" if empty
+	Host string
+}
+
+// User adds a SASL user with optional ACLs. Unlike Superuser, this user is
+// subject to ACL checks. The method must be PLAIN, SCRAM-SHA-256, or SCRAM-SHA-512.
+//
+// ACL.Principal is ignored and forced to "User:<user>".
+func User(method, user, pass string, acls ...ACL) Opt {
+	return opt{func(cfg *cfg) {
+		cfg.sasls[struct{ m, u string }{method, user}] = pass
+		for _, a := range acls {
+			host := a.Host
+			if host == "" {
+				host = "*"
+			}
+			perm := kmsg.ACLPermissionTypeDeny
+			if a.Allow {
+				perm = kmsg.ACLPermissionTypeAllow
+			}
+			cfg.seedACLs = append(cfg.seedACLs, acl{
+				principal:    "User:" + user,
+				host:         host,
+				resourceType: a.Resource,
+				resourceName: a.Name,
+				pattern:      a.Pattern,
+				operation:    a.Operation,
+				permission:   perm,
+			})
+		}
+	}}
 }

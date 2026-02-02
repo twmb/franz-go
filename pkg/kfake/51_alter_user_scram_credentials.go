@@ -17,14 +17,31 @@ import (
 
 func init() { regKey(51, 0, 0) }
 
-func (c *Cluster) handleAlterUserSCRAMCredentials(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
+func (c *Cluster) handleAlterUserSCRAMCredentials(creq *clientReq) (kmsg.Response, error) {
 	var (
-		req  = kreq.(*kmsg.AlterUserSCRAMCredentialsRequest)
+		b    = creq.cc.b
+		req  = creq.kreq.(*kmsg.AlterUserSCRAMCredentialsRequest)
 		resp = req.ResponseKind().(*kmsg.AlterUserSCRAMCredentialsResponse)
 	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
+	}
+
+	if !c.allowedClusterACL(creq, kmsg.ACLOperationAlter) {
+		for _, d := range req.Deletions {
+			sr := kmsg.NewAlterUserSCRAMCredentialsResponseResult()
+			sr.User = d.Name
+			sr.ErrorCode = kerr.ClusterAuthorizationFailed.Code
+			resp.Results = append(resp.Results, sr)
+		}
+		for _, u := range req.Upsertions {
+			sr := kmsg.NewAlterUserSCRAMCredentialsResponseResult()
+			sr.User = u.Name
+			sr.ErrorCode = kerr.ClusterAuthorizationFailed.Code
+			resp.Results = append(resp.Results, sr)
+		}
+		return resp, nil
 	}
 
 	addr := func(u string) *kmsg.AlterUserSCRAMCredentialsResponseResult {

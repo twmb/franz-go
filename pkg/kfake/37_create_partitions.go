@@ -19,9 +19,12 @@ import (
 
 func init() { regKey(37, 0, 3) }
 
-func (c *Cluster) handleCreatePartitions(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.CreatePartitionsRequest)
-	resp := req.ResponseKind().(*kmsg.CreatePartitionsResponse)
+func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error) {
+	var (
+		b    = creq.cc.b
+		req  = creq.kreq.(*kmsg.CreatePartitionsRequest)
+		resp = req.ResponseKind().(*kmsg.CreatePartitionsResponse)
+	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
@@ -55,6 +58,10 @@ func (c *Cluster) handleCreatePartitions(b *broker, kreq kmsg.Request) (kmsg.Res
 	}
 
 	for _, rt := range req.Topics {
+		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationAlter) {
+			donet(rt.Topic, kerr.TopicAuthorizationFailed.Code)
+			continue
+		}
 		t, ok := c.data.tps.gett(rt.Topic)
 		if !ok {
 			donet(rt.Topic, kerr.UnknownTopicOrPartition.Code)

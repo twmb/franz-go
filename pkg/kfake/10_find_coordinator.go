@@ -19,8 +19,8 @@ import (
 
 func init() { regKey(10, 0, 6) }
 
-func (c *Cluster) handleFindCoordinator(kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.FindCoordinatorRequest)
+func (c *Cluster) handleFindCoordinator(creq *clientReq) (kmsg.Response, error) {
+	req := creq.kreq.(*kmsg.FindCoordinatorRequest)
 	resp := req.ResponseKind().(*kmsg.FindCoordinatorResponse)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
@@ -54,6 +54,22 @@ func (c *Cluster) handleFindCoordinator(kreq kmsg.Request) (kmsg.Response, error
 		sc := addc(key)
 		if unknown {
 			sc.ErrorCode = kerr.InvalidRequest.Code
+			continue
+		}
+
+		// ACL check based on coordinator type
+		var allowed bool
+		var errCode int16
+		switch req.CoordinatorType {
+		case 0: // Group
+			allowed = c.allowedACL(creq, key, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe)
+			errCode = kerr.GroupAuthorizationFailed.Code
+		case 1: // Transaction
+			allowed = c.allowedACL(creq, key, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationDescribe)
+			errCode = kerr.TransactionalIDAuthorizationFailed.Code
+		}
+		if !allowed {
+			sc.ErrorCode = errCode
 			continue
 		}
 

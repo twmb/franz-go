@@ -255,6 +255,10 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	nbytes = 0
 full:
 	for _, fp := range toFetch {
+		if !c.allowedACL(creq, fp.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
+			donep(fp.topic, fp.topicID, fp.partition, kerr.TopicAuthorizationFailed.Code)
+			continue
+		}
 		pd, ok := c.data.tps.getp(fp.topic, fp.partition)
 		if !ok {
 			if req.Version >= 13 {

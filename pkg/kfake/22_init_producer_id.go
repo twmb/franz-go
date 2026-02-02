@@ -26,6 +26,23 @@ func (c *Cluster) handleInitProducerID(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
+	// ACL check: transactional requires WRITE on TxnID, non-transactional requires
+	// IDEMPOTENT_WRITE on Cluster or WRITE on any Topic.
+	if req.TransactionalID != nil {
+		if !c.allowedACL(creq, *req.TransactionalID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite) {
+			resp := req.ResponseKind().(*kmsg.InitProducerIDResponse)
+			resp.ErrorCode = kerr.TransactionalIDAuthorizationFailed.Code
+			return resp, nil
+		}
+	} else {
+		// Non-transactional: need idempotent write on cluster or write on any topic
+		if !c.allowedClusterACL(creq, kmsg.ACLOperationIdempotentWrite) && !c.anyAllowedACL(creq, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationWrite) {
+			resp := req.ResponseKind().(*kmsg.InitProducerIDResponse)
+			resp.ErrorCode = kerr.ClusterAuthorizationFailed.Code
+			return resp, nil
+		}
+	}
+
 	if c.pids.handleInitProducerID(creq) {
 		return nil, nil
 	}

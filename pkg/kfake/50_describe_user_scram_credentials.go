@@ -14,14 +14,19 @@ import (
 
 func init() { regKey(50, 0, 0) }
 
-func (c *Cluster) handleDescribeUserSCRAMCredentials(kreq kmsg.Request) (kmsg.Response, error) {
+func (c *Cluster) handleDescribeUserSCRAMCredentials(creq *clientReq) (kmsg.Response, error) {
 	var (
-		req  = kreq.(*kmsg.DescribeUserSCRAMCredentialsRequest)
+		req  = creq.kreq.(*kmsg.DescribeUserSCRAMCredentialsRequest)
 		resp = req.ResponseKind().(*kmsg.DescribeUserSCRAMCredentialsResponse)
 	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
+	}
+
+	if !c.allowedClusterACL(creq, kmsg.ACLOperationDescribe) {
+		resp.ErrorCode = kerr.ClusterAuthorizationFailed.Code
+		return resp, nil
 	}
 
 	describe := make(map[string]bool) // if false, user was duplicated

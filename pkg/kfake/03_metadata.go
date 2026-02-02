@@ -26,8 +26,8 @@ import (
 
 func init() { regKey(3, 0, 13) }
 
-func (c *Cluster) handleMetadata(kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.MetadataRequest)
+func (c *Cluster) handleMetadata(creq *clientReq) (kmsg.Response, error) {
+	req := creq.kreq.(*kmsg.MetadataRequest)
 	resp := req.ResponseKind().(*kmsg.MetadataResponse)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
@@ -106,6 +106,11 @@ func (c *Cluster) handleMetadata(kreq kmsg.Request) (kmsg.Response, error) {
 			topic = *rt.Topic
 		}
 
+		if !c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+			donet(topic, rt.TopicID, kerr.TopicAuthorizationFailed.Code)
+			continue
+		}
+
 		ps, ok := c.data.tps.gett(topic)
 		if !ok {
 			if !allowAuto {
@@ -123,6 +128,10 @@ func (c *Cluster) handleMetadata(kreq kmsg.Request) (kmsg.Response, error) {
 	}
 	if req.Topics == nil && c.data.tps != nil {
 		for topic, ps := range c.data.tps {
+			// For listing all topics, filter to only authorized topics
+			if !c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+				continue
+			}
 			id := c.data.t2id[topic]
 			for p, pd := range ps {
 				okp(topic, id, p, pd)

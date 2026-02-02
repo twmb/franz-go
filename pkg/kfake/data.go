@@ -28,11 +28,11 @@ type (
 		c   *Cluster
 		tps tps[partData]
 
-		id2t           map[uuid]string               // topic IDs => topic name
-		t2id           map[string]uuid               // topic name => topic IDs
-		treplicas      map[string]int                // topic name => # replicas
-		tcfgs          map[string]map[string]*string // topic name => config name => config value
-		tnorms map[string]string             // normalized name (. replaced with _) => topic name
+		id2t      map[uuid]string               // topic IDs => topic name
+		t2id      map[string]uuid               // topic name => topic IDs
+		treplicas map[string]int                // topic name => # replicas
+		tcfgs     map[string]map[string]*string // topic name => config name => config value
+		tnorms    map[string]string             // normalized name (. replaced with _) => topic name
 	}
 
 	partData struct {

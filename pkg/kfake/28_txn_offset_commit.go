@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -26,9 +27,41 @@ func (c *Cluster) handleTxnOffsetCommit(creq *clientReq) (kmsg.Response, error) 
 		return nil, err
 	}
 
+	errResp := func(errCode int16) kmsg.Response {
+		resp := req.ResponseKind().(*kmsg.TxnOffsetCommitResponse)
+		for _, rt := range req.Topics {
+			st := kmsg.NewTxnOffsetCommitResponseTopic()
+			st.Topic = rt.Topic
+			for _, rp := range rt.Partitions {
+				sp := kmsg.NewTxnOffsetCommitResponseTopicPartition()
+				sp.Partition = rp.Partition
+				sp.ErrorCode = errCode
+				st.Partitions = append(st.Partitions, sp)
+			}
+			resp.Topics = append(resp.Topics, st)
+		}
+		return resp
+	}
+
+	// ACL check: WRITE on TxnID
+	if !c.allowedACL(creq, req.TransactionalID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite) {
+		return errResp(kerr.TransactionalIDAuthorizationFailed.Code), nil
+	}
+
+	// ACL check: READ on Group
+	if !c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
+		return errResp(kerr.GroupAuthorizationFailed.Code), nil
+	}
+
+	// ACL check: READ on each Topic
+	for _, rt := range req.Topics {
+		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
+			return errResp(kerr.TopicAuthorizationFailed.Code), nil
+		}
+	}
+
 	if c.pids.handleTxnOffsetCommit(creq) {
 		return nil, nil
 	}
-	resp := req.ResponseKind().(*kmsg.TxnOffsetCommitResponse) // TODO CLAUDE add primitive error returning for all partitions. likely invalid group id?
-	return resp, nil
+	return errResp(kerr.GroupIDNotFound.Code), nil
 }

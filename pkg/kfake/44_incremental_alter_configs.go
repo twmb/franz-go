@@ -23,9 +23,12 @@ import (
 
 func init() { regKey(44, 0, 1) }
 
-func (c *Cluster) handleIncrementalAlterConfigs(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.IncrementalAlterConfigsRequest)
-	resp := req.ResponseKind().(*kmsg.IncrementalAlterConfigsResponse)
+func (c *Cluster) handleIncrementalAlterConfigs(creq *clientReq) (kmsg.Response, error) {
+	var (
+		b    = creq.cc.b
+		req  = creq.kreq.(*kmsg.IncrementalAlterConfigsRequest)
+		resp = req.ResponseKind().(*kmsg.IncrementalAlterConfigsResponse)
+	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
@@ -45,6 +48,10 @@ outer:
 		rr := &req.Resources[i]
 		switch rr.ResourceType {
 		case kmsg.ConfigResourceTypeBroker:
+			if !c.allowedClusterACL(creq, kmsg.ACLOperationAlterConfigs) {
+				doner(rr.ResourceName, rr.ResourceType, kerr.ClusterAuthorizationFailed.Code)
+				continue outer
+			}
 			id := int32(-1)
 			if rr.ResourceName != "" {
 				iid, err := strconv.Atoi(rr.ResourceName)
@@ -84,6 +91,10 @@ outer:
 			}
 
 		case kmsg.ConfigResourceTypeTopic:
+			if !c.allowedACL(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationAlterConfigs) {
+				doner(rr.ResourceName, rr.ResourceType, kerr.TopicAuthorizationFailed.Code)
+				continue
+			}
 			if _, ok := c.data.tps.gett(rr.ResourceName); !ok {
 				doner(rr.ResourceName, rr.ResourceType, kerr.UnknownTopicOrPartition.Code)
 				continue

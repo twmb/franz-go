@@ -25,8 +25,11 @@ import (
 
 func init() { regKey(2, 0, 10) }
 
-func (c *Cluster) handleListOffsets(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.ListOffsetsRequest)
+func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
+	var (
+		b   = creq.cc.b
+		req = creq.kreq.(*kmsg.ListOffsetsRequest)
+	)
 	resp := req.ResponseKind().(*kmsg.ListOffsetsResponse)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
@@ -54,6 +57,12 @@ func (c *Cluster) handleListOffsets(b *broker, kreq kmsg.Request) (kmsg.Response
 	}
 
 	for _, rt := range req.Topics {
+		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+			for _, rp := range rt.Partitions {
+				donep(rt.Topic, rp.Partition, kerr.TopicAuthorizationFailed.Code)
+			}
+			continue
+		}
 		ps, ok := c.data.tps.gett(rt.Topic)
 		for _, rp := range rt.Partitions {
 			if !ok {

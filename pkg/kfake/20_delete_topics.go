@@ -20,8 +20,11 @@ import (
 
 func init() { regKey(20, 0, 6) }
 
-func (c *Cluster) handleDeleteTopics(b *broker, kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.DeleteTopicsRequest)
+func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
+	var (
+		b   = creq.cc.b
+		req = creq.kreq.(*kmsg.DeleteTopicsRequest)
+	)
 	resp := req.ResponseKind().(*kmsg.DeleteTopicsResponse)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
@@ -85,6 +88,15 @@ func (c *Cluster) handleDeleteTopics(b *broker, kreq kmsg.Request) (kmsg.Respons
 		} else {
 			topic = c.data.id2t[rt.TopicID]
 			id = rt.TopicID
+		}
+		// ACL check: DESCRIBE first (to identify topic), then DELETE
+		if !c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+			donet(&topic, id, kerr.TopicAuthorizationFailed.Code)
+			continue
+		}
+		if !c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDelete) {
+			donet(&topic, id, kerr.TopicAuthorizationFailed.Code)
+			continue
 		}
 		t, ok := c.data.tps.gett(topic)
 		if !ok {
