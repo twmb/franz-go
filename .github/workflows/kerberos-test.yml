@@ -1,0 +1,161 @@
+name: kerberos integration test
+
+on:
+  push:
+    branches: ["*"]
+    paths:
+      - 'pkg/sasl/kerberos/**'
+      - '.github/workflows/kerberos-test.yml'
+  pull_request:
+    branches: ["*"]
+    paths:
+      - 'pkg/sasl/kerberos/**'
+      - '.github/workflows/kerberos-test.yml'
+
+jobs:
+  kerberos-test:
+    if: github.repository == 'twmb/franz-go'
+    runs-on: ubuntu-latest
+    name: "integration test kerberos"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Install Kerberos client utilities
+        run: sudo apt-get update && sudo apt-get install -y krb5-user
+
+      - name: Create Kerberos and Kafka configuration files
+        run: |
+          mkdir -p ${{ github.workspace }}/kerberos
+
+          cat > ${{ github.workspace }}/kerberos/krb5.conf << 'EOF'
+          [libdefaults]
+              default_realm = EXAMPLE.COM
+              dns_lookup_realm = false
+              dns_lookup_kdc = false
+              ticket_lifetime = 24h
+              forwardable = true
+              rdns = false
+
+          [realms]
+              EXAMPLE.COM = {
+                  kdc = kdc:88
+                  admin_server = kdc:749
+              }
+
+          [domain_realm]
+              .example.com = EXAMPLE.COM
+              example.com = EXAMPLE.COM
+          EOF
+
+          cat > ${{ github.workspace }}/kerberos/kafka_server_jaas.conf << 'EOF'
+          KafkaServer {
+              com.sun.security.auth.module.Krb5LoginModule required
+              useKeyTab=true
+              storeKey=true
+              doNotPrompt=true
+              keyTab="/etc/krb5-keytabs/kafka.keytab"
+              principal="kafka/kafka@EXAMPLE.COM";
+          };
+          EOF
+
+          cat > ${{ github.workspace }}/docker-compose.yml << 'EOF'
+          services:
+            kdc:
+              image: gcavalcante8808/krb5-server
+              hostname: kdc
+              ports:
+                - "88:88"
+                - "749:749"
+              environment:
+                KRB5_REALM: EXAMPLE.COM
+                KRB5_KDC: kdc
+                KRB5_PASS: adminpass
+              volumes:
+                - krb5-data:/var/lib/krb5kdc
+                - krb5-keytabs:/etc/krb5-keytabs
+              healthcheck:
+                test: ["CMD", "kadmin.local", "-q", "listprincs"]
+                interval: 5s
+                timeout: 5s
+                retries: 10
+
+            kafka:
+              image: apache/kafka:latest
+              hostname: kafka
+              depends_on:
+                kdc:
+                  condition: service_healthy
+              ports:
+                - "9092:9092"
+                - "9094:9094"
+              environment:
+                KAFKA_NODE_ID: 1
+                CLUSTER_ID: MkU3OEVBNTcwNTJENDM1Tk
+                KAFKA_PROCESS_ROLES: controller,broker
+                KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+                KAFKA_LISTENERS: SASL_PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT://:9094
+                KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT,PLAINTEXT:PLAINTEXT
+                KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+                KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://kafka:9092,PLAINTEXT://localhost:9094
+                KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+                KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+                KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+                KAFKA_SASL_ENABLED_MECHANISMS: GSSAPI
+                KAFKA_SASL_KERBEROS_SERVICE_NAME: kafka
+                KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+                KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/kafka_server_jaas.conf -Djava.security.krb5.conf=/etc/krb5.conf -Dsun.security.krb5.debug=true"
+              volumes:
+                - krb5-keytabs:/etc/krb5-keytabs:ro
+                - ./kerberos/krb5.conf:/etc/krb5.conf:ro
+                - ./kerberos/kafka_server_jaas.conf:/etc/kafka/kafka_server_jaas.conf:ro
+              healthcheck:
+                test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9094"]
+                interval: 5s
+                timeout: 5s
+                retries: 20
+
+          volumes:
+            krb5-data:
+            krb5-keytabs:
+          EOF
+
+      - name: Start KDC and create principals
+        run: |
+          docker compose up -d --wait kdc
+
+          docker compose exec -T kdc kadmin.local -q "addprinc -randkey kafka/kafka@EXAMPLE.COM"
+          docker compose exec -T kdc kadmin.local -q "ktadd -k /etc/krb5-keytabs/kafka.keytab kafka/kafka@EXAMPLE.COM"
+          docker compose exec -T kdc kadmin.local -q "addprinc -randkey client@EXAMPLE.COM"
+          docker compose exec -T kdc kadmin.local -q "ktadd -k /etc/krb5-keytabs/client.keytab client@EXAMPLE.COM"
+          docker compose exec -T kdc chmod 644 /etc/krb5-keytabs/kafka.keytab
+          docker compose exec -T kdc chmod 644 /etc/krb5-keytabs/client.keytab
+          docker compose cp kdc:/etc/krb5-keytabs/client.keytab ${{ github.workspace }}/kerberos/client.keytab
+
+      - name: Start Kafka
+        run: docker compose up -d --wait kafka
+
+      - name: Add kafka to /etc/hosts
+        run: echo "127.0.0.1 kafka kdc" | sudo tee -a /etc/hosts
+
+      - name: Run Kerberos integration test
+        run: |
+          cd pkg/sasl/kerberos/testdata
+          go work init . ../../../.. ../../../kmsg ..
+          go test -v -timeout 2m .
+        env:
+          KGO_KERBEROS_SEEDS: kafka:9092
+          KGO_KERBEROS_KEYTAB: ${{ github.workspace }}/kerberos/client.keytab
+          KGO_KERBEROS_CONF: ${{ github.workspace }}/kerberos/krb5.conf
+          KGO_KERBEROS_PRINCIPAL: client
+          KGO_KERBEROS_REALM: EXAMPLE.COM
+          KGO_KERBEROS_SERVICE: kafka
+          KRB5_CONFIG: ${{ github.workspace }}/kerberos/krb5.conf
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v
