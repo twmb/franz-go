@@ -143,10 +143,10 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				donep(rt, rp, kerr.CorruptMessage.Code, "Batch length mismatch.")
 				continue
 			}
-			if b.PartitionLeaderEpoch != -1 {
-				donep(rt, rp, kerr.CorruptMessage.Code, "Partition leader epoch must be -1.")
-				continue
-			}
+			// PartitionLeaderEpoch is not validated: real Kafka brokers
+			// overwrite this field with the current leader epoch. Clients
+			// send different values (franz-go sends -1, Sarama sends 0).
+
 			if b.Magic != 2 {
 				donep(rt, rp, kerr.CorruptMessage.Code, "Unsupported message format version.")
 				continue
