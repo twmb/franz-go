@@ -2221,21 +2221,22 @@ func (g *groupConsumer) loopCommit() {
 	}
 }
 
-// For SetOffsets, the gist of what follows:
-//
-// We need to set uncommitted.committed; that is the guarantee of this
-// function. However, if, for everything we are setting, the head equals the
-// commit, then we do not need to actually invalidate our current assignments.
-// This is a great optimization for transactions that are resetting their state
-// on abort.
-func (g *groupConsumer) getSetAssigns(setOffsets map[string]map[int32]EpochOffset) (assigns map[string]map[int32]Offset) {
+// applySetOffsets applies the given offsets to g.uncommitted for partitions
+// that are currently being consumed, updating their dirty, head, and committed
+// fields. Partitions not in g.uncommitted are skipped (per SetOffsets docs:
+// "any extra partitions are skipped"). If any partition's dirty field actually
+// changed, the partition is returned in assigns so the caller can reassign
+// cursors. If all partitions already had the same dirty offset, this returns
+// nil and no cursor reassignment is needed - this is a key optimization for
+// transactions resetting state on abort.
+func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOffset) (assigns map[string]map[int32]Offset) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	groupTopics := g.tps.load()
 
 	if g.uncommitted == nil {
-		g.uncommitted = make(uncommitted)
+		return nil
 	}
 	for topic, partitions := range setOffsets {
 		if !groupTopics.hasTopic(topic) {
@@ -2243,18 +2244,20 @@ func (g *groupConsumer) getSetAssigns(setOffsets map[string]map[int32]EpochOffse
 		}
 		topicUncommitted := g.uncommitted[topic]
 		if topicUncommitted == nil {
-			topicUncommitted = make(map[int32]uncommit)
-			g.uncommitted[topic] = topicUncommitted
+			continue // topic was not being consumed
 		}
 		var topicAssigns map[int32]Offset
 		for partition, epochOffset := range partitions {
 			current, exists := topicUncommitted[partition]
+			if !exists {
+				continue // partition was not being consumed
+			}
 			topicUncommitted[partition] = uncommit{
 				dirty:     epochOffset,
 				head:      epochOffset,
 				committed: epochOffset,
 			}
-			if exists && current.dirty == epochOffset {
+			if current.dirty == epochOffset {
 				continue
 			} else if topicAssigns == nil {
 				topicAssigns = make(map[int32]Offset, len(partitions))
