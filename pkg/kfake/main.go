@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 
 	"github.com/twmb/franz-go/pkg/kfake"
@@ -17,9 +18,12 @@ func main() {
 	// Configure log level from flag
 	var logLevelStr string
 	var versionStr string
+	var portsStr string
 	flag.StringVar(&logLevelStr, "log-level", "none", "Log level: none, error, warn, info, debug")
 	flag.StringVar(&logLevelStr, "l", "none", "Log level (shorthand)")
 	flag.StringVar(&versionStr, "as-version", "", "Kafka version to emulate (e.g., 2.8, 3.5)")
+	flag.StringVar(&portsStr, "ports", "9092,9093,9094", "Comma-separated broker ports")
+	flag.StringVar(&portsStr, "p", "9092,9093,9094", "Comma-separated broker ports (shorthand)")
 	flag.Parse()
 
 	logLevel := kfake.LogLevelNone
@@ -36,8 +40,18 @@ func main() {
 		logLevel = kfake.LogLevelNone
 	}
 
+	var ports []int
+	for _, s := range strings.Split(portsStr, ",") {
+		p, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid port %q: %v\n", s, err)
+			os.Exit(1)
+		}
+		ports = append(ports, p)
+	}
+
 	opts := []kfake.Opt{
-		kfake.Ports(9092, 9093, 9094),
+		kfake.Ports(ports...),
 		kfake.SeedTopics(-1, "foo"),
 		kfake.WithLogger(kfake.BasicLogger(os.Stderr, logLevel)),
 	}
