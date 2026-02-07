@@ -2,7 +2,6 @@ package kfake
 
 import (
 	"context"
-	"errors"
 	"net"
 	"strconv"
 	"sync"
@@ -1112,7 +1111,6 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// Create a transactional producer
 	producer, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
 		kgo.DefaultProduceTopic(testTopic),
@@ -1123,8 +1121,7 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	}
 	defer producer.Close()
 
-	// Produce and commit a transaction, then verify committed data
-	// satisfies MinBytes immediately.
+	// Committed data should satisfy MinBytes immediately.
 	if err := producer.BeginTransaction(); err != nil {
 		t.Fatal(err)
 	}
@@ -1160,13 +1157,14 @@ func TestReadCommittedMinBytes(t *testing.T) {
 		t.Fatalf("fetch errors: %v", errs)
 	}
 	if fetches.NumRecords() != 1 {
-		t.Fatalf("expected 1 record, got %d", fetches.NumRecords())
+		t.Fatalf("expected 1 committed record, got %d", fetches.NumRecords())
 	}
 	if elapsed > time.Second {
-		t.Fatalf("committed fetch took too long: %v (expected immediate)", elapsed)
+		t.Fatalf("readCommitted fetch of committed data took %v, expected immediate", elapsed)
 	}
 
-	// Uncommitted data should NOT satisfy MinBytes.
+	// Uncommitted data should NOT satisfy MinBytes for readCommitted.
+	// The consumer should block until the context expires.
 	hwmBeforeTxn := c.PartitionInfo(testTopic, 0).HighWatermark
 
 	if err := producer.BeginTransaction(); err != nil {
@@ -1178,10 +1176,10 @@ func TestReadCommittedMinBytes(t *testing.T) {
 
 	pi = c.PartitionInfo(testTopic, 0)
 	if pi.LastStableOffset != hwmBeforeTxn {
-		t.Errorf("LSO should not advance for uncommitted txn: LSO=%d, expected=%d", pi.LastStableOffset, hwmBeforeTxn)
+		t.Fatalf("LSO should not advance for uncommitted txn: LSO=%d, expected=%d", pi.LastStableOffset, hwmBeforeTxn)
 	}
 
-	shortCtx, shortCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	shortCtx, shortCancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	consumer2, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
@@ -1202,14 +1200,28 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	shortCancel()
 	consumer2.Close()
 
-	if elapsed < 50*time.Millisecond {
-		t.Fatalf("uncommitted fetch returned too quickly: %v (expected ~100ms wait)", elapsed)
+	if elapsed < 150*time.Millisecond {
+		t.Fatalf("readCommitted returned too quickly for uncommitted data: %v", elapsed)
 	}
 	if fetches.NumRecords() > 0 {
 		t.Fatalf("readCommitted should not see uncommitted data, got %d records", fetches.NumRecords())
 	}
 
-	// After commit, a waiting readCommitted consumer should get data.
+	// After committing, a waiting readCommitted consumer should wake up
+	// and return the newly committed data.
+
+	// Use a ControlKey observer to know when the consumer's fetch request
+	// arrives at the server, then commit. This avoids a flaky sleep.
+	fetchArrived := make(chan struct{}, 1)
+	c.ControlKey(int16(kmsg.Fetch), func(kmsg.Request) (kmsg.Response, error, bool) {
+		select {
+		case fetchArrived <- struct{}{}:
+		default:
+		}
+		c.KeepControl()
+		return nil, nil, false
+	})
+
 	consumer3, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
@@ -1223,7 +1235,6 @@ func TestReadCommittedMinBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Poll in background
 	fetchDone := make(chan struct{})
 	var fetchResult kgo.Fetches
 	var fetchElapsed time.Duration
@@ -1234,13 +1245,17 @@ func TestReadCommittedMinBytes(t *testing.T) {
 		close(fetchDone)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the consumer's fetch to arrive at the server, then commit.
+	select {
+	case <-fetchArrived:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for fetch request to arrive")
+	}
 
 	if err := producer.EndTransaction(ctx, kgo.TryCommit); err != nil {
 		t.Fatal(err)
 	}
 
-	// Wait for the fetch to complete
 	select {
 	case <-fetchDone:
 	case <-ctx.Done():
@@ -1249,13 +1264,13 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	consumer3.Close()
 
 	if fetchElapsed > 2*time.Second {
-		t.Fatalf("fetch took too long after commit: %v (expected <2s)", fetchElapsed)
+		t.Fatalf("readCommitted fetch took %v after commit, expected prompt wakeup", fetchElapsed)
 	}
 	if fetchResult.NumRecords() != 1 {
 		t.Fatalf("expected 1 record after commit, got %d", fetchResult.NumRecords())
 	}
 
-	// Verify read_uncommitted sees data immediately (baseline).
+	// Baseline: read_uncommitted should see uncommitted data immediately.
 	if err := producer.BeginTransaction(); err != nil {
 		t.Fatal(err)
 	}
@@ -1263,17 +1278,15 @@ func TestReadCommittedMinBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	newHWM := c.PartitionInfo(testTopic, 0).HighWatermark
 	newLSO := c.PartitionInfo(testTopic, 0).LastStableOffset
 
-	// read_uncommitted consumer should see the data immediately
 	consumer4, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
 		kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
 		kgo.FetchMinBytes(1),
 		kgo.FetchMaxWait(5*time.Second),
 		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
-			testTopic: {0: kgo.NewOffset().At(newLSO)}, // start at LSO, which is before HWM
+			testTopic: {0: kgo.NewOffset().At(newLSO)},
 		}),
 	)
 	if err != nil {
@@ -1286,13 +1299,15 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	consumer4.Close()
 
 	if elapsed > time.Second {
-		t.Fatalf("read_uncommitted took too long: %v", elapsed)
+		t.Fatalf("read_uncommitted took %v, expected immediate", elapsed)
 	}
 	if fetches.NumRecords() == 0 {
-		t.Fatalf("read_uncommitted should see uncommitted data, HWM=%d LSO=%d", newHWM, newLSO)
+		t.Fatal("read_uncommitted should see uncommitted data")
 	}
 
-	_ = producer.EndTransaction(ctx, kgo.TryAbort)
+	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("cleanup abort: %v", err)
+	}
 }
 
 // TestGroupRebalanceOnNonLeaderMetadataChange tests that a rebalance is
@@ -1323,18 +1338,19 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	}
 	defer cl.Close()
 
-	joinGroup := func(ctx context.Context, memberID string, metadata []byte) (*kmsg.JoinGroupResponse, error) {
+	joinGroup := func(memberID string, metadata []byte) (*kmsg.JoinGroupResponse, error) {
 		req := kmsg.NewJoinGroupRequest()
 		req.Group = groupID
 		req.MemberID = memberID
 		req.ProtocolType = "consumer"
-		req.SessionTimeoutMillis = 10000
-		req.RebalanceTimeoutMillis = 10000
+		req.SessionTimeoutMillis = 30000
+		req.RebalanceTimeoutMillis = 60000
 		proto := kmsg.NewJoinGroupRequestProtocol()
 		proto.Name = "cooperative-sticky"
 		proto.Metadata = metadata
 		req.Protocols = append(req.Protocols, proto)
-		return req.RequestWith(ctx, cl)
+		resp, err := req.RequestWith(ctx, cl)
+		return resp, err
 	}
 
 	syncGroup := func(memberID string, gen int32, isLeader bool, assignment []byte) (*kmsg.SyncGroupResponse, error) {
@@ -1352,11 +1368,11 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	}
 
 	metadataV1 := []byte{0, 1, 2, 3}
-	metadataV2 := []byte{0, 1, 2, 4}
+	metadataV2 := []byte{0, 1, 2, 4} // changed metadata
 	assignment := []byte{0, 0, 0, 0}
 
-	// m1 joins, gets MemberIDRequired, rejoins with ID to become leader.
-	resp1, err := joinGroup(ctx, "", metadataV1)
+	// m1 joins, gets MemberIDRequired, rejoins with ID
+	resp1, err := joinGroup("", metadataV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1365,7 +1381,7 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	}
 	m1ID := resp1.MemberID
 
-	resp1, err = joinGroup(ctx, m1ID, metadataV1)
+	resp1, err = joinGroup(m1ID, metadataV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1377,6 +1393,7 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	}
 	gen1 := resp1.Generation
 
+	// m1 syncs as leader
 	syncResp, err := syncGroup(m1ID, gen1, true, assignment)
 	if err != nil {
 		t.Fatal(err)
@@ -1385,10 +1402,8 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 		t.Fatalf("m1 sync error: %v", kerr.ErrorForCode(syncResp.ErrorCode))
 	}
 
-	// m2 joins (gets MemberIDRequired), then rejoins with ID.
-	// m2's rejoin triggers a rebalance; send it first so it blocks,
-	// then m1 rejoins to complete the rebalance.
-	resp2, err := joinGroup(ctx, "", metadataV1)
+	// m2 joins (initial), gets MemberIDRequired
+	resp2, err := joinGroup("", metadataV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1397,23 +1412,33 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	}
 	m2ID := resp2.MemberID
 
-	var wg sync.WaitGroup
-	var resp1Rebalance, resp2Rebalance *kmsg.JoinGroupResponse
-	var err1, err2 error
+	// m2 rejoins with ID, triggering rebalance. We must ensure m2's
+	// JoinGroup arrives before m1's: if m1 (leader) arrives first, it
+	// completes a rebalance with only itself, then m2's join starts a
+	// new rebalance waiting for m1, who is already done - deadlock.
+	m2Received := make(chan struct{}, 1)
+	c.ControlKey(int16(kmsg.JoinGroup), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		if kreq.(*kmsg.JoinGroupRequest).MemberID == m2ID {
+			select {
+			case m2Received <- struct{}{}:
+			default:
+			}
+		}
+		return nil, nil, false
+	})
 
-	// Send m2 first - it triggers the rebalance and blocks waiting for m1.
+	var wg sync.WaitGroup
+	var resp2Rebalance *kmsg.JoinGroupResponse
+	var err2 error
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		resp2Rebalance, err2 = joinGroup(ctx, m2ID, metadataV1)
+		resp2Rebalance, err2 = joinGroup(m2ID, metadataV1)
 	}()
-	// Brief sleep to ensure m2's request arrives first.
-	time.Sleep(10 * time.Millisecond)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		resp1Rebalance, err1 = joinGroup(ctx, m1ID, metadataV1)
-	}()
+	<-m2Received
+
+	resp1Rebalance, err1 := joinGroup(m1ID, metadataV1)
 	wg.Wait()
 
 	if err1 != nil {
@@ -1427,43 +1452,55 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 
 	gen2 := resp1.Generation
 
-	// Sync both members to reach Stable.
+	// Sync both members to reach Stable state.
 	_, _ = syncGroup(m1ID, gen2, resp1.LeaderID == m1ID, assignment)
-	_, _ = syncGroup(m2ID, gen2, resp2.LeaderID == m2ID, assignment)
+	if resp2 != nil {
+		_, _ = syncGroup(m2ID, gen2, resp2.LeaderID == m2ID, assignment)
+	}
 
 	// THE CRITICAL TEST: m2 (non-leader) rejoins with CHANGED metadata
-	// while group is Stable. This should trigger a new rebalance.
-	// Use a short timeout - if the JoinGroup blocks, rebalance was triggered.
-	shortCtx, shortCancel := context.WithTimeout(ctx, 100*time.Millisecond)
-	resp2, err = joinGroup(shortCtx, m2ID, metadataV2)
-	shortCancel()
-
-	if errors.Is(err, context.DeadlineExceeded) {
-		// Correct: rebalance was triggered, JoinGroup is waiting for m1.
-		// Complete the rebalance.
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			_, _ = joinGroup(ctx, m1ID, metadataV1)
-		}()
-		var resp2Final *kmsg.JoinGroupResponse
-		go func() {
-			defer wg.Done()
-			resp2Final, _ = joinGroup(ctx, m2ID, metadataV2)
-		}()
-		wg.Wait()
-
-		if resp2Final == nil || resp2Final.Generation <= gen2 {
-			t.Fatalf("rebalance did not advance generation past %d", gen2)
+	// while group is Stable. With the bug, m2 would get the same generation
+	// back (no rebalance). With the fix, a new rebalance is triggered.
+	m2JoinReceived := make(chan struct{}, 1)
+	c.ControlKey(int16(kmsg.JoinGroup), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		if kreq.(*kmsg.JoinGroupRequest).MemberID == m2ID {
+			select {
+			case m2JoinReceived <- struct{}{}:
+			default:
+			}
 		}
-	} else if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	} else if resp2.ErrorCode != 0 {
-		t.Fatalf("m2 rejoin unexpected error: %v", kerr.ErrorForCode(resp2.ErrorCode))
-	} else if resp2.Generation > gen2 {
-		// Rebalance triggered and completed within the short timeout - also correct.
-	} else {
-		t.Fatalf("m2 rejoined with changed metadata but got same generation %d (no rebalance triggered)", gen2)
+		return nil, nil, false
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resp2, err = joinGroup(m2ID, metadataV2)
+	}()
+
+	// Wait for m2's JoinGroup to arrive at the server.
+	<-m2JoinReceived
+
+	select {
+	case <-done:
+		// m2's JoinGroup returned immediately - no rebalance was triggered (bug).
+		if resp2 != nil && resp2.Generation == gen2 && resp2.ErrorCode == 0 {
+			t.Errorf("m2 rejoined with changed metadata but got same generation %d (no rebalance triggered)", gen2)
+		}
+	default:
+		// m2's JoinGroup is blocking - rebalance was triggered (correct).
+		// Complete the rebalance by having m1 rejoin.
+		if _, err := joinGroup(m1ID, metadataV1); err != nil {
+			t.Fatalf("m1 rejoin error: %v", err)
+		}
+		<-done
+		if resp2 == nil {
+			t.Fatal("m2 response is nil after rebalance")
+		}
+		if resp2.Generation <= gen2 {
+			t.Errorf("expected new generation > %d, got %d", gen2, resp2.Generation)
+		}
 	}
 }
 
@@ -1584,38 +1621,29 @@ func TestKIP447RequireStable(t *testing.T) {
 	}
 	defer c.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Create a client and use kadm to commit an offset, which creates the group
+	// Commit an initial offset to create the group
 	adminClient, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
 	if err != nil {
 		t.Fatal(err)
 	}
 	adm := kadm.NewClient(adminClient)
-
-	// Commit an initial offset to create the group
 	offsets := kadm.Offsets{}
 	offsets.Add(kadm.Offset{Topic: testTopic, Partition: 0, At: 0})
-	err = adm.CommitAllOffsets(ctx, groupID, offsets)
-	if err != nil {
+	if err = adm.CommitAllOffsets(ctx, groupID, offsets); err != nil {
 		t.Fatalf("CommitAllOffsets failed: %v", err)
 	}
 	adminClient.Close()
 
-	// Create a raw client for transaction operations. RequestRetries(0)
-	// prevents kgo from retrying UNSTABLE_OFFSET_COMMIT (a retriable error)
-	// which would block until timeout instead of returning the response.
-	rawClient, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.RequestRetries(0),
-	)
+	rawClient, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rawClient.Close()
 
-	// Step 1: InitProducerID to get a producer ID for our transaction
+	// InitProducerID
 	initReq := kmsg.NewInitProducerIDRequest()
 	txnIDStr := txnID
 	initReq.TransactionalID = &txnIDStr
@@ -1630,7 +1658,7 @@ func TestKIP447RequireStable(t *testing.T) {
 	pid := initResp.ProducerID
 	epoch := initResp.ProducerEpoch
 
-	// Step 2: AddOffsetsToTxn to register the group with the transaction
+	// AddOffsetsToTxn
 	addOffsetsReq := kmsg.NewAddOffsetsToTxnRequest()
 	addOffsetsReq.TransactionalID = txnID
 	addOffsetsReq.ProducerID = pid
@@ -1644,13 +1672,13 @@ func TestKIP447RequireStable(t *testing.T) {
 		t.Fatalf("AddOffsetsToTxn error: %v", kerr.ErrorForCode(addOffsetsResp.ErrorCode))
 	}
 
+	// TxnOffsetCommit to stage offset commits (not yet committed)
 	txnCommitReq := kmsg.NewTxnOffsetCommitRequest()
 	txnCommitReq.TransactionalID = txnID
 	txnCommitReq.Group = groupID
 	txnCommitReq.ProducerID = pid
 	txnCommitReq.ProducerEpoch = epoch
-	txnCommitReq.Generation = -1 // Simple consumer, not in active group session
-	txnCommitReq.MemberID = ""
+	txnCommitReq.Generation = -1
 	topic := kmsg.NewTxnOffsetCommitRequestTopic()
 	topic.Topic = testTopic
 	part := kmsg.NewTxnOffsetCommitRequestTopicPartition()
@@ -1668,7 +1696,7 @@ func TestKIP447RequireStable(t *testing.T) {
 		}
 	}
 
-	// OffsetFetch with RequireStable=true should return UNSTABLE_OFFSET_COMMIT.
+	// Use v8+ format with Groups field to work with auto-negotiated versions
 	fetchReq := kmsg.NewOffsetFetchRequest()
 	fetchReq.RequireStable = true
 	rg := kmsg.NewOffsetFetchRequestGroup()
@@ -1679,28 +1707,32 @@ func TestKIP447RequireStable(t *testing.T) {
 	rg.Topics = append(rg.Topics, rgt)
 	fetchReq.Groups = append(fetchReq.Groups, rg)
 
-	fetchResp, err := fetchReq.RequestWith(ctx, rawClient)
+	// Test 1: OffsetFetch with RequireStable=true should return UNSTABLE_OFFSET_COMMIT.
+	// Use Broker.Request to bypass the sharder, which retries retriable errors.
+	kresp, err := rawClient.Broker(0).Request(ctx, &fetchReq)
 	if err != nil {
 		t.Fatalf("OffsetFetch RequireStable=true failed: %v", err)
 	}
+	fetchResp := kresp.(*kmsg.OffsetFetchResponse)
 	if len(fetchResp.Groups) == 0 {
 		t.Fatal("no groups in RequireStable=true response")
 	}
 	if fetchResp.Groups[0].ErrorCode != kerr.UnstableOffsetCommit.Code {
-		t.Fatalf("expected UNSTABLE_OFFSET_COMMIT, got %v", kerr.ErrorForCode(fetchResp.Groups[0].ErrorCode))
+		t.Errorf("Test 1: expected UNSTABLE_OFFSET_COMMIT (88), got error code %d", fetchResp.Groups[0].ErrorCode)
 	}
 
-	// OffsetFetch with RequireStable=false should succeed even with pending txn.
+	// Test 2: OffsetFetch with RequireStable=false should succeed (even with pending txn)
 	fetchReq.RequireStable = false
-	fetchResp, err = fetchReq.RequestWith(ctx, rawClient)
+	kresp, err = rawClient.Broker(0).Request(ctx, &fetchReq)
 	if err != nil {
 		t.Fatalf("OffsetFetch RequireStable=false failed: %v", err)
 	}
+	fetchResp = kresp.(*kmsg.OffsetFetchResponse)
 	if len(fetchResp.Groups) == 0 {
 		t.Fatal("no groups in RequireStable=false response")
 	}
 	if fetchResp.Groups[0].ErrorCode != 0 {
-		t.Fatalf("expected no error with RequireStable=false, got %v", kerr.ErrorForCode(fetchResp.Groups[0].ErrorCode))
+		t.Errorf("Test 2: expected no error, got error code %d", fetchResp.Groups[0].ErrorCode)
 	}
 
 	// Commit the transaction.
@@ -1716,24 +1748,24 @@ func TestKIP447RequireStable(t *testing.T) {
 	if endResp.ErrorCode != 0 {
 		t.Fatalf("EndTxn error: %v", kerr.ErrorForCode(endResp.ErrorCode))
 	}
-
-	// After commit, OffsetFetch with RequireStable=true should succeed.
+	// Test 3: OffsetFetch with RequireStable=true should now succeed
 	fetchReq.RequireStable = true
-	fetchResp, err = fetchReq.RequestWith(ctx, rawClient)
+	kresp, err = rawClient.Broker(0).Request(ctx, &fetchReq)
 	if err != nil {
 		t.Fatalf("OffsetFetch post-commit failed: %v", err)
 	}
+	fetchResp = kresp.(*kmsg.OffsetFetchResponse)
 	if len(fetchResp.Groups) == 0 {
 		t.Fatal("no groups in post-commit response")
 	}
 	if fetchResp.Groups[0].ErrorCode != 0 {
-		t.Fatalf("expected no error after commit, got %v", kerr.ErrorForCode(fetchResp.Groups[0].ErrorCode))
+		t.Errorf("Test 3: expected no error after commit, got error code %d", fetchResp.Groups[0].ErrorCode)
 	}
 	if len(fetchResp.Groups[0].Topics) == 0 || len(fetchResp.Groups[0].Topics[0].Partitions) == 0 {
 		t.Fatal("no partitions in post-commit response")
 	}
 	if offset := fetchResp.Groups[0].Topics[0].Partitions[0].Offset; offset != 5 {
-		t.Fatalf("expected committed offset 5, got %d", offset)
+		t.Errorf("expected committed offset 5, got %d", offset)
 	}
 }
 
@@ -1867,27 +1899,42 @@ func TestRequestCachedMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Track metadata requests via a single ControlKey. Subtests that
-	// need to intercept metadata set metadataHook; the ControlKey
-	// delegates to it before falling through to the normal counter.
-	// Using one ControlKey avoids nondeterminism from Go map iteration
-	// order when multiple ControlKeys exist for the same request key.
+	// Count metadata requests. This ControlKey returns handled=false,
+	// so it observes without intercepting - any later ControlKey for
+	// Metadata (e.g., in StaleCacheResilience) can still fire.
 	var metadataRequests atomic.Int32
-	var metadataHookMu sync.Mutex
-	var metadataHook func(kmsg.Request) (kmsg.Response, error, bool)
-	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+	c.ControlKey(int16(kmsg.Metadata), func(kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
-		metadataHookMu.Lock()
-		fn := metadataHook
-		metadataHookMu.Unlock()
-		if fn != nil {
-			if resp, err, handled := fn(kreq); handled {
-				return resp, err, true
-			}
-		}
 		metadataRequests.Add(1)
 		return nil, nil, false
 	})
+
+	metaReqForTopic := func(name string) *kmsg.MetadataRequest {
+		req := kmsg.NewPtrMetadataRequest()
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr(name)
+		req.Topics = append(req.Topics, rt)
+		return req
+	}
+	metaReqForTopicID := func(id [16]byte) *kmsg.MetadataRequest {
+		req := kmsg.NewPtrMetadataRequest()
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.TopicID = id
+		req.Topics = append(req.Topics, rt)
+		return req
+	}
+	assertCached := func(t *testing.T, req *kmsg.MetadataRequest) *kmsg.MetadataResponse {
+		t.Helper()
+		before := metadataRequests.Load()
+		resp, err := cl.RequestCachedMetadata(ctx, req, 0)
+		if err != nil {
+			t.Fatalf("cached fetch: %v", err)
+		}
+		if metadataRequests.Load() != before {
+			t.Fatalf("expected cached, got %d total (was %d)", metadataRequests.Load(), before)
+		}
+		return resp
+	}
 
 	t.Run("AllTopicsCaching", func(t *testing.T) {
 		defer metadataRequests.Store(0)
@@ -1932,21 +1979,14 @@ func TestRequestCachedMetadata(t *testing.T) {
 			t.Fatal("expected at least one broker")
 		}
 
-		countAfterFirst := metadataRequests.Load()
-		if countAfterFirst == 0 {
+		if metadataRequests.Load() == 0 {
 			t.Fatal("expected at least one metadata request")
 		}
 
 		// Second call within cache window should use cache.
-		resp2, err := cl.RequestCachedMetadata(ctx, req, 0)
-		if err != nil {
-			t.Fatalf("second all-topics fetch: %v", err)
-		}
+		resp2 := assertCached(t, req)
 		if len(resp2.Topics) != 3 {
 			t.Fatalf("cached: expected 3 topics, got %d", len(resp2.Topics))
-		}
-		if metadataRequests.Load() != countAfterFirst {
-			t.Fatalf("expected cached (no new metadata request), got %d total (was %d)", metadataRequests.Load(), countAfterFirst)
 		}
 	})
 
@@ -1969,96 +2009,39 @@ func TestRequestCachedMetadata(t *testing.T) {
 			t.Fatal("expected valid controller ID")
 		}
 
-		countAfterFirst := metadataRequests.Load()
-
 		// Second call should also not issue a request.
-		resp2, err := cl.RequestCachedMetadata(ctx, req, 0)
-		if err != nil {
-			t.Fatalf("second no-topics fetch: %v", err)
-		}
+		resp2 := assertCached(t, req)
 		if len(resp2.Brokers) == 0 {
 			t.Fatal("cached: expected brokers")
 		}
-		if metadataRequests.Load() != countAfterFirst {
-			t.Fatalf("expected no new request, got %d total (was %d)", metadataRequests.Load(), countAfterFirst)
-		}
 	})
 
-	t.Run("SpecificTopicCaching", func(t *testing.T) {
-		defer metadataRequests.Store(0)
-
-		req := kmsg.NewPtrMetadataRequest()
-		rt := kmsg.NewMetadataRequestTopic()
-		rt.Topic = kmsg.StringPtr("topic1")
-		req.Topics = append(req.Topics, rt)
-
-		resp, err := cl.RequestCachedMetadata(ctx, req, 0)
-		if err != nil {
-			t.Fatalf("specific topic fetch: %v", err)
-		}
-		if len(resp.Topics) != 1 {
-			t.Fatalf("expected 1 topic, got %d", len(resp.Topics))
-		}
-		if *resp.Topics[0].Topic != "topic1" {
-			t.Fatalf("expected topic1, got %s", *resp.Topics[0].Topic)
-		}
-
-		countAfterFirst := metadataRequests.Load()
-
-		// Second call should be cached.
-		resp2, err := cl.RequestCachedMetadata(ctx, req, 0)
-		if err != nil {
-			t.Fatalf("second specific fetch: %v", err)
-		}
-		if len(resp2.Topics) != 1 || *resp2.Topics[0].Topic != "topic1" {
-			t.Fatal("cached: wrong topic")
-		}
-		if metadataRequests.Load() != countAfterFirst {
-			t.Fatalf("expected cached, got %d total (was %d)", metadataRequests.Load(), countAfterFirst)
-		}
-	})
-
-	t.Run("TopicIDLookupCached", func(t *testing.T) {
-		defer metadataRequests.Store(0)
-
-		// Look up topic1's TopicID from kfake directly.
+	t.Run("TopicLookupCaching", func(t *testing.T) {
 		ti := c.TopicInfo("topic1")
 		if ti == nil {
 			t.Fatal("topic1 not found in kfake")
 		}
-
-		// Request by TopicID only, without any prior cache-warming
-		// for this specific topic. The ID should be resolved from the
-		// client's internal id2t map (populated by the main metadata
-		// loop) and the topic data fetched/cached.
-		idReq := kmsg.NewPtrMetadataRequest()
-		rt := kmsg.NewMetadataRequestTopic()
-		rt.TopicID = ti.TopicID
-		idReq.Topics = append(idReq.Topics, rt)
-
-		resp, err := cl.RequestCachedMetadata(ctx, idReq, 0)
-		if err != nil {
-			t.Fatalf("TopicID lookup: %v", err)
-		}
-		if len(resp.Topics) != 1 {
-			t.Fatalf("expected 1 topic, got %d", len(resp.Topics))
-		}
-		if resp.Topics[0].Topic == nil || *resp.Topics[0].Topic != "topic1" {
-			t.Fatalf("expected topic1, got %v", resp.Topics[0].Topic)
-		}
-
-		countAfterFirst := metadataRequests.Load()
-
-		// Second lookup of the same TopicID should be cached.
-		resp2, err := cl.RequestCachedMetadata(ctx, idReq, 0)
-		if err != nil {
-			t.Fatalf("cached TopicID lookup: %v", err)
-		}
-		if len(resp2.Topics) != 1 || *resp2.Topics[0].Topic != "topic1" {
-			t.Fatal("cached: wrong topic")
-		}
-		if metadataRequests.Load() != countAfterFirst {
-			t.Fatalf("expected cached, got %d total (was %d)", metadataRequests.Load(), countAfterFirst)
+		for _, tt := range []struct {
+			name string
+			req  *kmsg.MetadataRequest
+		}{
+			{"ByName", metaReqForTopic("topic1")},
+			{"ByTopicID", metaReqForTopicID(ti.TopicID)},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				defer metadataRequests.Store(0)
+				resp, err := cl.RequestCachedMetadata(ctx, tt.req, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(resp.Topics) != 1 || resp.Topics[0].Topic == nil || *resp.Topics[0].Topic != "topic1" {
+					t.Fatalf("expected 1 topic 'topic1', got %v", resp.Topics)
+				}
+				resp2 := assertCached(t, tt.req)
+				if len(resp2.Topics) != 1 || *resp2.Topics[0].Topic != "topic1" {
+					t.Fatal("cached: wrong topic")
+				}
+			})
 		}
 	})
 
@@ -2079,10 +2062,7 @@ func TestRequestCachedMetadata(t *testing.T) {
 		}
 
 		// Request newTopic by TopicID only  - not in any cache.
-		idReq := kmsg.NewPtrMetadataRequest()
-		rt := kmsg.NewMetadataRequestTopic()
-		rt.TopicID = ti.TopicID
-		idReq.Topics = append(idReq.Topics, rt)
+		idReq := metaReqForTopicID(ti.TopicID)
 
 		resp, err := cl.RequestCachedMetadata(ctx, idReq, 0)
 		if err != nil {
@@ -2113,10 +2093,7 @@ func TestRequestCachedMetadata(t *testing.T) {
 	t.Run("StaleCacheResilience", func(t *testing.T) {
 		defer metadataRequests.Store(0)
 
-		req := kmsg.NewPtrMetadataRequest()
-		rt := kmsg.NewMetadataRequestTopic()
-		rt.Topic = kmsg.StringPtr("topic1")
-		req.Topics = append(req.Topics, rt)
+		req := metaReqForTopic("topic1")
 
 		// Step 1: populate cache.
 		_, err := cl.RequestCachedMetadata(ctx, req, 100*time.Millisecond)
@@ -2128,30 +2105,21 @@ func TestRequestCachedMetadata(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 
 		// Step 3: intercept next metadata to return an error response.
-		failOnce := true
-		metadataHookMu.Lock()
-		metadataHook = func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-			if failOnce {
-				failOnce = false
-				metaReq := kreq.(*kmsg.MetadataRequest)
-				resp := metaReq.ResponseKind().(*kmsg.MetadataResponse)
-				rt := kmsg.NewMetadataResponseTopic()
-				rt.Topic = kmsg.StringPtr("topic1")
-				rt.ErrorCode = kerr.UnknownServerError.Code
-				resp.Topics = append(resp.Topics, rt)
-				return resp, nil, true
-			}
-			return nil, nil, false
-		}
-		metadataHookMu.Unlock()
+		// This ControlKey is consumed after one use (no KeepControl).
+		c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+			metaReq := kreq.(*kmsg.MetadataRequest)
+			resp := metaReq.ResponseKind().(*kmsg.MetadataResponse)
+			rt := kmsg.NewMetadataResponseTopic()
+			rt.Topic = kmsg.StringPtr("topic1")
+			rt.ErrorCode = kerr.UnknownServerError.Code
+			resp.Topics = append(resp.Topics, rt)
+			return resp, nil, true
+		})
 
 		// Step 4: fetch - may get error data, but stale entry preserved.
 		_, _ = cl.RequestCachedMetadata(ctx, req, 100*time.Millisecond)
 
-		// Step 5: clear hook and re-fetch.
-		metadataHookMu.Lock()
-		metadataHook = nil
-		metadataHookMu.Unlock()
+		// Step 5: interceptor consumed, re-fetch goes to normal handler.
 
 		time.Sleep(150 * time.Millisecond)
 		resp, err := cl.RequestCachedMetadata(ctx, req, 100*time.Millisecond)
@@ -2168,10 +2136,7 @@ func TestRequestCachedMetadata(t *testing.T) {
 	t.Run("UnknownTopic", func(t *testing.T) {
 		defer metadataRequests.Store(0)
 
-		req := kmsg.NewPtrMetadataRequest()
-		rt := kmsg.NewMetadataRequestTopic()
-		rt.Topic = kmsg.StringPtr("no_such_topic")
-		req.Topics = append(req.Topics, rt)
+		req := metaReqForTopic("no_such_topic")
 
 		resp, err := cl.RequestCachedMetadata(ctx, req, 100*time.Millisecond)
 		if err != nil {
@@ -2193,10 +2158,7 @@ func TestRequestCachedMetadata(t *testing.T) {
 		defer metadataRequests.Store(0)
 
 		// Step 1: populate cache for topic1.
-		req := kmsg.NewPtrMetadataRequest()
-		rt := kmsg.NewMetadataRequestTopic()
-		rt.Topic = kmsg.StringPtr("topic1")
-		req.Topics = append(req.Topics, rt)
+		req := metaReqForTopic("topic1")
 		if _, err := cl.RequestCachedMetadata(ctx, req, 5*time.Second); err != nil {
 			t.Fatal(err)
 		}
@@ -2238,6 +2200,7 @@ func TestRequestCachedMetadata(t *testing.T) {
 }
 
 func TestKadmCachedMetadata(t *testing.T) {
+	t.Parallel()
 	c, err := NewCluster(
 		NumBrokers(1),
 		SeedTopics(2, "t1", "t2", "t_internal"),
