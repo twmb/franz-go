@@ -319,6 +319,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.acks}
 	case namefn(DisableIdempotentWrite):
 		return []any{cfg.disableIdempotency}
+	case namefn(AllowIdempotentProduceCancellation):
+		return []any{cfg.allowIdempotentProduceCancellation}
 	case namefn(MaxProduceRequestsInflightPerBroker):
 		return []any{cfg.maxProduceInflight}
 	case namefn(ProducerBatchCompression):
