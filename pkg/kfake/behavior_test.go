@@ -1785,4 +1785,56 @@ func TestTxnDescribeTransactions(t *testing.T) {
 	}
 }
 
+// TestProduceSyncUnlinger verifies that ProduceSync does not wait for the full
+// linger duration before completing. With a 10s linger, ProduceSync should
+// still return quickly because it unlingers partitions after enqueuing records.
+func TestProduceSyncUnlinger(t *testing.T) {
+	t.Parallel()
+	topic := "produce-sync-unlinger"
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+
+	producer := newPlainClient(t, c,
+		kgo.DefaultProduceTopic(topic),
+		kgo.ProducerLinger(10*time.Second),
+	)
+
+	// Produce one record and flush to load topic metadata and
+	// establish connections. Without this, the first ProduceSync
+	// would buffer to the unknown-topic path and not benefit from
+	// the unlinger optimization.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	producer.Produce(ctx, kgo.StringRecord("warmup"), nil)
+	if err := producer.Flush(ctx); err != nil {
+		t.Fatalf("warmup flush failed: %v", err)
+	}
+
+	start := time.Now()
+	results := producer.ProduceSync(ctx, kgo.StringRecord("v1"), kgo.StringRecord("v2"), kgo.StringRecord("v3"))
+	elapsed := time.Since(start)
+
+	if err := results.FirstErr(); err != nil {
+		t.Fatalf("ProduceSync failed: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+
+	// With the unlinger fix, ProduceSync should complete well within 5s
+	// despite the 10s linger. Without the fix, it would block for 10s.
+	if elapsed > 5*time.Second {
+		t.Fatalf("ProduceSync took %v, expected well under 5s with unlinger", elapsed)
+	}
+
+	// Verify all records are consumable (warmup + 3 = 4 records total).
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 4, 5*time.Second)
+	if len(records) != 4 {
+		t.Fatalf("expected 4 consumed records, got %d", len(records))
+	}
+}
+
 func stringp(s string) *string { return &s }

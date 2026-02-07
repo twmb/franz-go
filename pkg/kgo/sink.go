@@ -688,7 +688,7 @@ func (s *sink) handleReqRespNoack(b *bytes.Buffer, debug bool, req *produceReque
 				if debug {
 					fmt.Fprintf(b, "%d{0=>%d}, ", partition, len(batch.records))
 				}
-				s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, 0, nil)
+				s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, 0, nil)
 			} else if debug {
 				fmt.Fprintf(b, "%d{skipped}, ", partition)
 			}
@@ -979,7 +979,7 @@ func (s *sink) handleReqRespBatch(
 			)
 			s.cl.failProducerID(producerID, producerEpoch, err)
 
-			s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.Partition, rp.BaseOffset, err)
+			s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.BaseOffset, err)
 			if debug {
 				fmt.Fprintf(b, "fatal@%d,%d(%s)}, ", rp.BaseOffset, nrec, err)
 			}
@@ -1043,7 +1043,7 @@ func (s *sink) handleReqRespBatch(
 				batch.owner.addedToTxn.Swap(true)
 			}
 		}
-		s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.Partition, rp.BaseOffset, err)
+		s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.BaseOffset, err)
 		didProduce = err == nil
 		if debug {
 			if err != nil {
@@ -1061,7 +1061,7 @@ func (s *sink) handleReqRespBatch(
 //
 // This is safe even if the owning recBuf migrated sinks, since we are
 // finishing based off the status of an inflight req from the original sink.
-func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch int16, partition int32, baseOffset int64, err error) {
+func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch int16, baseOffset int64, err error) {
 	recBuf := batch.owner
 
 	if err != nil {
@@ -1095,9 +1095,8 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 		// corresponding to our own RecordAttr's bit 8 being no
 		// timestamp type. Thus, we can directly convert the batch
 		// attrs to our own RecordAttrs.
-		attrs:     RecordAttrs{uint8(attrs)},
-		partition: partition,
-		recs:      records,
+		attrs: RecordAttrs{uint8(attrs)},
+		recs:  records,
 	})
 }
 
