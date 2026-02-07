@@ -124,7 +124,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 			continue
 		}
 
-		if s.cl.cfg.disableIdempotency {
+		if s.cl.cfg.disableIdempotency || s.cl.cfg.allowIdempotentProduceCancellation {
 			if cctx := batch.records[0].cancelingCtx(); cctx != nil && req.firstCancelingCtx == nil {
 				req.firstCancelingCtx = cctx //nolint:fatcontext // we are only here if firstCancelingCtx is currently nil
 			}
@@ -288,7 +288,7 @@ func (s *sink) anyCtx() context.Context {
 			// that's fine, this is just to cancel a request, we
 			// will handle retrying those batches when when
 			// handling the response.
-			if batch0.canFailFromLoadErrs && !batch0.unsureIfProduced && len(batch0.records) > 0 {
+			if batch0.canFailFromLoadErrs && (!batch0.unsureIfProduced || s.cl.cfg.allowIdempotentProduceCancellation) && len(batch0.records) > 0 {
 				r0 := batch0.records[0]
 				if rctx := r0.cancelingCtx(); rctx != nil {
 					batch0.mu.Unlock()
@@ -380,7 +380,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 					if len(recBuf.batches) > 0 {
 						batch0 := recBuf.batches[0]
 						batch0.mu.Lock()
-						if batch0.canFailFromLoadErrs && !batch0.unsureIfProduced && len(batch0.records) > 0 {
+						if batch0.canFailFromLoadErrs && (!batch0.unsureIfProduced || s.cl.cfg.allowIdempotentProduceCancellation) && len(batch0.records) > 0 {
 							r0 := batch0.records[0]
 							if rctx := r0.cancelingCtx(); rctx != nil {
 								select {
@@ -1196,7 +1196,7 @@ func (s *sink) handleRetryBatches(
 			return
 		}
 
-		if (canFail && !batch.unsureIfProduced) || s.cl.cfg.disableIdempotency {
+		if (canFail && !batch.unsureIfProduced) || s.cl.cfg.disableIdempotency || s.cl.cfg.allowIdempotentProduceCancellation {
 			if err := batch.maybeFailErr(&s.cl.cfg); err != nil {
 				batch.owner.failAllRecords(err)
 				return
@@ -1555,11 +1555,11 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	batch0.mu.Lock()
 	batch0.tries++
 	var (
-		canFail        = !recBuf.cl.idempotent() || (batch0.canFailFromLoadErrs && !batch0.unsureIfProduced) // we can only fail if we are not idempotent or if we have no outstanding requests
-		batch0Fail     = batch0.maybeFailErr(&recBuf.cl.cfg) != nil                                          // timeout, retries, or aborting
-		netErr         = isRetryableBrokerErr(err) || isDialNonTimeoutErr(err)                               // we can fail if this is *not* a network error
-		retryableKerr  = kerr.IsRetriable(err)                                                               // we fail if this is not a retryable kerr,
-		isUnknownLimit = recBuf.checkUnknownFailLimit(err)                                                   // or if it is, but it is UnknownTopicOrPartition and we are at our limit
+		canFail        = !recBuf.cl.idempotent() || recBuf.cl.cfg.allowIdempotentProduceCancellation || (batch0.canFailFromLoadErrs && !batch0.unsureIfProduced) // we can only fail if we are not idempotent, cancellation is allowed, or if we have no outstanding requests
+		batch0Fail     = batch0.maybeFailErr(&recBuf.cl.cfg) != nil                                                                                              // timeout, retries, or aborting
+		netErr         = isRetryableBrokerErr(err) || isDialNonTimeoutErr(err)                                                                                   // we can fail if this is *not* a network error
+		retryableKerr  = kerr.IsRetriable(err)                                                                                                                   // we fail if this is not a retryable kerr,
+		isUnknownLimit = recBuf.checkUnknownFailLimit(err)                                                                                                       // or if it is, but it is UnknownTopicOrPartition and we are at our limit
 
 		willFail = canFail && (batch0Fail || !netErr && (!retryableKerr || retryableKerr && isUnknownLimit))
 	)
@@ -1927,7 +1927,7 @@ func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 	}
 
 	if recBuf.batches[0] == batch {
-		if !p.idempotent() || (batch.canFailFromLoadErrs && !batch.unsureIfProduced) {
+		if !p.idempotent() || recBuf.cl.cfg.allowIdempotentProduceCancellation || (batch.canFailFromLoadErrs && !batch.unsureIfProduced) {
 			if err := batch.maybeFailErr(&batch.owner.cl.cfg); err != nil {
 				recBuf.failAllRecords(err)
 				return false
