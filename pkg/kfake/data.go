@@ -390,6 +390,7 @@ func (d *data) setTopicConfig(t, k string, v *string, dry bool) bool {
 var validTopicConfigs = map[string]string{
 	"cleanup.policy":         "",
 	"compression.type":       "compression.type",
+	"kfake.is_internal":      "",
 	"max.message.bytes":      "log.message.max.bytes",
 	"message.timestamp.type": "log.message.timestamp.type",
 	"min.insync.replicas":    "min.insync.replicas",

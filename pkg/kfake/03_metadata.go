@@ -59,6 +59,9 @@ func (c *Cluster) handleMetadata(creq *clientReq) (kmsg.Response, error) {
 			st.Topic = kmsg.StringPtr(t)
 		}
 		st.TopicID = id
+		if v, ok := c.data.tcfgs[t]["kfake.is_internal"]; ok && v != nil && *v == "true" {
+			st.IsInternal = true
+		}
 		st.ErrorCode = errCode
 		if req.IncludeTopicAuthorizedOperations {
 			st.AuthorizedOperations = c.topicAuthorizedOps(creq, t)

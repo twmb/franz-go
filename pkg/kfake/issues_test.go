@@ -1835,3 +1835,509 @@ func TestFirstMetadataPartitionErrors(t *testing.T) {
 		t.Fatalf("produce never succeeded (metadata was likely not re-fetched after first load error): %v", lastErr)
 	}
 }
+
+func TestRequestCachedMetadata(t *testing.T) {
+	t.Parallel()
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(2, "topic1", "topic2", "internal_topic"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.MetadataMinAge(5*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx := context.Background()
+	adm := kadm.NewClient(cl)
+
+	// Mark internal_topic as internal via kfake-specific config.
+	v := "true"
+	if _, err := adm.AlterTopicConfigsState(ctx, []kadm.AlterConfig{
+		{Name: "kfake.is_internal", Value: &v},
+	}, "internal_topic"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Track metadata requests via a single ControlKey. Subtests that
+	// need to intercept metadata set metadataHook; the ControlKey
+	// delegates to it before falling through to the normal counter.
+	// Using one ControlKey avoids nondeterminism from Go map iteration
+	// order when multiple ControlKeys exist for the same request key.
+	var metadataRequests atomic.Int32
+	var metadataHookMu sync.Mutex
+	var metadataHook func(kmsg.Request) (kmsg.Response, error, bool)
+	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		metadataHookMu.Lock()
+		fn := metadataHook
+		metadataHookMu.Unlock()
+		if fn != nil {
+			if resp, err, handled := fn(kreq); handled {
+				return resp, err, true
+			}
+		}
+		metadataRequests.Add(1)
+		return nil, nil, false
+	})
+
+	t.Run("AllTopicsCaching", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		req := kmsg.NewPtrMetadataRequest()
+		// nil Topics = all topics
+		resp, err := cl.RequestCachedMetadata(ctx, req, 0)
+		if err != nil {
+			t.Fatalf("first all-topics fetch: %v", err)
+		}
+
+		if len(resp.Topics) != 3 {
+			t.Fatalf("expected 3 topics, got %d", len(resp.Topics))
+		}
+
+		gotTopics := make(map[string]bool)
+		for _, topic := range resp.Topics {
+			if topic.Topic == nil {
+				t.Fatal("topic name is nil")
+			}
+			gotTopics[*topic.Topic] = true
+			var zeroID [16]byte
+			if topic.TopicID == zeroID {
+				t.Errorf("topic %s has zero TopicID", *topic.Topic)
+			}
+			if len(topic.Partitions) != 2 {
+				t.Errorf("topic %s: expected 2 partitions, got %d", *topic.Topic, len(topic.Partitions))
+			}
+			// Verify IsInternal is set from kfake.is_internal config.
+			if *topic.Topic == "internal_topic" && !topic.IsInternal {
+				t.Error("internal_topic should be marked internal")
+			}
+			if (*topic.Topic == "topic1" || *topic.Topic == "topic2") && topic.IsInternal {
+				t.Errorf("topic %s should not be internal", *topic.Topic)
+			}
+		}
+		if !gotTopics["topic1"] || !gotTopics["topic2"] || !gotTopics["internal_topic"] {
+			t.Fatalf("expected topic1, topic2, internal_topic, got %v", gotTopics)
+		}
+
+		if len(resp.Brokers) == 0 {
+			t.Fatal("expected at least one broker")
+		}
+
+		countAfterFirst := metadataRequests.Load()
+		if countAfterFirst == 0 {
+			t.Fatal("expected at least one metadata request")
+		}
+
+		// Second call within cache window should use cache.
+		resp2, err := cl.RequestCachedMetadata(ctx, req, 0)
+		if err != nil {
+			t.Fatalf("second all-topics fetch: %v", err)
+		}
+		if len(resp2.Topics) != 3 {
+			t.Fatalf("cached: expected 3 topics, got %d", len(resp2.Topics))
+		}
+		if metadataRequests.Load() != countAfterFirst {
+			t.Fatalf("expected cached (no new metadata request), got %d total (was %d)", metadataRequests.Load(), countAfterFirst)
+		}
+	})
+
+	t.Run("NoTopicsCaching", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		req := kmsg.NewPtrMetadataRequest()
+		req.Topics = []kmsg.MetadataRequestTopic{} // empty = no topics
+
+		// By this point the client already has broker info from previous
+		// tests, so no-topics should not issue a metadata request at all.
+		resp, err := cl.RequestCachedMetadata(ctx, req, 0)
+		if err != nil {
+			t.Fatalf("no-topics fetch: %v", err)
+		}
+		if len(resp.Brokers) == 0 {
+			t.Fatal("expected brokers")
+		}
+		if resp.ControllerID < 0 {
+			t.Fatal("expected valid controller ID")
+		}
+
+		countAfterFirst := metadataRequests.Load()
+
+		// Second call should also not issue a request.
+		resp2, err := cl.RequestCachedMetadata(ctx, req, 0)
+		if err != nil {
+			t.Fatalf("second no-topics fetch: %v", err)
+		}
+		if len(resp2.Brokers) == 0 {
+			t.Fatal("cached: expected brokers")
+		}
+		if metadataRequests.Load() != countAfterFirst {
+			t.Fatalf("expected no new request, got %d total (was %d)", metadataRequests.Load(), countAfterFirst)
+		}
+	})
+
+	t.Run("SpecificTopicCaching", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		req := kmsg.NewPtrMetadataRequest()
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr("topic1")
+		req.Topics = append(req.Topics, rt)
+
+		resp, err := cl.RequestCachedMetadata(ctx, req, 0)
+		if err != nil {
+			t.Fatalf("specific topic fetch: %v", err)
+		}
+		if len(resp.Topics) != 1 {
+			t.Fatalf("expected 1 topic, got %d", len(resp.Topics))
+		}
+		if *resp.Topics[0].Topic != "topic1" {
+			t.Fatalf("expected topic1, got %s", *resp.Topics[0].Topic)
+		}
+
+		countAfterFirst := metadataRequests.Load()
+
+		// Second call should be cached.
+		resp2, err := cl.RequestCachedMetadata(ctx, req, 0)
+		if err != nil {
+			t.Fatalf("second specific fetch: %v", err)
+		}
+		if len(resp2.Topics) != 1 || *resp2.Topics[0].Topic != "topic1" {
+			t.Fatal("cached: wrong topic")
+		}
+		if metadataRequests.Load() != countAfterFirst {
+			t.Fatalf("expected cached, got %d total (was %d)", metadataRequests.Load(), countAfterFirst)
+		}
+	})
+
+	t.Run("TopicIDLookupCached", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		// Look up topic1's TopicID from kfake directly.
+		ti := c.TopicInfo("topic1")
+		if ti == nil {
+			t.Fatal("topic1 not found in kfake")
+		}
+
+		// Request by TopicID only, without any prior cache-warming
+		// for this specific topic. The ID should be resolved from the
+		// client's internal id2t map (populated by the main metadata
+		// loop) and the topic data fetched/cached.
+		idReq := kmsg.NewPtrMetadataRequest()
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.TopicID = ti.TopicID
+		idReq.Topics = append(idReq.Topics, rt)
+
+		resp, err := cl.RequestCachedMetadata(ctx, idReq, 0)
+		if err != nil {
+			t.Fatalf("TopicID lookup: %v", err)
+		}
+		if len(resp.Topics) != 1 {
+			t.Fatalf("expected 1 topic, got %d", len(resp.Topics))
+		}
+		if resp.Topics[0].Topic == nil || *resp.Topics[0].Topic != "topic1" {
+			t.Fatalf("expected topic1, got %v", resp.Topics[0].Topic)
+		}
+
+		countAfterFirst := metadataRequests.Load()
+
+		// Second lookup of the same TopicID should be cached.
+		resp2, err := cl.RequestCachedMetadata(ctx, idReq, 0)
+		if err != nil {
+			t.Fatalf("cached TopicID lookup: %v", err)
+		}
+		if len(resp2.Topics) != 1 || *resp2.Topics[0].Topic != "topic1" {
+			t.Fatal("cached: wrong topic")
+		}
+		if metadataRequests.Load() != countAfterFirst {
+			t.Fatalf("expected cached, got %d total (was %d)", metadataRequests.Load(), countAfterFirst)
+		}
+	})
+
+	t.Run("TopicIDLookupUncached", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		// Create a new topic after the client's main metadata loop
+		// has already run, so neither metaCache nor id2t know about it.
+		adm := kadm.NewClient(cl)
+		_, err := adm.CreateTopic(ctx, 1, 1, nil, "newTopic")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ti := c.TopicInfo("newTopic")
+		if ti == nil {
+			t.Fatal("newTopic not found in kfake")
+		}
+
+		// Request newTopic by TopicID only  - not in any cache.
+		idReq := kmsg.NewPtrMetadataRequest()
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.TopicID = ti.TopicID
+		idReq.Topics = append(idReq.Topics, rt)
+
+		resp, err := cl.RequestCachedMetadata(ctx, idReq, 0)
+		if err != nil {
+			t.Fatalf("uncached TopicID lookup: %v", err)
+		}
+		if len(resp.Topics) != 1 {
+			t.Fatalf("expected 1 topic, got %d", len(resp.Topics))
+		}
+		if resp.Topics[0].Topic == nil || *resp.Topics[0].Topic != "newTopic" {
+			t.Fatalf("expected newTopic, got %v", resp.Topics[0].Topic)
+		}
+
+		// Should have fetched from broker (at least 1 metadata request
+		// for the ID resolution + potentially 1 for the name-based fetch).
+		if metadataRequests.Load() < 1 {
+			t.Fatal("expected at least one metadata request for uncached TopicID")
+		}
+	})
+
+	// StaleCacheResilience verifies that a failed metadata re-fetch after
+	// cache expiry does not destroy the previously cached data. The flow:
+	// 1. Cache topic1 metadata with a short TTL.
+	// 2. Wait for the cache entry to expire.
+	// 3. Intercept the next metadata request to return an error.
+	// 4. Attempt a fetch  - the error is returned, but the stale cache
+	//    entry is preserved (we no longer delete on cache miss).
+	// 5. Restore normal metadata handling and fetch again  - succeeds.
+	t.Run("StaleCacheResilience", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		req := kmsg.NewPtrMetadataRequest()
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr("topic1")
+		req.Topics = append(req.Topics, rt)
+
+		// Step 1: populate cache.
+		_, err := cl.RequestCachedMetadata(ctx, req, 100*time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Step 2: wait for expiry.
+		time.Sleep(150 * time.Millisecond)
+
+		// Step 3: intercept next metadata to return an error response.
+		failOnce := true
+		metadataHookMu.Lock()
+		metadataHook = func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+			if failOnce {
+				failOnce = false
+				metaReq := kreq.(*kmsg.MetadataRequest)
+				resp := metaReq.ResponseKind().(*kmsg.MetadataResponse)
+				rt := kmsg.NewMetadataResponseTopic()
+				rt.Topic = kmsg.StringPtr("topic1")
+				rt.ErrorCode = kerr.UnknownServerError.Code
+				resp.Topics = append(resp.Topics, rt)
+				return resp, nil, true
+			}
+			return nil, nil, false
+		}
+		metadataHookMu.Unlock()
+
+		// Step 4: fetch - may get error data, but stale entry preserved.
+		_, _ = cl.RequestCachedMetadata(ctx, req, 100*time.Millisecond)
+
+		// Step 5: clear hook and re-fetch.
+		metadataHookMu.Lock()
+		metadataHook = nil
+		metadataHookMu.Unlock()
+
+		time.Sleep(150 * time.Millisecond)
+		resp, err := cl.RequestCachedMetadata(ctx, req, 100*time.Millisecond)
+		if err != nil {
+			t.Fatalf("fetch after failure: %v", err)
+		}
+		if len(resp.Topics) != 1 || *resp.Topics[0].Topic != "topic1" {
+			t.Fatalf("expected topic1 after recovery, got %v", resp.Topics)
+		}
+	})
+
+	// UnknownTopic verifies that requesting a non-existent topic by name
+	// surfaces the broker's UnknownTopicOrPartition error in the response.
+	t.Run("UnknownTopic", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		req := kmsg.NewPtrMetadataRequest()
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr("no_such_topic")
+		req.Topics = append(req.Topics, rt)
+
+		resp, err := cl.RequestCachedMetadata(ctx, req, 100*time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Topics) != 1 {
+			t.Fatalf("expected 1 topic, got %d", len(resp.Topics))
+		}
+		if resp.Topics[0].ErrorCode != kerr.UnknownTopicOrPartition.Code {
+			t.Fatalf("expected UnknownTopicOrPartition, got error code %d", resp.Topics[0].ErrorCode)
+		}
+	})
+
+	// ShardEviction verifies that a sharded request error (e.g.
+	// NotLeaderForPartition from ListOffsets) evicts the topic from the
+	// metadata cache, causing the next RequestCachedMetadata call to
+	// re-fetch from the broker rather than serving stale data.
+	t.Run("ShardEviction", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		// Step 1: populate cache for topic1.
+		req := kmsg.NewPtrMetadataRequest()
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr("topic1")
+		req.Topics = append(req.Topics, rt)
+		if _, err := cl.RequestCachedMetadata(ctx, req, 5*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		countAfterCache := metadataRequests.Load()
+
+		// Step 2: intercept ListOffsets to return NotLeaderForPartition,
+		// which triggers maybeDeleteCachedMeta for the topic.
+		c.ControlKey(int16(kmsg.ListOffsets), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+			lor := kreq.(*kmsg.ListOffsetsRequest)
+			resp := lor.ResponseKind().(*kmsg.ListOffsetsResponse)
+			for _, rt := range lor.Topics {
+				st := kmsg.NewListOffsetsResponseTopic()
+				st.Topic = rt.Topic
+				for _, rp := range rt.Partitions {
+					sp := kmsg.NewListOffsetsResponseTopicPartition()
+					sp.Partition = rp.Partition
+					sp.ErrorCode = kerr.NotLeaderForPartition.Code
+					st.Partitions = append(st.Partitions, sp)
+				}
+				resp.Topics = append(resp.Topics, st)
+			}
+			return resp, nil, true
+		})
+		adm.ListStartOffsets(ctx, "topic1")
+
+		// Step 3: the cache entry for topic1 should be evicted.
+		// A new RequestCachedMetadata must re-fetch from the broker.
+		resp, err := cl.RequestCachedMetadata(ctx, req, 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if metadataRequests.Load() <= countAfterCache {
+			t.Fatal("expected a new metadata request after shard eviction")
+		}
+		if len(resp.Topics) != 1 || *resp.Topics[0].Topic != "topic1" {
+			t.Fatalf("expected topic1, got %v", resp.Topics)
+		}
+	})
+}
+
+func TestKadmCachedMetadata(t *testing.T) {
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(2, "t1", "t2", "t_internal"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.MetadataMinAge(5*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx := context.Background()
+	adm := kadm.NewClient(cl)
+
+	// Mark t_internal as internal via kfake-specific config.
+	v := "true"
+	if _, err := adm.AlterTopicConfigsState(ctx, []kadm.AlterConfig{
+		{Name: "kfake.is_internal", Value: &v},
+	}, "t_internal"); err != nil {
+		t.Fatal(err)
+	}
+
+	var metadataRequests atomic.Int32
+	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		metadataRequests.Add(1)
+		return nil, nil, false
+	})
+
+	t.Run("MetadataAllTopics", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		m, err := adm.Metadata(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(m.Topics) != 3 {
+			t.Fatalf("expected 3 topics, got %d: %v", len(m.Topics), m.Topics.Names())
+		}
+		for _, td := range m.Topics {
+			var zeroID kadm.TopicID
+			if td.ID == zeroID {
+				t.Errorf("topic %s has zero ID", td.Topic)
+			}
+		}
+	})
+
+	t.Run("ListTopicsFiltersInternal", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		topics, err := adm.ListTopics(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// t1 and t2 are not internal, should be present.
+		if !topics.Has("t1") || !topics.Has("t2") {
+			t.Fatalf("expected t1 and t2, got %v", topics.Names())
+		}
+		// t_internal should be filtered out by ListTopics.
+		if topics.Has("t_internal") {
+			t.Fatal("t_internal should be filtered by ListTopics")
+		}
+	})
+
+	t.Run("BrokerMetadata", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		m, err := adm.BrokerMetadata(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(m.Brokers) == 0 {
+			t.Fatal("expected brokers")
+		}
+	})
+
+	t.Run("CachingReducesRequests", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		// First call.
+		_, err := adm.Metadata(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		countAfterFirst := metadataRequests.Load()
+
+		// Second call should be cached.
+		_, err = adm.Metadata(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if metadataRequests.Load() != countAfterFirst {
+			t.Fatalf("expected cached, got %d total (was %d)", metadataRequests.Load(), countAfterFirst)
+		}
+	})
+}

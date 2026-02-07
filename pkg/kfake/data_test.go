@@ -7,6 +7,7 @@ func TestConfigDefaults(t *testing.T) {
 	exceptions := map[string]struct{}{
 		"broker.id":               {},
 		"broker.rack":             {},
+		"kfake.is_internal":       {},
 		"sasl.enabled.mechanisms": {},
 		"super.users":             {},
 	}
