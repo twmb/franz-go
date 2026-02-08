@@ -1,3 +1,7 @@
+// This example demonstrates a dead letter queue (DLQ) pattern: records that
+// fail processing after retries are forwarded to a separate DLQ topic with
+// error metadata in headers. A DLQ consumer can later inspect and reprocess
+// these failed records.
 package main
 
 import (
@@ -28,13 +32,13 @@ type kafka struct {
 }
 
 type message struct {
-	topic       string
-	key         []byte
-	value       []byte
-	timestamp   time.Time
-	offset      int64
-	partition   int32
-	leaderEpoch int32
+	Topic       string    `json:"topic"`
+	Key         []byte    `json:"key"`
+	Value       []byte    `json:"value"`
+	Timestamp   time.Time `json:"timestamp"`
+	Offset      int64     `json:"offset"`
+	Partition   int32     `json:"partition"`
+	LeaderEpoch int32     `json:"leader_epoch"`
 }
 
 func main() {
@@ -125,13 +129,13 @@ func (k *kafka) run(ctx context.Context, wg *sync.WaitGroup) {
 						// to make sure that there's no obvious errors.
 						if err = k.retry(rec); err != nil {
 							failed, _ := json.Marshal(&message{
-								topic:       rec.Topic,
-								key:         rec.Key,
-								value:       rec.Value,
-								timestamp:   rec.Timestamp,
-								offset:      rec.Offset,
-								partition:   rec.Partition,
-								leaderEpoch: rec.LeaderEpoch,
+								Topic:       rec.Topic,
+								Key:         rec.Key,
+								Value:       rec.Value,
+								Timestamp:   rec.Timestamp,
+								Offset:      rec.Offset,
+								Partition:   rec.Partition,
+								LeaderEpoch: rec.LeaderEpoch,
 							})
 							// Then DLQ consumer should handle produced records.
 							k.producer.Produce(ctx, &kgo.Record{
@@ -157,13 +161,13 @@ func (k *kafka) process(r *kgo.Record) error {
 	// Simulate load.
 	time.Sleep(1 * time.Second)
 	msg := &message{
-		topic:       r.Topic,
-		key:         r.Key,
-		value:       r.Value,
-		timestamp:   r.Timestamp,
-		offset:      r.Offset,
-		partition:   r.Partition,
-		leaderEpoch: r.LeaderEpoch,
+		Topic:       r.Topic,
+		Key:         r.Key,
+		Value:       r.Value,
+		Timestamp:   r.Timestamp,
+		Offset:      r.Offset,
+		Partition:   r.Partition,
+		LeaderEpoch: r.LeaderEpoch,
 	}
 	if rand.IntN(100)%2 != 0 {
 		// Simulate error.
