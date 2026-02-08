@@ -207,9 +207,9 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					case window == nil && b.ProducerEpoch != -1:
 						errCode = kerr.InvalidTxnState.Code
 					case window != nil && b.ProducerEpoch < pidinf.epoch:
-						errCode = kerr.FencedLeaderEpoch.Code
+						errCode = kerr.InvalidProducerEpoch.Code
 					case window != nil && b.ProducerEpoch > pidinf.epoch:
-						errCode = kerr.UnknownLeaderEpoch.Code
+						errCode = kerr.InvalidProducerEpoch.Code
 					default:
 						var seqOk bool
 						seqOk, dup = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords)
