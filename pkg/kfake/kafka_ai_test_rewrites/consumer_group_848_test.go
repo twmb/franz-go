@@ -108,16 +108,20 @@ func Test848ConsumerLeaveReassigns(t *testing.T) {
 	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
-	// Two consumers join.
+	// Two consumers join. Use a short FetchMaxWait so that when
+	// partitions are reassigned, the new partition's fetch begins
+	// promptly rather than waiting for the prior long poll to expire.
 	c1 := newClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
 	)
 	c2 := newClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
 	)
 
 	// Consume all existing records to stabilize.
@@ -456,10 +460,14 @@ func Test848SessionTimeout(t *testing.T) {
 	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
+	// Use a short FetchMaxWait so that when partitions are reassigned
+	// after c2's session timeout, c1's next fetch includes the new
+	// partitions promptly rather than blocking on the prior long poll.
 	c1 := newClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
 	)
 
 	// c2 uses a short rebalance timeout so the server removes it quickly.

@@ -3,6 +3,7 @@ package kfake
 import "testing"
 
 func TestConfigDefaults(t *testing.T) {
+	t.Parallel()
 	exceptions := map[string]struct{}{
 		"broker.id":               {},
 		"broker.rack":             {},

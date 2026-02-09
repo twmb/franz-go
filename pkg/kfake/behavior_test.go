@@ -109,8 +109,8 @@ func Test848RegexSubscription(t *testing.T) {
 		kgo.ConsumeTopics("t848-rx-.*"),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.MetadataMinAge(time.Second),
-		kgo.MetadataMaxAge(time.Second),
+		kgo.MetadataMinAge(50*time.Millisecond),
+		kgo.MetadataMaxAge(100*time.Millisecond),
 	)
 
 	// Consume exactly the expected matching records.
@@ -128,7 +128,7 @@ func Test848RegexSubscription(t *testing.T) {
 
 	// Exclude path: poll briefly and verify no records from the
 	// non-matching topic arrive.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	for {
 		fs := consumer.PollRecords(ctx, 100)
@@ -551,8 +551,9 @@ func Test848AddTopicSubscription(t *testing.T) {
 		kgo.ConsumeTopics(topicA),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.MetadataMinAge(500*time.Millisecond),
-		kgo.MetadataMaxAge(time.Second),
+		kgo.MetadataMinAge(50*time.Millisecond),
+		kgo.MetadataMaxAge(100*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
 	)
 	records := consumeN(t, consumer, nRecords, 10*time.Second)
 	for _, r := range records {
@@ -597,8 +598,9 @@ func Test848TopicCreatedAfterJoin(t *testing.T) {
 		kgo.ConsumeTopics("t848-dynamic-.*"),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.MetadataMinAge(time.Second),
-		kgo.MetadataMaxAge(time.Second),
+		kgo.MetadataMinAge(50*time.Millisecond),
+		kgo.MetadataMaxAge(100*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
 	)
 
 	// Consume from existing topic first.

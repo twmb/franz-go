@@ -14,6 +14,7 @@ import (
 )
 
 func TestACLsDisabled(t *testing.T) {
+	t.Parallel()
 	c, err := NewCluster(NumBrokers(1), SeedTopics(1, "test-topic"))
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +39,7 @@ func TestACLsDisabled(t *testing.T) {
 }
 
 func TestACLsEnabled(t *testing.T) {
+	t.Parallel()
 	c, err := NewCluster(
 		NumBrokers(1),
 		SeedTopics(1, "test-topic"),
@@ -75,6 +77,7 @@ func TestACLsEnabled(t *testing.T) {
 }
 
 func TestACLsWithPermission(t *testing.T) {
+	t.Parallel()
 	c, err := NewCluster(
 		NumBrokers(1),
 		SeedTopics(1, "test-topic"),
@@ -111,6 +114,7 @@ func TestACLsWithPermission(t *testing.T) {
 }
 
 func TestACLsSuperuser(t *testing.T) {
+	t.Parallel()
 	c, err := NewCluster(
 		NumBrokers(1),
 		SeedTopics(1, "test-topic"),
@@ -143,6 +147,7 @@ func TestACLsSuperuser(t *testing.T) {
 }
 
 func TestACLCreateDescribeDelete(t *testing.T) {
+	t.Parallel()
 	c, err := NewCluster(
 		NumBrokers(1),
 		EnableACLs(),
@@ -239,6 +244,7 @@ func TestACLCreateDescribeDelete(t *testing.T) {
 }
 
 func TestACLDenyTakesPrecedence(t *testing.T) {
+	t.Parallel()
 	c, err := NewCluster(
 		NumBrokers(1),
 		SeedTopics(1, "test-topic"),
@@ -280,6 +286,7 @@ func TestACLDenyTakesPrecedence(t *testing.T) {
 }
 
 func TestACLPrefixPattern(t *testing.T) {
+	t.Parallel()
 	c, err := NewCluster(
 		NumBrokers(1),
 		SeedTopics(1, "test-topic"),
