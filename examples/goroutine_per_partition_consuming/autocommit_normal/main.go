@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,6 +142,18 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer cl.Close()
+
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, os.Interrupt)
+	go func() {
+		<-sigs
+		fmt.Println("received interrupt signal; closing client")
+		cl.Close()
+		<-sigs
+		fmt.Println("received second interrupt; exiting")
+		os.Exit(1)
+	}()
 
 	s.poll(cl)
 }

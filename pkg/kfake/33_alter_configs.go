@@ -63,10 +63,14 @@ outer:
 					continue outer
 				}
 			}
+			newBcfgs := make(map[string]*string, len(rr.Configs))
 			var invalid bool
 			for i := range rr.Configs {
 				rc := &rr.Configs[i]
-				invalid = invalid || !c.setBrokerConfig(rc.Name, rc.Value, true)
+				if !validateBrokerConfig(rc.Name, rc.Value) {
+					invalid = true
+				}
+				newBcfgs[rc.Name] = rc.Value
 			}
 			if invalid {
 				doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
@@ -76,11 +80,7 @@ outer:
 			if req.ValidateOnly {
 				continue
 			}
-			c.bcfgs = make(map[string]*string)
-			for i := range rr.Configs {
-				rc := &rr.Configs[i]
-				c.setBrokerConfig(rc.Name, rc.Value, false)
-			}
+			c.storeBcfgs(newBcfgs)
 
 		case kmsg.ConfigResourceTypeTopic:
 			if !c.allowedACL(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationAlterConfigs) {

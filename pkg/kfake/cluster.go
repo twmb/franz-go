@@ -42,10 +42,10 @@ type (
 		groups        groups
 		sasls         sasls
 		acls          clusterACLs
-		bcfgs         map[string]*string
-		quotas      map[string]quotaEntry
-		telem       map[[16]byte]int32
-		telemNextID int32
+		bcfgs         atomic.Pointer[map[string]*string]
+		quotas        map[string]quotaEntry
+		telem         map[[16]byte]int32
+		telemNextID   int32
 		fetchSessions fetchSessions
 
 		die  chan struct{}
@@ -131,12 +131,13 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			tcfgs:     make(map[string]map[string]*string),
 			tnorms:    make(map[string]string),
 		},
-		bcfgs:  make(map[string]*string),
+		// bcfgs initialized below via storeBcfgs
 		quotas: make(map[string]quotaEntry),
 		telem:  make(map[[16]byte]int32),
 
 		die: make(chan struct{}),
 	}
+	c.storeBcfgs(make(map[string]*string))
 	c.data.c = c
 	c.groups.c = c
 	c.pids.c = c
@@ -464,6 +465,10 @@ outer:
 			kresp, err = c.handleGetTelemetrySubscriptions(creq)
 		case kmsg.PushTelemetry:
 			kresp, err = c.handlePushTelemetry(creq)
+		case kmsg.ConsumerGroupHeartbeat:
+			kresp, err = c.handleConsumerGroupHeartbeat(creq)
+		case kmsg.ConsumerGroupDescribe:
+			kresp, err = c.handleConsumerGroupDescribe(creq)
 		default:
 			err = fmt.Errorf("unhandled key %v", k)
 		}

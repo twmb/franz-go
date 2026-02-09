@@ -51,7 +51,7 @@ jobs:
     container: golang:latest
     steps:
       - uses: actions/checkout@v4
-      - run: cd pkg/kfake && go work init . ../.. ../kadm ../kmsg && go test . && go test -race .
+      - run: cd pkg/kfake && go work init . ../.. ../kadm ../kmsg && go test ./... && go test -race ./...
 
   test-sr:
     if: github.repository == 'twmb/franz-go'

@@ -71,7 +71,6 @@ func (g *groupConsumer) manage848() {
 	g.memberGen.store(newStringUUID(), 0) // 0 joins the group
 
 	var consecutiveErrors int
-	var initialFences int
 outer:
 	for {
 		initialHb, err := g848.initialJoin()
@@ -103,30 +102,7 @@ outer:
 			}
 		}
 
-		// !!! TODO THIS BLOCK SHOULD NOT BE NECESSARY !!!
-		if errors.Is(err, kerr.FencedMemberEpoch) && initialFences < 1 {
-			lastMember, gen := g.memberGen.load()
-			newMember := newStringUUID()
-			g.memberGen.store(newMember, 0)
-			g.cfg.logger.Log(LogLevelInfo, "received fenced member epoch with epoch 0; clearing member ID to forcefully join as a new member",
-				"group", g.cfg.group,
-				"prior_member_id", lastMember,
-				"prior_generation", gen,
-				"new_member_id", newMember,
-				"new_generation", 0,
-			)
-			after := time.NewTimer(time.Second)
-			select {
-			case <-after.C:
-				initialFences++
-				continue outer
-			case <-g.cl.ctx.Done():
-				after.Stop()
-			}
-		}
-
 		for err == nil {
-			initialFences = 0
 			consecutiveErrors = 0
 			var nowAssigned map[string][]int32
 			// setupAssignedAndHeartbeat
@@ -143,9 +119,9 @@ outer:
 			// logic that handles all edge conditions.
 			_, err = g.setupAssignedAndHeartbeat(initialHb, func() (time.Duration, error) {
 				req := g848.mkreq()
-				dup := *req
 				if reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics) {
 					req.InstanceID = nil
+					req.RackID = nil
 					req.RebalanceTimeoutMillis = -1
 					req.ServerAssignor = nil
 					req.SubscribedTopicRegex = nil
@@ -155,30 +131,6 @@ outer:
 				resp, err := req.RequestWith(g.ctx, g.cl)
 				if err != nil {
 					return g.cfg.heartbeatInterval, err
-				}
-
-				// !!! TODO BEFORE OPTING IN BY DEFAULT !!!
-				// !!! ALSO EVALUATE COMMIT LOGIC       !!!
-				//
-				// See how the tests perform when the beartbeat is duplicated!
-				// I deliberately am not opting into next gen rebalancing until
-				// tests are reliably stable with the following lines uncommented!
-				//
-				// _, _ = resp, err
-				// resp, err = req.RequestWith(g.ctx, g.cl)
-				// if err != nil {
-				// 	return g.cfg.heartbeatInterval, err
-				// }
-				//
-				// !!! TODO DELETE
-
-				err = errCodeMessage(resp.ErrorCode, resp.ErrorMessage)
-				if errors.Is(err, kerr.FencedMemberEpoch) {
-					req = &dup
-					resp, err = req.RequestWith(g.ctx, g.cl)
-					if err != nil {
-						return g.cfg.heartbeatInterval, err
-					}
 				}
 
 				err = errCodeMessage(resp.ErrorCode, resp.ErrorMessage)
@@ -210,6 +162,17 @@ outer:
 
 			case errors.Is(err, kerr.RebalanceInProgress):
 				err = nil
+
+			case errors.Is(err, kerr.GroupMaxSizeReached):
+				g.cfg.logger.Log(LogLevelWarn, "consumer group is at maximum capacity; waiting for other members to leave before retrying",
+					"group", g.cfg.group,
+				)
+
+			case errors.Is(err, kerr.UnsupportedAssignor):
+				g.cfg.logger.Log(LogLevelError, "consumer group assignor is not supported by the broker; check client balancer configuration",
+					"group", g.cfg.group,
+					"assignor", serverAssignor,
+				)
 			}
 
 			if nowAssigned != nil {
@@ -391,7 +354,18 @@ func (g *g848) mkreq() *kmsg.ConsumerGroupHeartbeatRequest {
 	req.ServerAssignor = &g.serverAssignor
 
 	tps := g.g.tps.load()
-	if g.g.cl.cfg.regex {
+	if g.g.cl.cfg.regex && len(g.g.cl.cfg.excludeTopics) > 0 {
+		// KIP-848's SubscribedTopicRegex is include-only with no exclude
+		// counterpart. When excludes are configured, fall back to sending
+		// the already-resolved topic names from g.tps (which
+		// filterMetadataAllTopics populates with excludes applied).
+		// New topics are picked up on the next metadata refresh.
+		subscribedTopics := make([]string, 0, len(tps))
+		for t := range tps {
+			subscribedTopics = append(subscribedTopics, t)
+		}
+		req.SubscribedTopicNames = subscribedTopics
+	} else if g.g.cl.cfg.regex {
 		topics := g.g.cl.cfg.topics
 		patterns := make([]string, 0, len(topics))
 		for topic := range topics {

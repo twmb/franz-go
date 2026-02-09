@@ -4,7 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"time"
@@ -48,7 +50,7 @@ func (pc *pconsumer) consume() {
 		case <-pc.quit:
 			return
 		case p := <-pc.recs:
-			time.Sleep(time.Duration(rand.Intn(150)+100) * time.Millisecond) // simulate work
+			time.Sleep(time.Duration(rand.IntN(150)+100) * time.Millisecond) // simulate work
 			fmt.Printf("Some sort of work done, about to commit t %s p %d\n", pc.topic, pc.partition)
 			pc.cl.MarkCommitRecords(p.Records...)
 		}
@@ -104,7 +106,6 @@ func (s *splitConsume) killConsumers(lost map[string][]int32) {
 
 func main() {
 	flag.Parse()
-	rand.Seed(time.Now().Unix())
 
 	if len(*group) == 0 {
 		fmt.Println("missing required group")
@@ -134,9 +135,21 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer cl.Close()
 	if err = cl.Ping(context.Background()); err != nil { // check connectivity to cluster
 		panic(err)
 	}
+
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, os.Interrupt)
+	go func() {
+		<-sigs
+		fmt.Println("received interrupt signal; closing client")
+		cl.Close()
+		<-sigs
+		fmt.Println("received second interrupt; exiting")
+		os.Exit(1)
+	}()
 
 	s.poll(cl)
 }

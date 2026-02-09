@@ -1544,6 +1544,13 @@ func ConsumeRegex() ConsumerOpt {
 //
 // Topics matching any of the provided regular expressions will be excluded from
 // consumption, even if they match patterns provided to ConsumeTopics.
+//
+// When using the next-gen consumer group protocol (not yet enabled by default),
+// the heartbeat's SubscribedTopicRegex field is include-only with no exclude
+// counterpart. If exclude topics are configured, the client resolves regex
+// matching locally and sends explicit topic names instead. This means new
+// topics matching the include regex are discovered on the next metadata
+// refresh rather than immediately by the broker.
 func ConsumeExcludeTopics(topics ...string) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) {
 		if cfg.excludeTopics == nil {
