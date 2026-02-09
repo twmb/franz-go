@@ -31,7 +31,7 @@ type (
 		watchFetchCh chan *watchFetch
 
 		controlMu      sync.Mutex
-		control        map[int16]map[*controlCtx]struct{}
+		control        map[int16][]*controlCtx
 		currentBroker  *broker
 		currentControl *controlCtx
 		sleeping       map[*clientConn]*bsleep
@@ -119,7 +119,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		reqCh:        make(chan *clientReq, 20),
 		wakeCh:       make(chan *slept, 10),
 		watchFetchCh: make(chan *watchFetch, 20),
-		control:      make(map[int16]map[*controlCtx]struct{}),
+		control:      make(map[int16][]*controlCtx),
 		controlSleep: make(chan sleepChs, 1),
 
 		sleeping: make(map[*clientConn]*bsleep),
@@ -494,40 +494,30 @@ outer:
 }
 
 // Control is a function to call on any client request the cluster handles.
-//
-// If the control function returns true, then either the response is written
-// back to the client or, if the control function returns an error, the
-// client connection is closed. If both returns are nil, then the cluster will
-// loop continuing to read from the client and the client will likely have a
-// read timeout at some point.
-//
-// Controlling a request drops the control function from the cluster, meaning
-// that a control function can only control *one* request. To keep the control
-// function handling more requests, you can call KeepControl within your
-// control function. Alternatively, if you want to just run some logic in your
-// control function but then have the cluster handle the request as normal,
-// you can call DropControl to drop a control function that was not handled.
-//
-// It is safe to add new control functions within a control function.
-//
-// Control functions are run serially unless you use SleepControl, multiple
-// control functions are "in progress", and you run Cluster.Close. Closing a
-// Cluster awakens all sleeping control functions.
+// See [Cluster.ControlKey] for more details.
 func (c *Cluster) Control(fn func(kmsg.Request) (kmsg.Response, error, bool)) {
 	c.ControlKey(-1, fn)
 }
 
-// Control is a function to call on a specific request key that the cluster
+// ControlKey is a function to call on a specific request key that the cluster
 // handles. If the key is -1, then the control function is run on all requests.
 // For all possible keys, see [kmsg.Key], for example [kmsg.Produce].
 //
-// If the control function returns true, then either the response is written
-// back to the client or, if the control function returns an error, the
+// If the control function returns true (handled), then either the response is
+// written back to the client or, if the control function returns an error, the
 // client connection is closed. If both returns are nil, then the cluster will
 // loop continuing to read from the client and the client will likely have a
 // read timeout at some point.
 //
-// Controlling a request drops the control function from the cluster, meaning
+// If the control function returns false (not handled), the next control
+// function for this key runs. If no control function handles the request,
+// the cluster processes it normally. This allows control functions that just
+// observe or count requests without intercepting them.
+//
+// Multiple control functions for the same key run in FIFO order (the order
+// they were added).
+//
+// Handling a request drops the control function from the cluster, meaning
 // that a control function can only control *one* request. To keep the control
 // function handling more requests, you can call KeepControl within your
 // control function. Alternatively, if you want to just run some logic in your
@@ -542,16 +532,11 @@ func (c *Cluster) Control(fn func(kmsg.Request) (kmsg.Response, error, bool)) {
 func (c *Cluster) ControlKey(key int16, fn func(kmsg.Request) (kmsg.Response, error, bool)) {
 	c.controlMu.Lock()
 	defer c.controlMu.Unlock()
-	m := c.control[key]
-	if m == nil {
-		m = make(map[*controlCtx]struct{})
-		c.control[key] = m
-	}
-	m[&controlCtx{
+	c.control[key] = append(c.control[key], &controlCtx{
 		key:     key,
 		fn:      fn,
 		lastReq: make(map[*clientConn]*clientReq),
-	}] = struct{}{}
+	})
 }
 
 // KeepControl marks the currently running control function to be kept even if
@@ -565,11 +550,9 @@ func (c *Cluster) KeepControl() {
 	}
 }
 
-// DropControl allows you to drop the current control function. This takes
-// precedence over KeepControl. The use of this function is you can run custom
-// control logic *once*, drop the control function, and return that the
-// function was not handled -- thus allowing other control functions to run, or
-// allowing the kfake cluster to process the request as normal.
+// DropControl removes the current control function. This takes precedence
+// over KeepControl, allowing you to keep a control function by default but
+// forcefully drop it when a specific condition is met.
 func (c *Cluster) DropControl() {
 	c.controlMu.Lock()
 	defer c.controlMu.Unlock()
@@ -651,12 +634,13 @@ func (c *Cluster) tryControl(creq *clientReq) (kresp kmsg.Response, err error, h
 }
 
 func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, error, bool) {
-	for cctx := range c.control[key] {
+	for _, cctx := range c.control[key] {
 		if cctx.lastReq[creq.cc] == creq {
 			continue
 		}
 		cctx.lastReq[creq.cc] = creq
 		res := c.runControl(cctx, creq)
+	inner:
 		for {
 			select {
 			case admin := <-c.adminCh:
@@ -664,7 +648,10 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 				continue
 			case res := <-res:
 				c.maybePopControl(res.handled, cctx)
-				return res.kresp, res.err, res.handled
+				if res.handled {
+					return res.kresp, res.err, true
+				}
+				break inner
 			case sleepChs := <-c.controlSleep:
 				c.beginSleptControl(&slept{
 					cctx:     cctx,
@@ -759,7 +746,13 @@ func (c *Cluster) resleepSleptControl(s *slept, sleepChs sleepChs) {
 
 func (c *Cluster) maybePopControl(handled bool, cctx *controlCtx) {
 	if handled && !cctx.keep || cctx.drop {
-		delete(c.control[cctx.key], cctx)
+		s := c.control[cctx.key]
+		for i, v := range s {
+			if v == cctx {
+				c.control[cctx.key] = append(s[:i], s[i+1:]...)
+				break
+			}
+		}
 	}
 }
 
