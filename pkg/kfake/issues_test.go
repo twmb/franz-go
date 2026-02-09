@@ -2304,3 +2304,204 @@ func TestKadmCachedMetadata(t *testing.T) {
 		}
 	})
 }
+
+// TestIssue1217 verifies that batches are "poisoned" when a produce response
+// returns REQUEST_TIMED_OUT or NOT_ENOUGH_REPLICAS_AFTER_APPEND. When
+// poisoned, the batch retries past the normal RecordRetries limit and cannot
+// be canceled via context cancellation. This prevents data loss when the
+// broker state is uncertain.
+func TestIssue1217(t *testing.T) {
+	t.Parallel()
+	const testTopic = "foo"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SleepOutOfOrder(),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	produceErr := func(kreq kmsg.Request, errCode int16) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.ProduceRequest)
+		resp := req.ResponseKind().(*kmsg.ProduceResponse)
+		st := kmsg.NewProduceResponseTopic()
+		st.Topic = req.Topics[0].Topic
+		st.TopicID = req.Topics[0].TopicID
+		sp := kmsg.NewProduceResponseTopicPartition()
+		sp.Partition = req.Topics[0].Partitions[0].Partition
+		sp.ErrorCode = errCode
+		st.Partitions = append(st.Partitions, sp)
+		resp.Topics = append(resp.Topics, st)
+		return resp, nil, true
+	}
+
+	newClient := func(opts ...kgo.Opt) *kgo.Client {
+		t.Helper()
+		cl, err := kgo.NewClient(append([]kgo.Opt{
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.DefaultProduceTopic(testTopic),
+			kgo.RetryBackoffFn(func(int) time.Duration { return 10 * time.Millisecond }),
+			kgo.MetadataMinAge(10 * time.Millisecond),
+		}, opts...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cl
+	}
+
+	// With RecordRetries(1), the producer normally gives up after 1 retry.
+	// After a poison error, retries bypass the limit. Flow:
+	//   attempt 1: return poison error
+	//   attempt 2: return NOT_LEADER_FOR_PARTITION (retriable)
+	//   attempt 3: let kfake handle normally (success)
+	for _, poisonErr := range []struct {
+		name string
+		code int16
+	}{
+		{"request_timed_out", kerr.RequestTimedOut.Code},
+		{"not_enough_replicas_after_append", kerr.NotEnoughReplicasAfterAppend.Code},
+	} {
+		t.Run(poisonErr.name, func(t *testing.T) {
+			var attempt atomic.Int32
+			c.ControlKey(int16(kmsg.Produce), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+				c.KeepControl()
+				switch attempt.Add(1) {
+				case 1:
+					return produceErr(kreq, poisonErr.code)
+				case 2:
+					return produceErr(kreq, kerr.NotLeaderForPartition.Code)
+				default:
+					return nil, nil, false
+				}
+			})
+
+			cl := newClient(kgo.RecordRetries(1))
+			defer cl.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			if err := cl.ProduceSync(ctx, kgo.StringRecord("poison-test")).FirstErr(); err != nil {
+				t.Fatalf("produce should have succeeded after retries, got: %v", err)
+			}
+			if a := attempt.Load(); a < 3 {
+				t.Fatalf("expected at least 3 produce attempts, got %d", a)
+			}
+		})
+	}
+
+	// After REQUEST_TIMED_OUT, repeated metadata load errors (triggering
+	// bumpRepeatedLoadErr) should NOT fail the poisoned batch, even past
+	// the RecordRetries limit.
+	t.Run("load_errors_do_not_fail_poisoned_batch", func(t *testing.T) {
+		ti := c.TopicInfo(testTopic)
+		host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
+		port, _ := strconv.Atoi(portStr)
+
+		var produceAttempt atomic.Int32
+		c.ControlKey(int16(kmsg.Produce), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+			c.KeepControl()
+			if produceAttempt.Add(1) == 1 {
+				return produceErr(kreq, kerr.RequestTimedOut.Code)
+			}
+			return nil, nil, false
+		})
+
+		// After the poison, return LEADER_NOT_AVAILABLE on metadata
+		// to trigger bumpRepeatedLoadErr. We keep returning the error
+		// more times than RecordRetries(1) to verify the limit is
+		// bypassed.
+		var metadataErrors atomic.Int32
+		c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+			c.KeepControl()
+			req := kreq.(*kmsg.MetadataRequest)
+			if produceAttempt.Load() < 1 || len(req.Topics) == 0 {
+				return nil, nil, false
+			}
+			if metadataErrors.Add(1) > 3 {
+				return nil, nil, false
+			}
+			resp := req.ResponseKind().(*kmsg.MetadataResponse)
+			sb := kmsg.NewMetadataResponseBroker()
+			sb.NodeID = 0
+			sb.Host = host
+			sb.Port = int32(port)
+			resp.Brokers = append(resp.Brokers, sb)
+			resp.ControllerID = 0
+			st := kmsg.NewMetadataResponseTopic()
+			st.Topic = kmsg.StringPtr(testTopic)
+			st.TopicID = ti.TopicID
+			sp := kmsg.NewMetadataResponseTopicPartition()
+			sp.Partition = 0
+			sp.ErrorCode = kerr.LeaderNotAvailable.Code
+			sp.Leader = -1
+			sp.Replicas = []int32{0}
+			sp.ISR = []int32{0}
+			st.Partitions = append(st.Partitions, sp)
+			resp.Topics = append(resp.Topics, st)
+			return resp, nil, true
+		})
+
+		cl := newClient(kgo.RecordRetries(1))
+		defer cl.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := cl.ProduceSync(ctx, kgo.StringRecord("load-err-test")).FirstErr(); err != nil {
+			t.Fatalf("produce should have survived load errors, got: %v", err)
+		}
+		if m := metadataErrors.Load(); m < 3 {
+			t.Fatalf("expected at least 3 metadata errors, got %d", m)
+		}
+	})
+
+	// After REQUEST_TIMED_OUT, canceling the record context should NOT
+	// cancel the batch. The context is canceled after the first response
+	// so that tryAddBatch sees the canceled context when building the
+	// next produce request. Without the fix, tryAddBatch calls
+	// maybeFailErr which detects the canceled context and fails the batch.
+	t.Run("context_cancel_does_not_abort_poisoned_batch", func(t *testing.T) {
+		var attempt atomic.Int32
+		attemptOneDone := make(chan struct{})
+		c.ControlKey(int16(kmsg.Produce), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+			c.KeepControl()
+			if attempt.Add(1) == 1 {
+				defer close(attemptOneDone)
+				return produceErr(kreq, kerr.RequestTimedOut.Code)
+			}
+			return nil, nil, false
+		})
+
+		cl := newClient()
+		defer cl.Close()
+
+		recordCtx, recordCancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			done <- cl.ProduceSync(recordCtx, kgo.StringRecord("cancel-test")).FirstErr()
+		}()
+
+		// Wait for the broker to process attempt 1 (REQUEST_TIMED_OUT),
+		// then cancel the context. The client will process the response
+		// (setting canFailFromLoadErrs=true) and then build the retry
+		// request via tryAddBatch, which checks the context.
+		<-attemptOneDone
+		recordCancel()
+
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("produce should have succeeded despite context cancel, got: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for produce to complete")
+		}
+		if a := attempt.Load(); a < 2 {
+			t.Fatalf("expected at least 2 produce attempts, got %d", a)
+		}
+	})
+}

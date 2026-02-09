@@ -1152,7 +1152,7 @@ func (s *sink) handleRetryBatches(
 			return
 		}
 
-		if canFail || s.cl.cfg.disableIdempotency {
+		if (canFail && !batch.unsureIfProduced) || s.cl.cfg.disableIdempotency {
 			if err := batch.maybeFailErr(&s.cl.cfg); err != nil {
 				batch.owner.failAllRecords(err)
 				return
