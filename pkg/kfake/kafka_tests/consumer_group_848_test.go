@@ -1,8 +1,8 @@
-// Derived from Apache Kafka's ConsumerGroupHeartbeatRequestTest.scala and
+// Derived via LLM from Apache Kafka's ConsumerGroupHeartbeatRequestTest.scala and
 // GroupMetadataManagerTest.java (Apache 2.0).
 // https://github.com/apache/kafka/blob/trunk/group-coordinator/src/test/java/org/apache/kafka/coordinator/group/GroupMetadataManagerTest.java
 
-package kafka_ai_test_rewrites
+package kafka_tests
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 
 // Test848JoinAndConsume verifies a single consumer joining via the KIP-848
 // protocol, receiving an assignment, and consuming records end-to-end.
-// Derived from testConsumerGroupHeartbeatIsAccessibleWhenNewGroupCoordinatorIsEnabled.
+// Derived via LLM from testConsumerGroupHeartbeatIsAccessibleWhenNewGroupCoordinatorIsEnabled.
 func Test848JoinAndConsume(t *testing.T) {
 	t.Parallel()
 	topic := "t848-join"
@@ -44,7 +44,7 @@ func Test848JoinAndConsume(t *testing.T) {
 
 // Test848TwoConsumersRebalance verifies that when a second consumer joins,
 // partitions are redistributed across both members.
-// Derived from testNewJoiningMemberTriggersNewTargetAssignment.
+// Derived via LLM from testNewJoiningMemberTriggersNewTargetAssignment.
 func Test848TwoConsumersRebalance(t *testing.T) {
 	t.Parallel()
 	topic := "t848-rebal"
@@ -96,7 +96,7 @@ func Test848TwoConsumersRebalance(t *testing.T) {
 
 // Test848ConsumerLeaveReassigns verifies that when a consumer leaves,
 // the remaining consumer gets all partitions.
-// Derived from testLeavingMemberBumpsGroupEpoch.
+// Derived via LLM from testLeavingMemberBumpsGroupEpoch.
 func Test848ConsumerLeaveReassigns(t *testing.T) {
 	t.Parallel()
 	topic := "t848-leave"
@@ -169,7 +169,7 @@ func Test848ConsumerLeaveReassigns(t *testing.T) {
 
 // Test848OffsetCommitAndFetch verifies that offsets committed through a
 // KIP-848 consumer group can be fetched back.
-// Derived from testReconciliationProcess (offset commit portion).
+// Derived via LLM from testReconciliationProcess (offset commit portion).
 func Test848OffsetCommitAndFetch(t *testing.T) {
 	t.Parallel()
 	topic := "t848-commit"
@@ -215,7 +215,7 @@ func Test848OffsetCommitAndFetch(t *testing.T) {
 
 // Test848SubscriptionChange verifies that changing subscription (adding a
 // topic) triggers rebalance and the consumer gets partitions for the new topic.
-// Derived from testUpdatingSubscriptionTriggersNewTargetAssignment.
+// Derived via LLM from testUpdatingSubscriptionTriggersNewTargetAssignment.
 func Test848SubscriptionChange(t *testing.T) {
 	t.Parallel()
 	topic1 := "t848-sub1"
@@ -262,7 +262,7 @@ func Test848SubscriptionChange(t *testing.T) {
 
 // Test848DescribeGroup verifies that ConsumerGroupDescribe (key 69) returns
 // correct state for a KIP-848 consumer group.
-// Derived from testConsumerGroupHeartbeatFullResponse.
+// Derived via LLM from testConsumerGroupHeartbeatFullResponse.
 func Test848DescribeGroup(t *testing.T) {
 	t.Parallel()
 	topic := "t848-describe"
@@ -315,7 +315,7 @@ func Test848DescribeGroup(t *testing.T) {
 
 // Test848TxnOffsetCommit verifies that transactional offset commits work
 // with KIP-848 consumer groups.
-// Derived from testConsumerGroupTransactionalOffsetCommit (OffsetMetadataManagerTest.java).
+// Derived via LLM from testConsumerGroupTransactionalOffsetCommit (OffsetMetadataManagerTest.java).
 func Test848TxnOffsetCommit(t *testing.T) {
 	t.Parallel()
 	topic := "t848-txn-commit"
@@ -369,7 +369,7 @@ func Test848TxnOffsetCommit(t *testing.T) {
 
 // Test848EmptyGroupDescribe verifies that describing a non-existent or
 // empty consumer group returns the appropriate error.
-// Derived from testUnknownGroupId (GroupMetadataManagerTest.java).
+// Derived via LLM from testUnknownGroupId (GroupMetadataManagerTest.java).
 func Test848EmptyGroupDescribe(t *testing.T) {
 	t.Parallel()
 	group := "g848-empty-describe"
@@ -397,7 +397,7 @@ func Test848EmptyGroupDescribe(t *testing.T) {
 // Test848FencedEpochRecovery verifies that a kgo consumer automatically
 // recovers after the server returns FencedMemberEpoch. We inject the error
 // via ControlKey and confirm the consumer rejoins and continues consuming.
-// Derived from testConsumerGroupMemberEpochValidation.
+// Derived via LLM from testConsumerGroupMemberEpochValidation.
 func Test848FencedEpochRecovery(t *testing.T) {
 	t.Parallel()
 	topic := "t848-fenced"
@@ -448,7 +448,7 @@ func Test848FencedEpochRecovery(t *testing.T) {
 // Test848SessionTimeout verifies that when a consumer stops heartbeating,
 // the server removes it after the session timeout and reassigns its
 // partitions to the remaining consumer.
-// Derived from testSessionTimeoutExpiration.
+// Derived via LLM from testSessionTimeoutExpiration.
 func Test848SessionTimeout(t *testing.T) {
 	t.Parallel()
 	topic := "t848-timeout"

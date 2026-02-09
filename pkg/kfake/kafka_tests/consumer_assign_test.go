@@ -1,7 +1,7 @@
-// Derived from Apache Kafka's PlaintextConsumerAssignTest.java (Apache 2.0).
+// Derived via LLM from Apache Kafka's PlaintextConsumerAssignTest.java (Apache 2.0).
 // https://github.com/apache/kafka/blob/trunk/clients/clients-integration-tests/src/test/java/org/apache/kafka/clients/consumer/PlaintextConsumerAssignTest.java
 
-package kafka_ai_test_rewrites
+package kafka_tests
 
 import (
 	"context"
