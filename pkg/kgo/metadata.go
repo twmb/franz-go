@@ -924,6 +924,14 @@ func (cl *Client) mergeTopicPartitions(
 	// Anything left with a negative recBufsIdx / cursorsIdx is a new topic
 	// partition and must be added to the sink / source.
 	for _, newTP := range newPartitions {
+		if newTP.loadErr != nil {
+			if isProduce {
+				newTP.records.bumpRepeatedLoadErr(newTP.loadErr)
+			} else if !kerr.IsRetriable(newTP.loadErr) || cl.cfg.keepRetryableFetchErrors {
+				cl.consumer.addFakeReadyForDraining(topic, newTP.partition(), newTP.loadErr, "metadata refresh has a load error on a new partition")
+			}
+			retryWhy.add(topic, newTP.partition(), newTP.loadErr)
+		}
 		if isProduce && newTP.records.recBufsIdx == -1 {
 			newTP.records.sink.addRecBuf(newTP.records)
 			cl.cfg.logger.Log(LogLevelDebug, "metadata refresh new produce partition",

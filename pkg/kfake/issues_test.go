@@ -3,6 +3,7 @@ package kfake
 import (
 	"context"
 	"errors"
+	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -1733,5 +1734,104 @@ func TestKIP447RequireStable(t *testing.T) {
 	}
 	if offset := fetchResp.Groups[0].Topics[0].Partitions[0].Offset; offset != 5 {
 		t.Fatalf("expected committed offset 5, got %d", offset)
+	}
+}
+
+// TestFirstMetadataPartitionErrors verifies that the client re-fetches metadata
+// when the first metadata load returns per-partition errors (LEADER_NOT_AVAILABLE)
+// on all partitions of a topic.
+//
+// This reproduces an issue where, on first metadata load, per-partition errors
+// were not checked in the new-partitions code path (mergeTopicPartitions), so
+// retryWhy was never populated and metadata was never re-fetched. This caused
+// producers to stall indefinitely.
+func TestFirstMetadataPartitionErrors(t *testing.T) {
+	const testTopic = "foo"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ti := c.TopicInfo(testTopic)
+
+	// Intercept metadata: the first request for our topic returns
+	// LEADER_NOT_AVAILABLE on all partitions. The control is consumed
+	// after handling one request, so subsequent requests are handled
+	// normally by the cluster.
+	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.MetadataRequest)
+
+		if len(req.Topics) == 0 {
+			c.KeepControl()
+			return nil, nil, false
+		}
+
+		// First metadata request with topics: return
+		// LEADER_NOT_AVAILABLE on all partitions.
+		resp := req.ResponseKind().(*kmsg.MetadataResponse)
+
+		host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
+		port, _ := strconv.Atoi(portStr)
+		sb := kmsg.NewMetadataResponseBroker()
+		sb.NodeID = 0
+		sb.Host = host
+		sb.Port = int32(port)
+		resp.Brokers = append(resp.Brokers, sb)
+		resp.ControllerID = 0
+
+		st := kmsg.NewMetadataResponseTopic()
+		st.Topic = kmsg.StringPtr(testTopic)
+		st.TopicID = ti.TopicID
+		sp := kmsg.NewMetadataResponseTopicPartition()
+		sp.Partition = 0
+		sp.ErrorCode = kerr.LeaderNotAvailable.Code
+		sp.Leader = -1
+		sp.LeaderEpoch = 0
+		sp.Replicas = []int32{0}
+		sp.ISR = []int32{0}
+		st.Partitions = append(st.Partitions, sp)
+		resp.Topics = append(resp.Topics, st)
+
+		return resp, nil, true
+	})
+
+	cl, err := kgo.NewClient(
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.SeedBrokers(c.ListenAddrs()...),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	// The first produce triggers metadata for the topic. Since the first
+	// metadata returns LEADER_NOT_AVAILABLE, there are no writable
+	// partitions yet.
+	//
+	// Without the fix, metadata is never re-fetched (retryWhy is not
+	// populated for new partitions with errors), so producing is stuck
+	// until the default metadata max age (5m).
+	//
+	// With the fix, retryWhy is populated and metadata is internally
+	// retried within ~250ms, getting valid partition data.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var lastErr error
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		lastErr = cl.ProduceSync(ctx, kgo.StringRecord("test")).FirstErr()
+		if lastErr == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if lastErr != nil {
+		t.Fatalf("produce never succeeded (metadata was likely not re-fetched after first load error): %v", lastErr)
 	}
 }
