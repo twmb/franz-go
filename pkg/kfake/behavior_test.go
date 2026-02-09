@@ -25,7 +25,8 @@ func newCluster(t *testing.T, opts ...kfake.Opt) *kfake.Cluster {
 
 func newClient(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
 	t.Helper()
-	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...)}, opts...)
+	ctx := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
+	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...), kgo.WithContext(ctx)}, opts...)
 	cl, err := kgo.NewClient(opts...)
 	if err != nil {
 		t.Fatal(err)
