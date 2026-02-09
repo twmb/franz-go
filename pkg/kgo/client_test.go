@@ -4,10 +4,12 @@ import (
 	"context"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
 func TestMaxVersions(t *testing.T) {
@@ -256,4 +258,75 @@ func TestIssue1034(t *testing.T) {
 	if len(need) > 0 {
 		t.Errorf("coordinator key responses missing: %v", need)
 	}
+}
+
+// TestSCRAMAuth tests SCRAM-SHA-256 authentication against a Kafka broker.
+// This test requires KGO_TEST_SCRAM_SEEDS and KGO_TEST_SCRAM environment
+// variables to be set, pointing to a SASL-enabled listener and credentials.
+func TestSCRAMAuth(t *testing.T) {
+	t.Parallel()
+
+	if scramSeeds == "" || saslScram == nil {
+		t.Skip("KGO_TEST_SCRAM_SEEDS or KGO_TEST_SCRAM not set, skipping SCRAM test")
+	}
+
+	// Create a client with SCRAM authentication
+	cl, err := NewClient(
+		SeedBrokers(strings.Split(scramSeeds, ",")...),
+		SASL(saslScram),
+	)
+	if err != nil {
+		t.Fatalf("unable to create SCRAM client: %v", err)
+	}
+	defer cl.Close()
+
+	// Verify connection works by pinging
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := cl.Ping(ctx); err != nil {
+		t.Fatalf("unable to ping with SCRAM auth: %v", err)
+	}
+
+	// Also verify we can perform a metadata request
+	req := kmsg.NewPtrMetadataRequest()
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("unable to request metadata with SCRAM auth: %v", err)
+	}
+	if len(resp.Brokers) == 0 {
+		t.Error("expected at least one broker in metadata response")
+	}
+}
+
+// TestSCRAMAuthBadCredentials verifies that bad credentials fail authentication.
+func TestSCRAMAuthBadCredentials(t *testing.T) {
+	t.Parallel()
+
+	if scramSeeds == "" {
+		t.Skip("KGO_TEST_SCRAM_SEEDS not set, skipping SCRAM bad credentials test")
+	}
+
+	// Create a client with incorrect SCRAM credentials
+	badAuth := scram.Auth{
+		User: "nonexistent",
+		Pass: "wrongpassword",
+	}
+	cl, err := NewClient(
+		SeedBrokers(strings.Split(scramSeeds, ",")...),
+		SASL(badAuth.AsSha256Mechanism()),
+	)
+	if err != nil {
+		t.Fatalf("unable to create client: %v", err)
+	}
+	defer cl.Close()
+
+	// Ping should fail due to authentication error
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = cl.Ping(ctx)
+	if err == nil {
+		t.Fatal("expected authentication error with bad credentials, got nil")
+	}
+	// The error should indicate authentication failure
+	t.Logf("got expected error with bad credentials: %v", err)
 }

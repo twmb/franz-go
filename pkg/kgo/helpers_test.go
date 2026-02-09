@@ -46,6 +46,9 @@ var (
 	// KGO_TEST_SCRAM: DSL is user:pass(:num); we assume 256
 	saslScram sasl.Mechanism
 
+	// KGO_TEST_SCRAM_SEEDS: separate broker address for SCRAM testing
+	scramSeeds string
+
 	// We create topics with a different number of partitions to exercise
 	// a few extra code paths; we index into npartitions with npartitionsAt,
 	// an atomic that we modulo after load.
@@ -177,6 +180,7 @@ func init() {
 			}
 		}
 	}
+	scramSeeds = os.Getenv("KGO_TEST_SCRAM_SEEDS")
 	if maxTParts, exists := os.LookupEnv("KGO_TEST_MAX_TOPIC_PARTS"); exists {
 		n, err := strconv.Atoi(maxTParts)
 		if err != nil {
@@ -201,9 +205,6 @@ func testClientOpts(opts ...Opt) []Opt {
 	opts = append(opts, getSeedBrokers())
 	if testCert != nil {
 		opts = append(opts, DialTLSConfig(testCert))
-	}
-	if saslScram != nil {
-		opts = append(opts, SASL(saslScram))
 	}
 	return opts
 }
