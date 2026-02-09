@@ -1,3 +1,7 @@
+// This example demonstrates using the franz-go schema registry client (sr)
+// with Avro serialization. It registers an Avro schema, produces records
+// with schema-encoded values, and then consumes and decodes them using the
+// sr.Serde type for automatic serialization/deserialization.
 package main
 
 import (
