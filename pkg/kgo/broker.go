@@ -619,7 +619,7 @@ func (cl *Client) reapConnectionsLoop() {
 		return
 	}
 
-	ticker := time.NewTicker(idleTimeout)
+	ticker := time.NewTicker(min(20*time.Second, idleTimeout))
 	defer ticker.Stop()
 	last := time.Now()
 	for {

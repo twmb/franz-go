@@ -665,9 +665,8 @@ func RequestTimeoutOverhead(overhead time.Duration) Opt {
 // ConnIdleTimeout is a rough amount of time to allow connections to idle
 // before they are closed, overriding the default 20s.
 //
-// In the worst case, a connection can be allowed to idle for up to 2x this
-// time, while the average is expected to be 1.5x (essentially, a uniform
-// distribution from this interval to 2x the interval).
+// Connections are evaluated for reaping every min(20s, connIdleTimeout),
+// so the worst case idle time is roughly timeout + min(20s, timeout).
 //
 // It is possible that a connection can be reaped just as it is about to be
 // written to, but the client internally retries in these cases.
