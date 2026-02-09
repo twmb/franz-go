@@ -23,12 +23,13 @@ type (
 	}
 
 	clientReq struct {
-		cc   *clientConn
-		kreq kmsg.Request
-		at   time.Time
-		cid  string
-		corr int32
-		seq  uint32
+		cc        *clientConn
+		kreq      kmsg.Request
+		at        time.Time
+		cid       string
+		corr      int32
+		seq       uint32
+		topicMeta topicMetaSnap // snapshot for KIP-848 consumer group assignment
 	}
 
 	clientResp struct {
@@ -102,7 +103,7 @@ func (cc *clientConn) read() {
 		}
 
 		select {
-		case cc.c.reqCh <- &clientReq{cc, kreq, time.Now(), cid, corr, seq}:
+		case cc.c.reqCh <- &clientReq{cc: cc, kreq: kreq, at: time.Now(), cid: cid, corr: corr, seq: seq}:
 			seq++
 		case <-cc.c.die:
 			return

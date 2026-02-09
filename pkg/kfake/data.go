@@ -321,7 +321,7 @@ func (c *Cluster) brokerConfigs(node int32, fn func(k string, v *string, src kms
 		}
 	}
 
-	for k, v := range c.bcfgs {
+	for k, v := range c.loadBcfgs() {
 		fn(k, v, kmsg.ConfigSourceDynamicBrokerConfig, false)
 	}
 }
@@ -340,7 +340,7 @@ func (d *data) configs(t string, fn func(k string, v *string, src kmsg.ConfigSou
 			fn(k, &v, kmsg.ConfigSourceDefaultConfig, false)
 		}
 	}
-	for k, v := range d.c.bcfgs {
+	for k, v := range d.c.loadBcfgs() {
 		if topicEquiv, ok := validBrokerConfigs[k]; ok && topicEquiv != "" {
 			fn(k, v, kmsg.ConfigSourceDynamicBrokerConfig, false)
 		}
@@ -350,12 +350,27 @@ func (d *data) configs(t string, fn func(k string, v *string, src kmsg.ConfigSou
 	}
 }
 
-// Unlike Kafka, we validate the value before allowing it to be set.
-func (c *Cluster) setBrokerConfig(k string, v *string, dry bool) bool {
-	if dry {
+func (c *Cluster) loadBcfgs() map[string]*string {
+	return *c.bcfgs.Load()
+}
+
+func (c *Cluster) storeBcfgs(m map[string]*string) {
+	c.bcfgs.Store(&m)
+}
+
+// validateBrokerConfig returns whether v is a valid value for broker config k.
+func validateBrokerConfig(k string, v *string) bool {
+	if v == nil {
 		return true
 	}
-	c.bcfgs[k] = v
+	if ct, ok := configTypes[k]; ok {
+		switch ct {
+		case kmsg.ConfigTypeInt, kmsg.ConfigTypeLong:
+			if _, err := strconv.ParseInt(*v, 10, 64); err != nil {
+				return false
+			}
+		}
+	}
 	return true
 }
 
@@ -385,120 +400,101 @@ var validTopicConfigs = map[string]string{
 // All valid broker configs we support, as well as their equivalent
 // topic config if there is one.
 var validBrokerConfigs = map[string]string{
-	"broker.id":                  "",
-	"broker.rack":                "",
-	"compression.type":           "compression.type",
-	"default.replication.factor": "",
-	"fetch.max.bytes":            "",
-	"log.dir":                    "",
-	"log.message.timestamp.type": "message.timestamp.type",
-	"log.retention.bytes":        "retention.bytes",
-	"log.retention.ms":           "retention.ms",
-	"message.max.bytes":          "max.message.bytes",
-	"min.insync.replicas":        "min.insync.replicas",
-	"sasl.enabled.mechanisms":    "",
-	"super.users":                "",
+	"broker.id":                            "",
+	"broker.rack":                          "",
+	"compression.type":                     "compression.type",
+	"default.replication.factor":           "",
+	"fetch.max.bytes":                      "",
+	"group.consumer.heartbeat.interval.ms": "",
+	"log.dir":                              "",
+	"log.message.timestamp.type":           "message.timestamp.type",
+	"log.retention.bytes":                  "retention.bytes",
+	"log.retention.ms":                     "retention.ms",
+	"message.max.bytes":                    "max.message.bytes",
+	"min.insync.replicas":                  "min.insync.replicas",
+	"sasl.enabled.mechanisms":              "",
+	"super.users":                          "",
 }
 
-// Default topic and broker configs.
+const (
+	defLogDir            = "/mem/kfake"
+	defMaxMessageBytes   = 1048588
+	defHeartbeatInterval = 500
+)
+
+// Default topic and broker configs. Topic/broker pairs that share the same
+// underlying setting (e.g. max.message.bytes / message.max.bytes) both
+// appear here so that DescribeConfigs returns the correct default for
+// whichever name is queried.
 var configDefaults = map[string]string{
 	"cleanup.policy":         "delete",
 	"compression.type":       "producer",
-	"max.message.bytes":      "1048588",
+	"max.message.bytes":      strconv.Itoa(defMaxMessageBytes),
 	"message.timestamp.type": "CreateTime",
 	"min.insync.replicas":    "1",
 	"retention.bytes":        "-1",
 	"retention.ms":           "604800000",
 
-	"default.replication.factor": "3",
-	"fetch.max.bytes":            "57671680",
-	"log.dir":                    defLogDir,
-	"log.message.timestamp.type": "CreateTime",
-	"log.retention.bytes":        "-1",
-	"log.retention.ms":           "604800000",
-	"message.max.bytes":          "1048588",
+	"default.replication.factor":           "3",
+	"fetch.max.bytes":                      "57671680",
+	"group.consumer.heartbeat.interval.ms": strconv.Itoa(defHeartbeatInterval),
+	"log.dir":                              defLogDir,
+	"log.message.timestamp.type":           "CreateTime",
+	"log.retention.bytes":                  "-1",
+	"log.retention.ms":                     "604800000",
+	"message.max.bytes":                    strconv.Itoa(defMaxMessageBytes),
 }
 
 // configTypes maps config names to their data types for DescribeConfigs v3+.
 var configTypes = map[string]kmsg.ConfigType{
-	"broker.id":                  kmsg.ConfigTypeInt,
-	"broker.rack":                kmsg.ConfigTypeString,
-	"cleanup.policy":             kmsg.ConfigTypeList,
-	"compression.type":           kmsg.ConfigTypeString,
-	"default.replication.factor": kmsg.ConfigTypeInt,
-	"fetch.max.bytes":            kmsg.ConfigTypeInt,
-	"log.dir":                    kmsg.ConfigTypeString,
-	"log.message.timestamp.type": kmsg.ConfigTypeString,
-	"log.retention.bytes":        kmsg.ConfigTypeLong,
-	"log.retention.ms":           kmsg.ConfigTypeLong,
-	"max.message.bytes":          kmsg.ConfigTypeInt,
-	"message.max.bytes":          kmsg.ConfigTypeInt,
-	"message.timestamp.type":     kmsg.ConfigTypeString,
-	"min.insync.replicas":        kmsg.ConfigTypeInt,
-	"retention.bytes":            kmsg.ConfigTypeLong,
-	"retention.ms":               kmsg.ConfigTypeLong,
-	"sasl.enabled.mechanisms":    kmsg.ConfigTypeList,
-	"super.users":                kmsg.ConfigTypeList,
+	"broker.id":                            kmsg.ConfigTypeInt,
+	"broker.rack":                          kmsg.ConfigTypeString,
+	"cleanup.policy":                       kmsg.ConfigTypeList,
+	"compression.type":                     kmsg.ConfigTypeString,
+	"default.replication.factor":           kmsg.ConfigTypeInt,
+	"fetch.max.bytes":                      kmsg.ConfigTypeInt,
+	"group.consumer.heartbeat.interval.ms": kmsg.ConfigTypeInt,
+	"log.dir":                              kmsg.ConfigTypeString,
+	"log.message.timestamp.type":           kmsg.ConfigTypeString,
+	"log.retention.bytes":                  kmsg.ConfigTypeLong,
+	"log.retention.ms":                     kmsg.ConfigTypeLong,
+	"max.message.bytes":                    kmsg.ConfigTypeInt,
+	"message.max.bytes":                    kmsg.ConfigTypeInt,
+	"message.timestamp.type":               kmsg.ConfigTypeString,
+	"min.insync.replicas":                  kmsg.ConfigTypeInt,
+	"retention.bytes":                      kmsg.ConfigTypeLong,
+	"retention.ms":                         kmsg.ConfigTypeLong,
+	"sasl.enabled.mechanisms":              kmsg.ConfigTypeList,
+	"super.users":                          kmsg.ConfigTypeList,
 }
 
-const defLogDir = "/mem/kfake"
-
 var brokerRack = "krack"
+
+// consumerHeartbeatIntervalMs returns the group.consumer.heartbeat.interval.ms
+// broker config, falling back to the default of 500.
+func (c *Cluster) consumerHeartbeatIntervalMs() int32 {
+	const k = "group.consumer.heartbeat.interval.ms"
+	if v, ok := c.loadBcfgs()[k]; ok && v != nil {
+		n, _ := strconv.Atoi(*v)
+		return int32(n)
+	}
+	return defHeartbeatInterval
+}
 
 // maxMessageBytes returns the max.message.bytes for a topic, falling back to
 // broker config then defaults.
 func (d *data) maxMessageBytes(t string) int {
-	// Check topic-level config first
 	if tcfg, ok := d.tcfgs[t]; ok {
 		if v, ok := tcfg["max.message.bytes"]; ok && v != nil {
-			if n, err := strconv.Atoi(*v); err == nil {
-				return n
-			}
-		}
-	}
-	// Check broker-level config (message.max.bytes maps to max.message.bytes)
-	if v, ok := d.c.bcfgs["message.max.bytes"]; ok && v != nil {
-		if n, err := strconv.Atoi(*v); err == nil {
+			n, _ := strconv.Atoi(*v)
 			return n
 		}
 	}
-	// Fall back to default
-	if v, ok := configDefaults["max.message.bytes"]; ok {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
+	if v, ok := d.c.loadBcfgs()["message.max.bytes"]; ok && v != nil {
+		n, _ := strconv.Atoi(*v)
+		return n
 	}
-	return 1048588 // Kafka default
-}
-
-func staticConfig(s ...string) func(*string) bool {
-	return func(v *string) bool {
-		if v == nil {
-			return false
-		}
-		for _, ok := range s {
-			if *v == ok {
-				return true
-			}
-		}
-		return false
-	}
-}
-
-func numberConfig(min int, hasMin bool, max int, hasMax bool) func(*string) bool {
-	return func(v *string) bool {
-		if v == nil {
-			return false
-		}
-		i, err := strconv.Atoi(*v)
-		if err != nil {
-			return false
-		}
-		if hasMin && i < min || hasMax && i > max {
-			return false
-		}
-		return true
-	}
+	return defMaxMessageBytes
 }
 
 func forEachBatchRecord(batch kmsg.RecordBatch, cb func(kmsg.Record) error) error {

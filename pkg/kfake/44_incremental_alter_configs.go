@@ -61,13 +61,22 @@ outer:
 					continue outer
 				}
 			}
+			old := c.loadBcfgs()
+			dup := make(map[string]*string, len(old))
+			for k, v := range old {
+				dup[k] = v
+			}
 			var invalid bool
 			for i := range rr.Configs {
 				rc := &rr.Configs[i]
 				switch rc.Op {
 				case kmsg.IncrementalAlterConfigOpSet:
-					invalid = invalid || !c.setBrokerConfig(rr.Configs[i].Name, rr.Configs[i].Value, true)
+					if !validateBrokerConfig(rc.Name, rc.Value) {
+						invalid = true
+					}
+					dup[rc.Name] = rc.Value
 				case kmsg.IncrementalAlterConfigOpDelete:
+					delete(dup, rc.Name)
 				default:
 					invalid = true
 				}
@@ -80,15 +89,7 @@ outer:
 			if req.ValidateOnly {
 				continue
 			}
-			for i := range rr.Configs {
-				rc := &rr.Configs[i]
-				switch rc.Op {
-				case kmsg.IncrementalAlterConfigOpSet:
-					c.setBrokerConfig(rr.Configs[i].Name, rr.Configs[i].Value, false)
-				case kmsg.IncrementalAlterConfigOpDelete:
-					delete(c.bcfgs, rc.Name)
-				}
-			}
+			c.storeBcfgs(dup)
 
 		case kmsg.ConfigResourceTypeTopic:
 			if !c.allowedACL(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationAlterConfigs) {

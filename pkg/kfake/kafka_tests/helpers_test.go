@@ -1,7 +1,7 @@
-// Derived from Apache Kafka's clients-integration-tests (Apache 2.0).
+// Derived via LLM from Apache Kafka's clients-integration-tests (Apache 2.0).
 // https://github.com/apache/kafka/tree/trunk/clients/clients-integration-tests/src/test/java/org/apache/kafka/clients
 
-package kafka_ai_test_rewrites
+package kafka_tests
 
 import (
 	"context"
@@ -30,7 +30,8 @@ func newCluster(t *testing.T, opts ...kfake.Opt) *kfake.Cluster {
 // registers cleanup on test completion.
 func newClient(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
 	t.Helper()
-	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...)}, opts...)
+	ctx := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
+	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...), kgo.WithContext(ctx)}, opts...)
 	cl, err := kgo.NewClient(opts...)
 	if err != nil {
 		t.Fatal(err)
