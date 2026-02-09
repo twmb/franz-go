@@ -1521,7 +1521,7 @@ func isFullRequest(req *kmsg.ConsumerGroupHeartbeatRequest) bool {
 func (g *group) handleConsumerHeartbeat(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
 	resp := req.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
-	resp.HeartbeatIntervalMillis = 5000
+	resp.HeartbeatIntervalMillis = g.c.consumerHeartbeatIntervalMs()
 
 	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
 		resp.ErrorCode = kerr.Code
