@@ -45,9 +45,10 @@ type cfg struct {
 
 	maxVersions *kversion.Versions
 
-	enableACLs bool
-	superusers map[string]struct{}
-	seedACLs   []acl
+	enableACLs    bool
+	superusers    map[string]struct{}
+	seedACLs      []acl
+	brokerConfigs map[string]string
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
@@ -184,6 +185,27 @@ type ACL struct {
 	Allow bool
 	// Host to allow/deny from, defaults to "*" if empty
 	Host string
+}
+
+// BrokerConfigs sets initial broker-level dynamic configs. Empty values are
+// treated as deletes (reset to default). Configs most relevant for testing:
+//
+//   - group.consumer.heartbeat.interval.ms - heartbeat interval for KIP-848
+//     consumer groups (default 5000, lowered to 100 in test binaries)
+//   - message.max.bytes - max produce batch size (default 1048588)
+//
+// Other accepted configs include compression.type, default.replication.factor,
+// min.insync.replicas, log.retention.bytes, log.retention.ms, and
+// log.message.timestamp.type.
+func BrokerConfigs(configs map[string]string) Opt {
+	return opt{func(cfg *cfg) {
+		if cfg.brokerConfigs == nil {
+			cfg.brokerConfigs = make(map[string]string)
+		}
+		for k, v := range configs {
+			cfg.brokerConfigs[k] = v
+		}
+	}}
 }
 
 // User adds a SASL user with optional ACLs. Unlike Superuser, this user is

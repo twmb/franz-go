@@ -510,15 +510,35 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 	if req.Version >= 3 && (req.MemberID != "" || req.Generation != -1) {
 		var errCode int16
 		g.waitControl(func() {
-			if req.MemberID != "" {
-				if _, exists := g.members[req.MemberID]; !exists {
-					errCode = kerr.UnknownMemberID.Code
+			if g.typ == "consumer" {
+				// KIP-848: members are in consumerMembers, and
+				// generation is per-member (memberEpoch), not
+				// the group-level generation.
+				if req.MemberID != "" {
+					m, exists := g.consumerMembers[req.MemberID]
+					if !exists {
+						errCode = kerr.UnknownMemberID.Code
+						return
+					}
+					if req.Generation != -1 && req.Generation != m.memberEpoch {
+						errCode = kerr.IllegalGeneration.Code
+						return
+					}
+				} else if req.Generation != -1 && req.Generation != g.generation {
+					errCode = kerr.IllegalGeneration.Code
 					return
 				}
-			}
-			if req.Generation != -1 && req.Generation != g.generation {
-				errCode = kerr.IllegalGeneration.Code
-				return
+			} else {
+				if req.MemberID != "" {
+					if _, exists := g.members[req.MemberID]; !exists {
+						errCode = kerr.UnknownMemberID.Code
+						return
+					}
+				}
+				if req.Generation != -1 && req.Generation != g.generation {
+					errCode = kerr.IllegalGeneration.Code
+					return
+				}
 			}
 		})
 		if errCode != 0 {

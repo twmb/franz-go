@@ -137,7 +137,18 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 
 		die: make(chan struct{}),
 	}
-	c.storeBcfgs(make(map[string]*string))
+	{
+		m := make(map[string]*string, len(cfg.brokerConfigs))
+		for k, v := range cfg.brokerConfigs {
+			if v == "" {
+				m[k] = nil
+			} else {
+				v := v
+				m[k] = &v
+			}
+		}
+		c.storeBcfgs(m)
+	}
 	c.data.c = c
 	c.groups.c = c
 	c.pids.c = c
