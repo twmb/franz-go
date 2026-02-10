@@ -25,7 +25,7 @@ func TestTransactionalProducerSingleBrokerMaxInFlightOne(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	txnProducer := newClient(t, c,
+	txnProducer := newClient848(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID("txn-inflight-test"),
 		kgo.MaxProduceRequestsInflightPerBroker(1),
@@ -60,7 +60,7 @@ func TestTransactionalProducerSingleBrokerMaxInFlightOne(t *testing.T) {
 	}
 
 	// Verify read_committed consumer only sees committed records.
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 	)
@@ -76,7 +76,7 @@ func TestTransactionalProducerSingleBrokerMaxInFlightOne(t *testing.T) {
 	}
 
 	// Verify read_uncommitted consumer sees all 6 data records (aborted + committed).
-	uncommittedConsumer := newClient(t, c,
+	uncommittedConsumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
 	)

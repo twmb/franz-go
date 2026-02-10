@@ -25,7 +25,7 @@ func TestDescribeProducersDefaultRoutesToLeader(t *testing.T) {
 
 	// Create a transactional producer with an active (uncommitted) transaction.
 	txnID := "describe-producers-txn"
-	producer := newClient(t, c,
+	producer := newClient848(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID(txnID),
 	)
@@ -77,7 +77,7 @@ func TestDescribeProducersAfterCommit(t *testing.T) {
 	defer cancel()
 
 	txnID := "describe-producers-committed-txn"
-	producer := newClient(t, c,
+	producer := newClient848(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID(txnID),
 	)

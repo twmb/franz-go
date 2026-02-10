@@ -19,7 +19,7 @@ import (
 // and fences the original producer.
 func fenceProducer(t *testing.T, c *kfake.Cluster, txnID string) {
 	t.Helper()
-	cl := newClient(t, c)
+	cl := newClient848(t, c)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -47,7 +47,7 @@ func TestFenceAfterProducerCommit(t *testing.T) {
 	defer cancel()
 
 	// Create transactional producer and produce + commit.
-	producer := newClient(t, c,
+	producer := newClient848(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID(txnID),
 	)
@@ -99,7 +99,7 @@ func TestFenceBeforeProducerCommit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	producer := newClient(t, c,
+	producer := newClient848(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID(txnID),
 	)

@@ -13,13 +13,28 @@ import (
 	"github.com/twmb/franz-go/pkg/kversion"
 )
 
+type brokerConfigFlag map[string]string
+
+func (f brokerConfigFlag) String() string { return "" }
+
+func (f brokerConfigFlag) Set(s string) error {
+	k, v, ok := strings.Cut(s, "=")
+	if !ok {
+		return fmt.Errorf("expected key=value, got %q", s)
+	}
+	f[k] = v
+	return nil
+}
+
 func main() {
-	// Configure log level from flag
 	var logLevelStr string
 	var versionStr string
+	bcfgs := make(brokerConfigFlag)
 	flag.StringVar(&logLevelStr, "log-level", "none", "Log level: none, error, warn, info, debug")
 	flag.StringVar(&logLevelStr, "l", "none", "Log level (shorthand)")
 	flag.StringVar(&versionStr, "as-version", "", "Kafka version to emulate (e.g., 2.8, 3.5)")
+	flag.Var(bcfgs, "broker-config", "Broker config key=value (repeatable)")
+	flag.Var(bcfgs, "c", "Broker config key=value (shorthand, repeatable)")
 	flag.Parse()
 
 	logLevel := kfake.LogLevelNone
@@ -48,6 +63,9 @@ func main() {
 			os.Exit(1)
 		}
 		opts = append(opts, kfake.MaxVersions(v))
+	}
+	if len(bcfgs) > 0 {
+		opts = append(opts, kfake.BrokerConfigs(bcfgs))
 	}
 	c, err := kfake.NewCluster(opts...)
 	if err != nil {

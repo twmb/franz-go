@@ -142,7 +142,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     if [ -n "$KFAKE_VERSION" ]; then
         VERSION_ARG="--as-version $KFAKE_VERSION"
     fi
-    KFAKE_LOG_LEVEL=$LOG_LEVEL go run main.go $VERSION_ARG > "$SERVER_LOG" 2>&1 &
+    KFAKE_LOG_LEVEL=$LOG_LEVEL go run main.go $VERSION_ARG -c group.consumer.heartbeat.interval.ms=100 > "$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
 
     # Wait for server to be listening (max 10 seconds)

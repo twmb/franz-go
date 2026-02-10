@@ -3,6 +3,7 @@ package kfake_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func newCluster(t *testing.T, opts ...kfake.Opt) *kfake.Cluster {
@@ -23,7 +25,8 @@ func newCluster(t *testing.T, opts ...kfake.Opt) *kfake.Cluster {
 	return c
 }
 
-func newClient(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
+// newClient848 creates a kgo client with the KIP-848 context opt-in enabled.
+func newClient848(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
 	t.Helper()
 	ctx := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
 	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...), kgo.WithContext(ctx)}, opts...)
@@ -78,6 +81,73 @@ func consumeN(t *testing.T, cl *kgo.Client, n int, timeout time.Duration) []*kgo
 	return records
 }
 
+func waitForStableGroup(t *testing.T, adm *kadm.Client, group string, nMembers int, timeout time.Duration) kadm.DescribedConsumerGroup {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		described, err := adm.DescribeConsumerGroups(ctx, group)
+		if err != nil {
+			t.Fatalf("describe failed: %v", err)
+		}
+		dg := described[group]
+		if dg.State == "Stable" && len(dg.Members) == nMembers {
+			return dg
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("timeout waiting for stable group %q with %d members (state=%s, members=%d)", group, nMembers, dg.State, len(dg.Members))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// newGroupConsumer creates a kgo client configured for group consuming with
+// sensible test defaults: ConsumeTopics, ConsumerGroup, AtStart reset,
+// and 250ms FetchMaxWait. Additional opts are appended after the defaults.
+func newGroupConsumer(t *testing.T, c *kfake.Cluster, topic, group string, opts ...kgo.Opt) *kgo.Client {
+	t.Helper()
+	base := []kgo.Opt{
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250 * time.Millisecond),
+	}
+	return newClient848(t, c, append(base, opts...)...)
+}
+
+// poll1FromEachClient polls each client until every one has received at least
+// one record, or the timeout expires.
+func poll1FromEachClient(t *testing.T, timeout time.Duration, clients ...*kgo.Client) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	remaining := make(map[int]*kgo.Client, len(clients))
+	for i, cl := range clients {
+		remaining[i] = cl
+	}
+	for len(remaining) > 0 {
+		for i, cl := range remaining {
+			fs := cl.PollRecords(ctx, 10)
+			if fs.NumRecords() > 0 {
+				delete(remaining, i)
+			}
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("timeout waiting for all clients to get records: %d/%d remaining", len(remaining), len(clients))
+		}
+	}
+}
+
+func totalAssignedPartitions(dg kadm.DescribedConsumerGroup) int {
+	n := 0
+	for _, m := range dg.Members {
+		for _, parts := range m.Assignment {
+			n += len(parts)
+		}
+	}
+	return n
+}
+
 // Test848RegexSubscription verifies that server-side regex subscription
 // matches the correct topics and excludes non-matching topics.
 func Test848RegexSubscription(t *testing.T) {
@@ -93,7 +163,7 @@ func Test848RegexSubscription(t *testing.T) {
 		kfake.SeedTopics(2, matchB),
 		kfake.SeedTopics(2, noMatch),
 	)
-	producer := newClient(t, c)
+	producer := newClient848(t, c)
 
 	// Produce to all three topics.
 	for i := range nRecords {
@@ -105,7 +175,7 @@ func Test848RegexSubscription(t *testing.T) {
 	}
 
 	// Consumer with regex - should only match t848-rx-*.
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeRegex(),
 		kgo.ConsumeTopics("t848-rx-.*"),
 		kgo.ConsumerGroup(group),
@@ -153,10 +223,10 @@ func Test848GroupTypeIsConsumer(t *testing.T) {
 	group := "g848-type"
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 10)
 
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -166,7 +236,7 @@ func Test848GroupTypeIsConsumer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adm := kadm.NewClient(newClient(t, c))
+	adm := kadm.NewClient(newClient848(t, c))
 
 	// ListGroupsByType with "consumer" filter should include our group.
 	listed, err := adm.ListGroupsByType(ctx, []string{"consumer"})
@@ -195,10 +265,10 @@ func Test848DeleteGroup(t *testing.T) {
 	group := "g848-delete"
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 10)
 
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -208,7 +278,7 @@ func Test848DeleteGroup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adm := kadm.NewClient(newClient(t, c))
+	adm := kadm.NewClient(newClient848(t, c))
 
 	// Deleting a non-empty group should fail.
 	_, err := adm.DeleteGroup(ctx, group)
@@ -247,11 +317,11 @@ func Test848ResumeAfterRestart(t *testing.T) {
 	nRecords := 20
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
 	// First consumer: consume all and commit.
-	c1 := newClient(t, c,
+	c1 := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -274,7 +344,7 @@ func Test848ResumeAfterRestart(t *testing.T) {
 
 	// Second consumer: should resume from committed offset and only
 	// get the new records.
-	c2 := newClient(t, c,
+	c2 := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -301,7 +371,7 @@ func Test848MultipleTopics(t *testing.T) {
 		kfake.SeedTopics(3, topicA),
 		kfake.SeedTopics(6, topicB),
 	)
-	producer := newClient(t, c)
+	producer := newClient848(t, c)
 
 	// Produce to both topics.
 	for i := range nRecords {
@@ -313,7 +383,7 @@ func Test848MultipleTopics(t *testing.T) {
 		produceSync(t, producer, r2)
 	}
 
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topicA, topicB),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -342,7 +412,7 @@ func Test848TransactionalConsume(t *testing.T) {
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
 	// Produce 10 records in a committed transaction.
-	txnClient := newClient(t, c,
+	txnClient := newClient848(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID("t848-txn-id"),
 	)
@@ -388,7 +458,7 @@ func Test848TransactionalConsume(t *testing.T) {
 
 	// Consumer with read_committed should see 15 records (10+5), not the
 	// 5 aborted.
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -420,10 +490,10 @@ func Test848ThreeConsumersFairDistribution(t *testing.T) {
 	nPartitions := 9
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 
 	makeConsumer := func() *kgo.Client {
-		return newClient(t, c,
+		return newClient848(t, c,
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -444,8 +514,11 @@ func Test848ThreeConsumersFairDistribution(t *testing.T) {
 		for _, cl := range []*kgo.Client{c1, c2} {
 			fs := cl.PollRecords(ctx, 100)
 			fs.EachRecord(func(*kgo.Record) { got++ })
+			if got >= 30 {
+				break
+			}
 		}
-		if ctx.Err() != nil {
+		if got < 30 && ctx.Err() != nil {
 			t.Fatalf("timeout waiting for c1+c2: got %d/30", got)
 		}
 	}
@@ -461,8 +534,11 @@ func Test848ThreeConsumersFairDistribution(t *testing.T) {
 		for _, cl := range []*kgo.Client{c1, c2, c3} {
 			fs := cl.PollRecords(ctx2, 100)
 			fs.EachRecord(func(*kgo.Record) { got++ })
+			if got >= 90 {
+				break
+			}
 		}
-		if ctx2.Err() != nil {
+		if got < 90 && ctx2.Err() != nil {
 			t.Fatalf("timeout waiting for c1+c2+c3: got %d/90", got)
 		}
 	}
@@ -478,12 +554,12 @@ func Test848AllMembersLeave(t *testing.T) {
 	nRecords := 20
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
 	// Two consumers join the group and consume all records.
 	makeConsumer := func() *kgo.Client {
-		return newClient(t, c,
+		return newClient848(t, c,
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -499,8 +575,11 @@ func Test848AllMembersLeave(t *testing.T) {
 		for _, cl := range []*kgo.Client{c1, c2} {
 			fs := cl.PollRecords(ctx, 100)
 			fs.EachRecord(func(*kgo.Record) { got++ })
+			if got >= nRecords {
+				break
+			}
 		}
-		if ctx.Err() != nil {
+		if got < nRecords && ctx.Err() != nil {
 			t.Fatalf("timeout consuming initial records: got %d/%d", got, nRecords)
 		}
 	}
@@ -535,7 +614,7 @@ func Test848AddTopicSubscription(t *testing.T) {
 		kfake.SeedTopics(1, topicA),
 		kfake.SeedTopics(1, topicB),
 	)
-	producer := newClient(t, c)
+	producer := newClient848(t, c)
 
 	// Produce to both topics.
 	for i := range nRecords {
@@ -548,7 +627,7 @@ func Test848AddTopicSubscription(t *testing.T) {
 
 	// Consumer starts subscribed to topicA only. Use fast metadata
 	// refresh so AddConsumeTopics picks up the new topic quickly.
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topicA),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -590,11 +669,11 @@ func Test848TopicCreatedAfterJoin(t *testing.T) {
 	nRecords := 10
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, existingTopic))
-	producer := newClient(t, c)
+	producer := newClient848(t, c)
 	produceNStrings(t, producer, existingTopic, nRecords)
 
 	// Consumer subscribes with regex matching both existing and future topics.
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeRegex(),
 		kgo.ConsumeTopics("t848-dynamic-.*"),
 		kgo.ConsumerGroup(group),
@@ -613,7 +692,7 @@ func Test848TopicCreatedAfterJoin(t *testing.T) {
 	// Create the new topic and produce to it.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	adm := kadm.NewClient(newClient(t, c))
+	adm := kadm.NewClient(newClient848(t, c))
 	_, err := adm.CreateTopics(ctx, 1, 1, nil, newTopic)
 	if err != nil {
 		t.Fatalf("create topic failed: %v", err)
@@ -634,5 +713,325 @@ func Test848TopicCreatedAfterJoin(t *testing.T) {
 	}
 	if newTopicCount != nRecords {
 		t.Fatalf("expected %d records from new topic, got %d", nRecords, newTopicCount)
+	}
+}
+
+// Test848RangeAssignorContiguousBlocks verifies that when using the range
+// balancer, each consumer gets a contiguous block of partitions per topic.
+// Uses DescribeConsumerGroups to check the assignment directly rather than
+// inferring it from consumed records.
+func Test848RangeAssignorContiguousBlocks(t *testing.T) {
+	t.Parallel()
+	topic := "t848-range"
+	group := "g848-range"
+	nPartitions := 6
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 60)
+
+	// Two consumers using the range balancer.
+	c1 := newGroupConsumer(t, c, topic, group, kgo.Balancers(kgo.RangeBalancer()))
+	c2 := newGroupConsumer(t, c, topic, group, kgo.Balancers(kgo.RangeBalancer()))
+
+	// Wait for the group to stabilize with 2 members and verify
+	// the assignment via DescribeConsumerGroups.
+	adm := kadm.NewClient(newClient848(t, c))
+	dg := waitForStableGroup(t, adm, group, 2, 10*time.Second)
+
+	// Verify each member's assignment is contiguous.
+	for _, m := range dg.Members {
+		for topicName, parts := range m.Assignment {
+			var ps []int32
+			for p := range parts {
+				ps = append(ps, p)
+			}
+			slices.Sort(ps)
+			for i := 1; i < len(ps); i++ {
+				if ps[i] != ps[i-1]+1 {
+					t.Errorf("member %s has non-contiguous partitions for %s: %v", m.MemberID, topicName, ps)
+				}
+			}
+		}
+	}
+
+	// Also confirm both consumers actually receive records.
+	poll1FromEachClient(t, 10*time.Second, c1, c2)
+}
+
+// Test848UnsupportedAssignor verifies that an unknown server assignor
+// name is rejected with UnsupportedAssignor.
+func Test848UnsupportedAssignor(t *testing.T) {
+	t.Parallel()
+	group := "g848-bad-assignor"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, "t"))
+
+	// Send a raw ConsumerGroupHeartbeat with an unknown assignor.
+	cl := newClient848(t, c)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req := kmsg.NewConsumerGroupHeartbeatRequest()
+	req.Group = group
+	req.MemberEpoch = 0
+	req.RebalanceTimeoutMillis = 5000
+	bad := "nonexistent"
+	req.ServerAssignor = &bad
+	req.SubscribedTopicNames = []string{"t"}
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); !errors.Is(err, kerr.UnsupportedAssignor) {
+		t.Fatalf("expected UnsupportedAssignor, got %v", err)
+	}
+}
+
+// TestOffsetCommitAfterLeaveClassic verifies that an admin-style OffsetCommit
+// (empty memberID, generation -1) is accepted on an empty classic group after
+// all members have left.
+func TestOffsetCommitAfterLeaveClassic(t *testing.T) {
+	t.Parallel()
+	topic := "commit-after-leave"
+	group := "commit-after-leave-group"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 10)
+
+	// Classic group consumer.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.DisableAutoCommit(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	consumeN(t, cl, 10, 10*time.Second)
+
+	// Leave the group.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := cl.LeaveGroupContext(ctx); err != nil {
+		t.Fatalf("leave failed: %v", err)
+	}
+
+	// Admin-style commit: empty memberID, generation -1.
+	raw := newClient848(t, c)
+	adm := kadm.NewClient(raw)
+	offsets := kadm.Offsets{}
+	offsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: 10})
+	_, err = adm.CommitOffsets(ctx, group, offsets)
+	if err != nil {
+		t.Fatalf("admin commit failed: %v", err)
+	}
+
+	// Verify committed offsets.
+	fetched, err := adm.FetchOffsets(ctx, group)
+	if err != nil {
+		t.Fatalf("fetch offsets failed: %v", err)
+	}
+	o, ok := fetched.Lookup(topic, 0)
+	if !ok {
+		t.Fatal("no committed offset found after commit-after-leave")
+	}
+	if o.At != 10 {
+		t.Errorf("expected committed offset 10, got %d", o.At)
+	}
+}
+
+// TestOffsetCommitAfterLeave848 verifies that an admin-style OffsetCommit
+// (empty memberID, negative epoch) is accepted on an empty KIP-848 consumer
+// group after the member has left.
+func TestOffsetCommitAfterLeave848(t *testing.T) {
+	t.Parallel()
+	topic := "commit-after-leave-848"
+	group := "commit-after-leave-848-group"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 10)
+
+	// 848 consumer.
+	consumer := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.DisableAutoCommit(),
+	)
+	consumeN(t, consumer, 10, 10*time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Close the consumer (triggers leave via heartbeat with epoch -1).
+	consumer.Close()
+
+	// Admin-style commit with v9 OffsetCommit: empty memberID, generation -1.
+	commitReq := kmsg.NewOffsetCommitRequest()
+	commitReq.Version = 9
+	commitReq.Group = group
+	commitReq.Generation = -1
+	rt := kmsg.NewOffsetCommitRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewOffsetCommitRequestTopicPartition()
+	rp.Partition = 0
+	rp.Offset = 10
+	rt.Partitions = append(rt.Partitions, rp)
+	commitReq.Topics = append(commitReq.Topics, rt)
+
+	raw := newClient848(t, c)
+	commitResp, err := commitReq.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("commit request failed: %v", err)
+	}
+	for _, t2 := range commitResp.Topics {
+		for _, p := range t2.Partitions {
+			if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+				t.Fatalf("commit partition %d error: %v", p.Partition, err)
+			}
+		}
+	}
+
+	// Verify committed offsets.
+	adm := kadm.NewClient(raw)
+	fetched, err := adm.FetchOffsets(ctx, group)
+	if err != nil {
+		t.Fatalf("fetch offsets failed: %v", err)
+	}
+	o, ok := fetched.Lookup(topic, 0)
+	if !ok {
+		t.Fatal("no committed offset found after commit-after-leave")
+	}
+	if o.At != 10 {
+		t.Errorf("expected committed offset 10, got %d", o.At)
+	}
+}
+
+// Test848PartitionHandoffNoDuplicates verifies that when a consumer leaves,
+// its partitions are reassigned to the remaining consumer without any
+// partition being assigned to two consumers simultaneously.
+func Test848PartitionHandoffNoDuplicates(t *testing.T) {
+	t.Parallel()
+	topic := "t848-handoff"
+	group := "g848-handoff"
+	nPartitions := 6
+	nRecords := 60
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, nRecords)
+
+	adm := kadm.NewClient(newClient848(t, c))
+
+	c1 := newGroupConsumer(t, c, topic, group)
+	c2 := newGroupConsumer(t, c, topic, group)
+
+	// Wait for stable 2-member group.
+	dg := waitForStableGroup(t, adm, group, 2, 10*time.Second)
+	if total := totalAssignedPartitions(dg); total != nPartitions {
+		t.Fatalf("expected %d total partitions, got %d", nPartitions, total)
+	}
+
+	// Verify no partition overlap.
+	seen := make(map[string]string) // "topic/partition" -> memberID
+	for _, m := range dg.Members {
+		for topicName, parts := range m.Assignment {
+			for p := range parts {
+				key := topicName + "/" + strconv.Itoa(int(p))
+				if prev, ok := seen[key]; ok {
+					t.Fatalf("partition %s assigned to both %s and %s", key, prev, m.MemberID)
+				}
+				seen[key] = m.MemberID
+			}
+		}
+	}
+
+	// Close c2; c1 should pick up all partitions.
+	c2.Close()
+	dg = waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	if total := totalAssignedPartitions(dg); total != nPartitions {
+		t.Fatalf("expected %d partitions after c2 leave, got %d", nPartitions, total)
+	}
+
+	// Produce more and verify c1 consumes from all partitions.
+	produceNStrings(t, producer, topic, nRecords)
+	records := consumeN(t, c1, nRecords, 10*time.Second)
+	partitions := make(map[int32]bool)
+	for _, r := range records {
+		partitions[r.Partition] = true
+	}
+	if len(partitions) != nPartitions {
+		t.Errorf("expected records from all %d partitions, got %d", nPartitions, len(partitions))
+	}
+}
+
+// Test848CooperativeRevocationDuringConsumption verifies that cooperative
+// rebalancing works correctly while records are actively being consumed.
+// A third consumer joining should not cause data loss or duplication.
+func Test848CooperativeRevocationDuringConsumption(t *testing.T) {
+	t.Parallel()
+	topic := "t848-coop-consume"
+	group := "g848-coop-consume"
+	nPartitions := 6
+	nRecords := 60
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, nRecords)
+
+	adm := kadm.NewClient(newClient848(t, c))
+
+	nocommit := kgo.DisableAutoCommit()
+	c1 := newGroupConsumer(t, c, topic, group, nocommit)
+	c2 := newGroupConsumer(t, c, topic, group, nocommit)
+
+	waitForStableGroup(t, adm, group, 2, 10*time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got := 0
+	for got < nRecords {
+		for _, cl := range []*kgo.Client{c1, c2} {
+			fs := cl.PollRecords(ctx, 100)
+			fs.EachRecord(func(*kgo.Record) { got++ })
+			if got >= nRecords {
+				break
+			}
+		}
+		if got < nRecords && ctx.Err() != nil {
+			t.Fatalf("timeout consuming: got %d/%d", got, nRecords)
+		}
+	}
+
+	if err := c1.CommitUncommittedOffsets(ctx); err != nil {
+		t.Fatalf("c1 commit: %v", err)
+	}
+	if err := c2.CommitUncommittedOffsets(ctx); err != nil {
+		t.Fatalf("c2 commit: %v", err)
+	}
+
+	produceNStrings(t, producer, topic, nRecords)
+	c3 := newGroupConsumer(t, c, topic, group, nocommit)
+	waitForStableGroup(t, adm, group, 3, 15*time.Second)
+
+	consumeCtx, consumeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer consumeCancel()
+	got = 0
+	for got < nRecords {
+		for _, cl := range []*kgo.Client{c1, c2, c3} {
+			fs := cl.PollRecords(consumeCtx, 50)
+			fs.EachRecord(func(*kgo.Record) { got++ })
+			if got >= nRecords {
+				break
+			}
+		}
+		if got < nRecords && consumeCtx.Err() != nil {
+			t.Fatalf("timeout consuming after rebalance: got %d/%d", got, nRecords)
+		}
 	}
 }
