@@ -419,6 +419,8 @@ type testConsumer struct {
 	group    string
 	balancer GroupBalancer
 
+	enable848 bool // opt into KIP-848 consumer group protocol
+
 	expBody []byte // what every record body should be
 
 	consumed atomic.Uint64 // shared atomically
@@ -446,6 +448,7 @@ func newTestConsumer(
 	group string,
 	balancer GroupBalancer,
 	expBody []byte,
+	enable848 bool,
 ) *testConsumer {
 	return &testConsumer{
 		errCh: errCh,
@@ -455,6 +458,8 @@ func newTestConsumer(
 
 		group:    group,
 		balancer: balancer,
+
+		enable848: enable848,
 
 		expBody: expBody,
 
@@ -479,10 +484,11 @@ func testChainETL(
 	t *testing.T,
 	topic1 string,
 	body []byte,
-	errs chan error,
 	transactional bool,
 	balancer GroupBalancer,
+	enable848 bool,
 ) {
+	errs := make(chan error)
 	var (
 		/////////////
 		// LEVEL 1 //
@@ -498,6 +504,7 @@ func testChainETL(
 			group1,
 			balancer,
 			body,
+			enable848,
 		)
 
 		/////////////
@@ -514,6 +521,7 @@ func testChainETL(
 			group2,
 			balancer,
 			body,
+			enable848,
 		)
 
 		/////////////
@@ -530,6 +538,7 @@ func testChainETL(
 			group3,
 			balancer,
 			body,
+			enable848,
 		)
 	)
 
