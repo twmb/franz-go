@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -45,12 +46,15 @@ func (g *groupConsumer) manage848() {
 		serverAssignor = "range"
 	}
 
-	var known848Support bool
+	// fallbackToClassic is set when manage848 hands off to the classic
+	// manage() goroutine, which takes ownership of closing manageDone.
+	var fallbackToClassic bool
 	defer func() {
-		if known848Support {
+		if !fallbackToClassic {
 			close(g.manageDone)
 		}
 	}()
+	var known848Support bool
 	optInKnown := func() {
 		if known848Support {
 			return
@@ -91,6 +95,7 @@ outer:
 						g.is848 = false
 						g.mu.Unlock()
 						g.cfg.logger.Log(LogLevelInfo, "falling back to standard consumer group management due to lack of broker support", "group", g.cfg.group)
+						fallbackToClassic = true
 						go g.manage()
 						return
 					}
@@ -105,11 +110,7 @@ outer:
 		for err == nil {
 			consecutiveErrors = 0
 			var nowAssigned map[string][]int32
-			// setupAssignedAndHeartbeat
-			// * First revokes partitions we lost from our last session
-			// * Starts heartbeating
-			// * Starts fetching offsets for what new we're assigned
-			//
+
 			// In heartbeating, if we lose or gain partitions, we need to
 			// exit the old heartbeat and re-enter setupAssignedAndHeartbeat.
 			// Otherwise, we heartbeat exactly the same as the old.
@@ -117,9 +118,19 @@ outer:
 			// This results in a few more heartbeats than necessary
 			// when things are changing, but keeps all the old
 			// logic that handles all edge conditions.
+			//
+			// setupAssignedAndHeartbeat starts prerevoke (for
+			// lost partitions) and heartbeating concurrently.
+			// While prerevoking, the heartbeat sends keepalive
+			// (Topics=nil) so the server does not see partitions
+			// released before the user commits their offsets in
+			// any OnPartitionsRevoked callback.
+			// The prerevoke goroutine clears prerevoking when
+			// revocation and offset commits are complete, and
+			// subsequent heartbeats resume sending full requests.
 			_, err = g.setupAssignedAndHeartbeat(initialHb, func() (time.Duration, error) {
 				req := g848.mkreq()
-				if reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics) {
+				if g848.prerevoking.Load() || (reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics)) {
 					req.InstanceID = nil
 					req.RackID = nil
 					req.RebalanceTimeoutMillis = -1
@@ -145,34 +156,32 @@ outer:
 				}
 				return sleep, err
 			})
+
 			switch {
-			case errors.Is(err, kerr.FencedMemberEpoch):
-				member, gen := g.memberGen.load()
-				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat saw fenced member epoch, abandoning assignment and rejoining",
-					"group", g.cfg.group,
-					"member_id", member,
-					"generation", gen,
-				)
-				nowAssigned = make(map[string][]int32)
-				g.nowAssigned.store(nil)
-				continue outer
+			case errors.Is(err, kerr.RebalanceInProgress):
+				err = nil
 
 			case errors.Is(err, kerr.UnknownMemberID):
 				g.memberGen.store(newStringUUID(), 0)
 
-			case errors.Is(err, kerr.RebalanceInProgress):
-				err = nil
-
-			case errors.Is(err, kerr.GroupMaxSizeReached):
-				g.cfg.logger.Log(LogLevelWarn, "consumer group is at maximum capacity; waiting for other members to leave before retrying",
+			case errors.Is(err, kerr.FencedMemberEpoch),
+				errors.Is(err, kerr.GroupMaxSizeReached),
+				errors.Is(err, kerr.UnsupportedAssignor):
+				lvl := LogLevelInfo
+				if errors.Is(err, kerr.GroupMaxSizeReached) {
+					lvl = LogLevelWarn
+				} else if errors.Is(err, kerr.UnsupportedAssignor) {
+					lvl = LogLevelError
+				}
+				member, gen := g.memberGen.load()
+				g.cfg.logger.Log(lvl, "consumer group heartbeat error, abandoning assignment and rejoining",
 					"group", g.cfg.group,
+					"member_id", member,
+					"generation", gen,
+					"err", err,
 				)
-
-			case errors.Is(err, kerr.UnsupportedAssignor):
-				g.cfg.logger.Log(LogLevelError, "consumer group assignor is not supported by the broker; check client balancer configuration",
-					"group", g.cfg.group,
-					"assignor", serverAssignor,
-				)
+				g.nowAssigned.store(nil)
+				continue outer
 			}
 
 			if nowAssigned != nil {
@@ -245,6 +254,14 @@ type g848 struct {
 
 	lastSubscribedTopics []string
 	lastTopics           []kmsg.ConsumerGroupHeartbeatRequestTopic
+
+	// prerevoking is true while prerevoke is running: the
+	// assignment has changed and lost partitions are being
+	// revoked and their offsets committed. While true, the
+	// heartbeat closure sends keepalive (Topics=nil) so the
+	// server does not see partitions as released before offsets
+	// are committed. Cleared by the prerevoke goroutine.
+	prerevoking atomic.Bool
 }
 
 // v1+ requires the end user to generate their own MemberID, with the
@@ -261,6 +278,7 @@ func (g *g848) initialJoin() (time.Duration, error) {
 	g.g.memberGen.storeGeneration(0)
 	g.lastSubscribedTopics = nil
 	g.lastTopics = nil
+	g.prerevoking.Store(false)
 	req := g.mkreq()
 	resp, err := req.RequestWith(g.g.ctx, g.g.cl)
 	if err == nil {
@@ -382,7 +400,11 @@ func (g *g848) mkreq() *kmsg.ConsumerGroupHeartbeatRequest {
 		}
 		req.SubscribedTopicNames = subscribedTopics
 	}
-	nowAssigned := g.g.nowAssigned.clone()                   // always returns non-nil
+	// Build Topics from our current assignment. The heartbeat closure
+	// uses prerevoking to strip this to nil during prerevoke,
+	// preventing the server from seeing released partitions before
+	// offsets are committed.
+	nowAssigned := g.g.nowAssigned.read()
 	req.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{} // ALWAYS initialize: len 0 is significantly different than nil (nil means same as last time)
 	for t, ps := range nowAssigned {
 		rt := kmsg.NewConsumerGroupHeartbeatRequestTopic()
