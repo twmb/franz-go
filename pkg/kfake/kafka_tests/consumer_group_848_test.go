@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -27,15 +26,10 @@ func Test848JoinAndConsume(t *testing.T) {
 	nRecords := 50
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
-	consumer := newClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-	)
-
+	consumer := newGroupConsumer(t, c, topic, group)
 	records := consumeN(t, consumer, nRecords, 10*time.Second)
 	if len(records) != nRecords {
 		t.Fatalf("expected %d records, got %d", nRecords, len(records))
@@ -53,45 +47,22 @@ func Test848TwoConsumersRebalance(t *testing.T) {
 	nPartitions := 6
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
 	// First consumer joins and gets all partitions.
-	c1 := newClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-	)
+	c1 := newGroupConsumer(t, c, topic, group)
 	_ = consumeN(t, c1, nRecords, 10*time.Second)
 
 	// Second consumer joins the same group.
-	c2 := newClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-	)
+	c2 := newGroupConsumer(t, c, topic, group)
 
 	// Produce more records so both consumers have something to fetch.
 	produceNStrings(t, producer, topic, nRecords)
 
 	// Both consumers should eventually get records, meaning partitions
 	// were split between them.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	c1Got, c2Got := false, false
-	for !c1Got || !c2Got {
-		if !c1Got {
-			fs := c1.PollRecords(ctx, 10)
-			fs.EachRecord(func(*kgo.Record) { c1Got = true })
-		}
-		if !c2Got {
-			fs := c2.PollRecords(ctx, 10)
-			fs.EachRecord(func(*kgo.Record) { c2Got = true })
-		}
-		if ctx.Err() != nil {
-			t.Fatalf("timeout waiting for both consumers to get records (c1=%v, c2=%v)", c1Got, c2Got)
-		}
-	}
+	poll1FromEachClient(t, 15*time.Second, c1, c2)
 }
 
 // Test848ConsumerLeaveReassigns verifies that when a consumer leaves,
@@ -105,24 +76,12 @@ func Test848ConsumerLeaveReassigns(t *testing.T) {
 	nPartitions := 4
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
-	// Two consumers join. Use a short FetchMaxWait so that when
-	// partitions are reassigned, the new partition's fetch begins
-	// promptly rather than waiting for the prior long poll to expire.
-	c1 := newClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.FetchMaxWait(250*time.Millisecond),
-	)
-	c2 := newClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.FetchMaxWait(250*time.Millisecond),
-	)
+	// Two consumers join.
+	c1 := newGroupConsumer(t, c, topic, group)
+	c2 := newGroupConsumer(t, c, topic, group)
 
 	// Consume all existing records to stabilize.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -177,16 +136,11 @@ func Test848OffsetCommitAndFetch(t *testing.T) {
 	nRecords := 30
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
 	// Consume and commit.
-	consumer := newClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.DisableAutoCommit(),
-	)
+	consumer := newGroupConsumer(t, c, topic, group, kgo.DisableAutoCommit())
 	records := consumeN(t, consumer, nRecords, 10*time.Second)
 	if len(records) != nRecords {
 		t.Fatalf("expected %d records, got %d", nRecords, len(records))
@@ -199,7 +153,7 @@ func Test848OffsetCommitAndFetch(t *testing.T) {
 	}
 
 	// Verify via kadm that offsets are committed.
-	adm := kadm.NewClient(newClient(t, c))
+	adm := newAdminClient(t, c)
 	offsets, err := adm.FetchOffsets(ctx, group)
 	if err != nil {
 		t.Fatalf("fetch offsets failed: %v", err)
@@ -227,7 +181,7 @@ func Test848SubscriptionChange(t *testing.T) {
 		kfake.SeedTopics(2, topic1),
 		kfake.SeedTopics(2, topic2),
 	)
-	producer := newClient(t, c)
+	producer := newClient848(t, c)
 
 	// Produce to both topics.
 	for i := range nRecords {
@@ -240,7 +194,7 @@ func Test848SubscriptionChange(t *testing.T) {
 	}
 
 	// Consumer subscribes to both topics from the start.
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic1, topic2),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -269,24 +223,19 @@ func Test848DescribeGroup(t *testing.T) {
 	group := "g848-describe"
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 10)
 
-	consumer := newClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-	)
+	consumer := newGroupConsumer(t, c, topic, group)
 	_ = consumeN(t, consumer, 10, 10*time.Second)
 
 	// Allow heartbeats to stabilize.
 	time.Sleep(500 * time.Millisecond)
 
-	descClient := newClient(t, c)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adm := kadm.NewClient(descClient)
+	adm := newAdminClient(t, c)
 	described, err := adm.DescribeConsumerGroups(ctx, group)
 	if err != nil {
 		t.Fatalf("describe consumer groups failed: %v", err)
@@ -323,14 +272,11 @@ func Test848TxnOffsetCommit(t *testing.T) {
 	nRecords := 20
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
 	// Transactional consumer: consume, commit offsets in transaction.
-	txnConsumer := newClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	txnConsumer := newGroupConsumer(t, c, topic, group,
 		kgo.DisableAutoCommit(),
 		kgo.TransactionalID("t848-txn-consumer"),
 	)
@@ -353,7 +299,7 @@ func Test848TxnOffsetCommit(t *testing.T) {
 	}
 
 	// Verify committed offsets.
-	adm := kadm.NewClient(newClient(t, c))
+	adm := newAdminClient(t, c)
 	offsets, err := adm.FetchOffsets(ctx, group)
 	if err != nil {
 		t.Fatalf("fetch offsets failed: %v", err)
@@ -375,11 +321,10 @@ func Test848EmptyGroupDescribe(t *testing.T) {
 	group := "g848-empty-describe"
 
 	c := newCluster(t, kfake.NumBrokers(1))
-	cl := newClient(t, c)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adm := kadm.NewClient(cl)
+	adm := newAdminClient(t, c)
 	described, err := adm.DescribeGroups(ctx, group)
 	if err != nil {
 		t.Fatalf("describe groups failed: %v", err)
@@ -405,15 +350,10 @@ func Test848FencedEpochRecovery(t *testing.T) {
 	nRecords := 50
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
-	consumer := newClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.DisableAutoCommit(),
-	)
+	consumer := newGroupConsumer(t, c, topic, group, kgo.DisableAutoCommit())
 
 	// Consume all records and commit so the consumer has a stable position.
 	_ = consumeN(t, consumer, nRecords, 10*time.Second)
@@ -457,24 +397,13 @@ func Test848SessionTimeout(t *testing.T) {
 	nPartitions := 4
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
-	// Use a short FetchMaxWait so that when partitions are reassigned
-	// after c2's session timeout, c1's next fetch includes the new
-	// partitions promptly rather than blocking on the prior long poll.
-	c1 := newClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.FetchMaxWait(250*time.Millisecond),
-	)
+	c1 := newGroupConsumer(t, c, topic, group)
 
 	// c2 uses a short rebalance timeout so the server removes it quickly.
-	c2 := newClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	c2 := newGroupConsumer(t, c, topic, group,
 		kgo.RebalanceTimeout(500*time.Millisecond),
 	)
 
@@ -537,4 +466,190 @@ func Test848SessionTimeout(t *testing.T) {
 	if len(partitions) < 2 {
 		t.Fatalf("expected records from multiple partitions, got %d", len(partitions))
 	}
+}
+
+// Test848ReconciliationGroupStateTransitions verifies that when a second
+// consumer joins, the group transitions through Reconciling back to Stable
+// and the assignment is split between both members.
+// Derived via LLM from testReconciliationProcess (GroupMetadataManagerTest.java).
+func Test848ReconciliationGroupStateTransitions(t *testing.T) {
+	t.Parallel()
+	topic := "t848-reconcile-states"
+	group := "g848-reconcile-states"
+	nPartitions := 6
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	adm := newAdminClient(t, c)
+
+	// c1 joins and stabilizes with all partitions.
+	c1 := newGroupConsumer(t, c, topic, group)
+	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	if total := totalAssignedPartitions(dg); total != nPartitions {
+		t.Fatalf("c1 should own all %d partitions, got %d", nPartitions, total)
+	}
+
+	// c2 joins. The group should eventually stabilize with 2 members.
+	c2 := newGroupConsumer(t, c, topic, group)
+
+	dg = waitForStableGroup(t, adm, group, 2, 10*time.Second)
+
+	// Verify the assignment is split: each member should have partitions.
+	for _, m := range dg.Members {
+		nParts := 0
+		for _, parts := range m.Assignment {
+			nParts += len(parts)
+		}
+		if nParts == 0 {
+			t.Errorf("member %s has no partitions", m.MemberID)
+		}
+	}
+	if total := totalAssignedPartitions(dg); total != nPartitions {
+		t.Errorf("expected %d total partitions, got %d", nPartitions, total)
+	}
+
+	// Both consumers should be able to consume.
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 20)
+	poll1FromEachClient(t, 10*time.Second, c1, c2)
+}
+
+// Test848ReconciliationThreeMembers verifies the full 3-member reconciliation
+// flow: c1+c2 stable, c3 joins, all 3 eventually stabilize with a fair
+// distribution.
+// Derived via LLM from testReconciliationProcess (GroupMetadataManagerTest.java).
+func Test848ReconciliationThreeMembers(t *testing.T) {
+	t.Parallel()
+	topic := "t848-reconcile-3"
+	group := "g848-reconcile-3"
+	nPartitions := 9
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	adm := newAdminClient(t, c)
+
+	// c1 and c2 join and stabilize.
+	_ = newGroupConsumer(t, c, topic, group)
+	_ = newGroupConsumer(t, c, topic, group)
+	waitForStableGroup(t, adm, group, 2, 10*time.Second)
+
+	// c3 joins, triggering reassignment.
+	_ = newGroupConsumer(t, c, topic, group)
+
+	// Wait for all 3 members to be stable.
+	dg := waitForStableGroup(t, adm, group, 3, 15*time.Second)
+
+	// Each member should have exactly nPartitions/3 = 3 partitions.
+	for _, m := range dg.Members {
+		nParts := 0
+		for _, parts := range m.Assignment {
+			nParts += len(parts)
+		}
+		if nParts != nPartitions/3 {
+			t.Errorf("member %s has %d partitions, expected %d", m.MemberID, nParts, nPartitions/3)
+		}
+	}
+}
+
+// Test848StableToUnrevokedPartitions verifies that when a second consumer
+// joins, the first consumer cooperatively revokes partitions and the second
+// consumer eventually receives them.
+// Derived via LLM from testStableToUnrevokedPartitions (CurrentAssignmentBuilderTest.java).
+func Test848StableToUnrevokedPartitions(t *testing.T) {
+	t.Parallel()
+	topic := "t848-unrevoked"
+	group := "g848-unrevoked"
+	nPartitions := 6
+	nRecords := 30
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	adm := newAdminClient(t, c)
+
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, nRecords)
+
+	// c1 owns all partitions initially.
+	c1 := newGroupConsumer(t, c, topic, group)
+	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	if total := totalAssignedPartitions(dg); total != nPartitions {
+		t.Fatalf("c1 should own all %d partitions, got %d", nPartitions, total)
+	}
+
+	// Consume and commit so offsets are set.
+	consumeN(t, c1, nRecords, 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c1.CommitUncommittedOffsets(ctx); err != nil {
+		t.Fatalf("commit failed: %v", err)
+	}
+
+	// c2 joins, triggering cooperative rebalance.
+	c2 := newGroupConsumer(t, c, topic, group)
+
+	// Wait for both to be stable.
+	dg = waitForStableGroup(t, adm, group, 2, 10*time.Second)
+
+	// Verify both have partitions.
+	for _, m := range dg.Members {
+		nParts := 0
+		for _, parts := range m.Assignment {
+			nParts += len(parts)
+		}
+		if nParts == 0 {
+			t.Errorf("member %s has no partitions after rebalance", m.MemberID)
+		}
+	}
+	if total := totalAssignedPartitions(dg); total != nPartitions {
+		t.Errorf("expected %d total partitions, got %d", nPartitions, total)
+	}
+
+	// Produce more records and verify both consumers get records.
+	produceNStrings(t, producer, topic, nRecords)
+	poll1FromEachClient(t, 10*time.Second, c1, c2)
+}
+
+// Test848UnreleasedPartitionsWaitForRevocation verifies that a third consumer
+// joining an already-split group must wait for existing members to release
+// partitions before receiving its full assignment.
+// Derived via LLM from testReconciliationProcess (GroupMetadataManagerTest.java, member 3 waiting).
+func Test848UnreleasedPartitionsWaitForRevocation(t *testing.T) {
+	t.Parallel()
+	topic := "t848-unreleased"
+	group := "g848-unreleased"
+	nPartitions := 9
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	adm := newAdminClient(t, c)
+
+	// c1 and c2 stabilize.
+	c1 := newGroupConsumer(t, c, topic, group)
+	c2 := newGroupConsumer(t, c, topic, group)
+	dg := waitForStableGroup(t, adm, group, 2, 10*time.Second)
+	if total := totalAssignedPartitions(dg); total != nPartitions {
+		t.Fatalf("expected %d total partitions with 2 members, got %d", nPartitions, total)
+	}
+
+	// c3 joins, triggering another round of cooperative rebalance.
+	// c1 and c2 must revoke some partitions so c3 can pick them up.
+	c3 := newGroupConsumer(t, c, topic, group)
+
+	// Wait for all 3 to stabilize.
+	dg = waitForStableGroup(t, adm, group, 3, 15*time.Second)
+
+	// All 3 should have partitions.
+	for _, m := range dg.Members {
+		nParts := 0
+		for _, parts := range m.Assignment {
+			nParts += len(parts)
+		}
+		if nParts == 0 {
+			t.Errorf("member %s has no partitions", m.MemberID)
+		}
+	}
+	if total := totalAssignedPartitions(dg); total != nPartitions {
+		t.Errorf("expected %d total partitions, got %d", nPartitions, total)
+	}
+
+	// Produce and verify all 3 consumers get records.
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 30)
+	poll1FromEachClient(t, 10*time.Second, c1, c2, c3)
 }

@@ -46,7 +46,7 @@ func TestThreeNonCompressedRecordsInOneBatch(t *testing.T) {
 	topic := "list-offsets-uncompressed-batch"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c,
+	producer := newClient848(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.ProducerBatchCompression(kgo.NoCompression()),
 	)
@@ -89,7 +89,7 @@ func TestThreeCompressedRecordsInOneBatch(t *testing.T) {
 	topic := "list-offsets-compressed-batch"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c,
+	producer := newClient848(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.ProducerBatchCompression(kgo.GzipCompression()),
 	)
@@ -130,7 +130,7 @@ func TestThreeNonCompressedRecordsInSeparateBatches(t *testing.T) {
 	topic := "list-offsets-separate-batches"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c,
+	producer := newClient848(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.ProducerBatchCompression(kgo.NoCompression()),
 	)

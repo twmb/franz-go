@@ -35,7 +35,7 @@ func TestCompression(t *testing.T) {
 			topic := "compression-" + tc.name
 			c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-			producer := newClient(t, c,
+			producer := newClient848(t, c,
 				kgo.DefaultProduceTopic(topic),
 				kgo.ProducerBatchCompression(tc.codec),
 			)
@@ -54,7 +54,7 @@ func TestCompression(t *testing.T) {
 			}
 			produceSync(t, producer, produced...)
 
-			consumer := newClient(t, c, kgo.ConsumeTopics(topic))
+			consumer := newClient848(t, c, kgo.ConsumeTopics(topic))
 			records := consumeN(t, consumer, numRecords, 5*time.Second)
 
 			if len(records) != numRecords {

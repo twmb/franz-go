@@ -20,13 +20,13 @@ func TestMaxPollRecords(t *testing.T) {
 	topic := "poll-max-records"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	totalRecords := 20
 	for i := range totalRecords {
 		produceSync(t, producer, kgo.StringRecord("v-"+strconv.Itoa(i)))
 	}
 
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 	)
 
@@ -58,13 +58,13 @@ func TestPollEventuallyReturnsRecordsWithZeroTimeout(t *testing.T) {
 	topic := "poll-zero-timeout"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	totalRecords := 10
 	for i := range totalRecords {
 		produceSync(t, producer, kgo.StringRecord("v-"+strconv.Itoa(i)))
 	}
 
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 	)
 
@@ -90,13 +90,13 @@ func TestPerPartitionLagWithMaxPollRecords(t *testing.T) {
 	topic := "poll-lag"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	totalRecords := 15
 	for i := range totalRecords {
 		produceSync(t, producer, kgo.StringRecord("v-"+strconv.Itoa(i)))
 	}
 
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 	)
 

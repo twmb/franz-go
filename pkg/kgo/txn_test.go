@@ -19,7 +19,6 @@ func TestTxnEtl(t *testing.T) {
 	topic1, topic1Cleanup := tmpTopic(t)
 	t.Cleanup(topic1Cleanup)
 
-	errs := make(chan error)
 	body := []byte(randsha()) // a small body so we do not flood RAM
 
 	////////////////////
@@ -46,14 +45,14 @@ func TestTxnEtl(t *testing.T) {
 		partsUsed := make(map[int32]struct{})
 
 		if err := cl.BeginTransaction(); err != nil {
-			errs <- fmt.Errorf("unable to begin transaction: %v", err)
+			t.Errorf("unable to begin transaction: %v", err)
 		}
 		defer func() {
 			if err := cl.Flush(context.Background()); err != nil {
-				errs <- fmt.Errorf("unable to flush: %v", err)
+				t.Errorf("unable to flush: %v", err)
 			}
 			if err := cl.EndTransaction(context.Background(), true); err != nil {
-				errs <- fmt.Errorf("unable to end transaction: %v", err)
+				t.Errorf("unable to end transaction: %v", err)
 			}
 		}()
 		var safeUnsafe bool
@@ -68,11 +67,11 @@ func TestTxnEtl(t *testing.T) {
 				safeUnsafe = !safeUnsafe
 				if err := cl.EndAndBeginTransaction(context.Background(), how, TryCommit, func(_ context.Context, err error) error {
 					if err != nil {
-						errs <- fmt.Errorf("unable to end transaction: %v", err)
+						t.Errorf("unable to end transaction: %v", err)
 					}
 					return err
 				}); err != nil {
-					errs <- fmt.Errorf("unable to begin transaction: %v", err)
+					t.Errorf("unable to begin transaction: %v", err)
 				}
 			}
 
@@ -86,16 +85,16 @@ func TestTxnEtl(t *testing.T) {
 				},
 				func(r *Record, err error) {
 					if err != nil {
-						errs <- fmt.Errorf("unexpected produce err: %v", err)
+						t.Errorf("unexpected produce err: %v", err)
 					}
 					if !bytes.Equal(r.Key, myKey) {
-						errs <- fmt.Errorf("unexpected out of order key; got %s != exp %v", r.Key, myKey)
+						t.Errorf("unexpected out of order key; got %s != exp %v", r.Key, myKey)
 					}
 
 					// ensure the offsets for this partition are monotonically increasing
 					current, ok := offsets[r.Partition]
 					if ok && r.Offset <= current {
-						errs <- fmt.Errorf("partition %d produced offsets out of order, got %d != exp %d", r.Partition, r.Offset, current+1)
+						t.Errorf("partition %d produced offsets out of order, got %d != exp %d", r.Partition, r.Offset, current+1)
 					}
 					offsets[r.Partition] = r.Offset
 					partsUsed[r.Partition] = struct{}{}
@@ -109,22 +108,27 @@ func TestTxnEtl(t *testing.T) {
 	////////////////////////////
 
 	for _, tc := range []struct {
-		name     string
-		balancer GroupBalancer
+		name      string
+		balancer  GroupBalancer
+		enable848 bool
 	}{
-		{"roundrobin", RoundRobinBalancer()},
-		{"range", RangeBalancer()},
-		{"sticky", StickyBalancer()},
-		{"cooperative-sticky", CooperativeStickyBalancer()},
+		{"roundrobin", RoundRobinBalancer(), false},
+		{"range", RangeBalancer(), false},
+		{"sticky", StickyBalancer(), false},
+		{"cooperative-sticky", CooperativeStickyBalancer(), false},
+		{"range/848", RangeBalancer(), true},
+		{"sticky/848", StickyBalancer(), true},
+		{"cooperative-sticky/848", CooperativeStickyBalancer(), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			testChainETL(
 				t,
 				topic1,
 				body,
-				errs,
 				true,
 				tc.balancer,
+				tc.enable848,
 			)
 		})
 	}
@@ -160,6 +164,10 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 	}
 	if requireStableFetch {
 		opts = append(opts, RequireStableFetchOffsets())
+	}
+	if c.enable848 {
+		ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true) //nolint:revive,staticcheck // intentional string key for beta opt-in
+		opts = append(opts, WithContext(ctx848))
 	}
 	opts = append(opts, testClientOpts()...)
 

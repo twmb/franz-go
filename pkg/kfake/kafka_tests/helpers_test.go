@@ -26,9 +26,8 @@ func newCluster(t *testing.T, opts ...kfake.Opt) *kfake.Cluster {
 	return c
 }
 
-// newClient creates a new kgo client connected to the given cluster and
-// registers cleanup on test completion.
-func newClient(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
+// newClient848 creates a kgo client with the KIP-848 context opt-in enabled.
+func newClient848(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
 	t.Helper()
 	ctx := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
 	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...), kgo.WithContext(ctx)}, opts...)
@@ -44,7 +43,7 @@ func newClient(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
 // registers cleanup on test completion.
 func newAdminClient(t *testing.T, c *kfake.Cluster) *kadm.Client {
 	t.Helper()
-	cl := newClient(t, c)
+	cl := newClient848(t, c)
 	return kadm.NewClient(cl)
 }
 
@@ -95,4 +94,74 @@ func consumeN(t *testing.T, cl *kgo.Client, n int, timeout time.Duration) []*kgo
 		})
 	}
 	return records
+}
+
+// newGroupConsumer creates a KIP-848 consumer group client with common
+// defaults: ConsumeTopics, ConsumerGroup, AtStart, and FetchMaxWait(250ms).
+func newGroupConsumer(t *testing.T, c *kfake.Cluster, topic, group string, opts ...kgo.Opt) *kgo.Client {
+	t.Helper()
+	base := []kgo.Opt{
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250 * time.Millisecond),
+	}
+	return newClient848(t, c, append(base, opts...)...)
+}
+
+// poll1FromEachClient polls each client until every one has received at least
+// one record, or the timeout expires.
+func poll1FromEachClient(t *testing.T, timeout time.Duration, clients ...*kgo.Client) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	remaining := make(map[int]*kgo.Client, len(clients))
+	for i, cl := range clients {
+		remaining[i] = cl
+	}
+	for len(remaining) > 0 {
+		for i, cl := range remaining {
+			fs := cl.PollRecords(ctx, 10)
+			if fs.NumRecords() > 0 {
+				delete(remaining, i)
+			}
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("timeout waiting for all clients to get records: %d/%d remaining", len(remaining), len(clients))
+		}
+	}
+}
+
+// waitForStableGroup polls DescribeConsumerGroups until the group is Stable
+// with the expected number of members, then returns the described group.
+func waitForStableGroup(t *testing.T, adm *kadm.Client, group string, nMembers int, timeout time.Duration) kadm.DescribedConsumerGroup {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		described, err := adm.DescribeConsumerGroups(ctx, group)
+		if err != nil {
+			t.Fatalf("describe failed: %v", err)
+		}
+		dg := described[group]
+		if dg.State == "Stable" && len(dg.Members) == nMembers {
+			return dg
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("timeout waiting for stable group %q with %d members (state=%s, members=%d)", group, nMembers, dg.State, len(dg.Members))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// totalAssignedPartitions returns the total number of partitions assigned
+// across all members of a described consumer group.
+func totalAssignedPartitions(dg kadm.DescribedConsumerGroup) int {
+	n := 0
+	for _, m := range dg.Members {
+		for _, parts := range m.Assignment {
+			n += len(parts)
+		}
+	}
+	return n
 }

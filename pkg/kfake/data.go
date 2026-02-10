@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -418,10 +419,21 @@ var validBrokerConfigs = map[string]string{
 }
 
 const (
-	defLogDir            = "/mem/kfake"
-	defMaxMessageBytes   = 1048588
-	defHeartbeatInterval = 500
+	defLogDir          = "/mem/kfake"
+	defMaxMessageBytes = 1048588
 )
+
+// defHeartbeatInterval is the default group.consumer.heartbeat.interval.ms.
+// Real Kafka defaults to 5s; in test binaries we use 100ms so that
+// KIP-848 reconciliation completes quickly.
+var defHeartbeatInterval = 5000
+
+func init() {
+	if testing.Testing() {
+		defHeartbeatInterval = 100
+		configDefaults["group.consumer.heartbeat.interval.ms"] = "100"
+	}
+}
 
 // Default topic and broker configs. Topic/broker pairs that share the same
 // underlying setting (e.g. max.message.bytes / message.max.bytes) both
@@ -479,7 +491,7 @@ func (c *Cluster) consumerHeartbeatIntervalMs() int32 {
 		n, _ := strconv.Atoi(*v)
 		return int32(n)
 	}
-	return defHeartbeatInterval
+	return int32(defHeartbeatInterval)
 }
 
 // maxMessageBytes returns the max.message.bytes for a topic, falling back to

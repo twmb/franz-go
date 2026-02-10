@@ -851,36 +851,54 @@ func TestPooling(t *testing.T) {
 func TestGroupSimple(t *testing.T) {
 	t.Parallel()
 
-	t1, cleanup := tmpTopicPartitions(t, 1)
-	defer cleanup()
-	g1, gcleanup := tmpGroup(t)
-	defer gcleanup()
+	for _, tc := range []struct {
+		name      string
+		enable848 bool
+	}{
+		{"classic", false},
+		{"848", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	cl, _ := newTestClient(
-		DefaultProduceTopic(t1),
-		ConsumeTopics(t1),
-		ConsumerGroup(g1),
-		MetadataMinAge(100*time.Millisecond),
-		FetchMaxWait(time.Second),
-		UnknownTopicRetries(-1),
-	)
-	defer cl.Close()
+			t1, cleanup := tmpTopicPartitions(t, 1)
+			defer cleanup()
+			g1, gcleanup := tmpGroup(t)
+			defer gcleanup()
 
-	for range 2 {
-		if err := cl.ProduceSync(context.Background(), StringRecord("foo")).FirstErr(); err != nil {
-			t.Fatal(err)
-		}
+			opts := []Opt{
+				DefaultProduceTopic(t1),
+				ConsumeTopics(t1),
+				ConsumerGroup(g1),
+				MetadataMinAge(100 * time.Millisecond),
+				FetchMaxWait(time.Second),
+				UnknownTopicRetries(-1),
+			}
+			if tc.enable848 {
+				ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true) //nolint:revive,staticcheck // intentional string key for beta opt-in
+				opts = append(opts, WithContext(ctx848))
+			}
 
-		fs := cl.PollFetches(context.Background())
+			cl, _ := newTestClient(opts...)
+			defer cl.Close()
 
-		if errs := fs.Errors(); errs != nil {
-			t.Errorf("unexpected fetch errors: %v", errs)
-		}
-		if num := fs.NumRecords(); num != 1 {
-			t.Errorf("expected only one record, got %d", num)
-		}
-		if err := cl.CommitUncommittedOffsets(context.Background()); err != nil {
-			t.Errorf("unexpected err: %v", err)
-		}
+			for range 2 {
+				if err := cl.ProduceSync(context.Background(), StringRecord("foo")).FirstErr(); err != nil {
+					t.Fatal(err)
+				}
+
+				fs := cl.PollFetches(context.Background())
+
+				if errs := fs.Errors(); errs != nil {
+					t.Errorf("unexpected fetch errors: %v", errs)
+				}
+				if num := fs.NumRecords(); num != 1 {
+					t.Errorf("expected only one record, got %d", num)
+				}
+				if err := cl.CommitUncommittedOffsets(context.Background()); err != nil {
+					t.Errorf("unexpected err: %v", err)
+				}
+			}
+		})
 	}
 }

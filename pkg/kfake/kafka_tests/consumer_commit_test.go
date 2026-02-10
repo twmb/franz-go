@@ -24,7 +24,7 @@ func TestAutoCommitOnClose(t *testing.T) {
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
 	// Produce some records.
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	for i := range 5 {
 		produceSync(t, producer, kgo.StringRecord("v-"+strconv.Itoa(i)))
 	}
@@ -149,7 +149,7 @@ func TestAsyncCommit(t *testing.T) {
 	group := "commit-async-group"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	for i := range 5 {
 		produceSync(t, producer, kgo.StringRecord("v-"+strconv.Itoa(i)))
 	}
@@ -264,7 +264,7 @@ func TestPositionAndCommit(t *testing.T) {
 	group := "commit-position-group"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	for i := range 10 {
 		produceSync(t, producer, kgo.StringRecord("v-"+strconv.Itoa(i)))
 	}

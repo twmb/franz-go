@@ -22,11 +22,11 @@ func TestFetchInvalidOffset(t *testing.T) {
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
 	// Produce some records so there's data.
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceSync(t, producer, kgo.StringRecord("v1"), kgo.StringRecord("v2"))
 
 	// Create consumer starting at an offset beyond the log end, with no reset.
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
 			topic: {0: kgo.NewOffset().At(100)},
 		}),
@@ -60,11 +60,11 @@ func TestFetchOutOfRangeResetEarliest(t *testing.T) {
 	topic := "fetch-reset-earliest"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceSync(t, producer, kgo.StringRecord("v1"), kgo.StringRecord("v2"), kgo.StringRecord("v3"))
 
 	// Start at an out-of-range offset with reset to earliest.
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
 			topic: {0: kgo.NewOffset().At(100)},
 		}),
@@ -85,11 +85,11 @@ func TestFetchOutOfRangeResetLatest(t *testing.T) {
 	topic := "fetch-reset-latest"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceSync(t, producer, kgo.StringRecord("old1"), kgo.StringRecord("old2"))
 
 	// Start at an out-of-range offset with reset to latest.
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
 			topic: {0: kgo.NewOffset().At(100)},
 		}),
@@ -116,7 +116,7 @@ func TestFetchRecordLargerThanFetchMaxBytes(t *testing.T) {
 	topic := "fetch-large-record"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 
 	// Produce a record much larger than our fetch max bytes.
 	largeValue := []byte(strings.Repeat("x", 10_000))
@@ -124,7 +124,7 @@ func TestFetchRecordLargerThanFetchMaxBytes(t *testing.T) {
 	produceSync(t, producer, r)
 
 	// Consume with a very small FetchMaxBytes.
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.FetchMaxBytes(1024),
 	)
@@ -142,13 +142,13 @@ func TestFetchRecordLargerThanMaxPartitionFetchBytes(t *testing.T) {
 	topic := "fetch-large-partition"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 
 	largeValue := []byte(strings.Repeat("y", 10_000))
 	r := &kgo.Record{Value: largeValue}
 	produceSync(t, producer, r)
 
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.FetchMaxPartitionBytes(1024),
 	)
@@ -168,7 +168,7 @@ func TestFetchHonoursFetchSizeIfLargeRecordNotFirst(t *testing.T) {
 	topic := "fetch-honour-size"
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient(t, c, kgo.DefaultProduceTopic(topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 
 	// Produce a small record, then a large record in separate batches.
 	smallRecord := kgo.StringRecord("small")
@@ -178,7 +178,7 @@ func TestFetchHonoursFetchSizeIfLargeRecordNotFirst(t *testing.T) {
 	produceSync(t, producer, largeRecord)
 
 	// Consume with a fetch size that fits the small record but not the large.
-	consumer := newClient(t, c,
+	consumer := newClient848(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.FetchMaxPartitionBytes(512),
 	)

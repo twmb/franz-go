@@ -22,7 +22,7 @@ const assignTestRecords = 10
 func setupAssignTest(t *testing.T) *kfake.Cluster {
 	t.Helper()
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, assignTestTopic))
-	producer := newClient(t, c, kgo.DefaultProduceTopic(assignTestTopic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(assignTestTopic))
 	for i := range assignTestRecords {
 		r := kgo.StringRecord("value-" + strconv.Itoa(i))
 		r.Key = []byte("key-" + strconv.Itoa(i))
@@ -40,7 +40,7 @@ func assignConsumer(t *testing.T, c *kfake.Cluster, offset kgo.Offset, extraOpts
 			assignTestTopic: {0: offset},
 		}),
 	}, extraOpts...)
-	return newClient(t, c, opts...)
+	return newClient848(t, c, opts...)
 }
 
 // TestAssignAndConsume verifies basic assign + consume from beginning.
@@ -343,7 +343,7 @@ func TestAssignConsumeFromEnd(t *testing.T) {
 	consumer := assignConsumer(t, c, kgo.NewOffset().AtEnd())
 
 	// Produce one more record after the consumer is set up.
-	producer := newClient(t, c, kgo.DefaultProduceTopic(assignTestTopic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(assignTestTopic))
 	r := kgo.StringRecord("new-value")
 	r.Topic = assignTestTopic
 	produceSync(t, producer, r)

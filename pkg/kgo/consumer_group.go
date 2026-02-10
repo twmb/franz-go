@@ -815,10 +815,23 @@ func newAssignRevokeSession() *assignRevokeSession {
 // diff its last assignment and its new assignment and revoke anything lost.
 // We call this a "prerevoke".
 func (s *assignRevokeSession) prerevoke(g *groupConsumer, lost map[string][]int32) <-chan struct{} {
+	// For 848, set prerevoking before the goroutine starts so the
+	// very first concurrent heartbeat sends keepalive.
+	g.mu.Lock()
+	g848 := g.g848
+	g.mu.Unlock()
+	if g848 != nil {
+		g848.prerevoking.Store(true)
+	}
 	go func() {
 		defer close(s.prerevokeDone)
 		if g.cooperative.Load() && len(lost) > 0 {
 			g.revoke(revokeLastSession, lost, false)
+		}
+		// Now that prerevoke is complete, clear prerevoking so
+		// subsequent heartbeats resume sending full requests.
+		if g848 != nil {
+			g848.prerevoking.Store(false)
 		}
 	}()
 	return s.prerevokeDone
