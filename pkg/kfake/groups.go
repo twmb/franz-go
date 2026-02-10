@@ -96,6 +96,7 @@ type (
 		currentAssignment  map[uuid][]int32 // what member reports owning
 		targetAssignment   map[uuid][]int32 // what server wants member to own
 		lastSentAssignment map[uuid][]int32 // last assignment included in a response
+		prevAssignment     map[uuid][]int32 // previous currentAssignment, provides a one-cycle grace period for revocations
 
 		t    *time.Timer
 		last time.Time
@@ -1065,18 +1066,10 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 			fillOffsetCommit(req, resp, kerr.IllegalGeneration.Code)
 			return resp, false
 		}
-	} else {
-		if req.MemberID != "" {
-			fillOffsetCommit(req, resp, kerr.UnknownMemberID.Code)
-			return resp, false
-		}
-		if req.Generation != -1 {
-			fillOffsetCommit(req, resp, kerr.IllegalGeneration.Code)
-			return resp, false
-		}
-		if g.state != groupEmpty {
-			panic("invalid state: no members, but group not empty")
-		}
+	} else if req.Generation >= 0 {
+		// Empty group: only accept simple commits (generation < 0).
+		fillOffsetCommit(req, resp, kerr.IllegalGeneration.Code)
+		return resp, false
 	}
 
 	switch g.state {
@@ -1457,7 +1450,7 @@ func (gs *groups) handleConsumerGroupDescribe(creq *clientReq) *kmsg.ConsumerGro
 			continue
 		}
 		g, ok := gs.gs[rg]
-		if !ok || g.typ != "consumer" {
+		if !ok {
 			sg.ErrorCode = kerr.GroupIDNotFound.Code
 			if req.IncludeAuthorizedOperations {
 				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
@@ -1465,6 +1458,13 @@ func (gs *groups) handleConsumerGroupDescribe(creq *clientReq) *kmsg.ConsumerGro
 			continue
 		}
 		if !g.waitControl(func() {
+			if g.typ != "consumer" {
+				sg.ErrorCode = kerr.GroupIDNotFound.Code
+				if req.IncludeAuthorizedOperations {
+					sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
+				}
+				return
+			}
 			sg.State = g.state.String()
 			sg.Epoch = g.generation
 			sg.AssignmentEpoch = g.generation
@@ -1582,6 +1582,10 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 		targetAssignment:   make(map[uuid][]int32),
 	}
 	if req.ServerAssignor != nil {
+		if !validServerAssignor(*req.ServerAssignor) {
+			resp.ErrorCode = kerr.UnsupportedAssignor.Code
+			return resp
+		}
 		m.serverAssignor = *req.ServerAssignor
 	}
 	if req.SubscribedTopicNames != nil {
@@ -1618,8 +1622,9 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 
 	resp.MemberID = &memberID
 	resp.MemberEpoch = m.memberEpoch
-	resp.Assignment = makeAssignment(m)
-	m.lastSentAssignment = copyAssignment(m.targetAssignment)
+	reconciled := g.reconciledAssignment(m)
+	resp.Assignment = makeAssignment(reconciled)
+	m.lastSentAssignment = copyAssignment(reconciled)
 	return resp
 }
 
@@ -1681,6 +1686,10 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 			needRecompute = true
 		}
 		if req.ServerAssignor != nil && *req.ServerAssignor != m.serverAssignor {
+			if !validServerAssignor(*req.ServerAssignor) {
+				resp.ErrorCode = kerr.UnsupportedAssignor.Code
+				return resp
+			}
 			m.serverAssignor = *req.ServerAssignor
 			g.assignorName = m.serverAssignor
 		}
@@ -1689,6 +1698,7 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 			for _, t := range req.Topics {
 				reported[t.TopicID] = t.Partitions
 			}
+			m.prevAssignment = m.currentAssignment
 			m.currentAssignment = reported
 		}
 	}
@@ -1706,26 +1716,35 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 
 	resp.MemberID = &req.MemberID
 	resp.MemberEpoch = m.memberEpoch
-	// Include assignment on: epoch 0, full request, or assignment changed
-	// since last sent to this member.
-	if full || !assignmentsEqual(m.lastSentAssignment, m.targetAssignment) {
-		resp.Assignment = makeAssignment(m)
-		m.lastSentAssignment = copyAssignment(m.targetAssignment)
+	// Include assignment on: epoch 0, full request, or reconciled
+	// assignment changed since last sent to this member.
+	reconciled := g.reconciledAssignment(m)
+	if full || !assignmentsEqual(m.lastSentAssignment, reconciled) {
+		resp.Assignment = makeAssignment(reconciled)
+		m.lastSentAssignment = copyAssignment(reconciled)
 	}
 	return resp
 }
 
-// Uniform round-robin assignor. Uses the provided topic metadata
-// snapshot to resolve both explicit and regex subscriptions.
-// Updates targetAssignment on each consumerMember.
+// validServerAssignor returns whether the given assignor name is
+// supported for consumer groups. Only "uniform" and "range" are valid
+// ("simple" is for share groups only - KIP-932).
+func validServerAssignor(name string) bool {
+	return name == "uniform" || name == "range"
+}
+
+type assignorTP struct {
+	topic string
+	id    uuid
+	part  int32
+}
+
+// computeTargetAssignment resolves subscriptions against the topic
+// metadata snapshot and dispatches to the appropriate assignor based on
+// g.assignorName. Updates targetAssignment on each consumerMember.
 func (g *group) computeTargetAssignment(snap topicMetaSnap) {
-	type topicPartition struct {
-		topic string
-		id    uuid
-		part  int32
-	}
 	memberSubs := make(map[string]map[string]struct{}, len(g.consumerMembers))
-	var allTPs []topicPartition
+	var allTPs []assignorTP
 
 	subscribedSet := make(map[string]struct{})
 	for mid, m := range g.consumerMembers {
@@ -1751,12 +1770,12 @@ func (g *group) computeTargetAssignment(snap topicMetaSnap) {
 			continue
 		}
 		for p := int32(0); p < info.partitions; p++ {
-			allTPs = append(allTPs, topicPartition{topic: topic, id: info.id, part: p})
+			allTPs = append(allTPs, assignorTP{topic: topic, id: info.id, part: p})
 		}
 	}
 
 	// Sort deterministically: by topic name, then partition.
-	slices.SortFunc(allTPs, func(a, b topicPartition) int {
+	slices.SortFunc(allTPs, func(a, b assignorTP) int {
 		if c := cmp.Compare(a.topic, b.topic); c != 0 {
 			return c
 		}
@@ -1779,7 +1798,24 @@ func (g *group) computeTargetAssignment(snap topicMetaSnap) {
 		return
 	}
 
-	// Round-robin: iterate partitions, assign to next eligible member.
+	switch g.assignorName {
+	case "range":
+		g.assignRange(allTPs, memberIDs, memberSubs)
+	default: // "uniform" or "" (pre-assignor groups) - validated at heartbeat time
+		g.assignUniform(allTPs, memberIDs, memberSubs)
+	}
+
+	// Sort partition lists for determinism.
+	for _, m := range g.consumerMembers {
+		for id := range m.targetAssignment {
+			slices.Sort(m.targetAssignment[id])
+		}
+	}
+}
+
+// assignUniform distributes partitions round-robin across all eligible
+// members.
+func (g *group) assignUniform(allTPs []assignorTP, memberIDs []string, memberSubs map[string]map[string]struct{}) {
 	idx := 0
 	for _, tp := range allTPs {
 		startIdx := idx
@@ -1796,19 +1832,107 @@ func (g *group) computeTargetAssignment(snap topicMetaSnap) {
 			}
 		}
 	}
+}
 
-	// Sort partition lists for determinism.
-	for _, m := range g.consumerMembers {
-		for id := range m.targetAssignment {
-			slices.Sort(m.targetAssignment[id])
+// assignRange distributes contiguous partition ranges per topic. For
+// each topic, members subscribed to that topic (in sorted order) get
+// a contiguous block. If partitions don't divide evenly, the first
+// members get one extra partition.
+func (g *group) assignRange(allTPs []assignorTP, memberIDs []string, memberSubs map[string]map[string]struct{}) {
+	// Group TPs by topic. allTPs is sorted by (topic, partition),
+	// so partitions for each topic are contiguous.
+	type topicSlice struct {
+		topic      string
+		partitions []assignorTP
+	}
+	var topics []topicSlice
+	for i, tp := range allTPs {
+		if i == 0 || tp.topic != allTPs[i-1].topic {
+			topics = append(topics, topicSlice{topic: tp.topic})
+		}
+		topics[len(topics)-1].partitions = append(topics[len(topics)-1].partitions, tp)
+	}
+
+	for _, ts := range topics {
+		topic := ts.topic
+		partitions := ts.partitions
+
+		// Filter to members subscribed to this topic, preserving
+		// the sorted order from memberIDs.
+		var subs []string
+		for _, mid := range memberIDs {
+			if _, ok := memberSubs[mid][topic]; ok {
+				subs = append(subs, mid)
+			}
+		}
+		if len(subs) == 0 {
+			continue
+		}
+
+		numP := len(partitions)
+		numM := len(subs)
+		minQuota := numP / numM
+		extra := numP % numM
+		nextRange := 0
+
+		for _, mid := range subs {
+			quota := minQuota
+			if extra > 0 {
+				quota++
+				extra--
+			}
+			m := g.consumerMembers[mid]
+			for _, tp := range partitions[nextRange : nextRange+quota] {
+				m.targetAssignment[tp.id] = append(m.targetAssignment[tp.id], tp.part)
+			}
+			nextRange += quota
 		}
 	}
 }
 
-// Builds the response assignment for a consumer member.
-func makeAssignment(m *consumerMember) *kmsg.ConsumerGroupHeartbeatResponseAssignment {
-	a := new(kmsg.ConsumerGroupHeartbeatResponseAssignment)
+// reconciledAssignment returns the subset of m's target assignment that
+// is safe to send right now. A partition is only included if no OTHER
+// member currently owns it or was recently told to own it.
+//
+// We check currentAssignment (what the member reports owning),
+// lastSentAssignment (what we told the member to own), and
+// prevAssignment (what the member reported in its prior full heartbeat).
+//
+// prevAssignment handles a race where a cooperative client's heartbeat
+// reports releasing partitions before the client has committed offsets
+// for those partitions - the heartbeat fires while the client-side
+// revocation is still blocked on AllowRebalance. By checking the
+// previous currentAssignment, we provide a one-cycle grace period for
+// the commit to complete before another member can be assigned those
+// partitions.
+func (g *group) reconciledAssignment(m *consumerMember) map[uuid][]int32 {
+	result := make(map[uuid][]int32, len(m.targetAssignment))
 	for id, parts := range m.targetAssignment {
+		for _, p := range parts {
+			ownedByOther := false
+			for _, other := range g.consumerMembers {
+				if other.memberID == m.memberID {
+					continue
+				}
+				if slices.Contains(other.currentAssignment[id], p) ||
+					slices.Contains(other.lastSentAssignment[id], p) ||
+					slices.Contains(other.prevAssignment[id], p) {
+					ownedByOther = true
+					break
+				}
+			}
+			if !ownedByOther {
+				result[id] = append(result[id], p)
+			}
+		}
+	}
+	return result
+}
+
+// Builds the response assignment from a partition map.
+func makeAssignment(assigned map[uuid][]int32) *kmsg.ConsumerGroupHeartbeatResponseAssignment {
+	a := new(kmsg.ConsumerGroupHeartbeatResponseAssignment)
+	for id, parts := range assigned {
 		t := kmsg.NewConsumerGroupHeartbeatResponseAssignmentTopic()
 		t.TopicID = id
 		t.Partitions = parts
@@ -1882,8 +2006,15 @@ func (g *group) handleConsumerOffsetCommit(creq *clientReq) *kmsg.OffsetCommitRe
 		return resp
 	}
 
-	// KIP-1251: Generation is the member epoch; accept if <= member.memberEpoch.
-	if req.MemberID != "" {
+	// Empty group with negative epoch: accept without validation
+	// (admin / kadm commits).
+	if len(g.consumerMembers) == 0 && req.Generation < 0 {
+		// Fall through to commit.
+	} else if req.MemberID == "" {
+		fillOffsetCommit(req, resp, kerr.UnknownMemberID.Code)
+		return resp
+	} else {
+		// KIP-1251: Generation is the member epoch.
 		m, ok := g.consumerMembers[req.MemberID]
 		if !ok {
 			fillOffsetCommit(req, resp, kerr.UnknownMemberID.Code)
