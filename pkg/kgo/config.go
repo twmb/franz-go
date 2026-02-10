@@ -303,8 +303,8 @@ func (cfg *cfg) validate() error {
 		{name: "request timeout max overhead", v: int64(cfg.requestTimeoutOverhead), allowed: int64(15 * time.Minute), badcmp: i64gt, durs: true},
 		{name: "request timeout min overhead", v: int64(cfg.requestTimeoutOverhead), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
 
-		// 1s <= conn idle <= 15m
-		{name: "conn min idle timeout", v: int64(cfg.connIdleTimeout), allowed: int64(time.Second), badcmp: i64lt, durs: true},
+		// 100ms <= conn idle <= 15m
+		{name: "conn min idle timeout", v: int64(cfg.connIdleTimeout), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
 		{name: "conn max idle timeout", v: int64(cfg.connIdleTimeout), allowed: int64(15 * time.Minute), badcmp: i64gt, durs: true},
 
 		// 10ms <= metadata <= 1hr
@@ -501,7 +501,7 @@ func defaultCfg() cfg {
 
 		dialTimeout:            10 * time.Second,
 		requestTimeoutOverhead: 10 * time.Second,
-		connIdleTimeout:        20 * time.Second,
+		connIdleTimeout:        30 * time.Second,
 
 		softwareName:    "kgo",
 		softwareVersion: softwareVersion(),
@@ -662,12 +662,12 @@ func RequestTimeoutOverhead(overhead time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.requestTimeoutOverhead = overhead }}
 }
 
-// ConnIdleTimeout is a rough amount of time to allow connections to idle
-// before they are closed, overriding the default 20s.
+// ConnIdleTimeout sets the amount of time after which an idle connection will
+// not be reused, overriding the default 30s. The connection may be closed after
+// this timeout.
 //
 // In the worst case, a connection can be allowed to idle for up to 2x this
-// time, while the average is expected to be 1.5x (essentially, a uniform
-// distribution from this interval to 2x the interval).
+// time before being closed.
 //
 // It is possible that a connection can be reaped just as it is about to be
 // written to, but the client internally retries in these cases.

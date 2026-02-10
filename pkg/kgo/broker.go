@@ -541,6 +541,7 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 		isFetchCxn   bool
 		reqKey       = req.Key()
 		_, isTimeout = req.(kmsg.TimeoutRequest)
+		reuse        = true
 	)
 	switch {
 	case reqKey == 0:
@@ -555,7 +556,15 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 		pcxn = &b.cxnSlow
 	}
 
-	if *pcxn != nil && !(*pcxn).dead.Load() {
+	// Do not reuse a connection that has been idle for longer than idle timeout.
+	// Kill it instead.
+	if *pcxn != nil && !(*pcxn).dead.Load() && (*pcxn).isIdleTimeout(b.cl.cfg.connIdleTimeout) {
+		// die() in a goroutine to avoid blocking
+		go (*pcxn).die()
+		reuse = false
+	}
+
+	if reuse && *pcxn != nil && !(*pcxn).dead.Load() {
 		return *pcxn, nil
 	}
 
@@ -673,14 +682,7 @@ func (b *broker) reapConnections(idleTimeout time.Duration) (total int) {
 		//
 		// - produce can write but never read
 		// - fetch can hang for a while reading (infrequent writes)
-
-		lastWrite := time.Unix(0, cxn.lastWrite.Load())
-		lastRead := time.Unix(0, cxn.lastRead.Load())
-
-		writeIdle := time.Since(lastWrite) > idleTimeout && !cxn.writing.Load()
-		readIdle := time.Since(lastRead) > idleTimeout && !cxn.reading.Load()
-
-		if writeIdle && readIdle {
+		if cxn.isIdleTimeout(idleTimeout) {
 			cxn.die()
 			total++
 		}
@@ -1604,4 +1606,13 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 	}
 
 	pr.promise(pr.resp, readErr)
+}
+
+func (cxn *brokerCxn) isIdleTimeout(idleTimeout time.Duration) bool {
+	lastWrite := time.Unix(0, cxn.lastWrite.Load())
+	lastRead := time.Unix(0, cxn.lastRead.Load())
+
+	writeIdle := time.Since(lastWrite) > idleTimeout && !cxn.writing.Load()
+	readIdle := time.Since(lastRead) > idleTimeout && !cxn.reading.Load()
+	return writeIdle && readIdle
 }

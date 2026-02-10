@@ -2505,3 +2505,102 @@ func TestIssue1217(t *testing.T) {
 		}
 	})
 }
+
+// TestIssue1245 verifies that idle connections are not reused after
+// connIdleTimeout has elapsed. PR #1245 adds a check in loadConnection
+// so that a connection idle for longer than connIdleTimeout is killed
+// and a new connection is established, rather than reusing the stale one.
+//
+// The test is designed to exercise the loadConnection idle check rather
+// than the background reap loop. With ConnIdleTimeout of 200ms, the reap
+// loop ticks at t=200ms, 400ms, ... from client creation. The first
+// produce fires immediately (~t=10ms), so the produce connection's
+// lastRead/lastWrite is ~t=10ms. At the t=200ms reap tick the connection
+// has been idle for only ~190ms which is NOT > 200ms, so it is not
+// reaped. The second produce fires at ~t=310ms (idleTimeout + 100ms
+// after the first produce returns), well before the t=400ms reap tick.
+// At this point the produce connection has been idle for ~300ms > 200ms,
+// so loadConnection's isIdleTimeout check catches it and creates a new
+// connection.
+func TestIssue1245(t *testing.T) {
+	t.Parallel()
+	const testTopic = "foo"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Track the number of new broker connections.
+	connects := new(atomic.Int32)
+
+	idleTimeout := 200 * time.Millisecond
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.ConnIdleTimeout(idleTimeout),
+		kgo.ProducerLinger(0),
+		// Set metadata min and max age to 1hr so that no background
+		// metadata refreshes create or reuse connections during the test.
+		kgo.MetadataMinAge(time.Hour),
+		kgo.MetadataMaxAge(time.Hour),
+		kgo.WithHooks(&connCountHook{connects}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// First produce: fires immediately after client creation (~t=10ms),
+	// establishing a produce connection whose lastRead/lastWrite is set
+	// to approximately now.
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("msg-1")).FirstErr(); err != nil {
+		t.Fatalf("first produce failed: %v", err)
+	}
+
+	connectsAfterFirst := connects.Load()
+	if connectsAfterFirst == 0 {
+		t.Fatal("expected at least 1 connection after first produce")
+	}
+
+	// Sleep idleTimeout + 100ms. This is timed so that:
+	// - The reap loop at t=200ms sees the produce connection idle for
+	//   ~190ms (NOT > 200ms), so it does NOT reap it.
+	// - The second produce fires at ~t=310ms, well before the t=400ms
+	//   reap tick.
+	// - At ~t=310ms the produce connection has been idle for ~300ms >
+	//   200ms, so loadConnection's isIdleTimeout check catches it and
+	//   forces a new connection to be created.
+	time.Sleep(idleTimeout + 100*time.Millisecond)
+
+	// Second produce: loadConnection detects the idle produce connection,
+	// kills it, and creates a new one.
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("msg-2")).FirstErr(); err != nil {
+		t.Fatalf("second produce failed: %v", err)
+	}
+
+	// OnBrokerConnect is only called for new connections, so any increase
+	// in the counter means a new connection was established.
+	if connects.Load() <= connectsAfterFirst {
+		t.Fatal("second produce reused the same connection; expected a new connection to be created")
+	}
+}
+
+// connCountHook implements HookBrokerConnect to count new connections.
+type connCountHook struct {
+	connects *atomic.Int32
+}
+
+func (h *connCountHook) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
+	if err == nil {
+		h.connects.Add(1)
+	}
+}
