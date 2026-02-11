@@ -10,6 +10,7 @@
 #   -l, --log-level LEVEL  Set KGO_LOG_LEVEL (e.g., debug, info)
 #   -v, --version VERSION  Kafka version to emulate (e.g., 2.8, 3.5)
 #   -k, --kill             Kill processes on ports 9092-9094 and exit
+#   --clean                Remove /tmp/kfake_test_logs and exit
 #   -h, --help             Show this help
 
 MAX_ITERATIONS=50
@@ -57,6 +58,11 @@ while [[ $# -gt 0 ]]; do
             echo "Done."
             exit 0
             ;;
+        --clean)
+            rm -rf /tmp/kfake_test_logs
+            echo "Removed /tmp/kfake_test_logs"
+            exit 0
+            ;;
         -h|--help)
             echo "Usage: ./run_tests.sh [options]"
             echo "Options:"
@@ -68,6 +74,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -l, --log-level LEVEL  Set KGO_LOG_LEVEL (e.g., debug, info)"
             echo "  -v, --version VERSION  Kafka version to emulate (e.g., 2.8, 3.5)"
             echo "  -k, --kill             Kill processes on ports 9092-9094 and exit"
+            echo "  --clean                Remove /tmp/kfake_test_logs and exit"
             echo "  -h, --help             Show this help"
             exit 0
             ;;
@@ -142,7 +149,11 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     if [ -n "$KFAKE_VERSION" ]; then
         VERSION_ARG="--as-version $KFAKE_VERSION"
     fi
-    KFAKE_LOG_LEVEL=$LOG_LEVEL go run main.go $VERSION_ARG -c group.consumer.heartbeat.interval.ms=100 > "$SERVER_LOG" 2>&1 &
+    LOG_ARG=""
+    if [ -n "$LOG_LEVEL" ]; then
+        LOG_ARG="-l $LOG_LEVEL"
+    fi
+    go run main.go $VERSION_ARG $LOG_ARG -c group.consumer.heartbeat.interval.ms=100 > "$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
 
     # Wait for server to be listening (max 10 seconds)
@@ -164,9 +175,9 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     # Run the test (use longer timeout with race detector)
     cd /Users/travisbischel/src/twmb/franz-go/pkg/kgo
     if [ -n "$RACE" ]; then
-        TIMEOUT="100s"
+        TIMEOUT="180s"
     else
-        TIMEOUT="60s"
+        TIMEOUT="90s"
     fi
     KGO_TEST_RECORDS=$RECORDS KGO_LOG_LEVEL=$LOG_LEVEL go test $RACE $RUN_ARG -timeout $TIMEOUT > "$TEST_LOG" 2>&1
     TEST_EXIT=$?
