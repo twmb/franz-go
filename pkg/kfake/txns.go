@@ -603,6 +603,15 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 		return resp
 	}
 	if pidinf.epoch != req.ProducerEpoch {
+		// KIP-890 retry detection: if the epoch is exactly one ahead
+		// and the producer is not in a transaction, the previous
+		// EndTxn already completed and bumped the epoch. Return
+		// success with the current ID/epoch so the client can proceed.
+		if req.Version >= 5 && pidinf.epoch == req.ProducerEpoch+1 && !pidinf.inTx {
+			resp.ProducerID = pidinf.id
+			resp.ProducerEpoch = pidinf.epoch
+			return resp
+		}
 		resp.ErrorCode = kerr.InvalidProducerEpoch.Code
 		return resp
 	}
