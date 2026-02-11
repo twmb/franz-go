@@ -161,6 +161,13 @@ outer:
 			case errors.Is(err, kerr.RebalanceInProgress):
 				err = nil
 
+			case err != nil && isRetryableBrokerErr(err):
+				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat hit retriable broker error, retrying",
+					"group", g.cfg.group,
+					"err", err,
+				)
+				err = nil
+
 			case errors.Is(err, kerr.UnknownMemberID):
 				g.memberGen.store(newStringUUID(), 0)
 
