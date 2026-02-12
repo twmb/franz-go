@@ -1036,3 +1036,196 @@ func Test848CooperativeRevocationDuringConsumption(t *testing.T) {
 	}
 }
 
+// Test848RebalanceTimeout verifies that the per-member rebalance timeout
+// fences a member that does not complete partition revocation in time.
+// Member B joins via raw kmsg so we control exactly when it heartbeats.
+// After a rebalance is triggered, we send B one heartbeat (gets the
+// revocation instruction and schedules the rebalance timeout), then stop.
+// The rebalance timeout fires and fences B.
+func Test848RebalanceTimeout(t *testing.T) {
+	t.Parallel()
+	topic := "t848-rebal-timeout"
+	group := "g848-rebal-timeout"
+	nPartitions := 6
+
+	c := newCluster(t,
+		kfake.NumBrokers(1),
+		kfake.SeedTopics(int32(nPartitions), topic),
+		kfake.BrokerConfigs(map[string]string{
+			// Long session timeout so it doesn't interfere.
+			"group.consumer.session.timeout.ms": "30000",
+		}),
+	)
+
+	// Plain client for raw requests and admin.
+	raw, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	adm := kadm.NewClient(raw)
+
+	// A joins via kgo (automatic heartbeating).
+	a := newGroupConsumer(t, c, topic, group)
+	produceNStrings(t, a, topic, 30)
+	waitForStableGroup(t, adm, group, 1, 5*time.Second)
+
+	// B joins via raw heartbeat with a short rebalance timeout.
+	ctx := context.Background()
+	join := kmsg.NewConsumerGroupHeartbeatRequest()
+	join.Group = group
+	join.MemberEpoch = 0
+	join.RebalanceTimeoutMillis = 500
+	assignor := "uniform"
+	join.ServerAssignor = &assignor
+	join.SubscribedTopicNames = []string{topic}
+	join.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+	joinResp, err := join.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("B join: %v", err)
+	}
+	if joinResp.ErrorCode != 0 {
+		t.Fatalf("B join error: %v", kerr.ErrorForCode(joinResp.ErrorCode))
+	}
+	bMemberID := *joinResp.MemberID
+	bEpoch := joinResp.MemberEpoch
+
+	// Build B's current assignment from the join response.
+	bAssignment := make(map[[16]byte][]int32)
+	if joinResp.Assignment != nil {
+		for _, at := range joinResp.Assignment.Topics {
+			bAssignment[at.TopicID] = at.Partitions
+		}
+	}
+
+	// Heartbeat B with its assigned partitions to confirm and stabilize.
+	hb := kmsg.NewConsumerGroupHeartbeatRequest()
+	hb.Group = group
+	hb.MemberID = bMemberID
+	hb.MemberEpoch = bEpoch
+	hb.RebalanceTimeoutMillis = 500
+	hb.SubscribedTopicNames = []string{topic}
+	for id, parts := range bAssignment {
+		tp := kmsg.NewConsumerGroupHeartbeatRequestTopic()
+		tp.TopicID = id
+		tp.Partitions = parts
+		hb.Topics = append(hb.Topics, tp)
+	}
+	hbResp, err := hb.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("B heartbeat: %v", err)
+	}
+	if hbResp.ErrorCode != 0 {
+		t.Fatalf("B heartbeat error: %v", kerr.ErrorForCode(hbResp.ErrorCode))
+	}
+	if hbResp.MemberEpoch > bEpoch {
+		bEpoch = hbResp.MemberEpoch
+	}
+
+	// B may need additional heartbeats to fully reconcile if the
+	// epoch didn't advance on the first confirmation.
+	for i := range 20 {
+		described, err := adm.DescribeConsumerGroups(ctx, group)
+		if err != nil {
+			t.Fatalf("describe: %v", err)
+		}
+		if described[group].State == "Stable" && len(described[group].Members) == 2 {
+			break
+		}
+		if i == 19 {
+			t.Fatalf("timeout waiting for stable 2-member group (state=%s, members=%d)", described[group].State, len(described[group].Members))
+		}
+		// Re-heartbeat B to nudge reconciliation.
+		hb2 := kmsg.NewConsumerGroupHeartbeatRequest()
+		hb2.Group = group
+		hb2.MemberID = bMemberID
+		hb2.MemberEpoch = bEpoch
+		hb2.RebalanceTimeoutMillis = 500
+		hb2.SubscribedTopicNames = []string{topic}
+		for id, parts := range bAssignment {
+			tp := kmsg.NewConsumerGroupHeartbeatRequestTopic()
+			tp.TopicID = id
+			tp.Partitions = parts
+			hb2.Topics = append(hb2.Topics, tp)
+		}
+		resp, err := hb2.RequestWith(ctx, raw)
+		if err != nil {
+			t.Fatalf("B re-heartbeat: %v", err)
+		}
+		if resp.ErrorCode != 0 {
+			t.Fatalf("B re-heartbeat error: %v", kerr.ErrorForCode(resp.ErrorCode))
+		}
+		if resp.MemberEpoch > bEpoch {
+			bEpoch = resp.MemberEpoch
+		}
+		// Update bAssignment if the response includes one.
+		if resp.Assignment != nil {
+			bAssignment = make(map[[16]byte][]int32)
+			for _, at := range resp.Assignment.Topics {
+				bAssignment[at.TopicID] = at.Partitions
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// C joins via kgo - triggers rebalance. B's target assignment
+	// shrinks, so B needs to revoke partitions.
+	cJoin := newGroupConsumer(t, c, topic, group)
+	_ = cJoin
+
+	// Wait for the group to leave Stable (rebalance triggered).
+	deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for {
+		described, err := adm.DescribeConsumerGroups(deadline, group)
+		if err != nil {
+			t.Fatalf("describe: %v", err)
+		}
+		if described[group].State != "Stable" {
+			break
+		}
+		if deadline.Err() != nil {
+			t.Fatal("timeout waiting for rebalance to start")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Send one full heartbeat for B, reporting its current assignment.
+	// The server will send B the reduced reconciled assignment and
+	// schedule the rebalance timeout.
+	full := kmsg.NewConsumerGroupHeartbeatRequest()
+	full.Group = group
+	full.MemberID = bMemberID
+	full.MemberEpoch = bEpoch
+	full.RebalanceTimeoutMillis = 500
+	full.SubscribedTopicNames = []string{topic}
+	for id, parts := range bAssignment {
+		tp := kmsg.NewConsumerGroupHeartbeatRequestTopic()
+		tp.TopicID = id
+		tp.Partitions = parts
+		full.Topics = append(full.Topics, tp)
+	}
+	fullResp, err := full.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("B full heartbeat: %v", err)
+	}
+	if fullResp.ErrorCode != 0 {
+		t.Fatalf("B full heartbeat error: %v", kerr.ErrorForCode(fullResp.ErrorCode))
+	}
+
+	// Don't send any more heartbeats for B. The rebalance timeout
+	// (500ms) should fire and fence B.
+	time.Sleep(800 * time.Millisecond)
+
+	described, err := adm.DescribeConsumerGroups(ctx, group)
+	if err != nil {
+		t.Fatalf("describe after timeout: %v", err)
+	}
+	dg := described[group]
+	for _, m := range dg.Members {
+		if m.MemberID == bMemberID {
+			t.Fatalf("member B (%s) should have been fenced by rebalance timeout, but is still in group (state=%s)", bMemberID, dg.State)
+		}
+	}
+}
+
