@@ -408,6 +408,7 @@ var validBrokerConfigs = map[string]string{
 	"default.replication.factor":           "",
 	"fetch.max.bytes":                      "",
 	"group.consumer.heartbeat.interval.ms": "",
+	"group.consumer.session.timeout.ms":    "",
 	"log.dir":                              "",
 	"log.message.timestamp.type":           "message.timestamp.type",
 	"log.retention.bytes":                  "retention.bytes",
@@ -427,6 +428,9 @@ const (
 // Real Kafka defaults to 5s; in test binaries we use 100ms so that
 // KIP-848 reconciliation completes quickly.
 var defHeartbeatInterval = 5000
+
+// defSessionTimeout is the default group.consumer.session.timeout.ms.
+var defSessionTimeout = 45000
 
 func init() {
 	if testing.Testing() {
@@ -451,6 +455,7 @@ var configDefaults = map[string]string{
 	"default.replication.factor":           "3",
 	"fetch.max.bytes":                      "57671680",
 	"group.consumer.heartbeat.interval.ms": strconv.Itoa(defHeartbeatInterval),
+	"group.consumer.session.timeout.ms":    strconv.Itoa(defSessionTimeout),
 	"log.dir":                              defLogDir,
 	"log.message.timestamp.type":           "CreateTime",
 	"log.retention.bytes":                  "-1",
@@ -467,6 +472,7 @@ var configTypes = map[string]kmsg.ConfigType{
 	"default.replication.factor":           kmsg.ConfigTypeInt,
 	"fetch.max.bytes":                      kmsg.ConfigTypeInt,
 	"group.consumer.heartbeat.interval.ms": kmsg.ConfigTypeInt,
+	"group.consumer.session.timeout.ms":    kmsg.ConfigTypeInt,
 	"log.dir":                              kmsg.ConfigTypeString,
 	"log.message.timestamp.type":           kmsg.ConfigTypeString,
 	"log.retention.bytes":                  kmsg.ConfigTypeLong,
@@ -484,7 +490,7 @@ var configTypes = map[string]kmsg.ConfigType{
 var brokerRack = "krack"
 
 // consumerHeartbeatIntervalMs returns the group.consumer.heartbeat.interval.ms
-// broker config, falling back to the default of 500.
+// broker config, falling back to the default.
 func (c *Cluster) consumerHeartbeatIntervalMs() int32 {
 	const k = "group.consumer.heartbeat.interval.ms"
 	if v, ok := c.loadBcfgs()[k]; ok && v != nil {
@@ -492,6 +498,17 @@ func (c *Cluster) consumerHeartbeatIntervalMs() int32 {
 		return int32(n)
 	}
 	return int32(defHeartbeatInterval)
+}
+
+// consumerSessionTimeoutMs returns the group.consumer.session.timeout.ms
+// broker config, falling back to the default.
+func (c *Cluster) consumerSessionTimeoutMs() int32 {
+	const k = "group.consumer.session.timeout.ms"
+	if v, ok := c.loadBcfgs()[k]; ok && v != nil {
+		n, _ := strconv.Atoi(*v)
+		return int32(n)
+	}
+	return int32(defSessionTimeout)
 }
 
 // maxMessageBytes returns the max.message.bytes for a topic, falling back to

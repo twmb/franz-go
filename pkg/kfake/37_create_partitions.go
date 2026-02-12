@@ -142,5 +142,9 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 		donet(rt.Topic, 0)
 	}
 
+	if !req.ValidateOnly {
+		c.notifyTopicChange()
+	}
+
 	return resp, nil
 }

@@ -1035,3 +1035,66 @@ func Test848CooperativeRevocationDuringConsumption(t *testing.T) {
 		}
 	}
 }
+
+// Test848SessionTimeout verifies that the server-level session timeout
+// fences a member that stops heartbeating. We use ControlKey to block
+// heartbeat requests from reaching the server, so the session timer
+// fires and fences the member.
+func Test848SessionTimeout(t *testing.T) {
+	t.Parallel()
+	group := "session-timeout-group"
+	topic := "session-timeout-topic"
+
+	c := newCluster(t,
+		kfake.NumBrokers(1),
+		kfake.SeedTopics(1, topic),
+		kfake.BrokerConfigs(map[string]string{
+			"group.consumer.session.timeout.ms": "300",
+		}),
+	)
+
+	// c1 joins and stabilizes.
+	c1 := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(100*time.Millisecond),
+	)
+
+	// Separate admin client (not in the group) for describing.
+	admCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admCl.Close()
+	adm := kadm.NewClient(admCl)
+
+	produceNStrings(t, c1, topic, 10)
+	waitForStableGroup(t, adm, group, 1, 5*time.Second)
+
+	// Block all heartbeat requests from reaching the server. The
+	// ControlKey intercepts before server processing, so the session
+	// timer does not get reset. The kgo client sees
+	// CoordinatorNotAvailable and backs off, giving the timer time
+	// to fire.
+	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		resp := req.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
+		resp.ErrorCode = kerr.CoordinatorNotAvailable.Code
+		c.KeepControl()
+		return resp, nil, true
+	})
+
+	// Wait for the session timeout (300ms) plus margin for the
+	// control function dispatch and group state update.
+	time.Sleep(600 * time.Millisecond)
+
+	described, err := adm.DescribeConsumerGroups(context.Background(), group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dg := described[group]
+	if len(dg.Members) != 0 {
+		t.Fatalf("expected 0 members after session timeout, got %d (state=%s)", len(dg.Members), dg.State)
+	}
+	_ = c1 // keep c1 alive until here
+}

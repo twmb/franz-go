@@ -48,6 +48,7 @@ func testGroup(assignor string, members map[string][]string, snap topicMetaSnap)
 	g := &group{
 		assignorName:    assignor,
 		consumerMembers: make(map[string]*consumerMember, len(members)),
+		partitionEpochs: make(map[uuid]map[int32]int32),
 	}
 	for mid, topics := range members {
 		g.consumerMembers[mid] = &consumerMember{
