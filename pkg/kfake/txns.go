@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"math"
 	"math/rand"
+	"slices"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -107,15 +108,10 @@ func (pids *pids) waitControl(fn func()) {
 
 func (pids *pids) handleInitProducerID(creq *clientReq) bool {
 	pids.init()
-	select {
-	case pids.reqCh <- creq:
-		return true
-	case <-pids.c.die:
-		return false
-	}
+	return pids.sendReq(creq)
 }
 
-func (pids *pids) handleAddPartitionsToTxn(creq *clientReq) bool {
+func (pids *pids) sendReq(creq *clientReq) bool {
 	if pids.reqCh == nil {
 		return false
 	}
@@ -127,41 +123,10 @@ func (pids *pids) handleAddPartitionsToTxn(creq *clientReq) bool {
 	}
 }
 
-func (pids *pids) handleAddOffsetsToTxn(creq *clientReq) bool {
-	if pids.reqCh == nil {
-		return false
-	}
-	select {
-	case pids.reqCh <- creq:
-		return true
-	case <-pids.c.die:
-		return false
-	}
-}
-
-func (pids *pids) handleEndTxn(creq *clientReq) bool {
-	if pids.reqCh == nil {
-		return false
-	}
-	select {
-	case pids.reqCh <- creq:
-		return true
-	case <-pids.c.die:
-		return false
-	}
-}
-
-func (pids *pids) handleTxnOffsetCommit(creq *clientReq) bool {
-	if pids.reqCh == nil {
-		return false
-	}
-	select {
-	case pids.reqCh <- creq:
-		return true
-	case <-pids.c.die:
-		return false
-	}
-}
+func (pids *pids) handleAddPartitionsToTxn(creq *clientReq) bool { return pids.sendReq(creq) }
+func (pids *pids) handleAddOffsetsToTxn(creq *clientReq) bool    { return pids.sendReq(creq) }
+func (pids *pids) handleEndTxn(creq *clientReq) bool             { return pids.sendReq(creq) }
+func (pids *pids) handleTxnOffsetCommit(creq *clientReq) bool    { return pids.sendReq(creq) }
 
 // hasUnstableOffsets returns true if any active transaction has pending
 // (uncommitted) offset commits for the given group. Used for KIP-447
@@ -253,6 +218,9 @@ func (pids *pids) manage() {
 			// Check if this transaction actually expired
 			timeout := time.Duration(nextPid.txTimeout) * time.Millisecond
 			if time.Since(nextPid.txStart) >= timeout {
+				pids.c.cfg.logger.Logf(LogLevelDebug,
+					"txn timeout abort: txn_id=%s producer_id=%d epoch=%d timeout=%dms elapsed=%v",
+					nextPid.txid, nextPid.id, nextPid.epoch, nextPid.txTimeout, time.Since(nextPid.txStart))
 				nextPid.endTx(false) // abort (this also removes from pids.txs)
 				nextPid.epoch++
 				if nextPid.epoch < 0 {
@@ -547,14 +515,7 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 		}
 	}
 
-	// Check if group is part of transaction
-	groupInTx := false
-	for _, g := range pidinf.txGroups {
-		if g == req.Group {
-			groupInTx = true
-			break
-		}
-	}
+	groupInTx := slices.Contains(pidinf.txGroups, req.Group)
 
 	// KIP-890: For v5+ requests, implicitly add the group to the transaction
 	// if it's not already there. This allows clients to skip AddOffsetsToTxn.
@@ -612,6 +573,9 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 			resp.ProducerEpoch = pidinf.epoch
 			return resp
 		}
+		pids.c.cfg.logger.Logf(LogLevelDebug,
+			"EndTxn INVALID_PRODUCER_EPOCH: txn_id=%s producer_id=%d req_epoch=%d server_epoch=%d",
+			req.TransactionalID, req.ProducerID, req.ProducerEpoch, pidinf.epoch)
 		resp.ErrorCode = kerr.InvalidProducerEpoch.Code
 		return resp
 	}
@@ -669,25 +633,25 @@ func (pids *pids) getImplicitTxn(id int64, t string, p int32, pd *partData) (*pi
 	return pidinf, pidinf.windows.mkpDefault(t, p)
 }
 
+func (pids *pids) randomID() int64 {
+	for {
+		id := int64(rand.Uint64()) & math.MaxInt64
+		if _, exists := pids.ids[id]; !exists {
+			return id
+		}
+	}
+}
+
 // bumpEpoch increments the epoch for KIP-890. If the epoch would overflow,
 // a new producer ID is allocated. Returns the (possibly new) pidinfo.
-// Callers should reset pidinf.windows if the client is expected to reset sequences.
 func (pids *pids) bumpEpoch(pidinf *pidinfo) *pidinfo {
 	pidinf.epoch++
 	if pidinf.epoch >= 0 {
 		return pidinf
 	}
 
-	// Epoch overflow - allocate a new producer ID
-	var newID int64
-	for {
-		newID = int64(rand.Uint64()) & math.MaxInt64
-		if _, exists := pids.ids[newID]; !exists {
-			break
-		}
-	}
-
-	// Create new pidinfo with the new ID
+	// Epoch overflow - allocate a new producer ID.
+	newID := pids.randomID()
 	newPidinf := &pidinfo{
 		pids:      pids,
 		id:        newID,
@@ -712,12 +676,7 @@ func (pids *pids) create(txidp *string, txTimeout int32) (int64, int16) {
 		id = int64(hasher.Sum64()) & math.MaxInt64
 		txid = *txidp
 	} else {
-		for {
-			id = int64(rand.Uint64()) & math.MaxInt64
-			if _, exists := pids.ids[id]; !exists {
-				break
-			}
-		}
+		id = pids.randomID()
 	}
 	pidinf, exists := pids.ids[id]
 	if exists {
