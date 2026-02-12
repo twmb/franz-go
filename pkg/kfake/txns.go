@@ -79,21 +79,25 @@ func (pids *pids) reply(creq *clientReq, kresp kmsg.Response) {
 
 // waitControl executes fn in the pids management goroutine.
 //
-// While waiting for fn to complete, this function also processes adminCh.
-// This is necessary to avoid deadlock: handleProduce (in the cluster loop)
-// calls this function to synchronize with the pids loop for sequence
-// validation, while endTx (in the pids loop) calls c.admin() to modify
-// partition data in the cluster loop. Without processing adminCh here,
-// the two loops would deadlock waiting for each other.
+// Both the initial send and the completion wait drain adminCh to avoid
+// deadlock: the pids manage loop may call c.admin() (e.g. during
+// transaction timeout abort) while the cluster goroutine is trying to
+// send to controlCh here. Draining adminCh in both phases ensures
+// neither goroutine blocks waiting for the other.
 func (pids *pids) waitControl(fn func()) {
 	wait := make(chan struct{})
 	wfn := func() { fn(); close(wait) }
-	select {
-	case pids.controlCh <- wfn:
-	case <-pids.c.die:
-		return
+	for {
+		select {
+		case pids.controlCh <- wfn:
+			goto sent
+		case admin := <-pids.c.adminCh:
+			admin()
+		case <-pids.c.die:
+			return
+		}
 	}
-	// While waiting for completion, also process adminCh to avoid deadlock
+sent:
 	for {
 		select {
 		case <-wait:
