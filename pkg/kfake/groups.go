@@ -1283,24 +1283,30 @@ func (g *group) stopPending(m *groupMember) {
 	}
 }
 
+// timerControlFn starts a timer that, on expiry, sends fn to the
+// group's control channel. If the group is shutting down, the send
+// is abandoned.
+func (g *group) timerControlFn(d time.Duration, fn func()) *time.Timer {
+	return time.AfterFunc(d, func() {
+		select {
+		case <-g.quitCh:
+		case <-g.c.die:
+		case g.controlCh <- fn:
+		}
+	})
+}
+
 func (g *group) atSessionTimeout(m *groupMember, fn func()) {
 	if m.t != nil {
 		m.t.Stop()
 	}
 	timeout := time.Millisecond * time.Duration(m.join.SessionTimeoutMillis)
 	m.last = time.Now()
-	tfn := func() {
-		select {
-		case <-g.quitCh:
-		case <-g.c.die:
-		case g.controlCh <- func() {
-			if time.Since(m.last) >= timeout {
-				fn()
-			}
-		}:
+	m.t = g.timerControlFn(timeout, func() {
+		if time.Since(m.last) >= timeout {
+			fn()
 		}
-	}
-	m.t = time.AfterFunc(timeout, tfn)
+	})
 }
 
 // This is used to update a member from a new join request, or to clear a
@@ -2039,22 +2045,15 @@ func (g *group) atConsumerSessionTimeout(m *consumerMember) {
 	}
 	timeout := time.Duration(g.c.consumerSessionTimeoutMs()) * time.Millisecond
 	m.last = time.Now()
-	tfn := func() {
-		select {
-		case <-g.quitCh:
-		case <-g.c.die:
-		case g.controlCh <- func() {
-			if time.Since(m.last) >= timeout {
-				g.fenceConsumerMember(m)
-				delete(g.consumerMembers, m.memberID)
-				g.generation++
-				g.targetAssignmentsStale = true
-				g.updateConsumerStateField()
-			}
-		}:
+	m.t = g.timerControlFn(timeout, func() {
+		if time.Since(m.last) >= timeout {
+			g.fenceConsumerMember(m)
+			delete(g.consumerMembers, m.memberID)
+			g.generation++
+			g.targetAssignmentsStale = true
+			g.updateConsumerStateField()
 		}
-	}
-	m.t = time.AfterFunc(timeout, tfn)
+	})
 }
 
 // scheduleConsumerRebalanceTimeout starts a per-member rebalance
@@ -2067,24 +2066,18 @@ func (g *group) scheduleConsumerRebalanceTimeout(m *consumerMember) {
 	timeout := time.Duration(m.rebalanceTimeoutMs) * time.Millisecond
 	epoch := m.memberEpoch
 	memberID := m.memberID
-	m.tRebal = time.AfterFunc(timeout, func() {
-		select {
-		case <-g.quitCh:
-		case <-g.c.die:
-		case g.controlCh <- func() {
-			// Check the member still exists and hasn't
-			// progressed past the epoch we were watching.
-			cur, ok := g.consumerMembers[memberID]
-			if !ok || cur.memberEpoch != epoch {
-				return
-			}
-			g.fenceConsumerMember(cur)
-			delete(g.consumerMembers, memberID)
-			g.generation++
-			g.targetAssignmentsStale = true
-			g.updateConsumerStateField()
-		}:
+	m.tRebal = g.timerControlFn(timeout, func() {
+		// Check the member still exists and hasn't
+		// progressed past the epoch we were watching.
+		cur, ok := g.consumerMembers[memberID]
+		if !ok || cur.memberEpoch != epoch {
+			return
 		}
+		g.fenceConsumerMember(cur)
+		delete(g.consumerMembers, memberID)
+		g.generation++
+		g.targetAssignmentsStale = true
+		g.updateConsumerStateField()
 	})
 }
 

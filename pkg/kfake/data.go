@@ -489,26 +489,20 @@ var configTypes = map[string]kmsg.ConfigType{
 
 var brokerRack = "krack"
 
-// consumerHeartbeatIntervalMs returns the group.consumer.heartbeat.interval.ms
-// broker config, falling back to the default.
-func (c *Cluster) consumerHeartbeatIntervalMs() int32 {
-	const k = "group.consumer.heartbeat.interval.ms"
-	if v, ok := c.loadBcfgs()[k]; ok && v != nil {
+func (c *Cluster) brokerConfigInt(key string, def int) int32 {
+	if v, ok := c.loadBcfgs()[key]; ok && v != nil {
 		n, _ := strconv.Atoi(*v)
 		return int32(n)
 	}
-	return int32(defHeartbeatInterval)
+	return int32(def)
 }
 
-// consumerSessionTimeoutMs returns the group.consumer.session.timeout.ms
-// broker config, falling back to the default.
+func (c *Cluster) consumerHeartbeatIntervalMs() int32 {
+	return c.brokerConfigInt("group.consumer.heartbeat.interval.ms", defHeartbeatInterval)
+}
+
 func (c *Cluster) consumerSessionTimeoutMs() int32 {
-	const k = "group.consumer.session.timeout.ms"
-	if v, ok := c.loadBcfgs()[k]; ok && v != nil {
-		n, _ := strconv.Atoi(*v)
-		return int32(n)
-	}
-	return int32(defSessionTimeout)
+	return c.brokerConfigInt("group.consumer.session.timeout.ms", defSessionTimeout)
 }
 
 // maxMessageBytes returns the max.message.bytes for a topic, falling back to
