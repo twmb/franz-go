@@ -226,10 +226,6 @@ outer:
 }
 
 func (g *groupConsumer) leave848(ctx context.Context) {
-	if g.cfg.instanceID != nil {
-		return
-	}
-
 	memberID := g.memberGen.memberID()
 	g.cfg.logger.Log(LogLevelInfo, "leaving next-gen group",
 		"group", g.cfg.group,
@@ -240,7 +236,7 @@ func (g *groupConsumer) leave848(ctx context.Context) {
 	// we can do. We may as well just return.
 	req := kmsg.NewPtrConsumerGroupHeartbeatRequest()
 	req.Group = g.cfg.group
-	req.MemberID = g.memberGen.memberID()
+	req.MemberID = memberID
 	req.MemberEpoch = -1
 	if g.cfg.instanceID != nil {
 		req.MemberEpoch = -2
