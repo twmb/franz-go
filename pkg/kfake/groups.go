@@ -773,14 +773,34 @@ func (g *group) manage(detachNew func()) {
 func (g *group) waitControl(fn func()) bool {
 	wait := make(chan struct{})
 	wfn := func() { fn(); close(wait) }
-	select {
-	case <-g.quitCh:
-		return false
-	case <-g.c.die:
-		return false
-	case g.controlCh <- wfn:
-		<-wait
-		return true
+	// Drain adminCh while waiting to avoid deadlock: the pids
+	// manage loop may call c.admin() (e.g. transaction timeout
+	// abort) while we're blocked sending to controlCh or waiting
+	// for the function to complete.
+	for {
+		select {
+		case <-g.quitCh:
+			return false
+		case <-g.c.die:
+			return false
+		case g.controlCh <- wfn:
+			goto sent
+		case admin := <-g.c.adminCh:
+			admin()
+		}
+	}
+sent:
+	for {
+		select {
+		case <-wait:
+			return true
+		case <-g.quitCh:
+			return false
+		case <-g.c.die:
+			return false
+		case admin := <-g.c.adminCh:
+			admin()
+		}
 	}
 }
 
