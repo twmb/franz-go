@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -191,6 +192,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 			deadline:      deadline,
 			readCommitted: readCommitted,
 			creq:          creq,
+			c:             c,
 		}
 		w.cb = func() {
 			select {
@@ -198,6 +200,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 			case <-c.die:
 			}
 		}
+		var watchParts []string
 		for _, fp := range toFetch {
 			t, ok := c.data.tps.gett(fp.topic)
 			if !ok {
@@ -209,8 +212,11 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 			}
 			pd.watch[w] = struct{}{}
 			w.in = append(w.in, pd)
+			watchParts = append(watchParts, fmt.Sprintf("%s[%d]", fp.topic[:min(8, len(fp.topic))], fp.partition))
 		}
 		w.t = time.AfterFunc(wait, w.cb)
+		c.cfg.logger.Logf(LogLevelDebug, "fetch: watch created, need=%d, readCommitted=%v, partitions=%d (%v)",
+			w.need, readCommitted, len(w.in), watchParts)
 		return nil, nil
 	}
 
@@ -308,8 +314,10 @@ full:
 		var abortedByProducer map[int64][]int64
 
 		var pbytes int
+		var stoppedAtInTx bool
 		for _, b := range pd.batches[i:] {
 			if readCommitted && b.inTx {
+				stoppedAtInTx = true
 				break
 			}
 			if nbytes = nbytes + b.nbytes; nbytes > int(req.MaxBytes) && batchesAdded > 0 {
@@ -342,6 +350,11 @@ full:
 			sp.RecordBatches = b.AppendTo(sp.RecordBatches)
 		}
 
+		if stoppedAtInTx {
+			c.cfg.logger.Logf(LogLevelDebug, "fetch: read_committed %s[%d] stopped at uncommitted txn, LSO=%d HWM=%d pbytes=%d",
+				fp.topic, fp.partition, pd.lastStableOffset, pd.highWatermark, pbytes)
+		}
+
 		// Add aborted transactions for read_committed consumers
 		// Sorted by FirstOffset per producer (as expected by kgo client)
 		for producerID, offsets := range abortedByProducer {
@@ -362,6 +375,11 @@ full:
 		session.bumpEpoch()
 	}
 
+	if w != nil {
+		c.cfg.logger.Logf(LogLevelDebug, "fetch: watch response, batches=%d, bytes=%d, topics=%d",
+			batchesAdded, nbytes, len(resp.Topics))
+	}
+
 	return resp, nil
 }
 
@@ -370,6 +388,7 @@ type watchFetch struct {
 	needp    tps[int]
 	deadline time.Time
 	creq     *clientReq
+	c        *Cluster // for logging
 
 	in []*partData
 	cb func()
@@ -379,12 +398,15 @@ type watchFetch struct {
 
 	once    sync.Once
 	cleaned bool
+	fired   bool // track if watch was fired (for logging)
 }
 
 func (w *watchFetch) push(pd *partData, nbytes int) {
 	// For readCommitted consumers, skip counting bytes from uncommitted transactional batches.
 	// These bytes will be counted when the transaction commits via addBytes.
 	if w.readCommitted && pd.inTx {
+		w.c.cfg.logger.Logf(LogLevelDebug, "fetch: watch push skipped (readCommitted && batchInTx), %s[%d] nbytes=%d",
+			pd.t[:min(8, len(pd.t))], pd.p, nbytes)
 		return
 	}
 	w.addBytes(pd, nbytes)
@@ -408,6 +430,9 @@ func (w *watchFetch) deleted() { w.do() }
 
 func (w *watchFetch) do() {
 	w.once.Do(func() {
+		w.fired = true
+		w.c.cfg.logger.Logf(LogLevelDebug, "fetch: watch fired, readCommitted=%v, partitions=%d",
+			w.readCommitted, len(w.in))
 		go w.cb()
 	})
 }
@@ -418,6 +443,8 @@ func (w *watchFetch) cleanup() {
 		delete(in.watch, w)
 	}
 	w.t.Stop()
+	w.c.cfg.logger.Logf(LogLevelDebug, "fetch: watch cleanup, fired=%v, readCommitted=%v, partitions=%d",
+		w.fired, w.readCommitted, len(w.in))
 }
 
 // Fetch sessions (KIP-227)

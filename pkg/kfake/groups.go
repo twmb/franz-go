@@ -820,6 +820,9 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 	req := creq.kreq.(*kmsg.JoinGroupRequest)
 	resp := req.ResponseKind().(*kmsg.JoinGroupResponse)
 
+	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: handleJoin memberID=%q, state=%s, members=%d",
+		g.name, req.MemberID, g.state, len(g.members))
+
 	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
 		resp.ErrorCode = kerr.Code
 		return resp, false
@@ -854,21 +857,25 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 			join:       req,
 		}
 		if req.Version >= 4 {
+			g.c.cfg.logger.Logf(LogLevelDebug, "group %s: new member %s added to pending (MemberIDRequired)", g.name, memberID)
 			g.addPendingRebalance(m)
 			resp.ErrorCode = kerr.MemberIDRequired.Code
 			return resp, true
 		}
+		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: new member %s joining directly (v3 or below)", g.name, memberID)
 		g.addMemberAndRebalance(m, creq, req)
 		return nil, true
 	}
 
 	// Pending members rejoining immediately enters rebalance.
 	if m, ok := g.pending[req.MemberID]; ok {
+		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: pending member %s rejoining", g.name, req.MemberID)
 		g.addMemberAndRebalance(m, creq, req)
 		return nil, true
 	}
 	m, ok := g.members[req.MemberID]
 	if !ok {
+		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: member %s unknown", g.name, req.MemberID)
 		resp.ErrorCode = kerr.UnknownMemberID.Code
 		return resp, false
 	}
@@ -878,12 +885,14 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 		resp.ErrorCode = kerr.UnknownMemberID.Code
 		return resp, false
 	case groupPreparingRebalance:
+		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: member %s joining during PreparingRebalance", g.name, req.MemberID)
 		g.updateMemberAndRebalance(m, creq, req)
 	case groupCompletingRebalance:
 		if m.sameJoin(req) {
 			g.fillJoinResp(m.memberID, resp)
 			return resp, true
 		}
+		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: member %s rejoining during CompletingRebalance (different join)", g.name, req.MemberID)
 		g.updateMemberAndRebalance(m, creq, req)
 	case groupStable:
 		if g.leader != req.MemberID && m.sameJoin(req) {
@@ -891,6 +900,8 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 			g.fillJoinResp(m.memberID, resp)
 			return resp, true
 		}
+		// Leader rejoining OR any member with changed metadata: trigger rebalance
+		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: member %s rejoining during Stable (leader or different join)", g.name, req.MemberID)
 		g.updateMemberAndRebalance(m, creq, req)
 	}
 	return nil, true
@@ -900,6 +911,9 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 func (g *group) handleSync(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.SyncGroupRequest)
 	resp := req.ResponseKind().(*kmsg.SyncGroupResponse)
+
+	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: handleSync memberID=%s, generation=%d, state=%s, isLeader=%v",
+		g.name, req.MemberID, req.Generation, g.state, req.MemberID == g.leader)
 
 	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
 		resp.ErrorCode = kerr.Code
@@ -919,6 +933,7 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 		return resp
 	}
 	if req.Generation != g.generation {
+		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: sync generation mismatch, req=%d, group=%d", g.name, req.Generation, g.generation)
 		resp.ErrorCode = kerr.IllegalGeneration.Code
 		return resp
 	}
@@ -935,6 +950,7 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 	default:
 		resp.ErrorCode = kerr.UnknownMemberID.Code
 	case groupPreparingRebalance:
+		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: sync during PreparingRebalance, returning RebalanceInProgress", g.name)
 		resp.ErrorCode = kerr.RebalanceInProgress.Code
 	case groupCompletingRebalance:
 		m.waitingReply = creq
@@ -996,6 +1012,9 @@ func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.LeaveGroupRequest)
 	resp := req.ResponseKind().(*kmsg.LeaveGroupResponse)
 
+	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: handleLeave, state=%s, members=%d, leaving=%d",
+		g.name, g.state, len(g.members), len(req.Members))
+
 	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
 		resp.ErrorCode = kerr.Code
 		return resp
@@ -1029,6 +1048,7 @@ func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 				g.stopPending(p)
 			}
 		} else {
+			g.c.cfg.logger.Logf(LogLevelDebug, "group %s: member %s leaving", g.name, rm.MemberID)
 			g.updateMemberAndRebalance(m, nil, nil)
 		}
 	}
@@ -1147,6 +1167,9 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 // entered join, we immediately proceed to completeRebalance, otherwise we
 // begin a wait timer.
 func (g *group) rebalance() {
+	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: rebalance triggered, current state %s, members %d, nJoining %d",
+		g.name, g.state, len(g.members), g.nJoining)
+
 	if g.state == groupCompletingRebalance {
 		for _, m := range g.members {
 			m.assignment = nil
@@ -1164,6 +1187,8 @@ func (g *group) rebalance() {
 	}
 
 	g.state = groupPreparingRebalance
+	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: state -> PreparingRebalance, nJoining %d, members %d",
+		g.name, g.nJoining, len(g.members))
 
 	if g.nJoining >= len(g.members) {
 		g.completeRebalance()
@@ -1177,7 +1202,9 @@ func (g *group) rebalance() {
 		}
 	}
 	if g.tRebalance == nil {
+		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: starting rebalance timer %dms", g.name, rebalanceTimeoutMs)
 		g.tRebalance = time.AfterFunc(time.Duration(rebalanceTimeoutMs)*time.Millisecond, func() {
+			g.c.cfg.logger.Logf(LogLevelDebug, "group %s: rebalance timer fired", g.name)
 			select {
 			case <-g.quitCh:
 			case <-g.c.die:
@@ -1192,6 +1219,8 @@ func (g *group) rebalance() {
 // Transitions the group to either dead or stable, depending on if any members
 // remain by the time we clear those that are not waiting in join.
 func (g *group) completeRebalance() {
+	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: completeRebalance called, members %d", g.name, len(g.members))
+
 	if g.tRebalance != nil {
 		g.tRebalance.Stop()
 		g.tRebalance = nil
@@ -1199,6 +1228,7 @@ func (g *group) completeRebalance() {
 	g.nJoining = 0
 
 	var foundLeader bool
+	var removed int
 	for _, m := range g.members {
 		if m.waitingReply.empty() {
 			for _, p := range m.join.Protocols {
@@ -1208,6 +1238,7 @@ func (g *group) completeRebalance() {
 			if m.t != nil {
 				m.t.Stop()
 			}
+			removed++
 			continue
 		}
 		if m.memberID == g.leader {
@@ -1220,10 +1251,13 @@ func (g *group) completeRebalance() {
 		g.generation = 1
 	}
 	if len(g.members) == 0 {
+		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: state -> Empty (no members remain, removed %d)", g.name, removed)
 		g.state = groupEmpty
 		return
 	}
 	g.state = groupCompletingRebalance
+	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: state -> CompletingRebalance, generation %d, members %d (removed %d)",
+		g.name, g.generation, len(g.members), removed)
 
 	var foundProto bool
 	for proto, nsupport := range g.protocols {
@@ -1250,6 +1284,8 @@ func (g *group) completeRebalance() {
 
 // Transitions the group to stable, the final step of a rebalance.
 func (g *group) completeLeaderSync(req *kmsg.SyncGroupRequest) {
+	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: completeLeaderSync from leader, members %d", g.name, len(g.members))
+
 	for _, m := range g.members {
 		m.assignment = nil
 	}
@@ -1271,6 +1307,7 @@ func (g *group) completeLeaderSync(req *kmsg.SyncGroupRequest) {
 		g.reply(m.waitingReply, resp, m)
 	}
 	g.state = groupStable
+	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: state -> Stable, generation %d, members %d", g.name, g.generation, len(g.members))
 }
 
 // assignmentOrEmpty returns the assignment bytes, or a pre-serialized empty

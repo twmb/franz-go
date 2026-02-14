@@ -280,6 +280,12 @@ func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
 	id, epoch := pids.create(req.TransactionalID, req.TransactionTimeoutMillis)
 	resp.ProducerID = id
 	resp.ProducerEpoch = epoch
+	txid := ""
+	if req.TransactionalID != nil {
+		txid = *req.TransactionalID
+	}
+	pids.c.cfg.logger.Logf(LogLevelDebug, "txn: InitProducerID created pid %d epoch %d txid %q",
+		id, epoch, txid)
 	return resp
 }
 
@@ -290,6 +296,8 @@ func (pidinf *pidinfo) maybeStart() {
 	pidinf.inTx = true
 	pidinf.txStart = time.Now()
 	pidinf.pids.txs[pidinf] = struct{}{}
+	pidinf.pids.c.cfg.logger.Logf(LogLevelDebug, "txn: pid %d epoch %d txid %q started transaction",
+		pidinf.id, pidinf.epoch, pidinf.txid)
 }
 
 func (pids *pids) doAddPartitions(creq *clientReq) kmsg.Response {
@@ -379,6 +387,8 @@ out:
 		}
 	}
 	pidinf.maybeStart()
+	pids.c.cfg.logger.Logf(LogLevelDebug, "txn: AddPartitionsToTxn pid %d epoch %d txid %q added %d topics",
+		pidinf.id, pidinf.epoch, pidinf.txid, len(req.Topics))
 	return resp
 }
 
@@ -413,6 +423,8 @@ func (pids *pids) doAddOffsets(creq *clientReq) kmsg.Response {
 
 	pidinf.maybeStart()
 	pidinf.txGroups = append(pidinf.txGroups, req.Group)
+	pids.c.cfg.logger.Logf(LogLevelDebug, "txn: AddOffsetsToTxn pid %d epoch %d txid %q added group %q",
+		pidinf.id, pidinf.epoch, pidinf.txid, req.Group)
 	return resp
 }
 
@@ -548,6 +560,8 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 		}
 	}
 	pidinf.txOffsets[req.Group] = groupOffsets
+	pids.c.cfg.logger.Logf(LogLevelDebug, "txn: TxnOffsetCommit pid %d epoch %d txid %q group %q staged %d topics",
+		pidinf.id, pidinf.epoch, pidinf.txid, req.Group, len(req.Topics))
 	doneall(0)
 	return resp
 }
@@ -555,6 +569,13 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.EndTxnRequest)
 	resp := req.ResponseKind().(*kmsg.EndTxnResponse)
+
+	action := "abort"
+	if req.Commit {
+		action = "commit"
+	}
+	pids.c.cfg.logger.Logf(LogLevelDebug, "txn: EndTxn received pid %d epoch %d txid %q (%s)",
+		req.ProducerID, req.ProducerEpoch, req.TransactionalID, action)
 
 	coordinator := pids.c.coordinator(req.TransactionalID)
 	if creq.cc.b != coordinator {
@@ -698,6 +719,13 @@ func (pids *pids) create(txidp *string, txTimeout int32) (int64, int16) {
 }
 
 func (pidinf *pidinfo) endTx(commit bool) {
+	action := "abort"
+	if commit {
+		action = "commit"
+	}
+	pidinf.pids.c.cfg.logger.Logf(LogLevelDebug, "txn: pid %d epoch %d txid %q ending transaction (%s), batches=%d groups=%v",
+		pidinf.id, pidinf.epoch, pidinf.txid, action, len(pidinf.txBatches), pidinf.txGroups)
+
 	// Control record key format: version (int16=0) + type (int16: 0=abort, 1=commit)
 	var controlType byte // abort = 0
 	if commit {
@@ -733,6 +761,9 @@ func (pidinf *pidinfo) endTx(commit bool) {
 		}
 		pidinf.txParts.each(func(t string, p int32, pd *partData) {
 			pd.pushBatch(len(benc), b, false, 0) // control record is not itself transactional
+			oldLSO := pd.lastStableOffset
+			pidinf.pids.c.cfg.logger.Logf(LogLevelDebug, "txn: %s %s[%d] LSO %d -> %d, HWM %d",
+				action, t, p, oldLSO, pd.lastStableOffset, pd.highWatermark)
 			pd.recalculateLSO()
 			// Count the now-committed bytes for readCommitted watchers.
 			// These bytes were skipped in push() because pd.inTx was true.
@@ -766,6 +797,7 @@ func (pidinf *pidinfo) endTx(commit bool) {
 				groupOffsets.each(func(t string, p int32, oc *offsetCommit) {
 					g.commits.set(t, p, *oc)
 				})
+				pidinf.pids.c.cfg.logger.Logf(LogLevelDebug, "txn: applied committed offsets to group %q", groupID)
 			})
 		}
 	}
@@ -784,6 +816,9 @@ func (pidinf *pidinfo) endTx(commit bool) {
 
 	// Remove from active transaction tracking
 	delete(pidinf.pids.txs, pidinf)
+
+	pidinf.pids.c.cfg.logger.Logf(LogLevelDebug, "txn: pid %d epoch %d txid %q transaction ended (%s)",
+		pidinf.id, pidinf.epoch, pidinf.txid, action)
 }
 
 func (s *pidwindow) pushAndValidate(epoch int16, firstSeq, numRecs int32) (ok, dup bool) {

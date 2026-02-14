@@ -244,6 +244,8 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 						// Track bytes for readCommitted watcher accounting at commit time
 						bytesPtr := pidinf.txPartBytes.mkp(rt.Topic, rp.Partition, func() *int { return new(int) })
 						*bytesPtr += len(rp.Records)
+						c.cfg.logger.Logf(LogLevelDebug, "produce: txnal batch pid %d epoch %d txid %q %s[%d] offset %d records %d",
+							pidinf.id, pidinf.epoch, pidinf.txid, rt.Topic, rp.Partition, baseOffset, b.NumRecords)
 					}
 				})
 			} else {
