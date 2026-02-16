@@ -119,6 +119,23 @@ func (cl *Client) allSinksAndSources(fn func(sns sinkAndSource)) {
 	}
 }
 
+func (cl *Client) allSinksAndSourcesConcurrent(fn func(sns sinkAndSource)) {
+	cl.sinksAndSourcesMu.Lock()
+	defer cl.sinksAndSourcesMu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, sns := range cl.sinksAndSources {
+		sns := sns
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fn(sns)
+		}()
+	}
+	wg.Wait()
+}
+
 type hostport struct {
 	host string
 	port int32
@@ -1164,18 +1181,12 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 	// to be complete, meaning loopFetch cannot be running.
 
 	sessCloseCtx, sessCloseCancel := context.WithTimeout(ctx, time.Second)
-	var wg sync.WaitGroup
-	cl.allSinksAndSources(func(sns sinkAndSource) {
-		if sns.source.session.id != 0 {
-			sns := sns
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				sns.source.killSessionOnClose(sessCloseCtx)
-			}()
+	cl.allSinksAndSourcesConcurrent(func(sns sinkAndSource) {
+		if sns.source.session.id == 0 {
+			return
 		}
+		sns.source.killSessionOnClose(sessCloseCtx)
 	})
-	wg.Wait()
 	sessCloseCancel()
 
 	// Now we kill the client context and all brokers, ensuring all
