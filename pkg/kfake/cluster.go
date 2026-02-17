@@ -153,6 +153,9 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	c.groups.c = c
 	c.pids.c = c
 	c.pids.ids = make(map[int64]*pidinfo)
+	c.pids.txs = make(map[*pidinfo]struct{})
+	c.pids.txTimer = time.NewTimer(0)
+	<-c.pids.txTimer.C
 	var err error
 	defer func() {
 		if err != nil {
@@ -300,7 +303,12 @@ outer:
 
 		select {
 		case <-c.die:
+			c.pids.txTimer.Stop()
 			return
+
+		case <-c.pids.txTimer.C:
+			c.pids.handleTimeout()
+			continue
 
 		case admin := <-c.adminCh:
 			admin()
@@ -483,6 +491,7 @@ outer:
 		default:
 			err = fmt.Errorf("unhandled key %v", k)
 		}
+		c.pids.updateTimer()
 
 	afterControl:
 		// If s is non-nil, this is either a previously slept control

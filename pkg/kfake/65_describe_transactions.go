@@ -21,9 +21,5 @@ func (c *Cluster) handleDescribeTransactions(creq *clientReq) (kmsg.Response, er
 	if err := c.checkReqVersion(creq.kreq.Key(), creq.kreq.GetVersion()); err != nil {
 		return nil, err
 	}
-	c.pids.init()
-	if c.pids.handleDescribeTransactions(creq) {
-		return nil, nil
-	}
-	return creq.kreq.ResponseKind(), nil
+	return c.pids.doDescribeTransactions(creq), nil
 }

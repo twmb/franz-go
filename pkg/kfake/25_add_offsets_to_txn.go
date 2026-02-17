@@ -39,10 +39,5 @@ func (c *Cluster) handleAddOffsetsToTxn(creq *clientReq) (kmsg.Response, error) 
 		return resp, nil
 	}
 
-	if c.pids.handleAddOffsetsToTxn(creq) {
-		return nil, nil
-	}
-	resp := req.ResponseKind().(*kmsg.AddOffsetsToTxnResponse)
-	resp.ErrorCode = kerr.UnknownServerError.Code
-	return resp, nil
+	return c.pids.doAddOffsets(creq), nil
 }

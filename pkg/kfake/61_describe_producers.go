@@ -21,9 +21,5 @@ func (c *Cluster) handleDescribeProducers(creq *clientReq) (kmsg.Response, error
 	if err := c.checkReqVersion(creq.kreq.Key(), creq.kreq.GetVersion()); err != nil {
 		return nil, err
 	}
-	c.pids.init()
-	if c.pids.handleDescribeProducers(creq) {
-		return nil, nil
-	}
-	return creq.kreq.ResponseKind(), nil
+	return c.pids.doDescribeProducers(creq), nil
 }

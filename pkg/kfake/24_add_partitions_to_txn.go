@@ -54,10 +54,5 @@ func (c *Cluster) handleAddPartitionsToTxn(creq *clientReq) (kmsg.Response, erro
 		}
 	}
 
-	if c.pids.handleAddPartitionsToTxn(creq) {
-		return nil, nil
-	}
-	resp := req.ResponseKind().(*kmsg.AddPartitionsToTxnResponse)
-	resp.ErrorCode = kerr.UnknownServerError.Code
-	return resp, nil
+	return c.pids.doAddPartitions(creq), nil
 }

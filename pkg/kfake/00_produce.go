@@ -27,10 +27,6 @@ import (
 func init() { regKey(0, 3, 13) }
 
 func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
-	slowTimer := time.AfterFunc(5*time.Second, func() {
-		c.cfg.logger.Logf(LogLevelWarn, "produce: request blocked >5s")
-	})
-	defer slowTimer.Stop()
 	var (
 		b    = creq.cc.b
 		req  = creq.kreq.(*kmsg.ProduceRequest)
@@ -187,26 +183,20 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 			var dup bool
 			var baseOffset, lso int64
 
-			// Validate and push batch. For idempotent/transactional produces,
-			// we do this inside waitControl to synchronize with the txn loop.
 			if b.ProducerID >= 0 {
-				c.pids.init()
-				c.pids.waitControl(func() {
-					var pidinf *pidinfo
-					var window *pidwindow
-					if txnal && req.Version >= 12 {
-						// KIP-890: v12+ clients skip AddPartitionsToTxn,
-						// so we implicitly add partitions to the transaction.
-						pidinf, window = c.pids.getImplicitTxn(b.ProducerID, rt.Topic, rp.Partition, pd)
-					} else {
-						pidinf, window = c.pids.get(b.ProducerID, rt.Topic, rp.Partition)
-					}
+				// For KIP-890 (v12+), pass pd to implicitly add
+				// the partition to the transaction if not yet added.
+				var implicit *partData
+				if txnal && req.Version >= 12 {
+					implicit = pd
+				}
+				pidinf, window := c.pids.get(b.ProducerID, rt.Topic, rp.Partition, implicit)
 
-					if txnal && window == nil {
-						errCode = kerr.InvalidTxnState.Code
-						return
-					}
+				if txnal && window == nil {
+					errCode = kerr.InvalidTxnState.Code
+				}
 
+				if errCode == 0 {
 					switch {
 					case window == nil && b.ProducerEpoch != -1:
 						errCode = kerr.InvalidTxnState.Code
@@ -223,10 +213,8 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 							errCode = kerr.OutOfOrderSequenceNumber.Code
 						}
 					}
-					if errCode != 0 || dup {
-						return
-					}
-
+				}
+				if errCode == 0 && !dup {
 					// Validation passed, push the batch.
 					baseOffset = pd.highWatermark
 					lso = pd.logStartOffset
@@ -253,7 +241,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 						c.cfg.logger.Logf(LogLevelDebug, "produce: txnal batch pid %d epoch %d txid %q %s[%d] offset %d records %d",
 							pidinf.id, pidinf.epoch, pidinf.txid, rt.Topic, rp.Partition, baseOffset, b.NumRecords)
 					}
-				})
+				}
 			} else {
 				// Non-idempotent produce, no pids validation needed
 				baseOffset = pd.highWatermark

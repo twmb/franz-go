@@ -39,10 +39,9 @@ type (
 	pids struct {
 		ids map[int64]*pidinfo
 
-		txs       map[*pidinfo]struct{} // active transactions being tracked for timeout
-		reqCh     chan *clientReq       // channel for transaction requests
-		controlCh chan func()           // channel for control operations (like produce validation)
-		c         *Cluster
+		txs     map[*pidinfo]struct{} // active transactions being tracked for timeout
+		txTimer *time.Timer
+		c       *Cluster
 	}
 
 	// Seq/txn info for a given individual producer ID.
@@ -88,209 +87,70 @@ type (
 	}
 )
 
-// init initializes the pids management goroutine if needed
-func (pids *pids) init() {
-	if pids.reqCh == nil {
-		pids.txs = make(map[*pidinfo]struct{})
-		pids.reqCh = make(chan *clientReq)
-		pids.controlCh = make(chan func())
-		go pids.manage()
-	}
-}
-
-// reply sends a response back to the client, similar to groups.go
-func (pids *pids) reply(creq *clientReq, kresp kmsg.Response) {
-	select {
-	case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, seq: creq.seq}:
-	case <-pids.c.die:
-	}
-}
-
-// waitControl executes fn in the pids management goroutine.
-//
-// Both the initial send and the completion wait drain adminCh to avoid
-// deadlock: the pids manage loop may call c.admin() (e.g. during
-// transaction timeout abort) while the cluster goroutine is trying to
-// send to controlCh here. Draining adminCh in both phases ensures
-// neither goroutine blocks waiting for the other.
-func (pids *pids) waitControl(fn func()) {
-	wait := make(chan struct{})
-	wfn := func() { fn(); close(wait) }
-	slowTimer := time.AfterFunc(5*time.Second, func() {
-		pids.c.cfg.logger.Logf(LogLevelWarn, "pids.waitControl: blocked >5s")
-	})
-	defer slowTimer.Stop()
-	for {
-		select {
-		case pids.controlCh <- wfn:
-			goto sent
-		case admin := <-pids.c.adminCh:
-			admin()
-		case <-pids.c.die:
-			return
-		}
-	}
-sent:
-	for {
-		select {
-		case <-wait:
-			return
-		case admin := <-pids.c.adminCh:
-			admin()
-		case <-pids.c.die:
-			return
-		}
-	}
-}
-
-func (pids *pids) handleInitProducerID(creq *clientReq) bool {
-	pids.init()
-	return pids.sendReq(creq)
-}
-
-// sendReq dispatches a request to the pids manage loop. It drains
-// adminCh while sending to avoid deadlock: if pids.reqCh is blocked
-// and pids.manage() is blocked in c.admin() waiting for adminCh,
-// we must process adminCh to unblock pids.manage() so it can drain
-// reqCh.
-func (pids *pids) sendReq(creq *clientReq) bool {
-	if pids.reqCh == nil {
-		return false
-	}
-	for {
-		select {
-		case pids.reqCh <- creq:
-			return true
-		case admin := <-pids.c.adminCh:
-			admin()
-		case <-pids.c.die:
-			return false
-		}
-	}
-}
-
-func (pids *pids) handleAddPartitionsToTxn(creq *clientReq) bool    { return pids.sendReq(creq) }
-func (pids *pids) handleAddOffsetsToTxn(creq *clientReq) bool      { return pids.sendReq(creq) }
-func (pids *pids) handleEndTxn(creq *clientReq) bool               { return pids.sendReq(creq) }
-func (pids *pids) handleTxnOffsetCommit(creq *clientReq) bool      { return pids.sendReq(creq) }
-func (pids *pids) handleDescribeTransactions(creq *clientReq) bool { return pids.sendReq(creq) }
-func (pids *pids) handleListTransactions(creq *clientReq) bool     { return pids.sendReq(creq) }
-func (pids *pids) handleDescribeProducers(creq *clientReq) bool    { return pids.sendReq(creq) }
-
 // hasUnstableOffsets returns true if any active transaction has pending
 // (uncommitted) offset commits for the given group. Used for KIP-447
 // RequireStable support in OffsetFetch.
 func (pids *pids) hasUnstableOffsets(group string) bool {
-	if pids.reqCh == nil {
-		return false
-	}
-	var unstable bool
-	pids.waitControl(func() {
-		for pidinf := range pids.txs {
-			if _, hasGroup := pidinf.txOffsets[group]; hasGroup {
-				unstable = true
-				return
-			}
+	for pidinf := range pids.txs {
+		if _, hasGroup := pidinf.txOffsets[group]; hasGroup {
+			return true
 		}
-	})
-	return unstable
+	}
+	return false
 }
 
-// manage is the central loop for processing transaction requests and timeouts.
-// Similar to groups.go's manage loop pattern.
-func (pids *pids) manage() {
-	t := time.NewTimer(0)
-	<-t.C
-
-	// findNextExpiry finds the transaction that will expire soonest
-	findNextExpiry := func() (*pidinfo, time.Time) {
-		var minPid *pidinfo
-		var minExpire time.Time
-		for pidinf := range pids.txs {
-			timeout := time.Duration(pidinf.txTimeout) * time.Millisecond
-			expire := pidinf.txStart.Add(timeout)
-			if minPid == nil || expire.Before(minExpire) {
-				minPid = pidinf
-				minExpire = expire
-			}
-		}
-		return minPid, minExpire
-	}
-
-	updateTimer := func() {
-		nextPid, nextExpire := findNextExpiry()
-		if nextPid != nil {
-			if !t.Stop() {
-				select {
-				case <-t.C:
-				default:
-				}
-			}
-			t.Reset(time.Until(nextExpire))
-		}
-	}
-
-	for {
+// updateTimer reschedules the transaction timeout timer based on the
+// next expiring transaction.
+func (pids *pids) updateTimer() {
+	if !pids.txTimer.Stop() {
 		select {
-		case creq := <-pids.reqCh:
-			var kresp kmsg.Response
-			switch creq.kreq.(type) {
-			case *kmsg.InitProducerIDRequest:
-				kresp = pids.doInitProducerID(creq)
-			case *kmsg.AddPartitionsToTxnRequest:
-				kresp = pids.doAddPartitions(creq)
-			case *kmsg.AddOffsetsToTxnRequest:
-				kresp = pids.doAddOffsets(creq)
-			case *kmsg.TxnOffsetCommitRequest:
-				kresp = pids.doTxnOffsetCommit(creq)
-			case *kmsg.EndTxnRequest:
-				kresp = pids.doEnd(creq)
-			case *kmsg.DescribeTransactionsRequest:
-				kresp = pids.doDescribeTransactions(creq)
-			case *kmsg.ListTransactionsRequest:
-				kresp = pids.doListTransactions(creq)
-			case *kmsg.DescribeProducersRequest:
-				kresp = pids.doDescribeProducers(creq)
-			}
-			if kresp != nil {
-				pids.reply(creq, kresp)
-			}
-			updateTimer() // update timer in case txs changed
-
-		case fn := <-pids.controlCh:
-			fn()
-
-		case <-pids.c.die:
-			t.Stop()
-			return
-
-		case <-t.C:
-			// Timer fired - find and abort the expired transaction.
-			nextPid, _ := findNextExpiry()
-			if nextPid == nil {
-				continue
-			}
-			// Check if this transaction actually expired.
-			timeout := time.Duration(nextPid.txTimeout) * time.Millisecond
-			elapsed := time.Since(nextPid.txStart)
-			if elapsed >= 30*time.Second && elapsed < timeout {
-				pids.c.cfg.logger.Logf(LogLevelWarn,
-					"txn long-running: txn_id=%s pid=%d epoch=%d elapsed=%v timeout=%dms batches=%d",
-					nextPid.txid, nextPid.id, nextPid.epoch, elapsed, nextPid.txTimeout, len(nextPid.txBatches))
-			}
-			if elapsed >= timeout {
-				pids.c.cfg.logger.Logf(LogLevelDebug,
-					"txn timeout abort: txn_id=%s producer_id=%d epoch=%d timeout=%dms elapsed=%v",
-					nextPid.txid, nextPid.id, nextPid.epoch, nextPid.txTimeout, time.Since(nextPid.txStart))
-				// Bump epoch BEFORE abort so the control record
-				// uses the new (fenced) epoch.
-				nextPid = pids.bumpEpoch(nextPid)
-				nextPid.endTx(false)
-			}
-			// Reset timer for next expiry
-			updateTimer()
+		case <-pids.txTimer.C:
+		default:
 		}
 	}
+	var nextExpire time.Time
+	var found bool
+	for pidinf := range pids.txs {
+		expire := pidinf.txStart.Add(time.Duration(pidinf.txTimeout) * time.Millisecond)
+		if !found || expire.Before(nextExpire) {
+			nextExpire = expire
+			found = true
+		}
+	}
+	if found {
+		pids.txTimer.Reset(time.Until(nextExpire))
+	}
+}
+
+// handleTimeout checks for expired transactions, aborts the earliest
+// one if expired, and reschedules the timer.
+func (pids *pids) handleTimeout() {
+	var minPid *pidinfo
+	var minExpire time.Time
+	for pidinf := range pids.txs {
+		expire := pidinf.txStart.Add(time.Duration(pidinf.txTimeout) * time.Millisecond)
+		if minPid == nil || expire.Before(minExpire) {
+			minPid = pidinf
+			minExpire = expire
+		}
+	}
+	if minPid != nil {
+		elapsed := time.Since(minPid.txStart)
+		timeout := time.Duration(minPid.txTimeout) * time.Millisecond
+		if elapsed >= 30*time.Second && elapsed < timeout {
+			pids.c.cfg.logger.Logf(LogLevelWarn,
+				"txn long-running: txn_id=%s pid=%d epoch=%d elapsed=%v timeout=%dms batches=%d",
+				minPid.txid, minPid.id, minPid.epoch, elapsed, minPid.txTimeout, len(minPid.txBatches))
+		}
+		if elapsed >= timeout {
+			pids.c.cfg.logger.Logf(LogLevelDebug,
+				"txn timeout abort: txn_id=%s producer_id=%d epoch=%d timeout=%dms elapsed=%v",
+				minPid.txid, minPid.id, minPid.epoch, minPid.txTimeout, elapsed)
+			minPid = pids.bumpEpoch(minPid)
+			minPid.endTx(false)
+		}
+	}
+	pids.updateTimer()
 }
 
 func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
@@ -396,28 +256,40 @@ func (pids *pids) doAddPartitions(creq *clientReq) kmsg.Response {
 		}
 	}
 
-	// Check if all topics/partitions exist first.
-	var noAttempt bool
-out:
+	type tpKey struct {
+		t string
+		p int32
+	}
+	pdMap := make(map[tpKey]*partData)
 	for _, rt := range req.Topics {
 		ps, ok := pids.c.data.tps.gett(rt.Topic)
 		if !ok {
-			noAttempt = true
-			break out
+			continue
 		}
 		for _, rp := range rt.Partitions {
-			if ps[rp] == nil {
-				noAttempt = true
-				break out
+			if pd := ps[rp]; pd != nil {
+				pdMap[tpKey{rt.Topic, rp}] = pd
 			}
 		}
 	}
-	// If any fail, mark failures as UnknownTopicOrPartition and others as OperationNotAttempted.
+
+	// Check if all topics/partitions exist.
+	var noAttempt bool
+	for _, rt := range req.Topics {
+		for _, rp := range rt.Partitions {
+			if pdMap[tpKey{rt.Topic, rp}] == nil {
+				noAttempt = true
+				break
+			}
+		}
+		if noAttempt {
+			break
+		}
+	}
 	if noAttempt {
 		for _, rt := range req.Topics {
-			ps, ok := pids.c.data.tps.gett(rt.Topic)
 			for _, rp := range rt.Partitions {
-				if !ok || ps[rp] == nil {
+				if pdMap[tpKey{rt.Topic, rp}] == nil {
 					donep(rt.Topic, rp, kerr.UnknownTopicOrPartition.Code)
 				} else {
 					donep(rt.Topic, rp, kerr.OperationNotAttempted.Code)
@@ -445,7 +317,7 @@ out:
 
 	for _, rt := range req.Topics {
 		for _, partition := range rt.Partitions {
-			pd, _ := pids.c.data.tps.getp(rt.Topic, partition)
+			pd := pdMap[tpKey{rt.Topic, partition}]
 			ps := pidinf.txParts.mkt(rt.Topic)
 			ps[partition] = pd
 			donep(rt.Topic, partition, 0)
@@ -536,22 +408,24 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 	// Check if group exists. For generation >= 0, return
 	// ILLEGAL_GENERATION if the group doesn't exist. For
 	// generation < 0 (admin commits), allow it through.
+	var g *group
 	if pids.c.groups.gs != nil {
-		if g, ok := pids.c.groups.gs[req.Group]; ok {
-			if req.Version >= 3 && (req.MemberID != "" || req.Generation != -1) {
-				var errCode int16
-				g.waitControl(func() {
-					errCode = g.validateMemberGeneration(req.MemberID, req.Generation)
-				})
-				if errCode != 0 {
-					doneall(errCode)
-					return resp
-				}
+		g = pids.c.groups.gs[req.Group]
+	}
+	if g != nil {
+		if req.Version >= 3 && (req.MemberID != "" || req.Generation != -1) {
+			var errCode int16
+			g.waitControl(func() {
+				errCode = g.validateMemberGeneration(req.MemberID, req.Generation)
+			})
+			if errCode != 0 {
+				doneall(errCode)
+				return resp
 			}
-		} else if req.Generation >= 0 {
-			doneall(kerr.IllegalGeneration.Code)
-			return resp
 		}
+	} else if req.Generation >= 0 {
+		doneall(kerr.IllegalGeneration.Code)
+		return resp
 	}
 
 	groupInTx := slices.Contains(pidinf.txGroups, req.Group)
@@ -656,31 +530,21 @@ func (pids *pids) getpid(id int64) *pidinfo {
 	return pids.ids[id]
 }
 
-// Returns the pidinfo for this pid, and the idempotent-5 window for this
-// specific toppar. If this is transactional and the toppar has not been added
-// to the txn, returns nil.
-func (pids *pids) get(id int64, t string, p int32) (*pidinfo, *pidwindow) {
+// get returns the pidinfo and idempotent-5 window for a producer on a
+// topic-partition. If pd is non-nil and the producer is transactional
+// but hasn't registered this partition, the partition is implicitly
+// added to the transaction (KIP-890 implicit addition for produce
+// v12+). If pd is nil, unregistered transactional partitions cause
+// (nil, nil) to be returned.
+func (pids *pids) get(id int64, t string, p int32, pd *partData) (*pidinfo, *pidwindow) {
 	pidinf := pids.ids[id]
 	if pidinf == nil {
 		return nil, nil
 	}
 	if pidinf.txid != "" && !pidinf.txParts.checkp(t, p) {
-		return nil, nil
-	}
-	return pidinf, pidinf.windows.mkpDefault(t, p)
-}
-
-// getImplicitTxn is like get, but supports KIP-890 implicit partition addition.
-// If the producer is transactional and the partition isn't in the transaction,
-// this adds it implicitly (rather than returning nil like get does).
-// The pd parameter is required to store in txParts for the partition.
-func (pids *pids) getImplicitTxn(id int64, t string, p int32, pd *partData) (*pidinfo, *pidwindow) {
-	pidinf := pids.ids[id]
-	if pidinf == nil {
-		return nil, nil
-	}
-	if pidinf.txid != "" && !pidinf.txParts.checkp(t, p) {
-		// KIP-890: Implicitly add partition to transaction
+		if pd == nil {
+			return nil, nil
+		}
 		ps := pidinf.txParts.mkt(t)
 		ps[p] = pd
 		pidinf.maybeStart()
@@ -776,38 +640,29 @@ func (pidinf *pidinfo) endTx(commit bool) {
 	b.Length = int32(len(benc) - 12)
 	b.CRC = int32(crc32.Checksum(benc[21:], crc32c))
 
-	// Execute partition modifications in the cluster loop to avoid races.
-	pidinf.pids.c.cfg.logger.Logf(LogLevelDebug, "txn: endTx c.admin() start pid %d epoch %d", pidinf.id, pidinf.epoch)
-	adminStart := time.Now()
-	pidinf.pids.c.admin(func() {
-		for _, batch := range pidinf.txBatches {
-			batch.inTx = false
-			if !commit {
-				batch.aborted = true
-			}
+	for _, batch := range pidinf.txBatches {
+		batch.inTx = false
+		if !commit {
+			batch.aborted = true
 		}
-		pidinf.txParts.each(func(t string, p int32, pd *partData) {
-			pd.pushBatch(len(benc), b, false, 0) // control record is not itself transactional
-			oldLSO := pd.lastStableOffset
-			pidinf.pids.c.cfg.logger.Logf(LogLevelDebug, "txn: %s %s[%d] LSO %d -> %d, HWM %d",
-				action, t, p, oldLSO, pd.lastStableOffset, pd.highWatermark)
-			pd.recalculateLSO()
-			// Count the now-committed bytes for readCommitted watchers.
-			// These bytes were skipped in push() because pd.inTx was true.
-			txnBytes, _ := pidinf.txPartBytes.getp(t, p)
-			if txnBytes != nil && *txnBytes > 0 {
-				for w := range pd.watch {
-					if w.readCommitted {
-						w.addBytes(pd, *txnBytes)
-					}
+	}
+	pidinf.txParts.each(func(t string, p int32, pd *partData) {
+		pd.pushBatch(len(benc), b, false, 0) // control record is not itself transactional
+		oldLSO := pd.lastStableOffset
+		pidinf.pids.c.cfg.logger.Logf(LogLevelDebug, "txn: %s %s[%d] LSO %d -> %d, HWM %d",
+			action, t, p, oldLSO, pd.lastStableOffset, pd.highWatermark)
+		pd.recalculateLSO()
+		// Count the now-committed bytes for readCommitted watchers.
+		// These bytes were skipped in push() because pd.inTx was true.
+		txnBytes, _ := pidinf.txPartBytes.getp(t, p)
+		if txnBytes != nil && *txnBytes > 0 {
+			for w := range pd.watch {
+				if w.readCommitted {
+					w.addBytes(pd, *txnBytes)
 				}
 			}
-		})
+		}
 	})
-
-	if d := time.Since(adminStart); d > time.Second {
-		pidinf.pids.c.cfg.logger.Logf(LogLevelWarn, "txn: endTx c.admin() took %v for pid %d", d, pidinf.id)
-	}
 
 	// Handle transactional offset commits
 	if !commit && len(pidinf.txOffsets) > 0 {
@@ -821,11 +676,11 @@ func (pidinf *pidinfo) endTx(commit bool) {
 			if !hasOffsets || len(groupOffsets) == 0 {
 				continue
 			}
-			if pidinf.pids.c.groups.gs == nil {
-				continue
+			var g *group
+			if pidinf.pids.c.groups.gs != nil {
+				g = pidinf.pids.c.groups.gs[groupID]
 			}
-			g, ok := pidinf.pids.c.groups.gs[groupID]
-			if !ok {
+			if g == nil {
 				continue
 			}
 			pidinf.pids.c.cfg.logger.Logf(LogLevelDebug, "txn: endTx calling g.waitControl for group %s pid %d", groupID[:min(16, len(groupID))], pidinf.id)
@@ -991,10 +846,6 @@ func (pids *pids) doListTransactions(creq *clientReq) kmsg.Response {
 		}
 	}
 
-	if pids.ids == nil {
-		return resp
-	}
-
 	for _, pidinf := range pids.ids {
 		if pidinf.txid == "" {
 			continue
@@ -1034,16 +885,10 @@ func (pids *pids) doListTransactions(creq *clientReq) kmsg.Response {
 	return resp
 }
 
-// doDescribeProducers runs in the pids manage loop. It uses a single
-// c.admin() call to snapshot partition state (leaders, existence),
-// then iterates pids.ids (safe in this goroutine) to find active
-// transactional producers.
 func (pids *pids) doDescribeProducers(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.DescribeProducersRequest)
 	resp := req.ResponseKind().(*kmsg.DescribeProducersResponse)
 
-	// Collect all topic-partitions and their leader/existence state
-	// in one c.admin() call.
 	type partState struct {
 		topic     string
 		partition int32
@@ -1058,32 +903,29 @@ func (pids *pids) doDescribeProducers(creq *clientReq) kmsg.Response {
 			continue
 		}
 		for _, p := range rt.Partitions {
-			checks = append(checks, partState{rt.Topic, p, 0}) // 0 = needs checking
+			checks = append(checks, partState{rt.Topic, p, 0})
 		}
 	}
 
-	pids.c.admin(func() {
-		for i := range checks {
-			if checks[i].errCode != 0 {
-				continue
-			}
-			t, tok := pids.c.data.tps.gett(checks[i].topic)
-			if !tok {
-				checks[i].errCode = kerr.UnknownTopicOrPartition.Code
-				continue
-			}
-			pd, pok := t[checks[i].partition]
-			if !pok {
-				checks[i].errCode = kerr.UnknownTopicOrPartition.Code
-				continue
-			}
-			if pd.leader != creq.cc.b {
-				checks[i].errCode = kerr.NotLeaderForPartition.Code
-			}
+	for i := range checks {
+		if checks[i].errCode != 0 {
+			continue
 		}
-	})
+		t, tok := pids.c.data.tps.gett(checks[i].topic)
+		if !tok {
+			checks[i].errCode = kerr.UnknownTopicOrPartition.Code
+			continue
+		}
+		pd, pok := t[checks[i].partition]
+		if !pok {
+			checks[i].errCode = kerr.UnknownTopicOrPartition.Code
+			continue
+		}
+		if pd.leader != creq.cc.b {
+			checks[i].errCode = kerr.NotLeaderForPartition.Code
+		}
+	}
 
-	// Now iterate results and look up producers (safe - we're in pids goroutine).
 	tidx := make(map[string]int)
 	for _, pc := range checks {
 		var st *kmsg.DescribeProducersResponseTopic
@@ -1108,7 +950,6 @@ func (pids *pids) doDescribeProducers(creq *clientReq) kmsg.Response {
 }
 
 // txnProducers returns active transactional producers for a partition.
-// Must be called from the pids manage loop.
 func (pids *pids) txnProducers(topic string, partition int32) []kmsg.DescribeProducersResponseTopicPartitionActiveProducer {
 	var producers []kmsg.DescribeProducersResponseTopicPartitionActiveProducer
 	for _, pidinf := range pids.ids {
@@ -1133,8 +974,7 @@ func (pids *pids) txnProducers(topic string, partition int32) []kmsg.DescribePro
 	return producers
 }
 
-// findTxnID finds a producer info by transactional ID. Must be called
-// from the pids manage loop.
+// findTxnID finds a producer info by transactional ID.
 func (pids *pids) findTxnID(txnID string) *pidinfo {
 	for _, pidinf := range pids.ids {
 		if pidinf.txid == txnID {
