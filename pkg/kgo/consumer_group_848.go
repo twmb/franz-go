@@ -320,8 +320,21 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 	id2t := g.g.cl.id2tMap()
 	newAssigned := make(map[string][]int32)
 
-	g.lastSubscribedTopics = req.SubscribedTopicNames
-	g.lastTopics = req.Topics
+	// Only update the last-sent fields when Topics was actually
+	// included in the request. When the request was a keepalive
+	// (Topics=nil), we preserve the previous values so the next
+	// comparison still matches and produces another keepalive.
+	// Without this guard, storing nil after a keepalive causes
+	// DeepEqual(nil, []) to fail on the next heartbeat, re-sending
+	// Topics=[] - creating an alternating full/keepalive pattern.
+	// The server clears pendingRevocations when Topics does not
+	// contain a pending partition, so the alternating stale full
+	// heartbeats can cause premature revocation clearing and dual
+	// assignment.
+	if req.Topics != nil {
+		g.lastSubscribedTopics = req.SubscribedTopicNames
+		g.lastTopics = req.Topics
+	}
 
 	if resp.Assignment == nil {
 		return nil
