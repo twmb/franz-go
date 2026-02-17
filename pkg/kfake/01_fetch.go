@@ -47,6 +47,10 @@ import (
 func init() { regKey(1, 4, 18) }
 
 func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, error) {
+	slowTimer := time.AfterFunc(5*time.Second, func() {
+		c.cfg.logger.Logf(LogLevelWarn, "fetch: request blocked >5s")
+	})
+	defer slowTimer.Stop()
 	var (
 		req  = creq.kreq.(*kmsg.FetchRequest)
 		resp = req.ResponseKind().(*kmsg.FetchResponse)

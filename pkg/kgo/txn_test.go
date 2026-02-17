@@ -149,7 +149,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		// It also returns NotLeaderXyz; we handle both problems.
 		UnknownTopicRetries(-1),
 		TransactionalID(txid),
-		TransactionTimeout(60 * time.Second),
+		TransactionTimeout(120 * time.Second),
 		WithLogger(testLogger()),
 		// Control records have their own unique offset, so for testing,
 		// we keep the record to ensure we do not doubly consume control
@@ -246,6 +246,15 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		if err != nil {
 			c.errCh <- fmt.Errorf("flush unexpected err: %v", err)
 		} else if !committed {
+			// Log aborted transaction partition summary.
+			var abortParts []string
+			for part, recs := range fetchRecs {
+				if len(recs) > 0 {
+					abortParts = append(abortParts, fmt.Sprintf("p%d(%d-%d)", part, recs[0].offset, recs[len(recs)-1].offset))
+				}
+			}
+			txnSess.Client().cfg.logger.Log(LogLevelInfo, "transaction aborted, discarding consumed records",
+				"group", c.group, "topic", c.consumeFrom, "txid", txid, "partitions", abortParts)
 			if !wantCommit {
 				return
 			}
@@ -256,11 +265,24 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 
 		c.mu.Lock()
 
+		// Log committed transaction summary.
+		var commitParts []string
+		for part, recs := range fetchRecs {
+			if len(recs) > 0 {
+				commitParts = append(commitParts, fmt.Sprintf("p%d(%d-%d)", part, recs[0].offset, recs[len(recs)-1].offset))
+			}
+		}
+		txnSess.Client().cfg.logger.Log(LogLevelInfo, "transaction committed",
+			"group", c.group, "topic", c.consumeFrom, "txid", txid, "ntxns", ntxns, "partitions", commitParts)
+
 		for part, recs := range fetchRecs {
 			for _, rec := range recs {
 				po := partOffset{part, rec.offset}
 				if _, exists := c.partOffsets[po]; exists {
-					c.errCh <- fmt.Errorf("saw double offset t %s p%do%d", c.consumeFrom, po.part, po.offset)
+					txnSess.Client().cfg.logger.Log(LogLevelError, "SAW DOUBLE OFFSET",
+						"topic", c.consumeFrom, "partition", po.part, "offset", po.offset,
+						"txn_num", ntxns, "txid", txid, "group", c.group)
+					c.errCh <- fmt.Errorf("saw double offset t %s p%do%d (txn #%d, txid %s)", c.consumeFrom, po.part, po.offset, ntxns, txid)
 				}
 				c.partOffsets[po] = struct{}{}
 

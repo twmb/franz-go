@@ -1198,6 +1198,11 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			if offset.at >= 0 && partition >= 0 && partition < int32(len(topicPartitions.partitions)) {
 				part := topicPartitions.partitions[partition]
 				cursor := part.cursor
+				c.cl.cfg.logger.Log(LogLevelDebug, "assignPartitions (assignWithoutInvalidating): setting cursor offset",
+					"topic", topic,
+					"partition", partition,
+					"new_offset", offset.at,
+				)
 				cursor.setOffset(cursorOffset{
 					offset:            offset.at,
 					lastConsumedEpoch: -1,

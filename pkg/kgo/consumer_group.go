@@ -1193,14 +1193,26 @@ start:
 	// and then our final commit will receive either REBALANCE_IN_PROGRESS
 	// or ILLEGAL_GENERATION.
 
+	joinStart := time.Now()
 	go func() {
 		defer close(joined)
 		joinResp, err = joinReq.RequestWith(g.cl.ctx, g.cl)
 	}()
 
+	slowJoin := time.AfterFunc(5*time.Second, func() {
+		g.cfg.logger.Log(LogLevelWarn, "JoinGroup request blocked >5s",
+			"group", g.cfg.group, "member_id", joinReq.MemberID)
+	})
+
 	select {
 	case <-joined:
+		slowJoin.Stop()
+		if d := time.Since(joinStart); d > time.Second {
+			g.cfg.logger.Log(LogLevelInfo, "JoinGroup completed",
+				"group", g.cfg.group, "took", d, "err", err)
+		}
 	case <-g.cl.ctx.Done():
+		slowJoin.Stop()
 		return g.cl.ctx.Err() // client closed
 	}
 	if err != nil {
@@ -1556,8 +1568,47 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 // Any time a group is completely lost, the manage loop clears fetching. When
 // cooperative consuming, a hard error is basically losing the entire state and
 // rejoining from scratch.
+func fmtOffsetMap(offsets map[string]map[int32]Offset) string {
+	var sb strings.Builder
+	for t, ps := range offsets {
+		fmt.Fprintf(&sb, "%s[", t)
+		first := true
+		for p, o := range ps {
+			if !first {
+				sb.WriteString(" ")
+			}
+			first = false
+			fmt.Fprintf(&sb, "%d{%d e%d}", p, o.at, o.epoch)
+		}
+		sb.WriteString("]")
+	}
+	return sb.String()
+}
+
+func fetchingToMtps(f map[string]map[int32]struct{}) mtps {
+	if f == nil {
+		return nil
+	}
+	m := make(mtps, len(f))
+	for t, ps := range f {
+		sl := make([]int32, 0, len(ps))
+		for p := range ps {
+			sl = append(sl, p)
+		}
+		m[t] = sl
+	}
+	return m
+}
+
 func (g *groupConsumer) adjustCooperativeFetchOffsets(added, lost map[string][]int32) map[string][]int32 {
+	hadPriorFetching := g.fetching != nil
 	if g.fetching != nil {
+		g.cfg.logger.Log(LogLevelDebug, "adjustCooperativeFetchOffsets: prior g.fetching is non-nil, retaining state from previous failed fetchOffsets",
+			"group", g.cfg.group,
+			"prior_fetching", fetchingToMtps(g.fetching),
+			"added", mtps(added),
+			"lost", mtps(lost),
+		)
 		// We were fetching previously: remove anything lost.
 		for topic, partitions := range lost {
 			ft := g.fetching[topic]
@@ -1599,6 +1650,11 @@ func (g *groupConsumer) adjustCooperativeFetchOffsets(added, lost map[string][]i
 		}
 		added[topic] = ps
 	}
+	g.cfg.logger.Log(LogLevelDebug, "adjustCooperativeFetchOffsets: result",
+		"group", g.cfg.group,
+		"had_prior_fetching", hadPriorFetching,
+		"result", mtps(added),
+	)
 	return added
 }
 
@@ -1609,7 +1665,17 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int
 	// fetching tracking.
 	defer func() {
 		if rerr == nil {
+			g.cfg.logger.Log(LogLevelDebug, "fetchOffsets succeeded, clearing g.fetching",
+				"group", g.cfg.group,
+				"fetched_partitions", mtps(added),
+			)
 			g.fetching = nil
+		} else {
+			g.cfg.logger.Log(LogLevelDebug, "fetchOffsets failed, g.fetching retained",
+				"group", g.cfg.group,
+				"err", rerr,
+				"retained_fetching", fetchingToMtps(g.fetching),
+			)
 		}
 	}()
 
@@ -1731,6 +1797,12 @@ start:
 	defer g.c.mu.Unlock()
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
+	// Log the offsets we are about to assign.
+	g.cfg.logger.Log(LogLevelInfo, "fetchOffsets: assigning fetched offsets",
+		"group", g.cfg.group,
+		"offsets", fmtOffsetMap(offsets),
+	)
 
 	// Eager: we already invalidated everything; nothing to re-invalidate.
 	// Cooperative: assign without invalidating what we are consuming.
