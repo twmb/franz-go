@@ -1152,16 +1152,21 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 	c.kill.Store(true)
 	if c.g != nil {
 		rerr = cl.LeaveGroupContext(ctx)
+		<-c.g.left
 	} else if c.d != nil {
 		c.mu.Lock()                                           // lock for assign
 		c.assignPartitions(nil, assignInvalidateAll, nil, "") // we do not use a log message when not in a group
 		c.mu.Unlock()
 	}
 
-	// After the above, consumers cannot consume anymore. LeaveGroup
-	// internally assigns nil, which uses noConsumerSession, which prevents
-	// loopFetch from starting. Assigning also waits for the prior session
-	// to be complete, meaning loopFetch cannot be running.
+	// After the above, consumers cannot consume anymore.
+	//
+	// For group consumers, LeaveGroupContext may return early if ctx is
+	// already canceled (e.g. the user provided a parent context via
+	// WithContext that was canceled). Waiting on c.g.left ensures the
+	// goroutine spawned by LeaveGroupContext has fully completed
+	// assignPartitions and stopSession before we proceed. For direct
+	// consumers, assignPartitions above is synchronous.
 
 	sessCloseCtx, sessCloseCancel := context.WithTimeout(ctx, time.Second)
 	var wg sync.WaitGroup
