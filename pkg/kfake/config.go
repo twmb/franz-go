@@ -192,6 +192,8 @@ type ACL struct {
 //
 //   - group.consumer.heartbeat.interval.ms - heartbeat interval for KIP-848
 //     consumer groups (default 5000, lowered to 100 in test binaries)
+//   - group.consumer.session.timeout.ms - session timeout for KIP-848
+//     consumer groups (default 45000)
 //   - message.max.bytes - max produce batch size (default 1048588)
 //
 // Other accepted configs include compression.type, default.replication.factor,

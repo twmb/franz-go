@@ -260,7 +260,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			for _, rec := range recs {
 				po := partOffset{part, rec.offset}
 				if _, exists := c.partOffsets[po]; exists {
-					c.errCh <- fmt.Errorf("saw double offset t %s p%do%d", c.consumeFrom, po.part, po.offset)
+					c.errCh <- fmt.Errorf("saw double offset t %s p%do%d (txn #%d, txid %s)", c.consumeFrom, po.part, po.offset, ntxns, txid)
 				}
 				c.partOffsets[po] = struct{}{}
 

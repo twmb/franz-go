@@ -1564,6 +1564,8 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 					err = &ErrFirstReadEOF{kind: firstReadSASL, err: err}
 				}
 			}
+		} else {
+			cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker canceled, closing connection and killing any other in-flight requests on this connection", "req", kmsg.Key(pr.resp.Key()).Name(), "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
 		}
 		pr.promise(nil, err)
 		cxn.die()

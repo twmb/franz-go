@@ -60,8 +60,5 @@ func (c *Cluster) handleTxnOffsetCommit(creq *clientReq) (kmsg.Response, error) 
 		}
 	}
 
-	if c.pids.handleTxnOffsetCommit(creq) {
-		return nil, nil
-	}
-	return errResp(kerr.GroupIDNotFound.Code), nil
+	return c.pids.doTxnOffsetCommit(creq), nil
 }

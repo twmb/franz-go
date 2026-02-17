@@ -183,26 +183,20 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 			var dup bool
 			var baseOffset, lso int64
 
-			// Validate and push batch. For idempotent/transactional produces,
-			// we do this inside waitControl to synchronize with the txn loop.
 			if b.ProducerID >= 0 {
-				c.pids.init()
-				c.pids.waitControl(func() {
-					var pidinf *pidinfo
-					var window *pidwindow
-					if txnal && req.Version >= 12 {
-						// KIP-890: v12+ clients skip AddPartitionsToTxn,
-						// so we implicitly add partitions to the transaction.
-						pidinf, window = c.pids.getImplicitTxn(b.ProducerID, rt.Topic, rp.Partition, pd)
-					} else {
-						pidinf, window = c.pids.get(b.ProducerID, rt.Topic, rp.Partition)
-					}
+				// For KIP-890 (v12+), pass pd to implicitly add
+				// the partition to the transaction if not yet added.
+				var implicit *partData
+				if txnal && req.Version >= 12 {
+					implicit = pd
+				}
+				pidinf, window := c.pids.get(b.ProducerID, rt.Topic, rp.Partition, implicit)
 
-					if txnal && window == nil {
-						errCode = kerr.InvalidTxnState.Code
-						return
-					}
+				if txnal && window == nil {
+					errCode = kerr.InvalidTxnState.Code
+				}
 
+				if errCode == 0 {
 					switch {
 					case window == nil && b.ProducerEpoch != -1:
 						errCode = kerr.InvalidTxnState.Code
@@ -212,16 +206,14 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 						errCode = kerr.InvalidProducerEpoch.Code
 					default:
 						var seqOk bool
-						seqOk, dup = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords)
+						seqOk, dup, baseOffset = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords, pd.highWatermark)
 						if !seqOk {
 							errCode = kerr.OutOfOrderSequenceNumber.Code
 						}
 					}
-					if errCode != 0 || dup {
-						return
-					}
-
-					// Validation passed, push the batch
+				}
+				if errCode == 0 && !dup {
+					// Validation passed, push the batch.
 					baseOffset = pd.highWatermark
 					lso = pd.logStartOffset
 
@@ -245,7 +237,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 						bytesPtr := pidinf.txPartBytes.mkp(rt.Topic, rp.Partition, func() *int { return new(int) })
 						*bytesPtr += len(rp.Records)
 					}
-				})
+				}
 			} else {
 				// Non-idempotent produce, no pids validation needed
 				baseOffset = pd.highWatermark
@@ -258,7 +250,8 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				continue
 			}
 			if dup {
-				donep(rt, rp, 0, "")
+				sp := donep(rt, rp, 0, "")
+				sp.BaseOffset = baseOffset // original offset from dup detection
 				continue
 			}
 

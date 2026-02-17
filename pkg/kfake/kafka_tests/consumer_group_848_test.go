@@ -396,7 +396,15 @@ func Test848SessionTimeout(t *testing.T) {
 	nRecords := 50
 	nPartitions := 4
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	c := newCluster(t,
+		kfake.NumBrokers(1),
+		kfake.SeedTopics(int32(nPartitions), topic),
+		kfake.BrokerConfigs(map[string]string{
+			// Short session timeout so the fenced member is
+			// removed quickly. Default is 45s which is too long.
+			"group.consumer.session.timeout.ms": "1000",
+		}),
+	)
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
@@ -445,12 +453,11 @@ func Test848SessionTimeout(t *testing.T) {
 
 	// Close c2. The leave heartbeat is intercepted and dropped, so the
 	// server still considers c2 a member. After c2's session timeout
-	// (500ms) the server removes it and reassigns partitions to c1.
+	// (500ms) the server fences c2 and reassigns partitions to c1.
+	// We produce immediately - c1 will pick up c2's partitions after
+	// the session timeout fires, and consumeN has a generous timeout
+	// to wait for this.
 	c2.Close()
-	time.Sleep(800 * time.Millisecond)
-
-	// Produce more records. c1 should now own all partitions and consume
-	// all of them.
 	produceNStrings(t, producer, topic, nRecords)
 	records := consumeN(t, c1, nRecords, 15*time.Second)
 	if len(records) != nRecords {

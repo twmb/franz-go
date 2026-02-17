@@ -87,6 +87,7 @@ linters:
         - G104
         - G404
         - G115
+        - G117
         - G602 # https://github.com/securego/gosec/issues/1406
 
     nolintlint:

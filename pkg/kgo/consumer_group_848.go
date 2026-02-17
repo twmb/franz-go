@@ -161,6 +161,13 @@ outer:
 			case errors.Is(err, kerr.RebalanceInProgress):
 				err = nil
 
+			case err != nil && isRetryableBrokerErr(err):
+				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat hit retriable broker error, retrying",
+					"group", g.cfg.group,
+					"err", err,
+				)
+				err = nil
+
 			case errors.Is(err, kerr.UnknownMemberID):
 				g.memberGen.store(newStringUUID(), 0)
 
@@ -219,10 +226,6 @@ outer:
 }
 
 func (g *groupConsumer) leave848(ctx context.Context) {
-	if g.cfg.instanceID != nil {
-		return
-	}
-
 	memberID := g.memberGen.memberID()
 	g.cfg.logger.Log(LogLevelInfo, "leaving next-gen group",
 		"group", g.cfg.group,
@@ -233,7 +236,7 @@ func (g *groupConsumer) leave848(ctx context.Context) {
 	// we can do. We may as well just return.
 	req := kmsg.NewPtrConsumerGroupHeartbeatRequest()
 	req.Group = g.cfg.group
-	req.MemberID = g.memberGen.memberID()
+	req.MemberID = memberID
 	req.MemberEpoch = -1
 	if g.cfg.instanceID != nil {
 		req.MemberEpoch = -2
@@ -317,8 +320,21 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 	id2t := g.g.cl.id2tMap()
 	newAssigned := make(map[string][]int32)
 
-	g.lastSubscribedTopics = req.SubscribedTopicNames
-	g.lastTopics = req.Topics
+	// Only update the last-sent fields when Topics was actually
+	// included in the request. When the request was a keepalive
+	// (Topics=nil), we preserve the previous values so the next
+	// comparison still matches and produces another keepalive.
+	// Without this guard, storing nil after a keepalive causes
+	// DeepEqual(nil, []) to fail on the next heartbeat, re-sending
+	// Topics=[] - creating an alternating full/keepalive pattern.
+	// The server clears pendingRevocations when Topics does not
+	// contain a pending partition, so the alternating stale full
+	// heartbeats can cause premature revocation clearing and dual
+	// assignment.
+	if req.Topics != nil {
+		g.lastSubscribedTopics = req.SubscribedTopicNames
+		g.lastTopics = req.Topics
+	}
 
 	if resp.Assignment == nil {
 		return nil

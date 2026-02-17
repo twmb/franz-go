@@ -7,17 +7,25 @@
 #   -n, --iterations NUM   Max iterations (default: 50)
 #   -r, --records NUM      Number of records (default: 100000)
 #   --race                 Enable race detector (default: off)
-#   -l, --log-level LEVEL  Set KGO_LOG_LEVEL (e.g., debug, info)
+#   -l, --log-level LEVEL  Set log level for both client and server
+#   --client-log LEVEL     Set KGO_LOG_LEVEL for the test client only
+#   --server-log LEVEL     Set kfake server log level only
 #   -v, --version VERSION  Kafka version to emulate (e.g., 2.8, 3.5)
 #   -k, --kill             Kill processes on ports 9092-9094 and exit
+#   --clean                Kill servers and remove /tmp/kfake_test_logs
 #   -h, --help             Show this help
 
 MAX_ITERATIONS=50
 RECORDS=500000
 TEST_TYPE=""
 RACE=""
-LOG_LEVEL=""
+CLIENT_LOG=""
+SERVER_LOG_LEVEL=""
 KFAKE_VERSION="${KFAKE_VERSION:-}"
+
+KFAKE_DIR=/Users/travisbischel/src/twmb/franz-go/pkg/kfake
+KGO_DIR=/Users/travisbischel/src/twmb/franz-go/pkg/kgo
+LOG_DIR="/tmp/kfake_test_logs"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -38,7 +46,16 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -l|--log-level)
-            LOG_LEVEL="$2"
+            CLIENT_LOG="$2"
+            SERVER_LOG_LEVEL="$2"
+            shift 2
+            ;;
+        --client-log)
+            CLIENT_LOG="$2"
+            shift 2
+            ;;
+        --server-log)
+            SERVER_LOG_LEVEL="$2"
             shift 2
             ;;
         -v|--version)
@@ -57,6 +74,18 @@ while [[ $# -gt 0 ]]; do
             echo "Done."
             exit 0
             ;;
+        --clean)
+            for port in 9092 9093 9094; do
+                pid=$(lsof -ti:$port 2>/dev/null)
+                if [ -n "$pid" ]; then
+                    echo "Killing PID $pid on port $port"
+                    kill $pid 2>/dev/null || true
+                fi
+            done
+            rm -rf "$LOG_DIR"
+            echo "Removed $LOG_DIR"
+            exit 0
+            ;;
         -h|--help)
             echo "Usage: ./run_tests.sh [options]"
             echo "Options:"
@@ -65,9 +94,12 @@ while [[ $# -gt 0 ]]; do
             echo "  -n, --iterations NUM   Max iterations (default: 50)"
             echo "  -r, --records NUM      Number of records (default: 100000)"
             echo "  --race                 Enable race detector (default: off)"
-            echo "  -l, --log-level LEVEL  Set KGO_LOG_LEVEL (e.g., debug, info)"
+            echo "  -l, --log-level LEVEL  Set log level for both client and server"
+            echo "  --client-log LEVEL     Set KGO_LOG_LEVEL for the test client only"
+            echo "  --server-log LEVEL     Set kfake server log level only"
             echo "  -v, --version VERSION  Kafka version to emulate (e.g., 2.8, 3.5)"
             echo "  -k, --kill             Kill processes on ports 9092-9094 and exit"
+            echo "  --clean                Kill servers and remove /tmp/kfake_test_logs"
             echo "  -h, --help             Show this help"
             exit 0
             ;;
@@ -80,19 +112,25 @@ done
 
 # Build test pattern
 if [ -z "$TEST_TYPE" ]; then
-    # Run all tests by default
     TEST_PATTERN=""
     RUN_ARG=""
 else
-    # User specified a pattern like "Txn", "Group", "Txn/range"
     TEST_PATTERN="Test${TEST_TYPE}"
-    RUN_ARG="-run $TEST_PATTERN"
+    RUN_ARG="-test.run $TEST_PATTERN"
 fi
-LOG_DIR="/tmp/kfake_test_logs"
 mkdir -p "$LOG_DIR"
 SERVER_LOG="$LOG_DIR/server.log"
-TEST_LOG="$LOG_DIR/test.log"
+CLIENT_LOG_FILE="$LOG_DIR/client.log"
+SERVER_BIN="$LOG_DIR/kfake-server"
+TEST_BIN="$LOG_DIR/kgo-test"
 SERVER_PID=""
+
+# Build binaries once up front
+echo "Building server binary..."
+(cd "$KFAKE_DIR" && go build -o "$SERVER_BIN" main.go) || { echo "FAILED: server build"; exit 1; }
+
+echo "Building test binary..."
+(cd "$KGO_DIR" && go test -c $RACE -o "$TEST_BIN") || { echo "FAILED: test build"; exit 1; }
 
 cleanup_interrupt() {
     echo ""
@@ -113,44 +151,51 @@ cleanup_exit() {
 }
 trap cleanup_exit EXIT
 
+# Check if a port is in use via a TCP connect attempt.
+port_in_use() {
+    (echo >/dev/tcp/127.0.0.1/$1) 2>/dev/null
+}
+
+if [ -n "$RACE" ]; then
+    TIMEOUT="300s"
+else
+    TIMEOUT="90s"
+fi
+
+echo ""
 echo "Configuration:"
 echo "  Iterations: $MAX_ITERATIONS"
 echo "  Records: $RECORDS"
 echo "  Test pattern: ${TEST_PATTERN:-all}"
 echo "  Race detector: ${RACE:-disabled}"
-echo "  Log level: ${LOG_LEVEL:-default}"
+echo "  Client log level: ${CLIENT_LOG:-default}"
+echo "  Server log level: ${SERVER_LOG_LEVEL:-default}"
 echo "  Kafka version: ${KFAKE_VERSION:-latest}"
+echo "  Timeout: $TIMEOUT"
 echo "  Logs: $LOG_DIR"
 echo ""
 
 for i in $(seq 1 $MAX_ITERATIONS); do
     echo "=== Run $i of $MAX_ITERATIONS ==="
 
-    # Wait for ports to be free (max 20 seconds)
-    for port in 9092 9093 9094; do
-        for _ in $(seq 1 40); do
-            if ! lsof -ti:$port >/dev/null 2>&1; then
-                break
-            fi
-            sleep 0.5
-        done
-    done
-
-    # Start server and capture its output
-    cd /Users/travisbischel/src/twmb/franz-go/pkg/kfake
+    # Build server args
     VERSION_ARG=""
     if [ -n "$KFAKE_VERSION" ]; then
         VERSION_ARG="--as-version $KFAKE_VERSION"
     fi
-    KFAKE_LOG_LEVEL=$LOG_LEVEL go run main.go $VERSION_ARG -c group.consumer.heartbeat.interval.ms=100 > "$SERVER_LOG" 2>&1 &
+    LOG_ARG=""
+    if [ -n "$SERVER_LOG_LEVEL" ]; then
+        LOG_ARG="-l $SERVER_LOG_LEVEL"
+    fi
+    "$SERVER_BIN" $VERSION_ARG $LOG_ARG -c group.consumer.heartbeat.interval.ms=100 > "$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
 
-    # Wait for server to be listening (max 10 seconds)
-    for _ in $(seq 1 20); do
-        if lsof -ti:9092 >/dev/null 2>&1; then
+    # Wait for server to be listening (max 5 seconds)
+    for _ in $(seq 1 50); do
+        if port_in_use 9092; then
             break
         fi
-        sleep 0.5
+        sleep 0.1
     done
 
     # Check if server is still running
@@ -161,23 +206,17 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         exit 1
     fi
 
-    # Run the test (use longer timeout with race detector)
-    cd /Users/travisbischel/src/twmb/franz-go/pkg/kgo
-    if [ -n "$RACE" ]; then
-        TIMEOUT="100s"
-    else
-        TIMEOUT="60s"
-    fi
-    KGO_TEST_RECORDS=$RECORDS KGO_LOG_LEVEL=$LOG_LEVEL go test $RACE $RUN_ARG -timeout $TIMEOUT > "$TEST_LOG" 2>&1
+    # Run the test
+    KGO_TEST_RECORDS=$RECORDS KGO_LOG_LEVEL=$CLIENT_LOG "$TEST_BIN" $RUN_ARG -test.timeout $TIMEOUT > "$CLIENT_LOG_FILE" 2>&1
     TEST_EXIT=$?
 
     if [ $TEST_EXIT -ne 0 ]; then
         echo "FAILED on run $i"
-        echo "Test log: $TEST_LOG"
+        echo "Client log: $CLIENT_LOG_FILE"
         echo "Server log: $SERVER_LOG"
         echo ""
-        echo "=== Last 50 lines of test log ==="
-        tail -50 "$TEST_LOG"
+        echo "=== Last 50 lines of client log ==="
+        tail -50 "$CLIENT_LOG_FILE"
         echo ""
         echo "Server (pid $SERVER_PID) left running for debugging."
         echo "Connect to localhost:9092 to inspect state."
@@ -186,7 +225,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         exit 1
     fi
 
-    # Kill server and wait for clean shutdown (only on success)
+    # Kill server and wait for clean shutdown (ports freed by Close)
     kill $SERVER_PID 2>/dev/null || true
     wait $SERVER_PID 2>/dev/null
 

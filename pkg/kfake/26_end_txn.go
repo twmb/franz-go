@@ -34,10 +34,5 @@ func (c *Cluster) handleEndTxn(creq *clientReq) (kmsg.Response, error) {
 		return resp, nil
 	}
 
-	if c.pids.handleEndTxn(creq) {
-		return nil, nil
-	}
-	resp := req.ResponseKind().(*kmsg.EndTxnResponse)
-	resp.ErrorCode = kerr.InvalidTxnState.Code
-	return resp, nil
+	return c.pids.doEnd(creq), nil
 }

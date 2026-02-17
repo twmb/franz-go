@@ -3,8 +3,11 @@ package kfake_test
 import (
 	"context"
 	"errors"
+	"hash/crc32"
+	"math/rand"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 func newCluster(t *testing.T, opts ...kfake.Opt) *kfake.Cluster {
@@ -1035,3 +1039,750 @@ func Test848CooperativeRevocationDuringConsumption(t *testing.T) {
 		}
 	}
 }
+
+// Test848RebalanceTimeout verifies that the per-member rebalance timeout
+// fences a member that does not complete partition revocation in time.
+// Member B joins via raw kmsg so we control exactly when it heartbeats.
+// After a rebalance is triggered, we send B one heartbeat (gets the
+// revocation instruction and schedules the rebalance timeout), then stop.
+// The rebalance timeout fires and fences B.
+func Test848RebalanceTimeout(t *testing.T) {
+	t.Parallel()
+	topic := "t848-rebal-timeout"
+	group := "g848-rebal-timeout"
+	nPartitions := 6
+
+	c := newCluster(t,
+		kfake.NumBrokers(1),
+		kfake.SeedTopics(int32(nPartitions), topic),
+		kfake.BrokerConfigs(map[string]string{
+			// Long session timeout so it doesn't interfere.
+			"group.consumer.session.timeout.ms": "30000",
+		}),
+	)
+
+	// Plain client for raw requests and admin.
+	raw, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	adm := kadm.NewClient(raw)
+
+	// A joins via kgo (automatic heartbeating).
+	a := newGroupConsumer(t, c, topic, group)
+	produceNStrings(t, a, topic, 30)
+	waitForStableGroup(t, adm, group, 1, 5*time.Second)
+
+	// B joins via raw heartbeat with a short rebalance timeout.
+	ctx := context.Background()
+	join := kmsg.NewConsumerGroupHeartbeatRequest()
+	join.Group = group
+	join.MemberEpoch = 0
+	join.RebalanceTimeoutMillis = 500
+	assignor := "uniform"
+	join.ServerAssignor = &assignor
+	join.SubscribedTopicNames = []string{topic}
+	join.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+	joinResp, err := join.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("B join: %v", err)
+	}
+	if joinResp.ErrorCode != 0 {
+		t.Fatalf("B join error: %v", kerr.ErrorForCode(joinResp.ErrorCode))
+	}
+	bMemberID := *joinResp.MemberID
+	bEpoch := joinResp.MemberEpoch
+
+	// Build B's current assignment from the join response.
+	bAssignment := make(map[[16]byte][]int32)
+	if joinResp.Assignment != nil {
+		for _, at := range joinResp.Assignment.Topics {
+			bAssignment[at.TopicID] = at.Partitions
+		}
+	}
+
+	// Heartbeat B with its assigned partitions to confirm and stabilize.
+	hb := kmsg.NewConsumerGroupHeartbeatRequest()
+	hb.Group = group
+	hb.MemberID = bMemberID
+	hb.MemberEpoch = bEpoch
+	hb.RebalanceTimeoutMillis = 500
+	hb.SubscribedTopicNames = []string{topic}
+	for id, parts := range bAssignment {
+		tp := kmsg.NewConsumerGroupHeartbeatRequestTopic()
+		tp.TopicID = id
+		tp.Partitions = parts
+		hb.Topics = append(hb.Topics, tp)
+	}
+	hbResp, err := hb.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("B heartbeat: %v", err)
+	}
+	if hbResp.ErrorCode != 0 {
+		t.Fatalf("B heartbeat error: %v", kerr.ErrorForCode(hbResp.ErrorCode))
+	}
+	if hbResp.MemberEpoch > bEpoch {
+		bEpoch = hbResp.MemberEpoch
+	}
+
+	// B may need additional heartbeats to fully reconcile if the
+	// epoch didn't advance on the first confirmation.
+	for i := range 20 {
+		described, err := adm.DescribeConsumerGroups(ctx, group)
+		if err != nil {
+			t.Fatalf("describe: %v", err)
+		}
+		if described[group].State == "Stable" && len(described[group].Members) == 2 {
+			break
+		}
+		if i == 19 {
+			t.Fatalf("timeout waiting for stable 2-member group (state=%s, members=%d)", described[group].State, len(described[group].Members))
+		}
+		// Re-heartbeat B to nudge reconciliation.
+		hb2 := kmsg.NewConsumerGroupHeartbeatRequest()
+		hb2.Group = group
+		hb2.MemberID = bMemberID
+		hb2.MemberEpoch = bEpoch
+		hb2.RebalanceTimeoutMillis = 500
+		hb2.SubscribedTopicNames = []string{topic}
+		for id, parts := range bAssignment {
+			tp := kmsg.NewConsumerGroupHeartbeatRequestTopic()
+			tp.TopicID = id
+			tp.Partitions = parts
+			hb2.Topics = append(hb2.Topics, tp)
+		}
+		resp, err := hb2.RequestWith(ctx, raw)
+		if err != nil {
+			t.Fatalf("B re-heartbeat: %v", err)
+		}
+		if resp.ErrorCode != 0 {
+			t.Fatalf("B re-heartbeat error: %v", kerr.ErrorForCode(resp.ErrorCode))
+		}
+		if resp.MemberEpoch > bEpoch {
+			bEpoch = resp.MemberEpoch
+		}
+		// Update bAssignment if the response includes one.
+		if resp.Assignment != nil {
+			bAssignment = make(map[[16]byte][]int32)
+			for _, at := range resp.Assignment.Topics {
+				bAssignment[at.TopicID] = at.Partitions
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// C joins via kgo - triggers rebalance. B's target assignment
+	// shrinks, so B needs to revoke partitions.
+	cJoin := newGroupConsumer(t, c, topic, group)
+	_ = cJoin
+
+	// Wait for the group to leave Stable (rebalance triggered).
+	deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for {
+		described, err := adm.DescribeConsumerGroups(deadline, group)
+		if err != nil {
+			t.Fatalf("describe: %v", err)
+		}
+		if described[group].State != "Stable" {
+			break
+		}
+		if deadline.Err() != nil {
+			t.Fatal("timeout waiting for rebalance to start")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Send one full heartbeat for B, reporting its current assignment.
+	// The server will send B the reduced reconciled assignment and
+	// schedule the rebalance timeout.
+	full := kmsg.NewConsumerGroupHeartbeatRequest()
+	full.Group = group
+	full.MemberID = bMemberID
+	full.MemberEpoch = bEpoch
+	full.RebalanceTimeoutMillis = 500
+	full.SubscribedTopicNames = []string{topic}
+	for id, parts := range bAssignment {
+		tp := kmsg.NewConsumerGroupHeartbeatRequestTopic()
+		tp.TopicID = id
+		tp.Partitions = parts
+		full.Topics = append(full.Topics, tp)
+	}
+	fullResp, err := full.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("B full heartbeat: %v", err)
+	}
+	if fullResp.ErrorCode != 0 {
+		t.Fatalf("B full heartbeat error: %v", kerr.ErrorForCode(fullResp.ErrorCode))
+	}
+
+	// Don't send any more heartbeats for B. The rebalance timeout
+	// (500ms) should fire and fence B.
+	time.Sleep(800 * time.Millisecond)
+
+	described, err := adm.DescribeConsumerGroups(ctx, group)
+	if err != nil {
+		t.Fatalf("describe after timeout: %v", err)
+	}
+	dg := described[group]
+	for _, m := range dg.Members {
+		if m.MemberID == bMemberID {
+			t.Fatalf("member B (%s) should have been fenced by rebalance timeout, but is still in group (state=%s)", bMemberID, dg.State)
+		}
+	}
+}
+
+// newPlainClient creates a kgo client without 848 opt-in.
+func newPlainClient(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
+	t.Helper()
+	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...)}, opts...)
+	cl, err := kgo.NewClient(opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cl.Close)
+	return cl
+}
+
+// initProducerID sends a raw InitProducerID request with the given
+// parameters and returns the response.
+func initProducerID(t *testing.T, cl *kgo.Client, txid string, pid int64, epoch int16, timeout int32) *kmsg.InitProducerIDResponse {
+	t.Helper()
+	req := kmsg.NewInitProducerIDRequest()
+	req.TransactionalID = &txid
+	req.TransactionTimeoutMillis = timeout
+	req.ProducerID = pid
+	req.ProducerEpoch = epoch
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("InitProducerID: %v", err)
+	}
+	return resp
+}
+
+// TestTxnInitProducerIDStaleEpochRecovery verifies that a client can
+// recover after a transaction timeout bumps the epoch. The client
+// sends InitProducerID with its stale epoch and should get a new
+// valid epoch back - not INVALID_PRODUCER_EPOCH.
+func TestTxnInitProducerIDStaleEpochRecovery(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1))
+	cl := newPlainClient(t, c)
+
+	// Init with a transactional ID.
+	resp := initProducerID(t, cl, "txid-stale", -1, -1, 60000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	pid := resp.ProducerID
+	epoch := resp.ProducerEpoch
+	if epoch != 0 {
+		t.Fatalf("expected epoch 0, got %d", epoch)
+	}
+
+	// Simulate a timeout bump: re-init with the same txid (creates
+	// existing entry), then bump epoch via another init. This gives
+	// us a server epoch that's ahead of the client.
+	resp2 := initProducerID(t, cl, "txid-stale", pid, epoch, 60000)
+	if resp2.ErrorCode != 0 {
+		t.Fatalf("bump: %v", kerr.ErrorForCode(resp2.ErrorCode))
+	}
+	serverEpoch := resp2.ProducerEpoch
+	if serverEpoch <= epoch {
+		t.Fatalf("expected bumped epoch > %d, got %d", epoch, serverEpoch)
+	}
+
+	// Now try to recover with the STALE epoch (the original one).
+	// This is the scenario that used to cause an infinite retry loop.
+	resp3 := initProducerID(t, cl, "txid-stale", pid, epoch, 60000)
+	if resp3.ErrorCode != 0 {
+		t.Fatalf("stale recovery should succeed, got: %v", kerr.ErrorForCode(resp3.ErrorCode))
+	}
+	if resp3.ProducerEpoch <= serverEpoch {
+		t.Fatalf("expected epoch > %d after stale recovery, got %d", serverEpoch, resp3.ProducerEpoch)
+	}
+}
+
+// TestTxnInitProducerIDAbortOngoing verifies that InitProducerID
+// aborts an in-flight transaction before returning a new epoch.
+func TestTxnInitProducerIDAbortOngoing(t *testing.T) {
+	t.Parallel()
+	topic := "t-init-abort"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	cl := newPlainClient(t, c)
+
+	// Start a transactional producer and begin a transaction.
+	txnCl := newPlainClient(t, c,
+		kgo.DefaultProduceTopic(topic),
+		kgo.TransactionalID("txid-abort-ongoing"),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := txnCl.BeginTransaction(); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	r := kgo.StringRecord("ongoing")
+	r.Topic = topic
+	produceSync(t, txnCl, r)
+
+	// Fresh init with the SAME txid (no PID/epoch provided). The
+	// server already has an ongoing transaction for this txid, so
+	// it must abort the in-flight transaction before returning a
+	// new PID.
+	resp := initProducerID(t, cl, "txid-abort-ongoing", -1, -1, 60000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("reinit error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+
+	// The original txnCl's transaction should be aborted. Consume
+	// with read_committed and verify no records are visible.
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	// Poll briefly - should get nothing since the transaction was aborted.
+	pollCtx, pollCancel := context.WithTimeout(ctx, time.Second)
+	defer pollCancel()
+	fs := consumer.PollFetches(pollCtx)
+	if fs.NumRecords() > 0 {
+		t.Fatalf("expected 0 committed records after abort, got %d", fs.NumRecords())
+	}
+}
+
+// TestTxnEndTxnTV1Retry verifies that retrying EndTxn at the same
+// epoch returns success when the retry matches (commit-after-commit,
+// abort-after-abort) and INVALID_TXN_STATE when it doesn't.
+// Uses MaxVersions to pin EndTxn to v4 (TV1) to avoid KIP-890
+// epoch bumping - kgo always overrides the request version to the
+// negotiated max, so setting req.Version is not sufficient.
+func TestTxnEndTxnTV1Retry(t *testing.T) {
+	t.Parallel()
+	topic := "t-endtxn-retry"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	// Pin EndTxn (key 26) to v4 so we get TV1 behavior.
+	// kgo overrides req.Version to the negotiated max, so we
+	// must use MaxVersions to cap it.
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(26, 4) // EndTxn key = 26
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	// Init producer.
+	initResp := initProducerID(t, cl, "txid-retry", -1, -1, 60000)
+	if initResp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(initResp.ErrorCode))
+	}
+	pid := initResp.ProducerID
+	epoch := initResp.ProducerEpoch
+
+	// Add a partition to start a transaction.
+	addReq := kmsg.NewAddPartitionsToTxnRequest()
+	addReq.TransactionalID = "txid-retry"
+	addReq.ProducerID = pid
+	addReq.ProducerEpoch = epoch
+	addT := kmsg.NewAddPartitionsToTxnRequestTopic()
+	addT.Topic = topic
+	addT.Partitions = []int32{0}
+	addReq.Topics = append(addReq.Topics, addT)
+	if _, err := addReq.RequestWith(ctx, cl); err != nil {
+		t.Fatalf("add partitions: %v", err)
+	}
+
+	// EndTxn commit at v4 (TV1 - no epoch bump).
+	endReq := kmsg.NewEndTxnRequest()
+	endReq.Version = 4
+	endReq.TransactionalID = "txid-retry"
+	endReq.ProducerID = pid
+	endReq.ProducerEpoch = epoch
+	endReq.Commit = true
+	endResp, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("end commit: %v", err)
+	}
+	if endResp.ErrorCode != 0 {
+		t.Fatalf("end commit error: %v", kerr.ErrorForCode(endResp.ErrorCode))
+	}
+
+	// Retry commit at same epoch - should succeed (TV1 idempotency).
+	endResp2, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("retry commit: %v", err)
+	}
+	if endResp2.ErrorCode != 0 {
+		t.Fatalf("retry commit should succeed, got: %v", kerr.ErrorForCode(endResp2.ErrorCode))
+	}
+
+	// Retry abort at same epoch - should fail (commit != abort).
+	endReq.Commit = false
+	endResp3, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("retry abort: %v", err)
+	}
+	if endResp3.ErrorCode != kerr.InvalidTxnState.Code {
+		t.Fatalf("retry abort-after-commit should be INVALID_TXN_STATE, got: %v", kerr.ErrorForCode(endResp3.ErrorCode))
+	}
+}
+
+// TestTxnEndTxnTV2EmptyAbort verifies that aborting an empty
+// transaction (no produce, no offsets) succeeds for TV2 (v5+).
+func TestTxnEndTxnTV2EmptyAbort(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	// Init producer.
+	initResp := initProducerID(t, cl, "txid-empty-abort", -1, -1, 60000)
+	if initResp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(initResp.ErrorCode))
+	}
+
+	// EndTxn abort when no transaction is active. kfake advertises
+	// EndTxn v5 (KIP-890), so kgo sends v5 by default.
+	endReq := kmsg.NewEndTxnRequest()
+	endReq.TransactionalID = "txid-empty-abort"
+	endReq.ProducerID = initResp.ProducerID
+	endReq.ProducerEpoch = initResp.ProducerEpoch
+	endReq.Commit = false
+	endResp, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("empty abort: %v", err)
+	}
+	if endResp.ErrorCode != 0 {
+		t.Fatalf("empty abort should succeed for TV2, got: %v", kerr.ErrorForCode(endResp.ErrorCode))
+	}
+}
+
+// TestTxnEpochBumpMonotonic verifies that repeated InitProducerID
+// calls with the current epoch bump monotonically.
+func TestTxnEpochBumpMonotonic(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1))
+	cl := newPlainClient(t, c)
+
+	// Init producer - epoch starts at 0.
+	resp := initProducerID(t, cl, "txid-exhaust", -1, -1, 60000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	pid := resp.ProducerID
+	epoch := resp.ProducerEpoch
+	if epoch != 0 {
+		t.Fatalf("expected epoch 0, got %d", epoch)
+	}
+
+	// Bump 10 times and verify monotonic increase.
+	for i := range 10 {
+		resp = initProducerID(t, cl, "txid-exhaust", pid, epoch, 60000)
+		if resp.ErrorCode != 0 {
+			t.Fatalf("bump %d at epoch %d: %v", i, epoch, kerr.ErrorForCode(resp.ErrorCode))
+		}
+		newEpoch := resp.ProducerEpoch
+		if newEpoch != epoch+1 {
+			t.Fatalf("bump %d: expected epoch %d, got %d", i, epoch+1, newEpoch)
+		}
+		pid = resp.ProducerID
+		epoch = newEpoch
+	}
+	if epoch != 10 {
+		t.Fatalf("expected epoch 10 after 10 bumps, got %d", epoch)
+	}
+}
+
+// TestProduceDuplicateReturnsOriginalOffset verifies that when a
+// duplicate idempotent batch is detected (same PID, epoch, sequence),
+// the produce response returns the ORIGINAL base offset, not 0.
+// This is critical for kgo's produce callback correctness.
+func TestProduceDuplicateReturnsOriginalOffset(t *testing.T) {
+	t.Parallel()
+	topic := "t-dup-offset"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	// Pin Produce to v11 (topic names, not IDs) so our raw requests work.
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11) // Produce key = 0
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	// Produce padding records to move partition 0 past offset 0.
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.MaxVersions(v))
+	for range 20 {
+		r := kgo.StringRecord("pad")
+		r.Topic = topic
+		r.Partition = 0
+		produceSync(t, producer, r)
+	}
+
+	// Get an idempotent (non-txn) producer ID.
+	initReq := kmsg.NewInitProducerIDRequest()
+	initReq.TransactionTimeoutMillis = 0
+	initReq.ProducerID = -1
+	initReq.ProducerEpoch = -1
+	initResp, err := initReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if initResp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(initResp.ErrorCode))
+	}
+	pid := initResp.ProducerID
+	epoch := initResp.ProducerEpoch
+
+	// Build a produce request with specific PID/epoch/sequence.
+	buildProduce := func() *kmsg.ProduceRequest {
+		rec := kmsg.Record{Key: []byte("k"), Value: []byte("v")}
+		rec.Length = int32(len(rec.AppendTo(nil)) - 1)
+		now := time.Now().UnixMilli()
+		batch := kmsg.RecordBatch{
+			PartitionLeaderEpoch: -1,
+			Magic:                2,
+			LastOffsetDelta:      0,
+			FirstTimestamp:       now,
+			MaxTimestamp:         now,
+			ProducerID:           pid,
+			ProducerEpoch:        epoch,
+			FirstSequence:        0,
+			NumRecords:           1,
+			Records:              rec.AppendTo(nil),
+		}
+		raw := batch.AppendTo(nil)
+		batch.Length = int32(len(raw) - 12)
+		raw = batch.AppendTo(nil)
+		batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+
+		req := kmsg.NewProduceRequest()
+		req.Version = 11 // use topic names, not topic IDs
+		req.Acks = -1
+		req.TimeoutMillis = 5000
+		rt := kmsg.NewProduceRequestTopic()
+		rt.Topic = topic
+		rp := kmsg.NewProduceRequestTopicPartition()
+		rp.Partition = 0
+		rp.Records = batch.AppendTo(nil)
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		return &req
+	}
+
+	// First produce: sequence 0, should succeed.
+	resp1, err := buildProduce().RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("produce 1: %v", err)
+	}
+	p1 := resp1.Topics[0].Partitions[0]
+	if p1.ErrorCode != 0 {
+		t.Fatalf("produce 1 error: %v", kerr.ErrorForCode(p1.ErrorCode))
+	}
+	origOffset := p1.BaseOffset
+	if origOffset < 20 {
+		t.Fatalf("expected offset >= 20 (after padding), got %d", origOffset)
+	}
+
+	// Duplicate produce: same PID, epoch, sequence 0.
+	resp2, err := buildProduce().RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("produce 2 (dup): %v", err)
+	}
+	p2 := resp2.Topics[0].Partitions[0]
+	if p2.ErrorCode != 0 {
+		t.Fatalf("dup produce error: %v", kerr.ErrorForCode(p2.ErrorCode))
+	}
+	if p2.BaseOffset != origOffset {
+		t.Fatalf("dup produce should return original offset %d, got %d", origOffset, p2.BaseOffset)
+	}
+}
+
+// TestTxnConcurrentDescribeAndInit verifies that ListTransactions and
+// InitProducerID can run concurrently without data races. Run with
+// -race to detect.
+func TestTxnConcurrentDescribeAndInit(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1))
+	cl := newPlainClient(t, c)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				req := kmsg.NewInitProducerIDRequest()
+				req.TransactionalID = stringp("txid-race-" + strconv.Itoa(rand.Intn(100)))
+				req.TransactionTimeoutMillis = 60000
+				req.ProducerID = -1
+				req.ProducerEpoch = -1
+				req.RequestWith(ctx, cl) //nolint:errcheck
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				req := kmsg.NewListTransactionsRequest()
+				req.RequestWith(ctx, cl) //nolint:errcheck
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// TestTxnAddOffsetsWithoutGroup verifies that AddOffsetsToTxn
+// succeeds even when the consumer group does not yet exist. The
+// group is created lazily when TxnOffsetCommit arrives.
+func TestTxnAddOffsetsWithoutGroup(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	resp := initProducerID(t, cl, "txid-no-group", -1, -1, 60000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	pid := resp.ProducerID
+	epoch := resp.ProducerEpoch
+
+	// AddOffsetsToTxn for a group that does not exist yet.
+	addReq := kmsg.NewAddOffsetsToTxnRequest()
+	addReq.TransactionalID = "txid-no-group"
+	addReq.ProducerID = pid
+	addReq.ProducerEpoch = epoch
+	addReq.Group = "nonexistent-group"
+	addResp, err := addReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("add offsets: %v", err)
+	}
+	if addResp.ErrorCode != 0 {
+		t.Fatalf("AddOffsetsToTxn should succeed for non-existent group, got: %v",
+			kerr.ErrorForCode(addResp.ErrorCode))
+	}
+}
+
+// TestTxnDescribeTransactions verifies that DescribeTransactions
+// returns correct state for both ongoing and empty (completed)
+// transactions.
+func TestTxnDescribeTransactions(t *testing.T) {
+	t.Parallel()
+	topic := "t-describe-txn"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	txnID := "txid-describe"
+	resp := initProducerID(t, cl, txnID, -1, -1, 60000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	pid := resp.ProducerID
+	epoch := resp.ProducerEpoch
+
+	// Before any transaction: state should be Empty.
+	descReq := kmsg.NewDescribeTransactionsRequest()
+	descReq.TransactionalIDs = []string{txnID}
+	descResp, err := descReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	if len(descResp.TransactionStates) != 1 {
+		t.Fatalf("expected 1 state, got %d", len(descResp.TransactionStates))
+	}
+	st := descResp.TransactionStates[0]
+	if st.ErrorCode != 0 {
+		t.Fatalf("describe error: %v", kerr.ErrorForCode(st.ErrorCode))
+	}
+	if st.State != "Empty" {
+		t.Fatalf("expected Empty state before transaction, got %q", st.State)
+	}
+	if st.ProducerID != pid {
+		t.Fatalf("expected pid %d, got %d", pid, st.ProducerID)
+	}
+
+	// Start a transaction by adding a partition.
+	addReq := kmsg.NewAddPartitionsToTxnRequest()
+	addReq.TransactionalID = txnID
+	addReq.ProducerID = pid
+	addReq.ProducerEpoch = epoch
+	addT := kmsg.NewAddPartitionsToTxnRequestTopic()
+	addT.Topic = topic
+	addT.Partitions = []int32{0}
+	addReq.Topics = append(addReq.Topics, addT)
+	if _, err := addReq.RequestWith(ctx, cl); err != nil {
+		t.Fatalf("add partitions: %v", err)
+	}
+
+	// During transaction: state should be Ongoing with the partition.
+	descResp, err = descReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("describe during txn: %v", err)
+	}
+	st = descResp.TransactionStates[0]
+	if st.ErrorCode != 0 {
+		t.Fatalf("describe error: %v", kerr.ErrorForCode(st.ErrorCode))
+	}
+	if st.State != "Ongoing" {
+		t.Fatalf("expected Ongoing state during transaction, got %q", st.State)
+	}
+	if len(st.Topics) == 0 {
+		t.Fatal("expected at least one topic in ongoing transaction")
+	}
+	found := false
+	for _, dt := range st.Topics {
+		if dt.Topic == topic {
+			for _, p := range dt.Partitions {
+				if p == 0 {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("partition 0 of topic %s not in transaction describe", topic)
+	}
+
+	// Commit the transaction.
+	endReq := kmsg.NewEndTxnRequest()
+	endReq.TransactionalID = txnID
+	endReq.ProducerID = pid
+	endReq.ProducerEpoch = epoch
+	endReq.Commit = true
+	endResp, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("end txn: %v", err)
+	}
+	if endResp.ErrorCode != 0 {
+		t.Fatalf("end txn error: %v", kerr.ErrorForCode(endResp.ErrorCode))
+	}
+
+	// After commit: state should be Empty again, no partitions.
+	descResp, err = descReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("describe after commit: %v", err)
+	}
+	st = descResp.TransactionStates[0]
+	if st.ErrorCode != 0 {
+		t.Fatalf("describe error: %v", kerr.ErrorForCode(st.ErrorCode))
+	}
+	if st.State != "Empty" {
+		t.Fatalf("expected Empty state after commit, got %q", st.State)
+	}
+	if len(st.Topics) != 0 {
+		t.Fatalf("expected no topics after commit, got %d", len(st.Topics))
+	}
+}
+
+func stringp(s string) *string { return &s }

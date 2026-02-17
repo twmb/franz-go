@@ -43,10 +43,5 @@ func (c *Cluster) handleInitProducerID(creq *clientReq) (kmsg.Response, error) {
 		}
 	}
 
-	if c.pids.handleInitProducerID(creq) {
-		return nil, nil
-	}
-	resp := req.ResponseKind().(*kmsg.InitProducerIDResponse)
-	resp.ErrorCode = kerr.UnknownServerError.Code
-	return resp, nil
+	return c.pids.doInitProducerID(creq), nil
 }
