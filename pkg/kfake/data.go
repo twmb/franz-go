@@ -18,7 +18,6 @@ import (
 // TODO
 //
 // * Write to disk, if configured.
-// * Support modifying config values changing cluster behavior
 
 var noID uuid
 

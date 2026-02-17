@@ -176,13 +176,12 @@
    Rebalance timeout uses per-member rebalanceTimeoutMs, only active when
    member has unrevoked partitions.
 
-5. **No partitionsPendingRevocation tracking** (MEDIUM, LOW-MEDIUM)
-   Kafka: explicit per-member set added to currentPartitionEpoch.
-   kfake: lastSentAssignment superset approximation.
-   Kafka: ConsumerGroupMember.java:67,198-200; CurrentAssignmentBuilder.java:399-408
+5. **No partitionsPendingRevocation tracking** - FIXED (ac7d0fb8)
+   Added explicit per-member partitionsPendingRevocation set with
+   epoch map integration, matching Kafka's CurrentAssignmentBuilder.
 
 6. **No ASSIGNING/UNRELEASED_PARTITIONS states** (LOW)
-   kfake: empty/reconciling/stable. Missing intermediate states.
+   kfake uses empty/reconciling/stable. Missing intermediate states.
    Doesn't affect kgo client behavior.
 
 ## 69_consumer_group_describe (KIP-848) - IMPLEMENTED

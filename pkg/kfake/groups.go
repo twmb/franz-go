@@ -15,7 +15,10 @@ import (
 )
 
 // TODO instance IDs
-// TODO persisting groups so commits can happen to client-managed groups
+// TODO offset expiration: v5+ uses broker config offsets.retention.minutes
+// (KIP-211), v0-4 uses request-provided RetentionTimeMillis (or broker
+// default if <= 0). Expired offsets should be pruned, and empty groups
+// with no remaining offsets should be auto-deleted.
 //      we need lastCommit, and need to better prune empty groups
 
 type (
@@ -193,7 +196,7 @@ func (c *Cluster) notifyTopicChange() {
 			}
 		}:
 		default:
-			// Unbuffered channel with no receiver waiting - the
+			// Buffer full - a notification is already pending, the
 			// next heartbeat will pick up fresh metadata anyway.
 		}
 	}
