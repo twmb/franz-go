@@ -27,6 +27,10 @@ import (
 func init() { regKey(0, 3, 13) }
 
 func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
+	slowTimer := time.AfterFunc(5*time.Second, func() {
+		c.cfg.logger.Logf(LogLevelWarn, "produce: request blocked >5s")
+	})
+	defer slowTimer.Stop()
 	var (
 		b    = creq.cc.b
 		req  = creq.kreq.(*kmsg.ProduceRequest)
@@ -207,12 +211,14 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					case window == nil && b.ProducerEpoch != -1:
 						errCode = kerr.InvalidTxnState.Code
 					case window != nil && b.ProducerEpoch < pidinf.epoch:
+						c.cfg.logger.Logf(LogLevelWarn, "produce: INVALID_PRODUCER_EPOCH pid=%d req_epoch=%d server_epoch=%d inTx=%v topic=%s partition=%d",
+							b.ProducerID, b.ProducerEpoch, pidinf.epoch, pidinf.inTx, rt.Topic[:min(16, len(rt.Topic))], rp.Partition)
 						errCode = kerr.InvalidProducerEpoch.Code
 					case window != nil && b.ProducerEpoch > pidinf.epoch:
 						errCode = kerr.InvalidProducerEpoch.Code
 					default:
 						var seqOk bool
-						seqOk, dup = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords)
+						seqOk, dup, baseOffset = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords, pd.highWatermark)
 						if !seqOk {
 							errCode = kerr.OutOfOrderSequenceNumber.Code
 						}
@@ -221,7 +227,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 						return
 					}
 
-					// Validation passed, push the batch
+					// Validation passed, push the batch.
 					baseOffset = pd.highWatermark
 					lso = pd.logStartOffset
 
@@ -260,7 +266,8 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				continue
 			}
 			if dup {
-				donep(rt, rp, 0, "")
+				sp := donep(rt, rp, 0, "")
+				sp.BaseOffset = baseOffset // original offset from dup detection
 				continue
 			}
 
