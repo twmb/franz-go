@@ -1002,11 +1002,7 @@ func (c *Cluster) admin(fn func()) {
 	ofn := fn
 	wait := make(chan struct{})
 	fn = func() { ofn(); close(wait) }
-	slowTimer := time.AfterFunc(5*time.Second, func() {
-		c.cfg.logger.Logf(LogLevelWarn, "c.admin: blocked >5s sending to adminCh")
-	})
 	c.adminCh <- fn
-	slowTimer.Stop()
 	<-wait
 }
 

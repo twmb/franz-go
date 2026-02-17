@@ -201,8 +201,6 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					case window == nil && b.ProducerEpoch != -1:
 						errCode = kerr.InvalidTxnState.Code
 					case window != nil && b.ProducerEpoch < pidinf.epoch:
-						c.cfg.logger.Logf(LogLevelWarn, "produce: INVALID_PRODUCER_EPOCH pid=%d req_epoch=%d server_epoch=%d inTx=%v topic=%s partition=%d",
-							b.ProducerID, b.ProducerEpoch, pidinf.epoch, pidinf.inTx, rt.Topic[:min(16, len(rt.Topic))], rp.Partition)
 						errCode = kerr.InvalidProducerEpoch.Code
 					case window != nil && b.ProducerEpoch > pidinf.epoch:
 						errCode = kerr.InvalidProducerEpoch.Code
@@ -238,8 +236,6 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 						// Track bytes for readCommitted watcher accounting at commit time
 						bytesPtr := pidinf.txPartBytes.mkp(rt.Topic, rp.Partition, func() *int { return new(int) })
 						*bytesPtr += len(rp.Records)
-						c.cfg.logger.Logf(LogLevelDebug, "produce: txnal batch pid %d epoch %d txid %q %s[%d] offset %d records %d",
-							pidinf.id, pidinf.epoch, pidinf.txid, rt.Topic, rp.Partition, baseOffset, b.NumRecords)
 					}
 				}
 			} else {

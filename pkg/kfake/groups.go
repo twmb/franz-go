@@ -54,8 +54,8 @@ type (
 		assignorName           string
 		consumerMembers        map[string]*consumerMember
 		partitionEpochs        map[uuid]map[int32]int32 // (topicID, partition) -> owning member's epoch; -1 or absent means free
-		targetAssignmentsStale bool                      // session timeout cannot snapshot metadata, defers to next heartbeat
-		lastTopicMeta          topicMetaSnap // last snapshot received, for deferred recomputation
+		targetAssignmentsStale bool                     // session timeout cannot snapshot metadata, defers to next heartbeat
+		lastTopicMeta          topicMetaSnap            // last snapshot received, for deferred recomputation
 
 		quit   sync.Once
 		quitCh chan struct{}
@@ -586,8 +586,6 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 							sp.LeaderEpoch = c.leaderEpoch
 							sp.Metadata = c.metadata
 						}
-						gs.c.cfg.logger.Logf(LogLevelInfo, "OffsetFetch: group=%s topic=%s p=%d offset=%d",
-							rg.Group[:min(16, len(rg.Group))], t.Topic[:min(16, len(t.Topic))], p, sp.Offset)
 						st.Partitions = append(st.Partitions, sp)
 					}
 					sg.Topics = append(sg.Topics, st)
@@ -775,10 +773,6 @@ func (g *group) manage(detachNew func()) {
 func (g *group) waitControl(fn func()) bool {
 	wait := make(chan struct{})
 	wfn := func() { fn(); close(wait) }
-	slowTimer := time.AfterFunc(5*time.Second, func() {
-		g.c.cfg.logger.Logf(LogLevelWarn, "g.waitControl: blocked >5s, group=%s", g.name[:min(16, len(g.name))])
-	})
-	defer slowTimer.Stop()
 	// Drain adminCh while waiting to avoid deadlock: the pids
 	// manage loop may call c.admin() (e.g. transaction timeout
 	// abort) while we're blocked sending to controlCh or waiting
@@ -835,9 +829,6 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 	req := creq.kreq.(*kmsg.JoinGroupRequest)
 	resp := req.ResponseKind().(*kmsg.JoinGroupResponse)
 
-	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: handleJoin memberID=%q, state=%s, members=%d",
-		g.name, req.MemberID, g.state, len(g.members))
-
 	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
 		resp.ErrorCode = kerr.Code
 		return resp, false
@@ -872,25 +863,21 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 			join:       req,
 		}
 		if req.Version >= 4 {
-			g.c.cfg.logger.Logf(LogLevelDebug, "group %s: new member %s added to pending (MemberIDRequired)", g.name, memberID)
 			g.addPendingRebalance(m)
 			resp.ErrorCode = kerr.MemberIDRequired.Code
 			return resp, true
 		}
-		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: new member %s joining directly (v3 or below)", g.name, memberID)
 		g.addMemberAndRebalance(m, creq, req)
 		return nil, true
 	}
 
 	// Pending members rejoining immediately enters rebalance.
 	if m, ok := g.pending[req.MemberID]; ok {
-		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: pending member %s rejoining", g.name, req.MemberID)
 		g.addMemberAndRebalance(m, creq, req)
 		return nil, true
 	}
 	m, ok := g.members[req.MemberID]
 	if !ok {
-		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: member %s unknown", g.name, req.MemberID)
 		resp.ErrorCode = kerr.UnknownMemberID.Code
 		return resp, false
 	}
@@ -900,14 +887,12 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 		resp.ErrorCode = kerr.UnknownMemberID.Code
 		return resp, false
 	case groupPreparingRebalance:
-		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: member %s joining during PreparingRebalance", g.name, req.MemberID)
 		g.updateMemberAndRebalance(m, creq, req)
 	case groupCompletingRebalance:
 		if m.sameJoin(req) {
 			g.fillJoinResp(m.memberID, resp)
 			return resp, true
 		}
-		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: member %s rejoining during CompletingRebalance (different join)", g.name, req.MemberID)
 		g.updateMemberAndRebalance(m, creq, req)
 	case groupStable:
 		if g.leader != req.MemberID && m.sameJoin(req) {
@@ -916,7 +901,6 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 			return resp, true
 		}
 		// Leader rejoining OR any member with changed metadata: trigger rebalance
-		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: member %s rejoining during Stable (leader or different join)", g.name, req.MemberID)
 		g.updateMemberAndRebalance(m, creq, req)
 	}
 	return nil, true
@@ -926,9 +910,6 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 func (g *group) handleSync(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.SyncGroupRequest)
 	resp := req.ResponseKind().(*kmsg.SyncGroupResponse)
-
-	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: handleSync memberID=%s, generation=%d, state=%s, isLeader=%v",
-		g.name, req.MemberID, req.Generation, g.state, req.MemberID == g.leader)
 
 	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
 		resp.ErrorCode = kerr.Code
@@ -948,7 +929,6 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 		return resp
 	}
 	if req.Generation != g.generation {
-		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: sync generation mismatch, req=%d, group=%d", g.name, req.Generation, g.generation)
 		resp.ErrorCode = kerr.IllegalGeneration.Code
 		return resp
 	}
@@ -965,7 +945,6 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 	default:
 		resp.ErrorCode = kerr.UnknownMemberID.Code
 	case groupPreparingRebalance:
-		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: sync during PreparingRebalance, returning RebalanceInProgress", g.name)
 		resp.ErrorCode = kerr.RebalanceInProgress.Code
 	case groupCompletingRebalance:
 		m.waitingReply = creq
@@ -1027,9 +1006,6 @@ func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.LeaveGroupRequest)
 	resp := req.ResponseKind().(*kmsg.LeaveGroupResponse)
 
-	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: handleLeave, state=%s, members=%d, leaving=%d",
-		g.name, g.state, len(g.members), len(req.Members))
-
 	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
 		resp.ErrorCode = kerr.Code
 		return resp
@@ -1063,7 +1039,6 @@ func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 				g.stopPending(p)
 			}
 		} else {
-			g.c.cfg.logger.Logf(LogLevelDebug, "group %s: member %s leaving", g.name, rm.MemberID)
 			g.updateMemberAndRebalance(m, nil, nil)
 		}
 	}
@@ -1160,8 +1135,6 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 		allowed := g.fillOffsetCommitWithACL(creq, req, resp)
 		for _, t := range allowed {
 			for _, p := range t.Partitions {
-				g.c.cfg.logger.Logf(LogLevelInfo, "OffsetCommit: group=%s member=%s topic=%s p=%d offset=%d",
-					req.Group[:min(16, len(req.Group))], req.MemberID, t.Topic[:min(16, len(t.Topic))], p.Partition, p.Offset)
 				g.commits.set(t.Topic, p.Partition, offsetCommit{
 					offset:      p.Offset,
 					leaderEpoch: p.LeaderEpoch,
@@ -1184,9 +1157,6 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 // entered join, we immediately proceed to completeRebalance, otherwise we
 // begin a wait timer.
 func (g *group) rebalance() {
-	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: rebalance triggered, current state %s, members %d, nJoining %d",
-		g.name, g.state, len(g.members), g.nJoining)
-
 	if g.state == groupCompletingRebalance {
 		for _, m := range g.members {
 			m.assignment = nil
@@ -1204,8 +1174,6 @@ func (g *group) rebalance() {
 	}
 
 	g.state = groupPreparingRebalance
-	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: state -> PreparingRebalance, nJoining %d, members %d",
-		g.name, g.nJoining, len(g.members))
 
 	if g.nJoining >= len(g.members) {
 		g.completeRebalance()
@@ -1219,10 +1187,7 @@ func (g *group) rebalance() {
 		}
 	}
 	if g.tRebalance == nil {
-		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: starting rebalance timer %dms, nJoining=%d members=%d",
-			g.name[:min(16, len(g.name))], rebalanceTimeoutMs, g.nJoining, len(g.members))
 		g.tRebalance = time.AfterFunc(time.Duration(rebalanceTimeoutMs)*time.Millisecond, func() {
-			g.c.cfg.logger.Logf(LogLevelDebug, "group %s: rebalance timer fired", g.name[:min(16, len(g.name))])
 			select {
 			case <-g.quitCh:
 			case <-g.c.die:
@@ -1237,8 +1202,6 @@ func (g *group) rebalance() {
 // Transitions the group to either dead or stable, depending on if any members
 // remain by the time we clear those that are not waiting in join.
 func (g *group) completeRebalance() {
-	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: completeRebalance called, members %d", g.name, len(g.members))
-
 	if g.tRebalance != nil {
 		g.tRebalance.Stop()
 		g.tRebalance = nil
@@ -1246,7 +1209,6 @@ func (g *group) completeRebalance() {
 	g.nJoining = 0
 
 	var foundLeader bool
-	var removed int
 	for _, m := range g.members {
 		if m.waitingReply.empty() {
 			for _, p := range m.join.Protocols {
@@ -1256,7 +1218,6 @@ func (g *group) completeRebalance() {
 			if m.t != nil {
 				m.t.Stop()
 			}
-			removed++
 			continue
 		}
 		if m.memberID == g.leader {
@@ -1269,13 +1230,10 @@ func (g *group) completeRebalance() {
 		g.generation = 1
 	}
 	if len(g.members) == 0 {
-		g.c.cfg.logger.Logf(LogLevelDebug, "group %s: state -> Empty (no members remain, removed %d)", g.name, removed)
 		g.state = groupEmpty
 		return
 	}
 	g.state = groupCompletingRebalance
-	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: state -> CompletingRebalance, generation %d, members %d (removed %d)",
-		g.name, g.generation, len(g.members), removed)
 
 	var foundProto bool
 	for proto, nsupport := range g.protocols {
@@ -1302,8 +1260,6 @@ func (g *group) completeRebalance() {
 
 // Transitions the group to stable, the final step of a rebalance.
 func (g *group) completeLeaderSync(req *kmsg.SyncGroupRequest) {
-	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: completeLeaderSync from leader, members %d", g.name, len(g.members))
-
 	for _, m := range g.members {
 		m.assignment = nil
 	}
@@ -1325,7 +1281,6 @@ func (g *group) completeLeaderSync(req *kmsg.SyncGroupRequest) {
 		g.reply(m.waitingReply, resp, m)
 	}
 	g.state = groupStable
-	g.c.cfg.logger.Logf(LogLevelDebug, "group %s: state -> Stable, generation %d, members %d", g.name, g.generation, len(g.members))
 }
 
 // assignmentOrEmpty returns the assignment bytes, or a pre-serialized empty
@@ -1676,12 +1631,12 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 	}
 
 	m := &consumerMember{
-		memberID:           memberID,
-		clientID:           creq.cid,
-		clientHost:         creq.cc.conn.RemoteAddr().String(),
-		instanceID:         req.InstanceID,
-		rackID:             req.RackID,
-		rebalanceTimeoutMs: req.RebalanceTimeoutMillis,
+		memberID:                    memberID,
+		clientID:                    creq.cid,
+		clientHost:                  creq.cc.conn.RemoteAddr().String(),
+		instanceID:                  req.InstanceID,
+		rackID:                      req.RackID,
+		rebalanceTimeoutMs:          req.RebalanceTimeoutMillis,
 		currentAssignment:           make(map[uuid][]int32),
 		targetAssignment:            make(map[uuid][]int32),
 		partitionsPendingRevocation: make(map[uuid][]int32),
@@ -1734,15 +1689,6 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 	// partitions until this member releases them. Old state
 	// is empty (new member or fenced rejoin).
 	g.updateMemberEpochs(m, nil, nil, 0)
-	var sentCount, epochCount int
-	for _, parts := range m.lastReconciledSent {
-		sentCount += len(parts)
-	}
-	for _, pm := range g.partitionEpochs {
-		epochCount += len(pm)
-	}
-	g.c.cfg.logger.Logf(LogLevelDebug, "consumerJoin: member=%s epoch=%d sent=%d epochMap=%d",
-		m.memberID, m.memberEpoch, sentCount, epochCount)
 	m.assignmentEpoch = m.memberEpoch
 	return resp
 }
@@ -1812,18 +1758,8 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 		}
 		if req.Topics != nil {
 			reported := make(map[uuid][]int32, len(req.Topics))
-			var reportedCount int
 			for _, t := range req.Topics {
 				reported[t.TopicID] = t.Partitions
-				reportedCount += len(t.Partitions)
-			}
-			if !assignmentsEqual(m.currentAssignment, reported) {
-				var oldCount int
-				for _, parts := range m.currentAssignment {
-					oldCount += len(parts)
-				}
-				g.c.cfg.logger.Logf(LogLevelDebug, "TOPICS CHANGED: member=%s epoch=%d old=%d new=%d",
-					m.memberID, req.MemberEpoch, oldCount, reportedCount)
 			}
 
 			m.currentAssignment = reported
@@ -1838,23 +1774,12 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 			// when entering UNREVOKED state.
 			oldPending := m.partitionsPendingRevocation
 			newPending := make(map[uuid][]int32)
-			var cleared int
 			for id, parts := range oldPending {
 				for _, p := range parts {
 					if slices.Contains(reported[id], p) {
 						newPending[id] = append(newPending[id], p)
-					} else {
-						cleared++
 					}
 				}
-			}
-			if cleared > 0 {
-				var oldPendCount int
-				for _, parts := range oldPending {
-					oldPendCount += len(parts)
-				}
-				g.c.cfg.logger.Logf(LogLevelDebug, "pendingRevoke cleared: member=%s epoch=%d cleared=%d kept=%d",
-					m.memberID, m.memberEpoch, cleared, oldPendCount-cleared)
 			}
 			m.partitionsPendingRevocation = newPending
 
@@ -1884,11 +1809,6 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 	resp.MemberEpoch = m.memberEpoch
 	reconciled := g.reconciledAssignment(m)
 	if full || !assignmentsEqual(m.lastReconciledSent, reconciled) {
-		var reconciledCount int
-		for _, parts := range reconciled {
-			reconciledCount += len(parts)
-		}
-		g.c.cfg.logger.Logf(LogLevelDebug, "RECONCILE SEND: member=%s epoch=%d partitions=%d", m.memberID, m.memberEpoch, reconciledCount)
 		resp.Assignment = makeAssignment(reconciled)
 
 		// Save old state for epoch map update below.
@@ -1927,7 +1847,6 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 
 	return resp
 }
-
 
 // validServerAssignor returns whether the given assignor name is
 // supported for consumer groups. Only "uniform" and "range" are valid
@@ -2143,12 +2062,6 @@ func (g *group) reconciledAssignment(m *consumerMember) map[uuid][]int32 {
 		}
 	}
 	if hasRevocations {
-		var pendCount int
-		for _, parts := range m.partitionsPendingRevocation {
-			pendCount += len(parts)
-		}
-		g.c.cfg.logger.Logf(LogLevelDebug, "RECONCILE REVOKE-FIRST: member=%s pending=%d newRevocations=%v",
-			m.memberID, pendCount, pendCount == 0)
 		return result
 	}
 
@@ -2167,10 +2080,7 @@ func (g *group) reconciledAssignment(m *consumerMember) map[uuid][]int32 {
 			}
 			epoch := g.currentPartitionEpoch(id, p)
 			if epoch == -1 || slices.Contains(m.partitionsPendingRevocation[id], p) {
-				g.c.cfg.logger.Logf(LogLevelDebug, "RECONCILE ALLOW: member=%s topic=%x p=%d", m.memberID, id[:4], p)
 				result[id] = append(result[id], p)
-			} else {
-				g.c.cfg.logger.Logf(LogLevelDebug, "RECONCILE BLOCK: member=%s topic=%x p=%d epoch=%d", m.memberID, id[:4], p, epoch)
 			}
 		}
 	}
@@ -2318,8 +2228,6 @@ func (g *group) handleConsumerOffsetCommit(creq *clientReq) *kmsg.OffsetCommitRe
 	allowed := g.fillOffsetCommitWithACL(creq, req, resp)
 	for _, t := range allowed {
 		for _, p := range t.Partitions {
-			g.c.cfg.logger.Logf(LogLevelInfo, "OffsetCommit: group=%s member=%s topic=%s p=%d offset=%d",
-				req.Group[:min(16, len(req.Group))], req.MemberID, t.Topic[:min(16, len(t.Topic))], p.Partition, p.Offset)
 			g.commits.set(t.Topic, p.Partition, offsetCommit{
 				offset:      p.Offset,
 				leaderEpoch: p.LeaderEpoch,
@@ -2384,31 +2292,10 @@ func (g *group) currentPartitionEpoch(topicID uuid, partition int32) int32 {
 // from the member's current fields. Caller must save old state
 // before mutating the member.
 func (g *group) updateMemberEpochs(m *consumerMember, oldSent, oldPending map[uuid][]int32, oldEpoch int32) {
-	var oldSentCount, oldPendCount, newSentCount, newPendCount int
-	for _, parts := range oldSent {
-		oldSentCount += len(parts)
-	}
-	for _, parts := range oldPending {
-		oldPendCount += len(parts)
-	}
-	for _, parts := range m.lastReconciledSent {
-		newSentCount += len(parts)
-	}
-	for _, parts := range m.partitionsPendingRevocation {
-		newPendCount += len(parts)
-	}
-	g.c.cfg.logger.Logf(LogLevelDebug, "updateMemberEpochs: member=%s oldEpoch=%d newEpoch=%d removeSent=%d removePend=%d addSent=%d addPend=%d",
-		m.memberID, oldEpoch, m.memberEpoch, oldSentCount, oldPendCount, newSentCount, newPendCount)
 	g.removePartitionEpochs(oldSent, oldEpoch)
 	g.removePartitionEpochs(oldPending, oldEpoch)
 	g.addPartitionEpochs(m.lastReconciledSent, m.memberEpoch)
 	g.addPartitionEpochs(m.partitionsPendingRevocation, m.memberEpoch)
-	var totalEpochs int
-	for _, pm := range g.partitionEpochs {
-		totalEpochs += len(pm)
-	}
-	g.c.cfg.logger.Logf(LogLevelDebug, "updateMemberEpochs: member=%s epochMap=%d after update",
-		m.memberID, totalEpochs)
 }
 
 // addPartitionEpochs records that a member at the given epoch owns the
@@ -2422,10 +2309,6 @@ func (g *group) addPartitionEpochs(a map[uuid][]int32, epoch int32) {
 			g.partitionEpochs[id] = pm
 		}
 		for _, p := range parts {
-			if existing, ok := pm[p]; ok && epoch < existing {
-				g.c.cfg.logger.Logf(LogLevelWarn, "BUG: non-monotonic epoch update topic=%x p=%d existing=%d new=%d",
-					id[:4], p, existing, epoch)
-			}
 			pm[p] = epoch
 		}
 	}
@@ -2479,4 +2362,3 @@ func (g *group) validateMemberGeneration(memberID string, generation int32) int1
 	}
 	return 0
 }
-
