@@ -2436,4 +2436,215 @@ func TestFetchSessionEviction(t *testing.T) {
 	}
 }
 
+// fetchRequest builds a kmsg.FetchRequest for the given topic/partitions.
+func fetchRequest(sessionID, sessionEpoch int32, topic string, partitions ...struct {
+	p      int32
+	offset int64
+}) *kmsg.FetchRequest {
+	req := kmsg.NewPtrFetchRequest()
+	req.Version = 11
+	req.MaxWaitMillis = 100
+	req.MinBytes = 1
+	req.MaxBytes = 1 << 20
+	req.SessionID = sessionID
+	req.SessionEpoch = sessionEpoch
+	if len(partitions) > 0 {
+		ft := kmsg.NewFetchRequestTopic()
+		ft.Topic = topic
+		for _, p := range partitions {
+			fp := kmsg.NewFetchRequestTopicPartition()
+			fp.Partition = p.p
+			fp.FetchOffset = p.offset
+			fp.PartitionMaxBytes = 1 << 20
+			fp.CurrentLeaderEpoch = -1
+			ft.Partitions = append(ft.Partitions, fp)
+		}
+		req.Topics = append(req.Topics, ft)
+	}
+	return req
+}
+
+type pp struct {
+	p      int32
+	offset int64
+}
+
+func TestIncrementalFetchOmitsUnchanged(t *testing.T) {
+	t.Parallel()
+	topic := "t-incr-fetch"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(1, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	// Produce 5 records.
+	produceNStrings(t, cl, topic, 5)
+
+	// Step 1: epoch=0 fetch creates session, returns all records.
+	req := fetchRequest(0, 0, topic, pp{0, 0})
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("fetch error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	sessionID := resp.SessionID
+	if sessionID == 0 {
+		t.Fatal("expected non-zero session ID")
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatalf("expected 1 topic with 1 partition, got %d topics", len(resp.Topics))
+	}
+	if len(resp.Topics[0].Partitions[0].RecordBatches) == 0 {
+		t.Fatal("expected records in initial fetch")
+	}
+
+	// Step 2: epoch=1 incremental, advance offset to 5 (caught up).
+	// No new data - should return 0 partitions.
+	req = fetchRequest(sessionID, 1, topic, pp{0, 5})
+	resp, err = req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("fetch error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	totalPartitions := 0
+	for _, rt := range resp.Topics {
+		totalPartitions += len(rt.Partitions)
+	}
+	if totalPartitions != 0 {
+		t.Fatalf("expected 0 partitions in unchanged incremental, got %d", totalPartitions)
+	}
+
+	// Step 3: Produce 5 more records.
+	produceNStrings(t, cl, topic, 5)
+
+	// Step 4: epoch=2 incremental (session has offset=5, new records at 5-9).
+	// HWM changed and there are records - partition should be included.
+	req = fetchRequest(sessionID, 2, topic)
+	resp, err = req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("fetch error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatalf("expected 1 topic/1 partition, got %d topics", len(resp.Topics))
+	}
+	if len(resp.Topics[0].Partitions[0].RecordBatches) == 0 {
+		t.Fatal("expected records in incremental after produce")
+	}
+
+	// Step 5: epoch=3 incremental, advance offset past all records.
+	// Should return 0 partitions (caught up, nothing changed).
+	req = fetchRequest(sessionID, 3, topic, pp{0, 10})
+	resp, err = req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("fetch error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	totalPartitions = 0
+	for _, rt := range resp.Topics {
+		totalPartitions += len(rt.Partitions)
+	}
+	if totalPartitions != 0 {
+		t.Fatalf("expected 0 partitions when caught up, got %d", totalPartitions)
+	}
+}
+
+func TestIncrementalFetchIncludesErrors(t *testing.T) {
+	t.Parallel()
+	topic := "t-incr-err"
+
+	// Only 1 partition exists. We'll fetch p0 (exists) and p99 (does not).
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(1, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	produceNStrings(t, cl, topic, 1)
+
+	// Step 1: epoch=0 creates session with p0 and p99.
+	// p0 returns data, p99 returns UnknownTopicOrPartition.
+	req := fetchRequest(0, 0, topic, pp{0, 0}, pp{99, 0})
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	sessionID := resp.SessionID
+
+	// Step 2: epoch=1 incremental, advance p0 offset to 1 (caught up).
+	// p0 should be filtered (unchanged HWM, no records).
+	// p99 should be included (error partitions always included since
+	// cached HWM is set to -1 on error).
+	req = fetchRequest(sessionID, 1, topic, pp{0, 1})
+	resp, err = req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	var sawError bool
+	var sawP0 bool
+	for _, rt := range resp.Topics {
+		for _, rp := range rt.Partitions {
+			if rp.Partition == 99 && rp.ErrorCode != 0 {
+				sawError = true
+			}
+			if rp.Partition == 0 {
+				sawP0 = true
+			}
+		}
+	}
+	if !sawError {
+		t.Fatal("expected error partition p99 in incremental response")
+	}
+	if sawP0 {
+		t.Fatal("p0 should have been filtered from incremental response")
+	}
+}
+
+func TestIncrementalFetchEndToEnd(t *testing.T) {
+	t.Parallel()
+	topic := "t-incr-e2e"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+
+	// Produce to each partition in sequence.
+	for p := range int32(3) {
+		r := kgo.StringRecord("val-" + strconv.Itoa(int(p)))
+		r.Topic = topic
+		r.Partition = p
+		produceSync(t, cl, r)
+	}
+
+	// Consume all 3 records through incremental sessions.
+	records := consumeN(t, cl, 3, 10*time.Second)
+	if len(records) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(records))
+	}
+
+	// Verify all partitions represented.
+	seen := make(map[int32]bool)
+	for _, r := range records {
+		seen[r.Partition] = true
+	}
+	for p := range int32(3) {
+		if !seen[p] {
+			t.Fatalf("missing record from partition %d", p)
+		}
+	}
+}
+
 func stringp(s string) *string { return &s }

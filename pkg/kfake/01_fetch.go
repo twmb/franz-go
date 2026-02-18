@@ -30,7 +30,7 @@ import (
 // Fetch sessions (KIP-227):
 // * Sessions allow incremental fetches where clients only send changed partitions
 // * We track session state per broker and merge with request to get full partition list
-// * We always return full results (not incremental diffs) which is compliant behavior
+// * Incremental responses omit unchanged partitions (no records, same HWM/logStartOffset, no error)
 //
 // Version notes:
 // * v4: RecordBatch format, IsolationLevel, LastStableOffset, AbortedTransactions
@@ -355,9 +355,9 @@ full:
 		}
 	}
 
-	// TODO: Incremental fetch responses (KIP-227) - omit unchanged
-	// partitions from incremental responses. Disabled for now until
-	// the interaction with the watch mechanism is debugged.
+	// Record partition state in the session. For incremental fetches
+	// (not new), also filter out unchanged partitions.
+	session.updateAndFilterResponse(resp, !newSession)
 
 	// Bump session epoch after successful fetch, but not for newly created
 	// sessions. The client will send epoch=1 for its first incremental fetch
@@ -447,6 +447,12 @@ type fetchSessionPartition struct {
 	fetchOffset  int64
 	maxBytes     int32
 	currentEpoch int32
+
+	// Cached from last response sent. Used to detect changes for
+	// incremental filtering. Initialized to -1 to force inclusion
+	// in the first response after the partition is added.
+	lastHighWatermark  int64
+	lastLogStartOffset int64
 }
 
 const defMaxFetchSessionCacheSlots = 1000
@@ -525,7 +531,21 @@ func (s *fetchSession) updatePartition(topic string, partition int32, fetchOffse
 	if s == nil {
 		return
 	}
-	s.partitions[tp{topic, partition}] = fetchSessionPartition{fetchOffset, maxBytes, currentEpoch}
+	key := tp{topic, partition}
+	if existing, ok := s.partitions[key]; ok {
+		existing.fetchOffset = fetchOffset
+		existing.maxBytes = maxBytes
+		existing.currentEpoch = currentEpoch
+		s.partitions[key] = existing
+	} else {
+		s.partitions[key] = fetchSessionPartition{
+			fetchOffset:        fetchOffset,
+			maxBytes:           maxBytes,
+			currentEpoch:       currentEpoch,
+			lastHighWatermark:  -1,
+			lastLogStartOffset: -1,
+		}
+	}
 }
 
 func (s *fetchSession) forgetPartition(topic string, partition int32) {
@@ -543,4 +563,52 @@ func (s *fetchSession) bumpEpoch() {
 	if s.epoch < 0 {
 		s.epoch = 1
 	}
+}
+
+// updateAndFilterResponse records the HWM and logStartOffset from each
+// partition as baseline state. When filter is true, unchanged partitions
+// (no records, same HWM/logStartOffset, no error) are removed from the
+// response for incremental fetch.
+func (s *fetchSession) updateAndFilterResponse(resp *kmsg.FetchResponse, filter bool) {
+	if s == nil {
+		return
+	}
+	n := 0
+	for i := range resp.Topics {
+		rt := &resp.Topics[i]
+		np := 0
+		for j := range rt.Partitions {
+			rp := &rt.Partitions[j]
+			key := tp{rt.Topic, rp.Partition}
+			sp, ok := s.partitions[key]
+
+			include := !filter || !ok ||
+				len(rp.RecordBatches) > 0 ||
+				rp.ErrorCode != 0 ||
+				rp.HighWatermark != sp.lastHighWatermark ||
+				rp.LogStartOffset != sp.lastLogStartOffset
+
+			if ok {
+				if rp.ErrorCode != 0 {
+					sp.lastHighWatermark = -1
+					sp.lastLogStartOffset = -1
+				} else {
+					sp.lastHighWatermark = rp.HighWatermark
+					sp.lastLogStartOffset = rp.LogStartOffset
+				}
+				s.partitions[key] = sp
+			}
+
+			if include {
+				rt.Partitions[np] = *rp
+				np++
+			}
+		}
+		rt.Partitions = rt.Partitions[:np]
+		if len(rt.Partitions) > 0 {
+			resp.Topics[n] = *rt
+			n++
+		}
+	}
+	resp.Topics = resp.Topics[:n]
 }
