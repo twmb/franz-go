@@ -2158,4 +2158,230 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	}
 }
 
+// TestClassicIncompatibleProtocolRejected verifies that a member whose
+// protocols are not supported by all existing members is rejected with
+// INCONSISTENT_GROUP_PROTOCOL.
+func TestClassicIncompatibleProtocolRejected(t *testing.T) {
+	t.Parallel()
+	topic := "t-incompat-proto"
+	group := "g-incompat-proto"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	// Member A joins with protocols ["range"].
+	joinA := kmsg.NewJoinGroupRequest()
+	joinA.Group = group
+	joinA.SessionTimeoutMillis = 30000
+	joinA.RebalanceTimeoutMillis = 10000
+	joinA.ProtocolType = "consumer"
+	pRange := kmsg.NewJoinGroupRequestProtocol()
+	pRange.Name = "range"
+	pRange.Metadata = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	joinA.Protocols = append(joinA.Protocols, pRange)
+	respA, err := joinA.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("A join: %v", err)
+	}
+	// First join with no member ID gets MEMBER_ID_REQUIRED (v4+).
+	if respA.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("A join: expected MEMBER_ID_REQUIRED, got %v", kerr.ErrorForCode(respA.ErrorCode))
+	}
+	joinA.MemberID = respA.MemberID
+
+	// Complete A's join.
+	respA2, err := joinA.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("A rejoin: %v", err)
+	}
+	if respA2.ErrorCode != 0 {
+		t.Fatalf("A rejoin error: %v", kerr.ErrorForCode(respA2.ErrorCode))
+	}
+
+	// Sync A so group is stable.
+	syncA := kmsg.NewSyncGroupRequest()
+	syncA.Group = group
+	syncA.MemberID = joinA.MemberID
+	syncA.Generation = respA2.Generation
+	syncA.ProtocolType = kmsg.StringPtr("consumer")
+	syncA.Protocol = kmsg.StringPtr("range")
+	sa := kmsg.NewSyncGroupRequestGroupAssignment()
+	sa.MemberID = joinA.MemberID
+	sa.MemberAssignment = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	syncA.GroupAssignment = append(syncA.GroupAssignment, sa)
+	if _, err := syncA.RequestWith(ctx, cl); err != nil {
+		t.Fatalf("A sync: %v", err)
+	}
+
+	// Member B joins with ONLY ["roundrobin"] - incompatible with A's ["range"].
+	joinB := kmsg.NewJoinGroupRequest()
+	joinB.Group = group
+	joinB.SessionTimeoutMillis = 30000
+	joinB.RebalanceTimeoutMillis = 10000
+	joinB.ProtocolType = "consumer"
+	pRR := kmsg.NewJoinGroupRequestProtocol()
+	pRR.Name = "roundrobin"
+	pRR.Metadata = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	joinB.Protocols = append(joinB.Protocols, pRR)
+	respB, err := joinB.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("B join: %v", err)
+	}
+	if respB.ErrorCode != kerr.InconsistentGroupProtocol.Code {
+		t.Fatalf("expected INCONSISTENT_GROUP_PROTOCOL for incompatible member, got %v", kerr.ErrorForCode(respB.ErrorCode))
+	}
+}
+
+// TestClassicPendingSyncTimeout verifies that members who receive
+// JoinGroup responses but don't send SyncGroup within the rebalance
+// timeout are removed and a new rebalance is triggered.
+func TestClassicPendingSyncTimeout(t *testing.T) {
+	t.Parallel()
+	topic := "t-pending-sync"
+	group := "g-pending-sync"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	// Member A joins with a short rebalance timeout.
+	joinA := kmsg.NewJoinGroupRequest()
+	joinA.Group = group
+	joinA.SessionTimeoutMillis = 30000
+	joinA.RebalanceTimeoutMillis = 500 // short
+	joinA.ProtocolType = "consumer"
+	p := kmsg.NewJoinGroupRequestProtocol()
+	p.Name = "range"
+	p.Metadata = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	joinA.Protocols = append(joinA.Protocols, p)
+	respA, err := joinA.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("A join: %v", err)
+	}
+	if respA.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("A join: expected MEMBER_ID_REQUIRED, got %v", kerr.ErrorForCode(respA.ErrorCode))
+	}
+	joinA.MemberID = respA.MemberID
+	respA2, err := joinA.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("A rejoin: %v", err)
+	}
+	if respA2.ErrorCode != 0 {
+		t.Fatalf("A rejoin error: %v", kerr.ErrorForCode(respA2.ErrorCode))
+	}
+
+	// Don't send SyncGroup. Wait for the pending sync timeout to fire.
+	time.Sleep(800 * time.Millisecond)
+
+	// The member should have been removed. Verify by describing
+	// the group - it should be empty or dead.
+	adm := kadm.NewClient(cl)
+	described, err := adm.DescribeGroups(ctx, group)
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	dg := described[group]
+	if len(dg.Members) > 0 {
+		t.Fatalf("expected 0 members after pending sync timeout, got %d (state=%s)", len(dg.Members), dg.State)
+	}
+}
+
+// TestClassicProtocolVoting verifies that protocol selection uses
+// Kafka-style voting: each member votes for their most-preferred
+// protocol that is universally supported.
+func TestClassicProtocolVoting(t *testing.T) {
+	t.Parallel()
+	topic := "t-proto-vote"
+	group := "g-proto-vote"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	ctx := context.Background()
+
+	makeJoinReq := func(protos []string) *kmsg.JoinGroupRequest {
+		req := kmsg.NewPtrJoinGroupRequest()
+		req.Group = group
+		req.SessionTimeoutMillis = 30000
+		req.RebalanceTimeoutMillis = 250
+		req.ProtocolType = "consumer"
+		for _, name := range protos {
+			p := kmsg.NewJoinGroupRequestProtocol()
+			p.Name = name
+			p.Metadata = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+			req.Protocols = append(req.Protocols, p)
+		}
+		return req
+	}
+
+	// Both members support "range" and "sticky", but in different preference order.
+	// A prefers sticky, B prefers range. Both support both.
+	// Result should be: sticky gets 1 vote (A), range gets 1 vote (B).
+	// Map iteration is non-deterministic for ties, but at least both are candidates.
+	clA := newPlainClient(t, c)
+	clB := newPlainClient(t, c)
+
+	// A joins with [sticky, range].
+	joinA := makeJoinReq([]string{"sticky", "range"})
+	respA, err := joinA.RequestWith(ctx, clA)
+	if err != nil {
+		t.Fatalf("A join: %v", err)
+	}
+	if respA.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("A join: expected MEMBER_ID_REQUIRED, got %v", kerr.ErrorForCode(respA.ErrorCode))
+	}
+	joinA.MemberID = respA.MemberID
+
+	// B joins with [range, sticky] - range is preferred.
+	joinB := makeJoinReq([]string{"range", "sticky"})
+	respB, err := joinB.RequestWith(ctx, clB)
+	if err != nil {
+		t.Fatalf("B join: %v", err)
+	}
+	if respB.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("B join: expected MEMBER_ID_REQUIRED, got %v", kerr.ErrorForCode(respB.ErrorCode))
+	}
+	joinB.MemberID = respB.MemberID
+
+	// Complete both joins concurrently (both must be in join for the
+	// rebalance to complete).
+	type joinResult struct {
+		resp *kmsg.JoinGroupResponse
+		err  error
+	}
+	chA := make(chan joinResult, 1)
+	chB := make(chan joinResult, 1)
+	go func() {
+		r, e := joinA.RequestWith(ctx, clA)
+		chA <- joinResult{r, e}
+	}()
+	go func() {
+		r, e := joinB.RequestWith(ctx, clB)
+		chB <- joinResult{r, e}
+	}()
+
+	rA := <-chA
+	rB := <-chB
+	if rA.err != nil {
+		t.Fatalf("A rejoin: %v", rA.err)
+	}
+	if rB.err != nil {
+		t.Fatalf("B rejoin: %v", rB.err)
+	}
+	if rA.resp.ErrorCode != 0 {
+		t.Fatalf("A rejoin error: %v", kerr.ErrorForCode(rA.resp.ErrorCode))
+	}
+	if rB.resp.ErrorCode != 0 {
+		t.Fatalf("B rejoin error: %v", kerr.ErrorForCode(rB.resp.ErrorCode))
+	}
+
+	// The selected protocol should be one of the candidates.
+	proto := ""
+	if rA.resp.Protocol != nil {
+		proto = *rA.resp.Protocol
+	}
+	if proto != "range" && proto != "sticky" {
+		t.Fatalf("expected protocol 'range' or 'sticky', got %q", proto)
+	}
+}
+
 func stringp(s string) *string { return &s }

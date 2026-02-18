@@ -51,7 +51,9 @@ type (
 
 		nJoining int
 
-		tRebalance *time.Timer
+		tRebalance     *time.Timer
+		pendingSyncIDs map[string]struct{} // members that got JoinGroup but haven't sent SyncGroup yet
+		tPendingSync   *time.Timer         // fires when pending sync members should be removed
 
 		// KIP-848 consumer group fields
 		assignorName    string
@@ -962,6 +964,7 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 	case groupPreparingRebalance:
 		resp.ErrorCode = kerr.RebalanceInProgress.Code
 	case groupCompletingRebalance:
+		delete(g.pendingSyncIDs, req.MemberID)
 		m.waitingReply = creq
 		if req.MemberID == g.leader {
 			g.completeLeaderSync(req)
@@ -1189,29 +1192,19 @@ func (g *group) rebalance() {
 	}
 
 	g.state = groupPreparingRebalance
+	g.clearPendingSync()
 
 	if g.nJoining >= len(g.members) {
 		g.completeRebalance()
 		return
 	}
 
-	var rebalanceTimeoutMs int32
-	for _, m := range g.members {
-		if m.join.RebalanceTimeoutMillis > rebalanceTimeoutMs {
-			rebalanceTimeoutMs = m.join.RebalanceTimeoutMillis
-		}
+	// Always reset the timer with the current max rebalance timeout.
+	// A subsequent rebalance() call may have a different timeout.
+	if g.tRebalance != nil {
+		g.tRebalance.Stop()
 	}
-	if g.tRebalance == nil {
-		g.tRebalance = time.AfterFunc(time.Duration(rebalanceTimeoutMs)*time.Millisecond, func() {
-			select {
-			case <-g.quitCh:
-			case <-g.c.die:
-			case g.controlCh <- func() {
-				g.completeRebalance()
-			}:
-			}
-		})
-	}
+	g.tRebalance = g.timerControlFn(time.Duration(g.maxRebalanceTimeoutMs())*time.Millisecond, g.completeRebalance)
 }
 
 // Transitions the group to either dead or stable, depending on if any members
@@ -1250,27 +1243,68 @@ func (g *group) completeRebalance() {
 	}
 	g.state = groupCompletingRebalance
 
-	var foundProto bool
+	// Kafka-style protocol voting: find candidate protocols
+	// (supported by all members), then each member votes for
+	// their most-preferred candidate. The protocol with the
+	// most votes wins.
+	candidates := make(map[string]struct{})
 	for proto, nsupport := range g.protocols {
 		if nsupport == len(g.members) {
-			g.protocol = proto
-			foundProto = true
-			break
+			candidates[proto] = struct{}{}
 		}
 	}
-	if !foundProto {
+	if len(candidates) == 0 {
 		panic(fmt.Sprint("unable to find commonly supported protocol!", g.protocols, len(g.members)))
 	}
+	votes := make(map[string]int, len(candidates))
+	for _, m := range g.members {
+		for _, p := range m.join.Protocols {
+			if _, ok := candidates[p.Name]; ok {
+				votes[p.Name]++
+				break
+			}
+		}
+	}
+	bestProto, bestVotes := "", 0
+	for proto, v := range votes {
+		if v > bestVotes {
+			bestProto = proto
+			bestVotes = v
+		}
+	}
+	g.protocol = bestProto
 
+	// Track which members need to send SyncGroup.
+	g.pendingSyncIDs = make(map[string]struct{}, len(g.members))
 	for _, m := range g.members {
 		if !foundLeader {
 			g.leader = m.memberID
 		}
+		g.pendingSyncIDs[m.memberID] = struct{}{}
 		req := m.join
 		resp := req.ResponseKind().(*kmsg.JoinGroupResponse)
 		g.fillJoinResp(m.memberID, resp)
 		g.reply(m.waitingReply, resp, m)
 	}
+
+	// Start pending sync timeout: remove members that don't send
+	// SyncGroup within the rebalance timeout.
+	if g.tPendingSync != nil {
+		g.tPendingSync.Stop()
+	}
+	g.tPendingSync = g.timerControlFn(time.Duration(g.maxRebalanceTimeoutMs())*time.Millisecond, func() {
+		if len(g.pendingSyncIDs) == 0 {
+			return
+		}
+		// Remove all pending members, then trigger one rebalance.
+		for id := range g.pendingSyncIDs {
+			if m := g.members[id]; m != nil {
+				g.removeMember(m)
+			}
+		}
+		g.pendingSyncIDs = nil
+		g.rebalance()
+	})
 }
 
 // Transitions the group to stable, the final step of a rebalance.
@@ -1296,6 +1330,15 @@ func (g *group) completeLeaderSync(req *kmsg.SyncGroupRequest) {
 		g.reply(m.waitingReply, resp, m)
 	}
 	g.state = groupStable
+	g.clearPendingSync()
+}
+
+func (g *group) clearPendingSync() {
+	g.pendingSyncIDs = nil
+	if g.tPendingSync != nil {
+		g.tPendingSync.Stop()
+		g.tPendingSync = nil
+	}
 }
 
 // assignmentOrEmpty returns the assignment bytes, or a pre-serialized empty
@@ -1328,6 +1371,16 @@ func (g *group) stopPending(m *groupMember) {
 	}
 }
 
+func (g *group) maxRebalanceTimeoutMs() int32 {
+	var max int32
+	for _, m := range g.members {
+		if m.join.RebalanceTimeoutMillis > max {
+			max = m.join.RebalanceTimeoutMillis
+		}
+	}
+	return max
+}
+
 // timerControlFn starts a timer that, on expiry, sends fn to the
 // group's control channel. If the group is shutting down, the send
 // is abandoned.
@@ -1354,14 +1407,29 @@ func (g *group) atSessionTimeout(m *groupMember, fn func()) {
 	})
 }
 
-// This is used to update a member from a new join request, or to clear a
-// member from failed heartbeats.
-func (g *group) updateMemberAndRebalance(m *groupMember, waitingReply *clientReq, newJoin *kmsg.JoinGroupRequest) {
+// removeMember removes a member from the group, cleaning up its protocol
+// counts, session timer, and join counter. Does not trigger a rebalance.
+func (g *group) removeMember(m *groupMember) {
 	for _, p := range m.join.Protocols {
 		g.protocols[p.Name]--
 	}
-	m.join = newJoin
-	if m.join != nil {
+	delete(g.members, m.memberID)
+	if m.t != nil {
+		m.t.Stop()
+	}
+	if !m.waitingReply.empty() {
+		g.nJoining--
+	}
+}
+
+// This is used to update a member from a new join request, or to clear a
+// member from failed heartbeats.
+func (g *group) updateMemberAndRebalance(m *groupMember, waitingReply *clientReq, newJoin *kmsg.JoinGroupRequest) {
+	if newJoin != nil {
+		for _, p := range m.join.Protocols {
+			g.protocols[p.Name]--
+		}
+		m.join = newJoin
 		for _, p := range m.join.Protocols {
 			g.protocols[p.Name]++
 		}
@@ -1370,13 +1438,7 @@ func (g *group) updateMemberAndRebalance(m *groupMember, waitingReply *clientReq
 		}
 		m.waitingReply = waitingReply
 	} else {
-		delete(g.members, m.memberID)
-		if m.t != nil {
-			m.t.Stop()
-		}
-		if !m.waitingReply.empty() {
-			g.nJoining--
-		}
+		g.removeMember(m)
 	}
 	g.rebalance()
 }
@@ -1410,8 +1472,10 @@ func (g *group) protocolsMatch(protocolType string, protocols []kmsg.JoinGroupRe
 	if len(g.protocols) == 0 {
 		return true
 	}
+	// The joining member must support at least one protocol that
+	// is universally supported by all existing members.
 	for _, p := range protocols {
-		if _, ok := g.protocols[p.Name]; ok {
+		if g.protocols[p.Name] == len(g.members) {
 			return true
 		}
 	}
