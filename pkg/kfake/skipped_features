@@ -63,7 +63,7 @@
 
 ## 18_api_versions
 - ThrottleMillis: Not implementing throttling for any request
-- SupportedFeatures (KIP-584): Not returning SupportedFeatures tag
+- SupportedFeatures (KIP-584): implemented for transaction.version and group.version
 - ZkMigrationReady: Not implementing ZK migration flag
 - ClientSoftwareName/ClientSoftwareVersion: Parsed but not validated/stored
 

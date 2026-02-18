@@ -65,22 +65,47 @@ func (c *Cluster) handleApiVersions(kreq kmsg.Request) (kmsg.Response, error) {
 		resp.ApiKeys = apiVersionsSorted
 	}
 
-	// KIP-890: Advertise transaction.version feature so clients know they
-	// can use v5+ EndTxn with epoch bumping. Only advertise if Produce v12+
-	// is supported (required for implicit partition addition).
+	// Build SupportedFeatures (what we can support) and FinalizedFeatures
+	// (what is active), gated on whether the relevant API keys are available.
 	produceMax := apiVersionsKeys[0].MaxVersion
 	if c.cfg.maxVersions != nil {
 		if cfgMax, ok := c.cfg.maxVersions.LookupMaxKeyVersion(0); ok && cfgMax < produceMax {
 			produceMax = cfgMax
 		}
 	}
-	if produceMax >= 12 {
+	hasTxn := produceMax >= 12
+	_, hasGroup := apiVersionsKeys[68] // ConsumerGroupHeartbeat
+	if hasGroup && c.cfg.maxVersions != nil {
+		_, hasGroup = c.cfg.maxVersions.LookupMaxKeyVersion(68)
+	}
+	if hasTxn {
+		sf := kmsg.NewApiVersionsResponseSupportedFeature()
+		sf.Name = "transaction.version"
+		sf.MinVersion = 0
+		sf.MaxVersion = 2
+		resp.SupportedFeatures = append(resp.SupportedFeatures, sf)
+
+		ff := kmsg.NewApiVersionsResponseFinalizedFeature()
+		ff.Name = "transaction.version"
+		ff.MinVersionLevel = 0
+		ff.MaxVersionLevel = 2
+		resp.FinalizedFeatures = append(resp.FinalizedFeatures, ff)
+	}
+	if hasGroup {
+		sf := kmsg.NewApiVersionsResponseSupportedFeature()
+		sf.Name = "group.version"
+		sf.MinVersion = 0
+		sf.MaxVersion = 1
+		resp.SupportedFeatures = append(resp.SupportedFeatures, sf)
+
+		ff := kmsg.NewApiVersionsResponseFinalizedFeature()
+		ff.Name = "group.version"
+		ff.MinVersionLevel = 0
+		ff.MaxVersionLevel = 1
+		resp.FinalizedFeatures = append(resp.FinalizedFeatures, ff)
+	}
+	if len(resp.FinalizedFeatures) > 0 {
 		resp.FinalizedFeaturesEpoch = 1
-		resp.FinalizedFeatures = []kmsg.ApiVersionsResponseFinalizedFeature{{
-			Name:            "transaction.version",
-			MaxVersionLevel: 2,
-			MinVersionLevel: 0,
-		}}
 	}
 
 	return resp, nil
