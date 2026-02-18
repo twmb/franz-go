@@ -156,6 +156,10 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				continue
 			}
 			attrs := uint16(b.Attributes)
+			if attrs&0x0020 != 0 {
+				donep(rt, rp, kerr.InvalidRecord.Code, "Client cannot send control batches.")
+				continue
+			}
 			if attrs&0x0007 > 4 {
 				donep(rt, rp, kerr.CorruptMessage.Code, "Invalid compression type.")
 				continue
@@ -191,6 +195,12 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					implicit = pd
 				}
 				pidinf, window := c.pids.get(b.ProducerID, rt.Topic, rp.Partition, implicit)
+
+				// Reject non-transactional produce during an
+				// active transaction.
+				if pidinf != nil && pidinf.inTx && !txnal {
+					errCode = kerr.InvalidTxnState.Code
+				}
 
 				if txnal && window == nil {
 					errCode = kerr.InvalidTxnState.Code

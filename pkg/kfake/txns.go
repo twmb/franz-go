@@ -160,7 +160,7 @@ func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
 			resp.ErrorCode = kerr.NotCoordinator.Code
 			return resp
 		}
-		if req.TransactionTimeoutMillis <= 0 {
+		if req.TransactionTimeoutMillis <= 0 || req.TransactionTimeoutMillis > pids.c.transactionMaxTimeoutMs() {
 			resp.ErrorCode = kerr.InvalidTransactionTimeout.Code
 			return resp
 		}
@@ -426,21 +426,31 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 
 	// Store pending offset commits; will be actually mirrored into
 	// the group offsets once the transaction ends with a commit.
+	// Validate that each topic/partition exists first.
 	if pidinf.txOffsets == nil {
 		pidinf.txOffsets = make(map[string]tps[offsetCommit])
 	}
 	groupOffsets := pidinf.txOffsets[req.Group]
 	for _, rt := range req.Topics {
+		st := kmsg.NewTxnOffsetCommitResponseTopic()
+		st.Topic = rt.Topic
 		for _, rp := range rt.Partitions {
-			groupOffsets.set(rt.Topic, rp.Partition, offsetCommit{
-				offset:      rp.Offset,
-				leaderEpoch: rp.LeaderEpoch,
-				metadata:    rp.Metadata,
-			})
+			sp := kmsg.NewTxnOffsetCommitResponseTopicPartition()
+			sp.Partition = rp.Partition
+			if !pids.c.data.tps.checkp(rt.Topic, rp.Partition) {
+				sp.ErrorCode = kerr.UnknownTopicOrPartition.Code
+			} else {
+				groupOffsets.set(rt.Topic, rp.Partition, offsetCommit{
+					offset:      rp.Offset,
+					leaderEpoch: rp.LeaderEpoch,
+					metadata:    rp.Metadata,
+				})
+			}
+			st.Partitions = append(st.Partitions, sp)
 		}
+		resp.Topics = append(resp.Topics, st)
 	}
 	pidinf.txOffsets[req.Group] = groupOffsets
-	doneall(0)
 	return resp
 }
 
@@ -464,6 +474,10 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 		// ahead and the producer is not in a transaction, the
 		// previous EndTxn already completed and bumped the epoch.
 		if req.Version >= 5 && pidinf.epoch == req.ProducerEpoch+1 && !pidinf.inTx {
+			if req.Commit != pidinf.lastWasCommit {
+				resp.ErrorCode = kerr.InvalidTxnState.Code
+				return resp
+			}
 			resp.ProducerID = pidinf.id
 			resp.ProducerEpoch = pidinf.epoch
 			return resp
@@ -472,8 +486,13 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 		return resp
 	}
 	if !pidinf.inTx {
-		// v5+: allow aborting an empty transaction.
+		// v5+: allow aborting an empty transaction. Bump epoch
+		// so the client uses a fresh epoch for the next transaction.
 		if req.Version >= 5 && !req.Commit {
+			pidinf = pids.bumpEpoch(pidinf)
+			pidinf.lastWasCommit = false
+			resp.ProducerID = pidinf.id
+			resp.ProducerEpoch = pidinf.epoch
 			return resp
 		}
 		// Retry detection: return success if the retry matches the

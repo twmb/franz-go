@@ -410,6 +410,7 @@ var validBrokerConfigs = map[string]string{
 	"group.consumer.session.timeout.ms":    "",
 	"log.dir":                              "",
 	"log.message.timestamp.type":           "message.timestamp.type",
+	"transaction.max.timeout.ms":           "",
 	"log.retention.bytes":                  "retention.bytes",
 	"log.retention.ms":                     "retention.ms",
 	"message.max.bytes":                    "max.message.bytes",
@@ -451,6 +452,8 @@ var configDefaults = map[string]string{
 	"retention.bytes":        "-1",
 	"retention.ms":           "604800000",
 
+	"transaction.max.timeout.ms": "900000",
+
 	"default.replication.factor":           "3",
 	"fetch.max.bytes":                      "57671680",
 	"group.consumer.heartbeat.interval.ms": strconv.Itoa(defHeartbeatInterval),
@@ -484,6 +487,7 @@ var configTypes = map[string]kmsg.ConfigType{
 	"retention.ms":                         kmsg.ConfigTypeLong,
 	"sasl.enabled.mechanisms":              kmsg.ConfigTypeList,
 	"super.users":                          kmsg.ConfigTypeList,
+	"transaction.max.timeout.ms":           kmsg.ConfigTypeInt,
 }
 
 var brokerRack = "krack"
@@ -502,6 +506,12 @@ func (c *Cluster) consumerHeartbeatIntervalMs() int32 {
 
 func (c *Cluster) consumerSessionTimeoutMs() int32 {
 	return c.brokerConfigInt("group.consumer.session.timeout.ms", defSessionTimeout)
+}
+
+const defTransactionMaxTimeoutMs = 900000
+
+func (c *Cluster) transactionMaxTimeoutMs() int32 {
+	return c.brokerConfigInt("transaction.max.timeout.ms", defTransactionMaxTimeoutMs)
 }
 
 // maxMessageBytes returns the max.message.bytes for a topic, falling back to

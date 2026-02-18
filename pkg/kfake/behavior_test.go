@@ -1897,4 +1897,265 @@ func TestProduceSyncUnlinger(t *testing.T) {
 	}
 }
 
+// TestTxnEndTxnTV2RetryMismatchedDirection verifies that retrying an
+// EndTxn v5+ with the wrong direction (e.g. abort after a committed
+// transaction) returns INVALID_TXN_STATE.
+func TestTxnEndTxnTV2RetryMismatchedDirection(t *testing.T) {
+	t.Parallel()
+	topic := "t-endtxn-v5-mismatch"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	resp := initProducerID(t, cl, "txid-v5-mismatch", -1, -1, 60000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	pid := resp.ProducerID
+	epoch := resp.ProducerEpoch
+
+	// Start and commit a transaction.
+	addReq := kmsg.NewAddPartitionsToTxnRequest()
+	addReq.TransactionalID = "txid-v5-mismatch"
+	addReq.ProducerID = pid
+	addReq.ProducerEpoch = epoch
+	addT := kmsg.NewAddPartitionsToTxnRequestTopic()
+	addT.Topic = topic
+	addT.Partitions = []int32{0}
+	addReq.Topics = append(addReq.Topics, addT)
+	if _, err := addReq.RequestWith(ctx, cl); err != nil {
+		t.Fatalf("add partitions: %v", err)
+	}
+
+	endReq := kmsg.NewEndTxnRequest()
+	endReq.TransactionalID = "txid-v5-mismatch"
+	endReq.ProducerID = pid
+	endReq.ProducerEpoch = epoch
+	endReq.Commit = true
+	endResp, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("end commit: %v", err)
+	}
+	if endResp.ErrorCode != 0 {
+		t.Fatalf("end commit error: %v", kerr.ErrorForCode(endResp.ErrorCode))
+	}
+	// v5+ bumps epoch on commit.
+	newEpoch := endResp.ProducerEpoch
+
+	// Retry with the OLD epoch but ABORT direction - should fail.
+	endReq.ProducerEpoch = epoch // old epoch, server has newEpoch
+	endReq.Commit = false        // wrong direction
+	endResp2, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("retry abort: %v", err)
+	}
+	if endResp2.ErrorCode != kerr.InvalidTxnState.Code {
+		t.Fatalf("expected INVALID_TXN_STATE for mismatched retry, got: %v", kerr.ErrorForCode(endResp2.ErrorCode))
+	}
+
+	// Retry with old epoch and COMMIT direction - should succeed.
+	endReq.Commit = true
+	endResp3, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("retry commit: %v", err)
+	}
+	if endResp3.ErrorCode != 0 {
+		t.Fatalf("matching retry should succeed, got: %v", kerr.ErrorForCode(endResp3.ErrorCode))
+	}
+	if endResp3.ProducerEpoch != newEpoch {
+		t.Fatalf("expected epoch %d in retry response, got %d", newEpoch, endResp3.ProducerEpoch)
+	}
+}
+
+// TestTxnEndTxnTV2EmptyAbortBumpsEpoch verifies that aborting an empty
+// transaction at v5+ bumps the epoch.
+func TestTxnEndTxnTV2EmptyAbortBumpsEpoch(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	resp := initProducerID(t, cl, "txid-empty-bump", -1, -1, 60000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	origEpoch := resp.ProducerEpoch
+
+	endReq := kmsg.NewEndTxnRequest()
+	endReq.TransactionalID = "txid-empty-bump"
+	endReq.ProducerID = resp.ProducerID
+	endReq.ProducerEpoch = origEpoch
+	endReq.Commit = false
+	endResp, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("empty abort: %v", err)
+	}
+	if endResp.ErrorCode != 0 {
+		t.Fatalf("empty abort error: %v", kerr.ErrorForCode(endResp.ErrorCode))
+	}
+	if endResp.ProducerEpoch <= origEpoch {
+		t.Fatalf("expected epoch > %d after empty abort, got %d", origEpoch, endResp.ProducerEpoch)
+	}
+}
+
+// TestTxnInitProducerIDMaxTimeout verifies that InitProducerID with a
+// timeout exceeding transaction.max.timeout.ms returns
+// INVALID_TRANSACTION_TIMEOUT.
+func TestTxnInitProducerIDMaxTimeout(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.BrokerConfigs(map[string]string{
+		"transaction.max.timeout.ms": "5000",
+	}))
+	cl := newPlainClient(t, c)
+
+	// Timeout within limit - should succeed.
+	resp := initProducerID(t, cl, "txid-timeout-ok", -1, -1, 5000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("expected success for timeout <= max, got: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+
+	// Timeout exceeding limit - should fail.
+	resp2 := initProducerID(t, cl, "txid-timeout-bad", -1, -1, 5001)
+	if resp2.ErrorCode != kerr.InvalidTransactionTimeout.Code {
+		t.Fatalf("expected INVALID_TRANSACTION_TIMEOUT for timeout > max, got: %v", kerr.ErrorForCode(resp2.ErrorCode))
+	}
+}
+
+// TestProduceControlBatchRejected verifies that client-sent control batches
+// are rejected with INVALID_RECORD.
+func TestProduceControlBatchRejected(t *testing.T) {
+	t.Parallel()
+	topic := "t-control-batch"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	// Build a batch with the control bit (0x0020) set.
+	rec := kmsg.Record{Key: []byte{0, 0, 0, 1}, Value: []byte{}}
+	rec.Length = int32(len(rec.AppendTo(nil)) - 1)
+	now := time.Now().UnixMilli()
+	batch := kmsg.RecordBatch{
+		PartitionLeaderEpoch: -1,
+		Magic:                2,
+		Attributes:           int16(0x0030), // transactional + control
+		LastOffsetDelta:      0,
+		FirstTimestamp:       now,
+		MaxTimestamp:         now,
+		ProducerID:           1,
+		ProducerEpoch:        0,
+		FirstSequence:        -1,
+		NumRecords:           1,
+		Records:              rec.AppendTo(nil),
+	}
+	raw := batch.AppendTo(nil)
+	batch.Length = int32(len(raw) - 12)
+	raw = batch.AppendTo(nil)
+	batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+
+	req := kmsg.NewProduceRequest()
+	req.Version = 11
+	req.Acks = -1
+	req.TimeoutMillis = 5000
+	rt := kmsg.NewProduceRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewProduceRequestTopicPartition()
+	rp.Partition = 0
+	rp.Records = batch.AppendTo(nil)
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("produce: %v", err)
+	}
+	errCode := resp.Topics[0].Partitions[0].ErrorCode
+	if errCode != kerr.InvalidRecord.Code {
+		t.Fatalf("expected INVALID_RECORD for control batch, got: %v", kerr.ErrorForCode(errCode))
+	}
+}
+
+// TestTxnNonTransactionalProduceDuringTx verifies that a
+// non-transactional produce during an active transaction returns
+// INVALID_TXN_STATE.
+func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
+	t.Parallel()
+	topic := "t-non-txn-during-tx"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	// Init a transactional producer.
+	resp := initProducerID(t, cl, "txid-non-txn-during", -1, -1, 60000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	pid := resp.ProducerID
+	epoch := resp.ProducerEpoch
+
+	// Start a transaction by adding a partition.
+	addReq := kmsg.NewAddPartitionsToTxnRequest()
+	addReq.TransactionalID = "txid-non-txn-during"
+	addReq.ProducerID = pid
+	addReq.ProducerEpoch = epoch
+	addT := kmsg.NewAddPartitionsToTxnRequestTopic()
+	addT.Topic = topic
+	addT.Partitions = []int32{0}
+	addReq.Topics = append(addReq.Topics, addT)
+	if _, err := addReq.RequestWith(ctx, cl); err != nil {
+		t.Fatalf("add partitions: %v", err)
+	}
+
+	// Produce a NON-transactional batch using the same producer ID.
+	rec := kmsg.Record{Key: []byte("k"), Value: []byte("v")}
+	rec.Length = int32(len(rec.AppendTo(nil)) - 1)
+	now := time.Now().UnixMilli()
+	batch := kmsg.RecordBatch{
+		PartitionLeaderEpoch: -1,
+		Magic:                2,
+		Attributes:           0, // non-transactional
+		LastOffsetDelta:      0,
+		FirstTimestamp:       now,
+		MaxTimestamp:         now,
+		ProducerID:           pid,
+		ProducerEpoch:        epoch,
+		FirstSequence:        0,
+		NumRecords:           1,
+		Records:              rec.AppendTo(nil),
+	}
+	raw := batch.AppendTo(nil)
+	batch.Length = int32(len(raw) - 12)
+	raw = batch.AppendTo(nil)
+	batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+
+	produceReq := kmsg.NewProduceRequest()
+	produceReq.Version = 11
+	produceReq.Acks = -1
+	produceReq.TimeoutMillis = 5000
+	rt := kmsg.NewProduceRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewProduceRequestTopicPartition()
+	rp.Partition = 0
+	rp.Records = batch.AppendTo(nil)
+	rt.Partitions = append(rt.Partitions, rp)
+	produceReq.Topics = append(produceReq.Topics, rt)
+
+	produceResp, err := produceReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("produce: %v", err)
+	}
+	errCode := produceResp.Topics[0].Partitions[0].ErrorCode
+	if errCode != kerr.InvalidTxnState.Code {
+		t.Fatalf("expected INVALID_TXN_STATE for non-txn produce during tx, got: %v", kerr.ErrorForCode(errCode))
+	}
+}
+
 func stringp(s string) *string { return &s }
