@@ -54,11 +54,10 @@ type (
 		tRebalance *time.Timer
 
 		// KIP-848 consumer group fields
-		assignorName           string
-		consumerMembers        map[string]*consumerMember
-		partitionEpochs        map[uuid]map[int32]int32 // (topicID, partition) -> owning member's epoch; -1 or absent means free
-		targetAssignmentsStale bool                     // session timeout cannot snapshot metadata, defers to next heartbeat
-		lastTopicMeta          topicMetaSnap            // last snapshot received, for deferred recomputation
+		assignorName    string
+		consumerMembers map[string]*consumerMember
+		partitionEpochs map[uuid]map[int32]int32 // (topicID, partition) -> owning member's epoch; -1 or absent means free
+		lastTopicMeta   topicMetaSnap            // last snapshot received, for recomputation on member removal
 
 		quit   sync.Once
 		quitCh chan struct{}
@@ -181,23 +180,31 @@ func (c *Cluster) snapshotTopicMeta() topicMetaSnap {
 	return snap
 }
 
-// notifyTopicChange marks all 848 consumer groups as needing
-// recomputation after a topic is created, deleted, or has partitions
-// added. We notify all groups rather than filtering by subscription
-// because group member state is owned by the group's manage goroutine
-// and cannot be read safely from here.
+// notifyTopicChange recomputes target assignments for all 848 consumer
+// groups after a topic is created, deleted, or has partitions added. We
+// capture a fresh metadata snapshot here (in the cluster run loop where
+// c.data is safe to read) and pass it to the manage goroutine so that
+// the recomputation always sees the latest topics. This avoids a race
+// where the manage goroutine could recompute using a stale snapshot
+// from a heartbeat that was enqueued before the topic change.
+//
+// This blocks the cluster run loop until each group's manage goroutine
+// processes the notification. This is safe: the manage goroutine never
+// calls c.admin() and replies go to cc.respCh (drained by the
+// connection write goroutine, not the run loop).
 func (c *Cluster) notifyTopicChange() {
+	snap := c.snapshotTopicMeta()
 	for _, g := range c.groups.gs {
 		select {
 		case g.controlCh <- func() {
 			if len(g.consumerMembers) > 0 {
-				g.targetAssignmentsStale = true
+				g.lastTopicMeta = snap
+				g.computeTargetAssignment(snap)
 				g.updateConsumerStateField()
 			}
 		}:
-		default:
-			// Buffer full - a notification is already pending, the
-			// next heartbeat will pick up fresh metadata anyway.
+		case <-g.quitCh:
+		case <-g.c.die:
 		}
 	}
 }
@@ -753,10 +760,6 @@ func (g *group) manage(detachNew func()) {
 				kresp = g.handleOffsetDelete(creq)
 			case *kmsg.ConsumerGroupHeartbeatRequest:
 				g.lastTopicMeta = creq.topicMeta
-				if g.targetAssignmentsStale {
-					g.targetAssignmentsStale = false
-					g.computeTargetAssignment(creq.topicMeta)
-				}
 				kresp = g.handleConsumerHeartbeat(creq)
 				firstJoin(true)
 			}
@@ -2132,7 +2135,7 @@ func (g *group) atConsumerSessionTimeout(m *consumerMember) {
 			g.fenceConsumerMember(m)
 			delete(g.consumerMembers, m.memberID)
 			g.generation++
-			g.targetAssignmentsStale = true
+			g.computeTargetAssignment(g.lastTopicMeta)
 			g.updateConsumerStateField()
 		}
 	})
@@ -2158,7 +2161,7 @@ func (g *group) scheduleConsumerRebalanceTimeout(m *consumerMember) {
 		g.fenceConsumerMember(cur)
 		delete(g.consumerMembers, memberID)
 		g.generation++
-		g.targetAssignmentsStale = true
+		g.computeTargetAssignment(g.lastTopicMeta)
 		g.updateConsumerStateField()
 	})
 }
