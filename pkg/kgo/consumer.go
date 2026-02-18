@@ -680,7 +680,7 @@ func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
 // If using transactions, it is advised to just use a GroupTransactSession and
 // avoid this function entirely.
 //
-// If using group consuming, It is strongly recommended to use this function
+// If using group consuming, it is strongly recommended to use this function
 // outside of the context of a PollFetches loop and only when you know the
 // group is not revoked (i.e., block any concurrent revoke while issuing this
 // call) and to not use this concurrent with committing. Any other usage is
@@ -705,10 +705,10 @@ func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bo
 	var tps *topicsPartitions
 	switch {
 	case c.d != nil:
-		assigns = c.d.getSetAssigns(setOffsets)
+		assigns = c.d.applySetOffsets(setOffsets)
 		tps = c.d.tps
 	case c.g != nil:
-		assigns = c.g.getSetAssigns(setOffsets)
+		assigns = c.g.applySetOffsets(setOffsets)
 		tps = c.g.tps
 	}
 	if len(assigns) == 0 {
