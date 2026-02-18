@@ -720,6 +720,66 @@ func Test848TopicCreatedAfterJoin(t *testing.T) {
 	}
 }
 
+// Test848TopicCreatedAfterJoinNoPeriodicMeta is the same scenario as
+// Test848TopicCreatedAfterJoin but with MetadataMaxAge set to 1 minute
+// so no periodic metadata refresh races with the heartbeat. This makes
+// the bug deterministic: the heartbeat always delivers the assignment
+// before the client discovers the new topic via metadata, exercising
+// the resend path where the server must keep including the assignment
+// until the client confirms it.
+func Test848TopicCreatedAfterJoinNoPeriodicMeta(t *testing.T) {
+	t.Parallel()
+	existingTopic := "t848-nopermeta-existing"
+	newTopic := "t848-nopermeta-new"
+	group := "g848-nopermeta"
+	nRecords := 10
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, existingTopic))
+	producer := newClient848(t, c)
+	produceNStrings(t, producer, existingTopic, nRecords)
+
+	// MetadataMaxAge=1min prevents periodic metadata from discovering
+	// the new topic before the heartbeat delivers the assignment.
+	consumer := newClient848(t, c,
+		kgo.ConsumeRegex(),
+		kgo.ConsumeTopics("t848-nopermeta-.*"),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.MetadataMinAge(50*time.Millisecond),
+		kgo.MetadataMaxAge(time.Minute),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+
+	records := consumeN(t, consumer, nRecords, 10*time.Second)
+	if len(records) != nRecords {
+		t.Fatalf("expected %d records from existing topic, got %d", nRecords, len(records))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	adm := kadm.NewClient(newClient848(t, c))
+	_, err := adm.CreateTopics(ctx, 1, 1, nil, newTopic)
+	if err != nil {
+		t.Fatalf("create topic failed: %v", err)
+	}
+	for i := range nRecords {
+		r := kgo.StringRecord("new-" + strconv.Itoa(i))
+		r.Topic = newTopic
+		produceSync(t, producer, r)
+	}
+
+	records = consumeN(t, consumer, nRecords, 15*time.Second)
+	newTopicCount := 0
+	for _, r := range records {
+		if r.Topic == newTopic {
+			newTopicCount++
+		}
+	}
+	if newTopicCount != nRecords {
+		t.Fatalf("expected %d records from new topic, got %d", nRecords, newTopicCount)
+	}
+}
+
 // Test848RangeAssignorContiguousBlocks verifies that when using the range
 // balancer, each consumer gets a contiguous block of partitions per topic.
 // Uses DescribeConsumerGroups to check the assignment directly rather than

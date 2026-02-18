@@ -188,6 +188,14 @@ func (c *Cluster) snapshotTopicMeta() topicMetaSnap {
 // where the manage goroutine could recompute using a stale snapshot
 // from a heartbeat that was enqueued before the topic change.
 //
+// The generation bump matches Kafka's behavior where topic changes bump
+// the group epoch. This ensures heartbeat responses keep re-sending the
+// assignment until the member epoch catches up, which only happens when
+// the client confirms the assignment via currentAssignment == target.
+// Without this, a client that receives an assignment with an unknown
+// topic ID (metadata not yet refreshed) would miss the assignment
+// permanently because the server recorded it as delivered.
+//
 // This blocks the cluster run loop until each group's manage goroutine
 // processes the notification. This is safe: the manage goroutine never
 // calls c.admin() and replies go to cc.respCh (drained by the
@@ -198,6 +206,7 @@ func (c *Cluster) notifyTopicChange() {
 		select {
 		case g.controlCh <- func() {
 			if len(g.consumerMembers) > 0 {
+				g.generation++
 				g.lastTopicMeta = snap
 				g.computeTargetAssignment(snap)
 				g.updateConsumerStateField()
@@ -1814,7 +1823,7 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 	resp.MemberID = &req.MemberID
 	resp.MemberEpoch = m.memberEpoch
 	reconciled := g.reconciledAssignment(m)
-	if full || !assignmentsEqual(m.lastReconciledSent, reconciled) {
+	if full || !assignmentsEqual(m.lastReconciledSent, reconciled) || m.memberEpoch < g.generation {
 		resp.Assignment = makeAssignment(reconciled)
 
 		// Save old state for epoch map update below.
