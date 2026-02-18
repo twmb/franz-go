@@ -1809,6 +1809,10 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 		g.generation++
 		g.computeTargetAssignment(g.lastTopicMeta)
 	}
+	// Advance the member epoch when the member has fully converged
+	// (current == target). Kafka advances as soon as revocations
+	// complete (UNRELEASED_PARTITIONS state), which is faster but
+	// only affects convergence speed, not correctness.
 	if assignmentsEqual(m.currentAssignment, m.targetAssignment) && m.memberEpoch < g.generation {
 		oldEpoch := m.memberEpoch
 		m.previousMemberEpoch = m.memberEpoch
@@ -1851,11 +1855,11 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 	}
 
 	// Schedule or cancel the rebalance timeout: active only when
-	// the member has partitions pending revocation.
+	// the member has partitions pending revocation. Always
+	// reschedule (not just on first entry) so the timeout
+	// tracks the latest revocation state.
 	if len(m.partitionsPendingRevocation) > 0 {
-		if m.tRebal == nil {
-			g.scheduleConsumerRebalanceTimeout(m)
-		}
+		g.scheduleConsumerRebalanceTimeout(m)
 	} else {
 		g.cancelConsumerRebalanceTimeout(m)
 	}
@@ -2314,8 +2318,8 @@ func (g *group) updateMemberEpochs(m *consumerMember, oldSent, oldPending map[uu
 }
 
 // addPartitionEpochs records that a member at the given epoch owns the
-// given partitions. A lower epoch indicates a stale update that would
-// mask a newer owner.
+// given partitions. If a partition already has a higher or equal epoch,
+// the caller has a logic bug (double assignment), so we panic.
 func (g *group) addPartitionEpochs(a map[uuid][]int32, epoch int32) {
 	for id, parts := range a {
 		pm := g.partitionEpochs[id]
@@ -2324,6 +2328,9 @@ func (g *group) addPartitionEpochs(a map[uuid][]int32, epoch int32) {
 			g.partitionEpochs[id] = pm
 		}
 		for _, p := range parts {
+			if existing, ok := pm[p]; ok && existing >= epoch {
+				panic(fmt.Sprintf("addPartitionEpochs: partition %d of topic %v already has epoch %d >= %d", p, id, existing, epoch))
+			}
 			pm[p] = epoch
 		}
 	}
