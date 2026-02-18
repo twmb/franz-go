@@ -362,6 +362,40 @@ func (c *Cluster) storeBcfgs(m map[string]*string) {
 	c.bcfgs.Store(&m)
 }
 
+// configListAppend appends val to a comma-separated list config value.
+func configListAppend(current, val *string) *string {
+	if val == nil {
+		return current
+	}
+	if current == nil || *current == "" {
+		return val
+	}
+	s := *current + "," + *val
+	return &s
+}
+
+// configListSubtract removes val from a comma-separated list config value.
+func configListSubtract(current, val *string) *string {
+	if val == nil || current == nil {
+		return current
+	}
+	parts := strings.Split(*current, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		if p != *val {
+			out = append(out, p)
+		}
+	}
+	s := strings.Join(out, ",")
+	return &s
+}
+
+// isListConfig returns whether the named config is a list type.
+func isListConfig(name string) bool {
+	ct, ok := configTypes[name]
+	return ok && ct == kmsg.ConfigTypeList
+}
+
 // validateBrokerConfig returns whether v is a valid value for broker config k.
 func validateBrokerConfig(k string, v *string) bool {
 	if v == nil {

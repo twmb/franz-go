@@ -139,7 +139,7 @@
 
 ## 44_incremental_alter_configs
 - ThrottleMillis: Not implementing throttling for any request
-- APPEND/SUBTRACT ops: List config operations not implemented
+- APPEND/SUBTRACT ops: implemented for list-type configs
 
 ## 47_offset_delete
 - ThrottleMillis: Not implementing throttling for any request
