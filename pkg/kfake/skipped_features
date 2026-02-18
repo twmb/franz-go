@@ -197,7 +197,7 @@
 
 ## 69_consumer_group_describe (KIP-848) - IMPLEMENTED
 - Basic handler implemented: returns group state, members, assignments
-- AuthorizedOperations: not implemented (always returns 0)
+- AuthorizedOperations: implemented via groupAuthorizedOps
 
 ## General
 - Tiered storage: Not implemented (KIP-405, KIP-1005)
