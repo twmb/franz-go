@@ -456,6 +456,8 @@ outer:
 			kresp, err = c.handleCreatePartitions(creq)
 		case kmsg.DeleteGroups:
 			kresp, err = c.handleDeleteGroups(creq)
+		case kmsg.ElectLeaders:
+			kresp, err = c.handleElectLeaders(creq)
 		case kmsg.IncrementalAlterConfigs:
 			kresp, err = c.handleIncrementalAlterConfigs(creq)
 		case kmsg.AlterPartitionAssignments:
