@@ -66,7 +66,7 @@ func isRetryableBrokerErr(err error) bool {
 		// If the FIRST read is EOF, that is usually not a good sign,
 		// often it's from bad SASL. We err on the side of pessimism
 		// and do not retry.
-		if ee := (*ErrFirstReadEOF)(nil); errors.As(err, &ee) {
+		if ee := (*ErrFirstReadEOF)(nil); errors.As(err, &ee) && !ee.retry {
 			return false
 		}
 		return true
@@ -239,8 +239,9 @@ var (
 // the connection truly was severed before a response was received), but this
 // error can help you quickly check common problems.
 type ErrFirstReadEOF struct {
-	kind uint8
-	err  error
+	kind  uint8
+	err   error
+	retry bool
 }
 
 type errProducerIDLoadFail struct {
