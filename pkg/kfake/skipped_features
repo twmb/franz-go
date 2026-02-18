@@ -170,7 +170,7 @@
 
 ### Correctness gaps vs Kafka (analyzed against ~/src/apache/kafka):
 
-1. **No partition epoch tracking** - FIXED (63e50a66)
+1. **No partition epoch tracking** - FIXED
    Added group-level partitionEpochs map with two-phase check
    in reconciledAssignment.
 
@@ -179,15 +179,15 @@
    safe and simpler. Advancing in UNRELEASED_PARTITIONS state
    only affects convergence speed, not correctness.
 
-3. **Previous-epoch subset check against targetAssignment** - FIXED (63e50a66)
+3. **Previous-epoch subset check against targetAssignment** - FIXED
    Now checks against currentAssignment.
 
-4. **No separate session/rebalance timeout** - FIXED (b52529f1)
+4. **No separate session/rebalance timeout** - FIXED
    Session timeout uses group.consumer.session.timeout.ms (server config).
    Rebalance timeout uses per-member rebalanceTimeoutMs, only active when
    member has unrevoked partitions.
 
-5. **No partitionsPendingRevocation tracking** - FIXED (ac7d0fb8)
+5. **No partitionsPendingRevocation tracking** - FIXED
    Added explicit per-member partitionsPendingRevocation set with
    epoch map integration.
 

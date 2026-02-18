@@ -60,7 +60,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	var newSession bool
 	if req.Version >= 7 {
 		var errCode int16
-		session, newSession, errCode = c.fetchSessions.getOrCreate(creq.cc.b.node, req.SessionID, req.SessionEpoch)
+		session, newSession, errCode = c.fetchSessions.getOrCreate(creq.cc.b.node, req.SessionID, req.SessionEpoch, int(c.fetchSessionCacheSlots()))
 		if errCode != 0 {
 			resp.ErrorCode = errCode
 			return resp, nil
@@ -457,7 +457,7 @@ func (fs *fetchSessions) init(brokerNode int32) {
 // getOrCreate returns an existing session or creates a new one based on the
 // request's SessionID and SessionEpoch. Returns (nil, false, 0) for legacy
 // sessionless fetches.
-func (fs *fetchSessions) getOrCreate(brokerNode, sessionID, sessionEpoch int32) (*fetchSession, bool, int16) {
+func (fs *fetchSessions) getOrCreate(brokerNode, sessionID, sessionEpoch int32, maxSlots int) (*fetchSession, bool, int16) {
 	fs.init(brokerNode)
 
 	// SessionEpoch=-1: Full fetch, no session (legacy mode).
@@ -479,7 +479,7 @@ func (fs *fetchSessions) getOrCreate(brokerNode, sessionID, sessionEpoch int32) 
 		}
 		// Evict the oldest session if we're at the limit.
 		brokerSessions := fs.sessions[brokerNode]
-		if len(brokerSessions) >= defMaxFetchSessionCacheSlots {
+		if len(brokerSessions) >= maxSlots {
 			var oldestID int32
 			var oldestTime time.Time
 			for id, s := range brokerSessions {

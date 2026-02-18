@@ -196,6 +196,7 @@ type ACL struct {
 //     consumer groups (default 45000)
 //   - message.max.bytes - max produce batch size (default 1048588)
 //   - transaction.max.timeout.ms - max transaction timeout (default 900000)
+//   - max.incremental.fetch.session.cache.slots - max fetch sessions per broker (default 1000)
 //
 // Other accepted configs include compression.type, default.replication.factor,
 // min.insync.replicas, log.retention.bytes, log.retention.ms, and

@@ -1730,6 +1730,32 @@ func TestTxnAddOffsetsWithoutGroup(t *testing.T) {
 		t.Fatalf("AddOffsetsToTxn should succeed for non-existent group, got: %v",
 			kerr.ErrorForCode(addResp.ErrorCode))
 	}
+
+	// TxnOffsetCommit with a non-existent topic/partition should return
+	// UNKNOWN_TOPIC_OR_PARTITION for that partition only.
+	ocReq := kmsg.NewTxnOffsetCommitRequest()
+	ocReq.TransactionalID = "txid-no-group"
+	ocReq.Group = "nonexistent-group"
+	ocReq.ProducerID = pid
+	ocReq.ProducerEpoch = epoch
+	ocReq.Generation = -1
+	ocT := kmsg.NewTxnOffsetCommitRequestTopic()
+	ocT.Topic = "no-such-topic"
+	ocP := kmsg.NewTxnOffsetCommitRequestTopicPartition()
+	ocP.Partition = 99
+	ocP.Offset = 0
+	ocT.Partitions = append(ocT.Partitions, ocP)
+	ocReq.Topics = append(ocReq.Topics, ocT)
+	ocResp, err := ocReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("txn offset commit: %v", err)
+	}
+	if len(ocResp.Topics) != 1 || len(ocResp.Topics[0].Partitions) != 1 {
+		t.Fatalf("expected 1 topic/1 partition in response, got %d topics", len(ocResp.Topics))
+	}
+	if ec := ocResp.Topics[0].Partitions[0].ErrorCode; ec != kerr.UnknownTopicOrPartition.Code {
+		t.Fatalf("expected UNKNOWN_TOPIC_OR_PARTITION, got: %v", kerr.ErrorForCode(ec))
+	}
 }
 
 // TestTxnDescribeTransactions verifies that DescribeTransactions
@@ -2385,54 +2411,88 @@ func TestClassicProtocolVoting(t *testing.T) {
 }
 
 // TestFetchSessionEviction verifies that when the per-broker session
-// cache is full, the oldest session is evicted and the client gets
-// FETCH_SESSION_ID_NOT_FOUND on the next incremental fetch.
+// cache is full, the oldest session is evicted. The evicted client
+// gets FETCH_SESSION_ID_NOT_FOUND on its next incremental fetch and
+// must re-establish a session to continue consuming.
 func TestFetchSessionEviction(t *testing.T) {
 	t.Parallel()
 	topic := "t-session-evict"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic), kfake.BrokerConfigs(map[string]string{
+		"max.incremental.fetch.session.cache.slots": "3",
+	}))
 	v := kversion.Stable()
 	v.SetMaxKeyVersion(1, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
 	ctx := context.Background()
 
-	// Create many sessions by sending epoch=0 fetches from different clients.
-	var sessionIDs []int32
-	for range 5 {
-		cl := newPlainClient(t, c, kgo.MaxVersions(v))
-		req := kmsg.NewFetchRequest()
-		req.Version = 11
-		req.MaxWaitMillis = 100
-		req.MinBytes = 1
-		req.MaxBytes = 1 << 20
-		req.SessionID = 0
-		req.SessionEpoch = 0
-		ft := kmsg.NewFetchRequestTopic()
-		ft.Topic = topic
-		fp := kmsg.NewFetchRequestTopicPartition()
-		fp.Partition = 0
-		fp.FetchOffset = 0
-		fp.PartitionMaxBytes = 1 << 20
-		fp.CurrentLeaderEpoch = -1
-		ft.Partitions = append(ft.Partitions, fp)
-		req.Topics = append(req.Topics, ft)
-		resp, err := req.RequestWith(ctx, cl)
-		if err != nil {
-			t.Fatalf("fetch: %v", err)
-		}
-		if resp.ErrorCode != 0 {
-			t.Fatalf("fetch error: %v", kerr.ErrorForCode(resp.ErrorCode))
-		}
-		sessionIDs = append(sessionIDs, resp.SessionID)
+	// Produce a record so fetches have data.
+	r := kgo.StringRecord("evict-test")
+	r.Topic = topic
+	r.Partition = 0
+	produceSync(t, cl, r)
+
+	mkFetch := func(sessionID, epoch int32) *kmsg.FetchRequest {
+		return fetchRequest(sessionID, epoch, topic, pp{0, 0})
 	}
 
-	// Verify all session IDs are unique.
-	seen := make(map[int32]bool)
-	for _, id := range sessionIDs {
-		if seen[id] {
-			t.Fatalf("duplicate session ID: %d", id)
+	// Create session A and do an incremental fetch to confirm it works.
+	respA, err := mkFetch(0, 0).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("create session A: %v", err)
+	}
+	sidA := respA.SessionID
+
+	resp, err := mkFetch(sidA, 1).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("incremental A: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("incremental A error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+
+	// Fill the remaining 2 slots with sessions B and C.
+	for range 2 {
+		resp, err := mkFetch(0, 0).RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
 		}
-		seen[id] = true
+		if resp.ErrorCode != 0 {
+			t.Fatalf("create session: %v", kerr.ErrorForCode(resp.ErrorCode))
+		}
+	}
+
+	// Create session D - this should evict session A (oldest).
+	resp, err = mkFetch(0, 0).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("create session D: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+
+	// Session A's next incremental fetch should get FETCH_SESSION_ID_NOT_FOUND.
+	resp, err = mkFetch(sidA, 2).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != kerr.FetchSessionIDNotFound.Code {
+		t.Fatalf("expected FETCH_SESSION_ID_NOT_FOUND for evicted session, got: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+
+	// The evicted client can re-establish a session and continue consuming.
+	resp, err = mkFetch(0, 0).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("re-establish error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	if len(resp.Topics) == 0 || len(resp.Topics[0].Partitions) == 0 {
+		t.Fatal("expected data in re-established session response")
+	}
+	if len(resp.Topics[0].Partitions[0].RecordBatches) == 0 {
+		t.Fatal("expected records in re-established session")
 	}
 }
 
