@@ -156,6 +156,10 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				continue
 			}
 			attrs := uint16(b.Attributes)
+			if attrs&0x0020 != 0 {
+				donep(rt, rp, kerr.InvalidRecord.Code, "Client cannot send control batches.")
+				continue
+			}
 			if attrs&0x0007 > 4 {
 				donep(rt, rp, kerr.CorruptMessage.Code, "Invalid compression type.")
 				continue
@@ -192,6 +196,12 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				}
 				pidinf, window := c.pids.get(b.ProducerID, rt.Topic, rp.Partition, implicit)
 
+				// Reject non-transactional produce during an
+				// active transaction.
+				if pidinf != nil && pidinf.inTx && !txnal {
+					errCode = kerr.InvalidTxnState.Code
+				}
+
 				if txnal && window == nil {
 					errCode = kerr.InvalidTxnState.Code
 				}
@@ -217,9 +227,8 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					baseOffset = pd.highWatermark
 					lso = pd.logStartOffset
 
-					// For transactional batches, determine txnFirstOffset
-					var txnFirstOffset int64
 					if txnal {
+						// Track per-partition first offset for AbortedTransactions index.
 						ptr := pidinf.txPartFirstOffsets.mkp(rt.Topic, rp.Partition, func() *int64 {
 							v := int64(-1)
 							return &v
@@ -227,10 +236,9 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 						if *ptr == -1 {
 							*ptr = baseOffset
 						}
-						txnFirstOffset = *ptr
 					}
 
-					batchptr := pd.pushBatch(len(rp.Records), b, txnal, txnFirstOffset)
+					batchptr := pd.pushBatch(len(rp.Records), b, txnal)
 					if txnal {
 						pidinf.txBatches = append(pidinf.txBatches, batchptr)
 						// Track bytes for readCommitted watcher accounting at commit time
@@ -242,7 +250,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				// Non-idempotent produce, no pids validation needed
 				baseOffset = pd.highWatermark
 				lso = pd.logStartOffset
-				pd.pushBatch(len(rp.Records), b, txnal, 0)
+				pd.pushBatch(len(rp.Records), b, txnal)
 			}
 
 			if errCode != 0 {

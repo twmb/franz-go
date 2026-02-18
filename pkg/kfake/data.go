@@ -35,11 +35,18 @@ type (
 		tnorms    map[string]string             // normalized name (. replaced with _) => topic name
 	}
 
+	abortedTxnEntry struct {
+		producerID  int64
+		firstOffset int64 // first data offset of this txn on this partition
+		lastOffset  int64 // offset of the abort control record
+	}
+
 	partData struct {
-		batches []*partBatch
-		t       string
-		p       int32
-		dir     string
+		batches     []*partBatch
+		abortedTxns []abortedTxnEntry // sorted by lastOffset, for read_committed fetch
+		t           string
+		p           int32
+		dir         string
 
 		highWatermark    int64
 		lastStableOffset int64
@@ -81,13 +88,6 @@ type (
 		maxEarlierTimestamp int64
 
 		inTx bool
-
-		// Filled retroactively, if true, the pid aborted this batch.
-		aborted bool
-
-		// For aborted transactions: the first offset of this transaction
-		// on this partition. Used for AbortedTransactions in fetch response.
-		txnFirstOffset int64
 	}
 )
 
@@ -172,8 +172,7 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 // If transactional, we mark ourselves in a tx.
 // Finishing a tx clears the inTx state on pd, but also re-sets it if needed.
 // If we are not in a tx, we can bump the stable offset here.
-// txnFirstOffset is the first offset of this transaction on this partition (0 if not transactional).
-func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool, txnFirstOffset int64) *partBatch {
+func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool) *partBatch {
 	maxEarlierTimestamp := b.FirstTimestamp
 	if maxEarlierTimestamp < pd.maxTimestamp {
 		maxEarlierTimestamp = pd.maxTimestamp
@@ -195,8 +194,6 @@ func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool, txnFirs
 		epoch:               pd.epoch,
 		maxEarlierTimestamp: maxEarlierTimestamp,
 		inTx:                inTx,
-		aborted:             false,
-		txnFirstOffset:      txnFirstOffset,
 	})
 	pd.highWatermark += int64(b.NumRecords)
 	if inTx {
@@ -252,11 +249,18 @@ func (pd *partData) trimLeft() {
 		b0 := pd.batches[0]
 		finRec := b0.FirstOffset + int64(b0.LastOffsetDelta)
 		if finRec >= pd.logStartOffset {
-			return
+			break
 		}
 		pd.batches = pd.batches[1:]
 		pd.nbytes -= int64(b0.nbytes)
 	}
+	// Prune aborted txn entries fully before logStartOffset.
+	// Entries are sorted by lastOffset, so binary search for the
+	// first entry still relevant.
+	i := sort.Search(len(pd.abortedTxns), func(i int) bool {
+		return pd.abortedTxns[i].lastOffset >= pd.logStartOffset
+	})
+	pd.abortedTxns = pd.abortedTxns[i:]
 }
 
 // recalculateLSO recalculates the last stable offset.
@@ -264,7 +268,7 @@ func (pd *partData) recalculateLSO() {
 	// Find the earliest uncommitted transaction
 	earliestUncommitted := int64(-1)
 	for _, b := range pd.batches {
-		if b.inTx && !b.aborted {
+		if b.inTx {
 			earliestUncommitted = b.FirstOffset
 			break
 		}
@@ -401,21 +405,23 @@ var validTopicConfigs = map[string]string{
 // All valid broker configs we support, as well as their equivalent
 // topic config if there is one.
 var validBrokerConfigs = map[string]string{
-	"broker.id":                            "",
-	"broker.rack":                          "",
-	"compression.type":                     "compression.type",
-	"default.replication.factor":           "",
-	"fetch.max.bytes":                      "",
-	"group.consumer.heartbeat.interval.ms": "",
-	"group.consumer.session.timeout.ms":    "",
-	"log.dir":                              "",
-	"log.message.timestamp.type":           "message.timestamp.type",
-	"log.retention.bytes":                  "retention.bytes",
-	"log.retention.ms":                     "retention.ms",
-	"message.max.bytes":                    "max.message.bytes",
-	"min.insync.replicas":                  "min.insync.replicas",
-	"sasl.enabled.mechanisms":              "",
-	"super.users":                          "",
+	"broker.id":                  "",
+	"broker.rack":                "",
+	"compression.type":           "compression.type",
+	"default.replication.factor": "",
+	"fetch.max.bytes":            "",
+	"max.incremental.fetch.session.cache.slots": "",
+	"group.consumer.heartbeat.interval.ms":      "",
+	"group.consumer.session.timeout.ms":         "",
+	"log.dir":                                   "",
+	"log.message.timestamp.type":                "message.timestamp.type",
+	"transaction.max.timeout.ms":                "",
+	"log.retention.bytes":                       "retention.bytes",
+	"log.retention.ms":                          "retention.ms",
+	"message.max.bytes":                         "max.message.bytes",
+	"min.insync.replicas":                       "min.insync.replicas",
+	"sasl.enabled.mechanisms":                   "",
+	"super.users":                               "",
 }
 
 const (
@@ -451,39 +457,44 @@ var configDefaults = map[string]string{
 	"retention.bytes":        "-1",
 	"retention.ms":           "604800000",
 
-	"default.replication.factor":           "3",
-	"fetch.max.bytes":                      "57671680",
-	"group.consumer.heartbeat.interval.ms": strconv.Itoa(defHeartbeatInterval),
-	"group.consumer.session.timeout.ms":    strconv.Itoa(defSessionTimeout),
-	"log.dir":                              defLogDir,
-	"log.message.timestamp.type":           "CreateTime",
-	"log.retention.bytes":                  "-1",
-	"log.retention.ms":                     "604800000",
-	"message.max.bytes":                    strconv.Itoa(defMaxMessageBytes),
+	"transaction.max.timeout.ms": "900000",
+
+	"default.replication.factor":                "3",
+	"fetch.max.bytes":                           "57671680",
+	"max.incremental.fetch.session.cache.slots": strconv.Itoa(defMaxFetchSessionCacheSlots),
+	"group.consumer.heartbeat.interval.ms":      strconv.Itoa(defHeartbeatInterval),
+	"group.consumer.session.timeout.ms":         strconv.Itoa(defSessionTimeout),
+	"log.dir":                                   defLogDir,
+	"log.message.timestamp.type":                "CreateTime",
+	"log.retention.bytes":                       "-1",
+	"log.retention.ms":                          "604800000",
+	"message.max.bytes":                         strconv.Itoa(defMaxMessageBytes),
 }
 
 // configTypes maps config names to their data types for DescribeConfigs v3+.
 var configTypes = map[string]kmsg.ConfigType{
-	"broker.id":                            kmsg.ConfigTypeInt,
-	"broker.rack":                          kmsg.ConfigTypeString,
-	"cleanup.policy":                       kmsg.ConfigTypeList,
-	"compression.type":                     kmsg.ConfigTypeString,
-	"default.replication.factor":           kmsg.ConfigTypeInt,
-	"fetch.max.bytes":                      kmsg.ConfigTypeInt,
-	"group.consumer.heartbeat.interval.ms": kmsg.ConfigTypeInt,
-	"group.consumer.session.timeout.ms":    kmsg.ConfigTypeInt,
-	"log.dir":                              kmsg.ConfigTypeString,
-	"log.message.timestamp.type":           kmsg.ConfigTypeString,
-	"log.retention.bytes":                  kmsg.ConfigTypeLong,
-	"log.retention.ms":                     kmsg.ConfigTypeLong,
-	"max.message.bytes":                    kmsg.ConfigTypeInt,
-	"message.max.bytes":                    kmsg.ConfigTypeInt,
-	"message.timestamp.type":               kmsg.ConfigTypeString,
-	"min.insync.replicas":                  kmsg.ConfigTypeInt,
-	"retention.bytes":                      kmsg.ConfigTypeLong,
-	"retention.ms":                         kmsg.ConfigTypeLong,
-	"sasl.enabled.mechanisms":              kmsg.ConfigTypeList,
-	"super.users":                          kmsg.ConfigTypeList,
+	"broker.id":                  kmsg.ConfigTypeInt,
+	"broker.rack":                kmsg.ConfigTypeString,
+	"cleanup.policy":             kmsg.ConfigTypeList,
+	"compression.type":           kmsg.ConfigTypeString,
+	"default.replication.factor": kmsg.ConfigTypeInt,
+	"fetch.max.bytes":            kmsg.ConfigTypeInt,
+	"max.incremental.fetch.session.cache.slots": kmsg.ConfigTypeInt,
+	"group.consumer.heartbeat.interval.ms":      kmsg.ConfigTypeInt,
+	"group.consumer.session.timeout.ms":         kmsg.ConfigTypeInt,
+	"log.dir":                                   kmsg.ConfigTypeString,
+	"log.message.timestamp.type":                kmsg.ConfigTypeString,
+	"log.retention.bytes":                       kmsg.ConfigTypeLong,
+	"log.retention.ms":                          kmsg.ConfigTypeLong,
+	"max.message.bytes":                         kmsg.ConfigTypeInt,
+	"message.max.bytes":                         kmsg.ConfigTypeInt,
+	"message.timestamp.type":                    kmsg.ConfigTypeString,
+	"min.insync.replicas":                       kmsg.ConfigTypeInt,
+	"retention.bytes":                           kmsg.ConfigTypeLong,
+	"retention.ms":                              kmsg.ConfigTypeLong,
+	"sasl.enabled.mechanisms":                   kmsg.ConfigTypeList,
+	"super.users":                               kmsg.ConfigTypeList,
+	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
 }
 
 var brokerRack = "krack"
@@ -502,6 +513,16 @@ func (c *Cluster) consumerHeartbeatIntervalMs() int32 {
 
 func (c *Cluster) consumerSessionTimeoutMs() int32 {
 	return c.brokerConfigInt("group.consumer.session.timeout.ms", defSessionTimeout)
+}
+
+const defTransactionMaxTimeoutMs = 900000
+
+func (c *Cluster) transactionMaxTimeoutMs() int32 {
+	return c.brokerConfigInt("transaction.max.timeout.ms", defTransactionMaxTimeoutMs)
+}
+
+func (c *Cluster) fetchSessionCacheSlots() int32 {
+	return c.brokerConfigInt("max.incremental.fetch.session.cache.slots", defMaxFetchSessionCacheSlots)
 }
 
 // maxMessageBytes returns the max.message.bytes for a topic, falling back to

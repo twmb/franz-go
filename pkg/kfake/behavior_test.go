@@ -1730,6 +1730,32 @@ func TestTxnAddOffsetsWithoutGroup(t *testing.T) {
 		t.Fatalf("AddOffsetsToTxn should succeed for non-existent group, got: %v",
 			kerr.ErrorForCode(addResp.ErrorCode))
 	}
+
+	// TxnOffsetCommit with a non-existent topic/partition should return
+	// UNKNOWN_TOPIC_OR_PARTITION for that partition only.
+	ocReq := kmsg.NewTxnOffsetCommitRequest()
+	ocReq.TransactionalID = "txid-no-group"
+	ocReq.Group = "nonexistent-group"
+	ocReq.ProducerID = pid
+	ocReq.ProducerEpoch = epoch
+	ocReq.Generation = -1
+	ocT := kmsg.NewTxnOffsetCommitRequestTopic()
+	ocT.Topic = "no-such-topic"
+	ocP := kmsg.NewTxnOffsetCommitRequestTopicPartition()
+	ocP.Partition = 99
+	ocP.Offset = 0
+	ocT.Partitions = append(ocT.Partitions, ocP)
+	ocReq.Topics = append(ocReq.Topics, ocT)
+	ocResp, err := ocReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("txn offset commit: %v", err)
+	}
+	if len(ocResp.Topics) != 1 || len(ocResp.Topics[0].Partitions) != 1 {
+		t.Fatalf("expected 1 topic/1 partition in response, got %d topics", len(ocResp.Topics))
+	}
+	if ec := ocResp.Topics[0].Partitions[0].ErrorCode; ec != kerr.UnknownTopicOrPartition.Code {
+		t.Fatalf("expected UNKNOWN_TOPIC_OR_PARTITION, got: %v", kerr.ErrorForCode(ec))
+	}
 }
 
 // TestTxnDescribeTransactions verifies that DescribeTransactions
@@ -1894,6 +1920,876 @@ func TestProduceSyncUnlinger(t *testing.T) {
 	records := consumeN(t, consumer, 4, 5*time.Second)
 	if len(records) != 4 {
 		t.Fatalf("expected 4 consumed records, got %d", len(records))
+	}
+}
+
+// TestTxnEndTxnTV2RetryMismatchedDirection verifies that retrying an
+// EndTxn v5+ with the wrong direction (e.g. abort after a committed
+// transaction) returns INVALID_TXN_STATE.
+func TestTxnEndTxnTV2RetryMismatchedDirection(t *testing.T) {
+	t.Parallel()
+	topic := "t-endtxn-v5-mismatch"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	resp := initProducerID(t, cl, "txid-v5-mismatch", -1, -1, 60000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	pid := resp.ProducerID
+	epoch := resp.ProducerEpoch
+
+	// Start and commit a transaction.
+	addReq := kmsg.NewAddPartitionsToTxnRequest()
+	addReq.TransactionalID = "txid-v5-mismatch"
+	addReq.ProducerID = pid
+	addReq.ProducerEpoch = epoch
+	addT := kmsg.NewAddPartitionsToTxnRequestTopic()
+	addT.Topic = topic
+	addT.Partitions = []int32{0}
+	addReq.Topics = append(addReq.Topics, addT)
+	if _, err := addReq.RequestWith(ctx, cl); err != nil {
+		t.Fatalf("add partitions: %v", err)
+	}
+
+	endReq := kmsg.NewEndTxnRequest()
+	endReq.TransactionalID = "txid-v5-mismatch"
+	endReq.ProducerID = pid
+	endReq.ProducerEpoch = epoch
+	endReq.Commit = true
+	endResp, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("end commit: %v", err)
+	}
+	if endResp.ErrorCode != 0 {
+		t.Fatalf("end commit error: %v", kerr.ErrorForCode(endResp.ErrorCode))
+	}
+	// v5+ bumps epoch on commit.
+	newEpoch := endResp.ProducerEpoch
+
+	// Retry with the OLD epoch but ABORT direction - should fail.
+	endReq.ProducerEpoch = epoch // old epoch, server has newEpoch
+	endReq.Commit = false        // wrong direction
+	endResp2, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("retry abort: %v", err)
+	}
+	if endResp2.ErrorCode != kerr.InvalidTxnState.Code {
+		t.Fatalf("expected INVALID_TXN_STATE for mismatched retry, got: %v", kerr.ErrorForCode(endResp2.ErrorCode))
+	}
+
+	// Retry with old epoch and COMMIT direction - should succeed.
+	endReq.Commit = true
+	endResp3, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("retry commit: %v", err)
+	}
+	if endResp3.ErrorCode != 0 {
+		t.Fatalf("matching retry should succeed, got: %v", kerr.ErrorForCode(endResp3.ErrorCode))
+	}
+	if endResp3.ProducerEpoch != newEpoch {
+		t.Fatalf("expected epoch %d in retry response, got %d", newEpoch, endResp3.ProducerEpoch)
+	}
+}
+
+// TestTxnEndTxnTV2EmptyAbortBumpsEpoch verifies that aborting an empty
+// transaction at v5+ bumps the epoch.
+func TestTxnEndTxnTV2EmptyAbortBumpsEpoch(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	resp := initProducerID(t, cl, "txid-empty-bump", -1, -1, 60000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	origEpoch := resp.ProducerEpoch
+
+	endReq := kmsg.NewEndTxnRequest()
+	endReq.TransactionalID = "txid-empty-bump"
+	endReq.ProducerID = resp.ProducerID
+	endReq.ProducerEpoch = origEpoch
+	endReq.Commit = false
+	endResp, err := endReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("empty abort: %v", err)
+	}
+	if endResp.ErrorCode != 0 {
+		t.Fatalf("empty abort error: %v", kerr.ErrorForCode(endResp.ErrorCode))
+	}
+	if endResp.ProducerEpoch <= origEpoch {
+		t.Fatalf("expected epoch > %d after empty abort, got %d", origEpoch, endResp.ProducerEpoch)
+	}
+}
+
+// TestTxnInitProducerIDMaxTimeout verifies that InitProducerID with a
+// timeout exceeding transaction.max.timeout.ms returns
+// INVALID_TRANSACTION_TIMEOUT.
+func TestTxnInitProducerIDMaxTimeout(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.BrokerConfigs(map[string]string{
+		"transaction.max.timeout.ms": "5000",
+	}))
+	cl := newPlainClient(t, c)
+
+	// Timeout within limit - should succeed.
+	resp := initProducerID(t, cl, "txid-timeout-ok", -1, -1, 5000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("expected success for timeout <= max, got: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+
+	// Timeout exceeding limit - should fail.
+	resp2 := initProducerID(t, cl, "txid-timeout-bad", -1, -1, 5001)
+	if resp2.ErrorCode != kerr.InvalidTransactionTimeout.Code {
+		t.Fatalf("expected INVALID_TRANSACTION_TIMEOUT for timeout > max, got: %v", kerr.ErrorForCode(resp2.ErrorCode))
+	}
+}
+
+// TestProduceControlBatchRejected verifies that client-sent control batches
+// are rejected with INVALID_RECORD.
+func TestProduceControlBatchRejected(t *testing.T) {
+	t.Parallel()
+	topic := "t-control-batch"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	// Build a batch with the control bit (0x0020) set.
+	rec := kmsg.Record{Key: []byte{0, 0, 0, 1}, Value: []byte{}}
+	rec.Length = int32(len(rec.AppendTo(nil)) - 1)
+	now := time.Now().UnixMilli()
+	batch := kmsg.RecordBatch{
+		PartitionLeaderEpoch: -1,
+		Magic:                2,
+		Attributes:           int16(0x0030), // transactional + control
+		LastOffsetDelta:      0,
+		FirstTimestamp:       now,
+		MaxTimestamp:         now,
+		ProducerID:           1,
+		ProducerEpoch:        0,
+		FirstSequence:        -1,
+		NumRecords:           1,
+		Records:              rec.AppendTo(nil),
+	}
+	raw := batch.AppendTo(nil)
+	batch.Length = int32(len(raw) - 12)
+	raw = batch.AppendTo(nil)
+	batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+
+	req := kmsg.NewProduceRequest()
+	req.Version = 11
+	req.Acks = -1
+	req.TimeoutMillis = 5000
+	rt := kmsg.NewProduceRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewProduceRequestTopicPartition()
+	rp.Partition = 0
+	rp.Records = batch.AppendTo(nil)
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("produce: %v", err)
+	}
+	errCode := resp.Topics[0].Partitions[0].ErrorCode
+	if errCode != kerr.InvalidRecord.Code {
+		t.Fatalf("expected INVALID_RECORD for control batch, got: %v", kerr.ErrorForCode(errCode))
+	}
+}
+
+// TestTxnNonTransactionalProduceDuringTx verifies that a
+// non-transactional produce during an active transaction returns
+// INVALID_TXN_STATE.
+func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
+	t.Parallel()
+	topic := "t-non-txn-during-tx"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	// Init a transactional producer.
+	resp := initProducerID(t, cl, "txid-non-txn-during", -1, -1, 60000)
+	if resp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	pid := resp.ProducerID
+	epoch := resp.ProducerEpoch
+
+	// Start a transaction by adding a partition.
+	addReq := kmsg.NewAddPartitionsToTxnRequest()
+	addReq.TransactionalID = "txid-non-txn-during"
+	addReq.ProducerID = pid
+	addReq.ProducerEpoch = epoch
+	addT := kmsg.NewAddPartitionsToTxnRequestTopic()
+	addT.Topic = topic
+	addT.Partitions = []int32{0}
+	addReq.Topics = append(addReq.Topics, addT)
+	if _, err := addReq.RequestWith(ctx, cl); err != nil {
+		t.Fatalf("add partitions: %v", err)
+	}
+
+	// Produce a NON-transactional batch using the same producer ID.
+	rec := kmsg.Record{Key: []byte("k"), Value: []byte("v")}
+	rec.Length = int32(len(rec.AppendTo(nil)) - 1)
+	now := time.Now().UnixMilli()
+	batch := kmsg.RecordBatch{
+		PartitionLeaderEpoch: -1,
+		Magic:                2,
+		Attributes:           0, // non-transactional
+		LastOffsetDelta:      0,
+		FirstTimestamp:       now,
+		MaxTimestamp:         now,
+		ProducerID:           pid,
+		ProducerEpoch:        epoch,
+		FirstSequence:        0,
+		NumRecords:           1,
+		Records:              rec.AppendTo(nil),
+	}
+	raw := batch.AppendTo(nil)
+	batch.Length = int32(len(raw) - 12)
+	raw = batch.AppendTo(nil)
+	batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+
+	produceReq := kmsg.NewProduceRequest()
+	produceReq.Version = 11
+	produceReq.Acks = -1
+	produceReq.TimeoutMillis = 5000
+	rt := kmsg.NewProduceRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewProduceRequestTopicPartition()
+	rp.Partition = 0
+	rp.Records = batch.AppendTo(nil)
+	rt.Partitions = append(rt.Partitions, rp)
+	produceReq.Topics = append(produceReq.Topics, rt)
+
+	produceResp, err := produceReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("produce: %v", err)
+	}
+	errCode := produceResp.Topics[0].Partitions[0].ErrorCode
+	if errCode != kerr.InvalidTxnState.Code {
+		t.Fatalf("expected INVALID_TXN_STATE for non-txn produce during tx, got: %v", kerr.ErrorForCode(errCode))
+	}
+}
+
+// TestClassicIncompatibleProtocolRejected verifies that a member whose
+// protocols are not supported by all existing members is rejected with
+// INCONSISTENT_GROUP_PROTOCOL.
+func TestClassicIncompatibleProtocolRejected(t *testing.T) {
+	t.Parallel()
+	topic := "t-incompat-proto"
+	group := "g-incompat-proto"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	// Member A joins with protocols ["range"].
+	joinA := kmsg.NewJoinGroupRequest()
+	joinA.Group = group
+	joinA.SessionTimeoutMillis = 30000
+	joinA.RebalanceTimeoutMillis = 10000
+	joinA.ProtocolType = "consumer"
+	pRange := kmsg.NewJoinGroupRequestProtocol()
+	pRange.Name = "range"
+	pRange.Metadata = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	joinA.Protocols = append(joinA.Protocols, pRange)
+	respA, err := joinA.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("A join: %v", err)
+	}
+	// First join with no member ID gets MEMBER_ID_REQUIRED (v4+).
+	if respA.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("A join: expected MEMBER_ID_REQUIRED, got %v", kerr.ErrorForCode(respA.ErrorCode))
+	}
+	joinA.MemberID = respA.MemberID
+
+	// Complete A's join.
+	respA2, err := joinA.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("A rejoin: %v", err)
+	}
+	if respA2.ErrorCode != 0 {
+		t.Fatalf("A rejoin error: %v", kerr.ErrorForCode(respA2.ErrorCode))
+	}
+
+	// Sync A so group is stable.
+	syncA := kmsg.NewSyncGroupRequest()
+	syncA.Group = group
+	syncA.MemberID = joinA.MemberID
+	syncA.Generation = respA2.Generation
+	syncA.ProtocolType = kmsg.StringPtr("consumer")
+	syncA.Protocol = kmsg.StringPtr("range")
+	sa := kmsg.NewSyncGroupRequestGroupAssignment()
+	sa.MemberID = joinA.MemberID
+	sa.MemberAssignment = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	syncA.GroupAssignment = append(syncA.GroupAssignment, sa)
+	if _, err := syncA.RequestWith(ctx, cl); err != nil {
+		t.Fatalf("A sync: %v", err)
+	}
+
+	// Member B joins with ONLY ["roundrobin"] - incompatible with A's ["range"].
+	joinB := kmsg.NewJoinGroupRequest()
+	joinB.Group = group
+	joinB.SessionTimeoutMillis = 30000
+	joinB.RebalanceTimeoutMillis = 10000
+	joinB.ProtocolType = "consumer"
+	pRR := kmsg.NewJoinGroupRequestProtocol()
+	pRR.Name = "roundrobin"
+	pRR.Metadata = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	joinB.Protocols = append(joinB.Protocols, pRR)
+	respB, err := joinB.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("B join: %v", err)
+	}
+	if respB.ErrorCode != kerr.InconsistentGroupProtocol.Code {
+		t.Fatalf("expected INCONSISTENT_GROUP_PROTOCOL for incompatible member, got %v", kerr.ErrorForCode(respB.ErrorCode))
+	}
+}
+
+// TestClassicPendingSyncTimeout verifies that members who receive
+// JoinGroup responses but don't send SyncGroup within the rebalance
+// timeout are removed and a new rebalance is triggered.
+func TestClassicPendingSyncTimeout(t *testing.T) {
+	t.Parallel()
+	topic := "t-pending-sync"
+	group := "g-pending-sync"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	// Member A joins with a short rebalance timeout.
+	joinA := kmsg.NewJoinGroupRequest()
+	joinA.Group = group
+	joinA.SessionTimeoutMillis = 30000
+	joinA.RebalanceTimeoutMillis = 500 // short
+	joinA.ProtocolType = "consumer"
+	p := kmsg.NewJoinGroupRequestProtocol()
+	p.Name = "range"
+	p.Metadata = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	joinA.Protocols = append(joinA.Protocols, p)
+	respA, err := joinA.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("A join: %v", err)
+	}
+	if respA.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("A join: expected MEMBER_ID_REQUIRED, got %v", kerr.ErrorForCode(respA.ErrorCode))
+	}
+	joinA.MemberID = respA.MemberID
+	respA2, err := joinA.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("A rejoin: %v", err)
+	}
+	if respA2.ErrorCode != 0 {
+		t.Fatalf("A rejoin error: %v", kerr.ErrorForCode(respA2.ErrorCode))
+	}
+
+	// Don't send SyncGroup. Wait for the pending sync timeout to fire.
+	time.Sleep(800 * time.Millisecond)
+
+	// The member should have been removed. Verify by describing
+	// the group - it should be empty or dead.
+	adm := kadm.NewClient(cl)
+	described, err := adm.DescribeGroups(ctx, group)
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	dg := described[group]
+	if len(dg.Members) > 0 {
+		t.Fatalf("expected 0 members after pending sync timeout, got %d (state=%s)", len(dg.Members), dg.State)
+	}
+}
+
+// TestClassicProtocolVoting verifies that protocol selection uses
+// Kafka-style voting: each member votes for their most-preferred
+// protocol that is universally supported.
+func TestClassicProtocolVoting(t *testing.T) {
+	t.Parallel()
+	topic := "t-proto-vote"
+	group := "g-proto-vote"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	ctx := context.Background()
+
+	makeJoinReq := func(protos []string) *kmsg.JoinGroupRequest {
+		req := kmsg.NewPtrJoinGroupRequest()
+		req.Group = group
+		req.SessionTimeoutMillis = 30000
+		req.RebalanceTimeoutMillis = 250
+		req.ProtocolType = "consumer"
+		for _, name := range protos {
+			p := kmsg.NewJoinGroupRequestProtocol()
+			p.Name = name
+			p.Metadata = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+			req.Protocols = append(req.Protocols, p)
+		}
+		return req
+	}
+
+	// Both members support "range" and "sticky", but in different preference order.
+	// A prefers sticky, B prefers range. Both support both.
+	// Result should be: sticky gets 1 vote (A), range gets 1 vote (B).
+	// Map iteration is non-deterministic for ties, but at least both are candidates.
+	clA := newPlainClient(t, c)
+	clB := newPlainClient(t, c)
+
+	// A joins with [sticky, range].
+	joinA := makeJoinReq([]string{"sticky", "range"})
+	respA, err := joinA.RequestWith(ctx, clA)
+	if err != nil {
+		t.Fatalf("A join: %v", err)
+	}
+	if respA.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("A join: expected MEMBER_ID_REQUIRED, got %v", kerr.ErrorForCode(respA.ErrorCode))
+	}
+	joinA.MemberID = respA.MemberID
+
+	// B joins with [range, sticky] - range is preferred.
+	joinB := makeJoinReq([]string{"range", "sticky"})
+	respB, err := joinB.RequestWith(ctx, clB)
+	if err != nil {
+		t.Fatalf("B join: %v", err)
+	}
+	if respB.ErrorCode != kerr.MemberIDRequired.Code {
+		t.Fatalf("B join: expected MEMBER_ID_REQUIRED, got %v", kerr.ErrorForCode(respB.ErrorCode))
+	}
+	joinB.MemberID = respB.MemberID
+
+	// Complete both joins concurrently (both must be in join for the
+	// rebalance to complete).
+	type joinResult struct {
+		resp *kmsg.JoinGroupResponse
+		err  error
+	}
+	chA := make(chan joinResult, 1)
+	chB := make(chan joinResult, 1)
+	go func() {
+		r, e := joinA.RequestWith(ctx, clA)
+		chA <- joinResult{r, e}
+	}()
+	go func() {
+		r, e := joinB.RequestWith(ctx, clB)
+		chB <- joinResult{r, e}
+	}()
+
+	rA := <-chA
+	rB := <-chB
+	if rA.err != nil {
+		t.Fatalf("A rejoin: %v", rA.err)
+	}
+	if rB.err != nil {
+		t.Fatalf("B rejoin: %v", rB.err)
+	}
+	if rA.resp.ErrorCode != 0 {
+		t.Fatalf("A rejoin error: %v", kerr.ErrorForCode(rA.resp.ErrorCode))
+	}
+	if rB.resp.ErrorCode != 0 {
+		t.Fatalf("B rejoin error: %v", kerr.ErrorForCode(rB.resp.ErrorCode))
+	}
+
+	// The selected protocol should be one of the candidates.
+	proto := ""
+	if rA.resp.Protocol != nil {
+		proto = *rA.resp.Protocol
+	}
+	if proto != "range" && proto != "sticky" {
+		t.Fatalf("expected protocol 'range' or 'sticky', got %q", proto)
+	}
+}
+
+// TestFetchSessionEviction verifies that when the per-broker session
+// cache is full, the oldest session is evicted. The evicted client
+// gets FETCH_SESSION_ID_NOT_FOUND on its next incremental fetch and
+// must re-establish a session to continue consuming.
+func TestFetchSessionEviction(t *testing.T) {
+	t.Parallel()
+	topic := "t-session-evict"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic), kfake.BrokerConfigs(map[string]string{
+		"max.incremental.fetch.session.cache.slots": "3",
+	}))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(1, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	// Produce a record so fetches have data.
+	r := kgo.StringRecord("evict-test")
+	r.Topic = topic
+	r.Partition = 0
+	produceSync(t, cl, r)
+
+	mkFetch := func(sessionID, epoch int32) *kmsg.FetchRequest {
+		return fetchRequest(sessionID, epoch, topic, pp{0, 0})
+	}
+
+	// Create session A and do an incremental fetch to confirm it works.
+	respA, err := mkFetch(0, 0).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("create session A: %v", err)
+	}
+	sidA := respA.SessionID
+
+	resp, err := mkFetch(sidA, 1).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("incremental A: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("incremental A error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+
+	// Fill the remaining 2 slots with sessions B and C.
+	for range 2 {
+		resp, err := mkFetch(0, 0).RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.ErrorCode != 0 {
+			t.Fatalf("create session: %v", kerr.ErrorForCode(resp.ErrorCode))
+		}
+	}
+
+	// Create session D - this should evict session A (oldest).
+	resp, err = mkFetch(0, 0).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("create session D: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+
+	// Session A's next incremental fetch should get FETCH_SESSION_ID_NOT_FOUND.
+	resp, err = mkFetch(sidA, 2).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != kerr.FetchSessionIDNotFound.Code {
+		t.Fatalf("expected FETCH_SESSION_ID_NOT_FOUND for evicted session, got: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+
+	// The evicted client can re-establish a session and continue consuming.
+	resp, err = mkFetch(0, 0).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("re-establish error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	if len(resp.Topics) == 0 || len(resp.Topics[0].Partitions) == 0 {
+		t.Fatal("expected data in re-established session response")
+	}
+	if len(resp.Topics[0].Partitions[0].RecordBatches) == 0 {
+		t.Fatal("expected records in re-established session")
+	}
+}
+
+// fetchRequest builds a kmsg.FetchRequest for the given topic/partitions.
+func fetchRequest(sessionID, sessionEpoch int32, topic string, partitions ...struct {
+	p      int32
+	offset int64
+}) *kmsg.FetchRequest {
+	req := kmsg.NewPtrFetchRequest()
+	req.Version = 11
+	req.MaxWaitMillis = 100
+	req.MinBytes = 1
+	req.MaxBytes = 1 << 20
+	req.SessionID = sessionID
+	req.SessionEpoch = sessionEpoch
+	if len(partitions) > 0 {
+		ft := kmsg.NewFetchRequestTopic()
+		ft.Topic = topic
+		for _, p := range partitions {
+			fp := kmsg.NewFetchRequestTopicPartition()
+			fp.Partition = p.p
+			fp.FetchOffset = p.offset
+			fp.PartitionMaxBytes = 1 << 20
+			fp.CurrentLeaderEpoch = -1
+			ft.Partitions = append(ft.Partitions, fp)
+		}
+		req.Topics = append(req.Topics, ft)
+	}
+	return req
+}
+
+type pp struct {
+	p      int32
+	offset int64
+}
+
+func TestIncrementalFetchOmitsUnchanged(t *testing.T) {
+	t.Parallel()
+	topic := "t-incr-fetch"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(1, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	// Produce 5 records.
+	produceNStrings(t, cl, topic, 5)
+
+	// Step 1: epoch=0 fetch creates session, returns all records.
+	req := fetchRequest(0, 0, topic, pp{0, 0})
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("fetch error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	sessionID := resp.SessionID
+	if sessionID == 0 {
+		t.Fatal("expected non-zero session ID")
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatalf("expected 1 topic with 1 partition, got %d topics", len(resp.Topics))
+	}
+	if len(resp.Topics[0].Partitions[0].RecordBatches) == 0 {
+		t.Fatal("expected records in initial fetch")
+	}
+
+	// Step 2: epoch=1 incremental, advance offset to 5 (caught up).
+	// No new data - should return 0 partitions.
+	req = fetchRequest(sessionID, 1, topic, pp{0, 5})
+	resp, err = req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("fetch error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	totalPartitions := 0
+	for _, rt := range resp.Topics {
+		totalPartitions += len(rt.Partitions)
+	}
+	if totalPartitions != 0 {
+		t.Fatalf("expected 0 partitions in unchanged incremental, got %d", totalPartitions)
+	}
+
+	// Step 3: Produce 5 more records.
+	produceNStrings(t, cl, topic, 5)
+
+	// Step 4: epoch=2 incremental (session has offset=5, new records at 5-9).
+	// HWM changed and there are records - partition should be included.
+	req = fetchRequest(sessionID, 2, topic)
+	resp, err = req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("fetch error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatalf("expected 1 topic/1 partition, got %d topics", len(resp.Topics))
+	}
+	if len(resp.Topics[0].Partitions[0].RecordBatches) == 0 {
+		t.Fatal("expected records in incremental after produce")
+	}
+
+	// Step 5: epoch=3 incremental, advance offset past all records.
+	// Should return 0 partitions (caught up, nothing changed).
+	req = fetchRequest(sessionID, 3, topic, pp{0, 10})
+	resp, err = req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("fetch error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	totalPartitions = 0
+	for _, rt := range resp.Topics {
+		totalPartitions += len(rt.Partitions)
+	}
+	if totalPartitions != 0 {
+		t.Fatalf("expected 0 partitions when caught up, got %d", totalPartitions)
+	}
+}
+
+func TestIncrementalFetchIncludesErrors(t *testing.T) {
+	t.Parallel()
+	topic := "t-incr-err"
+
+	// Only 1 partition exists. We'll fetch p0 (exists) and p99 (does not).
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(1, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	produceNStrings(t, cl, topic, 1)
+
+	// Step 1: epoch=0 creates session with p0 and p99.
+	// p0 returns data, p99 returns UnknownTopicOrPartition.
+	req := fetchRequest(0, 0, topic, pp{0, 0}, pp{99, 0})
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	sessionID := resp.SessionID
+
+	// Step 2: epoch=1 incremental, advance p0 offset to 1 (caught up).
+	// p0 should be filtered (unchanged HWM, no records).
+	// p99 should be included (error partitions always included since
+	// cached HWM is set to -1 on error).
+	req = fetchRequest(sessionID, 1, topic, pp{0, 1})
+	resp, err = req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	var sawError bool
+	var sawP0 bool
+	for _, rt := range resp.Topics {
+		for _, rp := range rt.Partitions {
+			if rp.Partition == 99 && rp.ErrorCode != 0 {
+				sawError = true
+			}
+			if rp.Partition == 0 {
+				sawP0 = true
+			}
+		}
+	}
+	if !sawError {
+		t.Fatal("expected error partition p99 in incremental response")
+	}
+	if sawP0 {
+		t.Fatal("p0 should have been filtered from incremental response")
+	}
+}
+
+func TestIncrementalFetchEndToEnd(t *testing.T) {
+	t.Parallel()
+	topic := "t-incr-e2e"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+
+	// Produce to each partition in sequence.
+	for p := range int32(3) {
+		r := kgo.StringRecord("val-" + strconv.Itoa(int(p)))
+		r.Topic = topic
+		r.Partition = p
+		produceSync(t, cl, r)
+	}
+
+	// Consume all 3 records through incremental sessions.
+	records := consumeN(t, cl, 3, 10*time.Second)
+	if len(records) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(records))
+	}
+
+	// Verify all partitions represented.
+	seen := make(map[int32]bool)
+	for _, r := range records {
+		seen[r.Partition] = true
+	}
+	for p := range int32(3) {
+		if !seen[p] {
+			t.Fatalf("missing record from partition %d", p)
+		}
+	}
+}
+
+func TestAbortedTxnIndexOverlap(t *testing.T) {
+	t.Parallel()
+	topic := "t-abort-idx"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(1, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	// Produce a transactional batch, then abort. This creates records
+	// at offsets 0-4 and an abort marker at offset 5.
+	txnCl := newPlainClient(t, c,
+		kgo.TransactionalID("abort-idx-txn"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.MaxVersions(v),
+	)
+	if err := txnCl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		r := kgo.StringRecord("txn-" + strconv.Itoa(i))
+		r.Topic = topic
+		r.Partition = 0
+		produceSync(t, txnCl, r)
+	}
+	if err := txnCl.AbortBufferedRecords(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnCl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce 5 non-txn records (offsets 6-10).
+	for i := range 5 {
+		r := kgo.StringRecord("plain-" + strconv.Itoa(i))
+		r.Topic = topic
+		r.Partition = 0
+		produceSync(t, cl, r)
+	}
+
+	// Fetch from offset 3 (mid-aborted-transaction) with read_committed.
+	// The aborted transaction started at offset 0, abort marker at offset 5.
+	// The fetch should include this in AbortedTransactions even though
+	// firstOffset (0) is before fetchOffset (3).
+	req := kmsg.NewPtrFetchRequest()
+	req.Version = 11
+	req.MaxWaitMillis = 100
+	req.MinBytes = 1
+	req.MaxBytes = 1 << 20
+	req.SessionEpoch = -1
+	req.IsolationLevel = 1 // read_committed
+	ft := kmsg.NewFetchRequestTopic()
+	ft.Topic = topic
+	fp := kmsg.NewFetchRequestTopicPartition()
+	fp.Partition = 0
+	fp.FetchOffset = 3
+	fp.PartitionMaxBytes = 1 << 20
+	fp.CurrentLeaderEpoch = -1
+	ft.Partitions = append(ft.Partitions, fp)
+	req.Topics = append(req.Topics, ft)
+
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatalf("expected 1 topic/1 partition, got %d topics", len(resp.Topics))
+	}
+	rp := resp.Topics[0].Partitions[0]
+	if rp.ErrorCode != 0 {
+		t.Fatalf("partition error: %v", kerr.ErrorForCode(rp.ErrorCode))
+	}
+
+	// Verify AbortedTransactions includes the overlapping transaction.
+	var found bool
+	for _, at := range rp.AbortedTransactions {
+		if at.FirstOffset == 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected AbortedTransactions to include txn starting at offset 0, got %v", rp.AbortedTransactions)
 	}
 }
 

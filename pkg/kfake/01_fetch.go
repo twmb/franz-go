@@ -30,7 +30,7 @@ import (
 // Fetch sessions (KIP-227):
 // * Sessions allow incremental fetches where clients only send changed partitions
 // * We track session state per broker and merge with request to get full partition list
-// * We always return full results (not incremental diffs) which is compliant behavior
+// * Incremental responses omit unchanged partitions (no records, same HWM/logStartOffset, no error)
 //
 // Version notes:
 // * v4: RecordBatch format, IsolationLevel, LastStableOffset, AbortedTransactions
@@ -60,7 +60,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	var newSession bool
 	if req.Version >= 7 {
 		var errCode int16
-		session, newSession, errCode = c.fetchSessions.getOrCreate(creq.cc.b.node, req.SessionID, req.SessionEpoch)
+		session, newSession, errCode = c.fetchSessions.getOrCreate(creq.cc.b.node, req.SessionID, req.SessionEpoch, int(c.fetchSessionCacheSlots()))
 		if errCode != 0 {
 			resp.ErrorCode = errCode
 			return resp, nil
@@ -303,11 +303,7 @@ full:
 			continue
 		}
 
-		// Track aborted transactions per producer. The kgo client expects
-		// AbortedTransactions to be sorted by FirstOffset per producer.
-		var abortedByProducer map[int64][]int64
-
-		var pbytes int
+		var pbytes, pBatchesAdded int
 		for _, b := range pd.batches[i:] {
 			if readCommitted && b.inTx {
 				break
@@ -319,41 +315,36 @@ full:
 				break
 			}
 			batchesAdded++
-
-			// Track aborted transactions in returned batches
-			if readCommitted && req.Version >= 4 && b.aborted {
-				if abortedByProducer == nil {
-					abortedByProducer = make(map[int64][]int64)
-				}
-				// Only add if we haven't seen this txnFirstOffset for this producer
-				offsets := abortedByProducer[b.ProducerID]
-				found := false
-				for _, o := range offsets {
-					if o == b.txnFirstOffset {
-						found = true
-						break
-					}
-				}
-				if !found {
-					abortedByProducer[b.ProducerID] = append(offsets, b.txnFirstOffset)
-				}
-			}
-
+			pBatchesAdded++
 			sp.RecordBatches = b.AppendTo(sp.RecordBatches)
 		}
 
-		// Add aborted transactions for read_committed consumers
-		// Sorted by FirstOffset per producer (as expected by kgo client)
-		for producerID, offsets := range abortedByProducer {
-			sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
-			for _, firstOffset := range offsets {
+		// For read_committed, look up aborted transactions that overlap
+		// the returned data range using the partition's aborted txn index.
+		if readCommitted && req.Version >= 4 && pBatchesAdded > 0 {
+			lastBatch := pd.batches[i+pBatchesAdded-1]
+			upperBound := lastBatch.FirstOffset + int64(lastBatch.LastOffsetDelta) + 1
+			// Binary search for the first entry whose abort marker
+			// is at or after the fetch offset.
+			j := sort.Search(len(pd.abortedTxns), func(k int) bool {
+				return pd.abortedTxns[k].lastOffset >= fp.fetchOffset
+			})
+			for ; j < len(pd.abortedTxns); j++ {
+				e := pd.abortedTxns[j]
+				if e.firstOffset >= upperBound {
+					continue
+				}
 				at := kmsg.NewFetchResponseTopicPartitionAbortedTransaction()
-				at.ProducerID = producerID
-				at.FirstOffset = firstOffset
+				at.ProducerID = e.producerID
+				at.FirstOffset = e.firstOffset
 				sp.AbortedTransactions = append(sp.AbortedTransactions, at)
 			}
 		}
 	}
+
+	// Record partition state in the session. For incremental fetches
+	// (not new), also filter out unchanged partitions.
+	session.updateAndFilterResponse(resp, !newSession)
 
 	// Bump session epoch after successful fetch, but not for newly created
 	// sessions. The client will send epoch=1 for its first incremental fetch
@@ -435,6 +426,7 @@ type fetchSession struct {
 	id         int32
 	epoch      int32
 	partitions map[tp]fetchSessionPartition
+	lastUsed   time.Time
 }
 
 // fetchSessionPartition tracks per-partition state within a session.
@@ -442,7 +434,15 @@ type fetchSessionPartition struct {
 	fetchOffset  int64
 	maxBytes     int32
 	currentEpoch int32
+
+	// Cached from last response sent. Used to detect changes for
+	// incremental filtering. Initialized to -1 to force inclusion
+	// in the first response after the partition is added.
+	lastHighWatermark  int64
+	lastLogStartOffset int64
 }
+
+const defMaxFetchSessionCacheSlots = 1000
 
 func (fs *fetchSessions) init(brokerNode int32) {
 	if fs.sessions == nil {
@@ -457,7 +457,7 @@ func (fs *fetchSessions) init(brokerNode int32) {
 // getOrCreate returns an existing session or creates a new one based on the
 // request's SessionID and SessionEpoch. Returns (nil, false, 0) for legacy
 // sessionless fetches.
-func (fs *fetchSessions) getOrCreate(brokerNode, sessionID, sessionEpoch int32) (*fetchSession, bool, int16) {
+func (fs *fetchSessions) getOrCreate(brokerNode, sessionID, sessionEpoch int32, maxSlots int) (*fetchSession, bool, int16) {
 	fs.init(brokerNode)
 
 	// SessionEpoch=-1: Full fetch, no session (legacy mode).
@@ -477,11 +477,26 @@ func (fs *fetchSessions) getOrCreate(brokerNode, sessionID, sessionEpoch int32) 
 		if sessionID > 0 {
 			delete(fs.sessions[brokerNode], sessionID)
 		}
+		// Evict the oldest session if we're at the limit.
+		brokerSessions := fs.sessions[brokerNode]
+		if len(brokerSessions) >= maxSlots {
+			var oldestID int32
+			var oldestTime time.Time
+			for id, s := range brokerSessions {
+				if oldestTime.IsZero() || s.lastUsed.Before(oldestTime) {
+					oldestID = id
+					oldestTime = s.lastUsed
+				}
+			}
+			delete(brokerSessions, oldestID)
+		}
+		now := time.Now()
 		id := fs.nextID.Add(1) - 1
 		session := &fetchSession{
 			id:         id,
 			epoch:      1,
 			partitions: make(map[tp]fetchSessionPartition),
+			lastUsed:   now,
 		}
 		fs.sessions[brokerNode][id] = session
 		return session, true, 0
@@ -495,6 +510,7 @@ func (fs *fetchSessions) getOrCreate(brokerNode, sessionID, sessionEpoch int32) 
 	if sessionEpoch != session.epoch {
 		return nil, false, kerr.InvalidFetchSessionEpoch.Code
 	}
+	session.lastUsed = time.Now()
 	return session, false, 0
 }
 
@@ -502,7 +518,21 @@ func (s *fetchSession) updatePartition(topic string, partition int32, fetchOffse
 	if s == nil {
 		return
 	}
-	s.partitions[tp{topic, partition}] = fetchSessionPartition{fetchOffset, maxBytes, currentEpoch}
+	key := tp{topic, partition}
+	if existing, ok := s.partitions[key]; ok {
+		existing.fetchOffset = fetchOffset
+		existing.maxBytes = maxBytes
+		existing.currentEpoch = currentEpoch
+		s.partitions[key] = existing
+	} else {
+		s.partitions[key] = fetchSessionPartition{
+			fetchOffset:        fetchOffset,
+			maxBytes:           maxBytes,
+			currentEpoch:       currentEpoch,
+			lastHighWatermark:  -1,
+			lastLogStartOffset: -1,
+		}
+	}
 }
 
 func (s *fetchSession) forgetPartition(topic string, partition int32) {
@@ -520,4 +550,52 @@ func (s *fetchSession) bumpEpoch() {
 	if s.epoch < 0 {
 		s.epoch = 1
 	}
+}
+
+// updateAndFilterResponse records the HWM and logStartOffset from each
+// partition as baseline state. When filter is true, unchanged partitions
+// (no records, same HWM/logStartOffset, no error) are removed from the
+// response for incremental fetch.
+func (s *fetchSession) updateAndFilterResponse(resp *kmsg.FetchResponse, filter bool) {
+	if s == nil {
+		return
+	}
+	n := 0
+	for i := range resp.Topics {
+		rt := &resp.Topics[i]
+		np := 0
+		for j := range rt.Partitions {
+			rp := &rt.Partitions[j]
+			key := tp{rt.Topic, rp.Partition}
+			sp, ok := s.partitions[key]
+
+			include := !filter || !ok ||
+				len(rp.RecordBatches) > 0 ||
+				rp.ErrorCode != 0 ||
+				rp.HighWatermark != sp.lastHighWatermark ||
+				rp.LogStartOffset != sp.lastLogStartOffset
+
+			if ok {
+				if rp.ErrorCode != 0 {
+					sp.lastHighWatermark = -1
+					sp.lastLogStartOffset = -1
+				} else {
+					sp.lastHighWatermark = rp.HighWatermark
+					sp.lastLogStartOffset = rp.LogStartOffset
+				}
+				s.partitions[key] = sp
+			}
+
+			if include {
+				rt.Partitions[np] = *rp
+				np++
+			}
+		}
+		rt.Partitions = rt.Partitions[:np]
+		if len(rt.Partitions) > 0 {
+			resp.Topics[n] = *rt
+			n++
+		}
+	}
+	resp.Topics = resp.Topics[:n]
 }
