@@ -203,3 +203,10 @@
 - Tiered storage: Not implemented (KIP-405, KIP-1005)
 - Share groups: Not implemented (KIP-932)
 - Static membership: InstanceID handling not fully implemented (KIP-345)
+- Retention enforcement: Configs are stored but not enforced. Data persists
+  until explicitly removed via DeleteRecords. For an in-memory test broker,
+  time/size-based retention adds complexity for little value - tests are
+  short-lived and memory is the natural bound.
+- Log compaction: cleanup.policy=compact not enforced. See compaction plan below.
+- WriteTxnMarkers (key 27): Not implemented. Only useful for recovering from
+  broker bugs with stuck transactions, not needed for testing client behavior.
