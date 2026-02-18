@@ -2594,6 +2594,76 @@ func TestIssue1245(t *testing.T) {
 	}
 }
 
+// TestIssue1248 verifies that closing a client whose parent context is
+// already canceled does not race. LeaveGroupContext can return early via
+// ctx.Done() while its goroutine is still running stopSession ->
+// allSinksAndSources(reset). Without the fix, killSessionOnClose
+// goroutines concurrently call session.kill(), racing on fetchSession
+// fields. Run with -race to detect.
+func TestIssue1248(t *testing.T) {
+	t.Parallel()
+	c, err := NewCluster(NumBrokers(1), SeedTopics(1, "t1248"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Produce records for the consumer.
+	func() {
+		cl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.DefaultProduceTopic("t1248"),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+		for i := 0; i < 10; i++ {
+			if err := cl.ProduceSync(context.Background(), kgo.StringRecord("v")).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}()
+
+	// Run multiple iterations to increase the chance of the race
+	// detector catching the concurrent reset()/kill() access.
+	for i := 0; i < 20; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.WithContext(ctx),
+			kgo.ConsumerGroup("g1248-"+strconv.Itoa(i)),
+			kgo.ConsumeTopics("t1248"),
+			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+			kgo.FetchMaxWait(250*time.Millisecond),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Poll until we get records, establishing fetch sessions.
+		pollCtx, pollCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		for {
+			fs := cl.PollFetches(pollCtx)
+			if pollCtx.Err() != nil {
+				pollCancel()
+				t.Fatal("timed out waiting for records")
+			}
+			if fs.NumRecords() > 0 {
+				break
+			}
+		}
+		pollCancel()
+
+		// Cancel the client context, then Close. LeaveGroupContext
+		// returns immediately via ctx.Done() while its goroutine is
+		// still running stopSession -> reset(). Concurrently,
+		// killSessionOnClose calls session.kill().
+		cancel()
+		cl.Close()
+	}
+}
+
 // connCountHook implements HookBrokerConnect to count new connections.
 type connCountHook struct {
 	connects *atomic.Int32
