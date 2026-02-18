@@ -35,11 +35,18 @@ type (
 		tnorms    map[string]string             // normalized name (. replaced with _) => topic name
 	}
 
+	abortedTxnEntry struct {
+		producerID  int64
+		firstOffset int64 // first data offset of this txn on this partition
+		lastOffset  int64 // offset of the abort control record
+	}
+
 	partData struct {
-		batches []*partBatch
-		t       string
-		p       int32
-		dir     string
+		batches     []*partBatch
+		abortedTxns []abortedTxnEntry // sorted by lastOffset, for read_committed fetch
+		t           string
+		p           int32
+		dir         string
 
 		highWatermark    int64
 		lastStableOffset int64
@@ -81,13 +88,6 @@ type (
 		maxEarlierTimestamp int64
 
 		inTx bool
-
-		// Filled retroactively, if true, the pid aborted this batch.
-		aborted bool
-
-		// For aborted transactions: the first offset of this transaction
-		// on this partition. Used for AbortedTransactions in fetch response.
-		txnFirstOffset int64
 	}
 )
 
@@ -172,8 +172,7 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 // If transactional, we mark ourselves in a tx.
 // Finishing a tx clears the inTx state on pd, but also re-sets it if needed.
 // If we are not in a tx, we can bump the stable offset here.
-// txnFirstOffset is the first offset of this transaction on this partition (0 if not transactional).
-func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool, txnFirstOffset int64) *partBatch {
+func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool) *partBatch {
 	maxEarlierTimestamp := b.FirstTimestamp
 	if maxEarlierTimestamp < pd.maxTimestamp {
 		maxEarlierTimestamp = pd.maxTimestamp
@@ -190,13 +189,11 @@ func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool, txnFirs
 	}
 
 	pd.batches = append(pd.batches, &partBatch{
-		RecordBatch:         b,
-		nbytes:              nbytes,
-		epoch:               pd.epoch,
+		RecordBatch:        b,
+		nbytes:             nbytes,
+		epoch:              pd.epoch,
 		maxEarlierTimestamp: maxEarlierTimestamp,
-		inTx:                inTx,
-		aborted:             false,
-		txnFirstOffset:      txnFirstOffset,
+		inTx:               inTx,
 	})
 	pd.highWatermark += int64(b.NumRecords)
 	if inTx {
@@ -252,11 +249,18 @@ func (pd *partData) trimLeft() {
 		b0 := pd.batches[0]
 		finRec := b0.FirstOffset + int64(b0.LastOffsetDelta)
 		if finRec >= pd.logStartOffset {
-			return
+			break
 		}
 		pd.batches = pd.batches[1:]
 		pd.nbytes -= int64(b0.nbytes)
 	}
+	// Prune aborted txn entries fully before logStartOffset.
+	// Entries are sorted by lastOffset, so binary search for the
+	// first entry still relevant.
+	i := sort.Search(len(pd.abortedTxns), func(i int) bool {
+		return pd.abortedTxns[i].lastOffset >= pd.logStartOffset
+	})
+	pd.abortedTxns = pd.abortedTxns[i:]
 }
 
 // recalculateLSO recalculates the last stable offset.
@@ -264,7 +268,7 @@ func (pd *partData) recalculateLSO() {
 	// Find the earliest uncommitted transaction
 	earliestUncommitted := int64(-1)
 	for _, b := range pd.batches {
-		if b.inTx && !b.aborted {
+		if b.inTx {
 			earliestUncommitted = b.FirstOffset
 			break
 		}

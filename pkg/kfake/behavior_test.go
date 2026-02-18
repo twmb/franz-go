@@ -2647,4 +2647,90 @@ func TestIncrementalFetchEndToEnd(t *testing.T) {
 	}
 }
 
+func TestAbortedTxnIndexOverlap(t *testing.T) {
+	t.Parallel()
+	topic := "t-abort-idx"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(1, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	// Produce a transactional batch, then abort. This creates records
+	// at offsets 0-4 and an abort marker at offset 5.
+	txnCl := newPlainClient(t, c,
+		kgo.TransactionalID("abort-idx-txn"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.MaxVersions(v),
+	)
+	if err := txnCl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		r := kgo.StringRecord("txn-" + strconv.Itoa(i))
+		r.Topic = topic
+		r.Partition = 0
+		produceSync(t, txnCl, r)
+	}
+	if err := txnCl.AbortBufferedRecords(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnCl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce 5 non-txn records (offsets 6-10).
+	for i := range 5 {
+		r := kgo.StringRecord("plain-" + strconv.Itoa(i))
+		r.Topic = topic
+		r.Partition = 0
+		produceSync(t, cl, r)
+	}
+
+	// Fetch from offset 3 (mid-aborted-transaction) with read_committed.
+	// The aborted transaction started at offset 0, abort marker at offset 5.
+	// The fetch should include this in AbortedTransactions even though
+	// firstOffset (0) is before fetchOffset (3).
+	req := kmsg.NewPtrFetchRequest()
+	req.Version = 11
+	req.MaxWaitMillis = 100
+	req.MinBytes = 1
+	req.MaxBytes = 1 << 20
+	req.SessionEpoch = -1
+	req.IsolationLevel = 1 // read_committed
+	ft := kmsg.NewFetchRequestTopic()
+	ft.Topic = topic
+	fp := kmsg.NewFetchRequestTopicPartition()
+	fp.Partition = 0
+	fp.FetchOffset = 3
+	fp.PartitionMaxBytes = 1 << 20
+	fp.CurrentLeaderEpoch = -1
+	ft.Partitions = append(ft.Partitions, fp)
+	req.Topics = append(req.Topics, ft)
+
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatalf("expected 1 topic/1 partition, got %d topics", len(resp.Topics))
+	}
+	rp := resp.Topics[0].Partitions[0]
+	if rp.ErrorCode != 0 {
+		t.Fatalf("partition error: %v", kerr.ErrorForCode(rp.ErrorCode))
+	}
+
+	// Verify AbortedTransactions includes the overlapping transaction.
+	var found bool
+	for _, at := range rp.AbortedTransactions {
+		if at.FirstOffset == 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected AbortedTransactions to include txn starting at offset 0, got %v", rp.AbortedTransactions)
+	}
+}
+
 func stringp(s string) *string { return &s }

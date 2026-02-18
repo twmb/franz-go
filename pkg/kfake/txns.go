@@ -625,12 +625,19 @@ func (pidinf *pidinfo) endTx(commit bool) {
 
 	for _, batch := range pidinf.txBatches {
 		batch.inTx = false
-		if !commit {
-			batch.aborted = true
-		}
 	}
 	pidinf.txParts.each(func(t string, p int32, pd *partData) {
-		pd.pushBatch(len(benc), b, false, 0) // control record is not itself transactional
+		controlBatch := pd.pushBatch(len(benc), b, false) // control record is not itself transactional
+		if !commit {
+			firstOffset, ok := pidinf.txPartFirstOffsets.getp(t, p)
+			if ok {
+				pd.abortedTxns = append(pd.abortedTxns, abortedTxnEntry{
+					producerID:  pidinf.id,
+					firstOffset: *firstOffset,
+					lastOffset:  controlBatch.FirstOffset,
+				})
+			}
+		}
 		pd.recalculateLSO()
 		// Count the now-committed bytes for readCommitted watchers.
 		// These bytes were skipped in push() because pd.inTx was true.

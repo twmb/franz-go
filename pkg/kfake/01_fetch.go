@@ -303,11 +303,7 @@ full:
 			continue
 		}
 
-		// Track aborted transactions per producer. The kgo client expects
-		// AbortedTransactions to be sorted by FirstOffset per producer.
-		var abortedByProducer map[int64][]int64
-
-		var pbytes int
+		var pbytes, pBatchesAdded int
 		for _, b := range pd.batches[i:] {
 			if readCommitted && b.inTx {
 				break
@@ -319,37 +315,28 @@ full:
 				break
 			}
 			batchesAdded++
-
-			// Track aborted transactions in returned batches
-			if readCommitted && req.Version >= 4 && b.aborted {
-				if abortedByProducer == nil {
-					abortedByProducer = make(map[int64][]int64)
-				}
-				// Only add if we haven't seen this txnFirstOffset for this producer
-				offsets := abortedByProducer[b.ProducerID]
-				found := false
-				for _, o := range offsets {
-					if o == b.txnFirstOffset {
-						found = true
-						break
-					}
-				}
-				if !found {
-					abortedByProducer[b.ProducerID] = append(offsets, b.txnFirstOffset)
-				}
-			}
-
+			pBatchesAdded++
 			sp.RecordBatches = b.AppendTo(sp.RecordBatches)
 		}
 
-		// Add aborted transactions for read_committed consumers
-		// Sorted by FirstOffset per producer (as expected by kgo client)
-		for producerID, offsets := range abortedByProducer {
-			sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
-			for _, firstOffset := range offsets {
+		// For read_committed, look up aborted transactions that overlap
+		// the returned data range using the partition's aborted txn index.
+		if readCommitted && req.Version >= 4 && pBatchesAdded > 0 {
+			lastBatch := pd.batches[i+pBatchesAdded-1]
+			upperBound := lastBatch.FirstOffset + int64(lastBatch.LastOffsetDelta) + 1
+			// Binary search for the first entry whose abort marker
+			// is at or after the fetch offset.
+			j := sort.Search(len(pd.abortedTxns), func(k int) bool {
+				return pd.abortedTxns[k].lastOffset >= fp.fetchOffset
+			})
+			for ; j < len(pd.abortedTxns); j++ {
+				e := pd.abortedTxns[j]
+				if e.firstOffset >= upperBound {
+					continue
+				}
 				at := kmsg.NewFetchResponseTopicPartitionAbortedTransaction()
-				at.ProducerID = producerID
-				at.FirstOffset = firstOffset
+				at.ProducerID = e.producerID
+				at.FirstOffset = e.firstOffset
 				sp.AbortedTransactions = append(sp.AbortedTransactions, at)
 			}
 		}
