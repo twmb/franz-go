@@ -2794,3 +2794,409 @@ func TestAbortedTxnIndexOverlap(t *testing.T) {
 }
 
 func stringp(s string) *string { return &s }
+
+// TestCompactBasic verifies key deduplication, null-key dropping, and
+// the active segment invariant (single batch is never compacted).
+func TestCompactBasic(t *testing.T) {
+	t.Parallel()
+	compact := "compact"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+
+	// Dedup topic: produce a=1, null, b=2, a=3, c=4, b=5.
+	// After compaction: a=3, c=4, b=5 (null-key and superseded dropped).
+	topic := "compact-basic"
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("1")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("no-key")}) // null key
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("b"), Value: []byte("2")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("3")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("c"), Value: []byte("4")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("b"), Value: []byte("5")})
+
+	c.Compact()
+
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 3, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		got[string(r.Key)] = string(r.Value)
+	}
+	if got["a"] != "3" || got["b"] != "5" || got["c"] != "4" {
+		t.Fatalf("unexpected records after compaction: %v", got)
+	}
+
+	// Active segment: a single-batch topic should be a no-op.
+	topicSingle := "compact-single"
+	_, err = adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topicSingle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	produceSync(t, cl, &kgo.Record{Topic: topicSingle, Key: []byte("only"), Value: []byte("one")})
+
+	c.Compact()
+
+	consumer2 := newPlainClient(t, c,
+		kgo.ConsumeTopics(topicSingle),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records2 := consumeN(t, consumer2, 1, 5*time.Second)
+	if string(records2[0].Key) != "only" || string(records2[0].Value) != "one" {
+		t.Fatalf("active segment record should survive compaction")
+	}
+}
+
+// TestCompactTombstone verifies that tombstones (nil value) are removed
+// after delete.retention.ms expires.
+func TestCompactTombstone(t *testing.T) {
+	t.Parallel()
+	topic := "compact-tombstone"
+	compact := "compact"
+	zero := "0"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy":      &compact,
+		"delete.retention.ms": &zero,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce a keyed record, then a tombstone for it, then a dummy to
+	// ensure the tombstone is not in the active segment.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("k"), Value: []byte("v")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("k"), Value: nil})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("other"), Value: []byte("x")})
+
+	c.Compact()
+
+	// Only "other" should survive - "k" was superseded by tombstone,
+	// and the tombstone itself is expired.
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 1, 5*time.Second)
+	if string(records[0].Key) != "other" {
+		t.Fatalf("expected only 'other' to survive, got key=%s", string(records[0].Key))
+	}
+}
+
+// TestCompactOffsetGaps verifies that after compaction creates gaps in offsets,
+// fetching from a compacted offset skips to the next available batch.
+func TestCompactOffsetGaps(t *testing.T) {
+	t.Parallel()
+	topic := "compact-gaps"
+	compact := "compact"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce: a=old (offset 0), a=new (offset 1), b=val (offset 2, active).
+	// After compaction, offset 0 is gone. Fetching from offset 0 should
+	// skip to the next available batch.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("old")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("new")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("b"), Value: []byte("val")})
+
+	c.Compact()
+
+	// Consume from offset 0 - should get "a=new" (from cleaned range)
+	// and "b=val" (active segment).
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().At(0)),
+	)
+	records := consumeN(t, consumer, 2, 5*time.Second)
+	if string(records[0].Key) != "a" || string(records[0].Value) != "new" {
+		t.Fatalf("expected a=new, got %s=%s", string(records[0].Key), string(records[0].Value))
+	}
+}
+
+// TestCompactControlBatch verifies control batch handling: abort markers are
+// removed when no data remains for the PID, commit markers are kept when the
+// PID has surviving data.
+func TestCompactControlBatch(t *testing.T) {
+	t.Parallel()
+	topic := "compact-ctrl"
+	compact := "compact"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Aborted txn - its data and control batch should be removed.
+	abortCl := newPlainClient(t, c,
+		kgo.TransactionalID("compact-tx-abort"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	)
+	if err := abortCl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	produceSync(t, abortCl, &kgo.Record{Topic: topic, Partition: 0, Key: []byte("aborted"), Value: []byte("gone")})
+	if err := abortCl.AbortBufferedRecords(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := abortCl.EndTransaction(context.Background(), kgo.TryAbort); err != nil {
+		t.Fatal(err)
+	}
+
+	// Committed txn - its data and control batch should survive.
+	commitCl := newPlainClient(t, c,
+		kgo.TransactionalID("compact-tx-commit"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	)
+	if err := commitCl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	produceSync(t, commitCl, &kgo.Record{Topic: topic, Partition: 0, Key: []byte("committed"), Value: []byte("kept")})
+	if err := commitCl.EndTransaction(context.Background(), kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	// Active segment sentinel.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("sentinel"), Value: []byte("val")})
+
+	c.Compact()
+
+	// read_committed consumer: verifies commit control batch is intact
+	// (without it, committed data would be invisible).
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+	)
+	records := consumeN(t, consumer, 2, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		got[string(r.Key)] = string(r.Value)
+	}
+	if got["committed"] != "kept" {
+		t.Fatalf("committed txn record should survive, got: %v", got)
+	}
+	if got["sentinel"] != "val" {
+		t.Fatalf("sentinel should survive, got: %v", got)
+	}
+}
+
+// TestCompactBackgroundTicker verifies that the background compaction ticker
+// runs automatically for compact topics.
+func TestCompactBackgroundTicker(t *testing.T) {
+	t.Parallel()
+	topic := "compact-ticker"
+	compact := "compact"
+	backoff := "50"
+	c := newCluster(t, kfake.NumBrokers(1), kfake.BrokerConfigs(map[string]string{"log.cleaner.backoff.ms": backoff}))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce duplicate keys plus active segment.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("x"), Value: []byte("old")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("x"), Value: []byte("new")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("y"), Value: []byte("only")})
+
+	// Wait for the ticker to fire and compact.
+	time.Sleep(200 * time.Millisecond)
+
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 2, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		got[string(r.Key)] = string(r.Value)
+	}
+	if got["x"] != "new" || got["y"] != "only" {
+		t.Fatalf("expected compaction to run via ticker, got: %v", got)
+	}
+}
+
+// TestCompactMultiRecordBatch verifies that compaction correctly rebuilds
+// batches when only some records within a multi-record batch survive.
+// This exercises the rebuildBatch path (re-encoding, CRC, offset deltas).
+func TestCompactMultiRecordBatch(t *testing.T) {
+	t.Parallel()
+	topic := "compact-multi"
+	compact := "compact"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c,
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce batch 1: three records in one batch (a=old, b=keep, c=old).
+	// ProduceSync with multiple records to the same partition batches them.
+	produceSync(t, cl,
+		&kgo.Record{Topic: topic, Partition: 0, Key: []byte("a"), Value: []byte("old")},
+		&kgo.Record{Topic: topic, Partition: 0, Key: []byte("b"), Value: []byte("keep")},
+		&kgo.Record{Topic: topic, Partition: 0, Key: []byte("c"), Value: []byte("old")},
+	)
+	// Batch 2: supersede a and c.
+	produceSync(t, cl,
+		&kgo.Record{Topic: topic, Partition: 0, Key: []byte("a"), Value: []byte("new")},
+		&kgo.Record{Topic: topic, Partition: 0, Key: []byte("c"), Value: []byte("new")},
+	)
+	// Batch 3: active segment.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Partition: 0, Key: []byte("d"), Value: []byte("active")})
+
+	c.Compact()
+
+	// From batch 1, only b=keep should survive (a and c superseded).
+	// Batch 2: a=new and c=new survive (latest for their keys).
+	// Batch 3: d=active (active segment, untouched).
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 4, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		got[string(r.Key)] = string(r.Value)
+	}
+	want := map[string]string{"a": "new", "b": "keep", "c": "new", "d": "active"}
+	for k, wv := range want {
+		if got[k] != wv {
+			t.Fatalf("key %q: want %q, got %q (all: %v)", k, wv, got[k], got)
+		}
+	}
+}
+
+// TestCompactTombstoneRetained verifies that a tombstone within
+// delete.retention.ms is kept during compaction (not prematurely removed).
+func TestCompactTombstoneRetained(t *testing.T) {
+	t.Parallel()
+	topic := "compact-tombstone-retained"
+	compact := "compact"
+	// Default delete.retention.ms is 24h - tombstone should survive.
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce a record, then a tombstone for it, then an active segment.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("k"), Value: []byte("v")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("k"), Value: nil})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("other"), Value: []byte("x")})
+
+	c.Compact()
+
+	// The data record is superseded by the tombstone, but the tombstone
+	// itself should survive (within 24h retention). Plus the active segment.
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 2, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		if r.Value == nil {
+			got[string(r.Key)] = "<tombstone>"
+		} else {
+			got[string(r.Key)] = string(r.Value)
+		}
+	}
+	if got["k"] != "<tombstone>" {
+		t.Fatalf("expected tombstone for key 'k' to survive, got: %v", got)
+	}
+	if got["other"] != "x" {
+		t.Fatalf("expected 'other' in active segment, got: %v", got)
+	}
+}
+
+// TestCompactDoubleCompaction verifies that compacting twice is safe -
+// the rebuilt batches from the first compaction can be re-decoded and
+// re-processed by the second.
+func TestCompactDoubleCompaction(t *testing.T) {
+	t.Parallel()
+	topic := "compact-double"
+	compact := "compact"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Round 1: produce duplicates, compact.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("v1")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("v2")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("b"), Value: []byte("v1")})
+
+	c.Compact()
+
+	// Round 2: produce more duplicates that supersede round 1 survivors, compact again.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("v3")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("c"), Value: []byte("v1")})
+
+	c.Compact()
+
+	// After two compactions: a=v3 (latest), b=v1, c=v1 (active segment).
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 3, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		got[string(r.Key)] = string(r.Value)
+	}
+	want := map[string]string{"a": "v3", "b": "v1", "c": "v1"}
+	for k, wv := range want {
+		if got[k] != wv {
+			t.Fatalf("key %q: want %q, got %q (all: %v)", k, wv, got[k], got)
+		}
+	}
+}

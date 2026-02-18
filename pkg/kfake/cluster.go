@@ -47,6 +47,7 @@ type (
 		telem         map[[16]byte]int32
 		telemNextID   int32
 		fetchSessions fetchSessions
+		compactTicker *time.Ticker
 
 		die  chan struct{}
 		dead atomic.Bool
@@ -304,10 +305,17 @@ outer:
 		select {
 		case <-c.die:
 			c.pids.txTimer.Stop()
+			if c.compactTicker != nil {
+				c.compactTicker.Stop()
+			}
 			return
 
 		case <-c.pids.txTimer.C:
 			c.pids.handleTimeout()
+			continue
+
+		case <-c.compactTickerC():
+			c.compactAll()
 			continue
 
 		case admin := <-c.adminCh:
@@ -1180,4 +1188,59 @@ func (c *Cluster) SetFollowers(topic string, partition int32, followers []int32)
 		}
 		pd.followers = append([]int32(nil), followers...)
 	})
+}
+
+// Compact triggers log compaction on all topics with cleanup.policy=compact.
+// Records with duplicate keys are deduplicated, keeping only the latest value.
+// Tombstones (nil value) older than delete.retention.ms are removed.
+func (c *Cluster) Compact() {
+	c.admin(func() {
+		c.compactAll()
+	})
+}
+
+// compactAll compacts all eligible topics. Must be called from Cluster.run().
+func (c *Cluster) compactAll() {
+	for t := range c.data.tps {
+		if !c.data.isCompactTopic(t) {
+			continue
+		}
+		for _, pd := range c.data.tps[t] {
+			pd.compact(&c.data, t)
+		}
+	}
+}
+
+func (c *Cluster) compactTickerC() <-chan time.Time {
+	if c.compactTicker != nil {
+		return c.compactTicker.C
+	}
+	return nil
+}
+
+func (c *Cluster) compactIntervalMs() int64 {
+	if v, ok := c.loadBcfgs()["log.cleaner.backoff.ms"]; ok && v != nil {
+		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
+			return n
+		}
+	}
+	return 3600000
+}
+
+// refreshCompactTicker starts or stops the compaction ticker based on whether
+// any topic has cleanup.policy=compact. Must be called from Cluster.run().
+func (c *Cluster) refreshCompactTicker() {
+	hasCompact := false
+	for t := range c.data.tps {
+		if c.data.isCompactTopic(t) {
+			hasCompact = true
+			break
+		}
+	}
+	if hasCompact && c.compactTicker == nil {
+		c.compactTicker = time.NewTicker(time.Duration(c.compactIntervalMs()) * time.Millisecond)
+	} else if !hasCompact && c.compactTicker != nil {
+		c.compactTicker.Stop()
+		c.compactTicker = nil
+	}
 }

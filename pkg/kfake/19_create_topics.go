@@ -141,6 +141,7 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 
 	if !req.ValidateOnly {
 		c.notifyTopicChange()
+		c.refreshCompactTicker()
 	}
 
 	return resp, nil

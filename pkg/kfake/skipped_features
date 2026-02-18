@@ -7,7 +7,7 @@
 
 ## 00_produce
 - ThrottleMillis: Not implementing throttling for any request
-- Compaction: Log compaction not supported
+- Compaction: Log compaction implemented (cleanup.policy=compact)
 - ErrorRecords (v8+): Per-record errors not implemented; kfake validates at batch level only
 - TimeoutMillis: Ignored since writes are immediate (no replication)
 - Timestamp range validation: No client sends unreasonable timestamps in tests
@@ -207,6 +207,8 @@
   until explicitly removed via DeleteRecords. For an in-memory test broker,
   time/size-based retention adds complexity for little value - tests are
   short-lived and memory is the natural bound.
-- Log compaction: cleanup.policy=compact not enforced. See compaction plan below.
+- Log compaction: cleanup.policy=compact implemented. Deduplicates by key,
+  removes expired tombstones, cleans up orphaned control batches. Background
+  ticker driven by log.cleaner.backoff.ms. Manual trigger via Compact().
 - WriteTxnMarkers (key 27): Not implemented. Only useful for recovering from
   broker bugs with stuck transactions, not needed for testing client behavior.

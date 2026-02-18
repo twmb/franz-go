@@ -158,5 +158,6 @@ outer:
 		}
 	}
 
+	c.refreshCompactTicker()
 	return resp, nil
 }
