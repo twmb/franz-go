@@ -146,6 +146,20 @@ Registers a schema, produces encoded records, and decodes them on consume using
 - `-topic` - topic to produce to and consume from
 - `-registry` - schema registry URL (default localhost:8081)
 
+## testing_with_kfake
+
+Demonstrates `kfake`, a fake in-memory Kafka cluster for testing without a
+real broker. Shows three control function patterns for intercepting, observing,
+and coordinating Kafka protocol requests. Unlike other examples, this one runs
+entirely in-process with no external dependencies.
+
+- `-mode inject-error` - one-shot `ControlKey` to inject a produce error; kgo
+  retries and succeeds because the control is consumed after one interception (default)
+- `-mode observe` - `KeepControl` to persistently count every request type
+  during a produce-and-consume cycle without intercepting
+- `-mode sleep` - `SleepControl` with `SleepOutOfOrder` to delay a fetch until
+  a produce arrives, coordinating between connections
+
 ## transactions
 
 Demonstrates Kafka transactions in two modes.
