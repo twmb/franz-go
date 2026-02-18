@@ -1,3 +1,105 @@
+v1.20.7
+===
+
+This patch release fixes numerous niche bugs - some user reported, some found
+while investigating other things - contains a few behavior improvements,
+extensive kfake additions, and many test additions / improvements.
+
+There have been _extensive_ additions to kfake over the course of the past
+month; kfake now supports transactions, the next generation consumer group
+protocol, and more Kafka APIs. franz-go integration tests now run and pass
+against kfake in CI.
+
+Testing has further been extensively improved: integration tests now run
+against the latest patch version of Kafka for all major Kafka versions going
+back to 0.11.0. The existing test suite has been extended to run while opting
+into the next generation consumer group. An integration test against Kerberos
+has been added. For ~roughly the past year (maybe half year), all bugs found
+have had regression tests added in kfake. This release massively extends the
+kfake test suite -- both with behavior tests that were ported via Claude
+directly to franz-go (with license attribution!) and with behavior tests that
+Claude generated specifically for kfake.
+
+The "next generation" (KIP-848) consumer group code in franz-go itself has some
+improvements. These improvements were found after adding 848 code to kfake,
+which allowed for much faster integration test looping. This looping was still
+very slow for what it's worth; towards the end, integration tests would pass
+~40+ times with race mode over the course of two hours before failing once.
+Claude was instrumental with adding appropriate log lines and tracing logs for
+diagnosing extremely niche failures; things also got slower when a few specific
+log lines that would've helped weren't added the first time...
+
+Anyway,
+
+## Bug fixes
+
+* Returns from PollRecords / PollFetches that contained ONLY an error (context
+  cancellation or something) previously did not block rebalances, even if you
+  opted into BlockRebalanceOnPoll.
+
+* If, while idempotently producing, the client encountered `TIMED_OUT` while
+  producing (retryable), the client considered this a "we definitively did not
+  produce" state, and allowed you to cancel the records. Well, maybe the records
+  actually did get produced broker side eventually, and now you re-produce new
+  records - the NEW records could be "deduplicated" due to how idempotency works.
+  This one is a bit niche, if you're interested, you should read #1217 and the
+  two PRs that address it.
+  
+* My original implementation of how Kerberos handled authentication was
+  correct... for the time. I missed how it should have been touched up years
+  ago and now 4.0 hard deprecates the old auth flow. So, that's been found,
+  reported, and now fixed.
+
+* If a partition returned a retryable error in a metadata request (odd behavior
+  already) the first time the client is discovering the partition (i.e. on
+  startup), the client would not retry loading the partition right away (it
+  would, but much later on standard metadata refresh).
+
+* There was a very subtle, basically un-encounterable data race while
+  consuming. That was fixed in `5caaa1e0`. It's so niche it's not worth
+  writing more about here.
+
+* `RequestCachedMetadata`, broken for a few releases, has been fixed. I plan to
+  switch kadm back to using it in the next kadm release.
+
+* There was a data race on client shutdown while leaving the group if you canceled
+  the client context.
+
+## Improvements
+
+* `ConnIdleTimeout` is now obeyed more exactly, allowing you to more reliably reason
+  about the maximum idle time. Thanks [@carsonip](https://github.com/carsonip)!
+
+* At the end of a group transact session, I force a heartbeat to kinda "force
+  detect" the group is still alive (with some timing bounds). If the heartbeat
+  detected any error - including `REBALANCE_IN_PROGRESS` - the session would
+  abort no matter what. This has been changed to actually allow a commit (if
+  that's what you're doing) in certain scenarios (notably: the client detects
+  KIP-447 support on the broker and you are using RequireStable).
+
+* SetOffsets now does not let you set offsets for partitions that are not being
+  consumed. Previously, you could, but it'd just create entries in a map that were
+  never used. Those entries are no longer created.
+
+* ProduceSync now automatically un-lingers any partition that is produced to,
+  causing more immediate flushes. This should resolve lag that was introduced
+  from v1.20.0 where linger was set to 10ms by default. There are many usages of
+  franz-go I've seen in the wild where ProduceSync is used in random places to
+  produce one message before going back to other things.
+
+- [`764eb29d`](https://github.com/twmb/franz-go/commit/764eb29d) **improvement** kgo: unlinger partitions in ProduceSync to avoid linger delay
+- [`d996bf71`](https://github.com/twmb/franz-go/commit/d996bf71) **bugfix** kgo: fix data race during client shutdown with canceled context
+- [`85b2c855`](https://github.com/twmb/franz-go/commit/85b2c855) **behavior change** kgo: fix applySetOffsets to skip partitions not being consumed
+- [`05de202b`](https://github.com/twmb/franz-go/commit/05de202b) **improvement** kgo: allow commit despite rebalance with KIP-447 and RequireStable
+- [`e8a00cd6`](https://github.com/twmb/franz-go/commit/e8a00cd6) **improvement** kgo: do not reuse idle connection after connIdleTimeout (thanks [@carsonip](https://github.com/carsonip)!)
+- [`787ab9fe`](https://github.com/twmb/franz-go/commit/787ab9fe) **bugfix** kgo: fix and enhance RequestCachedMetadata
+- [`5caaa1e0`](https://github.com/twmb/franz-go/commit/5caaa1e0) **bugfix** kgo: fix data race in allowUsable reading c.source after Swap
+- [`40c144d3`](https://github.com/twmb/franz-go/commit/40c144d3) **bugfix** kgo: check loadErr for new partitions on first metadata load
+- [`e430ea93`](https://github.com/twmb/franz-go/commit/e430ea93) **bugfix** kgo: send SaslHandshake for GSSAPI mechanism
+- [`702c4f75`](https://github.com/twmb/franz-go/commit/702c4f75) **bugfix** kgo: error returns from polling should block rebalance
+- [`32e1580a`](https://github.com/twmb/franz-go/commit/32e1580a) [`0c086b05`](https://github.com/twmb/franz-go/commit/0c086b05) **bugfix** kgo: poison batches to prevent future cancelation on two errors
+
+
 v1.20.6
 ===
 
