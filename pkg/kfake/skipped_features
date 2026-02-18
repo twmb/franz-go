@@ -10,6 +10,7 @@
 - Compaction: Log compaction not supported
 - ErrorRecords (v8+): Per-record errors not implemented; kfake validates at batch level only
 - TimeoutMillis: Ignored since writes are immediate (no replication)
+- Timestamp range validation: No client sends unreasonable timestamps in tests
 
 ## 01_fetch
 - ThrottleMillis: Not implementing throttling for any request
@@ -46,6 +47,9 @@
 - ThrottleMillis: Not implementing throttling for any request
 - InstanceID/static membership: Not fully implemented (KIP-345)
 - SkipAssignment: Not implemented (KIP-814)
+- Initial rebalance delay: Skipped - optimization for reducing rebalance churn
+  during rolling restarts, not needed for correctness in tests
+- Group max size: Not enforced - low value for testing
 
 ## 15_describe_groups
 - ThrottleMillis: Not implementing throttling for any request
@@ -77,6 +81,11 @@
 
 ## 22_init_producer_id
 - ThrottleMillis: Not implementing throttling for any request
+- prevProducerId/lastProducerEpoch: Only matters for epoch exhaustion at 32K+
+  transactions per transactional ID, which never happens in tests
+- Transactional ID expiration: Background cleanup for idle transactional IDs;
+  tests are short-lived so expiration never matters
+- CONCURRENT_TRANSACTIONS error: Impossible in kfake's synchronous model
 
 ## 23_offset_for_leader_epoch
 - ThrottleMillis: Not implementing throttling for any request
@@ -154,22 +163,24 @@
   - kfake: on session timeout, do not remove static member (keep assignment reserved)
   - kfake: on rejoin with same instance ID, restore previous assignment
   - kfake: range assignor should sort static members (by instance ID) before dynamic
-    members (by member ID), matching Kafka's RangeAssignor.sortMemberIds
+    members (by member ID)
   - See KIP-345, KIP-814 for the classic group static member protocol
+- Metadata hash / metadata expiration: deliberate divergence; kfake recomputes
+  assignments on every relevant heartbeat rather than caching a metadata hash
 
 ### Correctness gaps vs Kafka (analyzed against ~/src/apache/kafka):
 
 1. **No partition epoch tracking** - FIXED (63e50a66)
-   Added group-level partitionEpochs map with Kafka-style two-phase check
+   Added group-level partitionEpochs map with two-phase check
    in reconciledAssignment.
 
 2. **Member epoch advancement only when fully converged** - SKIPPED
    kfake's conservative approach (not advancing until fully converged) is
-   safe and simpler. Kafka advances in UNRELEASED_PARTITIONS state but this
+   safe and simpler. Advancing in UNRELEASED_PARTITIONS state
    only affects convergence speed, not correctness.
 
 3. **Previous-epoch subset check against targetAssignment** - FIXED (63e50a66)
-   Now checks against currentAssignment matching Kafka's assignedPartitions().
+   Now checks against currentAssignment.
 
 4. **No separate session/rebalance timeout** - FIXED (b52529f1)
    Session timeout uses group.consumer.session.timeout.ms (server config).
@@ -178,7 +189,7 @@
 
 5. **No partitionsPendingRevocation tracking** - FIXED (ac7d0fb8)
    Added explicit per-member partitionsPendingRevocation set with
-   epoch map integration, matching Kafka's CurrentAssignmentBuilder.
+   epoch map integration.
 
 6. **No ASSIGNING/UNRELEASED_PARTITIONS states** (LOW)
    kfake uses empty/reconciling/stable. Missing intermediate states.

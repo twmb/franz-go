@@ -355,6 +355,10 @@ full:
 		}
 	}
 
+	// TODO: Incremental fetch responses (KIP-227) - omit unchanged
+	// partitions from incremental responses. Disabled for now until
+	// the interaction with the watch mechanism is debugged.
+
 	// Bump session epoch after successful fetch, but not for newly created
 	// sessions. The client will send epoch=1 for its first incremental fetch
 	// after receiving the new session ID.
@@ -435,6 +439,7 @@ type fetchSession struct {
 	id         int32
 	epoch      int32
 	partitions map[tp]fetchSessionPartition
+	lastUsed   time.Time
 }
 
 // fetchSessionPartition tracks per-partition state within a session.
@@ -443,6 +448,8 @@ type fetchSessionPartition struct {
 	maxBytes     int32
 	currentEpoch int32
 }
+
+const defMaxFetchSessionCacheSlots = 1000
 
 func (fs *fetchSessions) init(brokerNode int32) {
 	if fs.sessions == nil {
@@ -477,11 +484,26 @@ func (fs *fetchSessions) getOrCreate(brokerNode, sessionID, sessionEpoch int32) 
 		if sessionID > 0 {
 			delete(fs.sessions[brokerNode], sessionID)
 		}
+		// Evict the oldest session if we're at the limit.
+		brokerSessions := fs.sessions[brokerNode]
+		if len(brokerSessions) >= defMaxFetchSessionCacheSlots {
+			var oldestID int32
+			var oldestTime time.Time
+			for id, s := range brokerSessions {
+				if oldestTime.IsZero() || s.lastUsed.Before(oldestTime) {
+					oldestID = id
+					oldestTime = s.lastUsed
+				}
+			}
+			delete(brokerSessions, oldestID)
+		}
+		now := time.Now()
 		id := fs.nextID.Add(1) - 1
 		session := &fetchSession{
 			id:         id,
 			epoch:      1,
 			partitions: make(map[tp]fetchSessionPartition),
+			lastUsed:   now,
 		}
 		fs.sessions[brokerNode][id] = session
 		return session, true, 0
@@ -495,6 +517,7 @@ func (fs *fetchSessions) getOrCreate(brokerNode, sessionID, sessionEpoch int32) 
 	if sessionEpoch != session.epoch {
 		return nil, false, kerr.InvalidFetchSessionEpoch.Code
 	}
+	session.lastUsed = time.Now()
 	return session, false, 0
 }
 

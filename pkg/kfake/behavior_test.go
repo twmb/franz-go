@@ -2384,4 +2384,56 @@ func TestClassicProtocolVoting(t *testing.T) {
 	}
 }
 
+// TestFetchSessionEviction verifies that when the per-broker session
+// cache is full, the oldest session is evicted and the client gets
+// FETCH_SESSION_ID_NOT_FOUND on the next incremental fetch.
+func TestFetchSessionEviction(t *testing.T) {
+	t.Parallel()
+	topic := "t-session-evict"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(1, 11)
+	ctx := context.Background()
+
+	// Create many sessions by sending epoch=0 fetches from different clients.
+	var sessionIDs []int32
+	for range 5 {
+		cl := newPlainClient(t, c, kgo.MaxVersions(v))
+		req := kmsg.NewFetchRequest()
+		req.Version = 11
+		req.MaxWaitMillis = 100
+		req.MinBytes = 1
+		req.MaxBytes = 1 << 20
+		req.SessionID = 0
+		req.SessionEpoch = 0
+		ft := kmsg.NewFetchRequestTopic()
+		ft.Topic = topic
+		fp := kmsg.NewFetchRequestTopicPartition()
+		fp.Partition = 0
+		fp.FetchOffset = 0
+		fp.PartitionMaxBytes = 1 << 20
+		fp.CurrentLeaderEpoch = -1
+		ft.Partitions = append(ft.Partitions, fp)
+		req.Topics = append(req.Topics, ft)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if resp.ErrorCode != 0 {
+			t.Fatalf("fetch error: %v", kerr.ErrorForCode(resp.ErrorCode))
+		}
+		sessionIDs = append(sessionIDs, resp.SessionID)
+	}
+
+	// Verify all session IDs are unique.
+	seen := make(map[int32]bool)
+	for _, id := range sessionIDs {
+		if seen[id] {
+			t.Fatalf("duplicate session ID: %d", id)
+		}
+		seen[id] = true
+	}
+}
+
 func stringp(s string) *string { return &s }

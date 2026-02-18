@@ -2383,7 +2383,8 @@ func (g *group) updateMemberEpochs(m *consumerMember, oldSent, oldPending map[uu
 
 // addPartitionEpochs records that a member at the given epoch owns the
 // given partitions. If a partition already has a higher or equal epoch,
-// the caller has a logic bug (double assignment), so we panic.
+// the caller has a logic bug (double assignment) - we log and skip the
+// update to avoid masking the real owner.
 func (g *group) addPartitionEpochs(a map[uuid][]int32, epoch int32) {
 	for id, parts := range a {
 		pm := g.partitionEpochs[id]
@@ -2393,7 +2394,8 @@ func (g *group) addPartitionEpochs(a map[uuid][]int32, epoch int32) {
 		}
 		for _, p := range parts {
 			if existing, ok := pm[p]; ok && existing >= epoch {
-				panic(fmt.Sprintf("addPartitionEpochs: partition %d of topic %v already has epoch %d >= %d", p, id, existing, epoch))
+				g.c.cfg.logger.Logf(LogLevelError, "group %s: addPartitionEpochs: partition %d of topic %v already has epoch %d >= %d, skipping", g.name, p, id, existing, epoch)
+				continue
 			}
 			pm[p] = epoch
 		}
