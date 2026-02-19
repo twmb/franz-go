@@ -3,7 +3,7 @@
 # This file tracks features that were intentionally skipped during the
 # kfake feature gap analysis. These can be revisited in future sessions.
 
-* Add support for instance IDs for consumer groups, and support KIP-814 https://cwiki.apache.org/confluence/display/KAFKA/KIP-814%3A+Static+membership+protocol+should+let+the+leader+skip+assignment
+* Support KIP-814 (static member leader skip assignment) https://cwiki.apache.org/confluence/display/KAFKA/KIP-814%3A+Static+membership+protocol+should+let+the+leader+skip+assignment
 
 ## 00_produce
 - ThrottleMillis: Not implementing throttling for any request
@@ -31,7 +31,7 @@
 
 ## 08_offset_commit
 - ThrottleMillis: Not implementing throttling for any request
-- InstanceID (v7+): Returns error if set - static membership not implemented
+- InstanceID (v7+): Validated for static membership (KIP-345)
 
 ## 09_offset_fetch
 - ThrottleMillis: Not implementing throttling for any request
@@ -45,7 +45,8 @@
 
 ## 11_join_group, 12_heartbeat, 13_leave_group, 14_sync_group
 - ThrottleMillis: Not implementing throttling for any request
-- InstanceID/static membership: Not fully implemented (KIP-345)
+- InstanceID/static membership: Implemented (KIP-345) - rejoin, fencing,
+  leave-by-instanceID, session timeout preserves static mapping
 - SkipAssignment: Not implemented (KIP-814)
 - Initial rebalance delay: Skipped - optimization for reducing rebalance churn
   during rolling restarts, not needed for correctness in tests
@@ -53,7 +54,7 @@
 
 ## 15_describe_groups
 - ThrottleMillis: Not implementing throttling for any request
-- InstanceID: Static membership not fully implemented (KIP-345)
+- InstanceID: Reported on members for static membership (KIP-345)
 
 ## 16_list_groups
 - ThrottleMillis: Not implementing throttling for any request
@@ -103,7 +104,7 @@
 
 ## 28_txn_offset_commit
 - ThrottleMillis: Not implementing throttling for any request
-- InstanceID (v3+): Static membership not fully implemented (KIP-345)
+- InstanceID (v3+): Not validated in TxnOffsetCommit (low-value for tests)
 
 ## 32_describe_configs
 - ThrottleMillis: Not implementing throttling for any request
@@ -157,14 +158,15 @@
 - Basic handler implemented: server-side uniform and range assignment, member
   epoch tracking, session timeouts, regex subscription, leave (epoch -1)
 - SubscribedTopicRegex: supported (RE2 syntax, not Java RE2J)
+- Static membership implemented:
+  - MemberEpoch -2 (leave with instance ID retained)
+  - Fence by instance ID on join
+  - Session timeout preserves static member mapping
+  - Rejoin with same instance ID reclaims slot
 - Remaining static membership gaps:
-  - kfake: support MemberEpoch -2 (leave with instance ID retained)
-  - kfake: fence by instance ID, not just member ID
-  - kfake: on session timeout, do not remove static member (keep assignment reserved)
-  - kfake: on rejoin with same instance ID, restore previous assignment
-  - kfake: range assignor should sort static members (by instance ID) before dynamic
+  - Range assignor should sort static members (by instance ID) before dynamic
     members (by member ID)
-  - See KIP-345, KIP-814 for the classic group static member protocol
+  - See KIP-814 for classic group leader skip assignment
 - Metadata hash / metadata expiration: deliberate divergence; kfake recomputes
   assignments on every relevant heartbeat rather than caching a metadata hash
 
@@ -202,11 +204,12 @@
 ## General
 - Tiered storage: Not implemented (KIP-405, KIP-1005)
 - Share groups: Not implemented (KIP-932)
-- Static membership: InstanceID handling not fully implemented (KIP-345)
-- Retention enforcement: Configs are stored but not enforced. Data persists
-  until explicitly removed via DeleteRecords. For an in-memory test broker,
-  time/size-based retention adds complexity for little value - tests are
-  short-lived and memory is the natural bound.
+- Static membership: Implemented for classic and 848 groups (KIP-345).
+  KIP-814 (leader skip assignment) not yet supported.
+- Retention enforcement: retention.ms and retention.bytes are enforced via
+  the background cleaner ticker (log.cleaner.backoff.ms) and manually via
+  ApplyRetention(). Expired or oversized batches are trimmed and
+  logStartOffset advances accordingly.
 - Log compaction: cleanup.policy=compact implemented. Deduplicates by key,
   removes expired tombstones, cleans up orphaned control batches. Background
   ticker driven by log.cleaner.backoff.ms. Manual trigger via Compact().

@@ -14,7 +14,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TODO instance IDs
 // TODO offset expiration: v5+ uses broker config offsets.retention.minutes
 // (KIP-211), v0-4 uses request-provided RetentionTimeMillis (or broker
 // default if <= 0). Expired offsets should be pruned, and empty groups
@@ -35,9 +34,10 @@ type (
 
 		state groupState
 
-		leader  string
-		members map[string]*groupMember
-		pending map[string]*groupMember
+		leader        string
+		members       map[string]*groupMember
+		pending       map[string]*groupMember
+		staticMembers map[string]string // instanceID -> memberID; shared by classic and 848
 
 		commits tps[offsetCommit]
 
@@ -67,6 +67,7 @@ type (
 
 	groupMember struct {
 		memberID   string
+		instanceID *string
 		clientID   string
 		clientHost string
 
@@ -248,16 +249,17 @@ func generateMemberID(clientID string, instanceID *string) string {
 
 func (gs *groups) newGroup(name string) *group {
 	return &group{
-		c:         gs.c,
-		gs:        gs,
-		name:      name,
-		typ:       "classic", // group-coordinator/src/main/java/org/apache/kafka/coordinator/group/Group.java
-		members:   make(map[string]*groupMember),
-		pending:   make(map[string]*groupMember),
-		protocols: make(map[string]int),
-		reqCh:     make(chan *clientReq),
-		controlCh: make(chan func(), 1), // buffer 1: holds a pending notifyTopicChange
-		quitCh:    make(chan struct{}),
+		c:             gs.c,
+		gs:            gs,
+		name:          name,
+		typ:           "classic", // group-coordinator/src/main/java/org/apache/kafka/coordinator/group/Group.java
+		members:       make(map[string]*groupMember),
+		pending:       make(map[string]*groupMember),
+		staticMembers: make(map[string]string),
+		protocols:     make(map[string]int),
+		reqCh:         make(chan *clientReq),
+		controlCh:     make(chan func(), 1), // buffer 1: holds a pending notifyTopicChange
+		quitCh:        make(chan struct{}),
 	}
 }
 
@@ -434,6 +436,7 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 			for _, m := range g.members {
 				sm := kmsg.NewDescribeGroupsResponseGroupMember()
 				sm.MemberID = m.memberID
+				sm.InstanceID = m.instanceID
 				sm.ClientID = m.clientID
 				sm.ClientHost = m.clientHost
 				if g.state == groupStable {
@@ -854,10 +857,6 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
 		return resp, false
 	}
-	if req.InstanceID != nil {
-		resp.ErrorCode = kerr.InvalidGroupID.Code
-		return resp, false
-	}
 	if st := int64(req.SessionTimeoutMillis); st < g.c.cfg.minSessionTimeout.Milliseconds() || st > g.c.cfg.maxSessionTimeout.Milliseconds() {
 		resp.ErrorCode = kerr.InvalidSessionTimeout.Code
 		return resp, false
@@ -869,15 +868,25 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 
 	// Clients first join with no member ID. For join v4+, we generate
 	// the member ID and add the member to pending. For v3 and below,
-	// we immediately enter rebalance.
+	// we immediately enter rebalance. Static members (instanceID set)
+	// may rejoin with an empty memberID - check the static mapping.
 	if req.MemberID == "" {
+		if req.InstanceID != nil {
+			if oldMemberID, ok := g.staticMembers[*req.InstanceID]; ok {
+				return g.replaceStaticMember(oldMemberID, creq, req, resp)
+			}
+		}
 		memberID := generateMemberID(creq.cid, req.InstanceID)
 		resp.MemberID = memberID
 		m := &groupMember{
 			memberID:   memberID,
+			instanceID: req.InstanceID,
 			clientID:   creq.cid,
 			clientHost: creq.cc.conn.RemoteAddr().String(),
 			join:       req,
+		}
+		if req.InstanceID != nil {
+			g.staticMembers[*req.InstanceID] = memberID
 		}
 		if req.Version >= 4 {
 			g.addPendingRebalance(m)
@@ -886,6 +895,14 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 		}
 		g.addMemberAndRebalance(m, creq, req)
 		return nil, true
+	}
+
+	// Validate instanceID consistency for known members.
+	if req.InstanceID != nil {
+		if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
+			resp.ErrorCode = err.Code
+			return resp, false
+		}
 	}
 
 	// Pending members rejoining immediately enters rebalance.
@@ -923,6 +940,86 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 	return nil, true
 }
 
+// replaceStaticMember handles a static member rejoining with the same
+// instanceID. If the protocol is unchanged, the member is not the leader,
+// and the group is stable, we skip the rebalance (KIP-345).
+func (g *group) replaceStaticMember(oldMemberID string, creq *clientReq, req *kmsg.JoinGroupRequest, resp *kmsg.JoinGroupResponse) (kmsg.Response, bool) {
+	old, ok := g.members[oldMemberID]
+	if !ok {
+		// Old member was pending or already removed - treat as new join.
+		delete(g.staticMembers, *req.InstanceID)
+		memberID := generateMemberID(creq.cid, req.InstanceID)
+		resp.MemberID = memberID
+		m := &groupMember{
+			memberID:   memberID,
+			instanceID: req.InstanceID,
+			clientID:   creq.cid,
+			clientHost: creq.cc.conn.RemoteAddr().String(),
+			join:       req,
+		}
+		g.staticMembers[*req.InstanceID] = memberID
+		if p, ok := g.pending[oldMemberID]; ok {
+			g.stopPending(p)
+		}
+		if req.Version >= 4 {
+			g.addPendingRebalance(m)
+			resp.ErrorCode = kerr.MemberIDRequired.Code
+			return resp, true
+		}
+		g.addMemberAndRebalance(m, creq, req)
+		return nil, true
+	}
+
+	// Generate a new memberID for the replacement.
+	memberID := generateMemberID(creq.cid, req.InstanceID)
+
+	// Create the new member, preserving the old assignment.
+	m := &groupMember{
+		memberID:   memberID,
+		instanceID: req.InstanceID,
+		clientID:   creq.cid,
+		clientHost: creq.cc.conn.RemoteAddr().String(),
+		join:       req,
+		assignment: old.assignment,
+	}
+
+	// Fence the old member: if it's waiting for a reply, send FENCED_INSTANCE_ID.
+	if !old.waitingReply.empty() {
+		oldResp := old.waitingReply.kreq.ResponseKind()
+		switch r := oldResp.(type) {
+		case *kmsg.JoinGroupResponse:
+			r.ErrorCode = kerr.FencedInstanceID.Code
+		case *kmsg.SyncGroupResponse:
+			r.ErrorCode = kerr.FencedInstanceID.Code
+		}
+		g.reply(old.waitingReply, oldResp, nil)
+	}
+
+	// Remove old member state without triggering rebalance.
+	g.removeMember(old)
+
+	// Register new member in static mapping.
+	g.staticMembers[*req.InstanceID] = memberID
+	g.members[memberID] = m
+	for _, p := range m.join.Protocols {
+		g.protocols[p.Name]++
+	}
+
+	// If protocol unchanged, not leader, and group is stable: skip rebalance.
+	// The client gets its join response immediately and proceeds to sync.
+	if g.state == groupStable && g.leader != oldMemberID && old.sameJoin(req) {
+		g.updateHeartbeat(m)
+		g.fillJoinResp(memberID, resp)
+		return resp, true
+	}
+
+	// Otherwise trigger a rebalance.
+	g.nJoining++
+	m.waitingReply = creq
+	g.rebalance()
+	return nil, true
+}
+
 // Handles a sync, which can transition us to stable.
 func (g *group) handleSync(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.SyncGroupRequest)
@@ -936,8 +1033,8 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
 		return resp
 	}
-	if req.InstanceID != nil {
-		resp.ErrorCode = kerr.InvalidGroupID.Code
+	if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
+		resp.ErrorCode = err.Code
 		return resp
 	}
 	m, ok := g.members[req.MemberID]
@@ -992,8 +1089,8 @@ func (g *group) handleHeartbeat(creq *clientReq) kmsg.Response {
 		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
 		return resp
 	}
-	if req.InstanceID != nil {
-		resp.ErrorCode = kerr.InvalidGroupID.Code
+	if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
+		resp.ErrorCode = err.Code
 		return resp
 	}
 	m, ok := g.members[req.MemberID]
@@ -1046,10 +1143,18 @@ func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 		resp.Members = append(resp.Members, mresp)
 
 		r := &resp.Members[len(resp.Members)-1]
+
+		// Resolve memberID from instanceID for static members.
 		if rm.InstanceID != nil {
-			r.ErrorCode = kerr.UnknownMemberID.Code
-			continue
+			memberID, ok := g.staticMembers[*rm.InstanceID]
+			if !ok {
+				r.ErrorCode = kerr.UnknownMemberID.Code
+				continue
+			}
+			rm.MemberID = memberID
+			r.MemberID = memberID
 		}
+
 		if m, ok := g.members[rm.MemberID]; !ok {
 			if p, ok := g.pending[rm.MemberID]; !ok {
 				r.ErrorCode = kerr.UnknownMemberID.Code
@@ -1122,8 +1227,8 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 		return resp, false
 	}
 
-	if req.InstanceID != nil {
-		fillOffsetCommit(req, resp, kerr.InvalidGroupID.Code)
+	if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
+		fillOffsetCommit(req, resp, err.Code)
 		return resp, false
 	}
 
@@ -1223,6 +1328,9 @@ func (g *group) completeRebalance() {
 				g.protocols[p.Name]--
 			}
 			delete(g.members, m.memberID)
+			if m.instanceID != nil {
+				delete(g.staticMembers, *m.instanceID)
+			}
 			if m.t != nil {
 				m.t.Stop()
 			}
@@ -1408,18 +1516,39 @@ func (g *group) atSessionTimeout(m *groupMember, fn func()) {
 }
 
 // removeMember removes a member from the group, cleaning up its protocol
-// counts, session timer, and join counter. Does not trigger a rebalance.
+// counts, session timer, join counter, and static membership. Does not
+// trigger a rebalance.
 func (g *group) removeMember(m *groupMember) {
 	for _, p := range m.join.Protocols {
 		g.protocols[p.Name]--
 	}
 	delete(g.members, m.memberID)
+	if m.instanceID != nil {
+		delete(g.staticMembers, *m.instanceID)
+	}
 	if m.t != nil {
 		m.t.Stop()
 	}
 	if !m.waitingReply.empty() {
 		g.nJoining--
 	}
+}
+
+// validateInstanceID checks that the given instanceID and memberID are
+// consistent with the group's static membership state. Returns nil on
+// success or a kerr error.
+func (g *group) validateInstanceID(instanceID *string, memberID string) *kerr.Error {
+	if instanceID == nil {
+		return nil
+	}
+	knownMID, ok := g.staticMembers[*instanceID]
+	if !ok {
+		return kerr.UnknownMemberID
+	}
+	if knownMID != memberID {
+		return kerr.FencedInstanceID
+	}
+	return nil
 }
 
 // This is used to update a member from a new join request, or to clear a
@@ -1518,6 +1647,7 @@ members:
 			if p.Name == g.protocol {
 				metadata = append(metadata, kmsg.JoinGroupResponseMember{
 					MemberID:         m.memberID,
+					InstanceID:       m.instanceID,
 					ProtocolMetadata: p.Metadata,
 				})
 				continue members
@@ -1690,6 +1820,8 @@ func (g *group) handleConsumerHeartbeat(creq *clientReq) kmsg.Response {
 		return g.consumerJoin(creq, req, resp)
 	case -1:
 		return g.consumerLeave(req, resp)
+	case -2:
+		return g.consumerStaticLeave(req, resp)
 	default:
 		return g.consumerRegularHeartbeat(req, resp)
 	}
@@ -1698,7 +1830,19 @@ func (g *group) handleConsumerHeartbeat(creq *clientReq) kmsg.Response {
 func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.ConsumerGroupHeartbeatResponse) *kmsg.ConsumerGroupHeartbeatResponse {
 	memberID := req.MemberID
 	if memberID == "" {
-		memberID = generateMemberID(creq.cid, nil)
+		memberID = generateMemberID(creq.cid, req.InstanceID)
+	}
+
+	// Static member fencing: if this instanceID maps to a different
+	// active member, fence the old one first.
+	if req.InstanceID != nil {
+		if oldMemberID, ok := g.staticMembers[*req.InstanceID]; ok && oldMemberID != memberID {
+			if old, ok := g.consumerMembers[oldMemberID]; ok {
+				g.fenceConsumerMember(old)
+				delete(g.consumerMembers, oldMemberID)
+			}
+		}
+		g.staticMembers[*req.InstanceID] = memberID
 	}
 
 	// Rejoin (e.g. after fencing): remove and re-add.
@@ -1780,6 +1924,10 @@ func (g *group) consumerLeave(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kms
 	}
 	g.fenceConsumerMember(m)
 	delete(g.consumerMembers, req.MemberID)
+	// Full leave (-1): remove from static membership too.
+	if m.instanceID != nil {
+		delete(g.staticMembers, *m.instanceID)
+	}
 
 	g.generation++
 	g.computeTargetAssignment(g.lastTopicMeta)
@@ -1787,6 +1935,33 @@ func (g *group) consumerLeave(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kms
 
 	resp.MemberID = &req.MemberID
 	resp.MemberEpoch = -1
+	return resp
+}
+
+// consumerStaticLeave handles epoch -2: static member leave. The member
+// is removed from active membership but its instanceID mapping is preserved
+// in staticMembers so it can rejoin and reclaim its slot.
+func (g *group) consumerStaticLeave(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.ConsumerGroupHeartbeatResponse) *kmsg.ConsumerGroupHeartbeatResponse {
+	m, ok := g.consumerMembers[req.MemberID]
+	if !ok {
+		resp.ErrorCode = kerr.UnknownMemberID.Code
+		return resp
+	}
+	if m.instanceID == nil {
+		// Epoch -2 is only valid for static members.
+		resp.ErrorCode = kerr.UnreleasedInstanceID.Code
+		return resp
+	}
+	g.fenceConsumerMember(m)
+	delete(g.consumerMembers, req.MemberID)
+	// Keep g.staticMembers[*m.instanceID] intact - the key difference from -1.
+
+	g.generation++
+	g.computeTargetAssignment(g.lastTopicMeta)
+	g.updateConsumerStateField()
+
+	resp.MemberID = &req.MemberID
+	resp.MemberEpoch = -2
 	return resp
 }
 

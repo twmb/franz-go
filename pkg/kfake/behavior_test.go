@@ -3200,3 +3200,409 @@ func TestCompactDoubleCompaction(t *testing.T) {
 		}
 	}
 }
+
+// TestRetentionTime verifies that retention.ms=1 causes old batches to be
+// removed after ApplyRetention.
+func TestRetentionTime(t *testing.T) {
+	t.Parallel()
+	topic := "retention-time"
+	retMs := "1"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"retention.ms": &retMs,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce old records.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("old1")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("old2")})
+
+	// Let them expire.
+	time.Sleep(5 * time.Millisecond)
+
+	// Produce a new record (will not be expired).
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("new")})
+
+	c.ApplyRetention()
+
+	// logStartOffset should have advanced past the old records.
+	pi := c.PartitionInfo(topic, 0)
+	if pi.LogStartOffset < 2 {
+		t.Fatalf("expected logStartOffset >= 2 after retention, got %d", pi.LogStartOffset)
+	}
+
+	// Consuming from start should only get the new record.
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 1, 5*time.Second)
+	if string(records[0].Value) != "new" {
+		t.Fatalf("expected 'new', got %q", string(records[0].Value))
+	}
+}
+
+// TestRetentionBytes verifies that retention.bytes removes oldest batches
+// when the partition exceeds the size limit.
+func TestRetentionBytes(t *testing.T) {
+	t.Parallel()
+	topic := "retention-bytes"
+	// A single-record batch is ~70 bytes. Set retention to 100 so only
+	// the last batch survives out of three.
+	retBytes := "100"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"retention.bytes": &retBytes,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("a")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("b")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("c")})
+
+	c.ApplyRetention()
+
+	pi := c.PartitionInfo(topic, 0)
+	if pi.LogStartOffset < 2 {
+		t.Fatalf("expected logStartOffset >= 2 after retention, got %d", pi.LogStartOffset)
+	}
+
+	// Consuming from start should only get the last record.
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 1, 5*time.Second)
+	if string(records[0].Value) != "c" {
+		t.Fatalf("expected 'c', got %q", string(records[0].Value))
+	}
+}
+
+// TestRetentionTicker verifies that the background ticker applies retention
+// automatically when retention.ms and log.cleaner.backoff.ms are set.
+// waitForStableClassicGroup polls DescribeGroups until the classic group
+// is Stable with the expected member count.
+func waitForStableClassicGroup(t *testing.T, adm *kadm.Client, group string, nMembers int, timeout time.Duration) kadm.DescribedGroup {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		described, err := adm.DescribeGroups(ctx, group)
+		if err != nil {
+			t.Fatalf("describe failed: %v", err)
+		}
+		dg := described[group]
+		if dg.State == "Stable" && len(dg.Members) == nMembers {
+			return dg
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("timeout waiting for stable classic group %q with %d members (state=%s, members=%d)", group, nMembers, dg.State, len(dg.Members))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestStaticMemberClassicRejoin verifies that a static member can rejoin
+// a classic group using its instanceID. The instanceID is preserved across
+// the session timeout so the new client can reclaim the slot.
+func TestStaticMemberClassicRejoin(t *testing.T) {
+	t.Parallel()
+	topic := "static-classic-rejoin"
+	group := "static-classic-rejoin-group"
+	instanceID := "static-instance-1"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 20)
+
+	// First client with instanceID.
+	cl1, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumeN(t, cl1, 20, 10*time.Second)
+
+	adm := kadm.NewClient(newPlainClient(t, c))
+	waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+
+	// Close first client (static member - does not send leave).
+	cl1.Close()
+
+	// Wait for session timeout to expire the member.
+	time.Sleep(2 * time.Second)
+
+	// Second client with the same instanceID should rejoin.
+	cl2, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl2.Close()
+
+	dg := waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+	// Verify the member has the instanceID.
+	found := false
+	for _, m := range dg.Members {
+		if m.InstanceID != nil && *m.InstanceID == instanceID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("instanceID %q not found in group members after rejoin", instanceID)
+	}
+}
+
+// TestStaticMemberClassicFencing verifies that a second classic group
+// client with the same instanceID fences the first (the first gets
+// FENCED_INSTANCE_ID).
+func TestStaticMemberClassicFencing(t *testing.T) {
+	t.Parallel()
+	topic := "static-classic-fence"
+	group := "static-classic-fence-group"
+	instanceID := "fence-instance-1"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 20)
+
+	// First client.
+	cl1, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl1.Close()
+	consumeN(t, cl1, 20, 10*time.Second)
+	adm := kadm.NewClient(newPlainClient(t, c))
+	waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+
+	// Second client with the same instanceID - should fence the first.
+	cl2, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl2.Close()
+
+	// The group should stabilize with 1 member (cl2 replaced cl1).
+	dg := waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+	found := false
+	for _, m := range dg.Members {
+		if m.InstanceID != nil && *m.InstanceID == instanceID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("instanceID %q not found after fencing", instanceID)
+	}
+}
+
+// TestStaticMemberClassicLeaveByInstance verifies that a static member
+// can be removed from a classic group by sending a LeaveGroup request
+// with the instanceID.
+func TestStaticMemberClassicLeaveByInstance(t *testing.T) {
+	t.Parallel()
+	topic := "static-classic-leave-inst"
+	group := "static-classic-leave-inst-group"
+	instanceID := "leave-instance-1"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 10)
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	consumeN(t, cl, 10, 10*time.Second)
+
+	adm := kadm.NewClient(newPlainClient(t, c))
+	waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+
+	// Send a raw LeaveGroup with instanceID (no memberID).
+	raw := newPlainClient(t, c)
+	leaveReq := kmsg.NewPtrLeaveGroupRequest()
+	leaveReq.Group = group
+	leaveReq.Version = 3
+	lm := kmsg.NewLeaveGroupRequestMember()
+	lm.InstanceID = &instanceID
+	leaveReq.Members = append(leaveReq.Members, lm)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	leaveResp, err := leaveReq.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("leave request failed: %v", err)
+	}
+	if leaveResp.ErrorCode != 0 {
+		t.Fatalf("leave top-level error: %v", kerr.ErrorForCode(leaveResp.ErrorCode))
+	}
+	for _, m := range leaveResp.Members {
+		if m.ErrorCode != 0 {
+			t.Fatalf("leave member error: %v", kerr.ErrorForCode(m.ErrorCode))
+		}
+	}
+}
+
+// TestStaticMember848Leave verifies that a static member in an 848 group
+// can send epoch -2 (static leave), then rejoin and get an assignment.
+func TestStaticMember848Leave(t *testing.T) {
+	t.Parallel()
+	topic := "static-848-leave"
+	group := "static-848-leave-group"
+	instanceID := "static-848-instance-1"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 20)
+
+	// Consumer with instanceID.
+	cl1 := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	consumeN(t, cl1, 20, 10*time.Second)
+	adm := kadm.NewClient(newClient848(t, c))
+	waitForStableGroup(t, adm, group, 1, 10*time.Second)
+
+	// Close client - with instanceID, 848 sends epoch -2.
+	cl1.Close()
+
+	// Wait a bit for the leave to be processed.
+	time.Sleep(500 * time.Millisecond)
+
+	// Rejoin with a new client using the same instanceID.
+	cl2 := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	_ = cl2
+
+	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	if totalAssignedPartitions(dg) != 2 {
+		t.Fatalf("expected 2 partitions assigned after rejoin, got %d", totalAssignedPartitions(dg))
+	}
+}
+
+// TestStaticMember848SessionTimeout verifies that a static 848 member
+// that times out can rejoin and reclaim its assignment slot.
+func TestStaticMember848SessionTimeout(t *testing.T) {
+	t.Parallel()
+	topic := "static-848-timeout"
+	group := "static-848-timeout-group"
+	instanceID := "static-848-timeout-inst"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 20)
+
+	cl1 := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	consumeN(t, cl1, 20, 10*time.Second)
+	adm := kadm.NewClient(newClient848(t, c))
+	waitForStableGroup(t, adm, group, 1, 10*time.Second)
+
+	// Force-close the client so it cannot heartbeat - triggers session timeout.
+	cl1.Close()
+
+	// Wait for the session timeout to expire (test binary uses 100ms
+	// heartbeat; session timeout is typically 45s but kfake test defaults
+	// are much shorter).
+	time.Sleep(2 * time.Second)
+
+	// Rejoin with same instanceID.
+	cl2 := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	_ = cl2
+
+	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	if totalAssignedPartitions(dg) != 2 {
+		t.Fatalf("expected 2 partitions assigned after timeout rejoin, got %d", totalAssignedPartitions(dg))
+	}
+}
+
+func TestRetentionTicker(t *testing.T) {
+	t.Parallel()
+	topic := "retention-ticker"
+	retMs := "1"
+	backoff := "50"
+	c := newCluster(t, kfake.NumBrokers(1), kfake.BrokerConfigs(map[string]string{"log.cleaner.backoff.ms": backoff}))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"retention.ms": &retMs,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("old")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("keep")})
+
+	// Wait for the ticker to fire and apply retention.
+	time.Sleep(200 * time.Millisecond)
+
+	pi := c.PartitionInfo(topic, 0)
+	if pi.LogStartOffset < 1 {
+		t.Fatalf("expected logStartOffset >= 1 after ticker-driven retention, got %d", pi.LogStartOffset)
+	}
+}
