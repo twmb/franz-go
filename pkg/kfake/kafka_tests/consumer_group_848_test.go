@@ -402,7 +402,7 @@ func Test848SessionTimeout(t *testing.T) {
 		kfake.BrokerConfigs(map[string]string{
 			// Short session timeout so the fenced member is
 			// removed quickly. Default is 45s which is too long.
-			"group.consumer.session.timeout.ms": "1000",
+			"group.consumer.session.timeout.ms": "500",
 		}),
 	)
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))

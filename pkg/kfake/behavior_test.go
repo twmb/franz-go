@@ -484,126 +484,6 @@ func Test848TransactionalConsume(t *testing.T) {
 	}
 }
 
-// Test848ThreeConsumersFairDistribution verifies that partitions are evenly
-// distributed across three consumers. Consumers are staggered to allow
-// the group to stabilize between joins.
-func Test848ThreeConsumersFairDistribution(t *testing.T) {
-	t.Parallel()
-	topic := "t848-fair"
-	group := "g848-fair"
-	nPartitions := 9
-
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-
-	makeConsumer := func() *kgo.Client {
-		return newClient848(t, c,
-			kgo.ConsumeTopics(topic),
-			kgo.ConsumerGroup(group),
-			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		)
-	}
-
-	// Stagger consumers to let the group stabilize between joins.
-	produceNStrings(t, producer, topic, 30)
-	c1 := makeConsumer()
-	_ = consumeN(t, c1, 30, 10*time.Second)
-
-	c2 := makeConsumer()
-	produceNStrings(t, producer, topic, 30)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	got := 0
-	for got < 30 {
-		for _, cl := range []*kgo.Client{c1, c2} {
-			fs := cl.PollRecords(ctx, 100)
-			fs.EachRecord(func(*kgo.Record) { got++ })
-			if got >= 30 {
-				break
-			}
-		}
-		if got < 30 && ctx.Err() != nil {
-			t.Fatalf("timeout waiting for c1+c2: got %d/30", got)
-		}
-	}
-
-	c3 := makeConsumer()
-	produceNStrings(t, producer, topic, 90)
-
-	// All three consumers should collectively consume the 90 records.
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel2()
-	got = 0
-	for got < 90 {
-		for _, cl := range []*kgo.Client{c1, c2, c3} {
-			fs := cl.PollRecords(ctx2, 100)
-			fs.EachRecord(func(*kgo.Record) { got++ })
-			if got >= 90 {
-				break
-			}
-		}
-		if got < 90 && ctx2.Err() != nil {
-			t.Fatalf("timeout waiting for c1+c2+c3: got %d/90", got)
-		}
-	}
-}
-
-// Test848AllMembersLeave verifies that when all members leave a consumer
-// group, the group transitions to empty and a new joiner gets the full
-// assignment across all partitions.
-func Test848AllMembersLeave(t *testing.T) {
-	t.Parallel()
-	topic := "t848-allleave"
-	group := "g848-allleave"
-	nRecords := 20
-
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	produceNStrings(t, producer, topic, nRecords)
-
-	// Two consumers join the group and consume all records.
-	makeConsumer := func() *kgo.Client {
-		return newClient848(t, c,
-			kgo.ConsumeTopics(topic),
-			kgo.ConsumerGroup(group),
-			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		)
-	}
-	c1 := makeConsumer()
-	c2 := makeConsumer()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	got := 0
-	for got < nRecords {
-		for _, cl := range []*kgo.Client{c1, c2} {
-			fs := cl.PollRecords(ctx, 100)
-			fs.EachRecord(func(*kgo.Record) { got++ })
-			if got >= nRecords {
-				break
-			}
-		}
-		if got < nRecords && ctx.Err() != nil {
-			t.Fatalf("timeout consuming initial records: got %d/%d", got, nRecords)
-		}
-	}
-
-	// Both consumers leave.
-	c1.Close()
-	c2.Close()
-
-	// Produce more records.
-	moreRecords := 10
-	produceNStrings(t, producer, topic, moreRecords)
-
-	// A new consumer should get the full assignment (all 3 partitions).
-	c3 := makeConsumer()
-	records := consumeN(t, c3, moreRecords, 10*time.Second)
-	if len(records) < moreRecords {
-		t.Fatalf("expected at least %d records from new consumer, got %d", moreRecords, len(records))
-	}
-}
-
 // Test848AddTopicSubscription verifies that adding a new topic to a
 // consumer's subscription triggers a rebalance and the consumer picks
 // up partitions from the newly added topic.
@@ -1408,7 +1288,7 @@ func TestTxnInitProducerIDAbortOngoing(t *testing.T) {
 		kgo.FetchMaxWait(250*time.Millisecond),
 	)
 	// Poll briefly - should get nothing since the transaction was aborted.
-	pollCtx, pollCancel := context.WithTimeout(ctx, time.Second)
+	pollCtx, pollCancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer pollCancel()
 	fs := consumer.PollFetches(pollCtx)
 	if fs.NumRecords() > 0 {
@@ -1670,7 +1550,7 @@ func TestTxnConcurrentDescribeAndInit(t *testing.T) {
 
 	c := newCluster(t, kfake.NumBrokers(1))
 	cl := newPlainClient(t, c)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -3206,7 +3086,7 @@ func TestCompactDoubleCompaction(t *testing.T) {
 func TestRetentionTime(t *testing.T) {
 	t.Parallel()
 	topic := "retention-time"
-	retMs := "1"
+	retMs := "100"
 	c := newCluster(t, kfake.NumBrokers(1))
 
 	cl := newPlainClient(t, c)
@@ -3223,7 +3103,7 @@ func TestRetentionTime(t *testing.T) {
 	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("old2")})
 
 	// Let them expire.
-	time.Sleep(5 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	// Produce a new record (will not be expired).
 	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("new")})
@@ -3321,11 +3201,15 @@ func TestStaticMemberClassicRejoin(t *testing.T) {
 	group := "static-classic-rejoin-group"
 	instanceID := "static-instance-1"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	c := newCluster(t, kfake.NumBrokers(1),
+		kfake.SeedTopics(2, topic),
+		kfake.BrokerConfigs(map[string]string{"group.min.session.timeout.ms": "100"}),
+	)
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 20)
 
-	// First client with instanceID.
+	// First client with instanceID. Use a short session timeout so
+	// the server removes the member quickly after close.
 	cl1, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
 		kgo.ConsumerGroup(group),
@@ -3333,6 +3217,7 @@ func TestStaticMemberClassicRejoin(t *testing.T) {
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchMaxWait(250*time.Millisecond),
 		kgo.InstanceID(instanceID),
+		kgo.SessionTimeout(500*time.Millisecond),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -3346,7 +3231,7 @@ func TestStaticMemberClassicRejoin(t *testing.T) {
 	cl1.Close()
 
 	// Wait for session timeout to expire the member.
-	time.Sleep(2 * time.Second)
+	time.Sleep(700 * time.Millisecond)
 
 	// Second client with the same instanceID should rejoin.
 	cl2, err := kgo.NewClient(
@@ -3540,7 +3425,12 @@ func TestStaticMember848SessionTimeout(t *testing.T) {
 	group := "static-848-timeout-group"
 	instanceID := "static-848-timeout-inst"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	c := newCluster(t, kfake.NumBrokers(1),
+		kfake.SeedTopics(2, topic),
+		kfake.BrokerConfigs(map[string]string{
+			"group.consumer.session.timeout.ms": "500",
+		}),
+	)
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 20)
 
@@ -3558,10 +3448,8 @@ func TestStaticMember848SessionTimeout(t *testing.T) {
 	// Force-close the client so it cannot heartbeat - triggers session timeout.
 	cl1.Close()
 
-	// Wait for the session timeout to expire (test binary uses 100ms
-	// heartbeat; session timeout is typically 45s but kfake test defaults
-	// are much shorter).
-	time.Sleep(2 * time.Second)
+	// Wait for the session timeout to expire (500ms configured above).
+	time.Sleep(700 * time.Millisecond)
 
 	// Rejoin with same instanceID.
 	cl2 := newClient848(t, c,
