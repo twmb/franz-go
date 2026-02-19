@@ -587,6 +587,38 @@ func (d *data) maxMessageBytes(t string) int {
 	return defMaxMessageBytes
 }
 
+// retentionMs returns the retention.ms for a topic, falling back to
+// broker config then defaults.
+func (d *data) retentionMs(t string) int64 {
+	if tcfg, ok := d.tcfgs[t]; ok {
+		if v, ok := tcfg["retention.ms"]; ok && v != nil {
+			n, _ := strconv.ParseInt(*v, 10, 64)
+			return n
+		}
+	}
+	if v, ok := d.c.loadBcfgs()["log.retention.ms"]; ok && v != nil {
+		n, _ := strconv.ParseInt(*v, 10, 64)
+		return n
+	}
+	return 604800000
+}
+
+// retentionBytes returns the retention.bytes for a topic, falling back to
+// broker config then defaults. -1 means no limit.
+func (d *data) retentionBytes(t string) int64 {
+	if tcfg, ok := d.tcfgs[t]; ok {
+		if v, ok := tcfg["retention.bytes"]; ok && v != nil {
+			n, _ := strconv.ParseInt(*v, 10, 64)
+			return n
+		}
+	}
+	if v, ok := d.c.loadBcfgs()["log.retention.bytes"]; ok && v != nil {
+		n, _ := strconv.ParseInt(*v, 10, 64)
+		return n
+	}
+	return -1
+}
+
 func forEachBatchRecord(batch kmsg.RecordBatch, cb func(kmsg.Record) error) error {
 	records, err := kgo.DefaultDecompressor().Decompress(
 		batch.Records,
@@ -627,6 +659,18 @@ func BatchRecords(b kmsg.RecordBatch) ([]kmsg.Record, error) {
 /////////////////
 // COMPACTION  //
 /////////////////
+
+// hasRetentionConfig returns true if the topic has retention.ms or
+// retention.bytes explicitly set in its topic configs.
+func (d *data) hasRetentionConfig(t string) bool {
+	tcfg, ok := d.tcfgs[t]
+	if !ok {
+		return false
+	}
+	_, hasMs := tcfg["retention.ms"]
+	_, hasBytes := tcfg["retention.bytes"]
+	return hasMs || hasBytes
+}
 
 func (d *data) isCompactTopic(t string) bool {
 	if tcfg, ok := d.tcfgs[t]; ok {
@@ -798,6 +842,61 @@ func (pd *partData) trimAbortedTxns() {
 		return pd.abortedTxns[i].lastOffset >= pd.logStartOffset
 	})
 	pd.abortedTxns = pd.abortedTxns[i:]
+}
+
+/////////////////
+// RETENTION   //
+/////////////////
+
+// applyRetention advances logStartOffset past batches that are expired by
+// retention.ms or that exceed retention.bytes, then trims them.
+func (pd *partData) applyRetention(d *data, topic string) {
+	if len(pd.batches) == 0 {
+		return
+	}
+
+	retMs := d.retentionMs(topic)
+	retBytes := d.retentionBytes(topic)
+	if retMs < 0 && retBytes < 0 {
+		return
+	}
+
+	now := time.Now().UnixMilli()
+	newLogStart := pd.logStartOffset
+
+	// Time-based retention: drop batches whose max timestamp is older
+	// than retention.ms.
+	if retMs >= 0 {
+		for _, b := range pd.batches {
+			if now-b.MaxTimestamp >= retMs {
+				end := b.FirstOffset + int64(b.LastOffsetDelta) + 1
+				if end > newLogStart {
+					newLogStart = end
+				}
+			}
+		}
+	}
+
+	// Size-based retention: drop oldest batches until total size is
+	// within retention.bytes.
+	if retBytes >= 0 && pd.nbytes > retBytes {
+		excess := pd.nbytes - retBytes
+		for _, b := range pd.batches {
+			if excess <= 0 {
+				break
+			}
+			end := b.FirstOffset + int64(b.LastOffsetDelta) + 1
+			if end > newLogStart {
+				newLogStart = end
+			}
+			excess -= int64(b.nbytes)
+		}
+	}
+
+	if newLogStart > pd.logStartOffset {
+		pd.logStartOffset = newLogStart
+		pd.trimLeft()
+	}
 }
 
 // rebuildBatch creates a new partBatch with only the kept records,

@@ -1199,14 +1199,33 @@ func (c *Cluster) Compact() {
 	})
 }
 
-// compactAll compacts all eligible topics. Must be called from Cluster.run().
+// ApplyRetention enforces retention.ms and retention.bytes on all topics,
+// removing batches that are expired or exceed the size limit.
+func (c *Cluster) ApplyRetention() {
+	c.admin(func() {
+		c.applyRetentionAll()
+	})
+}
+
+// compactAll compacts and applies retention on all eligible topics.
+// Must be called from Cluster.run().
 func (c *Cluster) compactAll() {
 	for t := range c.data.tps {
-		if !c.data.isCompactTopic(t) {
-			continue
-		}
 		for _, pd := range c.data.tps[t] {
-			pd.compact(&c.data, t)
+			if c.data.isCompactTopic(t) {
+				pd.compact(&c.data, t)
+			}
+			pd.applyRetention(&c.data, t)
+		}
+	}
+}
+
+// applyRetentionAll applies retention on all topics.
+// Must be called from Cluster.run().
+func (c *Cluster) applyRetentionAll() {
+	for t := range c.data.tps {
+		for _, pd := range c.data.tps[t] {
+			pd.applyRetention(&c.data, t)
 		}
 	}
 }
@@ -1228,18 +1247,23 @@ func (c *Cluster) compactIntervalMs() int64 {
 }
 
 // refreshCompactTicker starts or stops the compaction ticker based on whether
-// any topic has cleanup.policy=compact. Must be called from Cluster.run().
+// any topic has cleanup.policy=compact or has retention configs explicitly set.
+// Must be called from Cluster.run().
 func (c *Cluster) refreshCompactTicker() {
-	hasCompact := false
+	needsTicker := false
 	for t := range c.data.tps {
 		if c.data.isCompactTopic(t) {
-			hasCompact = true
+			needsTicker = true
+			break
+		}
+		if c.data.hasRetentionConfig(t) {
+			needsTicker = true
 			break
 		}
 	}
-	if hasCompact && c.compactTicker == nil {
+	if needsTicker && c.compactTicker == nil {
 		c.compactTicker = time.NewTicker(time.Duration(c.compactIntervalMs()) * time.Millisecond)
-	} else if !hasCompact && c.compactTicker != nil {
+	} else if !needsTicker && c.compactTicker != nil {
 		c.compactTicker.Stop()
 		c.compactTicker = nil
 	}
