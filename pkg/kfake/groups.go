@@ -580,6 +580,18 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 			continue
 		}
 		if !g.waitControl(func() {
+			// KIP-848: validate MemberID/MemberEpoch for consumer groups (v9+).
+			if g.typ == "consumer" && rg.MemberID != nil && *rg.MemberID != "" {
+				m, ok := g.consumerMembers[*rg.MemberID]
+				if !ok {
+					sg.ErrorCode = kerr.UnknownMemberID.Code
+					return
+				}
+				if rg.MemberEpoch != -1 && rg.MemberEpoch != m.memberEpoch {
+					sg.ErrorCode = kerr.StaleMemberEpoch.Code
+					return
+				}
+			}
 			if rg.Topics == nil {
 				for t, ps := range g.commits {
 					st := kmsg.NewOffsetFetchResponseGroupTopic()
@@ -857,7 +869,7 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
 		return resp, false
 	}
-	if st := int64(req.SessionTimeoutMillis); st < g.c.cfg.minSessionTimeout.Milliseconds() || st > g.c.cfg.maxSessionTimeout.Milliseconds() {
+	if st := req.SessionTimeoutMillis; st < g.c.groupMinSessionTimeoutMs() || st > g.c.groupMaxSessionTimeoutMs() {
 		resp.ErrorCode = kerr.InvalidSessionTimeout.Code
 		return resp, false
 	}
@@ -875,6 +887,10 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 			if oldMemberID, ok := g.staticMembers[*req.InstanceID]; ok {
 				return g.replaceStaticMember(oldMemberID, creq, req, resp)
 			}
+		}
+		if int32(len(g.members)+len(g.pending)) >= g.c.groupMaxSize() {
+			resp.ErrorCode = kerr.GroupMaxSizeReached.Code
+			return resp, true
 		}
 		memberID := generateMemberID(creq.cid, req.InstanceID)
 		resp.MemberID = memberID
@@ -1005,11 +1021,18 @@ func (g *group) replaceStaticMember(oldMemberID string, creq *clientReq, req *km
 		g.protocols[p.Name]++
 	}
 
-	// If protocol unchanged, not leader, and group is stable: skip rebalance.
-	// The client gets its join response immediately and proceeds to sync.
-	if g.state == groupStable && g.leader != oldMemberID && old.sameJoin(req) {
+	// If protocol unchanged and group is stable: skip rebalance (KIP-345).
+	// For the leader, set SkipAssignment so it knows to re-send the
+	// existing assignment without running the balancer (KIP-814).
+	if g.state == groupStable && old.sameJoin(req) {
+		if g.leader == oldMemberID {
+			g.leader = memberID
+		}
 		g.updateHeartbeat(m)
 		g.fillJoinResp(memberID, resp)
+		if resp.LeaderID == memberID {
+			resp.SkipAssignment = true
+		}
 		return resp, true
 	}
 
@@ -1833,6 +1856,18 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 		memberID = generateMemberID(creq.cid, req.InstanceID)
 	}
 
+	// Check group max size for truly new members (not rejoins).
+	isRejoin := g.consumerMembers[memberID] != nil
+	if req.InstanceID != nil {
+		if oldMID, ok := g.staticMembers[*req.InstanceID]; ok {
+			isRejoin = isRejoin || oldMID == memberID || g.consumerMembers[oldMID] != nil
+		}
+	}
+	if !isRejoin && int32(len(g.consumerMembers)) >= g.c.groupMaxSize() {
+		resp.ErrorCode = kerr.GroupMaxSizeReached.Code
+		return resp
+	}
+
 	// Static member fencing: if this instanceID maps to a different
 	// active member, fence the old one first.
 	if req.InstanceID != nil {
@@ -2162,12 +2197,32 @@ func (g *group) computeTargetAssignment(snap topicMetaSnap) {
 		return cmp.Compare(a.part, b.part)
 	})
 
-	// Sort members by memberID for deterministic assignment.
+	// Sort members deterministically. For the range assignor, static
+	// members (sorted by instanceID) come before dynamic members
+	// (sorted by memberID), matching Kafka's behavior.
 	memberIDs := make([]string, 0, len(g.consumerMembers))
 	for id := range g.consumerMembers {
 		memberIDs = append(memberIDs, id)
 	}
-	slices.Sort(memberIDs)
+	if g.assignorName == "range" {
+		slices.SortFunc(memberIDs, func(a, b string) int {
+			ma, mb := g.consumerMembers[a], g.consumerMembers[b]
+			aStatic := ma.instanceID != nil
+			bStatic := mb.instanceID != nil
+			if aStatic != bStatic {
+				if aStatic {
+					return -1
+				}
+				return 1
+			}
+			if aStatic {
+				return cmp.Compare(*ma.instanceID, *mb.instanceID)
+			}
+			return cmp.Compare(a, b)
+		})
+	} else {
+		slices.Sort(memberIDs)
+	}
 
 	// Clear all target assignments.
 	for _, m := range g.consumerMembers {

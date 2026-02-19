@@ -454,10 +454,14 @@ var validBrokerConfigs = map[string]string{
 	"max.incremental.fetch.session.cache.slots": "",
 	"group.consumer.heartbeat.interval.ms":      "",
 	"group.consumer.session.timeout.ms":         "",
+	"group.max.size":                            "",
+	"group.min.session.timeout.ms":              "",
+	"group.max.session.timeout.ms":              "",
 	"log.cleaner.backoff.ms":                    "",
 	"log.dir":                                   "",
 	"log.message.timestamp.type":                "message.timestamp.type",
 	"transaction.max.timeout.ms":                "",
+	"transactional.id.expiration.ms":            "",
 	"log.retention.bytes":                       "retention.bytes",
 	"log.retention.ms":                          "retention.ms",
 	"message.max.bytes":                         "max.message.bytes",
@@ -500,7 +504,8 @@ var configDefaults = map[string]string{
 	"retention.bytes":        "-1",
 	"retention.ms":           "604800000",
 
-	"transaction.max.timeout.ms": "900000",
+	"transaction.max.timeout.ms":     "900000",
+	"transactional.id.expiration.ms": "604800000",
 
 	"default.replication.factor":                "3",
 	"fetch.max.bytes":                           "57671680",
@@ -508,6 +513,9 @@ var configDefaults = map[string]string{
 	"max.incremental.fetch.session.cache.slots": strconv.Itoa(defMaxFetchSessionCacheSlots),
 	"group.consumer.heartbeat.interval.ms":      strconv.Itoa(defHeartbeatInterval),
 	"group.consumer.session.timeout.ms":         strconv.Itoa(defSessionTimeout),
+	"group.max.size":                            "2147483647",
+	"group.min.session.timeout.ms":              "6000",
+	"group.max.session.timeout.ms":              "300000",
 	"log.dir":                                   defLogDir,
 	"log.message.timestamp.type":                "CreateTime",
 	"log.retention.bytes":                       "-1",
@@ -527,6 +535,9 @@ var configTypes = map[string]kmsg.ConfigType{
 	"max.incremental.fetch.session.cache.slots": kmsg.ConfigTypeInt,
 	"group.consumer.heartbeat.interval.ms":      kmsg.ConfigTypeInt,
 	"group.consumer.session.timeout.ms":         kmsg.ConfigTypeInt,
+	"group.max.size":                            kmsg.ConfigTypeInt,
+	"group.min.session.timeout.ms":              kmsg.ConfigTypeInt,
+	"group.max.session.timeout.ms":              kmsg.ConfigTypeInt,
 	"log.cleaner.backoff.ms":                    kmsg.ConfigTypeLong,
 	"log.dir":                                   kmsg.ConfigTypeString,
 	"log.message.timestamp.type":                kmsg.ConfigTypeString,
@@ -541,6 +552,7 @@ var configTypes = map[string]kmsg.ConfigType{
 	"sasl.enabled.mechanisms":                   kmsg.ConfigTypeList,
 	"super.users":                               kmsg.ConfigTypeList,
 	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
+	"transactional.id.expiration.ms":            kmsg.ConfigTypeInt,
 }
 
 var brokerRack = "krack"
@@ -561,10 +573,28 @@ func (c *Cluster) consumerSessionTimeoutMs() int32 {
 	return c.brokerConfigInt("group.consumer.session.timeout.ms", defSessionTimeout)
 }
 
+func (c *Cluster) groupMaxSize() int32 {
+	return c.brokerConfigInt("group.max.size", 2147483647)
+}
+
+func (c *Cluster) groupMinSessionTimeoutMs() int32 {
+	return c.brokerConfigInt("group.min.session.timeout.ms", int(c.cfg.minSessionTimeout.Milliseconds()))
+}
+
+func (c *Cluster) groupMaxSessionTimeoutMs() int32 {
+	return c.brokerConfigInt("group.max.session.timeout.ms", int(c.cfg.maxSessionTimeout.Milliseconds()))
+}
+
 const defTransactionMaxTimeoutMs = 900000
 
 func (c *Cluster) transactionMaxTimeoutMs() int32 {
 	return c.brokerConfigInt("transaction.max.timeout.ms", defTransactionMaxTimeoutMs)
+}
+
+const defTxnIDExpirationMs = 604800000 // 7 days
+
+func (c *Cluster) txnIDExpirationMs() int32 {
+	return c.brokerConfigInt("transactional.id.expiration.ms", defTxnIDExpirationMs)
 }
 
 func (c *Cluster) fetchSessionCacheSlots() int32 {

@@ -154,6 +154,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	c.groups.c = c
 	c.pids.c = c
 	c.pids.ids = make(map[int64]*pidinfo)
+	c.pids.byTxid = make(map[string]*pidinfo)
 	c.pids.txs = make(map[*pidinfo]struct{})
 	c.pids.txTimer = time.NewTimer(0)
 	<-c.pids.txTimer.C
