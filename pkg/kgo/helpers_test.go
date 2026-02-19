@@ -419,11 +419,14 @@ type testConsumer struct {
 	group    string
 	balancer GroupBalancer
 
-	enable848 bool // opt into KIP-848 consumer group protocol
+	enable848  bool   // opt into KIP-848 consumer group protocol
+	instanceID string // if non-empty, each goroutine gets a unique instanceID with this prefix
 
 	expBody []byte // what every record body should be
 
 	consumed atomic.Uint64 // shared atomically
+
+	instanceIDCounter atomic.Int64 // generates unique suffixes for instanceID
 
 	wg sync.WaitGroup
 	mu sync.Mutex
@@ -449,6 +452,7 @@ func newTestConsumer(
 	balancer GroupBalancer,
 	expBody []byte,
 	enable848 bool,
+	instanceID string,
 ) *testConsumer {
 	return &testConsumer{
 		errCh: errCh,
@@ -459,7 +463,8 @@ func newTestConsumer(
 		group:    group,
 		balancer: balancer,
 
-		enable848: enable848,
+		enable848:  enable848,
+		instanceID: instanceID,
 
 		expBody: expBody,
 
@@ -470,6 +475,25 @@ func newTestConsumer(
 
 func (c *testConsumer) wait() {
 	c.wg.Wait()
+}
+
+// leaveGroupStatic sends a raw LeaveGroup with instanceID for static
+// members (since kgo's LeaveGroup is a no-op with instanceID for classic
+// groups). For dynamic members (empty instanceID), this is a no-op
+// since the normal LeaveGroup path handles cleanup.
+func (c *testConsumer) leaveGroupStatic(cl *Client, instanceID string) {
+	if instanceID == "" {
+		return
+	}
+	req := kmsg.NewPtrLeaveGroupRequest()
+	req.Group = c.group
+	member := kmsg.NewLeaveGroupRequestMember()
+	member.InstanceID = &instanceID
+	member.Reason = kmsg.StringPtr("test cleanup")
+	req.Members = append(req.Members, member)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req.RequestWith(ctx, cl) //nolint:errcheck // best-effort cleanup
 }
 
 func (c *testConsumer) goRun(transactional bool, etlsBeforeQuit int) {
@@ -487,6 +511,7 @@ func testChainETL(
 	transactional bool,
 	balancer GroupBalancer,
 	enable848 bool,
+	instanceID string,
 ) {
 	errs := make(chan error)
 	var (
@@ -505,6 +530,7 @@ func testChainETL(
 			balancer,
 			body,
 			enable848,
+			instanceID,
 		)
 
 		/////////////
@@ -522,6 +548,7 @@ func testChainETL(
 			balancer,
 			body,
 			enable848,
+			instanceID,
 		)
 
 		/////////////
@@ -539,6 +566,7 @@ func testChainETL(
 			balancer,
 			body,
 			enable848,
+			instanceID,
 		)
 	)
 
