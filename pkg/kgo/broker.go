@@ -735,6 +735,8 @@ type brokerCxn struct {
 
 	successes uint64
 
+	sizeBuf [4]byte // reused in readConn, tiny win
+
 	// resps manages reading kafka responses.
 	resps ring[promisedResp]
 	// dead is an atomic so that a backed up resps cannot block cxn death.
@@ -1204,17 +1206,16 @@ func (cxn *brokerCxn) readConn(
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
-		sizeBuf := make([]byte, 4)
 		readStart := time.Now()
 		defer func() {
 			timeToRead = time.Since(readStart)
 			readWait = readStart.Sub(enqueuedForReadingAt)
 		}()
-		if nread, err = io.ReadFull(cxn.conn, sizeBuf); err != nil {
+		if nread, err = io.ReadFull(cxn.conn, cxn.sizeBuf[:]); err != nil {
 			return
 		}
 		var size int32
-		if size, err = cxn.parseReadSize(sizeBuf); err != nil {
+		if size, err = cxn.parseReadSize(cxn.sizeBuf[:]); err != nil {
 			return
 		}
 		buf = make([]byte, size)

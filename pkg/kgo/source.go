@@ -1993,12 +1993,15 @@ func recordToRecord(
 	krecord *kmsg.Record,
 	r *Record,
 ) {
-	h := make([]RecordHeader, 0, len(krecord.Headers))
-	for _, kv := range krecord.Headers {
-		h = append(h, RecordHeader{
-			Key:   kv.Key,
-			Value: kv.Value,
-		})
+	var h []RecordHeader
+	if len(krecord.Headers) > 0 {
+		h = make([]RecordHeader, len(krecord.Headers))
+		for i, kv := range krecord.Headers {
+			h[i] = RecordHeader{
+				Key:   kv.Key,
+				Value: kv.Value,
+			}
+		}
 	}
 	*r = Record{
 		Key:           krecord.Key,

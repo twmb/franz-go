@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"iter"
-	"reflect"
 	"time"
 	"unsafe"
 )
@@ -197,13 +196,7 @@ func (r *Record) AppendFormat(b []byte, layout string) ([]byte, error) {
 // be used if you only ever read record fields. This function can safely be used
 // for producing; the client never modifies a record's key nor value fields.
 func StringRecord(value string) *Record {
-	var slice []byte
-	slicehdr := (*reflect.SliceHeader)(unsafe.Pointer(&slice))             //nolint:gosec // known way to convert string to slice
-	slicehdr.Data = ((*reflect.StringHeader)(unsafe.Pointer(&value))).Data //nolint:gosec // known way to convert string to slice
-	slicehdr.Len = len(value)
-	slicehdr.Cap = len(value)
-
-	return &Record{Value: slice}
+	return &Record{Value: unsafe.Slice(unsafe.StringData(value), len(value))}
 }
 
 // KeyStringRecord returns a Record with the Key and Value fields set to the
@@ -216,14 +209,10 @@ func StringRecord(value string) *Record {
 // be used if you only ever read record fields. This function can safely be used
 // for producing; the client never modifies a record's key nor value fields.
 func KeyStringRecord(key, value string) *Record {
-	r := StringRecord(value)
-
-	keyhdr := (*reflect.SliceHeader)(unsafe.Pointer(&r.Key))           //nolint:gosec // known way to convert string to slice
-	keyhdr.Data = ((*reflect.StringHeader)(unsafe.Pointer(&key))).Data //nolint:gosec // known way to convert string to slice
-	keyhdr.Len = len(key)
-	keyhdr.Cap = len(key)
-
-	return r
+	return &Record{
+		Key:   unsafe.Slice(unsafe.StringData(key), len(key)),
+		Value: unsafe.Slice(unsafe.StringData(value), len(value)),
+	}
 }
 
 // SliceRecord returns a Record with the Value field set to the input value
