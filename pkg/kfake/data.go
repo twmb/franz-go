@@ -1,7 +1,6 @@
 package kfake
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -119,8 +118,7 @@ func (d *data) mkt(t string, nparts, nreplicas int, configs map[string]*string) 
 	}
 	var id uuid
 	for {
-		sha := sha256.Sum256([]byte(strconv.Itoa(int(time.Now().UnixNano()))))
-		copy(id[:], sha[:])
+		id = randUUID()
 		if _, exists := d.id2t[id]; !exists {
 			break
 		}

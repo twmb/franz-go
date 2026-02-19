@@ -414,13 +414,16 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 	if g != nil {
 		if req.Version >= 3 && (req.MemberID != "" || req.Generation != -1) {
 			var errCode int16
-			g.waitControl(func() {
+			if !g.waitControl(func() {
 				if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
 					errCode = err.Code
 					return
 				}
 				errCode = g.validateMemberGeneration(req.MemberID, req.Generation)
-			})
+			}) {
+				doneall(kerr.GroupIDNotFound.Code)
+				return resp
+			}
 			if errCode != 0 {
 				doneall(errCode)
 				return resp
@@ -596,33 +599,37 @@ func (pids *pids) bumpEpoch(pidinf *pidinfo) *pidinfo {
 }
 
 func (pids *pids) create(txidp *string, txTimeout int32) (int64, int16) {
+	// Re-init of an existing transactional ID: look up by txid first
+	// to avoid FNV-64 hash collisions between different txids.
+	if txidp != nil {
+		if pidinf, ok := pids.byTxid[*txidp]; ok {
+			pidinf = pids.bumpEpoch(pidinf)
+			pidinf.lastActive = time.Now()
+			return pidinf.id, pidinf.epoch
+		}
+	}
 	var id int64
-	var txid string
 	if txidp != nil {
 		hasher := fnv.New64()
 		hasher.Write([]byte(*txidp))
 		id = int64(hasher.Sum64()) & math.MaxInt64
-		txid = *txidp
+		if _, exists := pids.ids[id]; exists {
+			id = pids.randomID() // hash collision, use random
+		}
 	} else {
 		id = pids.randomID()
 	}
-	pidinf, exists := pids.ids[id]
-	if exists {
-		pidinf = pids.bumpEpoch(pidinf)
-		pidinf.lastActive = time.Now()
-		return pidinf.id, pidinf.epoch
-	}
-	pidinf = &pidinfo{
+	pidinf := &pidinfo{
 		pids:       pids,
 		id:         id,
-		txid:       txid,
 		txTimeout:  txTimeout,
 		lastActive: time.Now(),
 	}
-	pids.ids[id] = pidinf
-	if txid != "" {
-		pids.byTxid[txid] = pidinf
+	if txidp != nil {
+		pidinf.txid = *txidp
+		pids.byTxid[*txidp] = pidinf
 	}
+	pids.ids[id] = pidinf
 	return id, 0
 }
 
@@ -1000,10 +1007,5 @@ func (pids *pids) txnProducers(topic string, partition int32) []kmsg.DescribePro
 
 // findTxnID finds a producer info by transactional ID.
 func (pids *pids) findTxnID(txnID string) *pidinfo {
-	for _, pidinf := range pids.ids {
-		if pidinf.txid == txnID {
-			return pidinf
-		}
-	}
-	return nil
+	return pids.byTxid[txnID]
 }

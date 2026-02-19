@@ -250,8 +250,8 @@ var randsha = func() func() string {
 		defer mu.Unlock()
 
 		now := time.Now().UnixNano()
-		if now == last { // should never be the case
-			now++
+		if now <= last {
+			now = last + 1
 		}
 
 		last = now

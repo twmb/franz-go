@@ -491,7 +491,6 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 			if g.typ == "consumer" {
 				if len(g.consumerMembers) == 0 {
 					g.quitOnce()
-					delete(gs.gs, rg)
 				} else {
 					sg.ErrorCode = kerr.NonEmptyGroup.Code
 				}
@@ -501,13 +500,23 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 					sg.ErrorCode = kerr.GroupIDNotFound.Code
 				case groupEmpty:
 					g.quitOnce()
-					delete(gs.gs, rg)
 				case groupPreparingRebalance, groupCompletingRebalance, groupStable:
 					sg.ErrorCode = kerr.NonEmptyGroup.Code
 				}
 			}
 		}) {
 			sg.ErrorCode = kerr.GroupIDNotFound.Code
+		}
+		// Delete from gs.gs in the Cluster.run() goroutine, not
+		// inside the waitControl callback. The callback runs in the
+		// manage goroutine; if it calls quitOnce() (closing quitCh),
+		// waitControl can return before the callback finishes, and a
+		// delete(gs.gs) in the callback would race with any
+		// concurrent gs.gs iteration in Cluster.run().
+		select {
+		case <-g.quitCh:
+			delete(gs.gs, rg)
+		default:
 		}
 	}
 	return resp
