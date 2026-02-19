@@ -7,7 +7,6 @@
 
 ## 00_produce
 - ThrottleMillis: Not implementing throttling for any request
-- Compaction: Log compaction implemented (cleanup.policy=compact)
 - ErrorRecords (v8+): Per-record errors not implemented; kfake validates at batch level only
 - TimeoutMillis: Ignored since writes are immediate (no replication)
 - Timestamp range validation: No client sends unreasonable timestamps in tests
@@ -31,7 +30,6 @@
 
 ## 08_offset_commit
 - ThrottleMillis: Not implementing throttling for any request
-- InstanceID (v7+): Validated for static membership (KIP-345)
 
 ## 09_offset_fetch
 - ThrottleMillis: Not implementing throttling for any request
@@ -45,8 +43,6 @@
 
 ## 11_join_group, 12_heartbeat, 13_leave_group, 14_sync_group
 - ThrottleMillis: Not implementing throttling for any request
-- InstanceID/static membership: Implemented (KIP-345) - rejoin, fencing,
-  leave-by-instanceID, session timeout preserves static mapping
 - SkipAssignment: Not implemented (KIP-814)
 - Initial rebalance delay: Skipped - optimization for reducing rebalance churn
   during rolling restarts, not needed for correctness in tests
@@ -54,7 +50,6 @@
 
 ## 15_describe_groups
 - ThrottleMillis: Not implementing throttling for any request
-- InstanceID: Reported on members for static membership (KIP-345)
 
 ## 16_list_groups
 - ThrottleMillis: Not implementing throttling for any request
@@ -64,7 +59,6 @@
 
 ## 18_api_versions
 - ThrottleMillis: Not implementing throttling for any request
-- SupportedFeatures (KIP-584): implemented for transaction.version and group.version
 - ZkMigrationReady: Not implementing ZK migration flag
 - ClientSoftwareName/ClientSoftwareVersion: Parsed but not validated/stored
 
@@ -140,7 +134,6 @@
 
 ## 44_incremental_alter_configs
 - ThrottleMillis: Not implementing throttling for any request
-- APPEND/SUBTRACT ops: implemented for list-type configs
 
 ## 47_offset_delete
 - ThrottleMillis: Not implementing throttling for any request
@@ -154,64 +147,21 @@
 ## 51_alter_user_scram_credentials
 - ThrottleMillis: Not implementing throttling for any request
 
-## 68_consumer_group_heartbeat (KIP-848) - IMPLEMENTED
-- Basic handler implemented: server-side uniform and range assignment, member
-  epoch tracking, session timeouts, regex subscription, leave (epoch -1)
-- SubscribedTopicRegex: supported (RE2 syntax, not Java RE2J)
-- Static membership implemented:
-  - MemberEpoch -2 (leave with instance ID retained)
-  - Fence by instance ID on join
-  - Session timeout preserves static member mapping
-  - Rejoin with same instance ID reclaims slot
-- Remaining static membership gaps:
-  - Range assignor should sort static members (by instance ID) before dynamic
-    members (by member ID)
-  - See KIP-814 for classic group leader skip assignment
+## 68_consumer_group_heartbeat (KIP-848)
+- SubscribedTopicRegex: RE2 syntax, not Java RE2J
+- Range assignor should sort static members (by instance ID) before dynamic
+  members (by member ID)
+- Member epoch advancement only when fully converged: kfake's conservative
+  approach is safe and simpler. Advancing in UNRELEASED_PARTITIONS state
+  only affects convergence speed, not correctness.
+- No ASSIGNING/UNRELEASED_PARTITIONS states: kfake uses empty/reconciling/stable.
+  Missing intermediate states don't affect kgo client behavior.
 - Metadata hash / metadata expiration: deliberate divergence; kfake recomputes
   assignments on every relevant heartbeat rather than caching a metadata hash
-
-### Correctness gaps vs Kafka (analyzed against ~/src/apache/kafka):
-
-1. **No partition epoch tracking** - FIXED
-   Added group-level partitionEpochs map with two-phase check
-   in reconciledAssignment.
-
-2. **Member epoch advancement only when fully converged** - SKIPPED
-   kfake's conservative approach (not advancing until fully converged) is
-   safe and simpler. Advancing in UNRELEASED_PARTITIONS state
-   only affects convergence speed, not correctness.
-
-3. **Previous-epoch subset check against targetAssignment** - FIXED
-   Now checks against currentAssignment.
-
-4. **No separate session/rebalance timeout** - FIXED
-   Session timeout uses group.consumer.session.timeout.ms (server config).
-   Rebalance timeout uses per-member rebalanceTimeoutMs, only active when
-   member has unrevoked partitions.
-
-5. **No partitionsPendingRevocation tracking** - FIXED
-   Added explicit per-member partitionsPendingRevocation set with
-   epoch map integration.
-
-6. **No ASSIGNING/UNRELEASED_PARTITIONS states** (LOW)
-   kfake uses empty/reconciling/stable. Missing intermediate states.
-   Doesn't affect kgo client behavior.
-
-## 69_consumer_group_describe (KIP-848) - IMPLEMENTED
-- Basic handler implemented: returns group state, members, assignments
-- AuthorizedOperations: implemented via groupAuthorizedOps
 
 ## General
 - Tiered storage: Not implemented (KIP-405, KIP-1005)
 - Share groups: Not implemented (KIP-932)
-- Static membership: Implemented for classic and 848 groups (KIP-345).
-  KIP-814 (leader skip assignment) not yet supported.
-- Retention enforcement: retention.ms and retention.bytes are enforced via
-  the background cleaner ticker (log.cleaner.backoff.ms) and manually via
-  ApplyRetention(). Expired or oversized batches are trimmed and
-  logStartOffset advances accordingly.
-- Log compaction: cleanup.policy=compact implemented. Deduplicates by key,
-  removes expired tombstones, cleans up orphaned control batches. Background
-  ticker driven by log.cleaner.backoff.ms. Manual trigger via Compact().
+- KIP-814 (leader skip assignment): Not yet supported
 - WriteTxnMarkers (key 27): Not implemented. Only useful for recovering from
   broker bugs with stuck transactions, not needed for testing client behavior.
