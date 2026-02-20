@@ -260,6 +260,11 @@ func Test848DescribeGroup(t *testing.T) {
 	if len(m.SubscribedTopics) == 0 {
 		t.Fatal("expected subscribed topics")
 	}
+
+	// Verify AuthorizedOperations is populated (KIP-430).
+	if len(dg.AuthorizedOperations) == 0 {
+		t.Fatal("expected non-empty AuthorizedOperations")
+	}
 }
 
 // Test848TxnOffsetCommit verifies that transactional offset commits work

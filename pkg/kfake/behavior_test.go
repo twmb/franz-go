@@ -3494,3 +3494,320 @@ func TestRetentionTicker(t *testing.T) {
 		t.Fatalf("expected logStartOffset >= 1 after ticker-driven retention, got %d", pi.LogStartOffset)
 	}
 }
+
+func TestElectLeaders(t *testing.T) {
+	t.Parallel()
+	topic := "t-elect-leaders"
+
+	c := newCluster(t, kfake.NumBrokers(3), kfake.SeedTopics(3, topic))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	// Record original leaders.
+	meta, err := kmsg.NewPtrMetadataRequest().RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mt *kmsg.MetadataResponseTopic
+	for i := range meta.Topics {
+		if meta.Topics[i].Topic != nil && *meta.Topics[i].Topic == topic {
+			mt = &meta.Topics[i]
+			break
+		}
+	}
+	if mt == nil {
+		t.Fatal("topic not in metadata")
+	}
+	origLeaders := make(map[int32]int32, len(mt.Partitions))
+	origEpochs := make(map[int32]int32, len(mt.Partitions))
+	for _, p := range mt.Partitions {
+		origLeaders[p.Partition] = p.Leader
+		origEpochs[p.Partition] = p.LeaderEpoch
+	}
+
+	// Elect leaders for partitions 0 and 1 only.
+	electReq := kmsg.NewPtrElectLeadersRequest()
+	et := kmsg.NewElectLeadersRequestTopic()
+	et.Topic = topic
+	et.Partitions = []int32{0, 1}
+	electReq.Topics = append(electReq.Topics, et)
+	electResp, err := electReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rt := range electResp.Topics {
+		for _, rp := range rt.Partitions {
+			if rp.ErrorCode != 0 {
+				t.Fatalf("partition %d error: %v", rp.Partition, kerr.ErrorForCode(rp.ErrorCode))
+			}
+		}
+	}
+
+	// Verify leaders rotated and epochs bumped for 0 and 1.
+	meta2, err := kmsg.NewPtrMetadataRequest().RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range meta2.Topics {
+		if meta2.Topics[i].Topic == nil || *meta2.Topics[i].Topic != topic {
+			continue
+		}
+		for _, p := range meta2.Topics[i].Partitions {
+			switch p.Partition {
+			case 0, 1:
+				if p.Leader == origLeaders[p.Partition] {
+					t.Errorf("partition %d: leader did not rotate (still %d)", p.Partition, p.Leader)
+				}
+				if p.LeaderEpoch <= origEpochs[p.Partition] {
+					t.Errorf("partition %d: epoch did not bump (%d <= %d)", p.Partition, p.LeaderEpoch, origEpochs[p.Partition])
+				}
+			case 2:
+				if p.Leader != origLeaders[2] {
+					t.Errorf("partition 2: leader should not have changed (was %d, now %d)", origLeaders[2], p.Leader)
+				}
+			}
+		}
+	}
+
+	// Elect with unknown partition.
+	electReq2 := kmsg.NewPtrElectLeadersRequest()
+	et2 := kmsg.NewElectLeadersRequestTopic()
+	et2.Topic = topic
+	et2.Partitions = []int32{99}
+	electReq2.Topics = append(electReq2.Topics, et2)
+	electResp2, err := electReq2.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rt := range electResp2.Topics {
+		for _, rp := range rt.Partitions {
+			if rp.ErrorCode != kerr.UnknownTopicOrPartition.Code {
+				t.Fatalf("expected UnknownTopicOrPartition for p99, got %v", kerr.ErrorForCode(rp.ErrorCode))
+			}
+		}
+	}
+
+	// Elect with nil topics (all partitions).
+	electReq3 := kmsg.NewPtrElectLeadersRequest()
+	electResp3, err := electReq3.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var totalElected int
+	for _, rt := range electResp3.Topics {
+		for _, rp := range rt.Partitions {
+			if rp.ErrorCode != 0 {
+				t.Fatalf("elect all: partition error: %v", kerr.ErrorForCode(rp.ErrorCode))
+			}
+			totalElected++
+		}
+	}
+	if totalElected < 3 {
+		t.Fatalf("expected at least 3 partitions elected, got %d", totalElected)
+	}
+}
+
+func TestIncrementalAlterConfigAppendSubtract(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, "t-incr-cfg"))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	sp := func(s string) *string { return &s }
+
+	mkReq := func(rtype kmsg.ConfigResourceType, name string, configs ...kmsg.IncrementalAlterConfigsRequestResourceConfig) *kmsg.IncrementalAlterConfigsRequest {
+		req := kmsg.NewPtrIncrementalAlterConfigsRequest()
+		rr := kmsg.NewIncrementalAlterConfigsRequestResource()
+		rr.ResourceType = rtype
+		rr.ResourceName = name
+		rr.Configs = configs
+		req.Resources = append(req.Resources, rr)
+		return req
+	}
+
+	mkCfg := func(name string, val *string, op kmsg.IncrementalAlterConfigOp) kmsg.IncrementalAlterConfigsRequestResourceConfig {
+		rc := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+		rc.Name = name
+		rc.Value = val
+		rc.Op = op
+		return rc
+	}
+
+	getConfig := func(rtype kmsg.ConfigResourceType, name, key string) *string {
+		t.Helper()
+		req := kmsg.NewPtrDescribeConfigsRequest()
+		rr := kmsg.NewDescribeConfigsRequestResource()
+		rr.ResourceType = rtype
+		rr.ResourceName = name
+		rr.ConfigNames = []string{key}
+		req.Resources = append(req.Resources, rr)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range resp.Resources {
+			for _, c := range r.Configs {
+				if c.Name == key {
+					return c.Value
+				}
+			}
+		}
+		return nil
+	}
+
+	// APPEND to broker list config (cleanup.policy on a topic).
+	resp, err := mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg",
+		mkCfg("cleanup.policy", sp("compact"), kmsg.IncrementalAlterConfigOpSet),
+	).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Resources[0].ErrorCode != 0 {
+		t.Fatalf("set cleanup.policy: %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+
+	// APPEND "delete" to it.
+	resp, err = mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg",
+		mkCfg("cleanup.policy", sp("delete"), kmsg.IncrementalAlterConfigOpAppend),
+	).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Resources[0].ErrorCode != 0 {
+		t.Fatalf("append cleanup.policy: %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+
+	val := getConfig(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", "cleanup.policy")
+	if val == nil || *val != "compact,delete" {
+		got := "<nil>"
+		if val != nil {
+			got = *val
+		}
+		t.Fatalf("expected 'compact,delete', got %q", got)
+	}
+
+	// SUBTRACT "compact" from it.
+	resp, err = mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg",
+		mkCfg("cleanup.policy", sp("compact"), kmsg.IncrementalAlterConfigOpSubtract),
+	).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Resources[0].ErrorCode != 0 {
+		t.Fatalf("subtract cleanup.policy: %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+
+	val = getConfig(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", "cleanup.policy")
+	if val == nil || *val != "delete" {
+		got := "<nil>"
+		if val != nil {
+			got = *val
+		}
+		t.Fatalf("expected 'delete', got %q", got)
+	}
+
+	// APPEND on a non-list config should fail.
+	resp, err = mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg",
+		mkCfg("retention.ms", sp("1000"), kmsg.IncrementalAlterConfigOpAppend),
+	).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Resources[0].ErrorCode != kerr.InvalidRequest.Code {
+		t.Fatalf("expected InvalidRequest for APPEND on non-list config, got %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+
+	// APPEND on broker list config.
+	resp, err = mkReq(kmsg.ConfigResourceTypeBroker, "0",
+		mkCfg("cleanup.policy", sp("compact"), kmsg.IncrementalAlterConfigOpAppend),
+	).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Resources[0].ErrorCode != 0 {
+		t.Fatalf("broker append: %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+	val = getConfig(kmsg.ConfigResourceTypeBroker, "0", "cleanup.policy")
+	if val == nil || *val != "compact" {
+		got := "<nil>"
+		if val != nil {
+			got = *val
+		}
+		t.Fatalf("expected broker config 'compact', got %q", got)
+	}
+}
+
+func TestApiVersionsSupportedFeatures(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	req := kmsg.NewPtrApiVersionsRequest()
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	findFeature := func(features []kmsg.ApiVersionsResponseSupportedFeature, name string) *kmsg.ApiVersionsResponseSupportedFeature {
+		for i := range features {
+			if features[i].Name == name {
+				return &features[i]
+			}
+		}
+		return nil
+	}
+	findFinalized := func(features []kmsg.ApiVersionsResponseFinalizedFeature, name string) *kmsg.ApiVersionsResponseFinalizedFeature {
+		for i := range features {
+			if features[i].Name == name {
+				return &features[i]
+			}
+		}
+		return nil
+	}
+
+	// Default cluster has all keys, should have both features.
+	txnFeature := findFeature(resp.SupportedFeatures, "transaction.version")
+	if txnFeature == nil {
+		t.Fatal("expected transaction.version in SupportedFeatures")
+	}
+	if txnFeature.MaxVersion != 2 {
+		t.Fatalf("expected transaction.version max=2, got %d", txnFeature.MaxVersion)
+	}
+
+	groupFeature := findFeature(resp.SupportedFeatures, "group.version")
+	if groupFeature == nil {
+		t.Fatal("expected group.version in SupportedFeatures")
+	}
+	if groupFeature.MaxVersion != 1 {
+		t.Fatalf("expected group.version max=1, got %d", groupFeature.MaxVersion)
+	}
+
+	txnFinalized := findFinalized(resp.FinalizedFeatures, "transaction.version")
+	if txnFinalized == nil {
+		t.Fatal("expected transaction.version in FinalizedFeatures")
+	}
+	groupFinalized := findFinalized(resp.FinalizedFeatures, "group.version")
+	if groupFinalized == nil {
+		t.Fatal("expected group.version in FinalizedFeatures")
+	}
+
+	// With Produce capped below v12, transaction.version should be absent.
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11) // Produce max v11
+	c2 := newCluster(t, kfake.NumBrokers(1), kfake.MaxVersions(v))
+	cl2 := newPlainClient(t, c2)
+	resp2, err := req.RequestWith(ctx, cl2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findFeature(resp2.SupportedFeatures, "transaction.version") != nil {
+		t.Fatal("transaction.version should be absent when Produce < v12")
+	}
+	// group.version should still be present.
+	if findFeature(resp2.SupportedFeatures, "group.version") == nil {
+		t.Fatal("group.version should still be present")
+	}
+}
