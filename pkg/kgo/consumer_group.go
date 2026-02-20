@@ -2922,8 +2922,6 @@ func (g *groupConsumer) commit(
 	req.MemberID = memberID
 	req.InstanceID = g.cfg.instanceID
 
-	is848 := g.is848 // safe since we are under g.mu
-
 	if ctx.Done() != nil {
 		go func() {
 			select {
@@ -2969,48 +2967,48 @@ func (g *groupConsumer) commit(
 			}
 		}
 
-		var retries int
-	issue:
-		start := time.Now()
-		resp, err := req.RequestWith(commitCtx, g.cl)
-		if err != nil {
-			onDone(g.cl, req, nil, err)
-			return
-		}
-		g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
+		var resp *kmsg.OffsetCommitResponse
+		var err error
+		for range 5 {
+			start := time.Now()
+			resp, err = req.RequestWith(commitCtx, g.cl)
+			if err != nil {
+				onDone(g.cl, req, nil, err)
+				return
+			}
+			g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
 
-		// With next gen consumer groups, it is possible for the group
-		// to rebalance again immediately after we discover we need to
-		// revoke. We try up to 3x reloading and resending.
-		if is848 && len(resp.Topics) > 0 && len(resp.Topics[0].Partitions) > 0 {
-			ec := resp.Topics[0].Partitions[0].ErrorCode
-			if kerr.ErrorForCode(ec) == kerr.StaleMemberEpoch && retries < 3 {
-				hbreq := g.g848.mkreq()
-				hbresp, err := hbreq.RequestWith(commitCtx, g.cl)
-				if err != nil {
-					g.cl.cfg.logger.Log(LogLevelInfo, "received STALE_MEMBER_EPOCH while committing; unable to force heartbeat; returning original stale error",
-						"last_generation", generation,
-						"err", err,
-					)
-				} else {
-					if err := kerr.ErrorForCode(hbresp.ErrorCode); err != nil { //nolint:revive // err != nil is more standard as the first case
-						g.cl.cfg.logger.Log(LogLevelInfo, "received STALE_MEMBER_EPOCH while committing; forced immediate heartbeat to load the latest generation but received an error",
-							"last_generation", generation,
-							"err", err,
-						)
-					} else {
-						g.cl.cfg.logger.Log(LogLevelInfo, "received STALE_MEMBER_EPOCH while committing; forced immediate heartbeat to load the latest generation",
-							"last_generation", generation,
-							"new_generation", hbresp.MemberEpoch,
-						)
-						g.memberGen.storeGeneration(hbresp.MemberEpoch)
-						generation = hbresp.MemberEpoch
-						req.Generation = generation
-						retries++
-						goto issue
+			// Kafka returns STALE_MEMBER_EPOCH when the epoch
+			// used in the commit doesn't match the member's
+			// current epoch. This can happen when a heartbeat
+			// and OffsetCommit are pipelined on the same
+			// connection and the server processes them in an
+			// order that bumps the epoch before seeing the
+			// commit. We sleep briefly to allow the heartbeat
+			// response (carrying the new epoch) to arrive and
+			// update memberGen, then retry with the new epoch.
+			stale := false
+			for _, t := range resp.Topics {
+				for _, p := range t.Partitions {
+					if p.ErrorCode == kerr.StaleMemberEpoch.Code {
+						stale = true
 					}
 				}
 			}
+			if stale {
+				time.Sleep(time.Second)
+				_, newGen := g.memberGen.load()
+				if newGen != req.Generation {
+					g.cfg.logger.Log(LogLevelInfo, "offset commit got stale member epoch, retrying with updated epoch",
+						"group", g.cfg.group,
+						"old_epoch", req.Generation,
+						"new_epoch", newGen,
+					)
+					req.Generation = newGen
+					continue
+				}
+			}
+			break
 		}
 
 		g.updateCommitted(req, resp)
