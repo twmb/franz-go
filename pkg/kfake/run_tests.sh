@@ -187,7 +187,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     if [ -n "$SERVER_LOG_LEVEL" ]; then
         LOG_ARG="-l $SERVER_LOG_LEVEL"
     fi
-    "$SERVER_BIN" $VERSION_ARG $LOG_ARG -c group.consumer.heartbeat.interval.ms=100 > "$SERVER_LOG" 2>&1 &
+    "$SERVER_BIN" $VERSION_ARG $LOG_ARG > "$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
 
     # Wait for server to be listening (max 5 seconds)

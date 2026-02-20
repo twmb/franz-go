@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -481,12 +480,6 @@ var defHeartbeatInterval = 5000
 // defSessionTimeout is the default group.consumer.session.timeout.ms.
 var defSessionTimeout = 45000
 
-func init() {
-	if testing.Testing() {
-		defHeartbeatInterval = 100
-		configDefaults["group.consumer.heartbeat.interval.ms"] = "100"
-	}
-}
 
 // Default topic and broker configs. Topic/broker pairs that share the same
 // underlying setting (e.g. max.message.bytes / message.max.bytes) both
