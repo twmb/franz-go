@@ -1616,6 +1616,7 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int
 	// Our client maps the v0 to v7 format to v8+ when sharding this
 	// request, if we are only requesting one group, as well as maps the
 	// response back, so we do not need to worry about v8+ here.
+	var staleRetries int
 start:
 	member, gen := g.memberGen.load()
 	req := kmsg.NewPtrOffsetFetchRequest()
@@ -1650,6 +1651,39 @@ start:
 	}
 	if err != nil {
 		g.cfg.logger.Log(LogLevelError, "fetch offsets failed with non-retryable error", "group", g.cfg.group, "err", err)
+		return err
+	}
+
+	// Check the group-level error code. For 848 consumers, the
+	// server validates MemberEpoch on OffsetFetch and returns
+	// STALE_MEMBER_EPOCH if the epoch changed between the
+	// heartbeat that assigned partitions and this OffsetFetch.
+	// We force a heartbeat to update our epoch and retry.
+	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		if errors.Is(err, kerr.StaleMemberEpoch) {
+			staleRetries++
+			if staleRetries > 5 {
+				g.cfg.logger.Log(LogLevelError, "fetch offsets failed: stale member epoch after 5 retries", "group", g.cfg.group)
+				return err
+			}
+			g.cfg.logger.Log(LogLevelInfo, "fetch offsets returned stale member epoch, forcing heartbeat and retrying",
+				"group", g.cfg.group,
+				"attempt", staleRetries,
+			)
+			done := make(chan error, 1)
+			select {
+			case g.heartbeatForceCh <- func(err error) { done <- err }:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			goto start
+		}
+		g.cfg.logger.Log(LogLevelError, "fetch offsets failed with group-level error", "group", g.cfg.group, "err", err)
 		return err
 	}
 

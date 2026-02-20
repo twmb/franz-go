@@ -3495,6 +3495,64 @@ func TestRetentionTicker(t *testing.T) {
 	}
 }
 
+// Test848FetchOffsetsStaleEpochRetry verifies that the kgo client retries
+// OffsetFetch when the server returns STALE_MEMBER_EPOCH at the group
+// level. This can happen when the member epoch changes between the
+// heartbeat that assigned partitions and the subsequent OffsetFetch.
+func Test848FetchOffsetsStaleEpochRetry(t *testing.T) {
+	t.Parallel()
+	topic := "t-stale-epoch"
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+
+	pCl := newPlainClient(t, c)
+	for i := 0; i < 10; i++ {
+		produceSync(t, pCl, &kgo.Record{Topic: topic, Value: []byte("v")})
+	}
+
+	// Intercept the first OffsetFetch and return STALE_MEMBER_EPOCH at
+	// the group level. The client should force a heartbeat, update its
+	// epoch, and retry successfully.
+	var staleOnce sync.Once
+	c.ControlKey(int16(kmsg.OffsetFetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		var fail bool
+		staleOnce.Do(func() { fail = true })
+		if !fail {
+			return nil, nil, false
+		}
+		c.KeepControl()
+		req := kreq.(*kmsg.OffsetFetchRequest)
+		resp := req.ResponseKind().(*kmsg.OffsetFetchResponse)
+		if req.Version >= 8 {
+			sg := kmsg.NewOffsetFetchResponseGroup()
+			sg.ErrorCode = kerr.StaleMemberEpoch.Code
+			if len(req.Groups) > 0 {
+				sg.Group = req.Groups[0].Group
+			}
+			resp.Groups = append(resp.Groups, sg)
+		} else {
+			resp.ErrorCode = kerr.StaleMemberEpoch.Code
+		}
+		return resp, nil, true
+	})
+
+	cl := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup("test-stale-epoch"),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var total int
+	for total < 10 {
+		fetches := cl.PollFetches(ctx)
+		if ctx.Err() != nil {
+			t.Fatalf("timed out after consuming %d/10 records", total)
+		}
+		total += fetches.NumRecords()
+	}
+}
+
 func TestElectLeaders(t *testing.T) {
 	t.Parallel()
 	topic := "t-elect-leaders"
