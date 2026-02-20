@@ -2233,19 +2233,23 @@ func (g *group) computeTargetAssignment(snap topicMetaSnap) {
 		slices.Sort(memberIDs)
 	}
 
-	// Clear all target assignments.
-	for _, m := range g.consumerMembers {
-		m.targetAssignment = make(map[uuid][]int32)
-	}
-
 	if len(memberIDs) == 0 {
+		for _, m := range g.consumerMembers {
+			m.targetAssignment = make(map[uuid][]int32)
+		}
 		return
 	}
 
 	switch g.assignorName {
 	case "range":
+		// Range is position-based, not sticky - clear and recompute.
+		for _, m := range g.consumerMembers {
+			m.targetAssignment = make(map[uuid][]int32)
+		}
 		g.assignRange(allTPs, memberIDs, memberSubs)
 	default: // "uniform" or "" (pre-assignor groups) - validated at heartbeat time
+		// assignUniform is sticky: it preserves existing targets
+		// and only reassigns partitions that need to move.
 		g.assignUniform(allTPs, memberIDs, memberSubs)
 	}
 
@@ -2265,24 +2269,168 @@ func (g *group) computeTargetAssignment(snap topicMetaSnap) {
 	// - fenceConsumerMember: removePartitionEpochs
 }
 
-// assignUniform distributes partitions round-robin across all eligible
-// members.
+// assignUniform distributes partitions across all eligible members using
+// a sticky algorithm: existing assignments are preserved when valid, and
+// only unassigned partitions are redistributed. This minimizes partition
+// movement during cooperative rebalances (KIP-848), where each moved
+// partition requires multiple heartbeat rounds to revoke and reassign.
 func (g *group) assignUniform(allTPs []assignorTP, memberIDs []string, memberSubs map[string]map[string]struct{}) {
-	idx := 0
+	type tpKey struct {
+		id   uuid
+		part int32
+	}
+	allTPSet := make(map[tpKey]string, len(allTPs))
 	for _, tp := range allTPs {
-		startIdx := idx
-		for {
-			mid := memberIDs[idx%len(memberIDs)]
-			idx++
-			if _, ok := memberSubs[mid][tp.topic]; ok {
-				m := g.consumerMembers[mid]
-				m.targetAssignment[tp.id] = append(m.targetAssignment[tp.id], tp.part)
-				break
+		allTPSet[tpKey{tp.id, tp.part}] = tp.topic
+	}
+
+	// Step 1: keep existing assignments that are still valid (member
+	// exists, subscribes to the topic, partition still exists).
+	assigned := make(map[tpKey]bool, len(allTPs))
+	counts := make(map[string]int, len(memberIDs))
+	for _, mid := range memberIDs {
+		m := g.consumerMembers[mid]
+		for id, parts := range m.targetAssignment {
+			var kept []int32
+			for _, p := range parts {
+				k := tpKey{id, p}
+				topic, exists := allTPSet[k]
+				if !exists {
+					continue
+				}
+				if _, ok := memberSubs[mid][topic]; !ok {
+					continue
+				}
+				kept = append(kept, p)
+				assigned[k] = true
 			}
-			if idx-startIdx >= len(memberIDs) {
-				break
+			if len(kept) > 0 {
+				m.targetAssignment[id] = kept
+			} else {
+				delete(m.targetAssignment, id)
 			}
 		}
+		for _, parts := range m.targetAssignment {
+			counts[mid] += len(parts)
+		}
+	}
+
+	if g.c != nil {
+		for _, mid := range memberIDs {
+			m := g.consumerMembers[mid]
+			for id, parts := range m.targetAssignment {
+				g.c.cfg.logger.Logf(LogLevelDebug, "assignUniform step1: member=%s %x kept=%v count=%d",
+					mid, id[:4], parts, counts[mid])
+			}
+		}
+	}
+
+	// Step 2: balance - members with too many partitions shed
+	// excess. With N total and M members, each gets floor(N/M)
+	// or floor(N/M)+1.
+	minCount := len(allTPs) / len(memberIDs)
+	extra := len(allTPs) % len(memberIDs)
+
+	// Determine the allowed max per member. Sort members by
+	// current count descending - the top `extra` members are
+	// allowed minCount+1, the rest get minCount. This minimizes
+	// movement by letting the most-loaded members keep an extra
+	// partition when possible.
+	type memberCount struct {
+		mid   string
+		count int
+	}
+	sorted := make([]memberCount, len(memberIDs))
+	for i, mid := range memberIDs {
+		sorted[i] = memberCount{mid, counts[mid]}
+	}
+	slices.SortFunc(sorted, func(a, b memberCount) int {
+		if c := cmp.Compare(b.count, a.count); c != 0 {
+			return c // descending
+		}
+		return cmp.Compare(a.mid, b.mid) // tie-break by member ID
+	})
+	allowed := make(map[string]int, len(memberIDs))
+	for i, mc := range sorted {
+		if i < extra {
+			allowed[mc.mid] = minCount + 1
+		} else {
+			allowed[mc.mid] = minCount
+		}
+	}
+
+	// Shed excess from overloaded members. Only update
+	// m.targetAssignment and remove from assigned; step 3
+	// collects all unassigned partitions in one pass.
+	for _, mid := range memberIDs {
+		m := g.consumerMembers[mid]
+		excess := counts[mid] - allowed[mid]
+		if excess <= 0 {
+			continue
+		}
+		// Remove excess partitions. Iterate topic IDs in sorted
+		// order so the choice is deterministic.
+		ids := make([]uuid, 0, len(m.targetAssignment))
+		for id := range m.targetAssignment {
+			ids = append(ids, id)
+		}
+		slices.SortFunc(ids, func(a, b uuid) int { return bytes.Compare(a[:], b[:]) })
+		for _, id := range ids {
+			if excess <= 0 {
+				break
+			}
+			parts := m.targetAssignment[id]
+			remove := min(excess, len(parts))
+			for _, p := range parts[len(parts)-remove:] {
+				delete(assigned, tpKey{id, p})
+			}
+			m.targetAssignment[id] = parts[:len(parts)-remove]
+			if len(m.targetAssignment[id]) == 0 {
+				delete(m.targetAssignment, id)
+			}
+			counts[mid] -= remove
+			excess -= remove
+		}
+	}
+
+	// Step 3: collect all unassigned partitions - from members
+	// that left, partitions never assigned, and excess shed above.
+	var unassigned []assignorTP
+	for _, tp := range allTPs {
+		if !assigned[tpKey{tp.id, tp.part}] {
+			unassigned = append(unassigned, tp)
+		}
+	}
+	if len(unassigned) == 0 {
+		return
+	}
+
+	// Step 4: distribute unassigned partitions to members with
+	// the fewest partitions.
+	slices.SortFunc(unassigned, func(a, b assignorTP) int {
+		if c := cmp.Compare(a.topic, b.topic); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.part, b.part)
+	})
+	for _, tp := range unassigned {
+		bestMid := ""
+		bestCount := math.MaxInt
+		for _, mid := range memberIDs {
+			if _, ok := memberSubs[mid][tp.topic]; !ok {
+				continue
+			}
+			if counts[mid] < bestCount {
+				bestMid = mid
+				bestCount = counts[mid]
+			}
+		}
+		if bestMid == "" {
+			continue
+		}
+		m := g.consumerMembers[bestMid]
+		m.targetAssignment[tp.id] = append(m.targetAssignment[tp.id], tp.part)
+		counts[bestMid]++
 	}
 }
 
