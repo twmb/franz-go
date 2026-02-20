@@ -424,6 +424,51 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		return moreToDrain
 	}
 
+	// With KIP-890 (EndTxn v5+), the epoch is bumped on every EndTxn.
+	// There is a possible TOCTOU race between producerID() and
+	// createReq() above:
+	//
+	//   - Sink A's drain loop calls producerID(), gets epoch N.
+	//   - Sink A is preempted or otherwise delayed before calling
+	//     createReq().
+	//   - Meanwhile, the last produce response arrives on another
+	//     sink. bufferedRecords hits 0, Flush returns.
+	//   - EndTxn round-trips, the epoch bumps to N+1.
+	//   - The user produces records for the next transaction.
+	//   - Sink A resumes, calls createReq(epoch=N), and picks up
+	//     those new records stamped with the stale epoch N.
+	//   - The broker rejects with INVALID_PRODUCER_EPOCH, failing
+	//     the records permanently.
+	//
+	// We check the epoch after building the request. If it changed,
+	// we undo the drain state (resetBatchDrainIdx + decInflight) and
+	// return true so the drain loop retries with the new epoch.
+	//
+	// If the epoch has NOT changed, then EndTxn has not completed,
+	// Flush has not returned, and the user has not produced any
+	// records for a new transaction. Any records in the request are
+	// from the current transaction at epoch N, which is correct.
+	//
+	// This undo is safe: resetBatchDrainIdx + decInflight rewind
+	// each recBuf to its pre-drain state, the existing defer releases
+	// the semaphore (produced is still false), and returning true
+	// retries produce() with the correct epoch.
+	//
+	// We use a raw atomic load rather than producerID() to avoid
+	// side effects (blocking on idMu, triggering InitProducerID
+	// reloads). We bail on ANY change to the producer ID - whether
+	// from an epoch bump, a reload, or an error - so we do not need
+	// to interpret the stored value beyond id/epoch comparison. The
+	// next produce() call handles errors through producerID()'s
+	// normal error paths.
+	if cur := s.cl.producer.id.Load().(*producerID); cur.id != id || cur.epoch != epoch {
+		req.batches.sliced().eachOwnerLocked(func(b *recBatch) {
+			b.owner.resetBatchDrainIdx()
+			b.decInflight()
+		})
+		return true
+	}
+
 	if txnReq != nil {
 		// txnReq can fail from:
 		// - TransactionAbortable
