@@ -383,7 +383,22 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 		g.g.cl.triggerUpdateMetadataNow("consumer group heartbeat has unresolved topic IDs in assignment")
 	}
 
-	if len(newAssigned) == 0 {
+	// Only return nil (no change) when the response had no
+	// assignment at all (keepalive) or when all topics in the
+	// assignment are still unresolved. When the server explicitly
+	// sends an empty assignment (resp.Assignment != nil with no
+	// topics), fall through to the comparison so the client
+	// detects it as "revoke everything".
+	//
+	// The unresolved check handles the case where the server
+	// assigned topics whose IDs the client can't map to names
+	// yet (e.g. newly created topic, metadata not refreshed).
+	// Those went into unresolvedAssigned rather than
+	// newAssigned. Without this guard, we'd fall through with
+	// newAssigned={} and tell the client to revoke everything,
+	// when really the server did assign partitions - we just
+	// need to wait for metadata resolution.
+	if len(newAssigned) == 0 && (resp.Assignment == nil || len(g.unresolvedAssigned) > 0) {
 		return nil
 	}
 
