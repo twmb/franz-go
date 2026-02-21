@@ -129,7 +129,9 @@ outer:
 			// subsequent heartbeats resume sending full requests.
 			_, err = g.setupAssignedAndHeartbeat(initialHb, func() (time.Duration, error) {
 				req := g848.mkreq()
-				if g848.prerevoking.Load() || (reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics)) {
+				prerevoking := g848.prerevoking.Load()
+				topicsMatch := reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics)
+				if prerevoking || topicsMatch {
 					req.InstanceID = nil
 					req.RackID = nil
 					req.RebalanceTimeoutMillis = -1
@@ -150,7 +152,7 @@ outer:
 				}
 				hbAssigned := g848.handleResp(req, resp)
 				if hbAssigned != nil {
-					err = kerr.RebalanceInProgress
+					err = errReassigned848
 					nowAssigned = hbAssigned
 				}
 				return sleep, err

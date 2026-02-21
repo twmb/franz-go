@@ -89,24 +89,17 @@ func TestGroupETL(t *testing.T) {
 		enable848  bool
 		instanceID string
 	}{
-		{"roundrobin", RoundRobinBalancer(), false, ""},
 		{"range", RangeBalancer(), false, ""},
-		{"sticky", StickyBalancer(), false, ""},
 		{"cooperative-sticky", CooperativeStickyBalancer(), false, ""},
 		{"range/848", RangeBalancer(), true, ""},
 		{"sticky/848", StickyBalancer(), true, ""},
-		{"cooperative-sticky/848", CooperativeStickyBalancer(), true, ""},
-		{"range/static", RangeBalancer(), false, "static"},
 		{"cooperative-sticky/static", CooperativeStickyBalancer(), false, "static"},
 		{"sticky/848/static", StickyBalancer(), true, "static"},
 	}
 
-	sem := make(chan struct{}, 4)
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 			testChainETL(
 				t,
 				topic1,

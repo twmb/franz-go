@@ -194,6 +194,12 @@ var (
 
 	errNoCommittedOffset = errors.New("partition has no prior committed offset")
 
+	// Returned by the 848 heartbeat closure when it detects an assignment
+	// change. The heartbeat loop treats this like RebalanceInProgress but
+	// suppresses further heartbeat requests so that a second heartbeat
+	// cannot see stale assignment state and miss a revocation.
+	errReassigned848 = errors.New("848 reassignment detected")
+
 	//////////////
 	// EXTERNAL //
 	//////////////

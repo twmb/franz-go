@@ -477,12 +477,43 @@ func (c *testConsumer) wait() {
 	c.wg.Wait()
 }
 
-// leaveGroupStatic sends a raw LeaveGroup with instanceID for static
-// members (since kgo's LeaveGroup is a no-op with instanceID for classic
-// groups). For dynamic members (empty instanceID), this is a no-op
-// since the normal LeaveGroup path handles cleanup.
+// leaveGroupStatic fully removes a static member after the client has
+// closed. For classic groups this sends a raw LeaveGroup (since kgo's
+// LeaveGroup is a no-op for classic static members). For 848 groups
+// this sends a ConsumerGroupHeartbeat with MemberEpoch=-1 (full leave).
+// For dynamic members (empty instanceID), this is a no-op since the
+// normal LeaveGroup path handles cleanup.
 func (c *testConsumer) leaveGroupStatic(cl *Client, instanceID string) {
 	if instanceID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if c.enable848 {
+		// Look up the server-assigned memberID via ConsumerGroupDescribe.
+		dreq := kmsg.NewPtrConsumerGroupDescribeRequest()
+		dreq.Groups = []string{c.group}
+		dresp, err := dreq.RequestWith(ctx, cl)
+		if err != nil {
+			return
+		}
+		var memberID string
+		for _, g := range dresp.Groups {
+			for _, m := range g.Members {
+				if m.InstanceID != nil && *m.InstanceID == instanceID {
+					memberID = m.MemberID
+					break
+				}
+			}
+		}
+		if memberID == "" {
+			return
+		}
+		req := kmsg.NewPtrConsumerGroupHeartbeatRequest()
+		req.Group = c.group
+		req.MemberID = memberID
+		req.MemberEpoch = -1
+		req.RequestWith(ctx, cl) //nolint:errcheck // best-effort cleanup
 		return
 	}
 	req := kmsg.NewPtrLeaveGroupRequest()
@@ -491,8 +522,6 @@ func (c *testConsumer) leaveGroupStatic(cl *Client, instanceID string) {
 	member.InstanceID = &instanceID
 	member.Reason = kmsg.StringPtr("test cleanup")
 	req.Members = append(req.Members, member)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	req.RequestWith(ctx, cl) //nolint:errcheck // best-effort cleanup
 }
 

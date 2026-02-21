@@ -766,7 +766,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		return
 	}
 
-	if stage != revokeThisSession { // cooperative consumers rejoin after they revoking what they lost
+	if stage != revokeThisSession { // cooperative consumers rejoin after revoking what they lost
 		defer g.rejoin("after revoking what we lost from a rebalance")
 	}
 
@@ -1012,9 +1012,10 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 	}
 
 	var revoked <-chan struct{}
-	var heartbeat, didRevoke bool
+	var heartbeat, didRevoke, stopHeartbeating bool
 	var rejoinWhy string
 	var lastErr error
+	heartbeatForceCh := g.heartbeatForceCh
 
 	ctxCh := g.ctx.Done()
 
@@ -1027,12 +1028,12 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 			heartbeat = true
 		case <-timer.C:
 			heartbeat = true
-		case force = <-g.heartbeatForceCh:
+		case force = <-heartbeatForceCh:
 			heartbeat = true
 		case rejoinWhy = <-g.rejoinCh:
 			// If a metadata update changes our subscription,
 			// we just pretend we are rebalancing.
-			g.cfg.logger.Log(LogLevelInfo, "forced rejoin quitting heartbeat loop", "why", rejoinWhy)
+			g.cfg.logger.Log(LogLevelInfo, "forced rejoin quitting heartbeat loop", "why", rejoinWhy, "is848", is848)
 			err = kerr.RebalanceInProgress
 		case err = <-fetchErrCh:
 			fetchErrCh = nil
@@ -1048,7 +1049,7 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 			err = context.Canceled
 		}
 
-		if heartbeat {
+		if heartbeat && !stopHeartbeating {
 			g.cfg.logger.Log(LogLevelDebug, "heartbeating", "group", g.cfg.group)
 			var reset time.Duration
 			reset, err = hbfn()
@@ -1068,6 +1069,17 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 
 		if err == nil {
 			continue
+		}
+
+		// When the 848 closure detects an assignment change, it
+		// returns errReassigned848. We suppress further heartbeats
+		// so we cannot see stale state and miss a server-side
+		// revocation, but we still run the revoke path below.
+		isReassign := errors.Is(err, errReassigned848)
+		if isReassign {
+			stopHeartbeating = true
+			heartbeatForceCh = nil
+			err = kerr.RebalanceInProgress
 		}
 
 		if lastErr == nil {
