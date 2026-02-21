@@ -196,7 +196,7 @@ func (r *Record) AppendFormat(b []byte, layout string) ([]byte, error) {
 // be used if you only ever read record fields. This function can safely be used
 // for producing; the client never modifies a record's key nor value fields.
 func StringRecord(value string) *Record {
-	return &Record{Value: unsafe.Slice(unsafe.StringData(value), len(value))}
+	return &Record{Value: unsafe.Slice(unsafe.StringData(value), len(value))} //nolint:gosec // G103 safe string-to-[]byte without copy; caller must not modify the slice
 }
 
 // KeyStringRecord returns a Record with the Key and Value fields set to the
@@ -210,8 +210,8 @@ func StringRecord(value string) *Record {
 // for producing; the client never modifies a record's key nor value fields.
 func KeyStringRecord(key, value string) *Record {
 	return &Record{
-		Key:   unsafe.Slice(unsafe.StringData(key), len(key)),
-		Value: unsafe.Slice(unsafe.StringData(value), len(value)),
+		Key:   unsafe.Slice(unsafe.StringData(key), len(key)),     //nolint:gosec // G103 safe string-to-[]byte without copy; caller must not modify the slice
+		Value: unsafe.Slice(unsafe.StringData(value), len(value)), //nolint:gosec // G103 safe string-to-[]byte without copy; caller must not modify the slice
 	}
 }
 
