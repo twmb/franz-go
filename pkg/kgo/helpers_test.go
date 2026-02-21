@@ -20,6 +20,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
@@ -39,6 +40,9 @@ var (
 	// EndTxn to return successfully before beginning a new transaction. We
 	// cannot use EndAndBeginTransaction with EndBeginTxnUnsafe.
 	allowUnsafe = false
+
+	// Static membership (KIP-345) requires JoinGroup v5+.
+	allowStaticMembership = false
 
 	// KGO_TEST_TLS: DSL syntax is ({ca|cert|key}:path),{1,3}
 	testCert *tls.Config
@@ -198,6 +202,21 @@ func init() {
 	adm, err = newTestClient()
 	if err != nil {
 		panic(fmt.Sprintf("unable to create admin client: %v", err))
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp, err := adm.Request(context.Background(), kmsg.NewPtrApiVersionsRequest())
+		if err == nil {
+			versions := kversion.FromApiVersionsResponse(resp.(*kmsg.ApiVersionsResponse))
+			if v, ok := versions.LookupMaxKeyVersion(11); ok && v >= 5 { // 11 = JoinGroup
+				allowStaticMembership = true
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			panic(fmt.Sprintf("unable to issue ApiVersions: %v", err))
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
 }
 
@@ -542,6 +561,9 @@ func testChainETL(
 	enable848 bool,
 	instanceID string,
 ) {
+	if instanceID != "" && !allowStaticMembership {
+		t.Skip("broker does not support static membership (requires JoinGroup v5+, KIP-345)")
+	}
 	errs := make(chan error)
 	var (
 		/////////////
