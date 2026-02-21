@@ -150,7 +150,15 @@ func (pids *pids) handleTimeout() {
 	if minPid != nil {
 		elapsed := time.Since(minPid.txStart)
 		timeout := time.Duration(minPid.txTimeout) * time.Millisecond
+		if elapsed >= 30*time.Second && elapsed < timeout {
+			pids.c.cfg.logger.Logf(LogLevelWarn,
+				"txn long-running: txn_id=%s pid=%d epoch=%d elapsed=%v timeout=%dms batches=%d",
+				minPid.txid, minPid.id, minPid.epoch, elapsed, minPid.txTimeout, len(minPid.txBatches))
+		}
 		if elapsed >= timeout {
+			pids.c.cfg.logger.Logf(LogLevelWarn,
+				"txn timeout abort: txn_id=%s producer_id=%d epoch=%d timeout=%dms elapsed=%v",
+				minPid.txid, minPid.id, minPid.epoch, minPid.txTimeout, elapsed)
 			minPid = pids.bumpEpoch(minPid)
 			minPid.endTx(false)
 		}
@@ -527,7 +535,13 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 		return resp
 	}
 
+	nBatches, nGroups := len(pidinf.txBatches), len(pidinf.txGroups)
+	endTxStart := time.Now()
 	pidinf.endTx(req.Commit)
+	if elapsed := time.Since(endTxStart); elapsed > 5*time.Millisecond {
+		pids.c.cfg.logger.Logf(LogLevelWarn, "txn: EndTxn slow pid=%d epoch=%d elapsed=%dms batches=%d groups=%d",
+			req.ProducerID, req.ProducerEpoch, elapsed.Milliseconds(), nBatches, nGroups)
+	}
 
 	// KIP-890: For v5+ clients, bump epoch and return new ID/epoch.
 	if req.Version >= 5 {

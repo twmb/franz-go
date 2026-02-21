@@ -76,7 +76,6 @@ func (cc *clientConn) read() {
 		}
 
 		if err := read.err; err != nil {
-			cc.c.cfg.logger.Logf(LogLevelDebug, "client %s disconnected from read: %v", who, err)
 			return
 		}
 
@@ -177,7 +176,6 @@ func (cc *clientConn) write() {
 		case err = <-writeCh:
 		}
 		if err != nil {
-			cc.c.cfg.logger.Logf(LogLevelDebug, "client %s disconnected from write: %v", who, err)
 			return
 		}
 	}

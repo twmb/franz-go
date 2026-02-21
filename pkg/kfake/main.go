@@ -5,6 +5,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -30,10 +33,12 @@ func (f brokerConfigFlag) Set(s string) error {
 func main() {
 	var logLevelStr string
 	var versionStr string
+	var pprofAddr string
 	bcfgs := make(brokerConfigFlag)
 	flag.StringVar(&logLevelStr, "log-level", "none", "Log level: none, error, warn, info, debug")
 	flag.StringVar(&logLevelStr, "l", "none", "Log level (shorthand)")
 	flag.StringVar(&versionStr, "as-version", "", "Kafka version to emulate (e.g., 2.8, 3.5)")
+	flag.StringVar(&pprofAddr, "pprof", ":6060", "pprof port on 127.0.0.1 (empty to disable)")
 	flag.Var(bcfgs, "broker-config", "Broker config key=value (repeatable)")
 	flag.Var(bcfgs, "c", "Broker config key=value (shorthand, repeatable)")
 	flag.Parse()
@@ -50,6 +55,16 @@ func main() {
 		logLevel = kfake.LogLevelError
 	case "none":
 		logLevel = kfake.LogLevelNone
+	}
+
+	if pprofAddr != "" {
+		addr := net.JoinHostPort("127.0.0.1", strings.TrimPrefix(pprofAddr, ":"))
+		go func() {
+			fmt.Fprintf(os.Stderr, "pprof listening on %s\n", addr)
+			if err := http.ListenAndServe(addr, nil); err != nil {
+				fmt.Fprintf(os.Stderr, "pprof failed: %v\n", err)
+			}
+		}()
 	}
 
 	opts := []kfake.Opt{
