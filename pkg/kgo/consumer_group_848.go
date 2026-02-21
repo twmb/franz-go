@@ -319,10 +319,10 @@ func (g *g848) initialJoin() (time.Duration, error) {
 func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.ConsumerGroupHeartbeatResponse) map[string][]int32 {
 	if resp.MemberID != nil {
 		g.g.memberGen.store(*resp.MemberID, resp.MemberEpoch)
-		g.g.cl.cfg.logger.Log(LogLevelDebug, "storing member and epoch", "member", *resp.MemberID, "epoch", resp.MemberEpoch)
+		g.g.cl.cfg.logger.Log(LogLevelDebug, "storing member and epoch", "group", g.g.cfg.group, "member", *resp.MemberID, "epoch", resp.MemberEpoch)
 	} else {
 		g.g.memberGen.storeGeneration(resp.MemberEpoch)
-		g.g.cl.cfg.logger.Log(LogLevelDebug, "storing epoch", "epoch", resp.MemberEpoch)
+		g.g.cl.cfg.logger.Log(LogLevelDebug, "storing epoch", "group", g.g.cfg.group, "epoch", resp.MemberEpoch)
 	}
 
 	id2t := g.g.cl.id2tMap()
@@ -374,14 +374,6 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 		}
 	}
 	if len(g.unresolvedAssigned) > 0 {
-		unresolved := make([]topicID, 0, len(g.unresolvedAssigned))
-		for id := range g.unresolvedAssigned {
-			unresolved = append(unresolved, id)
-		}
-		g.g.cl.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat has unresolved topic IDs in assignment, triggering metadata update",
-			"group", g.g.cfg.group,
-			"unresolved_topic_ids", unresolved,
-		)
 		g.g.cl.triggerUpdateMetadataNow("consumer group heartbeat has unresolved topic IDs in assignment")
 	}
 
