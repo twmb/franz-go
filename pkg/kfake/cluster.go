@@ -284,6 +284,7 @@ func (b *broker) listen() {
 			b:      b,
 			conn:   conn,
 			respCh: make(chan clientResp, 2),
+			done:   make(chan struct{}),
 		}
 		go cc.read()
 		go cc.write()
@@ -518,6 +519,7 @@ outer:
 
 		select {
 		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err, seq: creq.seq}:
+		case <-creq.cc.done:
 		case <-c.die:
 			return
 		}

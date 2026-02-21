@@ -1744,6 +1744,8 @@ members:
 func (g *group) reply(creq *clientReq, kresp kmsg.Response, m *groupMember) {
 	select {
 	case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, seq: creq.seq}:
+	case <-creq.cc.done:
+		return
 	case <-g.c.die:
 		return
 	}

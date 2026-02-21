@@ -16,6 +16,7 @@ type (
 		b      *broker
 		conn   net.Conn
 		respCh chan clientResp
+		done   chan struct{} // closed when read() returns
 
 		saslStage saslStage
 		s0        *scramServer0
@@ -43,6 +44,7 @@ type (
 func (creq *clientReq) empty() bool { return creq == nil || creq.cc == nil || creq.kreq == nil }
 
 func (cc *clientConn) read() {
+	defer close(cc.done)
 	defer cc.conn.Close()
 
 	type read struct {
@@ -140,6 +142,8 @@ func (cc *clientConn) write() {
 					continue
 				}
 				seq = resp.seq + 1
+			case <-cc.done:
+				return
 			case <-cc.c.die:
 				return
 			}
