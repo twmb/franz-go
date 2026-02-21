@@ -288,12 +288,6 @@ func TestAssignUniformStickyRapidJoinsThenLeave(t *testing.T) {
 			targetAssignment:  make(map[uuid][]int32),
 		}
 		g.computeTargetAssignment(snap)
-		t.Logf("after %s joins: targets:", mid)
-		for _, m2 := range allMembers {
-			if cm, ok := g.consumerMembers[m2]; ok {
-				t.Logf("  %s: %v", m2, cm.targetAssignment[id])
-			}
-		}
 	}
 
 	// Record the converged assignment (after all 5 joins).
@@ -305,12 +299,6 @@ func TestAssignUniformStickyRapidJoinsThenLeave(t *testing.T) {
 	// Now remove m4.
 	delete(g.consumerMembers, "m4")
 	g.computeTargetAssignment(snap)
-
-	t.Logf("after m4 leaves:")
-	for _, mid := range []string{"m0", "m1", "m2", "m3"} {
-		m := g.consumerMembers[mid]
-		t.Logf("  %s: before=%v after=%v", mid, converged[mid], m.targetAssignment[id])
-	}
 
 	// Every remaining member must keep ALL of their converged
 	// partitions (sticky). They should only gain partitions,

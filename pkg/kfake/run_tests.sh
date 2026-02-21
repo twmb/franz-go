@@ -157,7 +157,7 @@ port_in_use() {
 }
 
 if [ -n "$RACE" ]; then
-    TIMEOUT="300s"
+    TIMEOUT="240s"
 else
     TIMEOUT="90s"
 fi
