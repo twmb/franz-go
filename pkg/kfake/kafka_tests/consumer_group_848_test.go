@@ -87,14 +87,14 @@ func Test848ConsumerLeaveReassigns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	got := 0
-	for got < nRecords {
+	for got < nRecords && ctx.Err() == nil {
 		fs := c1.PollRecords(ctx, 100)
 		fs.EachRecord(func(*kgo.Record) { got++ })
 		fs = c2.PollRecords(ctx, 100)
 		fs.EachRecord(func(*kgo.Record) { got++ })
-		if ctx.Err() != nil {
-			t.Fatalf("timeout consuming initial records: got %d/%d", got, nRecords)
-		}
+	}
+	if got < nRecords {
+		t.Fatalf("timeout consuming initial records: got %d/%d", got, nRecords)
 	}
 
 	// Explicitly commit c2's offsets before closing. Without this,
@@ -407,7 +407,9 @@ func Test848SessionTimeout(t *testing.T) {
 		kfake.BrokerConfigs(map[string]string{
 			// Short session timeout so the fenced member is
 			// removed quickly. Default is 45s which is too long.
-			"group.consumer.session.timeout.ms": "500",
+			// Must be long enough that members don't get fenced
+			// during initial stabilization under the race detector.
+			"group.consumer.session.timeout.ms": "3000",
 		}),
 	)
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
@@ -424,14 +426,14 @@ func Test848SessionTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	got := 0
-	for got < nRecords {
+	for got < nRecords && ctx.Err() == nil {
 		fs := c1.PollRecords(ctx, 100)
 		fs.EachRecord(func(*kgo.Record) { got++ })
 		fs = c2.PollRecords(ctx, 100)
 		fs.EachRecord(func(*kgo.Record) { got++ })
-		if ctx.Err() != nil {
-			t.Fatalf("timeout consuming initial records: got %d/%d", got, nRecords)
-		}
+	}
+	if got < nRecords {
+		t.Fatalf("timeout consuming initial records: got %d/%d", got, nRecords)
 	}
 
 	// Commit both consumers' offsets so that when c1 picks up c2's
