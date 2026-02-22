@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"fmt"
+	"maps"
 	"math"
 	"regexp"
 	"slices"
@@ -263,6 +264,8 @@ func generateMemberID(clientID string, instanceID *string) string {
 // GROUPS //
 ////////////
 
+func (g *group) logName() string { return g.name[:min(16, len(g.name))] }
+
 func (gs *groups) newGroup(name string) *group {
 	return &group{
 		c:             gs.c,
@@ -366,22 +369,6 @@ func (gs *groups) handleList(creq *clientReq) *kmsg.ListGroupsResponse {
 	req := creq.kreq.(*kmsg.ListGroupsRequest)
 	resp := req.ResponseKind().(*kmsg.ListGroupsResponse)
 
-	var states map[string]struct{}
-	if len(req.StatesFilter) > 0 {
-		states = make(map[string]struct{})
-		for _, state := range req.StatesFilter {
-			states[state] = struct{}{}
-		}
-	}
-
-	var types map[string]struct{}
-	if len(req.TypesFilter) > 0 {
-		types = make(map[string]struct{})
-		for _, typ := range req.TypesFilter {
-			types[typ] = struct{}{}
-		}
-	}
-
 	for _, g := range gs.gs {
 		if g.c.coordinator(g.name).node != creq.cc.b.node {
 			continue
@@ -391,15 +378,11 @@ func (gs *groups) handleList(creq *clientReq) *kmsg.ListGroupsResponse {
 			continue
 		}
 		g.waitControl(func() {
-			if states != nil {
-				if _, ok := states[g.state.String()]; !ok {
-					return
-				}
+			if len(req.StatesFilter) > 0 && !slices.Contains(req.StatesFilter, g.state.String()) {
+				return
 			}
-			if types != nil {
-				if _, ok := types[g.typ]; !ok {
-					return
-				}
+			if len(req.TypesFilter) > 0 && !slices.Contains(req.TypesFilter, g.typ) {
+				return
 			}
 			sg := kmsg.NewListGroupsResponseGroup()
 			sg.Group = g.name
@@ -1394,16 +1377,7 @@ func (g *group) completeRebalance() {
 	var foundLeader bool
 	for _, m := range g.members {
 		if m.waitingReply.empty() {
-			for _, p := range m.join.Protocols {
-				g.protocols[p.Name]--
-			}
-			delete(g.members, m.memberID)
-			if m.instanceID != nil {
-				delete(g.staticMembers, *m.instanceID)
-			}
-			if m.t != nil {
-				m.t.Stop()
-			}
+			g.removeMember(m)
 			continue
 		}
 		if m.memberID == g.leader {
@@ -2034,20 +2008,44 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 	resp.MemberEpoch = m.memberEpoch
 	g.c.cfg.logger.Logf(LogLevelDebug, "RECONCILE SEND: member=%s epoch=%d partitions=%d", m.memberID, m.memberEpoch, countAssignment(m.lastReconciledSent))
 	resp.Assignment = makeAssignment(m.lastReconciledSent)
-	var sentCount, epochCount int
-	for _, parts := range m.lastReconciledSent {
-		sentCount += len(parts)
-	}
-	for _, pm := range g.partitionEpochs {
-		epochCount += len(pm)
-	}
 	g.c.cfg.logger.Logf(LogLevelInfo, "consumerJoin: group=%s member=%s epoch=%d sent=%d epochMap=%d members=%d",
-		g.name[:min(16, len(g.name))], m.memberID, m.memberEpoch, sentCount, epochCount, len(g.consumerMembers))
+		g.logName(), m.memberID, m.memberEpoch, countAssignment(m.lastReconciledSent), g.countPartitionEpochs(), len(g.consumerMembers))
 	m.updatePartAssignmentEpochs(m.lastReconciledSent)
 	if len(m.partitionsPendingRevocation) > 0 {
 		g.scheduleConsumerRebalanceTimeout(m)
 	}
 	return resp
+}
+
+// updateMemberSubscriptions processes subscription and assignor changes
+// from a heartbeat request. Returns whether the subscription changed
+// and an error code (0 on success).
+func (g *group) updateMemberSubscriptions(m *consumerMember, req *kmsg.ConsumerGroupHeartbeatRequest) (changed bool, errCode int16) {
+	if req.SubscribedTopicNames != nil {
+		sorted := slices.Clone(req.SubscribedTopicNames)
+		slices.Sort(sorted)
+		if !slices.Equal(m.subscribedTopics, sorted) {
+			m.subscribedTopics = sorted
+			changed = true
+		}
+	}
+	if req.SubscribedTopicRegex != nil && *req.SubscribedTopicRegex != m.subscribedRegexSource {
+		re, err := regexp.Compile(*req.SubscribedTopicRegex)
+		if err != nil {
+			return false, kerr.InvalidRequest.Code
+		}
+		m.subscribedTopicRegex = re
+		m.subscribedRegexSource = *req.SubscribedTopicRegex
+		changed = true
+	}
+	if req.ServerAssignor != nil && *req.ServerAssignor != m.serverAssignor {
+		if !validServerAssignor(*req.ServerAssignor) {
+			return false, kerr.UnsupportedAssignor.Code
+		}
+		m.serverAssignor = *req.ServerAssignor
+		g.assignorName = m.serverAssignor
+	}
+	return changed, 0
 }
 
 // consumerRejoin handles a non-static rejoin: an active member sends
@@ -2060,33 +2058,11 @@ func (g *group) consumerRejoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeat
 	if req.RebalanceTimeoutMillis > 0 {
 		m.rebalanceTimeoutMs = req.RebalanceTimeoutMillis
 	}
-	if req.ServerAssignor != nil {
-		if !validServerAssignor(*req.ServerAssignor) {
-			resp.ErrorCode = kerr.UnsupportedAssignor.Code
-			return resp
-		}
-		m.serverAssignor = *req.ServerAssignor
-		g.assignorName = m.serverAssignor
-	}
 
-	hasSubscriptionChanged := false
-	if req.SubscribedTopicNames != nil {
-		sorted := slices.Clone(req.SubscribedTopicNames)
-		slices.Sort(sorted)
-		if !slices.Equal(m.subscribedTopics, sorted) {
-			m.subscribedTopics = sorted
-			hasSubscriptionChanged = true
-		}
-	}
-	if req.SubscribedTopicRegex != nil && *req.SubscribedTopicRegex != m.subscribedRegexSource {
-		re, err := regexp.Compile(*req.SubscribedTopicRegex)
-		if err != nil {
-			resp.ErrorCode = kerr.InvalidRequest.Code
-			return resp
-		}
-		m.subscribedTopicRegex = re
-		m.subscribedRegexSource = *req.SubscribedTopicRegex
-		hasSubscriptionChanged = true
+	hasSubscriptionChanged, errCode := g.updateMemberSubscriptions(m, req)
+	if errCode != 0 {
+		resp.ErrorCode = errCode
+		return resp
 	}
 	if hasSubscriptionChanged {
 		g.groupEpoch++
@@ -2107,15 +2083,8 @@ func (g *group) consumerRejoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeat
 	} else {
 		g.cancelConsumerRebalanceTimeout(m)
 	}
-	var sentCount, epochCount int
-	for _, parts := range m.lastReconciledSent {
-		sentCount += len(parts)
-	}
-	for _, pm := range g.partitionEpochs {
-		epochCount += len(pm)
-	}
 	g.c.cfg.logger.Logf(LogLevelInfo, "consumerJoin: group=%s member=%s epoch=%d sent=%d epochMap=%d members=%d (rejoin)",
-		g.name[:min(16, len(g.name))], m.memberID, m.memberEpoch, sentCount, epochCount, len(g.consumerMembers))
+		g.logName(), m.memberID, m.memberEpoch, countAssignment(m.lastReconciledSent), g.countPartitionEpochs(), len(g.consumerMembers))
 	return resp
 }
 
@@ -2125,15 +2094,8 @@ func (g *group) consumerLeave(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kms
 		resp.ErrorCode = kerr.UnknownMemberID.Code
 		return resp
 	}
-	var sentCount, pendCount int
-	for _, parts := range m.lastReconciledSent {
-		sentCount += len(parts)
-	}
-	for _, parts := range m.partitionsPendingRevocation {
-		pendCount += len(parts)
-	}
 	g.c.cfg.logger.Logf(LogLevelInfo, "consumerLeave: group=%s member=%s epoch=%d sent=%d pending=%d remaining=%d",
-		g.name[:min(16, len(g.name))], m.memberID, m.memberEpoch, sentCount, pendCount, len(g.consumerMembers)-1)
+		g.logName(), m.memberID, m.memberEpoch, countAssignment(m.lastReconciledSent), countAssignment(m.partitionsPendingRevocation), len(g.consumerMembers)-1)
 	g.fenceConsumerMember(m)
 	delete(g.consumerMembers, req.MemberID)
 	// Full leave (-1): remove from static membership too.
@@ -2167,17 +2129,8 @@ func (g *group) consumerStaticLeave(req *kmsg.ConsumerGroupHeartbeatRequest, res
 		resp.ErrorCode = kerr.UnreleasedInstanceID.Code
 		return resp
 	}
-	var sentCount, activeRemaining int
-	for _, parts := range m.lastReconciledSent {
-		sentCount += len(parts)
-	}
-	for _, other := range g.consumerMembers {
-		if other != m && other.memberEpoch != -2 {
-			activeRemaining++
-		}
-	}
 	g.c.cfg.logger.Logf(LogLevelInfo, "consumerStaticLeave: group=%s member=%s instance=%s epoch=%d sent=%d remaining=%d",
-		g.name[:min(16, len(g.name))], m.memberID, *m.instanceID, m.memberEpoch, sentCount, activeRemaining)
+		g.logName(), m.memberID, *m.instanceID, m.memberEpoch, countAssignment(m.lastReconciledSent), g.activeConsumerCount()-1)
 
 	// Mark as temporarily departed - do NOT fence, do NOT
 	// delete from consumerMembers, do NOT bump generation.
@@ -2234,38 +2187,18 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 
 	if gap := time.Since(m.last); gap > 2*time.Duration(g.c.consumerHeartbeatIntervalMs())*time.Millisecond {
 		g.c.cfg.logger.Logf(LogLevelWarn, "consumerHeartbeatLate: group=%s member=%s gap=%dms interval=%dms",
-			g.name[:min(16, len(g.name))], m.memberID, gap.Milliseconds(), g.c.consumerHeartbeatIntervalMs())
+			g.logName(), m.memberID, gap.Milliseconds(), g.c.consumerHeartbeatIntervalMs())
 	}
 	g.atConsumerSessionTimeout(m)
 
 	// Process subscription changes.
-	hasSubscriptionChanged := false
+	var hasSubscriptionChanged bool
 	if full {
-		if req.SubscribedTopicNames != nil {
-			sorted := slices.Clone(req.SubscribedTopicNames)
-			slices.Sort(sorted)
-			if !slices.Equal(m.subscribedTopics, sorted) {
-				m.subscribedTopics = sorted
-				hasSubscriptionChanged = true
-			}
-		}
-		if req.SubscribedTopicRegex != nil && *req.SubscribedTopicRegex != m.subscribedRegexSource {
-			re, err := regexp.Compile(*req.SubscribedTopicRegex)
-			if err != nil {
-				resp.ErrorCode = kerr.InvalidRequest.Code
-				return resp
-			}
-			m.subscribedTopicRegex = re
-			m.subscribedRegexSource = *req.SubscribedTopicRegex
-			hasSubscriptionChanged = true
-		}
-		if req.ServerAssignor != nil && *req.ServerAssignor != m.serverAssignor {
-			if !validServerAssignor(*req.ServerAssignor) {
-				resp.ErrorCode = kerr.UnsupportedAssignor.Code
-				return resp
-			}
-			m.serverAssignor = *req.ServerAssignor
-			g.assignorName = m.serverAssignor
+		var errCode int16
+		hasSubscriptionChanged, errCode = g.updateMemberSubscriptions(m, req)
+		if errCode != 0 {
+			resp.ErrorCode = errCode
+			return resp
 		}
 	}
 
@@ -2368,10 +2301,7 @@ func (g *group) computeTargetAssignment(snap topicMetaSnap) {
 	// members (sorted by instanceID) come before dynamic members
 	// (sorted by memberID), matching Kafka's behavior. Epoch -2
 	// members are excluded (skipped in memberSubs above).
-	memberIDs := make([]string, 0, len(memberSubs))
-	for id := range memberSubs {
-		memberIDs = append(memberIDs, id)
-	}
+	memberIDs := slices.Collect(maps.Keys(memberSubs))
 	if g.assignorName == "range" {
 		slices.SortFunc(memberIDs, func(a, b string) int {
 			ma, mb := g.consumerMembers[a], g.consumerMembers[b]
@@ -2393,9 +2323,6 @@ func (g *group) computeTargetAssignment(snap topicMetaSnap) {
 	}
 
 	if len(memberIDs) == 0 {
-		for _, mid := range memberIDs {
-			g.consumerMembers[mid].targetAssignment = make(map[uuid][]int32)
-		}
 		return
 	}
 
@@ -2521,10 +2448,7 @@ func (g *group) assignUniform(allTPs []assignorTP, memberIDs []string, memberSub
 		}
 		// Remove excess partitions. Iterate topic IDs in sorted
 		// order so the choice is deterministic.
-		ids := make([]uuid, 0, len(m.targetAssignment))
-		for id := range m.targetAssignment {
-			ids = append(ids, id)
-		}
+		ids := slices.Collect(maps.Keys(m.targetAssignment))
 		slices.SortFunc(ids, func(a, b uuid) int { return bytes.Compare(a[:], b[:]) })
 		for _, id := range ids {
 			if excess <= 0 {
@@ -2557,13 +2481,8 @@ func (g *group) assignUniform(allTPs []assignorTP, memberIDs []string, memberSub
 	}
 
 	// Step 4: distribute unassigned partitions to members with
-	// the fewest partitions.
-	slices.SortFunc(unassigned, func(a, b assignorTP) int {
-		if c := cmp.Compare(a.topic, b.topic); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.part, b.part)
-	})
+	// the fewest partitions. unassigned preserves allTPs order
+	// (already sorted by topic, partition).
 	for _, tp := range unassigned {
 		bestMid := ""
 		bestCount := math.MaxInt
@@ -2701,24 +2620,9 @@ func (g *group) computeNextAssignment(m *consumerMember,
 		}
 	}
 
-	// Clean empty entries.
-	for id := range pendingRevocation {
-		if len(pendingRevocation[id]) == 0 {
-			delete(pendingRevocation, id)
-		}
-	}
-	for id := range pendingAssignment {
-		if len(pendingAssignment[id]) == 0 {
-			delete(pendingAssignment, id)
-		}
-	}
-
 	// Merge existing pending revocations (from previous rounds,
 	// not yet confirmed by client) with newly computed ones.
-	allPendingRevocation := make(map[uuid][]int32)
-	for id, parts := range m.partitionsPendingRevocation {
-		allPendingRevocation[id] = append(allPendingRevocation[id], parts...)
-	}
+	allPendingRevocation := copyAssignment(m.partitionsPendingRevocation)
 	for id, parts := range pendingRevocation {
 		for _, p := range parts {
 			if !slices.Contains(allPendingRevocation[id], p) {
@@ -2727,8 +2631,8 @@ func (g *group) computeNextAssignment(m *consumerMember,
 		}
 	}
 
-	hasAnyPendingRevocation := countAssignment(allPendingRevocation) > 0
-	hasPendingAssignment := countAssignment(pendingAssignment) > 0
+	hasAnyPendingRevocation := len(allPendingRevocation) > 0
+	hasPendingAssignment := len(pendingAssignment) > 0
 
 	switch {
 	case hasAnyPendingRevocation && ownsRevokedPartitions(allPendingRevocation, ownedTopicPartitions):
@@ -2750,9 +2654,7 @@ func (g *group) computeNextAssignment(m *consumerMember,
 		m.previousMemberEpoch = m.memberEpoch
 		m.memberEpoch = g.targetAssignmentEpoch
 		newAssigned = make(map[uuid][]int32, len(keep)+len(pendingAssignment))
-		for id, parts := range keep {
-			newAssigned[id] = parts
-		}
+		maps.Copy(newAssigned, keep)
 		for id, parts := range pendingAssignment {
 			newAssigned[id] = append(newAssigned[id], parts...)
 		}
@@ -2760,26 +2662,22 @@ func (g *group) computeNextAssignment(m *consumerMember,
 		g.c.cfg.logger.Logf(LogLevelDebug, "RECONCILE SUMMARY: member=%s reconciled=%d target=%d +%d blocked=%d",
 			m.memberID, countAssignment(newAssigned), countAssignment(m.targetAssignment), countAssignment(pendingAssignment), blockedCount)
 
-	case hasUnreleasedPartitions:
-		// Branch c: no new partitions, but some are unreleased.
-		m.state = cmUnreleasedPartitions
-		m.previousMemberEpoch = m.memberEpoch
-		m.memberEpoch = g.targetAssignmentEpoch
-		newAssigned = keep
-		newPending = make(map[uuid][]int32)
-		g.c.cfg.logger.Logf(LogLevelDebug, "RECONCILE SUMMARY: member=%s reconciled=%d target=%d +%d blocked=%d",
-			m.memberID, countAssignment(keep), countAssignment(m.targetAssignment), 0, blockedCount)
-
 	default:
-		// Branch d: stable, no changes needed.
-		m.state = cmStable
+		// Branches c+d: no new partitions.
+		if hasUnreleasedPartitions {
+			m.state = cmUnreleasedPartitions
+			g.c.cfg.logger.Logf(LogLevelDebug, "RECONCILE SUMMARY: member=%s reconciled=%d target=%d +%d blocked=%d",
+				m.memberID, countAssignment(keep), countAssignment(m.targetAssignment), 0, blockedCount)
+		} else {
+			m.state = cmStable
+		}
 		m.previousMemberEpoch = m.memberEpoch
 		m.memberEpoch = g.targetAssignmentEpoch
 		newAssigned = keep
 		newPending = make(map[uuid][]int32)
 	}
 
-	changed = !assignmentsEqual(m.lastReconciledSent, newAssigned) || !assignmentsEqual(m.partitionsPendingRevocation, newPending)
+	changed = !maps.EqualFunc(m.lastReconciledSent, newAssigned, slices.Equal) || !maps.EqualFunc(m.partitionsPendingRevocation, newPending, slices.Equal)
 	return
 }
 
@@ -2822,10 +2720,7 @@ func (g *group) updateCurrentAssignment(m *consumerMember,
 	}
 
 	// Merge with existing pending.
-	newPending = make(map[uuid][]int32)
-	for id, parts := range m.partitionsPendingRevocation {
-		newPending[id] = append(newPending[id], parts...)
-	}
+	newPending = copyAssignment(m.partitionsPendingRevocation)
 	for id, parts := range pendingRevocation {
 		newPending[id] = append(newPending[id], parts...)
 	}
@@ -2846,10 +2741,7 @@ func (g *group) updateCurrentAssignment(m *consumerMember,
 func (g *group) clearConfirmedRevocations(m *consumerMember,
 	ownedTopicPartitions []kmsg.ConsumerGroupHeartbeatRequestTopic) {
 
-	reported := make(map[uuid][]int32, len(ownedTopicPartitions))
-	for _, t := range ownedTopicPartitions {
-		reported[t.TopicID] = t.Partitions
-	}
+	reported := topicsToAssignment(ownedTopicPartitions)
 
 	oldPending := m.partitionsPendingRevocation
 	newPending := make(map[uuid][]int32)
@@ -2963,6 +2855,16 @@ func (g *group) updateConsumerStateField() {
 	g.state = groupStable
 }
 
+// evictConsumerMember fences and removes a consumer member, then
+// recomputes the target assignment.
+func (g *group) evictConsumerMember(m *consumerMember) {
+	g.fenceConsumerMember(m)
+	delete(g.consumerMembers, m.memberID)
+	g.groupEpoch++
+	g.computeTargetAssignment(g.lastTopicMeta)
+	g.updateConsumerStateField()
+}
+
 // atConsumerSessionTimeout sets up the session timeout for a consumer
 // member. The session timeout uses the server-level config
 // group.consumer.session.timeout.ms and fences the member entirely if
@@ -2976,12 +2878,8 @@ func (g *group) atConsumerSessionTimeout(m *consumerMember) {
 	m.t = g.timerControlFn(timeout, func() {
 		if time.Since(m.last) >= timeout {
 			g.c.cfg.logger.Logf(LogLevelWarn, "consumerSessionTimeout: group=%s member=%s epoch=%d remaining=%d",
-				g.name[:min(16, len(g.name))], m.memberID, m.memberEpoch, len(g.consumerMembers)-1)
-			g.fenceConsumerMember(m)
-			delete(g.consumerMembers, m.memberID)
-			g.groupEpoch++
-			g.computeTargetAssignment(g.lastTopicMeta)
-			g.updateConsumerStateField()
+				g.logName(), m.memberID, m.memberEpoch, len(g.consumerMembers)-1)
+			g.evictConsumerMember(m)
 		}
 	})
 }
@@ -3004,12 +2902,8 @@ func (g *group) scheduleConsumerRebalanceTimeout(m *consumerMember) {
 			return
 		}
 		g.c.cfg.logger.Logf(LogLevelWarn, "consumerRebalanceTimeout: group=%s member=%s epoch=%d remaining=%d",
-			g.name[:min(16, len(g.name))], memberID, epoch, len(g.consumerMembers)-1)
-		g.fenceConsumerMember(cur)
-		delete(g.consumerMembers, memberID)
-		g.groupEpoch++
-		g.computeTargetAssignment(g.lastTopicMeta)
-		g.updateConsumerStateField()
+			g.logName(), memberID, epoch, len(g.consumerMembers)-1)
+		g.evictConsumerMember(cur)
 	})
 }
 
@@ -3085,7 +2979,7 @@ func (g *group) handleConsumerOffsetCommit(creq *clientReq) *kmsg.OffsetCommitRe
 		}
 		if req.Generation > m.memberEpoch {
 			g.c.cfg.logger.Logf(LogLevelWarn, "OffsetCommit STALE: group=%s member=%s reqEpoch=%d memberEpoch=%d",
-				req.Group[:min(16, len(req.Group))], req.MemberID, req.Generation, m.memberEpoch)
+				g.logName(), req.MemberID, req.Generation, m.memberEpoch)
 			fillOffsetCommit(req, resp, kerr.StaleMemberEpoch.Code)
 			return resp
 		}
@@ -3104,7 +2998,7 @@ func (g *group) handleConsumerOffsetCommit(creq *clientReq) *kmsg.OffsetCommitRe
 					if epochs, ok := cm.partAssignmentEpochs[id.id]; ok {
 						if assignEpoch, ok := epochs[p.Partition]; ok && req.Generation < assignEpoch {
 							g.c.cfg.logger.Logf(LogLevelWarn, "OffsetCommit STALE: group=%s member=%s topic=%s p=%d reqEpoch=%d assignmentEpoch=%d",
-								req.Group[:min(16, len(req.Group))], req.MemberID, t.Topic[:min(16, len(t.Topic))], p.Partition, req.Generation, assignEpoch)
+								g.logName(), req.MemberID, t.Topic[:min(16, len(t.Topic))], p.Partition, req.Generation, assignEpoch)
 							setOffsetCommitPartitionErr(resp, t.Topic, p.Partition, kerr.StaleMemberEpoch.Code)
 							continue
 						}
@@ -3137,6 +3031,22 @@ func countAssignment(a map[uuid][]int32) int {
 	return n
 }
 
+func (g *group) countPartitionEpochs() int {
+	var n int
+	for _, pm := range g.partitionEpochs {
+		n += len(pm)
+	}
+	return n
+}
+
+func topicsToAssignment(topics []kmsg.ConsumerGroupHeartbeatRequestTopic) map[uuid][]int32 {
+	m := make(map[uuid][]int32, len(topics))
+	for _, t := range topics {
+		m[t.TopicID] = t.Partitions
+	}
+	return m
+}
+
 // updatePartAssignmentEpochs updates per-partition assignment epochs
 // after reconciliation. Retained partitions keep their existing epoch;
 // newly assigned partitions get the member's current epoch.
@@ -3165,10 +3075,7 @@ func ownsRevokedPartitions(pending map[uuid][]int32, topics []kmsg.ConsumerGroup
 	if topics == nil {
 		return len(pending) > 0
 	}
-	reported := make(map[uuid][]int32, len(topics))
-	for _, t := range topics {
-		reported[t.TopicID] = t.Partitions
-	}
+	reported := topicsToAssignment(topics)
 	for id, parts := range pending {
 		for _, p := range parts {
 			if slices.Contains(reported[id], p) {
@@ -3190,19 +3097,6 @@ func isSubsetAssignment(owned []kmsg.ConsumerGroupHeartbeatRequestTopic, target 
 			if !slices.Contains(tParts, p) {
 				return false
 			}
-		}
-	}
-	return true
-}
-
-func assignmentsEqual(a, b map[uuid][]int32) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for id, aParts := range a {
-		bParts, ok := b[id]
-		if !ok || !slices.Equal(aParts, bParts) {
-			return false
 		}
 	}
 	return true
@@ -3246,10 +3140,6 @@ func (g *group) addPartitionEpochs(a map[uuid][]int32, epoch int32) {
 			if existing, ok := pm[p]; ok && existing >= epoch {
 				g.c.cfg.logger.Logf(LogLevelError, "group %s: addPartitionEpochs: partition %d of topic %v already has epoch %d >= %d, skipping", g.name, p, id, existing, epoch)
 				continue
-			}
-			if existing, ok := pm[p]; ok && epoch < existing {
-				g.c.cfg.logger.Logf(LogLevelWarn, "BUG: non-monotonic epoch update topic=%x p=%d existing=%d new=%d",
-					id[:4], p, existing, epoch)
 			}
 			pm[p] = epoch
 		}

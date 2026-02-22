@@ -971,7 +971,11 @@ func Test848CooperativeRevocationDuringConsumption(t *testing.T) {
 	got = 0
 	for got < nRecords {
 		for _, cl := range []*kgo.Client{c1, c2, c3} {
-			fs := cl.PollRecords(consumeCtx, 50)
+			// Short per-poll timeout so one slow client can't
+			// block polling the others for the entire deadline.
+			pollCtx, pollCancel := context.WithTimeout(consumeCtx, 250*time.Millisecond)
+			fs := cl.PollRecords(pollCtx, 50)
+			pollCancel()
 			fs.EachRecord(func(*kgo.Record) { got++ })
 			if got >= nRecords {
 				break
