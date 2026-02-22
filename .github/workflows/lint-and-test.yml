@@ -74,12 +74,18 @@ jobs:
       - uses: actions/checkout@v4
       - name: Start kfake and run tests
         run: |
-          (cd pkg/kfake && go work init . ../.. ../kadm ../kmsg && go run main.go --as-version ${{ matrix.version }}) &
+          (cd pkg/kfake && go work init . ../.. ../kadm ../kmsg && go run main.go --as-version ${{ matrix.version }} -c group.consumer.heartbeat.interval.ms=1000 -l debug) > /tmp/kfake.log 2>&1 &
           sleep 2
           go test -timeout 5m ./...
         env:
           KGO_TEST_RF: 1
           KGO_SEEDS: 127.0.0.1:9092
+      - name: Upload kfake logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kfake-logs-${{ matrix.version }}
+          path: /tmp/kfake.log
 
   integration-test-kafka:
     if: github.repository == 'twmb/franz-go'

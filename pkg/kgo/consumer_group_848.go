@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
 	"reflect"
 	"slices"
@@ -130,7 +129,9 @@ outer:
 			// subsequent heartbeats resume sending full requests.
 			_, err = g.setupAssignedAndHeartbeat(initialHb, func() (time.Duration, error) {
 				req := g848.mkreq()
-				if g848.prerevoking.Load() || (reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics)) {
+				prerevoking := g848.prerevoking.Load()
+				topicsMatch := reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics)
+				if prerevoking || topicsMatch {
 					req.InstanceID = nil
 					req.RackID = nil
 					req.RebalanceTimeoutMillis = -1
@@ -151,7 +152,7 @@ outer:
 				}
 				hbAssigned := g848.handleResp(req, resp)
 				if hbAssigned != nil {
-					err = kerr.RebalanceInProgress
+					err = errReassigned848
 					nowAssigned = hbAssigned
 				}
 				return sleep, err
@@ -258,6 +259,13 @@ type g848 struct {
 	lastSubscribedTopics []string
 	lastTopics           []kmsg.ConsumerGroupHeartbeatRequestTopic
 
+	// unresolvedAssigned holds topic IDs from a heartbeat
+	// response that could not be mapped to a name via id2t.
+	// These are included in subsequent heartbeat Topics so the
+	// server sees them acknowledged. When metadata resolves the
+	// ID, the topic is moved into newAssigned.
+	unresolvedAssigned map[topicID][]int32
+
 	// prerevoking is true while prerevoke is running: the
 	// assignment has changed and lost partitions are being
 	// revoked and their offsets committed. While true, the
@@ -311,10 +319,10 @@ func (g *g848) initialJoin() (time.Duration, error) {
 func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.ConsumerGroupHeartbeatResponse) map[string][]int32 {
 	if resp.MemberID != nil {
 		g.g.memberGen.store(*resp.MemberID, resp.MemberEpoch)
-		g.g.cl.cfg.logger.Log(LogLevelDebug, "storing member and epoch", "member", *resp.MemberID, "epoch", resp.MemberEpoch)
+		g.g.cl.cfg.logger.Log(LogLevelDebug, "storing member and epoch", "group", g.g.cfg.group, "member", *resp.MemberID, "epoch", resp.MemberEpoch)
 	} else {
 		g.g.memberGen.storeGeneration(resp.MemberEpoch)
-		g.g.cl.cfg.logger.Log(LogLevelDebug, "storing epoch", "epoch", resp.MemberEpoch)
+		g.g.cl.cfg.logger.Log(LogLevelDebug, "storing epoch", "group", g.g.cfg.group, "epoch", resp.MemberEpoch)
 	}
 
 	id2t := g.g.cl.id2tMap()
@@ -336,25 +344,70 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 		g.lastTopics = req.Topics
 	}
 
-	if resp.Assignment == nil {
+	if resp.Assignment != nil {
+		// Fresh assignment from server - replace unresolved state.
+		g.unresolvedAssigned = nil
+		for _, t := range resp.Assignment.Topics {
+			name := id2t[t.TopicID]
+			if name == "" {
+				if g.unresolvedAssigned == nil {
+					g.unresolvedAssigned = make(map[topicID][]int32)
+				}
+				g.unresolvedAssigned[topicID(t.TopicID)] = slices.Clone(t.Partitions)
+				continue
+			}
+			slices.Sort(t.Partitions)
+			newAssigned[name] = t.Partitions
+		}
+	}
+
+	// Try to resolve previously-unresolved topic IDs now that
+	// metadata may have refreshed since the last heartbeat.
+	// We don't proactively hook into the metadata update to
+	// resolve immediately - waiting for the next heartbeat is
+	// simpler and only costs one heartbeat interval (~5s).
+	for id, ps := range g.unresolvedAssigned {
+		if name := id2t[[16]byte(id)]; name != "" {
+			slices.Sort(ps)
+			newAssigned[name] = ps
+			delete(g.unresolvedAssigned, id)
+		}
+	}
+	if len(g.unresolvedAssigned) > 0 {
+		g.g.cl.triggerUpdateMetadataNow("consumer group heartbeat has unresolved topic IDs in assignment")
+	}
+
+	// Only return nil (no change) when the response had no
+	// assignment at all (keepalive) or when all topics in the
+	// assignment are still unresolved. When the server explicitly
+	// sends an empty assignment (resp.Assignment != nil with no
+	// topics), fall through to the comparison so the client
+	// detects it as "revoke everything".
+	//
+	// The unresolved check handles the case where the server
+	// assigned topics whose IDs the client can't map to names
+	// yet (e.g. newly created topic, metadata not refreshed).
+	// Those went into unresolvedAssigned rather than
+	// newAssigned. Without this guard, we'd fall through with
+	// newAssigned={} and tell the client to revoke everything,
+	// when really the server did assign partitions - we just
+	// need to wait for metadata resolution.
+	if len(newAssigned) == 0 && (resp.Assignment == nil || len(g.unresolvedAssigned) > 0) {
 		return nil
 	}
 
-	for _, t := range resp.Assignment.Topics {
-		name := id2t[t.TopicID]
-		if name == "" {
-			// If we do not recognize the topic ID, we do not keep it for
-			// assignment yet, but we immediately trigger a metadata update
-			// to hopefully discover this topic by the time we are assigned
-			// the topic again.
-			g.g.cl.triggerUpdateMetadataNow(fmt.Sprintf("consumer group heartbeat returned topic ID %s that we do not recognize", topicID(t.TopicID)))
-			continue
+	// Merge with current assignment: newAssigned only has topics
+	// from the response or freshly resolved; fill in any existing
+	// topics the server didn't mention (resp.Assignment == nil).
+	current := g.g.nowAssigned.read()
+	if resp.Assignment == nil {
+		for t, ps := range current {
+			if _, ok := newAssigned[t]; !ok {
+				newAssigned[t] = ps
+			}
 		}
-		slices.Sort(t.Partitions)
-		newAssigned[name] = t.Partitions
 	}
 
-	current := g.g.nowAssigned.read()
 	if !mapi32sDeepEq(current, newAssigned) {
 		return newAssigned
 	}
@@ -398,6 +451,7 @@ func (g *g848) mkreq() *kmsg.ConsumerGroupHeartbeatRequest {
 		for t := range tps {
 			subscribedTopics = append(subscribedTopics, t)
 		}
+		slices.Sort(subscribedTopics)
 		req.SubscribedTopicNames = subscribedTopics
 	} else if g.g.cl.cfg.regex {
 		topics := g.g.cl.cfg.topics
@@ -405,6 +459,7 @@ func (g *g848) mkreq() *kmsg.ConsumerGroupHeartbeatRequest {
 		for topic := range topics {
 			patterns = append(patterns, "(?:"+topic+")")
 		}
+		slices.Sort(patterns)
 		pattern := strings.Join(patterns, "|")
 		req.SubscribedTopicRegex = &pattern
 	} else {
@@ -414,6 +469,7 @@ func (g *g848) mkreq() *kmsg.ConsumerGroupHeartbeatRequest {
 		for t := range tps {
 			subscribedTopics = append(subscribedTopics, t)
 		}
+		slices.Sort(subscribedTopics)
 		req.SubscribedTopicNames = subscribedTopics
 	}
 	// Build Topics from our current assignment. The heartbeat closure
@@ -426,6 +482,16 @@ func (g *g848) mkreq() *kmsg.ConsumerGroupHeartbeatRequest {
 		rt := kmsg.NewConsumerGroupHeartbeatRequestTopic()
 		rt.Partitions = slices.Clone(ps)
 		rt.TopicID = tps[t].load().id
+		req.Topics = append(req.Topics, rt)
+	}
+	// Include unresolved topic IDs so the server sees them
+	// acknowledged. This also makes topicsMatch false (since
+	// lastTopics won't contain these), forcing a full request
+	// whose isFullRequest triggers a re-send of the assignment.
+	for id, ps := range g.unresolvedAssigned {
+		rt := kmsg.NewConsumerGroupHeartbeatRequestTopic()
+		rt.TopicID = [16]byte(id)
+		rt.Partitions = slices.Clone(ps)
 		req.Topics = append(req.Topics, rt)
 	}
 

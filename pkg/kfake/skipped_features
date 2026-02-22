@@ -2,123 +2,60 @@
 #
 # This file tracks features that were intentionally skipped during the
 # kfake feature gap analysis. These can be revisited in future sessions.
-
-* Add support for instance IDs for consumer groups, and support KIP-814 https://cwiki.apache.org/confluence/display/KAFKA/KIP-814%3A+Static+membership+protocol+should+let+the+leader+skip+assignment
+#
+# ThrottleMillis and TimeoutMillis are omitted globally - kfake does not
+# implement throttling, and writes are immediate (no replication).
 
 ## 00_produce
-- ThrottleMillis: Not implementing throttling for any request
-- Compaction: Log compaction not supported
 - ErrorRecords (v8+): Per-record errors not implemented; kfake validates at batch level only
-- TimeoutMillis: Ignored since writes are immediate (no replication)
 - Timestamp range validation: No client sends unreasonable timestamps in tests
 
 ## 01_fetch
-- ThrottleMillis: Not implementing throttling for any request
 - PreferredReadReplica: Rack-aware replica hints not implemented (KIP-392)
 - Rack: Rack-aware reading not implemented (KIP-392)
 - LastFetchedEpoch/DivergingEpoch: Log truncation detection not implemented
 - SnapshotID: Snapshot fetching not implemented (KIP-630)
 
 ## 02_list_offsets
-- ThrottleMillis: Not implementing throttling for any request
 - Timestamp -4: Local log start offset not implemented - tiered storage (KIP-405)
 - Timestamp -5: Remote storage offset not implemented - tiered storage (KIP-1005)
-- TimeoutMillis: Remote storage lookup timeout not implemented (KIP-1075)
 
 ## 03_metadata
-- ThrottleMillis: Not implementing throttling for any request
 - Top-level ErrorCode (v13+): Rebootstrapping signal not needed (KIP-1102)
 
-## 08_offset_commit
-- ThrottleMillis: Not implementing throttling for any request
-- InstanceID (v7+): Returns error if set - static membership not implemented
-
-## 09_offset_fetch
-- ThrottleMillis: Not implementing throttling for any request
-- MemberID/MemberEpoch (v9+): KIP-848 member epoch validation not implemented in
-  standard OffsetFetch handler; consumer group offset commits go through the
-  heartbeat-based path in groups.go instead
-
 ## 10_find_coordinator
-- ThrottleMillis: Not implementing throttling for any request
 - Share groups (coordinator type 2): Not implemented (KIP-932)
 
 ## 11_join_group, 12_heartbeat, 13_leave_group, 14_sync_group
-- ThrottleMillis: Not implementing throttling for any request
-- InstanceID/static membership: Not fully implemented (KIP-345)
-- SkipAssignment: Not implemented (KIP-814)
 - Initial rebalance delay: Skipped - optimization for reducing rebalance churn
   during rolling restarts, not needed for correctness in tests
-- Group max size: Not enforced - low value for testing
-
-## 15_describe_groups
-- ThrottleMillis: Not implementing throttling for any request
-- InstanceID: Static membership not fully implemented (KIP-345)
-
-## 16_list_groups
-- ThrottleMillis: Not implementing throttling for any request
 
 ## 17_sasl_handshake
 - v0: Not supported (uses implicit auth flow after handshake)
 
 ## 18_api_versions
-- ThrottleMillis: Not implementing throttling for any request
-- SupportedFeatures (KIP-584): Not returning SupportedFeatures tag
 - ZkMigrationReady: Not implementing ZK migration flag
 - ClientSoftwareName/ClientSoftwareVersion: Parsed but not validated/stored
 
-## 19_create_topics
-- ThrottleMillis: Not implementing throttling for any request
-- ReplicaAssignment: Manual partition assignment not supported
-
-## 20_delete_topics
-- ThrottleMillis: Not implementing throttling for any request
-- TimeoutMillis: Ignored since writes are immediate
-
-## 21_delete_records
-- ThrottleMillis: Not implementing throttling for any request
-- TimeoutMillis: Ignored since writes are immediate
-
 ## 22_init_producer_id
-- ThrottleMillis: Not implementing throttling for any request
 - prevProducerId/lastProducerEpoch: Only matters for epoch exhaustion at 32K+
   transactions per transactional ID, which never happens in tests
-- Transactional ID expiration: Background cleanup for idle transactional IDs;
-  tests are short-lived so expiration never matters
 - CONCURRENT_TRANSACTIONS error: Impossible in kfake's synchronous model
 
 ## 23_offset_for_leader_epoch
-- ThrottleMillis: Not implementing throttling for any request
 - ReplicaID != -1: Only consumer replica ID (-1) supported
 
 ## 24_add_partitions_to_txn
-- ThrottleMillis: Not implementing throttling for any request
 - v4+ Transactions (broker batching): Not implemented
 
-## 25_add_offsets_to_txn
-- ThrottleMillis: Not implementing throttling for any request
-
-## 26_end_txn
-- ThrottleMillis: Not implementing throttling for any request
-
-## 28_txn_offset_commit
-- ThrottleMillis: Not implementing throttling for any request
-- InstanceID (v3+): Static membership not fully implemented (KIP-345)
-
 ## 32_describe_configs
-- ThrottleMillis: Not implementing throttling for any request
 - ConfigDocumentation (v3+): Not returning documentation
 - IncludeDocumentation: Request field ignored (no docs to return)
 
-## 33_alter_configs
-- ThrottleMillis: Not implementing throttling for any request
-
 ## 34_alter_replica_log_dirs
-- ThrottleMillis: Not implementing throttling for any request
 - Log directory validation: No validation that directory exists in broker config
 
 ## 35_describe_log_dirs
-- ThrottleMillis: Not implementing throttling for any request
 - ErrorCode (v3+): Top-level error code not implemented
 - OffsetLag: Always returns 0 (no replication delay tracking)
 - IsFuture: Always returns false (no async replica moves)
@@ -126,80 +63,25 @@
 ## 36_sasl_authenticate
 - SessionLifetimeMillis (v1+): Session re-auth not implemented
 
-## 37_create_partitions
-- ThrottleMillis: Not implementing throttling for any request
-- TimeoutMillis: Ignored since writes are immediate
-
 ## 38-41 Delegation Tokens
 - Not implemented: CreateDelegationToken, RenewDelegationToken, ExpireDelegationToken, DescribeDelegationToken
 - Reason: Adds complexity for marginal testing value; no kgo APIs use these directly
 
-## 42_delete_groups
-- ThrottleMillis: Not implementing throttling for any request
-
-## 44_incremental_alter_configs
-- ThrottleMillis: Not implementing throttling for any request
-- APPEND/SUBTRACT ops: List config operations not implemented
-
-## 47_offset_delete
-- ThrottleMillis: Not implementing throttling for any request
-
 ## 48_describe_client_quotas, 49_alter_client_quotas
 - Quota enforcement: Quotas are stored but not enforced (no actual throttling)
 
-## 50_describe_user_scram_credentials
-- ThrottleMillis: Not implementing throttling for any request
-
-## 51_alter_user_scram_credentials
-- ThrottleMillis: Not implementing throttling for any request
-
-## 68_consumer_group_heartbeat (KIP-848) - IMPLEMENTED
-- Basic handler implemented: server-side uniform and range assignment, member
-  epoch tracking, session timeouts, regex subscription, leave (epoch -1)
-- SubscribedTopicRegex: supported (RE2 syntax, not Java RE2J)
-- Remaining static membership gaps:
-  - kfake: support MemberEpoch -2 (leave with instance ID retained)
-  - kfake: fence by instance ID, not just member ID
-  - kfake: on session timeout, do not remove static member (keep assignment reserved)
-  - kfake: on rejoin with same instance ID, restore previous assignment
-  - kfake: range assignor should sort static members (by instance ID) before dynamic
-    members (by member ID)
-  - See KIP-345, KIP-814 for the classic group static member protocol
+## 68_consumer_group_heartbeat (KIP-848)
+- SubscribedTopicRegex: RE2 syntax, not Java RE2J
+- Member epoch advancement only when fully converged: kfake's conservative
+  approach is safe and simpler. Advancing in UNRELEASED_PARTITIONS state
+  only affects convergence speed, not correctness.
+- No ASSIGNING/UNRELEASED_PARTITIONS states: kfake uses empty/reconciling/stable.
+  Missing intermediate states don't affect kgo client behavior.
 - Metadata hash / metadata expiration: deliberate divergence; kfake recomputes
   assignments on every relevant heartbeat rather than caching a metadata hash
-
-### Correctness gaps vs Kafka (analyzed against ~/src/apache/kafka):
-
-1. **No partition epoch tracking** - FIXED
-   Added group-level partitionEpochs map with two-phase check
-   in reconciledAssignment.
-
-2. **Member epoch advancement only when fully converged** - SKIPPED
-   kfake's conservative approach (not advancing until fully converged) is
-   safe and simpler. Advancing in UNRELEASED_PARTITIONS state
-   only affects convergence speed, not correctness.
-
-3. **Previous-epoch subset check against targetAssignment** - FIXED
-   Now checks against currentAssignment.
-
-4. **No separate session/rebalance timeout** - FIXED
-   Session timeout uses group.consumer.session.timeout.ms (server config).
-   Rebalance timeout uses per-member rebalanceTimeoutMs, only active when
-   member has unrevoked partitions.
-
-5. **No partitionsPendingRevocation tracking** - FIXED
-   Added explicit per-member partitionsPendingRevocation set with
-   epoch map integration.
-
-6. **No ASSIGNING/UNRELEASED_PARTITIONS states** (LOW)
-   kfake uses empty/reconciling/stable. Missing intermediate states.
-   Doesn't affect kgo client behavior.
-
-## 69_consumer_group_describe (KIP-848) - IMPLEMENTED
-- Basic handler implemented: returns group state, members, assignments
-- AuthorizedOperations: not implemented (always returns 0)
 
 ## General
 - Tiered storage: Not implemented (KIP-405, KIP-1005)
 - Share groups: Not implemented (KIP-932)
-- Static membership: InstanceID handling not fully implemented (KIP-345)
+- WriteTxnMarkers (key 27): Not implemented. Only useful for recovering from
+  broker bugs with stuck transactions, not needed for testing client behavior.

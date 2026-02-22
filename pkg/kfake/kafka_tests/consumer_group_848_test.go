@@ -260,6 +260,11 @@ func Test848DescribeGroup(t *testing.T) {
 	if len(m.SubscribedTopics) == 0 {
 		t.Fatal("expected subscribed topics")
 	}
+
+	// Verify AuthorizedOperations is populated (KIP-430).
+	if len(dg.AuthorizedOperations) == 0 {
+		t.Fatal("expected non-empty AuthorizedOperations")
+	}
 }
 
 // Test848TxnOffsetCommit verifies that transactional offset commits work
@@ -402,7 +407,7 @@ func Test848SessionTimeout(t *testing.T) {
 		kfake.BrokerConfigs(map[string]string{
 			// Short session timeout so the fenced member is
 			// removed quickly. Default is 45s which is too long.
-			"group.consumer.session.timeout.ms": "1000",
+			"group.consumer.session.timeout.ms": "500",
 		}),
 	)
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))

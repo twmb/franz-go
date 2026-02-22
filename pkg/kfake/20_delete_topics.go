@@ -119,6 +119,7 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 
 	if len(toDeletes) > 0 {
 		c.notifyTopicChange()
+		c.refreshCompactTicker()
 	}
 
 	return resp, nil

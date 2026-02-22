@@ -20,6 +20,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
@@ -39,6 +40,9 @@ var (
 	// EndTxn to return successfully before beginning a new transaction. We
 	// cannot use EndAndBeginTransaction with EndBeginTxnUnsafe.
 	allowUnsafe = false
+
+	// Static membership (KIP-345) requires JoinGroup v5+.
+	allowStaticMembership = false
 
 	// KGO_TEST_TLS: DSL syntax is ({ca|cert|key}:path),{1,3}
 	testCert *tls.Config
@@ -199,6 +203,21 @@ func init() {
 	if err != nil {
 		panic(fmt.Sprintf("unable to create admin client: %v", err))
 	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp, err := adm.Request(context.Background(), kmsg.NewPtrApiVersionsRequest())
+		if err == nil {
+			versions := kversion.FromApiVersionsResponse(resp.(*kmsg.ApiVersionsResponse))
+			if v, ok := versions.LookupMaxKeyVersion(11); ok && v >= 5 { // 11 = JoinGroup
+				allowStaticMembership = true
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			panic(fmt.Sprintf("unable to issue ApiVersions: %v", err))
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 func testClientOpts(opts ...Opt) []Opt {
@@ -250,8 +269,8 @@ var randsha = func() func() string {
 		defer mu.Unlock()
 
 		now := time.Now().UnixNano()
-		if now == last { // should never be the case
-			now++
+		if now <= last {
+			now = last + 1
 		}
 
 		last = now
@@ -419,11 +438,14 @@ type testConsumer struct {
 	group    string
 	balancer GroupBalancer
 
-	enable848 bool // opt into KIP-848 consumer group protocol
+	enable848  bool   // opt into KIP-848 consumer group protocol
+	instanceID string // if non-empty, each goroutine gets a unique instanceID with this prefix
 
 	expBody []byte // what every record body should be
 
 	consumed atomic.Uint64 // shared atomically
+
+	instanceIDCounter atomic.Int64 // generates unique suffixes for instanceID
 
 	wg sync.WaitGroup
 	mu sync.Mutex
@@ -449,6 +471,7 @@ func newTestConsumer(
 	balancer GroupBalancer,
 	expBody []byte,
 	enable848 bool,
+	instanceID string,
 ) *testConsumer {
 	return &testConsumer{
 		errCh: errCh,
@@ -459,7 +482,8 @@ func newTestConsumer(
 		group:    group,
 		balancer: balancer,
 
-		enable848: enable848,
+		enable848:  enable848,
+		instanceID: instanceID,
 
 		expBody: expBody,
 
@@ -470,6 +494,54 @@ func newTestConsumer(
 
 func (c *testConsumer) wait() {
 	c.wg.Wait()
+}
+
+// leaveGroupStatic fully removes a static member after the client has
+// closed. For classic groups this sends a raw LeaveGroup (since kgo's
+// LeaveGroup is a no-op for classic static members). For 848 groups
+// this sends a ConsumerGroupHeartbeat with MemberEpoch=-1 (full leave).
+// For dynamic members (empty instanceID), this is a no-op since the
+// normal LeaveGroup path handles cleanup.
+func (c *testConsumer) leaveGroupStatic(cl *Client, instanceID string) {
+	if instanceID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if c.enable848 {
+		// Look up the server-assigned memberID via ConsumerGroupDescribe.
+		dreq := kmsg.NewPtrConsumerGroupDescribeRequest()
+		dreq.Groups = []string{c.group}
+		dresp, err := dreq.RequestWith(ctx, cl)
+		if err != nil {
+			return
+		}
+		var memberID string
+		for _, g := range dresp.Groups {
+			for _, m := range g.Members {
+				if m.InstanceID != nil && *m.InstanceID == instanceID {
+					memberID = m.MemberID
+					break
+				}
+			}
+		}
+		if memberID == "" {
+			return
+		}
+		req := kmsg.NewPtrConsumerGroupHeartbeatRequest()
+		req.Group = c.group
+		req.MemberID = memberID
+		req.MemberEpoch = -1
+		req.RequestWith(ctx, cl) //nolint:errcheck // best-effort cleanup
+		return
+	}
+	req := kmsg.NewPtrLeaveGroupRequest()
+	req.Group = c.group
+	member := kmsg.NewLeaveGroupRequestMember()
+	member.InstanceID = &instanceID
+	member.Reason = kmsg.StringPtr("test cleanup")
+	req.Members = append(req.Members, member)
+	req.RequestWith(ctx, cl) //nolint:errcheck // best-effort cleanup
 }
 
 func (c *testConsumer) goRun(transactional bool, etlsBeforeQuit int) {
@@ -487,7 +559,11 @@ func testChainETL(
 	transactional bool,
 	balancer GroupBalancer,
 	enable848 bool,
+	instanceID string,
 ) {
+	if instanceID != "" && !allowStaticMembership {
+		t.Skip("broker does not support static membership (requires JoinGroup v5+, KIP-345)")
+	}
 	errs := make(chan error)
 	var (
 		/////////////
@@ -505,6 +581,7 @@ func testChainETL(
 			balancer,
 			body,
 			enable848,
+			instanceID,
 		)
 
 		/////////////
@@ -522,6 +599,7 @@ func testChainETL(
 			balancer,
 			body,
 			enable848,
+			instanceID,
 		)
 
 		/////////////
@@ -539,6 +617,7 @@ func testChainETL(
 			balancer,
 			body,
 			enable848,
+			instanceID,
 		)
 	)
 

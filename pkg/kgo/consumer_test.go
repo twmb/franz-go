@@ -709,7 +709,7 @@ func TestIssue865(t *testing.T) {
 			}
 		})
 
-		if nrecs%flushEvery == 0 {
+		if i%flushEvery == 0 {
 			cl.Flush(ctx)
 		}
 	}

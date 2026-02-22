@@ -83,19 +83,21 @@ func TestGroupETL(t *testing.T) {
 	// CONSUMER CHAINING TEST //
 	////////////////////////////
 
-	for _, tc := range []struct {
-		name      string
-		balancer  GroupBalancer
-		enable848 bool
+	tcs := []struct {
+		name       string
+		balancer   GroupBalancer
+		enable848  bool
+		instanceID string
 	}{
-		{"roundrobin", RoundRobinBalancer(), false},
-		{"range", RangeBalancer(), false},
-		{"sticky", StickyBalancer(), false},
-		{"cooperative-sticky", CooperativeStickyBalancer(), false},
-		{"range/848", RangeBalancer(), true},
-		{"sticky/848", StickyBalancer(), true},
-		{"cooperative-sticky/848", CooperativeStickyBalancer(), true},
-	} {
+		{"range", RangeBalancer(), false, ""},
+		{"cooperative-sticky", CooperativeStickyBalancer(), false, ""},
+		{"range/848", RangeBalancer(), true, ""},
+		{"sticky/848", StickyBalancer(), true, ""},
+		{"cooperative-sticky/static", CooperativeStickyBalancer(), false, "static"},
+		{"sticky/848/static", StickyBalancer(), true, "static"},
+	}
+
+	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			testChainETL(
@@ -105,6 +107,7 @@ func TestGroupETL(t *testing.T) {
 				false,
 				tc.balancer,
 				tc.enable848,
+				tc.instanceID,
 			)
 		})
 	}
@@ -153,12 +156,18 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		}),
 		OnPartitionsLost(func(context.Context, *Client, map[string][]int32) {}),
 	}
+	var myInstanceID string
+	if c.instanceID != "" {
+		myInstanceID = fmt.Sprintf("%s-%s-%d", c.instanceID, c.group, c.instanceIDCounter.Add(1))
+		opts = append(opts, InstanceID(myInstanceID))
+	}
 	if c.enable848 {
 		ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true) //nolint:revive,staticcheck // intentional string key for beta opt-in
 		opts = append(opts, WithContext(ctx848))
 	}
 
 	cl, _ := newTestClient(opts...)
+	defer c.leaveGroupStatic(adm, myInstanceID)
 	defer cl.Close()
 
 	defer func() {

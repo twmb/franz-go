@@ -565,7 +565,7 @@ func (mp metadataPartition) newPartition(cl *Client, isProduce bool) *topicParti
 		topicPartitionData: td,
 	}
 	if isProduce {
-		p.records = &recBuf{
+		r := &recBuf{
 			cl:                  cl,
 			topic:               mp.topic,
 			topicID:             mp.topicID,
@@ -577,6 +577,8 @@ func (mp metadataPartition) newPartition(cl *Client, isProduce bool) *topicParti
 			topicPartitionData:  td,
 			lastAckedOffset:     -1,
 		}
+		r.lingerFn = r.unlingerAndManuallyDrain
+		p.records = r
 	} else {
 		p.cursor = &cursor{
 			topic:              mp.topic,

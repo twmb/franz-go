@@ -766,7 +766,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		return
 	}
 
-	if stage != revokeThisSession { // cooperative consumers rejoin after they revoking what they lost
+	if stage != revokeThisSession { // cooperative consumers rejoin after revoking what they lost
 		defer g.rejoin("after revoking what we lost from a rebalance")
 	}
 
@@ -1012,9 +1012,10 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 	}
 
 	var revoked <-chan struct{}
-	var heartbeat, didRevoke bool
+	var heartbeat, didRevoke, stopHeartbeating bool
 	var rejoinWhy string
 	var lastErr error
+	heartbeatForceCh := g.heartbeatForceCh
 
 	ctxCh := g.ctx.Done()
 
@@ -1027,12 +1028,12 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 			heartbeat = true
 		case <-timer.C:
 			heartbeat = true
-		case force = <-g.heartbeatForceCh:
+		case force = <-heartbeatForceCh:
 			heartbeat = true
 		case rejoinWhy = <-g.rejoinCh:
 			// If a metadata update changes our subscription,
 			// we just pretend we are rebalancing.
-			g.cfg.logger.Log(LogLevelInfo, "forced rejoin quitting heartbeat loop", "why", rejoinWhy)
+			g.cfg.logger.Log(LogLevelInfo, "forced rejoin quitting heartbeat loop", "why", rejoinWhy, "is848", is848)
 			err = kerr.RebalanceInProgress
 		case err = <-fetchErrCh:
 			fetchErrCh = nil
@@ -1048,7 +1049,7 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 			err = context.Canceled
 		}
 
-		if heartbeat {
+		if heartbeat && !stopHeartbeating {
 			g.cfg.logger.Log(LogLevelDebug, "heartbeating", "group", g.cfg.group)
 			var reset time.Duration
 			reset, err = hbfn()
@@ -1068,6 +1069,17 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 
 		if err == nil {
 			continue
+		}
+
+		// When the 848 closure detects an assignment change, it
+		// returns errReassigned848. We suppress further heartbeats
+		// so we cannot see stale state and miss a server-side
+		// revocation, but we still run the revoke path below.
+		isReassign := errors.Is(err, errReassigned848)
+		if isReassign {
+			stopHeartbeating = true
+			heartbeatForceCh = nil
+			err = kerr.RebalanceInProgress
 		}
 
 		if lastErr == nil {
@@ -1616,6 +1628,7 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int
 	// Our client maps the v0 to v7 format to v8+ when sharding this
 	// request, if we are only requesting one group, as well as maps the
 	// response back, so we do not need to worry about v8+ here.
+	var staleRetries int
 start:
 	member, gen := g.memberGen.load()
 	req := kmsg.NewPtrOffsetFetchRequest()
@@ -1650,6 +1663,39 @@ start:
 	}
 	if err != nil {
 		g.cfg.logger.Log(LogLevelError, "fetch offsets failed with non-retryable error", "group", g.cfg.group, "err", err)
+		return err
+	}
+
+	// Check the group-level error code. For 848 consumers, the
+	// server validates MemberEpoch on OffsetFetch and returns
+	// STALE_MEMBER_EPOCH if the epoch changed between the
+	// heartbeat that assigned partitions and this OffsetFetch.
+	// We force a heartbeat to update our epoch and retry.
+	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		if errors.Is(err, kerr.StaleMemberEpoch) {
+			staleRetries++
+			if staleRetries > 5 {
+				g.cfg.logger.Log(LogLevelError, "fetch offsets failed: stale member epoch after 5 retries", "group", g.cfg.group)
+				return err
+			}
+			g.cfg.logger.Log(LogLevelInfo, "fetch offsets returned stale member epoch, forcing heartbeat and retrying",
+				"group", g.cfg.group,
+				"attempt", staleRetries,
+			)
+			done := make(chan error, 1)
+			select {
+			case g.heartbeatForceCh <- func(err error) { done <- err }:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			goto start
+		}
+		g.cfg.logger.Log(LogLevelError, "fetch offsets failed with group-level error", "group", g.cfg.group, "err", err)
 		return err
 	}
 
@@ -2888,8 +2934,6 @@ func (g *groupConsumer) commit(
 	req.MemberID = memberID
 	req.InstanceID = g.cfg.instanceID
 
-	is848 := g.is848 // safe since we are under g.mu
-
 	if ctx.Done() != nil {
 		go func() {
 			select {
@@ -2935,48 +2979,48 @@ func (g *groupConsumer) commit(
 			}
 		}
 
-		var retries int
-	issue:
-		start := time.Now()
-		resp, err := req.RequestWith(commitCtx, g.cl)
-		if err != nil {
-			onDone(g.cl, req, nil, err)
-			return
-		}
-		g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
+		var resp *kmsg.OffsetCommitResponse
+		var err error
+		for range 5 {
+			start := time.Now()
+			resp, err = req.RequestWith(commitCtx, g.cl)
+			if err != nil {
+				onDone(g.cl, req, nil, err)
+				return
+			}
+			g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
 
-		// With next gen consumer groups, it is possible for the group
-		// to rebalance again immediately after we discover we need to
-		// revoke. We try up to 3x reloading and resending.
-		if is848 && len(resp.Topics) > 0 && len(resp.Topics[0].Partitions) > 0 {
-			ec := resp.Topics[0].Partitions[0].ErrorCode
-			if kerr.ErrorForCode(ec) == kerr.StaleMemberEpoch && retries < 3 {
-				hbreq := g.g848.mkreq()
-				hbresp, err := hbreq.RequestWith(commitCtx, g.cl)
-				if err != nil {
-					g.cl.cfg.logger.Log(LogLevelInfo, "received STALE_MEMBER_EPOCH while committing; unable to force heartbeat; returning original stale error",
-						"last_generation", generation,
-						"err", err,
-					)
-				} else {
-					if err := kerr.ErrorForCode(hbresp.ErrorCode); err != nil { //nolint:revive // err != nil is more standard as the first case
-						g.cl.cfg.logger.Log(LogLevelInfo, "received STALE_MEMBER_EPOCH while committing; forced immediate heartbeat to load the latest generation but received an error",
-							"last_generation", generation,
-							"err", err,
-						)
-					} else {
-						g.cl.cfg.logger.Log(LogLevelInfo, "received STALE_MEMBER_EPOCH while committing; forced immediate heartbeat to load the latest generation",
-							"last_generation", generation,
-							"new_generation", hbresp.MemberEpoch,
-						)
-						g.memberGen.storeGeneration(hbresp.MemberEpoch)
-						generation = hbresp.MemberEpoch
-						req.Generation = generation
-						retries++
-						goto issue
+			// Kafka returns STALE_MEMBER_EPOCH when the epoch
+			// used in the commit doesn't match the member's
+			// current epoch. This can happen when a heartbeat
+			// and OffsetCommit are pipelined on the same
+			// connection and the server processes them in an
+			// order that bumps the epoch before seeing the
+			// commit. We sleep briefly to allow the heartbeat
+			// response (carrying the new epoch) to arrive and
+			// update memberGen, then retry with the new epoch.
+			stale := false
+			for _, t := range resp.Topics {
+				for _, p := range t.Partitions {
+					if p.ErrorCode == kerr.StaleMemberEpoch.Code {
+						stale = true
 					}
 				}
 			}
+			if stale {
+				time.Sleep(time.Second)
+				_, newGen := g.memberGen.load()
+				if newGen != req.Generation {
+					g.cfg.logger.Log(LogLevelInfo, "offset commit got stale member epoch, retrying with updated epoch",
+						"group", g.cfg.group,
+						"old_epoch", req.Generation,
+						"new_epoch", newGen,
+					)
+					req.Generation = newGen
+					continue
+				}
+			}
+			break
 		}
 
 		g.updateCommitted(req, resp)

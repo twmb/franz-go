@@ -107,19 +107,21 @@ func TestTxnEtl(t *testing.T) {
 	// CONSUMER CHAINING TEST //
 	////////////////////////////
 
-	for _, tc := range []struct {
-		name      string
-		balancer  GroupBalancer
-		enable848 bool
+	tcs := []struct {
+		name       string
+		balancer   GroupBalancer
+		enable848  bool
+		instanceID string
 	}{
-		{"roundrobin", RoundRobinBalancer(), false},
-		{"range", RangeBalancer(), false},
-		{"sticky", StickyBalancer(), false},
-		{"cooperative-sticky", CooperativeStickyBalancer(), false},
-		{"range/848", RangeBalancer(), true},
-		{"sticky/848", StickyBalancer(), true},
-		{"cooperative-sticky/848", CooperativeStickyBalancer(), true},
-	} {
+		{"range", RangeBalancer(), false, ""},
+		{"cooperative-sticky", CooperativeStickyBalancer(), false, ""},
+		{"range/848", RangeBalancer(), true, ""},
+		{"sticky/848", StickyBalancer(), true, ""},
+		{"cooperative-sticky/static", CooperativeStickyBalancer(), false, "static"},
+		{"sticky/848/static", StickyBalancer(), true, "static"},
+	}
+
+	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			testChainETL(
@@ -129,6 +131,7 @@ func TestTxnEtl(t *testing.T) {
 				true,
 				tc.balancer,
 				tc.enable848,
+				tc.instanceID,
 			)
 		})
 	}
@@ -162,6 +165,11 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		MaxBufferedRecords(10000),
 		WithPools(new(primitivePool)),
 	}
+	var myInstanceID string
+	if c.instanceID != "" {
+		myInstanceID = fmt.Sprintf("%s-%s-%d", c.instanceID, c.group, c.instanceIDCounter.Add(1))
+		opts = append(opts, InstanceID(myInstanceID))
+	}
 	if requireStableFetch {
 		opts = append(opts, RequireStableFetchOffsets())
 	}
@@ -172,6 +180,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 	opts = append(opts, testClientOpts()...)
 
 	txnSess, _ := NewGroupTransactSession(opts...)
+	defer c.leaveGroupStatic(adm, myInstanceID)
 	defer txnSess.Close()
 
 	ntxns := 0 // for if txnsBeforeQuit is non-negative

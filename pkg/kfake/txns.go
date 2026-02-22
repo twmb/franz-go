@@ -37,8 +37,8 @@ import (
 
 type (
 	pids struct {
-		ids map[int64]*pidinfo
-
+		ids     map[int64]*pidinfo
+		byTxid  map[string]*pidinfo   // txid -> pidinfo, for expiration
 		txs     map[*pidinfo]struct{} // active transactions being tracked for timeout
 		txTimer *time.Timer
 		c       *Cluster
@@ -67,8 +67,9 @@ type (
 		// Used to count committed bytes for readCommitted watchers.
 		txPartBytes tps[int]
 
-		txStart time.Time
-		inTx    bool
+		txStart    time.Time
+		lastActive time.Time // last time this transactional ID was used
+		inTx       bool
 
 		// Whether the last completed transaction was a commit (true)
 		// or abort (false). Used for EndTxn retry detection: if the
@@ -117,6 +118,18 @@ func (pids *pids) updateTimer() {
 			found = true
 		}
 	}
+	// Also schedule for the next transactional ID expiration.
+	expirationMs := int64(pids.c.txnIDExpirationMs())
+	for _, pidinf := range pids.byTxid {
+		if pidinf.inTx {
+			continue
+		}
+		expire := pidinf.lastActive.Add(time.Duration(expirationMs) * time.Millisecond)
+		if !found || expire.Before(nextExpire) {
+			nextExpire = expire
+			found = true
+		}
+	}
 	if found {
 		pids.txTimer.Reset(time.Until(nextExpire))
 	}
@@ -137,11 +150,20 @@ func (pids *pids) handleTimeout() {
 	if minPid != nil {
 		elapsed := time.Since(minPid.txStart)
 		timeout := time.Duration(minPid.txTimeout) * time.Millisecond
+		if elapsed >= 30*time.Second && elapsed < timeout {
+			pids.c.cfg.logger.Logf(LogLevelWarn,
+				"txn long-running: txn_id=%s pid=%d epoch=%d elapsed=%v timeout=%dms batches=%d",
+				minPid.txid, minPid.id, minPid.epoch, elapsed, minPid.txTimeout, len(minPid.txBatches))
+		}
 		if elapsed >= timeout {
+			pids.c.cfg.logger.Logf(LogLevelWarn,
+				"txn timeout abort: txn_id=%s producer_id=%d epoch=%d timeout=%dms elapsed=%v",
+				minPid.txid, minPid.id, minPid.epoch, minPid.txTimeout, elapsed)
 			minPid = pids.bumpEpoch(minPid)
 			minPid.endTx(false)
 		}
 	}
+	pids.expireTransactionalIDs()
 	pids.updateTimer()
 }
 
@@ -194,12 +216,14 @@ func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
 			pidinf.endTx(false)
 		}
 		pidinf = pids.bumpEpoch(pidinf)
+		pidinf.lastActive = time.Now()
 		resp.ProducerID = pidinf.id
 		resp.ProducerEpoch = pidinf.epoch
 		return resp
 	}
 
-	// New transactional ID or first init.
+	// New transactional ID or first init. Check if an expired txid is
+	// being re-used - the create path handles this via byTxid.
 	id, epoch := pids.create(req.TransactionalID, req.TransactionTimeoutMillis)
 	resp.ProducerID = id
 	resp.ProducerEpoch = epoch
@@ -398,9 +422,16 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 	if g != nil {
 		if req.Version >= 3 && (req.MemberID != "" || req.Generation != -1) {
 			var errCode int16
-			g.waitControl(func() {
+			if !g.waitControl(func() {
+				if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
+					errCode = err.Code
+					return
+				}
 				errCode = g.validateMemberGeneration(req.MemberID, req.Generation)
-			})
+			}) {
+				doneall(kerr.GroupIDNotFound.Code)
+				return resp
+			}
 			if errCode != 0 {
 				doneall(errCode)
 				return resp
@@ -504,7 +535,13 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 		return resp
 	}
 
+	nBatches, nGroups := len(pidinf.txBatches), len(pidinf.txGroups)
+	endTxStart := time.Now()
 	pidinf.endTx(req.Commit)
+	if elapsed := time.Since(endTxStart); elapsed > 5*time.Millisecond {
+		pids.c.cfg.logger.Logf(LogLevelWarn, "txn: EndTxn slow pid=%d epoch=%d elapsed=%dms batches=%d groups=%d",
+			req.ProducerID, req.ProducerEpoch, elapsed.Milliseconds(), nBatches, nGroups)
+	}
 
 	// KIP-890: For v5+ clients, bump epoch and return new ID/epoch.
 	if req.Version >= 5 {
@@ -557,14 +594,18 @@ func (pids *pids) bumpEpoch(pidinf *pidinfo) *pidinfo {
 	if pidinf.epoch >= math.MaxInt16-1 {
 		newID := pids.randomID()
 		newPidinf := &pidinfo{
-			pids:      pids,
-			id:        newID,
-			epoch:     0,
-			txid:      pidinf.txid,
-			txTimeout: pidinf.txTimeout,
+			pids:       pids,
+			id:         newID,
+			epoch:      0,
+			txid:       pidinf.txid,
+			txTimeout:  pidinf.txTimeout,
+			lastActive: pidinf.lastActive,
 		}
 		pids.ids[newID] = newPidinf
 		delete(pids.ids, pidinf.id)
+		if pidinf.txid != "" {
+			pids.byTxid[pidinf.txid] = newPidinf
+		}
 		return newPidinf
 	}
 	pidinf.epoch++
@@ -572,29 +613,55 @@ func (pids *pids) bumpEpoch(pidinf *pidinfo) *pidinfo {
 }
 
 func (pids *pids) create(txidp *string, txTimeout int32) (int64, int16) {
+	// Re-init of an existing transactional ID: look up by txid first
+	// to avoid FNV-64 hash collisions between different txids.
+	if txidp != nil {
+		if pidinf, ok := pids.byTxid[*txidp]; ok {
+			pidinf = pids.bumpEpoch(pidinf)
+			pidinf.lastActive = time.Now()
+			return pidinf.id, pidinf.epoch
+		}
+	}
 	var id int64
-	var txid string
 	if txidp != nil {
 		hasher := fnv.New64()
 		hasher.Write([]byte(*txidp))
 		id = int64(hasher.Sum64()) & math.MaxInt64
-		txid = *txidp
+		if _, exists := pids.ids[id]; exists {
+			id = pids.randomID() // hash collision, use random
+		}
 	} else {
 		id = pids.randomID()
 	}
-	pidinf, exists := pids.ids[id]
-	if exists {
-		pidinf = pids.bumpEpoch(pidinf)
-		return pidinf.id, pidinf.epoch
+	pidinf := &pidinfo{
+		pids:       pids,
+		id:         id,
+		txTimeout:  txTimeout,
+		lastActive: time.Now(),
 	}
-	pidinf = &pidinfo{
-		pids:      pids,
-		id:        id,
-		txid:      txid,
-		txTimeout: txTimeout,
+	if txidp != nil {
+		pidinf.txid = *txidp
+		pids.byTxid[*txidp] = pidinf
 	}
 	pids.ids[id] = pidinf
 	return id, 0
+}
+
+// expireTransactionalIDs removes idle transactional IDs that haven't been
+// used within transactional.id.expiration.ms and are not in an active
+// transaction.
+func (pids *pids) expireTransactionalIDs() {
+	expirationMs := int64(pids.c.txnIDExpirationMs())
+	now := time.Now()
+	for txid, pidinf := range pids.byTxid {
+		if pidinf.inTx {
+			continue
+		}
+		if now.Sub(pidinf.lastActive).Milliseconds() >= expirationMs {
+			delete(pids.ids, pidinf.id)
+			delete(pids.byTxid, txid)
+		}
+	}
 }
 
 func (pidinf *pidinfo) endTx(commit bool) {
@@ -687,6 +754,7 @@ func (pidinf *pidinfo) resetTx(wasCommit bool) {
 	pidinf.txStart = time.Time{}
 	pidinf.inTx = false
 	pidinf.lastWasCommit = wasCommit
+	pidinf.lastActive = time.Now()
 	delete(pidinf.pids.txs, pidinf)
 }
 
@@ -953,10 +1021,5 @@ func (pids *pids) txnProducers(topic string, partition int32) []kmsg.DescribePro
 
 // findTxnID finds a producer info by transactional ID.
 func (pids *pids) findTxnID(txnID string) *pidinfo {
-	for _, pidinf := range pids.ids {
-		if pidinf.txid == txnID {
-			return pidinf
-		}
-	}
-	return nil
+	return pids.byTxid[txnID]
 }

@@ -16,6 +16,7 @@ type (
 		b      *broker
 		conn   net.Conn
 		respCh chan clientResp
+		done   chan struct{} // closed when read() returns
 
 		saslStage saslStage
 		s0        *scramServer0
@@ -43,6 +44,7 @@ type (
 func (creq *clientReq) empty() bool { return creq == nil || creq.cc == nil || creq.kreq == nil }
 
 func (cc *clientConn) read() {
+	defer close(cc.done)
 	defer cc.conn.Close()
 
 	type read struct {
@@ -74,7 +76,6 @@ func (cc *clientConn) read() {
 		}
 
 		if err := read.err; err != nil {
-			cc.c.cfg.logger.Logf(LogLevelDebug, "client %s disconnected from read: %v", who, err)
 			return
 		}
 
@@ -140,6 +141,8 @@ func (cc *clientConn) write() {
 					continue
 				}
 				seq = resp.seq + 1
+			case <-cc.done:
+				return
 			case <-cc.c.die:
 				return
 			}
@@ -173,7 +176,6 @@ func (cc *clientConn) write() {
 		case err = <-writeCh:
 		}
 		if err != nil {
-			cc.c.cfg.logger.Logf(LogLevelDebug, "client %s disconnected from write: %v", who, err)
 			return
 		}
 	}

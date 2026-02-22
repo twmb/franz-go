@@ -16,6 +16,8 @@ import (
 // Supported operations:
 // * SET (0)
 // * DELETE (1)
+// * APPEND (2)
+// * SUBTRACT (3)
 //
 // Version notes:
 // * v0: Initial version
@@ -77,6 +79,18 @@ outer:
 					dup[rc.Name] = rc.Value
 				case kmsg.IncrementalAlterConfigOpDelete:
 					delete(dup, rc.Name)
+				case kmsg.IncrementalAlterConfigOpAppend:
+					if !isListConfig(rc.Name) {
+						invalid = true
+					} else {
+						dup[rc.Name] = configListAppend(dup[rc.Name], rc.Value)
+					}
+				case kmsg.IncrementalAlterConfigOpSubtract:
+					if !isListConfig(rc.Name) {
+						invalid = true
+					} else {
+						dup[rc.Name] = configListSubtract(dup[rc.Name], rc.Value)
+					}
 				default:
 					invalid = true
 				}
@@ -107,6 +121,10 @@ outer:
 				case kmsg.IncrementalAlterConfigOpSet:
 					invalid = invalid || !c.data.setTopicConfig(rr.ResourceName, rc.Name, rc.Value, true)
 				case kmsg.IncrementalAlterConfigOpDelete:
+				case kmsg.IncrementalAlterConfigOpAppend, kmsg.IncrementalAlterConfigOpSubtract:
+					if !isListConfig(rc.Name) {
+						invalid = true
+					}
 				default:
 					invalid = true
 				}
@@ -126,6 +144,12 @@ outer:
 					c.data.setTopicConfig(rr.ResourceName, rc.Name, rc.Value, false)
 				case kmsg.IncrementalAlterConfigOpDelete:
 					delete(c.data.tcfgs[rr.ResourceName], rc.Name)
+				case kmsg.IncrementalAlterConfigOpAppend:
+					current := c.data.tcfgs[rr.ResourceName][rc.Name]
+					c.data.setTopicConfig(rr.ResourceName, rc.Name, configListAppend(current, rc.Value), false)
+				case kmsg.IncrementalAlterConfigOpSubtract:
+					current := c.data.tcfgs[rr.ResourceName][rc.Name]
+					c.data.setTopicConfig(rr.ResourceName, rc.Name, configListSubtract(current, rc.Value), false)
 				}
 			}
 
@@ -134,5 +158,6 @@ outer:
 		}
 	}
 
+	c.refreshCompactTicker()
 	return resp, nil
 }

@@ -21,6 +21,9 @@ import (
 
 func newCluster(t *testing.T, opts ...kfake.Opt) *kfake.Cluster {
 	t.Helper()
+	opts = append([]kfake.Opt{kfake.BrokerConfigs(map[string]string{
+		"group.consumer.heartbeat.interval.ms": "100",
+	})}, opts...)
 	c, err := kfake.NewCluster(opts...)
 	if err != nil {
 		t.Fatal(err)
@@ -481,126 +484,6 @@ func Test848TransactionalConsume(t *testing.T) {
 		if len(v) >= 7 && v[:7] == "aborted" {
 			t.Fatalf("read_committed consumer saw aborted record: %s", v)
 		}
-	}
-}
-
-// Test848ThreeConsumersFairDistribution verifies that partitions are evenly
-// distributed across three consumers. Consumers are staggered to allow
-// the group to stabilize between joins.
-func Test848ThreeConsumersFairDistribution(t *testing.T) {
-	t.Parallel()
-	topic := "t848-fair"
-	group := "g848-fair"
-	nPartitions := 9
-
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-
-	makeConsumer := func() *kgo.Client {
-		return newClient848(t, c,
-			kgo.ConsumeTopics(topic),
-			kgo.ConsumerGroup(group),
-			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		)
-	}
-
-	// Stagger consumers to let the group stabilize between joins.
-	produceNStrings(t, producer, topic, 30)
-	c1 := makeConsumer()
-	_ = consumeN(t, c1, 30, 10*time.Second)
-
-	c2 := makeConsumer()
-	produceNStrings(t, producer, topic, 30)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	got := 0
-	for got < 30 {
-		for _, cl := range []*kgo.Client{c1, c2} {
-			fs := cl.PollRecords(ctx, 100)
-			fs.EachRecord(func(*kgo.Record) { got++ })
-			if got >= 30 {
-				break
-			}
-		}
-		if got < 30 && ctx.Err() != nil {
-			t.Fatalf("timeout waiting for c1+c2: got %d/30", got)
-		}
-	}
-
-	c3 := makeConsumer()
-	produceNStrings(t, producer, topic, 90)
-
-	// All three consumers should collectively consume the 90 records.
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel2()
-	got = 0
-	for got < 90 {
-		for _, cl := range []*kgo.Client{c1, c2, c3} {
-			fs := cl.PollRecords(ctx2, 100)
-			fs.EachRecord(func(*kgo.Record) { got++ })
-			if got >= 90 {
-				break
-			}
-		}
-		if got < 90 && ctx2.Err() != nil {
-			t.Fatalf("timeout waiting for c1+c2+c3: got %d/90", got)
-		}
-	}
-}
-
-// Test848AllMembersLeave verifies that when all members leave a consumer
-// group, the group transitions to empty and a new joiner gets the full
-// assignment across all partitions.
-func Test848AllMembersLeave(t *testing.T) {
-	t.Parallel()
-	topic := "t848-allleave"
-	group := "g848-allleave"
-	nRecords := 20
-
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	produceNStrings(t, producer, topic, nRecords)
-
-	// Two consumers join the group and consume all records.
-	makeConsumer := func() *kgo.Client {
-		return newClient848(t, c,
-			kgo.ConsumeTopics(topic),
-			kgo.ConsumerGroup(group),
-			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		)
-	}
-	c1 := makeConsumer()
-	c2 := makeConsumer()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	got := 0
-	for got < nRecords {
-		for _, cl := range []*kgo.Client{c1, c2} {
-			fs := cl.PollRecords(ctx, 100)
-			fs.EachRecord(func(*kgo.Record) { got++ })
-			if got >= nRecords {
-				break
-			}
-		}
-		if got < nRecords && ctx.Err() != nil {
-			t.Fatalf("timeout consuming initial records: got %d/%d", got, nRecords)
-		}
-	}
-
-	// Both consumers leave.
-	c1.Close()
-	c2.Close()
-
-	// Produce more records.
-	moreRecords := 10
-	produceNStrings(t, producer, topic, moreRecords)
-
-	// A new consumer should get the full assignment (all 3 partitions).
-	c3 := makeConsumer()
-	records := consumeN(t, c3, moreRecords, 10*time.Second)
-	if len(records) < moreRecords {
-		t.Fatalf("expected at least %d records from new consumer, got %d", moreRecords, len(records))
 	}
 }
 
@@ -1088,7 +971,11 @@ func Test848CooperativeRevocationDuringConsumption(t *testing.T) {
 	got = 0
 	for got < nRecords {
 		for _, cl := range []*kgo.Client{c1, c2, c3} {
-			fs := cl.PollRecords(consumeCtx, 50)
+			// Short per-poll timeout so one slow client can't
+			// block polling the others for the entire deadline.
+			pollCtx, pollCancel := context.WithTimeout(consumeCtx, 250*time.Millisecond)
+			fs := cl.PollRecords(pollCtx, 50)
+			pollCancel()
 			fs.EachRecord(func(*kgo.Record) { got++ })
 			if got >= nRecords {
 				break
@@ -1408,7 +1295,7 @@ func TestTxnInitProducerIDAbortOngoing(t *testing.T) {
 		kgo.FetchMaxWait(250*time.Millisecond),
 	)
 	// Poll briefly - should get nothing since the transaction was aborted.
-	pollCtx, pollCancel := context.WithTimeout(ctx, time.Second)
+	pollCtx, pollCancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer pollCancel()
 	fs := consumer.PollFetches(pollCtx)
 	if fs.NumRecords() > 0 {
@@ -1670,7 +1557,7 @@ func TestTxnConcurrentDescribeAndInit(t *testing.T) {
 
 	c := newCluster(t, kfake.NumBrokers(1))
 	cl := newPlainClient(t, c)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -2794,3 +2681,1198 @@ func TestAbortedTxnIndexOverlap(t *testing.T) {
 }
 
 func stringp(s string) *string { return &s }
+
+// TestCompactBasic verifies key deduplication, null-key dropping, and
+// the active segment invariant (single batch is never compacted).
+func TestCompactBasic(t *testing.T) {
+	t.Parallel()
+	compact := "compact"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+
+	// Dedup topic: produce a=1, null, b=2, a=3, c=4, b=5.
+	// After compaction: a=3, c=4, b=5 (null-key and superseded dropped).
+	topic := "compact-basic"
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("1")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("no-key")}) // null key
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("b"), Value: []byte("2")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("3")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("c"), Value: []byte("4")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("b"), Value: []byte("5")})
+
+	c.Compact()
+
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 3, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		got[string(r.Key)] = string(r.Value)
+	}
+	if got["a"] != "3" || got["b"] != "5" || got["c"] != "4" {
+		t.Fatalf("unexpected records after compaction: %v", got)
+	}
+
+	// Active segment: a single-batch topic should be a no-op.
+	topicSingle := "compact-single"
+	_, err = adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topicSingle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	produceSync(t, cl, &kgo.Record{Topic: topicSingle, Key: []byte("only"), Value: []byte("one")})
+
+	c.Compact()
+
+	consumer2 := newPlainClient(t, c,
+		kgo.ConsumeTopics(topicSingle),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records2 := consumeN(t, consumer2, 1, 5*time.Second)
+	if string(records2[0].Key) != "only" || string(records2[0].Value) != "one" {
+		t.Fatalf("active segment record should survive compaction")
+	}
+}
+
+// TestCompactTombstone verifies that tombstones (nil value) are removed
+// after delete.retention.ms expires.
+func TestCompactTombstone(t *testing.T) {
+	t.Parallel()
+	topic := "compact-tombstone"
+	compact := "compact"
+	zero := "0"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy":      &compact,
+		"delete.retention.ms": &zero,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce a keyed record, then a tombstone for it, then a dummy to
+	// ensure the tombstone is not in the active segment.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("k"), Value: []byte("v")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("k"), Value: nil})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("other"), Value: []byte("x")})
+
+	c.Compact()
+
+	// Only "other" should survive - "k" was superseded by tombstone,
+	// and the tombstone itself is expired.
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 1, 5*time.Second)
+	if string(records[0].Key) != "other" {
+		t.Fatalf("expected only 'other' to survive, got key=%s", string(records[0].Key))
+	}
+}
+
+// TestCompactOffsetGaps verifies that after compaction creates gaps in offsets,
+// fetching from a compacted offset skips to the next available batch.
+func TestCompactOffsetGaps(t *testing.T) {
+	t.Parallel()
+	topic := "compact-gaps"
+	compact := "compact"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce: a=old (offset 0), a=new (offset 1), b=val (offset 2, active).
+	// After compaction, offset 0 is gone. Fetching from offset 0 should
+	// skip to the next available batch.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("old")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("new")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("b"), Value: []byte("val")})
+
+	c.Compact()
+
+	// Consume from offset 0 - should get "a=new" (from cleaned range)
+	// and "b=val" (active segment).
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().At(0)),
+	)
+	records := consumeN(t, consumer, 2, 5*time.Second)
+	if string(records[0].Key) != "a" || string(records[0].Value) != "new" {
+		t.Fatalf("expected a=new, got %s=%s", string(records[0].Key), string(records[0].Value))
+	}
+}
+
+// TestCompactControlBatch verifies control batch handling: abort markers are
+// removed when no data remains for the PID, commit markers are kept when the
+// PID has surviving data.
+func TestCompactControlBatch(t *testing.T) {
+	t.Parallel()
+	topic := "compact-ctrl"
+	compact := "compact"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Aborted txn - its data and control batch should be removed.
+	abortCl := newPlainClient(t, c,
+		kgo.TransactionalID("compact-tx-abort"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	)
+	if err := abortCl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	produceSync(t, abortCl, &kgo.Record{Topic: topic, Partition: 0, Key: []byte("aborted"), Value: []byte("gone")})
+	if err := abortCl.AbortBufferedRecords(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := abortCl.EndTransaction(context.Background(), kgo.TryAbort); err != nil {
+		t.Fatal(err)
+	}
+
+	// Committed txn - its data and control batch should survive.
+	commitCl := newPlainClient(t, c,
+		kgo.TransactionalID("compact-tx-commit"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	)
+	if err := commitCl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	produceSync(t, commitCl, &kgo.Record{Topic: topic, Partition: 0, Key: []byte("committed"), Value: []byte("kept")})
+	if err := commitCl.EndTransaction(context.Background(), kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	// Active segment sentinel.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("sentinel"), Value: []byte("val")})
+
+	c.Compact()
+
+	// read_committed consumer: verifies commit control batch is intact
+	// (without it, committed data would be invisible).
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+	)
+	records := consumeN(t, consumer, 2, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		got[string(r.Key)] = string(r.Value)
+	}
+	if got["committed"] != "kept" {
+		t.Fatalf("committed txn record should survive, got: %v", got)
+	}
+	if got["sentinel"] != "val" {
+		t.Fatalf("sentinel should survive, got: %v", got)
+	}
+}
+
+// TestCompactBackgroundTicker verifies that the background compaction ticker
+// runs automatically for compact topics.
+func TestCompactBackgroundTicker(t *testing.T) {
+	t.Parallel()
+	topic := "compact-ticker"
+	compact := "compact"
+	backoff := "50"
+	c := newCluster(t, kfake.NumBrokers(1), kfake.BrokerConfigs(map[string]string{"log.cleaner.backoff.ms": backoff}))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce duplicate keys plus active segment.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("x"), Value: []byte("old")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("x"), Value: []byte("new")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("y"), Value: []byte("only")})
+
+	// Wait for the ticker to fire and compact.
+	time.Sleep(200 * time.Millisecond)
+
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 2, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		got[string(r.Key)] = string(r.Value)
+	}
+	if got["x"] != "new" || got["y"] != "only" {
+		t.Fatalf("expected compaction to run via ticker, got: %v", got)
+	}
+}
+
+// TestCompactMultiRecordBatch verifies that compaction correctly rebuilds
+// batches when only some records within a multi-record batch survive.
+// This exercises the rebuildBatch path (re-encoding, CRC, offset deltas).
+func TestCompactMultiRecordBatch(t *testing.T) {
+	t.Parallel()
+	topic := "compact-multi"
+	compact := "compact"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c,
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce batch 1: three records in one batch (a=old, b=keep, c=old).
+	// ProduceSync with multiple records to the same partition batches them.
+	produceSync(t, cl,
+		&kgo.Record{Topic: topic, Partition: 0, Key: []byte("a"), Value: []byte("old")},
+		&kgo.Record{Topic: topic, Partition: 0, Key: []byte("b"), Value: []byte("keep")},
+		&kgo.Record{Topic: topic, Partition: 0, Key: []byte("c"), Value: []byte("old")},
+	)
+	// Batch 2: supersede a and c.
+	produceSync(t, cl,
+		&kgo.Record{Topic: topic, Partition: 0, Key: []byte("a"), Value: []byte("new")},
+		&kgo.Record{Topic: topic, Partition: 0, Key: []byte("c"), Value: []byte("new")},
+	)
+	// Batch 3: active segment.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Partition: 0, Key: []byte("d"), Value: []byte("active")})
+
+	c.Compact()
+
+	// From batch 1, only b=keep should survive (a and c superseded).
+	// Batch 2: a=new and c=new survive (latest for their keys).
+	// Batch 3: d=active (active segment, untouched).
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 4, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		got[string(r.Key)] = string(r.Value)
+	}
+	want := map[string]string{"a": "new", "b": "keep", "c": "new", "d": "active"}
+	for k, wv := range want {
+		if got[k] != wv {
+			t.Fatalf("key %q: want %q, got %q (all: %v)", k, wv, got[k], got)
+		}
+	}
+}
+
+// TestCompactTombstoneRetained verifies that a tombstone within
+// delete.retention.ms is kept during compaction (not prematurely removed).
+func TestCompactTombstoneRetained(t *testing.T) {
+	t.Parallel()
+	topic := "compact-tombstone-retained"
+	compact := "compact"
+	// Default delete.retention.ms is 24h - tombstone should survive.
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce a record, then a tombstone for it, then an active segment.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("k"), Value: []byte("v")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("k"), Value: nil})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("other"), Value: []byte("x")})
+
+	c.Compact()
+
+	// The data record is superseded by the tombstone, but the tombstone
+	// itself should survive (within 24h retention). Plus the active segment.
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 2, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		if r.Value == nil {
+			got[string(r.Key)] = "<tombstone>"
+		} else {
+			got[string(r.Key)] = string(r.Value)
+		}
+	}
+	if got["k"] != "<tombstone>" {
+		t.Fatalf("expected tombstone for key 'k' to survive, got: %v", got)
+	}
+	if got["other"] != "x" {
+		t.Fatalf("expected 'other' in active segment, got: %v", got)
+	}
+}
+
+// TestCompactDoubleCompaction verifies that compacting twice is safe -
+// the rebuilt batches from the first compaction can be re-decoded and
+// re-processed by the second.
+func TestCompactDoubleCompaction(t *testing.T) {
+	t.Parallel()
+	topic := "compact-double"
+	compact := "compact"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"cleanup.policy": &compact,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Round 1: produce duplicates, compact.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("v1")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("v2")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("b"), Value: []byte("v1")})
+
+	c.Compact()
+
+	// Round 2: produce more duplicates that supersede round 1 survivors, compact again.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("a"), Value: []byte("v3")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte("c"), Value: []byte("v1")})
+
+	c.Compact()
+
+	// After two compactions: a=v3 (latest), b=v1, c=v1 (active segment).
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 3, 5*time.Second)
+	got := make(map[string]string)
+	for _, r := range records {
+		got[string(r.Key)] = string(r.Value)
+	}
+	want := map[string]string{"a": "v3", "b": "v1", "c": "v1"}
+	for k, wv := range want {
+		if got[k] != wv {
+			t.Fatalf("key %q: want %q, got %q (all: %v)", k, wv, got[k], got)
+		}
+	}
+}
+
+// TestRetentionTime verifies that retention.ms=1 causes old batches to be
+// removed after ApplyRetention.
+func TestRetentionTime(t *testing.T) {
+	t.Parallel()
+	topic := "retention-time"
+	retMs := "100"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"retention.ms": &retMs,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce old records.
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("old1")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("old2")})
+
+	// Let them expire.
+	time.Sleep(150 * time.Millisecond)
+
+	// Produce a new record (will not be expired).
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("new")})
+
+	c.ApplyRetention()
+
+	// logStartOffset should have advanced past the old records.
+	pi := c.PartitionInfo(topic, 0)
+	if pi.LogStartOffset < 2 {
+		t.Fatalf("expected logStartOffset >= 2 after retention, got %d", pi.LogStartOffset)
+	}
+
+	// Consuming from start should only get the new record.
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 1, 5*time.Second)
+	if string(records[0].Value) != "new" {
+		t.Fatalf("expected 'new', got %q", string(records[0].Value))
+	}
+}
+
+// TestRetentionBytes verifies that retention.bytes removes oldest batches
+// when the partition exceeds the size limit.
+func TestRetentionBytes(t *testing.T) {
+	t.Parallel()
+	topic := "retention-bytes"
+	// A single-record batch is ~70 bytes. Set retention to 100 so only
+	// the last batch survives out of three.
+	retBytes := "100"
+	c := newCluster(t, kfake.NumBrokers(1))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"retention.bytes": &retBytes,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("a")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("b")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("c")})
+
+	c.ApplyRetention()
+
+	pi := c.PartitionInfo(topic, 0)
+	if pi.LogStartOffset < 2 {
+		t.Fatalf("expected logStartOffset >= 2 after retention, got %d", pi.LogStartOffset)
+	}
+
+	// Consuming from start should only get the last record.
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	records := consumeN(t, consumer, 1, 5*time.Second)
+	if string(records[0].Value) != "c" {
+		t.Fatalf("expected 'c', got %q", string(records[0].Value))
+	}
+}
+
+// TestRetentionTicker verifies that the background ticker applies retention
+// automatically when retention.ms and log.cleaner.backoff.ms are set.
+// waitForStableClassicGroup polls DescribeGroups until the classic group
+// is Stable with the expected member count.
+func waitForStableClassicGroup(t *testing.T, adm *kadm.Client, group string, nMembers int, timeout time.Duration) kadm.DescribedGroup {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		described, err := adm.DescribeGroups(ctx, group)
+		if err != nil {
+			t.Fatalf("describe failed: %v", err)
+		}
+		dg := described[group]
+		if dg.State == "Stable" && len(dg.Members) == nMembers {
+			return dg
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("timeout waiting for stable classic group %q with %d members (state=%s, members=%d)", group, nMembers, dg.State, len(dg.Members))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestStaticMemberClassicRejoin verifies that a static member can rejoin
+// a classic group using its instanceID. The instanceID is preserved across
+// the session timeout so the new client can reclaim the slot.
+func TestStaticMemberClassicRejoin(t *testing.T) {
+	t.Parallel()
+	topic := "static-classic-rejoin"
+	group := "static-classic-rejoin-group"
+	instanceID := "static-instance-1"
+
+	c := newCluster(t, kfake.NumBrokers(1),
+		kfake.SeedTopics(2, topic),
+		kfake.BrokerConfigs(map[string]string{"group.min.session.timeout.ms": "100"}),
+	)
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 20)
+
+	// First client with instanceID. Use a short session timeout so
+	// the server removes the member quickly after close.
+	cl1, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+		kgo.SessionTimeout(500*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumeN(t, cl1, 20, 10*time.Second)
+
+	adm := kadm.NewClient(newPlainClient(t, c))
+	waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+
+	// Close first client (static member - does not send leave).
+	cl1.Close()
+
+	// Wait for session timeout to expire the member.
+	time.Sleep(700 * time.Millisecond)
+
+	// Second client with the same instanceID should rejoin.
+	cl2, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl2.Close()
+
+	dg := waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+	// Verify the member has the instanceID.
+	found := false
+	for _, m := range dg.Members {
+		if m.InstanceID != nil && *m.InstanceID == instanceID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("instanceID %q not found in group members after rejoin", instanceID)
+	}
+}
+
+// TestStaticMemberClassicFencing verifies that a second classic group
+// client with the same instanceID fences the first (the first gets
+// FENCED_INSTANCE_ID).
+func TestStaticMemberClassicFencing(t *testing.T) {
+	t.Parallel()
+	topic := "static-classic-fence"
+	group := "static-classic-fence-group"
+	instanceID := "fence-instance-1"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 20)
+
+	// First client.
+	cl1, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl1.Close()
+	consumeN(t, cl1, 20, 10*time.Second)
+	adm := kadm.NewClient(newPlainClient(t, c))
+	waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+
+	// Second client with the same instanceID - should fence the first.
+	cl2, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl2.Close()
+
+	// The group should stabilize with 1 member (cl2 replaced cl1).
+	dg := waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+	found := false
+	for _, m := range dg.Members {
+		if m.InstanceID != nil && *m.InstanceID == instanceID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("instanceID %q not found after fencing", instanceID)
+	}
+}
+
+// TestStaticMemberClassicLeaveByInstance verifies that a static member
+// can be removed from a classic group by sending a LeaveGroup request
+// with the instanceID.
+func TestStaticMemberClassicLeaveByInstance(t *testing.T) {
+	t.Parallel()
+	topic := "static-classic-leave-inst"
+	group := "static-classic-leave-inst-group"
+	instanceID := "leave-instance-1"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 10)
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	consumeN(t, cl, 10, 10*time.Second)
+
+	adm := kadm.NewClient(newPlainClient(t, c))
+	waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+
+	// Send a raw LeaveGroup with instanceID (no memberID).
+	raw := newPlainClient(t, c)
+	leaveReq := kmsg.NewPtrLeaveGroupRequest()
+	leaveReq.Group = group
+	leaveReq.Version = 3
+	lm := kmsg.NewLeaveGroupRequestMember()
+	lm.InstanceID = &instanceID
+	leaveReq.Members = append(leaveReq.Members, lm)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	leaveResp, err := leaveReq.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("leave request failed: %v", err)
+	}
+	if leaveResp.ErrorCode != 0 {
+		t.Fatalf("leave top-level error: %v", kerr.ErrorForCode(leaveResp.ErrorCode))
+	}
+	for _, m := range leaveResp.Members {
+		if m.ErrorCode != 0 {
+			t.Fatalf("leave member error: %v", kerr.ErrorForCode(m.ErrorCode))
+		}
+	}
+}
+
+// TestStaticMember848Leave verifies that a static member in an 848 group
+// can send epoch -2 (static leave), then rejoin and get an assignment.
+func TestStaticMember848Leave(t *testing.T) {
+	t.Parallel()
+	topic := "static-848-leave"
+	group := "static-848-leave-group"
+	instanceID := "static-848-instance-1"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 20)
+
+	// Consumer with instanceID.
+	cl1 := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	consumeN(t, cl1, 20, 10*time.Second)
+	adm := kadm.NewClient(newClient848(t, c))
+	waitForStableGroup(t, adm, group, 1, 10*time.Second)
+
+	// Close client - with instanceID, 848 sends epoch -2.
+	cl1.Close()
+
+	// Wait a bit for the leave to be processed.
+	time.Sleep(500 * time.Millisecond)
+
+	// Rejoin with a new client using the same instanceID.
+	cl2 := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	_ = cl2
+
+	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	if totalAssignedPartitions(dg) != 2 {
+		t.Fatalf("expected 2 partitions assigned after rejoin, got %d", totalAssignedPartitions(dg))
+	}
+}
+
+// TestStaticMember848SessionTimeout verifies that a static 848 member
+// that times out can rejoin and reclaim its assignment slot.
+func TestStaticMember848SessionTimeout(t *testing.T) {
+	t.Parallel()
+	topic := "static-848-timeout"
+	group := "static-848-timeout-group"
+	instanceID := "static-848-timeout-inst"
+
+	c := newCluster(t, kfake.NumBrokers(1),
+		kfake.SeedTopics(2, topic),
+		kfake.BrokerConfigs(map[string]string{
+			"group.consumer.session.timeout.ms": "500",
+		}),
+	)
+	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 20)
+
+	cl1 := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	consumeN(t, cl1, 20, 10*time.Second)
+	adm := kadm.NewClient(newClient848(t, c))
+	waitForStableGroup(t, adm, group, 1, 10*time.Second)
+
+	// Force-close the client so it cannot heartbeat - triggers session timeout.
+	cl1.Close()
+
+	// Wait for the session timeout to expire (500ms configured above).
+	time.Sleep(700 * time.Millisecond)
+
+	// Rejoin with same instanceID.
+	cl2 := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.InstanceID(instanceID),
+	)
+	_ = cl2
+
+	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	if totalAssignedPartitions(dg) != 2 {
+		t.Fatalf("expected 2 partitions assigned after timeout rejoin, got %d", totalAssignedPartitions(dg))
+	}
+}
+
+func TestRetentionTicker(t *testing.T) {
+	t.Parallel()
+	topic := "retention-ticker"
+	retMs := "1"
+	backoff := "50"
+	c := newCluster(t, kfake.NumBrokers(1), kfake.BrokerConfigs(map[string]string{"log.cleaner.backoff.ms": backoff}))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+	_, err := adm.CreateTopic(context.Background(), 1, 1, map[string]*string{
+		"retention.ms": &retMs,
+	}, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("old")})
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("keep")})
+
+	// Wait for the ticker to fire and apply retention.
+	time.Sleep(200 * time.Millisecond)
+
+	pi := c.PartitionInfo(topic, 0)
+	if pi.LogStartOffset < 1 {
+		t.Fatalf("expected logStartOffset >= 1 after ticker-driven retention, got %d", pi.LogStartOffset)
+	}
+}
+
+// Test848FetchOffsetsStaleEpochRetry verifies that the kgo client retries
+// OffsetFetch when the server returns STALE_MEMBER_EPOCH at the group
+// level. This can happen when the member epoch changes between the
+// heartbeat that assigned partitions and the subsequent OffsetFetch.
+func Test848FetchOffsetsStaleEpochRetry(t *testing.T) {
+	t.Parallel()
+	topic := "t-stale-epoch"
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+
+	pCl := newPlainClient(t, c)
+	for i := 0; i < 10; i++ {
+		produceSync(t, pCl, &kgo.Record{Topic: topic, Value: []byte("v")})
+	}
+
+	// Intercept the first OffsetFetch and return STALE_MEMBER_EPOCH at
+	// the group level. The client should force a heartbeat, update its
+	// epoch, and retry successfully.
+	var staleOnce sync.Once
+	c.ControlKey(int16(kmsg.OffsetFetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		var fail bool
+		staleOnce.Do(func() { fail = true })
+		if !fail {
+			return nil, nil, false
+		}
+		c.KeepControl()
+		req := kreq.(*kmsg.OffsetFetchRequest)
+		resp := req.ResponseKind().(*kmsg.OffsetFetchResponse)
+		if req.Version >= 8 {
+			sg := kmsg.NewOffsetFetchResponseGroup()
+			sg.ErrorCode = kerr.StaleMemberEpoch.Code
+			if len(req.Groups) > 0 {
+				sg.Group = req.Groups[0].Group
+			}
+			resp.Groups = append(resp.Groups, sg)
+		} else {
+			resp.ErrorCode = kerr.StaleMemberEpoch.Code
+		}
+		return resp, nil, true
+	})
+
+	cl := newClient848(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup("test-stale-epoch"),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var total int
+	for total < 10 {
+		fetches := cl.PollFetches(ctx)
+		if ctx.Err() != nil {
+			t.Fatalf("timed out after consuming %d/10 records", total)
+		}
+		total += fetches.NumRecords()
+	}
+}
+
+func TestElectLeaders(t *testing.T) {
+	t.Parallel()
+	topic := "t-elect-leaders"
+
+	c := newCluster(t, kfake.NumBrokers(3), kfake.SeedTopics(3, topic))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	// Record original leaders.
+	meta, err := kmsg.NewPtrMetadataRequest().RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mt *kmsg.MetadataResponseTopic
+	for i := range meta.Topics {
+		if meta.Topics[i].Topic != nil && *meta.Topics[i].Topic == topic {
+			mt = &meta.Topics[i]
+			break
+		}
+	}
+	if mt == nil {
+		t.Fatal("topic not in metadata")
+	}
+	origLeaders := make(map[int32]int32, len(mt.Partitions))
+	origEpochs := make(map[int32]int32, len(mt.Partitions))
+	for _, p := range mt.Partitions {
+		origLeaders[p.Partition] = p.Leader
+		origEpochs[p.Partition] = p.LeaderEpoch
+	}
+
+	// Elect leaders for partitions 0 and 1 only.
+	electReq := kmsg.NewPtrElectLeadersRequest()
+	et := kmsg.NewElectLeadersRequestTopic()
+	et.Topic = topic
+	et.Partitions = []int32{0, 1}
+	electReq.Topics = append(electReq.Topics, et)
+	electResp, err := electReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rt := range electResp.Topics {
+		for _, rp := range rt.Partitions {
+			if rp.ErrorCode != 0 {
+				t.Fatalf("partition %d error: %v", rp.Partition, kerr.ErrorForCode(rp.ErrorCode))
+			}
+		}
+	}
+
+	// Verify leaders rotated and epochs bumped for 0 and 1.
+	meta2, err := kmsg.NewPtrMetadataRequest().RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range meta2.Topics {
+		if meta2.Topics[i].Topic == nil || *meta2.Topics[i].Topic != topic {
+			continue
+		}
+		for _, p := range meta2.Topics[i].Partitions {
+			switch p.Partition {
+			case 0, 1:
+				if p.Leader == origLeaders[p.Partition] {
+					t.Errorf("partition %d: leader did not rotate (still %d)", p.Partition, p.Leader)
+				}
+				if p.LeaderEpoch <= origEpochs[p.Partition] {
+					t.Errorf("partition %d: epoch did not bump (%d <= %d)", p.Partition, p.LeaderEpoch, origEpochs[p.Partition])
+				}
+			case 2:
+				if p.Leader != origLeaders[2] {
+					t.Errorf("partition 2: leader should not have changed (was %d, now %d)", origLeaders[2], p.Leader)
+				}
+			}
+		}
+	}
+
+	// Elect with unknown partition.
+	electReq2 := kmsg.NewPtrElectLeadersRequest()
+	et2 := kmsg.NewElectLeadersRequestTopic()
+	et2.Topic = topic
+	et2.Partitions = []int32{99}
+	electReq2.Topics = append(electReq2.Topics, et2)
+	electResp2, err := electReq2.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rt := range electResp2.Topics {
+		for _, rp := range rt.Partitions {
+			if rp.ErrorCode != kerr.UnknownTopicOrPartition.Code {
+				t.Fatalf("expected UnknownTopicOrPartition for p99, got %v", kerr.ErrorForCode(rp.ErrorCode))
+			}
+		}
+	}
+
+	// Elect with nil topics (all partitions).
+	electReq3 := kmsg.NewPtrElectLeadersRequest()
+	electResp3, err := electReq3.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var totalElected int
+	for _, rt := range electResp3.Topics {
+		for _, rp := range rt.Partitions {
+			if rp.ErrorCode != 0 {
+				t.Fatalf("elect all: partition error: %v", kerr.ErrorForCode(rp.ErrorCode))
+			}
+			totalElected++
+		}
+	}
+	if totalElected < 3 {
+		t.Fatalf("expected at least 3 partitions elected, got %d", totalElected)
+	}
+}
+
+func TestIncrementalAlterConfigAppendSubtract(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, "t-incr-cfg"))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	sp := func(s string) *string { return &s }
+
+	mkReq := func(rtype kmsg.ConfigResourceType, name string, configs ...kmsg.IncrementalAlterConfigsRequestResourceConfig) *kmsg.IncrementalAlterConfigsRequest {
+		req := kmsg.NewPtrIncrementalAlterConfigsRequest()
+		rr := kmsg.NewIncrementalAlterConfigsRequestResource()
+		rr.ResourceType = rtype
+		rr.ResourceName = name
+		rr.Configs = configs
+		req.Resources = append(req.Resources, rr)
+		return req
+	}
+
+	mkCfg := func(name string, val *string, op kmsg.IncrementalAlterConfigOp) kmsg.IncrementalAlterConfigsRequestResourceConfig {
+		rc := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+		rc.Name = name
+		rc.Value = val
+		rc.Op = op
+		return rc
+	}
+
+	getConfig := func(rtype kmsg.ConfigResourceType, name, key string) *string {
+		t.Helper()
+		req := kmsg.NewPtrDescribeConfigsRequest()
+		rr := kmsg.NewDescribeConfigsRequestResource()
+		rr.ResourceType = rtype
+		rr.ResourceName = name
+		rr.ConfigNames = []string{key}
+		req.Resources = append(req.Resources, rr)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range resp.Resources {
+			for _, c := range r.Configs {
+				if c.Name == key {
+					return c.Value
+				}
+			}
+		}
+		return nil
+	}
+
+	// APPEND to broker list config (cleanup.policy on a topic).
+	resp, err := mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg",
+		mkCfg("cleanup.policy", sp("compact"), kmsg.IncrementalAlterConfigOpSet),
+	).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Resources[0].ErrorCode != 0 {
+		t.Fatalf("set cleanup.policy: %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+
+	// APPEND "delete" to it.
+	resp, err = mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg",
+		mkCfg("cleanup.policy", sp("delete"), kmsg.IncrementalAlterConfigOpAppend),
+	).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Resources[0].ErrorCode != 0 {
+		t.Fatalf("append cleanup.policy: %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+
+	val := getConfig(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", "cleanup.policy")
+	if val == nil || *val != "compact,delete" {
+		got := "<nil>"
+		if val != nil {
+			got = *val
+		}
+		t.Fatalf("expected 'compact,delete', got %q", got)
+	}
+
+	// SUBTRACT "compact" from it.
+	resp, err = mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg",
+		mkCfg("cleanup.policy", sp("compact"), kmsg.IncrementalAlterConfigOpSubtract),
+	).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Resources[0].ErrorCode != 0 {
+		t.Fatalf("subtract cleanup.policy: %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+
+	val = getConfig(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", "cleanup.policy")
+	if val == nil || *val != "delete" {
+		got := "<nil>"
+		if val != nil {
+			got = *val
+		}
+		t.Fatalf("expected 'delete', got %q", got)
+	}
+
+	// APPEND on a non-list config should fail.
+	resp, err = mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg",
+		mkCfg("retention.ms", sp("1000"), kmsg.IncrementalAlterConfigOpAppend),
+	).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Resources[0].ErrorCode != kerr.InvalidRequest.Code {
+		t.Fatalf("expected InvalidRequest for APPEND on non-list config, got %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+
+	// APPEND on broker list config.
+	resp, err = mkReq(kmsg.ConfigResourceTypeBroker, "0",
+		mkCfg("cleanup.policy", sp("compact"), kmsg.IncrementalAlterConfigOpAppend),
+	).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Resources[0].ErrorCode != 0 {
+		t.Fatalf("broker append: %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+	val = getConfig(kmsg.ConfigResourceTypeBroker, "0", "cleanup.policy")
+	if val == nil || *val != "compact" {
+		got := "<nil>"
+		if val != nil {
+			got = *val
+		}
+		t.Fatalf("expected broker config 'compact', got %q", got)
+	}
+}
+
+func TestApiVersionsSupportedFeatures(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.NumBrokers(1))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	req := kmsg.NewPtrApiVersionsRequest()
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	findFeature := func(features []kmsg.ApiVersionsResponseSupportedFeature, name string) *kmsg.ApiVersionsResponseSupportedFeature {
+		for i := range features {
+			if features[i].Name == name {
+				return &features[i]
+			}
+		}
+		return nil
+	}
+	findFinalized := func(features []kmsg.ApiVersionsResponseFinalizedFeature, name string) *kmsg.ApiVersionsResponseFinalizedFeature {
+		for i := range features {
+			if features[i].Name == name {
+				return &features[i]
+			}
+		}
+		return nil
+	}
+
+	// Default cluster has all keys, should have both features.
+	txnFeature := findFeature(resp.SupportedFeatures, "transaction.version")
+	if txnFeature == nil {
+		t.Fatal("expected transaction.version in SupportedFeatures")
+	}
+	if txnFeature.MaxVersion != 2 {
+		t.Fatalf("expected transaction.version max=2, got %d", txnFeature.MaxVersion)
+	}
+
+	groupFeature := findFeature(resp.SupportedFeatures, "group.version")
+	if groupFeature == nil {
+		t.Fatal("expected group.version in SupportedFeatures")
+	}
+	if groupFeature.MaxVersion != 1 {
+		t.Fatalf("expected group.version max=1, got %d", groupFeature.MaxVersion)
+	}
+
+	txnFinalized := findFinalized(resp.FinalizedFeatures, "transaction.version")
+	if txnFinalized == nil {
+		t.Fatal("expected transaction.version in FinalizedFeatures")
+	}
+	groupFinalized := findFinalized(resp.FinalizedFeatures, "group.version")
+	if groupFinalized == nil {
+		t.Fatal("expected group.version in FinalizedFeatures")
+	}
+
+	// With Produce capped below v12, transaction.version should be absent.
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11) // Produce max v11
+	c2 := newCluster(t, kfake.NumBrokers(1), kfake.MaxVersions(v))
+	cl2 := newPlainClient(t, c2)
+	resp2, err := req.RequestWith(ctx, cl2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findFeature(resp2.SupportedFeatures, "transaction.version") != nil {
+		t.Fatal("transaction.version should be absent when Produce < v12")
+	}
+	// group.version should still be present.
+	if findFeature(resp2.SupportedFeatures, "group.version") == nil {
+		t.Fatal("group.version should still be present")
+	}
+}

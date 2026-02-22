@@ -47,6 +47,7 @@ type (
 		telem         map[[16]byte]int32
 		telemNextID   int32
 		fetchSessions fetchSessions
+		compactTicker *time.Ticker
 
 		die  chan struct{}
 		dead atomic.Bool
@@ -153,6 +154,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	c.groups.c = c
 	c.pids.c = c
 	c.pids.ids = make(map[int64]*pidinfo)
+	c.pids.byTxid = make(map[string]*pidinfo)
 	c.pids.txs = make(map[*pidinfo]struct{})
 	c.pids.txTimer = time.NewTimer(0)
 	<-c.pids.txTimer.C
@@ -282,6 +284,7 @@ func (b *broker) listen() {
 			b:      b,
 			conn:   conn,
 			respCh: make(chan clientResp, 2),
+			done:   make(chan struct{}),
 		}
 		go cc.read()
 		go cc.write()
@@ -304,10 +307,17 @@ outer:
 		select {
 		case <-c.die:
 			c.pids.txTimer.Stop()
+			if c.compactTicker != nil {
+				c.compactTicker.Stop()
+			}
 			return
 
 		case <-c.pids.txTimer.C:
 			c.pids.handleTimeout()
+			continue
+
+		case <-c.compactTickerC():
+			c.compactAll()
 			continue
 
 		case admin := <-c.adminCh:
@@ -456,6 +466,8 @@ outer:
 			kresp, err = c.handleCreatePartitions(creq)
 		case kmsg.DeleteGroups:
 			kresp, err = c.handleDeleteGroups(creq)
+		case kmsg.ElectLeaders:
+			kresp, err = c.handleElectLeaders(creq)
 		case kmsg.IncrementalAlterConfigs:
 			kresp, err = c.handleIncrementalAlterConfigs(creq)
 		case kmsg.AlterPartitionAssignments:
@@ -507,6 +519,7 @@ outer:
 
 		select {
 		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err, seq: creq.seq}:
+		case <-creq.cc.done:
 		case <-c.die:
 			return
 		}
@@ -1178,4 +1191,83 @@ func (c *Cluster) SetFollowers(topic string, partition int32, followers []int32)
 		}
 		pd.followers = append([]int32(nil), followers...)
 	})
+}
+
+// Compact triggers log compaction on all topics with cleanup.policy=compact.
+// Records with duplicate keys are deduplicated, keeping only the latest value.
+// Tombstones (nil value) older than delete.retention.ms are removed.
+func (c *Cluster) Compact() {
+	c.admin(func() {
+		c.compactAll()
+	})
+}
+
+// ApplyRetention enforces retention.ms and retention.bytes on all topics,
+// removing batches that are expired or exceed the size limit.
+func (c *Cluster) ApplyRetention() {
+	c.admin(func() {
+		c.applyRetentionAll()
+	})
+}
+
+// compactAll compacts and applies retention on all eligible topics.
+// Must be called from Cluster.run().
+func (c *Cluster) compactAll() {
+	for t := range c.data.tps {
+		for _, pd := range c.data.tps[t] {
+			if c.data.isCompactTopic(t) {
+				pd.compact(&c.data, t)
+			}
+			pd.applyRetention(&c.data, t)
+		}
+	}
+}
+
+// applyRetentionAll applies retention on all topics.
+// Must be called from Cluster.run().
+func (c *Cluster) applyRetentionAll() {
+	for t := range c.data.tps {
+		for _, pd := range c.data.tps[t] {
+			pd.applyRetention(&c.data, t)
+		}
+	}
+}
+
+func (c *Cluster) compactTickerC() <-chan time.Time {
+	if c.compactTicker != nil {
+		return c.compactTicker.C
+	}
+	return nil
+}
+
+func (c *Cluster) compactIntervalMs() int64 {
+	if v, ok := c.loadBcfgs()["log.cleaner.backoff.ms"]; ok && v != nil {
+		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
+			return n
+		}
+	}
+	return 3600000
+}
+
+// refreshCompactTicker starts or stops the compaction ticker based on whether
+// any topic has cleanup.policy=compact or has retention configs explicitly set.
+// Must be called from Cluster.run().
+func (c *Cluster) refreshCompactTicker() {
+	needsTicker := false
+	for t := range c.data.tps {
+		if c.data.isCompactTopic(t) {
+			needsTicker = true
+			break
+		}
+		if c.data.hasRetentionConfig(t) {
+			needsTicker = true
+			break
+		}
+	}
+	if needsTicker && c.compactTicker == nil {
+		c.compactTicker = time.NewTicker(time.Duration(c.compactIntervalMs()) * time.Millisecond)
+	} else if !needsTicker && c.compactTicker != nil {
+		c.compactTicker.Stop()
+		c.compactTicker = nil
+	}
 }

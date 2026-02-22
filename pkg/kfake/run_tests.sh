@@ -11,6 +11,7 @@
 #   --client-log LEVEL     Set KGO_LOG_LEVEL for the test client only
 #   --server-log LEVEL     Set kfake server log level only
 #   -v, --version VERSION  Kafka version to emulate (e.g., 2.8, 3.5)
+#   --pprof ADDR           Enable pprof on server (e.g., :6060)
 #   -k, --kill             Kill processes on ports 9092-9094 and exit
 #   --clean                Kill servers and remove /tmp/kfake_test_logs
 #   -h, --help             Show this help
@@ -22,6 +23,7 @@ RACE=""
 CLIENT_LOG=""
 SERVER_LOG_LEVEL=""
 KFAKE_VERSION="${KFAKE_VERSION:-}"
+PPROF_ADDR=""
 
 KFAKE_DIR=/Users/travisbischel/src/twmb/franz-go/pkg/kfake
 KGO_DIR=/Users/travisbischel/src/twmb/franz-go/pkg/kgo
@@ -62,6 +64,10 @@ while [[ $# -gt 0 ]]; do
             KFAKE_VERSION="$2"
             shift 2
             ;;
+        --pprof)
+            PPROF_ADDR="$2"
+            shift 2
+            ;;
         -k|--kill)
             echo "Killing processes on ports 9092, 9093, 9094..."
             for port in 9092 9093 9094; do
@@ -98,6 +104,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --client-log LEVEL     Set KGO_LOG_LEVEL for the test client only"
             echo "  --server-log LEVEL     Set kfake server log level only"
             echo "  -v, --version VERSION  Kafka version to emulate (e.g., 2.8, 3.5)"
+            echo "  --pprof ADDR           Enable pprof on server (e.g., :6060)"
             echo "  -k, --kill             Kill processes on ports 9092-9094 and exit"
             echo "  --clean                Kill servers and remove /tmp/kfake_test_logs"
             echo "  -h, --help             Show this help"
@@ -134,22 +141,12 @@ echo "Building test binary..."
 
 cleanup_interrupt() {
     echo ""
-    echo "Interrupted, cleaning up..."
-    if [ -n "$SERVER_PID" ]; then
-        kill $SERVER_PID 2>/dev/null || true
-        wait $SERVER_PID 2>/dev/null
-    fi
+    echo "Interrupted. Server (pid $SERVER_PID) left running."
+    echo "Use --clean to kill servers and remove logs."
+    SERVER_PID=""
     exit 1
 }
 trap cleanup_interrupt SIGINT SIGTERM
-
-cleanup_exit() {
-    if [ -n "$SERVER_PID" ]; then
-        kill $SERVER_PID 2>/dev/null || true
-        wait $SERVER_PID 2>/dev/null
-    fi
-}
-trap cleanup_exit EXIT
 
 # Check if a port is in use via a TCP connect attempt.
 port_in_use() {
@@ -171,12 +168,14 @@ echo "  Race detector: ${RACE:-disabled}"
 echo "  Client log level: ${CLIENT_LOG:-default}"
 echo "  Server log level: ${SERVER_LOG_LEVEL:-default}"
 echo "  Kafka version: ${KFAKE_VERSION:-latest}"
+echo "  Pprof: ${PPROF_ADDR:-disabled}"
 echo "  Timeout: $TIMEOUT"
 echo "  Logs: $LOG_DIR"
 echo ""
 
 for i in $(seq 1 $MAX_ITERATIONS); do
     echo "=== Run $i of $MAX_ITERATIONS ==="
+    RUN_START=$SECONDS
 
     # Build server args
     VERSION_ARG=""
@@ -187,7 +186,11 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     if [ -n "$SERVER_LOG_LEVEL" ]; then
         LOG_ARG="-l $SERVER_LOG_LEVEL"
     fi
-    "$SERVER_BIN" $VERSION_ARG $LOG_ARG -c group.consumer.heartbeat.interval.ms=100 > "$SERVER_LOG" 2>&1 &
+    PPROF_ARG=""
+    if [ -n "$PPROF_ADDR" ]; then
+        PPROF_ARG="-pprof $PPROF_ADDR"
+    fi
+    "$SERVER_BIN" $VERSION_ARG $LOG_ARG $PPROF_ARG -c group.consumer.heartbeat.interval.ms=1000 > "$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
 
     # Wait for server to be listening (max 5 seconds)
@@ -229,7 +232,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     kill $SERVER_PID 2>/dev/null || true
     wait $SERVER_PID 2>/dev/null
 
-    echo "PASS (run $i)"
+    echo "PASS (run $i) - $((SECONDS - RUN_START))s"
 done
 
 echo ""

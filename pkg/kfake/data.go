@@ -1,14 +1,13 @@
 package kfake
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"math/rand"
 	"sort"
 	"strconv"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -118,8 +117,7 @@ func (d *data) mkt(t string, nparts, nreplicas int, configs map[string]*string) 
 	}
 	var id uuid
 	for {
-		sha := sha256.Sum256([]byte(strconv.Itoa(int(time.Now().UnixNano()))))
-		copy(id[:], sha[:])
+		id = randUUID()
 		if _, exists := d.id2t[id]; !exists {
 			break
 		}
@@ -241,6 +239,11 @@ func (pd *partData) searchOffset(o int64) (index int, found bool, atEnd bool) {
 		}
 		return 0
 	})
+	// After compaction, offsets may land in gaps between batches.
+	// Skip forward to the next available batch.
+	if !found && index < len(pd.batches) {
+		found = true
+	}
 	return index, found, false
 }
 
@@ -362,6 +365,40 @@ func (c *Cluster) storeBcfgs(m map[string]*string) {
 	c.bcfgs.Store(&m)
 }
 
+// configListAppend appends val to a comma-separated list config value.
+func configListAppend(current, val *string) *string {
+	if val == nil {
+		return current
+	}
+	if current == nil || *current == "" {
+		return val
+	}
+	s := *current + "," + *val
+	return &s
+}
+
+// configListSubtract removes val from a comma-separated list config value.
+func configListSubtract(current, val *string) *string {
+	if val == nil || current == nil {
+		return current
+	}
+	parts := strings.Split(*current, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		if p != *val {
+			out = append(out, p)
+		}
+	}
+	s := strings.Join(out, ",")
+	return &s
+}
+
+// isListConfig returns whether the named config is a list type.
+func isListConfig(name string) bool {
+	ct, ok := configTypes[name]
+	return ok && ct == kmsg.ConfigTypeList
+}
+
 // validateBrokerConfig returns whether v is a valid value for broker config k.
 func validateBrokerConfig(k string, v *string) bool {
 	if v == nil {
@@ -394,6 +431,7 @@ func (d *data) setTopicConfig(t, k string, v *string, dry bool) bool {
 var validTopicConfigs = map[string]string{
 	"cleanup.policy":         "",
 	"compression.type":       "compression.type",
+	"delete.retention.ms":    "",
 	"kfake.is_internal":      "",
 	"max.message.bytes":      "log.message.max.bytes",
 	"message.timestamp.type": "log.message.timestamp.type",
@@ -413,9 +451,14 @@ var validBrokerConfigs = map[string]string{
 	"max.incremental.fetch.session.cache.slots": "",
 	"group.consumer.heartbeat.interval.ms":      "",
 	"group.consumer.session.timeout.ms":         "",
+	"group.max.size":                            "",
+	"group.min.session.timeout.ms":              "",
+	"group.max.session.timeout.ms":              "",
+	"log.cleaner.backoff.ms":                    "",
 	"log.dir":                                   "",
 	"log.message.timestamp.type":                "message.timestamp.type",
 	"transaction.max.timeout.ms":                "",
+	"transactional.id.expiration.ms":            "",
 	"log.retention.bytes":                       "retention.bytes",
 	"log.retention.ms":                          "retention.ms",
 	"message.max.bytes":                         "max.message.bytes",
@@ -437,12 +480,6 @@ var defHeartbeatInterval = 5000
 // defSessionTimeout is the default group.consumer.session.timeout.ms.
 var defSessionTimeout = 45000
 
-func init() {
-	if testing.Testing() {
-		defHeartbeatInterval = 100
-		configDefaults["group.consumer.heartbeat.interval.ms"] = "100"
-	}
-}
 
 // Default topic and broker configs. Topic/broker pairs that share the same
 // underlying setting (e.g. max.message.bytes / message.max.bytes) both
@@ -451,19 +488,25 @@ func init() {
 var configDefaults = map[string]string{
 	"cleanup.policy":         "delete",
 	"compression.type":       "producer",
+	"delete.retention.ms":    "86400000",
 	"max.message.bytes":      strconv.Itoa(defMaxMessageBytes),
 	"message.timestamp.type": "CreateTime",
 	"min.insync.replicas":    "1",
 	"retention.bytes":        "-1",
 	"retention.ms":           "604800000",
 
-	"transaction.max.timeout.ms": "900000",
+	"transaction.max.timeout.ms":     "900000",
+	"transactional.id.expiration.ms": "604800000",
 
 	"default.replication.factor":                "3",
 	"fetch.max.bytes":                           "57671680",
+	"log.cleaner.backoff.ms":                    "3600000",
 	"max.incremental.fetch.session.cache.slots": strconv.Itoa(defMaxFetchSessionCacheSlots),
 	"group.consumer.heartbeat.interval.ms":      strconv.Itoa(defHeartbeatInterval),
 	"group.consumer.session.timeout.ms":         strconv.Itoa(defSessionTimeout),
+	"group.max.size":                            "2147483647",
+	"group.min.session.timeout.ms":              "6000",
+	"group.max.session.timeout.ms":              "300000",
 	"log.dir":                                   defLogDir,
 	"log.message.timestamp.type":                "CreateTime",
 	"log.retention.bytes":                       "-1",
@@ -478,10 +521,15 @@ var configTypes = map[string]kmsg.ConfigType{
 	"cleanup.policy":             kmsg.ConfigTypeList,
 	"compression.type":           kmsg.ConfigTypeString,
 	"default.replication.factor": kmsg.ConfigTypeInt,
+	"delete.retention.ms":        kmsg.ConfigTypeLong,
 	"fetch.max.bytes":            kmsg.ConfigTypeInt,
 	"max.incremental.fetch.session.cache.slots": kmsg.ConfigTypeInt,
 	"group.consumer.heartbeat.interval.ms":      kmsg.ConfigTypeInt,
 	"group.consumer.session.timeout.ms":         kmsg.ConfigTypeInt,
+	"group.max.size":                            kmsg.ConfigTypeInt,
+	"group.min.session.timeout.ms":              kmsg.ConfigTypeInt,
+	"group.max.session.timeout.ms":              kmsg.ConfigTypeInt,
+	"log.cleaner.backoff.ms":                    kmsg.ConfigTypeLong,
 	"log.dir":                                   kmsg.ConfigTypeString,
 	"log.message.timestamp.type":                kmsg.ConfigTypeString,
 	"log.retention.bytes":                       kmsg.ConfigTypeLong,
@@ -495,6 +543,7 @@ var configTypes = map[string]kmsg.ConfigType{
 	"sasl.enabled.mechanisms":                   kmsg.ConfigTypeList,
 	"super.users":                               kmsg.ConfigTypeList,
 	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
+	"transactional.id.expiration.ms":            kmsg.ConfigTypeInt,
 }
 
 var brokerRack = "krack"
@@ -515,10 +564,28 @@ func (c *Cluster) consumerSessionTimeoutMs() int32 {
 	return c.brokerConfigInt("group.consumer.session.timeout.ms", defSessionTimeout)
 }
 
+func (c *Cluster) groupMaxSize() int32 {
+	return c.brokerConfigInt("group.max.size", 2147483647)
+}
+
+func (c *Cluster) groupMinSessionTimeoutMs() int32 {
+	return c.brokerConfigInt("group.min.session.timeout.ms", int(c.cfg.minSessionTimeout.Milliseconds()))
+}
+
+func (c *Cluster) groupMaxSessionTimeoutMs() int32 {
+	return c.brokerConfigInt("group.max.session.timeout.ms", int(c.cfg.maxSessionTimeout.Milliseconds()))
+}
+
 const defTransactionMaxTimeoutMs = 900000
 
 func (c *Cluster) transactionMaxTimeoutMs() int32 {
 	return c.brokerConfigInt("transaction.max.timeout.ms", defTransactionMaxTimeoutMs)
+}
+
+const defTxnIDExpirationMs = 604800000 // 7 days
+
+func (c *Cluster) txnIDExpirationMs() int32 {
+	return c.brokerConfigInt("transactional.id.expiration.ms", defTxnIDExpirationMs)
 }
 
 func (c *Cluster) fetchSessionCacheSlots() int32 {
@@ -539,6 +606,38 @@ func (d *data) maxMessageBytes(t string) int {
 		return n
 	}
 	return defMaxMessageBytes
+}
+
+// retentionMs returns the retention.ms for a topic, falling back to
+// broker config then defaults.
+func (d *data) retentionMs(t string) int64 {
+	if tcfg, ok := d.tcfgs[t]; ok {
+		if v, ok := tcfg["retention.ms"]; ok && v != nil {
+			n, _ := strconv.ParseInt(*v, 10, 64)
+			return n
+		}
+	}
+	if v, ok := d.c.loadBcfgs()["log.retention.ms"]; ok && v != nil {
+		n, _ := strconv.ParseInt(*v, 10, 64)
+		return n
+	}
+	return 604800000
+}
+
+// retentionBytes returns the retention.bytes for a topic, falling back to
+// broker config then defaults. -1 means no limit.
+func (d *data) retentionBytes(t string) int64 {
+	if tcfg, ok := d.tcfgs[t]; ok {
+		if v, ok := tcfg["retention.bytes"]; ok && v != nil {
+			n, _ := strconv.ParseInt(*v, 10, 64)
+			return n
+		}
+	}
+	if v, ok := d.c.loadBcfgs()["log.retention.bytes"]; ok && v != nil {
+		n, _ := strconv.ParseInt(*v, 10, 64)
+		return n
+	}
+	return -1
 }
 
 func forEachBatchRecord(batch kmsg.RecordBatch, cb func(kmsg.Record) error) error {
@@ -576,4 +675,291 @@ func BatchRecords(b kmsg.RecordBatch) ([]kmsg.Record, error) {
 		return nil
 	})
 	return rs, err
+}
+
+/////////////////
+// COMPACTION  //
+/////////////////
+
+// hasRetentionConfig returns true if the topic has retention.ms or
+// retention.bytes explicitly set in its topic configs.
+func (d *data) hasRetentionConfig(t string) bool {
+	tcfg, ok := d.tcfgs[t]
+	if !ok {
+		return false
+	}
+	_, hasMs := tcfg["retention.ms"]
+	_, hasBytes := tcfg["retention.bytes"]
+	return hasMs || hasBytes
+}
+
+func (d *data) isCompactTopic(t string) bool {
+	if tcfg, ok := d.tcfgs[t]; ok {
+		if v, ok := tcfg["cleanup.policy"]; ok && v != nil {
+			return strings.Contains(*v, "compact")
+		}
+	}
+	return false
+}
+
+// isBatchAborted returns true if the batch belongs to an aborted transaction.
+// A batch is produced atomically within a transaction, so all its records
+// share the same fate. abortedTxns is sorted by lastOffset, so we binary
+// search to skip entries that end before this batch.
+func (pd *partData) isBatchAborted(batch *partBatch) bool {
+	j := sort.Search(len(pd.abortedTxns), func(i int) bool {
+		return pd.abortedTxns[i].lastOffset >= batch.FirstOffset
+	})
+	for ; j < len(pd.abortedTxns); j++ {
+		a := pd.abortedTxns[j]
+		if a.producerID == batch.ProducerID && batch.FirstOffset >= a.firstOffset {
+			return true
+		}
+	}
+	return false
+}
+
+// compact removes superseded records from a compactable partition.
+// The last batch is treated as the active segment and is never compacted.
+func (pd *partData) compact(d *data, topic string) {
+	if len(pd.batches) < 2 {
+		return
+	}
+
+	// Read delete.retention.ms from topic config, falling back to default.
+	deleteRetentionMs := int64(86400000)
+	if tcfg, ok := d.tcfgs[topic]; ok {
+		if v, ok := tcfg["delete.retention.ms"]; ok && v != nil {
+			if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
+				deleteRetentionMs = n
+			}
+		}
+	}
+	now := time.Now().UnixMilli()
+
+	cleanable := pd.batches[:len(pd.batches)-1]
+
+	// Pass 1: build key => highest offset map from cleanable range.
+	keyOffsets := make(map[string]int64)
+	for _, batch := range cleanable {
+		if batch.Attributes&0x0020 != 0 || pd.isBatchAborted(batch) { // skip control batches and aborted txns
+			continue
+		}
+		_ = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) error {
+			if rec.Key == nil {
+				return nil
+			}
+			absOffset := batch.FirstOffset + int64(rec.OffsetDelta)
+			k := string(rec.Key)
+			if prev, ok := keyOffsets[k]; !ok || absOffset > prev {
+				keyOffsets[k] = absOffset
+			}
+			return nil
+		})
+	}
+
+	// Pass 2: filter batches, keeping only non-superseded records.
+	// Also track which PIDs still have surviving data batches.
+	survivingPIDs := make(map[int64]bool)
+	var kept []*partBatch
+	for _, batch := range cleanable {
+		if batch.Attributes&0x0020 != 0 {
+			// Defer control batch decision until after we know surviving PIDs.
+			continue
+		}
+		if pd.isBatchAborted(batch) {
+			continue
+		}
+
+		var surviving []kmsg.Record
+		_ = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) error {
+			absOffset := batch.FirstOffset + int64(rec.OffsetDelta)
+
+			// Drop null-keyed records.
+			if rec.Key == nil {
+				return nil
+			}
+
+			k := string(rec.Key)
+
+			// Drop superseded records (a later record has the same key).
+			if keyOffsets[k] > absOffset {
+				return nil
+			}
+
+			// Drop expired tombstones (nil value).
+			if rec.Value == nil {
+				recTs := batch.FirstTimestamp + int64(rec.TimestampDelta)
+				if now-recTs >= deleteRetentionMs {
+					return nil
+				}
+			}
+
+			surviving = append(surviving, rec)
+			return nil
+		})
+
+		if len(surviving) == 0 {
+			continue
+		}
+
+		survivingPIDs[batch.ProducerID] = true
+		if len(surviving) == int(batch.NumRecords) {
+			// All records survived - keep original batch as-is.
+			kept = append(kept, batch)
+		} else {
+			kept = append(kept, rebuildBatch(batch, surviving))
+		}
+	}
+
+	// Pass 3: handle control batches - keep only if PID has surviving data.
+	// Control batches are functionally inert in kfake (read_committed is
+	// driven by pd.abortedTxns and LSO, not control batches), but we
+	// match real Kafka's compaction behavior for fidelity.
+	for _, batch := range cleanable {
+		isControl := batch.Attributes&0x0020 != 0
+		if !isControl {
+			continue
+		}
+		if survivingPIDs[batch.ProducerID] {
+			kept = append(kept, batch)
+		}
+	}
+
+	// Sort kept batches by FirstOffset to maintain order (control batches
+	// were appended out of order in pass 3).
+	sort.Slice(kept, func(i, j int) bool {
+		return kept[i].FirstOffset < kept[j].FirstOffset
+	})
+
+	// Append the active segment (last batch).
+	kept = append(kept, pd.batches[len(pd.batches)-1])
+
+	// Rebuild partition metadata.
+	pd.batches = kept
+	pd.nbytes = 0
+	for _, b := range pd.batches {
+		pd.nbytes += int64(b.nbytes)
+	}
+	if len(pd.batches) > 0 {
+		pd.logStartOffset = pd.batches[0].FirstOffset
+	}
+
+	// Rebuild maxTimestampBatchIdx.
+	pd.maxTimestampBatchIdx = -1
+	for i, b := range pd.batches {
+		if pd.maxTimestampBatchIdx < 0 || b.MaxTimestamp >= pd.batches[pd.maxTimestampBatchIdx].MaxTimestamp {
+			pd.maxTimestampBatchIdx = i
+		}
+	}
+
+	// Prune aborted txn entries that are now before logStartOffset.
+	pd.trimAbortedTxns()
+}
+
+// trimAbortedTxns prunes aborted txn entries fully before logStartOffset.
+func (pd *partData) trimAbortedTxns() {
+	i := sort.Search(len(pd.abortedTxns), func(i int) bool {
+		return pd.abortedTxns[i].lastOffset >= pd.logStartOffset
+	})
+	pd.abortedTxns = pd.abortedTxns[i:]
+}
+
+/////////////////
+// RETENTION   //
+/////////////////
+
+// applyRetention advances logStartOffset past batches that are expired by
+// retention.ms or that exceed retention.bytes, then trims them.
+func (pd *partData) applyRetention(d *data, topic string) {
+	if len(pd.batches) == 0 {
+		return
+	}
+
+	retMs := d.retentionMs(topic)
+	retBytes := d.retentionBytes(topic)
+	if retMs < 0 && retBytes < 0 {
+		return
+	}
+
+	now := time.Now().UnixMilli()
+	newLogStart := pd.logStartOffset
+
+	// Time-based retention: drop batches whose max timestamp is older
+	// than retention.ms.
+	if retMs >= 0 {
+		for _, b := range pd.batches {
+			if now-b.MaxTimestamp >= retMs {
+				end := b.FirstOffset + int64(b.LastOffsetDelta) + 1
+				if end > newLogStart {
+					newLogStart = end
+				}
+			}
+		}
+	}
+
+	// Size-based retention: drop oldest batches until total size is
+	// within retention.bytes.
+	if retBytes >= 0 && pd.nbytes > retBytes {
+		excess := pd.nbytes - retBytes
+		for _, b := range pd.batches {
+			if excess <= 0 {
+				break
+			}
+			end := b.FirstOffset + int64(b.LastOffsetDelta) + 1
+			if end > newLogStart {
+				newLogStart = end
+			}
+			excess -= int64(b.nbytes)
+		}
+	}
+
+	if newLogStart > pd.logStartOffset {
+		pd.logStartOffset = newLogStart
+		pd.trimLeft()
+	}
+}
+
+// rebuildBatch creates a new partBatch with only the kept records,
+// re-encoding them uncompressed with updated batch metadata.
+func rebuildBatch(orig *partBatch, kept []kmsg.Record) *partBatch {
+	// Re-encode records uncompressed.
+	var rawRecords []byte
+	for _, rec := range kept {
+		rawRecords = rec.AppendTo(rawRecords)
+	}
+
+	b := kmsg.RecordBatch{
+		FirstOffset:          orig.FirstOffset,
+		PartitionLeaderEpoch: orig.PartitionLeaderEpoch,
+		Magic:                2,
+		Attributes:           orig.Attributes &^ 0x0007, // clear compression bits (uncompressed)
+		LastOffsetDelta:      kept[len(kept)-1].OffsetDelta,
+		FirstTimestamp:       orig.FirstTimestamp,
+		MaxTimestamp:         orig.FirstTimestamp,
+		ProducerID:           orig.ProducerID,
+		ProducerEpoch:        orig.ProducerEpoch,
+		FirstSequence:        orig.FirstSequence,
+		NumRecords:           int32(len(kept)),
+		Records:              rawRecords,
+	}
+
+	// Recompute timestamps.
+	for _, rec := range kept {
+		ts := orig.FirstTimestamp + int64(rec.TimestampDelta)
+		if ts > b.MaxTimestamp {
+			b.MaxTimestamp = ts
+		}
+	}
+
+	benc := b.AppendTo(nil)
+	b.Length = int32(len(benc) - 12)
+	b.CRC = int32(crc32.Checksum(benc[21:], crc32c))
+
+	return &partBatch{
+		RecordBatch:         b,
+		nbytes:              len(benc),
+		epoch:               orig.epoch,
+		maxEarlierTimestamp: orig.maxEarlierTimestamp,
+	}
 }

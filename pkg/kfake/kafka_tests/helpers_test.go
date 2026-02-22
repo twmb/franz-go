@@ -18,6 +18,9 @@ import (
 // cleanup on test completion.
 func newCluster(t *testing.T, opts ...kfake.Opt) *kfake.Cluster {
 	t.Helper()
+	opts = append([]kfake.Opt{kfake.BrokerConfigs(map[string]string{
+		"group.consumer.heartbeat.interval.ms": "100",
+	})}, opts...)
 	c, err := kfake.NewCluster(opts...)
 	if err != nil {
 		t.Fatal(err)

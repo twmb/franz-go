@@ -52,10 +52,9 @@ func testGroup(assignor string, members map[string][]string, snap topicMetaSnap)
 	}
 	for mid, topics := range members {
 		g.consumerMembers[mid] = &consumerMember{
-			memberID:          mid,
-			subscribedTopics:  topics,
-			currentAssignment: make(map[uuid][]int32),
-			targetAssignment:  make(map[uuid][]int32),
+			memberID:         mid,
+			subscribedTopics: topics,
+			targetAssignment: make(map[uuid][]int32),
 		}
 	}
 	return g
@@ -208,5 +207,108 @@ func TestAssignRangeHeterogeneousSubscriptions(t *testing.T) {
 	}
 	if !slices.Equal(m2.targetAssignment[idB], []int32{2, 3}) {
 		t.Errorf("m2 topicB = %v, want [2 3]", m2.targetAssignment[idB])
+	}
+}
+
+func TestAssignUniformStickyOnLeave(t *testing.T) {
+	t.Parallel()
+	id := uuid{1}
+	snap := topicMetaSnap{
+		"topic": {id: id, partitions: 31},
+	}
+
+	// Start with 5 members all subscribing to the same topic.
+	g := testGroup("uniform", map[string][]string{
+		"m0": {"topic"},
+		"m1": {"topic"},
+		"m2": {"topic"},
+		"m3": {"topic"},
+		"m4": {"topic"},
+	}, snap)
+	g.computeTargetAssignment(snap)
+
+	// Record the initial assignment for all members.
+	before := make(map[string][]int32)
+	for mid, m := range g.consumerMembers {
+		before[mid] = slices.Clone(m.targetAssignment[id])
+	}
+
+	// Verify initial: 5 members, 31 partitions => 6,6,6,6,7.
+	var total int
+	for _, ps := range before {
+		total += len(ps)
+	}
+	if total != 31 {
+		t.Fatalf("initial total = %d, want 31", total)
+	}
+
+	// Remove m4 (simulating a leave).
+	delete(g.consumerMembers, "m4")
+	g.computeTargetAssignment(snap)
+
+	// After leave: 4 members, 31 partitions => 7,8,8,8.
+	// ALL of each remaining member's old partitions must
+	// still be in their new target (sticky).
+	for _, mid := range []string{"m0", "m1", "m2", "m3"} {
+		m := g.consumerMembers[mid]
+		newTarget := m.targetAssignment[id]
+		for _, p := range before[mid] {
+			if !slices.Contains(newTarget, p) {
+				t.Errorf("member %s lost partition %d: before=%v after=%v",
+					mid, p, before[mid], newTarget)
+			}
+		}
+	}
+}
+
+// TestAssignUniformStickyRapidJoinsThenLeave simulates the ETL
+// integration test scenario: members join one-by-one (each
+// triggering a target recomputation before any convergence), then
+// one member leaves. After convergence, the remaining members'
+// targets should be sticky - a leave should only redistribute the
+// leaving member's partitions.
+func TestAssignUniformStickyRapidJoinsThenLeave(t *testing.T) {
+	t.Parallel()
+	id := uuid{1}
+	snap := topicMetaSnap{
+		"topic": {id: id, partitions: 31},
+	}
+
+	g := testGroup("uniform", map[string][]string{}, snap)
+	allMembers := []string{"m0", "m1", "m2", "m3", "m4"}
+
+	// Simulate rapid joins: each member joins and triggers
+	// target recomputation immediately (no convergence between).
+	for _, mid := range allMembers {
+		g.consumerMembers[mid] = &consumerMember{
+			memberID:         mid,
+			subscribedTopics: []string{"topic"},
+			targetAssignment: make(map[uuid][]int32),
+		}
+		g.computeTargetAssignment(snap)
+	}
+
+	// Record the converged assignment (after all 5 joins).
+	converged := make(map[string][]int32)
+	for mid, m := range g.consumerMembers {
+		converged[mid] = slices.Clone(m.targetAssignment[id])
+	}
+
+	// Now remove m4.
+	delete(g.consumerMembers, "m4")
+	g.computeTargetAssignment(snap)
+
+	// Every remaining member must keep ALL of their converged
+	// partitions (sticky). They should only gain partitions,
+	// never lose.
+	for _, mid := range []string{"m0", "m1", "m2", "m3"} {
+		m := g.consumerMembers[mid]
+		newTarget := m.targetAssignment[id]
+		for _, p := range converged[mid] {
+			if !slices.Contains(newTarget, p) {
+				t.Errorf("member %s lost partition %d: converged=%v after=%v",
+					mid, p, converged[mid], newTarget)
+			}
+		}
 	}
 }
