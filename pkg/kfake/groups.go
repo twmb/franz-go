@@ -276,7 +276,7 @@ func (gs *groups) newGroup(name string) *group {
 		pending:       make(map[string]*groupMember),
 		staticMembers: make(map[string]string),
 		protocols:     make(map[string]int),
-		reqCh:         make(chan *clientReq),
+		reqCh:         make(chan *clientReq, 16),
 		controlCh:     make(chan func(), 1), // buffer 1: holds a pending notifyTopicChange
 		quitCh:        make(chan struct{}),
 	}

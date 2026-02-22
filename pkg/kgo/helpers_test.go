@@ -44,6 +44,9 @@ var (
 	// Static membership (KIP-345) requires JoinGroup v5+.
 	allowStaticMembership = false
 
+	// KIP-848 requires ConsumerGroupHeartbeat (key 68).
+	allow848 = false
+
 	// KGO_TEST_TLS: DSL syntax is ({ca|cert|key}:path),{1,3}
 	testCert *tls.Config
 
@@ -210,6 +213,9 @@ func init() {
 			versions := kversion.FromApiVersionsResponse(resp.(*kmsg.ApiVersionsResponse))
 			if v, ok := versions.LookupMaxKeyVersion(11); ok && v >= 5 { // 11 = JoinGroup
 				allowStaticMembership = true
+			}
+			if _, ok := versions.LookupMaxKeyVersion(68); ok { // 68 = ConsumerGroupHeartbeat
+				allow848 = true
 			}
 			break
 		}
@@ -563,6 +569,9 @@ func testChainETL(
 ) {
 	if instanceID != "" && !allowStaticMembership {
 		t.Skip("broker does not support static membership (requires JoinGroup v5+, KIP-345)")
+	}
+	if enable848 && !allow848 {
+		t.Skip("broker does not support KIP-848 (requires ConsumerGroupHeartbeat, key 68)")
 	}
 	errs := make(chan error)
 	var (
