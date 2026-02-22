@@ -1,6 +1,7 @@
 // WriteTxnMarkersRequest is a broker-to-broker request that Kafka uses to
 // finish transactions.
-WriteTxnMarkersRequest => key 27, max version 1, flexible v1+
+// Version 2, introduced in Kafka 4.2, adds TransactionVersion (KIP-1228).
+WriteTxnMarkersRequest => key 27, max version 2, flexible v1+
   // Markers contains transactional markers to be written.
   Markers: [=>]
     // ProducerID is the current producer ID to use when writing a marker.
@@ -20,6 +21,9 @@ WriteTxnMarkersRequest => key 27, max version 1, flexible v1+
     // CoordinatorEpoch is the current epoch of the transaction coordinator we
     // are writing a marker to. This is used to detect fenced writers.
     CoordinatorEpoch: int32
+    // TransactionVersion is the transaction version of the marker.
+    // 0/1 = legacy (TV0/TV1), 2 = TV2 etc.
+    TransactionVersion: int8 // v2+
 
 // WriteTxnMarkersResponse is a response to a WriteTxnMarkersRequest.
 WriteTxnMarkersResponse =>

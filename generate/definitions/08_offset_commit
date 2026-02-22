@@ -1,6 +1,8 @@
 // OffsetCommitRequest commits offsets for consumed topics / partitions in
 // a group.
-OffsetCommitRequest => key 8, max version 9, flexible v8+, group coordinator
+// Version 10, introduced in Kafka 4.2, replaces topic names with topic IDs
+// (KIP-848).
+OffsetCommitRequest => key 8, max version 10, flexible v8+, group coordinator
   // Group is the group this request is committing offsets to.
   Group: string
   // Generation being -1 and group being empty means the group is being used
@@ -27,7 +29,9 @@ OffsetCommitRequest => key 8, max version 9, flexible v8+, group coordinator
   // Topics is contains topics and partitions for which to commit offsets.
   Topics: [=>]
     // Topic is a topic to commit offsets for.
-    Topic: string
+    Topic: string // v0-v9
+    // TopicID is the topic ID, replacing Topic in v10+.
+    TopicID: uuid // v10+
     // Partitions contains partitions in a topic for which to commit offsets.
     Partitions: [=>]
       // Partition if a partition to commit offsets for.
@@ -55,7 +59,9 @@ OffsetCommitResponse =>
   // Topics contains responses for each topic / partition in the commit request.
   Topics: [=>]
     // Topic is the topic this offset commit response corresponds to.
-    Topic: string
+    Topic: string // v0-v9
+    // TopicID is the topic ID, replacing Topic in v10+.
+    TopicID: uuid // v10+
     // Partitions contains responses for each requested partition in
     // a topic.
     Partitions: [=>]

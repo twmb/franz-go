@@ -4,7 +4,10 @@
 // removed in Apacke Kafka 4.1.
 //
 // Version 1 is the initial stable version (KIP-932).
-ShareFetchRequest => key 78, max version 1, flexible v0+
+//
+// Version 2, introduced in Kafka 4.2, adds ShareAcquireMode (KIP-1206) and
+// IsRenewAck for renew acknowledgements (KIP-1222).
+ShareFetchRequest => key 78, max version 2, flexible v0+
   // GroupID is the group identifier.
   GroupID: nullable-string
   // MemberID is the member ID.
@@ -26,6 +29,12 @@ ShareFetchRequest => key 78, max version 1, flexible v0+
   // BatchSize is the optimal number of records for batches of acquired
   // records and acknowledgements.
   BatchSize: int32 // v1+
+  // ShareAcquireMode controls the fetch behavior:
+  // 0 = batch-optimized, 1 = record-limit.
+  ShareAcquireMode: int8 // v2+
+  // IsRenewAck indicates whether Renew type acknowledgements are present
+  // in AcknowledgementBatches.
+  IsRenewAck: bool // v2+
   // Topics are the topics to fetch.
   Topics: [=>]
     // TopicID is the unique topic ID.

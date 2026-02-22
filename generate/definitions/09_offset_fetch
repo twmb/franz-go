@@ -1,6 +1,8 @@
 // OffsetFetchRequest requests the most recent committed offsets for topic
 // partitions in a group.
-OffsetFetchRequest => key 9, max version 9, flexible v6+, group coordinator
+// Version 10, introduced in Kafka 4.2, replaces topic names with topic IDs
+// in the Groups field (KIP-848).
+OffsetFetchRequest => key 9, max version 10, flexible v6+, group coordinator
   // Group is the group to fetch offsets for.
   Group: string // v0-v7
   // Topics contains topics to fetch offets for. Version 2+ allows this to be
@@ -22,7 +24,9 @@ OffsetFetchRequest => key 9, max version 9, flexible v6+, group coordinator
     // The member epoch if using the new consumer protocol (KIP-848).
     MemberEpoch: int32(-1) // v9+
     Topics: nullable[=>]
-      Topic: string
+      Topic: string // v8-v9
+      // TopicID is the topic ID, replacing Topic in v10+.
+      TopicID: uuid // v10+
       Partitions: [int32]
   // RequireStable signifies whether the broker should wait on returning
   // unstable offsets, instead setting a retryable error on the relevant
@@ -83,7 +87,9 @@ OffsetFetchResponse =>
   Groups: [=>] // v8+
     Group: string
     Topics: [=>]
-      Topic: string
+      Topic: string // v8-v9
+      // TopicID is the topic ID, replacing Topic in v10+.
+      TopicID: uuid // v10+
       Partitions: [=>]
         Partition: int32
         Offset: int64
