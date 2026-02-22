@@ -1,5 +1,6 @@
 // WriteShareGroupStateRequest is a request to write share group state.
-WriteShareGroupStateRequest => key 85, max version 0, flexible v0+
+// Version 1, introduced in Kafka 4.2, adds DeliveryCompleteCount (KIP-1226).
+WriteShareGroupStateRequest => key 85, max version 1, flexible v0+
   // GroupID is the group identifier.
   GroupID: string
   // Topics are the data for the topics.
@@ -17,6 +18,9 @@ WriteShareGroupStateRequest => key 85, max version 0, flexible v0+
       // StartOffset is the share-partition start offset, or -1 if the start
       // offset is not being written.
       StartOffset: int64
+      // DeliveryCompleteCount is the number of offsets >= share-partition start
+      // offset for which delivery has been completed. -1 if not set.
+      DeliveryCompleteCount: int32(-1) // v1+
       // StateBatches are the state batches for the share-partition.
       StateBatches: [=>]
         // FirstOffset is the first offset of this state batch.
