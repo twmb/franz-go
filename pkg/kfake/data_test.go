@@ -52,10 +52,9 @@ func testGroup(assignor string, members map[string][]string, snap topicMetaSnap)
 	}
 	for mid, topics := range members {
 		g.consumerMembers[mid] = &consumerMember{
-			memberID:          mid,
-			subscribedTopics:  topics,
-			currentAssignment: make(map[uuid][]int32),
-			targetAssignment:  make(map[uuid][]int32),
+			memberID:         mid,
+			subscribedTopics: topics,
+			targetAssignment: make(map[uuid][]int32),
 		}
 	}
 	return g
@@ -282,10 +281,9 @@ func TestAssignUniformStickyRapidJoinsThenLeave(t *testing.T) {
 	// target recomputation immediately (no convergence between).
 	for _, mid := range allMembers {
 		g.consumerMembers[mid] = &consumerMember{
-			memberID:          mid,
-			subscribedTopics:  []string{"topic"},
-			currentAssignment: make(map[uuid][]int32),
-			targetAssignment:  make(map[uuid][]int32),
+			memberID:         mid,
+			subscribedTopics: []string{"topic"},
+			targetAssignment: make(map[uuid][]int32),
 		}
 		g.computeTargetAssignment(snap)
 	}
