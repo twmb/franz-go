@@ -39,9 +39,14 @@ var types = map[string]Type{
 
 // LineScanner is a shoddy scanner that allows us to peek an entire line.
 type LineScanner struct {
+	file   string
 	lineno int
 	buf    string
 	nlat   int
+}
+
+func (l *LineScanner) dief(why string, args ...any) {
+	die("%s:%d: "+why, append([]any{l.file, l.lineno}, args...)...)
 }
 
 func (l *LineScanner) Ok() bool {
@@ -94,32 +99,23 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key, level int) (done bool) {
 			continue
 		}
 
-		// ThrottleMillis is a special field:
-		// - we die if there is preceding documentation
-		// - there can only be a minimum version, no max
-		// - no tags
-		if strings.Contains(line, "ThrottleMillis") {
+		// ThrottleMillis and TimeoutMillis are special fields with
+		// their own syntax (no ": " separator). TimeoutMillis can
+		// also appear as a regular field (with ":"), so we only
+		// treat it specially when there is no colon.
+		if sf, ok := parseSpecialField(scanner, line); ok {
 			if nextComment != "" {
-				die("unexpected comment on ThrottleMillis: %s", nextComment)
+				scanner.dief("unexpected comment on %s: %s", sf.FieldName, nextComment)
 			}
-			s.Fields = append(s.Fields, parseThrottleMillis(line))
-			continue
-		}
-
-		// TimeoutMillis can be a special field, or it can be standard
-		// (for misc).
-		if strings.Contains(line, "TimeoutMillis") && !strings.Contains(line, ":") {
-			if nextComment != "" {
-				die("unexpected comment on TimeoutMillis: %s", nextComment)
-			}
-			s.Fields = append(s.Fields, parseTimeoutMillis(line))
+			nextComment = ""
+			s.Fields = append(s.Fields, sf)
 			continue
 		}
 
 		// Fields are name on left, type on right.
 		fields := strings.Split(line, ": ")
 		if len(fields) != 2 || len(fields[0]) == 0 || len(fields[1]) == 0 {
-			die("improper struct field format on line %q (%d)", line, scanner.lineno)
+			scanner.dief("improper struct field format on line %q", line)
 		}
 
 		f := StructField{
@@ -137,7 +133,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key, level int) (done bool) {
 		if idx := strings.Index(typ, " // "); idx >= 0 {
 			f.MinVersion, f.MaxVersion, f.Tag, err = parseFieldComment(typ[idx:])
 			if err != nil {
-				die("unable to parse field comment on line %q: %v", line, err)
+				scanner.dief("unable to parse field comment on line %q: %v", line, err)
 			}
 			typ = typ[:idx]
 		}
@@ -166,13 +162,13 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key, level int) (done bool) {
 					typ = typ[len("-v"):]
 					vend := strings.IndexByte(typ, '[')
 					if vend < 2 {
-						die("empty nullable array version number")
+						scanner.dief("empty nullable array version number")
 					}
 					if typ[vend-1] != '+' {
-						die("max version number bound is unhandled in arrays")
+						scanner.dief("max version number bound is unhandled in arrays")
 					}
 					if nullableVersion, err = strconv.Atoi(typ[:vend-1]); err != nil {
-						die("improper nullable array version number %q: %v", typ[:vend-1], err)
+						scanner.dief("improper nullable array version number %q: %v", typ[:vend-1], err)
 					}
 					typ = typ[vend:]
 				}
@@ -187,7 +183,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key, level int) (done bool) {
 		if start := strings.IndexByte(typ, '('); start >= 0 {
 			end := strings.IndexByte(typ[start:], ')')
 			if end <= 0 {
-				die("invalid default: start %d, end %d", start, end)
+				scanner.dief("invalid default: start %d, end %d", start, end)
 			}
 			hasDefault = true
 			def = typ[start+1 : start+end]
@@ -198,8 +194,8 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key, level int) (done bool) {
 			f.Comment += "// This field has a default of " + def + "."
 		}
 
-		switch {
-		case strings.HasPrefix(typ, "=>") || strings.HasPrefix(typ, "nullable=>"): // nested struct; recurse
+		if strings.HasPrefix(typ, "=>") || strings.HasPrefix(typ, "nullable=>") {
+			// Nested struct; recurse.
 			newS := Struct{
 				FromFlexible: s.FromFlexible,
 				FlexibleAt:   s.FlexibleAt,
@@ -218,69 +214,11 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key, level int) (done bool) {
 			done = newS.BuildFrom(scanner, key, level+1)
 			f.Type = newS
 			newStructs = append(newStructs, newS)
-
-		case strings.HasPrefix(typ, "length-field-minus => "): // special bytes referencing another field
-			typ = strings.TrimPrefix(typ, "length-field-minus => ")
-			from, minus, err := parseFieldLength(typ)
-			if err != nil {
-				die("unable to parse field-length-bytes in %q: %v", typ, err)
-			}
-			f.Type = FieldLengthMinusBytes{
-				Field:       from,
-				LengthMinus: minus,
-			}
-
-		case strings.HasPrefix(typ, "nullable-string-v"):
-			if typ[len(typ)-1] != '+' {
-				die("invalid missing + at end of nullable-string-v; nullable-strings cannot become nullable and then become non-nullable")
-			}
-			if nullableVersion, err = strconv.Atoi(typ[len("nullable-string-v") : len(typ)-1]); err != nil {
-				die("improper nullable string version number in %q: %v", typ, err)
-			}
-			f.Type = NullableString{
-				FromFlexible:    s.FromFlexible,
-				NullableVersion: nullableVersion,
-			}
-
-		case strings.HasPrefix(typ, "enum-"):
-			typ = strings.TrimPrefix(typ, "enum-")
-			if _, ok := enums[typ]; !ok {
-				die("unknown enum %q on line %q", typ, line)
-			}
-			f.Type = enums[typ]
-
+		} else {
+			f.Type = resolveType(scanner, s, typ, key, line)
 			if hasDefault {
 				f.Type = f.Type.(Defaulter).SetDefault(def)
 			}
-
-		default: // type is known, lookup and set
-			got := types[typ]
-			if got == nil {
-				die("unknown type %q on line %q", typ, line)
-			}
-			if s, ok := got.(Struct); ok {
-				// If this field's struct type specified no encoding, then it
-				// is not anonymous, but it is tied to a request and should be
-				// ordered by that request when generating code.
-				//
-				// The default key is -1, so if we still have they key, we fix
-				// it and also fix the key in the newStructs slice.
-				if s.WithNoEncoding && s.Key == -1 {
-					for i := range newStructs {
-						if newStructs[i].Name == s.Name {
-							newStructs[i].Key = key
-						}
-					}
-					s.Key = key
-					types[typ] = s
-				}
-			}
-			f.Type = got
-
-			if hasDefault {
-				f.Type = f.Type.(Defaulter).SetDefault(def)
-			}
-
 			if s.FromFlexible {
 				if setter, ok := f.Type.(FlexibleSetter); ok {
 					f.Type = setter.AsFromFlexible()
@@ -308,6 +246,106 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key, level int) (done bool) {
 	}
 
 	return done
+}
+
+// resolveType resolves a type name string to a Type, handling special type
+// prefixes (length-field-minus, nullable-string-v, enum-) and named type
+// lookup. The caller handles defaults and flexible setter application.
+func resolveType(scanner *LineScanner, s *Struct, typ string, key int, line string) Type {
+	switch {
+	case strings.HasPrefix(typ, "length-field-minus => "):
+		typ = strings.TrimPrefix(typ, "length-field-minus => ")
+		from, minus, err := parseFieldLength(typ)
+		if err != nil {
+			scanner.dief("unable to parse field-length-bytes in %q: %v", typ, err)
+		}
+		return FieldLengthMinusBytes{
+			Field:       from,
+			LengthMinus: minus,
+		}
+
+	case strings.HasPrefix(typ, "nullable-string-v"):
+		if typ[len(typ)-1] != '+' {
+			scanner.dief("invalid missing + at end of nullable-string-v; nullable-strings cannot become nullable and then become non-nullable")
+		}
+		nullableVersion, err := strconv.Atoi(typ[len("nullable-string-v") : len(typ)-1])
+		if err != nil {
+			scanner.dief("improper nullable string version number in %q: %v", typ, err)
+		}
+		return NullableString{
+			FromFlexible:    s.FromFlexible,
+			NullableVersion: nullableVersion,
+		}
+
+	case strings.HasPrefix(typ, "enum-"):
+		typ = strings.TrimPrefix(typ, "enum-")
+		if _, ok := enums[typ]; !ok {
+			scanner.dief("unknown enum %q on line %q", typ, line)
+		}
+		return enums[typ]
+
+	default:
+		got := types[typ]
+		if got == nil {
+			scanner.dief("unknown type %q on line %q", typ, line)
+		}
+		if s, ok := got.(Struct); ok {
+			// If this field's struct type specified no encoding, then it
+			// is not anonymous, but it is tied to a request and should be
+			// ordered by that request when generating code.
+			//
+			// The default key is -1, so if we still have the key, we fix
+			// it and also fix the key in the newStructs slice.
+			if s.WithNoEncoding && s.Key == -1 {
+				for i := range newStructs {
+					if newStructs[i].Name == s.Name {
+						newStructs[i].Key = key
+					}
+				}
+				s.Key = key
+				types[typ] = s
+			}
+		}
+		return got
+	}
+}
+
+// validateStructs validates all parsed structs. This centralizes checks that
+// were previously scattered across code generation, catching errors earlier
+// with clearer messages.
+func validateStructs() {
+	for _, s := range newStructs {
+		validateStructFields(s.Name, s.Fields, s.FromFlexible)
+	}
+}
+
+func validateStructFields(structName string, fields []StructField, fromFlexible bool) {
+	tags := make(map[int]StructField)
+	for _, f := range fields {
+		if f.MinVersion == -1 && f.MaxVersion > 0 {
+			die("struct %s field %s: unexpected negative min version %d while max version %d", structName, f.FieldName, f.MinVersion, f.MaxVersion)
+		}
+		if f.MinVersion == -1 && f.Tag < 0 {
+			die("struct %s field %s: min version -1 with no tag", structName, f.FieldName)
+		}
+		if f.Tag >= 0 {
+			if prev, exists := tags[f.Tag]; exists {
+				die("struct %s: duplicate tag %d on fields %s and %s", structName, f.Tag, prev.FieldName, f.FieldName)
+			}
+			tags[f.Tag] = f
+		}
+	}
+	if fromFlexible {
+		for i := range len(tags) {
+			f, exists := tags[i]
+			if !exists {
+				die("struct %s: saw %d tags, but did not see tag %d; expected monotonically increasing", structName, len(tags), i)
+			}
+			if _, canDefault := f.Type.(Defaulter); !canDefault {
+				die("struct %s field %s: tagged field has no Defaulter", structName, f.FieldName)
+			}
+		}
+	}
 }
 
 // 0: entire line
@@ -359,10 +397,10 @@ func parseFieldLength(in string) (string, int, error) {
 // 2: optional version introduced
 var throttleRe = regexp.MustCompile(`^ThrottleMillis(?:\((\d+)\))?(?: // v(\d+)\+)?$`)
 
-func parseThrottleMillis(in string) StructField {
+func parseThrottleMillis(scanner *LineScanner, in string) StructField {
 	match := throttleRe.FindStringSubmatch(in)
 	if len(match) == 0 {
-		die("throttle line does not match: %s", in)
+		scanner.dief("throttle line does not match: %s", in)
 	}
 
 	typ := Throttle{}
@@ -399,10 +437,10 @@ func parseThrottleMillis(in string) StructField {
 // 2: optional version introduced
 var timeoutRe = regexp.MustCompile(`^TimeoutMillis(?:\((\d+)\))?(?: // v(\d+)\+)?$`)
 
-func parseTimeoutMillis(in string) StructField {
+func parseTimeoutMillis(scanner *LineScanner, in string) StructField {
 	match := timeoutRe.FindStringSubmatch(in)
 	if len(match) == 0 {
-		die("timeout line does not match: %s", in)
+		scanner.dief("timeout line does not match: %s", in)
 	}
 
 	s := StructField{
@@ -426,17 +464,25 @@ func parseTimeoutMillis(in string) StructField {
 	return s
 }
 
-// 0: entire thing
-// 1: name
-// 2: "no encoding" if present
-// 3: "with version field" if present
-// 4: flexible version if present
-var notTopLevelRe = regexp.MustCompile(`^([A-Za-z0-9]+) => not top level(?:, (?:(no encoding)|(with version field))(?:, flexible v(\d+)\+)?)?$`)
+// parseSpecialField checks if a line is a special field (ThrottleMillis or
+// TimeoutMillis without a colon separator) and returns the parsed field.
+func parseSpecialField(scanner *LineScanner, line string) (StructField, bool) {
+	if strings.Contains(line, "ThrottleMillis") {
+		return parseThrottleMillis(scanner, line), true
+	}
+	if strings.Contains(line, "TimeoutMillis") && !strings.Contains(line, ":") {
+		return parseTimeoutMillis(scanner, line), true
+	}
+	return StructField{}, false
+}
+
+const notTopLevelSuffix = " => not top level"
 
 // Parse parses the raw contents of a messages file and adds all newly
 // parsed structs to newStructs.
-func Parse(raw []byte) {
+func Parse(file string, raw []byte) {
 	scanner := &LineScanner{
+		file: file,
 		buf:  string(raw),
 		nlat: -1,
 	}
@@ -477,29 +523,30 @@ func Parse(raw []byte) {
 		flexibleAt := -1
 		fromFlexible := false
 
-		nameMatch := notTopLevelRe.FindStringSubmatch(line)
 		name := line
-		parseNoEncodingFlexible := func() {
-			name = nameMatch[1]
-			if nameMatch[4] != "" {
-				flexible, err := strconv.Atoi(nameMatch[4])
-				if err != nil || flexible < 0 {
-					die("flexible version on line %q parse err: %v", line, err)
+		if idx := strings.Index(line, notTopLevelSuffix); idx > 0 {
+			name = line[:idx]
+			rem := line[idx+len(notTopLevelSuffix):]
+			if rem != "" {
+				for _, part := range strings.Split(strings.TrimPrefix(rem, ", "), ", ") {
+					switch {
+					case part == "no encoding":
+						withNoEncoding = true
+					case part == "with version field":
+						withVersionField = true
+					case strings.HasPrefix(part, "flexible v"):
+						vstr := strings.TrimSuffix(part[len("flexible v"):], "+")
+						flexible, err := strconv.Atoi(vstr)
+						if err != nil || flexible < 0 {
+							scanner.dief("flexible version on line %q parse err: %v", line, err)
+						}
+						flexibleAt = flexible
+						fromFlexible = true
+					default:
+						scanner.dief("unknown not-top-level modifier %q on line %q", part, line)
+					}
 				}
-				flexibleAt = flexible
-				fromFlexible = true
 			}
-		}
-		switch {
-		case len(nameMatch) == 0:
-		case nameMatch[2] != "":
-			withNoEncoding = true
-			parseNoEncodingFlexible()
-		case nameMatch[3] != "":
-			withVersionField = true
-			parseNoEncodingFlexible()
-		default: // simply "not top level"
-			name = nameMatch[1]
 		}
 
 		key := -1
@@ -529,7 +576,7 @@ func Parse(raw []byte) {
 			last := strings.Replace(name, "Response =>", "Request", 1)
 			prior := &newStructs[len(newStructs)-1]
 			if prior.Name != last {
-				die("from %q does not refer to last message defn on line %q", last, line)
+				scanner.dief("from %q does not refer to last message defn on line %q", last, line)
 			}
 			name = strings.TrimSuffix(name, " =>")
 			prior.ResponseKind = name
@@ -545,71 +592,46 @@ func Parse(raw []byte) {
 		}
 
 		// At this point, we are dealing with a top level request.
-		// The order, l to r, is key, version, admin/group/txn.
-		// We strip and process r to l.
-		delim := strings.Index(name, " =>")
+		// Format: Name => key N, max version N[, admin|group coordinator|txn coordinator][, flexible vN+]
+		delim := strings.Index(name, " => ")
 		if delim == -1 {
-			die("missing struct delimiter on line %q", line)
+			scanner.dief("missing struct delimiter on line %q", line)
 		}
-		rem := name[delim+3:]
+		modifiers := name[delim+4:]
 		name = name[:delim]
 
-		if idx := strings.Index(rem, ", admin"); idx > 0 {
-			s.Admin = true
-			if rem[idx:] != ", admin" {
-				die("unknown content after \"admin\" in %q", rem[idx:])
-			}
-			rem = rem[:idx]
-		} else if idx := strings.Index(rem, ", group coordinator"); idx > 0 {
-			s.GroupCoordinator = true
-			if rem[idx:] != ", group coordinator" {
-				die("unknown content after \"group coordinator\" in %q", rem[idx:])
-			}
-			rem = rem[:idx]
-		} else if idx := strings.Index(rem, ", txn coordinator"); idx > 0 {
-			s.TxnCoordinator = true
-			if rem[idx:] != ", txn coordinator" {
-				die("unknown content q after \"txn coordinator\" in %q", rem[idx:])
-			}
-			rem = rem[:idx]
-		}
-
-		if strings.HasSuffix(rem, "+") {
-			const flexibleStr = ", flexible v"
-			if idx := strings.Index(rem, flexibleStr); idx == -1 {
-				die("missing flexible text on string ending with + in %q", rem)
-			} else {
-				flexible, err := strconv.Atoi(rem[idx+len(flexibleStr) : len(rem)-1])
+		for _, part := range strings.Split(modifiers, ", ") {
+			switch {
+			case strings.HasPrefix(part, "key "):
+				var err error
+				if key, err = strconv.Atoi(part[len("key "):]); err != nil {
+					scanner.dief("key on line %q parse err: %v", line, err)
+				}
+				if key > maxKey {
+					maxKey = key
+				}
+			case strings.HasPrefix(part, "max version "):
+				max, err := strconv.Atoi(part[len("max version "):])
+				if err != nil {
+					scanner.dief("max version on line %q parse err: %v", line, err)
+				}
+				s.MaxVersion = max
+			case part == "admin":
+				s.Admin = true
+			case part == "group coordinator":
+				s.GroupCoordinator = true
+			case part == "txn coordinator":
+				s.TxnCoordinator = true
+			case strings.HasPrefix(part, "flexible v"):
+				vstr := strings.TrimSuffix(part[len("flexible v"):], "+")
+				flexible, err := strconv.Atoi(vstr)
 				if err != nil || flexible < 0 {
-					die("flexible version on line %q parse err: %v", line, err)
+					scanner.dief("flexible version on line %q parse err: %v", line, err)
 				}
 				s.FlexibleAt = flexible
 				s.FromFlexible = true
-				rem = rem[:idx]
-			}
-		}
-
-		const maxStr = ", max version "
-		if idx := strings.Index(rem, maxStr); idx == -1 {
-			die("missing max version on line %q", line)
-		} else {
-			max, err := strconv.Atoi(rem[idx+len(maxStr):])
-			if err != nil {
-				die("max version on line %q parse err: %v", line, err)
-			}
-			s.MaxVersion = max
-			rem = rem[:idx]
-		}
-		const keyStr = " key "
-		if idx := strings.Index(rem, keyStr); idx == -1 {
-			die("missing key on line %q", line)
-		} else {
-			var err error
-			if key, err = strconv.Atoi(rem[idx+len(keyStr):]); err != nil {
-				die("key on line %q pare err: %v", line, err)
-			}
-			if key > maxKey {
-				maxKey = key
+			default:
+				scanner.dief("unknown request modifier %q on line %q", part, line)
 			}
 		}
 
@@ -617,8 +639,9 @@ func Parse(raw []byte) {
 	}
 }
 
-func ParseEnums(raw []byte) {
+func ParseEnums(file string, raw []byte) {
 	scanner := &LineScanner{
+		file: file,
 		buf:  string(raw),
 		nlat: -1,
 	}
@@ -665,7 +688,7 @@ func ParseEnums(raw []byte) {
 		}
 		nameMatch := enumNameRe.FindStringSubmatch(line)
 		if len(nameMatch) == 0 {
-			die("invalid enum name, unable to match `Name type (`")
+			scanner.dief("invalid enum name, unable to match `Name type (`")
 		}
 
 		e := Enum{
@@ -697,14 +720,14 @@ func ParseEnums(raw []byte) {
 
 			switch {
 			default:
-				die("unable to determine line %s", line)
+				scanner.dief("unable to determine line %s", line)
 			case strings.HasPrefix(line, "  //"):
 				canStop = false
 				writeComment(line)
 			case len(fieldMatch) > 0:
 				num, err := strconv.Atoi(fieldMatch[1])
 				if err != nil {
-					die("unable to convert to number on line %s", line)
+					scanner.dief("unable to convert to number on line %s", line)
 				}
 				ev.Value = num
 				ev.Word = fieldMatch[2]
@@ -716,7 +739,7 @@ func ParseEnums(raw []byte) {
 			}
 		}
 		if !canStop {
-			die("invalid enum ending with a comment")
+			scanner.dief("invalid enum ending with a comment")
 		}
 
 		enums[e.Name] = e

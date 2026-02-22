@@ -186,6 +186,22 @@ type Defaulter interface {
 	GetTypeDefault() any
 }
 
+// Parse helpers for default values, dying on error.
+func mustParseInt(s, name string, bitSize int) int64 {
+	v, err := strconv.ParseInt(s, 0, bitSize)
+	if err != nil {
+		die("invalid %s default: %v", name, err)
+	}
+	return v
+}
+func mustParseUint(s, name string, base, bitSize int) uint64 {
+	v, err := strconv.ParseUint(s, base, bitSize)
+	if err != nil {
+		die("invalid %s default: %v", name, err)
+	}
+	return v
+}
+
 func (e Enum) SetDefault(s string) Type {
 	e.Type = e.Type.(Defaulter).SetDefault(s)
 	return e
@@ -206,48 +222,28 @@ func (b Bool) GetDefault() (any, bool) { return b.Default, b.HasDefault }
 func (Bool) GetTypeDefault() any       { return false }
 
 func (i Int8) SetDefault(s string) Type {
-	v, err := strconv.ParseInt(s, 0, 8)
-	if err != nil {
-		die("invalid int8 default: %v", err)
-	}
-	i.Default = int8(v)
-	i.HasDefault = true
+	i.Default, i.HasDefault = int8(mustParseInt(s, "int8", 8)), true
 	return i
 }
 func (i Int8) GetDefault() (any, bool) { return i.Default, i.HasDefault }
 func (Int8) GetTypeDefault() any       { return 0 }
 
 func (i Int16) SetDefault(s string) Type {
-	v, err := strconv.ParseInt(s, 0, 16)
-	if err != nil {
-		die("invalid int16 default: %v", err)
-	}
-	i.Default = int16(v)
-	i.HasDefault = true
+	i.Default, i.HasDefault = int16(mustParseInt(s, "int16", 16)), true
 	return i
 }
 func (i Int16) GetDefault() (any, bool) { return i.Default, i.HasDefault }
 func (Int16) GetTypeDefault() any       { return 0 }
 
 func (u Uint16) SetDefault(s string) Type {
-	v, err := strconv.ParseUint(s, 0, 16)
-	if err != nil {
-		die("invalid uint16 default: %v", err)
-	}
-	u.Default = uint16(v)
-	u.HasDefault = true
+	u.Default, u.HasDefault = uint16(mustParseUint(s, "uint16", 0, 16)), true
 	return u
 }
 func (u Uint16) GetDefault() (any, bool) { return u.Default, u.HasDefault }
 func (Uint16) GetTypeDefault() any       { return 0 }
 
 func (i Int32) SetDefault(s string) Type {
-	v, err := strconv.ParseInt(s, 0, 32)
-	if err != nil {
-		die("invalid int32 default: %v", err)
-	}
-	i.Default = int32(v)
-	i.HasDefault = true
+	i.Default, i.HasDefault = int32(mustParseInt(s, "int32", 32)), true
 	return i
 }
 func (i Int32) GetDefault() (any, bool) { return i.Default, i.HasDefault }
@@ -259,12 +255,7 @@ func (t Timeout) SetDefault(s string) Type {
 }
 
 func (i Int64) SetDefault(s string) Type {
-	v, err := strconv.ParseInt(s, 0, 64)
-	if err != nil {
-		die("invalid int64 default: %v", err)
-	}
-	i.Default = v
-	i.HasDefault = true
+	i.Default, i.HasDefault = mustParseInt(s, "int64", 64), true
 	return i
 }
 func (i Int64) GetDefault() (any, bool) { return i.Default, i.HasDefault }
@@ -275,44 +266,28 @@ func (f Float64) SetDefault(s string) Type {
 	if err != nil {
 		die("invalid float64 default: %v", err)
 	}
-	f.Default = v
-	f.HasDefault = true
+	f.Default, f.HasDefault = v, true
 	return f
 }
 func (f Float64) GetDefault() (any, bool) { return f.Default, f.HasDefault }
 func (Float64) GetTypeDefault() any       { return 0 }
 
 func (u Uint32) SetDefault(s string) Type {
-	v, err := strconv.ParseUint(s, 10, 32)
-	if err != nil {
-		die("invalid uint32 default: %v", err)
-	}
-	u.Default = uint32(v)
-	u.HasDefault = true
+	u.Default, u.HasDefault = uint32(mustParseUint(s, "uint32", 10, 32)), true
 	return u
 }
 func (u Uint32) GetDefault() (any, bool) { return u.Default, u.HasDefault }
 func (Uint32) GetTypeDefault() any       { return 0 }
 
 func (i Varint) SetDefault(s string) Type {
-	v, err := strconv.ParseInt(s, 0, 32)
-	if err != nil {
-		die("invalid varint default: %v", err)
-	}
-	i.Default = int32(v)
-	i.HasDefault = true
+	i.Default, i.HasDefault = int32(mustParseInt(s, "varint", 32)), true
 	return i
 }
 func (i Varint) GetDefault() (any, bool) { return i.Default, i.HasDefault }
 func (Varint) GetTypeDefault() any       { return 0 }
 
 func (i Varlong) SetDefault(s string) Type {
-	v, err := strconv.ParseInt(s, 0, 64)
-	if err != nil {
-		die("invalid varlong default: %v", err)
-	}
-	i.Default = v
-	i.HasDefault = true
+	i.Default, i.HasDefault = mustParseInt(s, "varlong", 64), true
 	return i
 }
 func (i Varlong) GetDefault() (any, bool) { return i.Default, i.HasDefault }
@@ -437,28 +412,31 @@ func main() {
 	}
 
 	{ // first parse all enums for use in definitions
-		f, err := os.ReadFile(filepath.Join(dir, enums))
+		path := filepath.Join(dir, enums)
+		f, err := os.ReadFile(path)
 		if err != nil {
-			die("unable to read %s/%s: %v", dir, enums, err)
+			die("unable to read %s: %v", path, err)
 		}
-		ParseEnums(f)
+		ParseEnums(path, f)
 	}
 
 	for _, ent := range dirents {
 		if ent.Name() == enums || strings.HasPrefix(ent.Name(), ".") {
 			continue
 		}
-		f, err := os.ReadFile(filepath.Join(dir, ent.Name()))
+		path := filepath.Join(dir, ent.Name())
+		f, err := os.ReadFile(path)
 		if err != nil {
-			die("unable to read %s/%s: %v", dir, ent.Name(), err)
+			die("unable to read %s: %v", path, err)
 		}
-		Parse(f)
+		Parse(path, f)
 	}
 	for _, s := range newStructs {
 		if s.TopLevel {
 			validateMaxVersions(&s, &s)
 		}
 	}
+	validateStructs()
 
 	l := &LineWriter{buf: bytes.NewBuffer(make([]byte, 0, 300<<10))}
 	l.Write("package kmsg")
