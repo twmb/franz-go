@@ -1,5 +1,6 @@
 // DescribeShareGroupOffsetsRequest is a request to describe share group offsets.
-DescribeShareGroupOffsetsRequest => key 90, max version 0, flexible v0+
+// Version 1, introduced in Kafka 4.2, adds Lag to the response (KIP-1226).
+DescribeShareGroupOffsetsRequest => key 90, max version 1, flexible v0+
   // Groups are the groups to describe offsets for.
   Groups: [=>]
     // GroupID is the group identifier.
@@ -43,6 +44,8 @@ DescribeShareGroupOffsetsResponse =>
         StartOffset: int64
         // LeaderEpoch is the leader epoch of the partition.
         LeaderEpoch: int32
+        // Lag is the share-partition lag. -1 if not available.
+        Lag: int64(-1) // v1+
         // ErrorCode is the partition-level error code, or 0 if there was no
         // error.
         ErrorCode: int16
