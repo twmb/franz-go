@@ -72,13 +72,10 @@
 
 ## 68_consumer_group_heartbeat (KIP-848)
 - SubscribedTopicRegex: RE2 syntax, not Java RE2J
-- Member epoch advancement only when fully converged: kfake's conservative
-  approach is safe and simpler. Advancing in UNRELEASED_PARTITIONS state
-  only affects convergence speed, not correctness.
-- No ASSIGNING/UNRELEASED_PARTITIONS states: kfake uses empty/reconciling/stable.
-  Missing intermediate states don't affect kgo client behavior.
-- Metadata hash / metadata expiration: deliberate divergence; kfake recomputes
-  assignments on every relevant heartbeat rather than caching a metadata hash
+- Metadata hash: kfake uses notifyTopicChange() from the cluster run loop
+  instead of hashing metadata. Functionally equivalent for in-process use.
+- Group downgrade (consumer -> classic): not supported. Once a group
+  upgrades to "consumer" type, it stays that way.
 
 ## General
 - Tiered storage: Not implemented (KIP-405, KIP-1005)
