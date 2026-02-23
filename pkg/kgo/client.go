@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/sasl"
 )
@@ -44,7 +45,7 @@ type Client struct {
 
 	rng func(func(*rand.Rand))
 
-	brokersMu    sync.RWMutex
+	brokersMu    xsync.RWMutex
 	brokers      []*broker    // ordered by broker ID
 	seeds        atomic.Value // []*broker, seed brokers, also ordered by ID
 	anyBrokerOrd []int32      // shuffled brokers, for random ordering
@@ -57,7 +58,7 @@ type Client struct {
 	// The mutex only exists to allow consumer session stopping to read
 	// sources to notify when starting a session; all writes happen in the
 	// metadata loop.
-	sinksAndSourcesMu sync.Mutex
+	sinksAndSourcesMu xsync.Mutex
 	sinksAndSources   map[int32]sinkAndSource
 
 	reqFormatter  *kmsg.RequestFormatter
@@ -66,14 +67,14 @@ type Client struct {
 	bufPool bufPool // for to brokers to share underlying reusable request buffers
 	prsPool prsPool // for sinks to reuse []promisedNumberedRecord
 
-	controllerIDMu sync.Mutex
+	controllerIDMu xsync.Mutex
 	controllerID   int32
 	clusterID      *string // we piggy back updating clusterID
 
 	// The following two ensure that we only have one fetchBrokerMetadata
 	// at once. This avoids unnecessary broker metadata requests and
 	// metadata trampling.
-	fetchingBrokersMu sync.Mutex
+	fetchingBrokersMu xsync.Mutex
 	fetchingBrokers   *struct {
 		done chan struct{}
 		err  error
@@ -85,7 +86,7 @@ type Client struct {
 
 	metrics metrics
 
-	coordinatorsMu sync.Mutex
+	coordinatorsMu xsync.Mutex
 	coordinators   map[coordinatorKey]*coordinatorLoad
 
 	updateMetadataCh     chan string
@@ -95,7 +96,7 @@ type Client struct {
 	metadone             chan struct{}
 
 	metaCache struct {
-		mu     sync.Mutex
+		mu     xsync.Mutex
 		topics map[string]cachedMetaTopic
 		byID   map[[16]byte]string // TopicID => topic name
 		allAt  time.Time           // when last all-topics fetch completed
@@ -520,7 +521,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		ctxCancel: cancel,
 
 		rng: func() func(func(*rand.Rand)) {
-			var mu sync.Mutex
+			var mu xsync.Mutex
 			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 			return func(fn func(*rand.Rand)) {
 				mu.Lock()
@@ -768,7 +769,7 @@ func parseBrokerAddr(addr string) (hostport, error) {
 
 type connTimeouter struct {
 	def                  time.Duration
-	joinMu               sync.Mutex
+	joinMu               xsync.Mutex
 	lastRebalanceTimeout time.Duration
 }
 
@@ -2500,7 +2501,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 	}
 
 	var (
-		shardsMu sync.Mutex
+		shardsMu xsync.Mutex
 		shards   []ResponseShard
 
 		addShard = func(shard ResponseShard) {

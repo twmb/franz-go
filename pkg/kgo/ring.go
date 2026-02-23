@@ -1,7 +1,7 @@
 package kgo
 
 import (
-	"sync"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 )
 
 // The ring type below in based on fixed sized blocking MPSC ringbuffer
@@ -46,7 +46,7 @@ const (
 )
 
 type ring[T any] struct {
-	mu sync.Mutex
+	mu xsync.Mutex
 
 	elems [eight]T
 

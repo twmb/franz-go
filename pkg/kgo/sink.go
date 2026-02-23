@@ -14,6 +14,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -35,7 +36,7 @@ type sink struct {
 	// but sequentially.
 	seqResps ring[*seqResp] // we never call die() on it
 
-	backoffMu   sync.Mutex // guards the following
+	backoffMu   xsync.Mutex // guards the following
 	needBackoff bool
 	backoffSeq  uint32 // prevents pile on failures
 
@@ -45,7 +46,7 @@ type sink struct {
 	// occurs, the backoff is not cleared.
 	consecutiveFailures atomic.Uint32
 
-	recBufsMu    sync.Mutex // guards the following
+	recBufsMu    xsync.Mutex // guards the following
 	recBufs      []*recBuf  // contains all partition records for batch building
 	recBufsStart int        // incremented every req to avoid large batch starvation
 }
@@ -339,7 +340,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// context.Canceled error is from *that* context rather than the client
 	// context or something else. So, we go through some special care to
 	// track setting the ctx / looking up if it is canceled.
-	var holCtxMu sync.Mutex
+	var holCtxMu xsync.Mutex
 	var holCtx context.Context
 	ctxFn := func() context.Context {
 		holCtxMu.Lock()
@@ -1317,7 +1318,7 @@ type recBuf struct {
 	// of records buffered in total on this recBuf.
 	buffered atomic.Int64
 
-	mu sync.Mutex // guards r/w access to all fields below
+	mu xsync.Mutex // guards r/w access to all fields below
 
 	// sink is who is currently draining us. This can be modified
 	// concurrently during a metadata update.
@@ -1700,7 +1701,7 @@ type recBatch struct {
 	firstTimestamp    int64 // since unix epoch, in millis
 	maxTimestampDelta int64
 
-	mu      sync.Mutex    // guards appendTo's reading of records against failAllRecords emptying it
+	mu      xsync.Mutex   // guards appendTo's reading of records against failAllRecords emptying it
 	records []promisedRec // record w/ length, ts calculated
 }
 

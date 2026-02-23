@@ -8,10 +8,10 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -288,7 +288,7 @@ func newTopicPartitions() *topicPartitions {
 type topicPartitions struct {
 	v atomic.Value // *topicPartitionsData
 
-	partsMu     sync.Mutex
+	partsMu     xsync.Mutex
 	partitioner TopicPartitioner
 	lb          *leastBackupInput // for partitioning if the partitioner is a LoadTopicPartitioner
 }

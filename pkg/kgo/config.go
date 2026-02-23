@@ -11,9 +11,9 @@ import (
 	"net"
 	"regexp"
 	"runtime/debug"
-	"sync"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl"
@@ -512,7 +512,7 @@ func defaultCfg() cfg {
 		maxVersions: kversion.Stable(), // kversion bumps what is returned from Stable on the same release we add support for new features to kgo
 
 		retryBackoff: func() func(int) time.Duration {
-			var rngMu sync.Mutex
+			var rngMu xsync.Mutex
 			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 			return func(fails int) time.Duration {
 				const (

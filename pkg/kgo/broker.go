@@ -20,6 +20,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/sasl"
 )
@@ -157,7 +158,7 @@ type broker struct {
 	cxnGroup   *brokerCxn
 	cxnSlow    *brokerCxn
 
-	reapMu sync.Mutex // held when modifying a brokerCxn
+	reapMu xsync.Mutex // held when modifying a brokerCxn
 
 	// reqs manages incoming message requests.
 	reqs ring[promisedReq]
@@ -1436,7 +1437,7 @@ func (cxn *brokerCxn) discard() {
 			err        error
 			timeToRead time.Duration
 
-			deadlineMu  sync.Mutex
+			deadlineMu  xsync.Mutex
 			deadlineSet bool
 
 			readDone = make(chan struct{})

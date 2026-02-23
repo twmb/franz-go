@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 type producer struct {
 	// mu and c are used for flush and drain notifications; mu is used for
 	// a few other tight locks.
-	mu sync.Mutex
+	mu xsync.Mutex
 	c  *sync.Cond
 
 	bufferedRecords int64
@@ -24,7 +25,7 @@ type producer struct {
 
 	cl *Client
 
-	topicsMu sync.Mutex // locked to prevent concurrent updates; reads are always atomic
+	topicsMu xsync.Mutex // locked to prevent concurrent updates; reads are always atomic
 	topics   *topicsPartitions
 
 	// Hooks exist behind a pointer because likely they are not used.
@@ -40,7 +41,7 @@ type producer struct {
 	// unknownTopics buffers all records for topics that are not loaded.
 	// The map is to a pointer to a slice for reasons documented in
 	// waitUnknownTopic.
-	unknownTopicsMu sync.Mutex
+	unknownTopicsMu xsync.Mutex
 	unknownTopics   map[string]*unknownTopicProduces
 
 	id           atomic.Value
@@ -55,12 +56,12 @@ type producer struct {
 
 	aborting atomic.Int32 // >0 if aborting, can abort many times concurrently
 
-	idMu      sync.Mutex
+	idMu      xsync.Mutex
 	idVersion int16
 
 	batchPromises ring[batchPromise] // we never call die() on it
 
-	txnMu   sync.Mutex
+	txnMu   xsync.Mutex
 	inTxn   bool
 	tx890p2 bool
 }
@@ -102,7 +103,7 @@ func (cl *Client) EnsureProduceConnectionIsOpen(ctx context.Context, brokers ...
 		keep = brokers[:0]
 		all  bool
 		wg   sync.WaitGroup
-		mu   sync.Mutex
+		mu   xsync.Mutex
 		errs []error
 	)
 	for _, b := range brokers {
