@@ -14,7 +14,7 @@ import (
 var requireStable = func() *string { s := "require_stable"; return &s }()
 
 // RequireStable returns a context that causes [FetchOffsets],
-// [FetchOffsetsForTopics], and [FetchManyOffsets] to
+// [FetchOffsetsForTopics], [FetchManyOffsets], and [FetchOffsetsByID] to
 // set RequireStable on the underlying OffsetFetch request. When enabled,
 // the broker blocks until any pending transactional offset commits are
 // resolved (KIP-447, Kafka 2.5+). On older brokers, this field is
@@ -2638,10 +2638,16 @@ func (cl *Client) CommitAllOffsetsByID(ctx context.Context, group string, os Off
 // brokers that respond with topic names instead of IDs, topic names are
 // resolved to IDs via metadata.
 //
+// Use [RequireStable] to block until pending transactional offset commits are
+// resolved.
+//
 // This method requires talking to Kafka v0.11+.
 func (cl *Client) FetchOffsetsByID(ctx context.Context, group string) (OffsetResponsesByID, error) {
 	req := kmsg.NewPtrOffsetFetchRequest()
 	req.Group = group
+	if ctx.Value(requireStable) != nil {
+		req.RequireStable = true
+	}
 	resp, err := req.RequestWith(ctx, cl.cl)
 	if err != nil {
 		return nil, err
