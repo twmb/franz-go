@@ -54,21 +54,26 @@ func errInvalidReference(ref sr.SchemaReference) *registryError {
 }
 
 func errInvalidSchema(msg string) *registryError {
-	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, msg)
+	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "%s", msg)
 }
 
-func errInvalidSchemaWithCause(cause error, msg string) *registryError {
-	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, msg)
+func errInvalidSchemaWithCause(_ error, msg string) *registryError {
+	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "%s", msg)
 }
 
 func errInvalidVersion(msg string) *registryError {
-	return newErr(http.StatusBadRequest, sr.ErrInvalidVersion.Code, msg)
+	return newErr(http.StatusBadRequest, sr.ErrInvalidVersion.Code, "%s", msg)
 }
 
 func errInvalidCompatLevel(msg string) *registryError {
-	return newErr(http.StatusBadRequest, sr.ErrInvalidCompatibilityLevel.Code, msg)
+	return newErr(http.StatusBadRequest, sr.ErrInvalidCompatibilityLevel.Code, "%s", msg)
 }
 
 func errCircularDependency(subject string) *registryError {
 	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "circular dependency detected: subject %s is referenced in a cycle", subject)
+}
+
+func errContextNotEmpty(context string) *registryError {
+	return newErr(http.StatusConflict, sr.ErrOperationNotPermitted.Code,
+		"context %q is not empty", context)
 }
