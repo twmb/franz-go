@@ -2664,6 +2664,58 @@ func TestIssue1248(t *testing.T) {
 	}
 }
 
+// TestDeleteRecordsThenProduce verifies that producing after deleting all
+// records does not panic. trimLeft must properly adjust maxTimestampBatchIdx
+// so that a subsequent pushBatch does not access a stale index.
+func TestDeleteRecordsThenProduce(t *testing.T) {
+	t.Parallel()
+	const topic = "delete-then-produce"
+
+	c, err := NewCluster(NumBrokers(1), SeedTopics(1, topic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(topic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Step 1: Produce some records to create batches.
+	for i := 0; i < 5; i++ {
+		if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Step 2: Delete all records (sets logStartOffset to HWM, trimLeft
+	// removes all batches). This is the operation that used to leave
+	// maxTimestampBatchIdx stale.
+	adm := kadm.NewClient(cl)
+	deleteOffsets := kadm.Offsets{}
+	deleteOffsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: -1}) // -1 = high watermark
+	_, err = adm.DeleteRecords(ctx, deleteOffsets)
+	if err != nil {
+		t.Fatalf("delete records: %v", err)
+	}
+
+	// Step 3: Produce again. Before the fix, pushBatch would panic with
+	// "index out of range" accessing pd.batches[maxTimestampBatchIdx].
+	for i := 0; i < 5; i++ {
+		if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // connCountHook implements HookBrokerConnect to count new connections.
 type connCountHook struct {
 	connects *atomic.Int32
