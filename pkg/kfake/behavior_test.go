@@ -796,66 +796,108 @@ func TestOffsetCommitAfterLeaveClassic(t *testing.T) {
 // group after the member has left.
 func TestOffsetCommitAfterLeave848(t *testing.T) {
 	t.Parallel()
-	topic := "commit-after-leave-848"
-	group := "commit-after-leave-848-group"
+	for _, tc := range []struct {
+		name string
+		opts []kfake.Opt
+	}{
+		{"v10", nil},
+		{"v9", func() []kfake.Opt {
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(8, 9)
+			v.SetMaxKeyVersion(9, 9)
+			return []kfake.Opt{kfake.MaxVersions(v)}
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "commit-after-leave-848-" + tc.name
+			group := "commit-after-leave-848-group-" + tc.name
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	produceNStrings(t, producer, topic, 10)
+			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			c := newCluster(t, opts...)
+			producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			produceNStrings(t, producer, topic, 10)
 
-	// 848 consumer.
-	consumer := newClient848(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.DisableAutoCommit(),
-	)
-	consumeN(t, consumer, 10, 10*time.Second)
+			// 848 consumer.
+			consumer := newClient848(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.DisableAutoCommit(),
+			)
+			consumeN(t, consumer, 10, 10*time.Second)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-	// Close the consumer (triggers leave via heartbeat with epoch -1).
-	consumer.Close()
+			// Close the consumer (triggers leave via heartbeat with epoch -1).
+			consumer.Close()
 
-	// Admin-style commit with v9 OffsetCommit: empty memberID, generation -1.
-	commitReq := kmsg.NewOffsetCommitRequest()
-	commitReq.Version = 9
-	commitReq.Group = group
-	commitReq.Generation = -1
-	rt := kmsg.NewOffsetCommitRequestTopic()
-	rt.Topic = topic
-	rp := kmsg.NewOffsetCommitRequestTopicPartition()
-	rp.Partition = 0
-	rp.Offset = 10
-	rt.Partitions = append(rt.Partitions, rp)
-	commitReq.Topics = append(commitReq.Topics, rt)
+			// Admin-style commit: empty memberID, generation -1.
+			// Set both Topic and TopicID: v9 uses Topic, v10 uses TopicID.
+			ti := c.TopicInfo(topic)
+			raw := newClient848(t, c)
 
-	raw := newClient848(t, c)
-	commitResp, err := commitReq.RequestWith(ctx, raw)
-	if err != nil {
-		t.Fatalf("commit request failed: %v", err)
-	}
-	for _, t2 := range commitResp.Topics {
-		for _, p := range t2.Partitions {
-			if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-				t.Fatalf("commit partition %d error: %v", p.Partition, err)
+			commitReq := kmsg.NewOffsetCommitRequest()
+			commitReq.Group = group
+			commitReq.Generation = -1
+			rt := kmsg.NewOffsetCommitRequestTopic()
+			rt.Topic = topic
+			rt.TopicID = ti.TopicID
+			rp := kmsg.NewOffsetCommitRequestTopicPartition()
+			rp.Partition = 0
+			rp.Offset = 10
+			rt.Partitions = append(rt.Partitions, rp)
+			commitReq.Topics = append(commitReq.Topics, rt)
+
+			commitResp, err := commitReq.RequestWith(ctx, raw)
+			if err != nil {
+				t.Fatalf("commit request failed: %v", err)
 			}
-		}
-	}
+			for _, t2 := range commitResp.Topics {
+				for _, p := range t2.Partitions {
+					if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+						t.Fatalf("commit partition %d error: %v", p.Partition, err)
+					}
+				}
+			}
 
-	// Verify committed offsets.
-	adm := kadm.NewClient(raw)
-	fetched, err := adm.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok := fetched.Lookup(topic, 0)
-	if !ok {
-		t.Fatal("no committed offset found after commit-after-leave")
-	}
-	if o.At != 10 {
-		t.Errorf("expected committed offset 10, got %d", o.At)
+			// Verify committed offsets.
+			adm := kadm.NewClient(raw)
+			fetched, err := adm.FetchOffsets(ctx, group)
+			if err != nil {
+				t.Fatalf("fetch offsets failed: %v", err)
+			}
+			o, ok := fetched.Lookup(topic, 0)
+			if !ok {
+				t.Fatal("no committed offset found after commit-after-leave")
+			}
+			if o.At != 10 {
+				t.Errorf("expected committed offset 10, got %d", o.At)
+			}
+
+			// Also test kadm commit (auto-resolves TopicIDs from topic names via metadata).
+			offsets := kadm.Offsets{}
+			offsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: 8, LeaderEpoch: -1})
+			rs, err := adm.CommitOffsets(ctx, group, offsets)
+			if err != nil {
+				t.Fatalf("kadm commit failed: %v", err)
+			}
+			if err := rs.Error(); err != nil {
+				t.Fatalf("kadm commit response error: %v", err)
+			}
+			fetched, err = adm.FetchOffsets(ctx, group)
+			if err != nil {
+				t.Fatalf("kadm fetch after commit failed: %v", err)
+			}
+			o, ok = fetched.Lookup(topic, 0)
+			if !ok {
+				t.Fatal("no committed offset after kadm commit")
+			}
+			if o.At != 8 {
+				t.Errorf("expected committed offset 8 after kadm commit, got %d", o.At)
+			}
+		})
 	}
 }
 
@@ -3876,3 +3918,271 @@ func TestApiVersionsSupportedFeatures(t *testing.T) {
 		t.Fatal("group.version should still be present")
 	}
 }
+
+// TestOffsetCommitTopicID verifies that kadm CommitOffsets/FetchOffsets works
+// end-to-end with a v10-capable broker (TopicID-based OffsetCommit/OffsetFetch).
+func TestOffsetCommitTopicID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		opts []kfake.Opt // additional cluster options
+	}{
+		{"v10", nil},
+		{"v9", func() []kfake.Opt {
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(8, 9) // OffsetCommit
+			v.SetMaxKeyVersion(9, 9) // OffsetFetch
+			return []kfake.Opt{kfake.MaxVersions(v)}
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "commit-topicid-" + tc.name
+			group := "commit-topicid-group-" + tc.name
+
+			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			c := newCluster(t, opts...)
+			raw := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			produceNStrings(t, raw, topic, 10)
+
+			adm := kadm.NewClient(raw)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Commit offsets via kadm (sets TopicID in v10, topic name in v9).
+			offsets := kadm.Offsets{}
+			offsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: 5, LeaderEpoch: -1})
+			rs, err := adm.CommitOffsets(ctx, group, offsets)
+			if err != nil {
+				t.Fatalf("commit offsets failed: %v", err)
+			}
+			if err := rs.Error(); err != nil {
+				t.Fatalf("commit offsets response error: %v", err)
+			}
+
+			// Fetch offsets and verify.
+			fetched, err := adm.FetchOffsets(ctx, group)
+			if err != nil {
+				t.Fatalf("fetch offsets failed: %v", err)
+			}
+			o, ok := fetched.Lookup(topic, 0)
+			if !ok {
+				t.Fatal("no committed offset found")
+			}
+			if o.At != 5 {
+				t.Errorf("expected committed offset 5, got %d", o.At)
+			}
+
+			// Update the offset and verify again.
+			offsets = kadm.Offsets{}
+			offsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: 10, LeaderEpoch: -1})
+			rs, err = adm.CommitOffsets(ctx, group, offsets)
+			if err != nil {
+				t.Fatalf("second commit failed: %v", err)
+			}
+			if err := rs.Error(); err != nil {
+				t.Fatalf("second commit response error: %v", err)
+			}
+
+			fetched, err = adm.FetchOffsets(ctx, group)
+			if err != nil {
+				t.Fatalf("second fetch offsets failed: %v", err)
+			}
+			o, ok = fetched.Lookup(topic, 0)
+			if !ok {
+				t.Fatal("no committed offset found after second commit")
+			}
+			if o.At != 10 {
+				t.Errorf("expected committed offset 10, got %d", o.At)
+			}
+		})
+	}
+}
+
+// Test848OffsetCommitTopicID verifies that a KIP-848 consumer group correctly
+// commits and fetches offsets with both v10 (TopicID) and v9 (topic name) brokers.
+func Test848OffsetCommitTopicID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		opts []kfake.Opt
+	}{
+		{"v10", nil},
+		{"v9", func() []kfake.Opt {
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(8, 9)
+			v.SetMaxKeyVersion(9, 9)
+			return []kfake.Opt{kfake.MaxVersions(v)}
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "commit-topicid-848-" + tc.name
+			group := "commit-topicid-848-group-" + tc.name
+
+			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			c := newCluster(t, opts...)
+			producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			produceNStrings(t, producer, topic, 10)
+
+			consumer := newClient848(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.DisableAutoCommit(),
+			)
+			records := consumeN(t, consumer, 10, 10*time.Second)
+			if len(records) != 10 {
+				t.Fatalf("expected 10 records, got %d", len(records))
+			}
+
+			// Commit the consumed offsets.
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := consumer.CommitUncommittedOffsets(ctx); err != nil {
+				t.Fatalf("commit err: %v", err)
+			}
+
+			// Verify via kadm.
+			consumer.Close()
+			adm := kadm.NewClient(newClient848(t, c))
+			fetched, err := adm.FetchOffsets(ctx, group)
+			if err != nil {
+				t.Fatalf("fetch offsets failed: %v", err)
+			}
+			o, ok := fetched.Lookup(topic, 0)
+			if !ok {
+				t.Fatal("no committed offset found after 848 commit")
+			}
+			if o.At != 10 {
+				t.Errorf("expected committed offset 10, got %d", o.At)
+			}
+		})
+	}
+}
+
+// TestOffsetCommitTopicIDByID tests the kadm CommitOffsetsByID / FetchOffsetsByID APIs
+// with both v10 (native TopicID) and v9 (fallback to name resolution) brokers.
+func TestOffsetCommitTopicIDByID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		opts []kfake.Opt
+	}{
+		{"v10", nil},
+		{"v9", func() []kfake.Opt {
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(8, 9)
+			v.SetMaxKeyVersion(9, 9)
+			return []kfake.Opt{kfake.MaxVersions(v)}
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "commit-byid-" + tc.name
+			group := "commit-byid-group-" + tc.name
+
+			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			c := newCluster(t, opts...)
+			raw := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			produceNStrings(t, raw, topic, 10)
+
+			adm := kadm.NewClient(raw)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Get the topic ID via metadata.
+			meta, err := adm.Metadata(ctx, topic)
+			if err != nil {
+				t.Fatalf("metadata failed: %v", err)
+			}
+			td, ok := meta.Topics[topic]
+			if !ok {
+				t.Fatalf("topic %q not in metadata", topic)
+			}
+			topicID := td.ID
+
+			// Commit by ID.
+			os := kadm.OffsetsByID{}
+			os.Add(kadm.Offset{TopicID: topicID, Partition: 0, At: 7, LeaderEpoch: -1})
+			rs, err := adm.CommitOffsetsByID(ctx, group, os)
+			if err != nil {
+				t.Fatalf("commit by ID failed: %v", err)
+			}
+			if err := rs.Error(); err != nil {
+				t.Fatalf("commit by ID response error: %v", err)
+			}
+
+			// Verify response is keyed by the correct topic ID.
+			ro, ok := rs.Lookup(topicID, 0)
+			if !ok {
+				t.Fatal("no response for committed topic ID")
+			}
+			if ro.Err != nil {
+				t.Fatalf("commit by ID partition error: %v", ro.Err)
+			}
+
+			// Fetch by ID and verify.
+			fetched, err := adm.FetchOffsetsByID(ctx, group)
+			if err != nil {
+				t.Fatalf("fetch by ID failed: %v", err)
+			}
+			fo, ok := fetched.Lookup(topicID, 0)
+			if !ok {
+				t.Fatal("no fetched offset for topic ID")
+			}
+			if fo.At != 7 {
+				t.Errorf("expected offset 7, got %d", fo.At)
+			}
+			if fo.TopicID != topicID {
+				t.Errorf("expected TopicID %v, got %v", topicID, fo.TopicID)
+			}
+		})
+	}
+}
+
+// TestOffsetCommitUnknownTopicID verifies that committing with an unknown
+// TopicID returns UNKNOWN_TOPIC_ID.
+func TestOffsetCommitUnknownTopicID(t *testing.T) {
+	t.Parallel()
+	topic := "commit-unknown-id"
+	group := "commit-unknown-id-group"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	raw := newClient848(t, c)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Build a v10 OffsetCommit with a fabricated (unknown) TopicID.
+	req := kmsg.NewOffsetCommitRequest()
+	req.Version = 10
+	req.Group = group
+	req.Generation = -1
+	rt := kmsg.NewOffsetCommitRequestTopic()
+	rt.TopicID = [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	rp := kmsg.NewOffsetCommitRequestTopicPartition()
+	rp.Partition = 0
+	rp.Offset = 5
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	resp, err := req.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+
+	// The entire response should have UNKNOWN_TOPIC_ID errors.
+	if len(resp.Topics) != 1 {
+		t.Fatalf("expected 1 topic in response, got %d", len(resp.Topics))
+	}
+	for _, tp := range resp.Topics {
+		for _, pp := range tp.Partitions {
+			if pp.ErrorCode != kerr.UnknownTopicID.Code {
+				t.Errorf("expected UNKNOWN_TOPIC_ID (%d), got error code %d",
+					kerr.UnknownTopicID.Code, pp.ErrorCode)
+			}
+		}
+	}
+}
+
