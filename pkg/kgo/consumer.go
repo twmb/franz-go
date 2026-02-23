@@ -1787,13 +1787,19 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 		return
 	}
 
-	wait := true
-	if immediate {
-		s.c.cl.triggerUpdateMetadataNow(why)
-	} else {
-		wait = s.c.cl.triggerUpdateMetadata(false, why) // avoid trigger if within refresh interval
-	}
-
+	// We must set up listOrEpochMetaCh BEFORE triggering metadata. If we
+	// trigger first and set the channel second, there is a race where the
+	// metadata update completes and doOnMetadataUpdate checks for the
+	// channel before we create it, causing the signal to be lost. With the
+	// channel created first, doOnMetadataUpdate will always find the
+	// channel and signal it.
+	//
+	// Race without this ordering:
+	//   1. listOrEpoch: triggerUpdateMetadata -> sends trigger
+	//   2. listOrEpoch: goroutine descheduled under load
+	//   3. metadata loop: processes trigger, runs doOnMetadataUpdate
+	//   4. doOnMetadataUpdate: listOrEpochMetaCh is nil -> returns (signal lost)
+	//   5. listOrEpoch: resumes, creates listOrEpochMetaCh, waits forever
 	s.listOrEpochMu.Lock() // collapse any listOrEpochs that occur during meta update into one
 	if !s.listOrEpochLoadsWaiting.isEmpty() {
 		s.listOrEpochLoadsWaiting.mergeFrom(waiting)
@@ -1803,6 +1809,13 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 	s.listOrEpochLoadsWaiting = waiting
 	s.listOrEpochMetaCh = make(chan struct{}, 1)
 	s.listOrEpochMu.Unlock()
+
+	wait := true
+	if immediate {
+		s.c.cl.triggerUpdateMetadataNow(why)
+	} else {
+		wait = s.c.cl.triggerUpdateMetadata(false, why) // avoid trigger if within refresh interval
+	}
 
 	if wait {
 		select {
