@@ -194,6 +194,7 @@ func mustParseInt(s, name string, bitSize int) int64 {
 	}
 	return v
 }
+
 func mustParseUint(s, name string, base, bitSize int) uint64 {
 	v, err := strconv.ParseUint(s, base, bitSize)
 	if err != nil {
@@ -413,7 +414,7 @@ func main() {
 
 	{ // first parse all enums for use in definitions
 		path := filepath.Join(dir, enums)
-		f, err := os.ReadFile(path)
+		f, err := os.ReadFile(path) //nolint:gosec // reading known definitions directory
 		if err != nil {
 			die("unable to read %s: %v", path, err)
 		}
@@ -425,7 +426,7 @@ func main() {
 			continue
 		}
 		path := filepath.Join(dir, ent.Name())
-		f, err := os.ReadFile(path)
+		f, err := os.ReadFile(path) //nolint:gosec // reading known definitions directory
 		if err != nil {
 			die("unable to read %s: %v", path, err)
 		}

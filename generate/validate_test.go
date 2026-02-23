@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,13 +23,35 @@ type kafkaMessage struct {
 	CommonStructs         []kafkaStruct `json:"commonStructs"`
 }
 
+// flexInt unmarshals a JSON value that may be either a number or a string
+// containing a number. Kafka sometimes uses "1" instead of 1 for tag fields.
+type flexInt int
+
+func (f *flexInt) UnmarshalJSON(data []byte) error {
+	var n int
+	if err := json.Unmarshal(data, &n); err == nil {
+		*f = flexInt(n)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("cannot unmarshal %s into int or string", string(data))
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return fmt.Errorf("cannot parse %q as int: %v", s, err)
+	}
+	*f = flexInt(n)
+	return nil
+}
+
 type kafkaField struct {
 	Name             string       `json:"name"`
 	Type             string       `json:"type"`
 	Versions         string       `json:"versions"`
 	NullableVersions string       `json:"nullableVersions"`
 	TaggedVersions   string       `json:"taggedVersions"`
-	Tag              *int         `json:"tag"`
+	Tag              *flexInt     `json:"tag"`
 	Default          any          `json:"default"`
 	Fields           []kafkaField `json:"fields"`
 }
@@ -134,7 +157,7 @@ func initDSL(t *testing.T) {
 		const enumsFile = "enums"
 
 		path := filepath.Join(dir, enumsFile)
-		f, err := os.ReadFile(path)
+		f, err := os.ReadFile(path) //nolint:gosec // reading known definitions directory
 		if err != nil {
 			t.Fatalf("reading enums: %v", err)
 		}
@@ -149,7 +172,7 @@ func initDSL(t *testing.T) {
 				continue
 			}
 			path := filepath.Join(dir, ent.Name())
-			f, err := os.ReadFile(path)
+			f, err := os.ReadFile(path) //nolint:gosec // reading known definitions directory
 			if err != nil {
 				t.Fatalf("reading %s: %v", path, err)
 			}
@@ -293,10 +316,7 @@ func resolvedJSONFields(f kafkaField, commons map[string]kafkaStruct) []kafkaFie
 		return f.Fields
 	}
 	jt := f.Type
-	name := jt
-	if strings.HasPrefix(name, "[]") {
-		name = name[2:]
-	}
+	name := strings.TrimPrefix(jt, "[]")
 	if cs, ok := commons[name]; ok {
 		return cs.Fields
 	}
@@ -310,7 +330,7 @@ func TestValidateDSLAgainstKafkaJSON(t *testing.T) {
 	}
 
 	jsonDir := filepath.Join(kafkaDir, "clients", "src", "main", "resources", "common", "message")
-	if _, err := os.Stat(jsonDir); err != nil {
+	if _, err := os.Stat(jsonDir); err != nil { //nolint:gosec // path from trusted env var
 		t.Fatalf("Kafka message dir not found at %s: %v", jsonDir, err)
 	}
 
@@ -354,7 +374,7 @@ func TestValidateDSLAgainstKafkaJSON(t *testing.T) {
 		if !strings.HasSuffix(ent.Name(), ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(jsonDir, ent.Name()))
+		data, err := os.ReadFile(filepath.Join(jsonDir, ent.Name())) //nolint:gosec // reading from trusted KAFKA_DIR
 		if err != nil {
 			t.Fatalf("reading %s: %v", ent.Name(), err)
 		}
@@ -477,7 +497,7 @@ func compareFieldsAtVersion(t *testing.T, msgName string, version, flexibleAt in
 		if jf.Tag != nil {
 			tvr := parseVersionRange(jf.TaggedVersions)
 			if tvr.contains(version) {
-				jsonTagged[*jf.Tag] = jf
+				jsonTagged[int(*jf.Tag)] = jf
 				continue
 			}
 		}
