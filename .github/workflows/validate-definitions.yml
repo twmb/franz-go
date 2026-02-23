@@ -1,0 +1,34 @@
+name: validate definitions
+
+on:
+  push:
+    branches: ["master"]
+    paths:
+      - 'generate/**'
+  pull_request:
+    branches: ["*"]
+    paths:
+      - 'generate/**'
+
+concurrency:
+  group: validate-definitions-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-definitions:
+    if: github.repository == 'twmb/franz-go'
+    runs-on: ubuntu-latest
+    name: "validate DSL against Kafka JSON"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+      - uses: actions/checkout@v4
+        with:
+          repository: apache/kafka
+          path: kafka
+          sparse-checkout: clients/src/main/resources/common/message
+      - run: cd generate && go test -run TestValidateDSLAgainstKafkaJSON -v
+        env:
+          KAFKA_DIR: ${{ github.workspace }}/kafka

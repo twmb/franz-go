@@ -15,7 +15,7 @@ EndQuorumEpochRequest => key 54, max version 1, flexible v1+, admin
       // The current epoch.
       LeaderEpoch: int32
       // A sorted list of preferred successors to start the election.
-      PreferredSuccessors: [int32]
+      PreferredSuccessors: [int32] // v0-v0
       // A sorted list of preferred candidates to start the election.
       PreferredCandidates: [=>] // v1+
         CandidateID: int32

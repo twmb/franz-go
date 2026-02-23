@@ -15,7 +15,7 @@ AddRaftVoterRequest => key 80, max version 0, flexible v0+
     // The hostname.
     Host: string
     // The port.
-    Port: int16
+    Port: uint16
 
 AddRaftVoterResponse =>
   ThrottleMillis

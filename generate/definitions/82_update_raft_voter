@@ -16,7 +16,7 @@ UpdateRaftVoterRequest => key 82, max version 0, flexible v0+
     // The hostname.
     Host: string
     // The port.
-    Port: int16
+    Port: uint16
   // The range of versions of the protocol that the replica supports.
   KRaftVersionFeature: =>
     // The min supported KRaft protocol version.

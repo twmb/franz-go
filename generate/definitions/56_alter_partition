@@ -20,7 +20,7 @@ AlterPartitionRequest => key 56, max version 3, flexible v0+, admin
         // The broker ID .
         BrokerID: int32
         // The broker's epoch; -1 if the epoch check is not supported.
-        BrokerEpoch: int32(-1)
+        BrokerEpoch: int64(-1)
       // 1 if the partition is recovering from unclean leader election; 0 otherwise
       LeaderRecoveryState: int8 // v1+
       // The expected epoch of the partition which is being updated.

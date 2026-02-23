@@ -190,16 +190,6 @@ func (s Struct) WriteAppend(l *LineWriter) {
 	l.Write("if isFlexible {")
 	defer l.Write("}")
 
-	for i := range len(tags) {
-		f, exists := tags[i]
-		if !exists {
-			die("saw %d tags, but did not see tag %d; expected monotonically increasing", len(tags), i)
-		}
-		if _, canDefault := f.Type.(Defaulter); !canDefault {
-			die("no Defaulter for %s", f.FieldName)
-		}
-	}
-
 	defer l.Write("dst = v.UnknownTags.AppendEach(dst)")
 
 	if len(tags) > 0 {
@@ -297,14 +287,9 @@ func (s Struct) WriteAppend(l *LineWriter) {
 
 // writeBeginAndTag begins a struct field encode/decode and adds the field to
 // the tags map if necessary. If this field is only tagged, this returns true.
+// Validation of field versions and tags is done in validateStructFields.
 func (f StructField) writeBeginAndTag(l *LineWriter, tags map[int]StructField) (onlyTag bool) {
-	if f.MinVersion == -1 && f.MaxVersion > 0 {
-		die("unexpected negative min version %d while max version %d on field %s", f.MinVersion, f.MaxVersion, f.FieldName)
-	}
 	if f.Tag >= 0 {
-		if _, exists := tags[f.Tag]; exists {
-			die("unexpected duplicate tag %d on field %s", f.Tag, f.FieldName)
-		}
 		tags[f.Tag] = f
 	}
 	switch {
@@ -313,9 +298,6 @@ func (f StructField) writeBeginAndTag(l *LineWriter, tags map[int]StructField) (
 	case f.MinVersion > 0:
 		l.Write("if version >= %d {", f.MinVersion)
 	case f.MinVersion == -1:
-		if f.Tag < 0 {
-			die("unexpected min version -1 with tag %d on field %s", f.Tag, f.FieldName)
-		}
 		return true
 	default:
 		l.Write("{")
@@ -575,14 +557,9 @@ func (s Struct) WriteDecode(l *LineWriter) {
 	l.Write("s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))")
 
 	for i := range len(tags) {
-		f, exists := tags[i]
-		if !exists {
-			die("saw %d tags, but did not see tag %d; expected monotonically increasing", len(tags), i)
-		}
-
 		l.Write("case %d:", i)
 		l.Write("b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}")
-		f.WriteDecode(l)
+		tags[i].WriteDecode(l)
 		l.Write("if err := b.Complete(); err != nil {")
 		l.Write("return err")
 		l.Write("}")
