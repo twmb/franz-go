@@ -73,6 +73,12 @@ func PreReq(preReq func(req *http.Request) error) ClientOpt {
 	}}
 }
 
+// DefaultSchemaContext sets a default schema registry context (namespacing) applied to every request.
+// Per-request contexts set via [InContext] take priority.
+func DefaultSchemaContext(name string) ClientOpt {
+	return clientOpt{func(cl *Client) { cl.defContext = name }}
+}
+
 // DefaultParams sets default parameters to apply to every request.
 func DefaultParams(ps ...Param) ClientOpt {
 	return clientOpt{func(cl *Client) {
