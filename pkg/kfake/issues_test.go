@@ -1696,13 +1696,16 @@ func TestKIP447RequireStable(t *testing.T) {
 		}
 	}
 
-	// Use v8+ format with Groups field to work with auto-negotiated versions
+	// Use v8+ format with Groups field to work with auto-negotiated versions.
+	// Set TopicID for v10+ where Topic is not serialized on the wire.
+	ti := c.TopicInfo(testTopic)
 	fetchReq := kmsg.NewOffsetFetchRequest()
 	fetchReq.RequireStable = true
 	rg := kmsg.NewOffsetFetchRequestGroup()
 	rg.Group = groupID
 	rgt := kmsg.NewOffsetFetchRequestGroupTopic()
 	rgt.Topic = testTopic
+	rgt.TopicID = ti.TopicID
 	rgt.Partitions = []int32{0}
 	rg.Topics = append(rg.Topics, rgt)
 	fetchReq.Groups = append(fetchReq.Groups, rg)

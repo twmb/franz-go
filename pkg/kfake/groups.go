@@ -579,6 +579,17 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 			sg.ErrorCode = kerr.Code
 			continue
 		}
+
+		// v10: resolve TopicIDs to topic names before processing.
+		if req.Version >= 10 && rg.Topics != nil {
+			for i := range rg.Topics {
+				t := &rg.Topics[i]
+				if name, ok := gs.c.data.id2t[t.TopicID]; ok {
+					t.Topic = name
+				}
+			}
+		}
+
 		// KIP-447: If RequireStable is set, check for pending transactional offsets
 		if req.RequireStable && gs.c.pids.hasUnstableOffsets(rg.Group) {
 			sg.ErrorCode = kerr.UnstableOffsetCommit.Code
@@ -613,6 +624,7 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 				for t, ps := range g.commits {
 					st := kmsg.NewOffsetFetchResponseGroupTopic()
 					st.Topic = t
+					st.TopicID = gs.c.data.t2id[t]
 					for p, c := range ps {
 						sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
 						sp.Partition = p
@@ -627,6 +639,7 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 				for _, t := range rg.Topics {
 					st := kmsg.NewOffsetFetchResponseGroupTopic()
 					st.Topic = t.Topic
+					st.TopicID = t.TopicID
 					for _, p := range t.Partitions {
 						sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
 						sp.Partition = p
@@ -1213,6 +1226,7 @@ func fillOffsetCommit(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResp
 	for _, t := range req.Topics {
 		st := kmsg.NewOffsetCommitResponseTopic()
 		st.Topic = t.Topic
+		st.TopicID = t.TopicID
 		for _, p := range t.Partitions {
 			sp := kmsg.NewOffsetCommitResponseTopicPartition()
 			sp.Partition = p.Partition
@@ -1243,6 +1257,7 @@ func (g *group) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitR
 	for _, t := range req.Topics {
 		st := kmsg.NewOffsetCommitResponseTopic()
 		st.Topic = t.Topic
+		st.TopicID = t.TopicID
 		if !g.c.allowedACL(creq, t.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
 			for _, p := range t.Partitions {
 				sp := kmsg.NewOffsetCommitResponseTopicPartition()
