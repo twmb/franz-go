@@ -519,3 +519,74 @@ func TestOptValues(t *testing.T) {
 		}
 	})
 }
+
+// TestCreateSchemaWithContext tests that CreateSchema correctly matches
+// context-prefixed subjects returned by the registry.
+func TestCreateSchemaWithContext(t *testing.T) {
+	dummySchema := Schema{Schema: `{"type":"string"}`}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.EscapedPath()
+		var output any
+		switch {
+		case path == "/contexts/.myctx/subjects/foo/versions" && r.Method == http.MethodPost:
+			output = map[string]int{"id": 1}
+		case path == "/contexts/.myctx/schemas/ids/1/versions" && r.Method == http.MethodGet:
+			// The real registry returns subjects with context prefix.
+			output = []map[string]any{{"subject": ":.myctx:foo", "version": 1}}
+		case path == "/contexts/.myctx/subjects/:.myctx:foo/versions/1" && r.Method == http.MethodGet:
+			output = SubjectSchema{
+				Subject: ":.myctx:foo",
+				Version: 1,
+				ID:      1,
+				Schema:  dummySchema,
+			}
+		default:
+			http.Error(w, fmt.Sprintf("path not found: %s (method: %s)", path, r.Method), http.StatusNotFound)
+			return
+		}
+		b, err := json.Marshal(output)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Write(b)
+	}))
+	t.Cleanup(ts.Close)
+
+	ctx := context.Background()
+
+	t.Run("WithSchemaContext", func(t *testing.T) {
+		c, err := NewClient(URLs(ts.URL))
+		if err != nil {
+			t.Fatalf("unable to create client: %s", err)
+		}
+		ss, err := c.CreateSchema(WithSchemaContext(ctx, ".myctx"), "foo", dummySchema)
+		if err != nil {
+			t.Fatalf("CreateSchema with WithSchemaContext failed: %s", err)
+		}
+		if ss.Subject != ":.myctx:foo" {
+			t.Errorf("expected subject %q, got %q", ":.myctx:foo", ss.Subject)
+		}
+		if ss.ID != 1 {
+			t.Errorf("expected ID 1, got %d", ss.ID)
+		}
+	})
+
+	t.Run("DefaultSchemaContext", func(t *testing.T) {
+		c, err := NewClient(URLs(ts.URL), DefaultSchemaContext(".myctx"))
+		if err != nil {
+			t.Fatalf("unable to create client: %s", err)
+		}
+		ss, err := c.CreateSchema(ctx, "foo", dummySchema)
+		if err != nil {
+			t.Fatalf("CreateSchema with DefaultSchemaContext failed: %s", err)
+		}
+		if ss.Subject != ":.myctx:foo" {
+			t.Errorf("expected subject %q, got %q", ":.myctx:foo", ss.Subject)
+		}
+		if ss.ID != 1 {
+			t.Errorf("expected ID 1, got %d", ss.ID)
+		}
+	})
+}

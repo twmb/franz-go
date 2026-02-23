@@ -425,8 +425,18 @@ func (cl *Client) CreateSchemaWithIDAndVersion(ctx context.Context, subject stri
 	if err != nil {
 		return SubjectSchema{}, err
 	}
+	// When using schema contexts, the registry stores subjects with a
+	// context prefix (e.g. ":.myctx:subject"). We need to match against
+	// both the plain subject and the context-prefixed form.
+	ctxName, _ := ctx.Value(&schemaContextKey).(string)
+	if ctxName == "" {
+		ctxName = cl.defContext
+	}
 	for _, usage := range usages {
 		if usage.Subject == subject {
+			return usage, nil
+		}
+		if ctxName != "" && usage.Subject == ":"+ctxName+":"+subject {
 			return usage, nil
 		}
 	}
