@@ -18,7 +18,7 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 
 ## Features
 
-- Feature complete client (Kafka >= 0.8.0 through v4.1+) _minus_ the next generation group protocol, which is implemented but deliberately hidden due to concerns with the broker implementation (see the 1.19.0 release notes for how to opt in)
+- Feature complete client (Kafka >= 0.8.0 through v4.2+) _minus_ the next generation group protocol, which is implemented but deliberately hidden due to concerns with the broker implementation (see the 1.19.0 release notes for how to opt in)
 - Full Exactly-Once-Semantics (EOS)
 - Idempotent & transactional producers
 - Simple (legacy) consumer
@@ -423,7 +423,9 @@ generation.
 | [KIP-1000](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1000%3A+List+Client+Metrics+Configuration+Resources) — ListClientMetricsResources | 3.7 | Supported |
 | [KIP-1005](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1005%3A+Expose+EarliestLocalOffset+and+TieredOffset) — ListOffsets w. Timestamp -5 | 3.9 | Supported |
 | [KIP-1022](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1022%3A+Formatting+and+Updating+Features) - Formatting changes for features | 4.0 | Supported |
+| [KIP-1023](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1023%3A+Follower+fetch+from+tiered+offset) — ListOffsets earliest pending upload offset | 4.2 | Supported (existing) |
 | [KIP-1043](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1043%3A+Administration+of+groups) — Administration of groups | 4.0 | Supported |
+| [KIP-1071](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1071%3A+Streams+Rebalance+Protocol) — Streams group protocol | 4.2 | Supported (proto) |
 | [KIP-1073](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1073:+Return+fenced+brokers+in+DescribeCluster+response) — DescribeCluster.IsFenced | 4.0 | Supported |
 | [KIP-1075](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1075%3A+Introduce+delayed+remote+list+offsets+purgatory+to+make+LIST_OFFSETS+async) — TimeoutMillis on ListOffsets | 4.0 | Supported |
 | [KIP-1076](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1076%3A++Metrics+for+client+applications+KIP-714+extension) — User provided client metrics | 4.0 | Supported |
@@ -434,6 +436,8 @@ generation.
 | [KIP-1142](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1142%3A+Allow+to+list+non-existent+group+which+has+dynamic+config) - ListConfigResources | 4.1 | Supported (kadm v1.17+) |
 | [KIP-1152](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1152%3A+Add+transactional+ID+pattern+filter+to+ListTransactions+API) - ListTransactions.TransactionalIDPattern | 4.1 | Supported (kadm v1.17+) |
 | [KIP-1166](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1166%3A+Improve+high-watermark+replication) - Improve HWM replication (protocol) | 4.1 | Supported |
+| [KIP-1186](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1186%3A+Update+AddRaftVoterRequest+RPC+to+support+auto-join) — AddRaftVoter AckWhenCommitted | 4.2 | Supported (proto) |
+| [KIP-1228](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1228%3A+Add+Transaction+Version+to+WriteTxnMarkersRequest) — WriteTxnMarkers TransactionVersion | 4.2 | Supported |
 
 Missing from above but included in librdkafka is:
 

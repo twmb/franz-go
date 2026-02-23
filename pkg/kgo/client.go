@@ -4023,9 +4023,10 @@ func (cl *writeTxnMarkersSharder) shard(ctx context.Context, kreq kmsg.Request, 
 	}
 
 	type pidEpochCommit struct {
-		pid    int64
-		epoch  int16
-		commit bool
+		pid        int64
+		epoch      int16
+		commit     bool
+		txnVersion int8
 	}
 
 	brokerReqs := make(map[int32]map[pidEpochCommit]map[string][]int32)
@@ -4063,6 +4064,7 @@ func (cl *writeTxnMarkersSharder) shard(ctx context.Context, kreq kmsg.Request, 
 			marker.ProducerID,
 			marker.ProducerEpoch,
 			marker.Committed,
+			marker.TransactionVersion,
 		}
 		for _, topic := range marker.Topics {
 			t := topic.Topic
@@ -4098,6 +4100,7 @@ func (cl *writeTxnMarkersSharder) shard(ctx context.Context, kreq kmsg.Request, 
 			rm.ProducerID = pec.pid
 			rm.ProducerEpoch = pec.epoch
 			rm.Committed = pec.commit
+			rm.TransactionVersion = pec.txnVersion
 			for topic, parts := range topics {
 				rt := kmsg.NewWriteTxnMarkersRequestMarkerTopic()
 				rt.Topic = topic
@@ -4119,6 +4122,7 @@ func (cl *writeTxnMarkersSharder) shard(ctx context.Context, kreq kmsg.Request, 
 			rm.ProducerID = pec.pid
 			rm.ProducerEpoch = pec.epoch
 			rm.Committed = pec.commit
+			rm.TransactionVersion = pec.txnVersion
 			for topic, parts := range topics {
 				rt := kmsg.NewWriteTxnMarkersRequestMarkerTopic()
 				rt.Topic = topic
