@@ -820,11 +820,15 @@ func (os OffsetResponses) Ok() bool {
 // This does not return on authorization failures, instead, authorization
 // failures are included in the responses.
 func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (OffsetResponses, error) {
+	// Resolve topic names to IDs via metadata for v10+ support.
+	t2id := cl.resolveTopicIDs(ctx, os)
+
 	req := kmsg.NewPtrOffsetCommitRequest()
 	req.Group = group
 	for t, ps := range os {
 		rt := kmsg.NewOffsetCommitRequestTopic()
 		rt.Topic = t
+		rt.TopicID = t2id[t]
 		for p, o := range ps {
 			rp := kmsg.NewOffsetCommitRequestTopicPartition()
 			rp.Partition = p
@@ -843,13 +847,23 @@ func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (
 		return nil, err
 	}
 
+	// Build reverse map for v10 responses where Topic is empty.
+	id2name := make(map[TopicID]string, len(t2id))
+	for name, id := range t2id {
+		id2name[id] = name
+	}
+
 	rs := make(OffsetResponses)
 	for _, t := range resp.Topics {
+		topic := t.Topic
+		if topic == "" {
+			topic = id2name[t.TopicID]
+		}
 		rt := make(map[int32]OffsetResponse)
-		rs[t.Topic] = rt
+		rs[topic] = rt
 		for _, p := range t.Partitions {
 			rt[p.Partition] = OffsetResponse{
-				Offset: os[t.Topic][p.Partition],
+				Offset: os[topic][p.Partition],
 				Err:    kerr.ErrorForCode(p.ErrorCode),
 			}
 		}
@@ -917,6 +931,66 @@ func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetRespons
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		return nil, err
 	}
+
+	// v8+: the sharder populates resp.Groups (with TopicID for v10+) and
+	// copies back to resp.Topics. Use Groups when available to preserve
+	// TopicIDs.
+	if len(resp.Groups) > 0 {
+		g := resp.Groups[0]
+		if err := maybeAuthErr(g.ErrorCode); err != nil {
+			return nil, err
+		}
+		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+			return nil, err
+		}
+
+		// If any topic name is empty (v10 response where kgo's id2t
+		// missed), resolve via metadata.
+		needsResolve := false
+		for _, t := range g.Topics {
+			if t.Topic == "" {
+				needsResolve = true
+				break
+			}
+		}
+		var id2name map[TopicID]string
+		if needsResolve {
+			id2name = cl.resolveTopicNames(ctx)
+		}
+
+		rs := make(OffsetResponses)
+		for _, t := range g.Topics {
+			topic := t.Topic
+			if topic == "" && id2name != nil {
+				topic = id2name[TopicID(t.TopicID)]
+			}
+			rt := make(map[int32]OffsetResponse)
+			rs[topic] = rt
+			for _, p := range t.Partitions {
+				if err := maybeAuthErr(p.ErrorCode); err != nil {
+					return nil, err
+				}
+				var meta string
+				if p.Metadata != nil {
+					meta = *p.Metadata
+				}
+				rt[p.Partition] = OffsetResponse{
+					Offset: Offset{
+						Topic:       topic,
+						TopicID:     TopicID(t.TopicID),
+						Partition:   p.Partition,
+						At:          p.Offset,
+						LeaderEpoch: p.LeaderEpoch,
+						Metadata:    meta,
+					},
+					Err: kerr.ErrorForCode(p.ErrorCode),
+				}
+			}
+		}
+		return rs, nil
+	}
+
+	// v0-v7 fallback: resp.Topics only, no TopicID.
 	rs := make(OffsetResponses)
 	for _, t := range resp.Topics {
 		rt := make(map[int32]OffsetResponse)
@@ -1150,6 +1224,28 @@ func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchO
 	}
 
 	shards := cl.cl.RequestSharded(ctx, req)
+
+	// Detect if any shard returned v10 responses with empty topic names.
+	// If so, resolve all topic IDs via one metadata call.
+	var id2name map[TopicID]string
+	needsResolve := false
+	for _, shard := range shards {
+		if shard.Err != nil {
+			continue
+		}
+		resp := shard.Resp.(*kmsg.OffsetFetchResponse)
+		for _, g := range resp.Groups {
+			for _, t := range g.Topics {
+				if t.Topic == "" {
+					needsResolve = true
+				}
+			}
+		}
+	}
+	if needsResolve {
+		id2name = cl.resolveTopicNames(ctx)
+	}
+
 	for _, shard := range shards {
 		req := shard.Req.(*kmsg.OffsetFetchRequest)
 		if shard.Err != nil {
@@ -1174,8 +1270,12 @@ func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchO
 			}
 			fetched[g.Group] = fg // group coordinator owns all of a group, no need to check existence
 			for _, t := range g.Topics {
+				topic := t.Topic
+				if topic == "" && id2name != nil {
+					topic = id2name[TopicID(t.TopicID)]
+				}
 				rt := make(map[int32]OffsetResponse)
-				rs[t.Topic] = rt
+				rs[topic] = rt
 				for _, p := range t.Partitions {
 					var meta string
 					if p.Metadata != nil {
@@ -1183,7 +1283,8 @@ func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchO
 					}
 					rt[p.Partition] = OffsetResponse{
 						Offset: Offset{
-							Topic:       t.Topic,
+							Topic:       topic,
+							TopicID:     TopicID(t.TopicID),
 							Partition:   p.Partition,
 							At:          p.Offset,
 							LeaderEpoch: p.LeaderEpoch,
@@ -2416,4 +2517,237 @@ func (cl *Client) DescribeShareGroups(ctx context.Context, groups ...string) (De
 	default:
 		return nil, err
 	}
+}
+
+// resolveTopicIDs issues a metadata request for the topics in the given
+// Offsets map and returns a name-to-TopicID mapping.
+func (cl *Client) resolveTopicIDs(ctx context.Context, os Offsets) map[string]TopicID {
+	topics := make([]string, 0, len(os))
+	for t := range os {
+		topics = append(topics, t)
+	}
+	t2id := make(map[string]TopicID, len(topics))
+	if len(topics) == 0 {
+		return t2id
+	}
+	meta, err := cl.Metadata(ctx, topics...)
+	if err != nil {
+		return t2id
+	}
+	for _, td := range meta.Topics {
+		if td.Err != nil {
+			continue
+		}
+		t2id[td.Topic] = td.ID
+	}
+	return t2id
+}
+
+// resolveTopicNames issues a metadata request for all topics and returns
+// a TopicID-to-name mapping.
+func (cl *Client) resolveTopicNames(ctx context.Context) map[TopicID]string {
+	id2name := make(map[TopicID]string)
+	meta, err := cl.Metadata(ctx)
+	if err != nil {
+		return id2name
+	}
+	for _, td := range meta.Topics {
+		if td.Err != nil {
+			continue
+		}
+		id2name[td.ID] = td.Topic
+	}
+	return id2name
+}
+
+// CommitOffsetsByID issues an offset commit request for the input offsets,
+// keyed by topic ID. This resolves topic IDs to names via metadata so that
+// the request works with all broker versions. The response is keyed by
+// topic ID.
+//
+// This does not return on authorization failures, instead, authorization
+// failures are included in the responses.
+func (cl *Client) CommitOffsetsByID(ctx context.Context, group string, os OffsetsByID) (OffsetResponsesByID, error) {
+	// Resolve IDs to names for backward compat with v0-v9 brokers.
+	id2name := cl.resolveTopicNames(ctx)
+
+	req := kmsg.NewPtrOffsetCommitRequest()
+	req.Group = group
+	for id, ps := range os {
+		rt := kmsg.NewOffsetCommitRequestTopic()
+		rt.TopicID = [16]byte(id)
+		rt.Topic = id2name[id]
+		for p, o := range ps {
+			rp := kmsg.NewOffsetCommitRequestTopicPartition()
+			rp.Partition = p
+			rp.Offset = o.At
+			rp.LeaderEpoch = o.LeaderEpoch
+			if len(o.Metadata) > 0 {
+				rp.Metadata = kmsg.StringPtr(o.Metadata)
+			}
+			rt.Partitions = append(rt.Partitions, rp)
+		}
+		req.Topics = append(req.Topics, rt)
+	}
+
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+
+	rs := make(OffsetResponsesByID)
+	for _, t := range resp.Topics {
+		id := TopicID(t.TopicID)
+		if id == (TopicID{}) {
+			// v0-v9 response: look up ID from name.
+			for rid, name := range id2name {
+				if name == t.Topic {
+					id = rid
+					break
+				}
+			}
+		}
+		rt := make(map[int32]OffsetResponse)
+		rs[id] = rt
+		for _, p := range t.Partitions {
+			var o Offset
+			if ops, ok := os[id]; ok {
+				o = ops[p.Partition]
+			}
+			rt[p.Partition] = OffsetResponse{
+				Offset: o,
+				Err:    kerr.ErrorForCode(p.ErrorCode),
+			}
+		}
+	}
+	return rs, nil
+}
+
+// CommitAllOffsetsByID is identical to CommitOffsetsByID, but returns an error
+// if some offset within the commit failed.
+func (cl *Client) CommitAllOffsetsByID(ctx context.Context, group string, os OffsetsByID) error {
+	commits, err := cl.CommitOffsetsByID(ctx, group, os)
+	if err != nil {
+		return err
+	}
+	return commits.Error()
+}
+
+// FetchOffsetsByID issues an offset fetch request for all topics and
+// partitions in the group. The response is keyed by topic ID. For older
+// brokers that respond with topic names instead of IDs, topic names are
+// resolved to IDs via metadata.
+//
+// This method requires talking to Kafka v0.11+.
+func (cl *Client) FetchOffsetsByID(ctx context.Context, group string) (OffsetResponsesByID, error) {
+	req := kmsg.NewPtrOffsetFetchRequest()
+	req.Group = group
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+	if err := maybeAuthErr(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+
+	// v8+: use resp.Groups which has TopicID.
+	if len(resp.Groups) > 0 {
+		g := resp.Groups[0]
+		if err := maybeAuthErr(g.ErrorCode); err != nil {
+			return nil, err
+		}
+		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+			return nil, err
+		}
+
+		// If TopicIDs are missing (pre-v10 broker), resolve from names.
+		needsIDResolve := false
+		for _, t := range g.Topics {
+			if t.TopicID == [16]byte{} && t.Topic != "" {
+				needsIDResolve = true
+				break
+			}
+		}
+		var name2id map[string]TopicID
+		if needsIDResolve {
+			os := make(Offsets)
+			for _, t := range g.Topics {
+				for _, p := range t.Partitions {
+					os.AddOffset(t.Topic, p.Partition, p.Offset, p.LeaderEpoch)
+				}
+			}
+			name2id = cl.resolveTopicIDs(ctx, os)
+		}
+
+		rs := make(OffsetResponsesByID)
+		for _, t := range g.Topics {
+			id := TopicID(t.TopicID)
+			if id == (TopicID{}) && name2id != nil {
+				id = name2id[t.Topic]
+			}
+			rt := make(map[int32]OffsetResponse)
+			rs[id] = rt
+			for _, p := range t.Partitions {
+				if err := maybeAuthErr(p.ErrorCode); err != nil {
+					return nil, err
+				}
+				var meta string
+				if p.Metadata != nil {
+					meta = *p.Metadata
+				}
+				rt[p.Partition] = OffsetResponse{
+					Offset: Offset{
+						Topic:       t.Topic,
+						TopicID:     id,
+						Partition:   p.Partition,
+						At:          p.Offset,
+						LeaderEpoch: p.LeaderEpoch,
+						Metadata:    meta,
+					},
+					Err: kerr.ErrorForCode(p.ErrorCode),
+				}
+			}
+		}
+		return rs, nil
+	}
+
+	// v0-v7 fallback: resolve all names to IDs via metadata.
+	os := make(Offsets)
+	for _, t := range resp.Topics {
+		for _, p := range t.Partitions {
+			os.AddOffset(t.Topic, p.Partition, p.Offset, p.LeaderEpoch)
+		}
+	}
+	name2id := cl.resolveTopicIDs(ctx, os)
+
+	rs := make(OffsetResponsesByID)
+	for _, t := range resp.Topics {
+		id := name2id[t.Topic]
+		rt := make(map[int32]OffsetResponse)
+		rs[id] = rt
+		for _, p := range t.Partitions {
+			if err := maybeAuthErr(p.ErrorCode); err != nil {
+				return nil, err
+			}
+			var meta string
+			if p.Metadata != nil {
+				meta = *p.Metadata
+			}
+			rt[p.Partition] = OffsetResponse{
+				Offset: Offset{
+					Topic:       t.Topic,
+					TopicID:     id,
+					Partition:   p.Partition,
+					At:          p.Offset,
+					LeaderEpoch: p.LeaderEpoch,
+					Metadata:    meta,
+				},
+				Err: kerr.ErrorForCode(p.ErrorCode),
+			}
+		}
+	}
+	return rs, nil
 }

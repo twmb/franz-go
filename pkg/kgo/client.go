@@ -3300,6 +3300,21 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 	req := kreq.(*kmsg.OffsetFetchRequest)
 	resp := kresp.(*kmsg.OffsetFetchResponse)
 
+	// v10+: response uses TopicID instead of Topic. Resolve using the
+	// client's metadata-populated id2t map so that downstream consumers
+	// (both kgo internal and kadm) see topic names.
+	if resp.Version >= 10 {
+		id2t := cl.id2tMap()
+		for i := range resp.Groups {
+			for j := range resp.Groups[i].Topics {
+				t := &resp.Groups[i].Topics[j]
+				if t.Topic == "" {
+					t.Topic = id2t[t.TopicID]
+				}
+			}
+		}
+	}
+
 	switch len(resp.Groups) {
 	case 0:
 		// Requested no groups: move top level into batch for v0-v7 to

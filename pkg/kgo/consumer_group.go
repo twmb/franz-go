@@ -1680,9 +1680,13 @@ start:
 		reqg.MemberID = &member
 		reqg.MemberEpoch = gen
 	}
+	groupTopics := g.tps.load()
 	for topic, partitions := range added {
 		reqTopic := kmsg.NewOffsetFetchRequestGroupTopic()
 		reqTopic.Topic = topic
+		if td := groupTopics.loadTopic(topic); td != nil {
+			reqTopic.TopicID = td.id
+		}
 		reqTopic.Partitions = partitions
 		reqg.Topics = append(reqg.Topics, reqTopic)
 	}
@@ -1794,7 +1798,6 @@ start:
 		}
 	}
 
-	groupTopics := g.tps.load()
 	for fetchedTopic := range offsets {
 		if !groupTopics.hasTopic(fetchedTopic) {
 			delete(offsets, fetchedTopic)
@@ -2126,6 +2129,20 @@ func (g *groupConsumer) updateCommitted(
 	if len(req.Topics) != len(resp.Topics) { // bad kafka
 		g.cfg.logger.Log(LogLevelError, fmt.Sprintf("broker replied to our OffsetCommitRequest incorrectly! Num topics in request: %d, in reply: %d, we cannot handle this!", len(req.Topics), len(resp.Topics)), "group", g.cfg.group)
 		return
+	}
+
+	// v10+: response uses TopicID instead of Topic. Resolve TopicIDs to
+	// names using the request (which has both) so sorting/matching works.
+	if resp.Version >= 10 {
+		id2t := make(map[[16]byte]string, len(req.Topics))
+		for _, t := range req.Topics {
+			id2t[t.TopicID] = t.Topic
+		}
+		for i := range resp.Topics {
+			if resp.Topics[i].Topic == "" {
+				resp.Topics[i].Topic = id2t[resp.Topics[i].TopicID]
+			}
+		}
 	}
 
 	sort.Slice(req.Topics, func(i, j int) bool {
@@ -3016,9 +3033,13 @@ func (g *groupConsumer) commit(
 		}
 		g.cfg.logger.Log(LogLevelDebug, "issuing commit", "group", g.cfg.group, "uncommitted", uncommitted)
 
+		groupTopics := g.tps.load()
 		for topic, partitions := range uncommitted {
 			reqTopic := kmsg.NewOffsetCommitRequestTopic()
 			reqTopic.Topic = topic
+			if td := groupTopics.loadTopic(topic); td != nil {
+				reqTopic.TopicID = td.id
+			}
 			for partition, eo := range partitions {
 				reqPartition := kmsg.NewOffsetCommitRequestTopicPartition()
 				reqPartition.Partition = partition
