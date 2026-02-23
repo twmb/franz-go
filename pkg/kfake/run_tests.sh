@@ -25,8 +25,9 @@ SERVER_LOG_LEVEL=""
 KFAKE_VERSION="${KFAKE_VERSION:-}"
 PPROF_ADDR=""
 
-KFAKE_DIR=/Users/travisbischel/src/twmb/franz-go/pkg/kfake
-KGO_DIR=/Users/travisbischel/src/twmb/franz-go/pkg/kgo
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+KFAKE_DIR="$SCRIPT_DIR"
+KGO_DIR="$SCRIPT_DIR/../kgo"
 LOG_DIR="/tmp/kfake_test_logs"
 
 while [[ $# -gt 0 ]]; do
