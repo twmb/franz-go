@@ -23,6 +23,8 @@ type Param struct {
 	subject         string
 	page            *int
 	limit           int
+	offset          int
+	contextPrefix   string
 	hardDelete      bool
 	rawParams       url.Values
 }
@@ -86,6 +88,12 @@ func (p Param) apply(req *http.Request) {
 	if p.limit > 0 {
 		q.Set("limit", fmt.Sprintf("%d", p.limit))
 	}
+	if p.offset > 0 {
+		q.Set("offset", fmt.Sprintf("%d", p.offset))
+	}
+	if p.contextPrefix != "" {
+		q.Set("contextPrefix", p.contextPrefix)
+	}
 	if p.hardDelete {
 		q.Set("permanent", "true")
 	}
@@ -142,6 +150,12 @@ func mergeParams(p ...Param) Param {
 		}
 		if p.limit > 0 {
 			merged.limit = p.limit
+		}
+		if p.offset > 0 {
+			merged.offset = p.offset
+		}
+		if p.contextPrefix != "" {
+			merged.contextPrefix = p.contextPrefix
 		}
 		if p.hardDelete {
 			merged.hardDelete = p.hardDelete
@@ -210,11 +224,17 @@ func Subject(s string) Param { return Param{subject: s} }
 // RawParams returns a Param with raw query parameters.
 func RawParams(v url.Values) Param { return Param{rawParams: v} }
 
+// ContextPrefix returns a Param that filters contexts by prefix.
+func ContextPrefix(pfx string) Param { return Param{contextPrefix: pfx} }
+
+// Offset returns a Param that sets the pagination offset.
+func Offset(o int) Param { return Param{offset: o} }
+
+// Limit returns a Param that sets the maximum number of results to return.
+func Limit(l int) Param { return Param{limit: l} }
+
 /*
 TODO once we know the header that is returned for pagination, we can use these.
 // Page returns a Param for certain paginating APIs.
 func Page(page int) Param { return Param{page: &page} }
-
-// Limit returns a Param for certain paginating APIs.
-func Limit(limit int) Param { return Param{limit: limit} }
 */

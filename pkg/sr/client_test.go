@@ -98,6 +98,34 @@ func TestSchemaRegistryAPI(t *testing.T) {
 				output = []map[string]any{{"subject": dummySchemaWithRef.Subject, "version": dummySchemaWithRef.Version}}
 			case "/schemas/types":
 				output = []string{"AVRO", "JSON"}
+			case "/contexts":
+				all := []string{".mycontext", ".other"}
+				prefix := r.URL.Query().Get("contextPrefix")
+				if prefix != "" {
+					var filtered []string
+					for _, c := range all {
+						if len(c) >= len(prefix) && c[:len(prefix)] == prefix {
+							filtered = append(filtered, c)
+						}
+					}
+					all = filtered
+				}
+				output = all
+			case "/contexts/.mycontext/subjects":
+				output = []string{"foo"}
+			case "/contexts/.mycontext/schemas/ids/1":
+				output = dummySchema.Schema
+			case "/contexts/.mycontext/schemas/ids/1/subjects":
+				output = []string{"foo"}
+			case "/contexts/.mycontext/schemas/ids/1/versions":
+				output = []map[string]any{{"subject": "foo", "version": 1}}
+			case "/contexts/.mycontext":
+				if r.Method != http.MethodDelete {
+					http.Error(w, fmt.Sprintf("method not supported: %s", r.Method), http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+				return
 			default:
 				http.Error(w, fmt.Sprintf("path not found: %s", path), http.StatusNotFound)
 				return
@@ -277,6 +305,45 @@ func TestSchemaRegistryAPI(t *testing.T) {
 			fn:       func() (any, error) { return c.ResetMode(ctx, dummySchema.Subject), nil },
 			expected: `[{"Subject":"foo","Mode":"IMPORT","Err":{"error_code":0,"message":""}}]`,
 		},
+		{
+			name:     "get contexts",
+			fn:       func() (any, error) { return c.Contexts(ctx) },
+			expected: `[".mycontext",".other"]`,
+		},
+		{
+			name: "get contexts with prefix",
+			fn: func() (any, error) {
+				return c.Contexts(WithParams(ctx, ContextPrefix(".my")))
+			},
+			expected: `[".mycontext"]`,
+		},
+		{
+			name: "delete context",
+			fn: func() (any, error) {
+				return nil, c.DeleteContext(ctx, ".mycontext")
+			},
+			expected: `null`,
+		},
+		{
+			name:     "get context subjects",
+			fn:       func() (any, error) { return c.Subjects(WithSchemaContext(ctx, ".mycontext")) },
+			expected: `["foo"]`,
+		},
+		{
+			name:     "get context schema by ID",
+			fn:       func() (any, error) { return c.SchemaByID(WithSchemaContext(ctx, ".mycontext"), 1) },
+			expected: `{"schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
+		},
+		{
+			name:     "get context subjects by ID",
+			fn:       func() (any, error) { return c.SubjectsByID(WithSchemaContext(ctx, ".mycontext"), 1) },
+			expected: `["foo"]`,
+		},
+		{
+			name:     "get context schema versions by ID",
+			fn:       func() (any, error) { return c.SchemaVersionsByID(WithSchemaContext(ctx, ".mycontext"), 1) },
+			expected: `[{"subject":"foo","version":1}]`,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -397,6 +464,8 @@ func TestOptValue(t *testing.T) {
 					vp.subject == "" &&
 					vp.page == nil &&
 					vp.limit == 0 &&
+					vp.offset == 0 &&
+					vp.contextPrefix == "" &&
 					!vp.hardDelete &&
 					len(vp.rawParams) == 0
 			},
