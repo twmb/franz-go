@@ -170,9 +170,6 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		myInstanceID = fmt.Sprintf("%s-%s-%d", c.instanceID, c.group, c.instanceIDCounter.Add(1))
 		opts = append(opts, InstanceID(myInstanceID))
 	}
-	if requireStableFetch {
-		opts = append(opts, RequireStableFetchOffsets())
-	}
 	if c.enable848 {
 		ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true) //nolint:revive,staticcheck // intentional string key for beta opt-in
 		opts = append(opts, WithContext(ctx848))
