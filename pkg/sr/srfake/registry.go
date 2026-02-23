@@ -108,6 +108,7 @@ func New(opts ...Option) *Registry {
 	mux.HandleFunc("GET /schemas/ids/{id}", r.handleGetSchemaByID)
 	mux.HandleFunc("GET /schemas/ids/{id}/schema", r.handleGetRawSchemaByID)
 	mux.HandleFunc("GET /schemas/ids/{id}/versions", r.handleGetSchemaVersionsByID)
+	mux.HandleFunc("GET /schemas/ids/{id}/subjects", r.handleGetSubjectsByID)
 
 	// subject routes
 	mux.HandleFunc("GET /subjects", r.handleGetSubjects)
@@ -130,10 +131,15 @@ func New(opts ...Option) *Registry {
 	// compatibility route
 	mux.HandleFunc("POST /compatibility/subjects/{subject}/versions/{version}", r.handleCheckCompatibility)
 
+	// context routes (standalone endpoints, not subject to prefix stripping)
+	mux.HandleFunc("GET /contexts", r.handleGetContexts)
+	mux.HandleFunc("DELETE /contexts/{context}", r.handleDeleteContext)
+
 	// mode route
 	mux.HandleFunc("GET /mode", r.handleGetMode)
 
 	var h http.Handler = mux
+	h = r.contextMiddleware(h)
 	if r.expectedAuth != "" {
 		h = r.authMiddleware(h)
 	}
@@ -630,6 +636,16 @@ func (r *Registry) detectCycle(schema sr.Schema, subject string, version int, vi
 	// Remove from subject stack before returning
 	delete(subjectStack, subject)
 	return nil
+}
+
+// subjectContext extracts the context from a ":.name:subject" string, defaulting to ".".
+func subjectContext(subject string) string {
+	if strings.HasPrefix(subject, ":.") {
+		if idx := strings.Index(subject[2:], ":"); idx >= 0 {
+			return subject[1 : idx+2] // e.g. ":.myctx:topic" → ".myctx"
+		}
+	}
+	return "."
 }
 
 func normalizeSchema(raw string, t sr.SchemaType) (string, error) {
