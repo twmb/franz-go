@@ -37,7 +37,7 @@ ShareFetchRequest => key 78, max version 1, flexible v0+
       // PartitionMaxBytes is the maximum bytes to fetch from this partition.
       // 0 when only acknowledgement with no fetching is required. See KIP-74
       // for cases where this limit may not be honored.
-      PartitionMaxBytes: int32
+      PartitionMaxBytes: int32 // v0-v0
       // AcknowledgementBatches are record batches to acknowledge.
       AcknowledgementBatches: [=>]
         // FirstOffset is the first offset of batch of records to acknowledge.

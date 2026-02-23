@@ -22,7 +22,7 @@ DescribeTopicPartitionsResponse =>
   // Each topic in the response.
   Topics: [=>]
     // The topic error, or 0 if there is no error.
-    ErrorCode: int32
+    ErrorCode: int16
     // The topic name.
     Topic: nullable-string
     // The topic ID.
@@ -31,7 +31,7 @@ DescribeTopicPartitionsResponse =>
     IsInternal: bool
     Partitions: [=>]
       // The partition error, or 0 if there is no error.
-      ErrorCode: int32
+      ErrorCode: int16
       // The partition this is a response for.
       Partition: int32
       // The ID of the leader broker for this partition.

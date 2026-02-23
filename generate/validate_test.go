@@ -485,11 +485,12 @@ func compareFieldsAtVersion(t *testing.T, msgName string, version, flexibleAt in
 	}
 
 	// Filter DSL fields active at this version.
+	// Tags never have version ranges — they are valid across all flexible
+	// versions once introduced and can never be reused.
 	var dslNonTagged []StructField
 	dslTagged := make(map[int]StructField)
 	for _, df := range dslFields {
 		if df.Tag >= 0 && df.MinVersion == -1 {
-			// Tag-only field: only active at flexible versions.
 			if isFlexible {
 				dslTagged[df.Tag] = df
 			}
