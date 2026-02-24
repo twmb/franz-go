@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -121,20 +122,27 @@ func TestTxnEtl(t *testing.T) {
 		{"sticky/848/static", StickyBalancer(), true, "static"},
 	}
 
+	var wg sync.WaitGroup
 	for _, tc := range tcs {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			testChainETL(
-				t,
-				topic1,
-				body,
-				true,
-				tc.balancer,
-				tc.enable848,
-				tc.instanceID,
-			)
-		})
+		etlSem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t.Run(tc.name, func(t *testing.T) {
+				defer func() { <-etlSem }()
+				testChainETL(
+					t,
+					topic1,
+					body,
+					true,
+					tc.balancer,
+					tc.enable848,
+					tc.instanceID,
+				)
+			})
+		}()
 	}
+	wg.Wait()
 }
 
 func (c *testConsumer) goTransact(txnsBeforeQuit int) {

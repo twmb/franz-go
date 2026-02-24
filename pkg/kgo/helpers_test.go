@@ -25,6 +25,8 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
+var errSkipChecks848 = errors.New("848 stale commit; skip checks")
+
 var (
 	adm             *Client
 	testrf          = 3
@@ -549,6 +551,17 @@ func (c *testConsumer) goRun(transactional bool, etlsBeforeQuit int) {
 	}
 }
 
+// etlSem limits the number of concurrent ETL subtests to avoid
+// overwhelming the broker cluster. Too many concurrent transactional
+// clients can cause transaction timeouts: broker contention causes
+// produce draining to stall, the transaction exceeds its timeout, and
+// Kafka's coordinator fences the producer with INVALID_PRODUCER_EPOCH.
+//
+// The semaphore is acquired in the for loop of TestGroupETL/TestTxnEtl
+// BEFORE t.Run so that the subtest timer reflects actual work rather
+// than time spent waiting for a semaphore slot.
+var etlSem = make(chan struct{}, 4)
+
 func testChainETL(
 	t *testing.T,
 	topic1 string,
@@ -666,14 +679,27 @@ func testChainETL(
 	// FINAL VALIDATION //
 	//////////////////////
 
+	var skipChecks bool
 out:
 	for {
 		select {
 		case err := <-errs:
+			if skipChecks {
+				continue
+			}
+			if errors.Is(err, errSkipChecks848) {
+				t.Log("pre-KIP-1251 stale commit encountered, skipping validation")
+				skipChecks = true
+				continue
+			}
 			t.Fatal(err)
 		case <-doneConsume:
 			break out
 		}
+	}
+
+	if skipChecks {
+		return
 	}
 
 	for level, part2key := range []map[int32][]int{

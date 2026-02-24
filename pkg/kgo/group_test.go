@@ -3,11 +3,15 @@ package kgo
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 // TestGroupETL tests:
@@ -97,20 +101,27 @@ func TestGroupETL(t *testing.T) {
 		{"sticky/848/static", StickyBalancer(), true, "static"},
 	}
 
+	var wg sync.WaitGroup
 	for _, tc := range tcs {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			testChainETL(
-				t,
-				topic1,
-				body,
-				false,
-				tc.balancer,
-				tc.enable848,
-				tc.instanceID,
-			)
-		})
+		etlSem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t.Run(tc.name, func(t *testing.T) {
+				defer func() { <-etlSem }()
+				testChainETL(
+					t,
+					topic1,
+					body,
+					false,
+					tc.balancer,
+					tc.enable848,
+					tc.instanceID,
+				)
+			})
+		}()
 	}
+	wg.Wait()
 }
 
 func (c *testConsumer) goGroupETL(etlsBeforeQuit int) {
@@ -151,6 +162,10 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 				return
 			}
 			if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+				if c.enable848 && errors.Is(err, kerr.StaleMemberEpoch) {
+					c.errCh <- errSkipChecks848
+					return
+				}
 				c.errCh <- fmt.Errorf("unable to commit in revoked: %v", err)
 			}
 		}),
