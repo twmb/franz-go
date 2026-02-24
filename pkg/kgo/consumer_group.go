@@ -2990,15 +2990,23 @@ func (g *groupConsumer) commit(
 			}
 			g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
 
-			// Kafka returns STALE_MEMBER_EPOCH when the epoch
-			// used in the commit doesn't match the member's
-			// current epoch. This can happen when a heartbeat
-			// and OffsetCommit are pipelined on the same
-			// connection and the server processes them in an
-			// order that bumps the epoch before seeing the
-			// commit. We sleep briefly to allow the heartbeat
-			// response (carrying the new epoch) to arrive and
-			// update memberGen, then retry with the new epoch.
+			// KIP-848 returns STALE_MEMBER_EPOCH when the
+			// commit's epoch doesn't match the server's current
+			// epoch. This commonly happens when a heartbeat and
+			// OffsetCommit are pipelined on the same connection
+			// and the server bumps the epoch before seeing the
+			// commit. The heartbeat response carrying the new
+			// epoch arrives before the commit response (same
+			// connection, ordered), but goroutine scheduling
+			// may let us process the commit response first. We
+			// sleep briefly to give the heartbeat loop time to
+			// update memberGen, then reload and retry.
+			//
+			// If the heartbeat loop has stopped (e.g. leave
+			// path with a canceled context), memberGen is not
+			// updated and we break without retrying. This is a
+			// known limitation without KIP-1251 (assignment
+			// epochs for consumer groups).
 			stale := false
 			for _, t := range resp.Topics {
 				for _, p := range t.Partitions {
@@ -3008,7 +3016,7 @@ func (g *groupConsumer) commit(
 				}
 			}
 			if stale {
-				time.Sleep(time.Second)
+				time.Sleep(500 * time.Millisecond)
 				_, newGen := g.memberGen.load()
 				if newGen != req.Generation {
 					g.cfg.logger.Log(LogLevelInfo, "offset commit got stale member epoch, retrying with updated epoch",
