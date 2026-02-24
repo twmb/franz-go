@@ -1,5 +1,3 @@
-claude --resume 8707654f-2524-4c51-8f7e-8d161eee8dd0
-
 # franz-go Internals
 
 This document is your guide to working on the `kgo` package. It covers how the
