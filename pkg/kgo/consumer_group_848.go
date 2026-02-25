@@ -106,6 +106,34 @@ outer:
 			}
 		}
 
+		// Retriable errors from initialJoin should not be surfaced
+		// to the user. Coordinator errors (unavailable, loading,
+		// moved) and broker-level errors (connection closed, EOF)
+		// are transient -- we backoff and retry without going
+		// through manageFailWait (which calls onLost and injects
+		// a fake fetch error to the user).
+		//
+		// We can't rely on the client's default retry logic because
+		// ConsumerGroupHeartbeat cannot be retried by default.
+		if err != nil && (g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err) || isRetryableBrokerErr(err)) {
+			consecutiveErrors++
+			g.cfg.logger.Log(LogLevelInfo, "consumer group initial heartbeat hit retriable error, backing off and retrying",
+				"group", g.cfg.group,
+				"err", err,
+				"consecutive_errors", consecutiveErrors,
+			)
+			backoff := g.cfg.retryBackoff(consecutiveErrors)
+			g.cl.waitmeta(g.ctx, backoff, "waitmeta during 848 retriable error backoff")
+			after := time.NewTimer(backoff)
+			select {
+			case <-g.ctx.Done():
+				after.Stop()
+				return
+			case <-after.C:
+			}
+			continue
+		}
+
 		for err == nil {
 			consecutiveErrors = 0
 			var nowAssigned map[string][]int32
@@ -160,6 +188,17 @@ outer:
 
 			switch {
 			case errors.Is(err, kerr.RebalanceInProgress):
+				err = nil
+
+			// Coordinator errors during heartbeating are
+			// transient and should not surface to the user.
+			// We delete the stale coordinator so the next
+			// heartbeat discovers the new one.
+			case err != nil && g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err):
+				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat hit coordinator error, retrying",
+					"group", g.cfg.group,
+					"err", err,
+				)
 				err = nil
 
 			case err != nil && isRetryableBrokerErr(err):
