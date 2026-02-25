@@ -190,23 +190,10 @@ outer:
 			case errors.Is(err, kerr.RebalanceInProgress):
 				err = nil
 
-			// Coordinator errors during heartbeating are
-			// transient and should not surface to the user.
-			// We delete the stale coordinator so the next
-			// heartbeat discovers the new one.
-			case err != nil && g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err):
-				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat hit coordinator error, retrying",
-					"group", g.cfg.group,
-					"err", err,
-				)
-				err = nil
-
-			case err != nil && isRetryableBrokerErr(err):
-				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat hit retriable broker error, retrying",
-					"group", g.cfg.group,
-					"err", err,
-				)
-				err = nil
+			// Retriable broker errors (connection closed, EOF) and
+			// coordinator errors (NOT_COORDINATOR, etc.) are
+			// handled in the heartbeat loop directly with
+			// exponential backoff, avoiding session teardown.
 
 			case errors.Is(err, kerr.UnknownMemberID):
 				member, gen := g.memberGen.load()

@@ -1013,6 +1013,7 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 	var heartbeat, didRevoke, stopHeartbeating bool
 	var rejoinWhy string
 	var lastErr error
+	var hbBrokerRetries int
 	heartbeatForceCh := g.heartbeatForceCh
 
 	ctxCh := g.ctx.Done()
@@ -1066,6 +1067,29 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 		}
 
 		if err == nil {
+			hbBrokerRetries = 0
+			continue
+		}
+
+		// For KIP-848, retriable broker errors (connection closed,
+		// EOF) and coordinator errors (NOT_COORDINATOR, etc.) are
+		// transient and do not invalidate the member's state on
+		// the broker. The classic protocol retries these
+		// transparently via the client's retryable request
+		// wrapper, but 848 heartbeats bypass that and manage
+		// retries here. We use exponential backoff matching the
+		// retryable wrapper and retry in-place, avoiding the
+		// session teardown/rebuild that would occur if the error
+		// propagated to the manage848 loop.
+		if is848 && (isRetryableBrokerErr(err) || g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err)) {
+			hbBrokerRetries++
+			backoff := g.cfg.retryBackoff(hbBrokerRetries)
+			g.cfg.logger.Log(LogLevelInfo, "heartbeat hit retriable error, retrying",
+				"group", g.cfg.group,
+				"err", err,
+				"backoff", backoff,
+			)
+			timer.Reset(backoff)
 			continue
 		}
 
@@ -1648,6 +1672,11 @@ start:
 	var resp *kmsg.OffsetFetchResponse
 	var err error
 
+	g.cfg.logger.Log(LogLevelDebug, "fetching offsets",
+		"group", g.cfg.group,
+		"require_stable", req.RequireStable,
+		"num_topics", len(reqg.Topics),
+	)
 	fetchDone := make(chan struct{})
 	go func() {
 		defer close(fetchDone)
@@ -1655,6 +1684,7 @@ start:
 	}()
 	select {
 	case <-fetchDone:
+		g.cfg.logger.Log(LogLevelDebug, "fetch offsets returned", "group", g.cfg.group, "err", err)
 	case <-ctx.Done():
 		g.cfg.logger.Log(LogLevelInfo, "fetch offsets failed due to context cancelation", "group", g.cfg.group)
 		return ctx.Err()
