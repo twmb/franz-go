@@ -1463,6 +1463,9 @@ type TxnMetadataValueTopic struct {
 
 	// Partitions are partitions in this topic involved in the transaction.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v1+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -1480,6 +1483,11 @@ func NewTxnMetadataValueTopic() TxnMetadataValueTopic {
 
 // TxnMetadataValue is the value for the Kafka internal __transaction_state
 // topic if the key is of TxnMetadataKey type.
+//
+// Version 0 was introduced in 0.11.0.
+//
+// KAFKA-14869 commit 4b6dcf19dc, proposed in KIP-915 and included in 3.5
+// released version 1.
 type TxnMetadataValue struct {
 	// Version is the version of this value.
 	Version int16
@@ -1507,11 +1515,40 @@ type TxnMetadataValue struct {
 
 	// StartTimestamp is the timestamp in millis of when this transaction started.
 	StartTimestamp int64
+
+	// PreviousProducerID is the producer ID used by the last committed
+	// transaction. KAFKA-14562 commit ede0c94aaa, proposed in KIP-890 and
+	// included in 4.0.
+	//
+	// This field has a default of -1.
+	PreviousProducerID int64 // tag 0
+
+	// NextProducerID is the latest producer ID sent to the producer for the
+	// given transactional ID. KAFKA-14562 commit ede0c94aaa, proposed in
+	// KIP-890 and included in 4.0.
+	//
+	// This field has a default of -1.
+	NextProducerID int64 // tag 1
+
+	// ClientTransactionVersion is the transaction version used by the client.
+	// KAFKA-14562 commit ede0c94aaa, proposed in KIP-890 and included in 4.0.
+	ClientTransactionVersion int16 // tag 2
+
+	// NextProducerEpoch is the producer epoch associated with NextProducerID.
+	// KAFKA-15370 commit 247c0f0ba5, proposed in KIP-939 and included in 4.1.0.
+	//
+	// This field has a default of -1.
+	NextProducerEpoch int16 // tag 3
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v1+
 }
 
 func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 1
+	_ = isFlexible
 	{
 		v := v.Version
 		dst = kbin.AppendInt16(dst, v)
@@ -1537,20 +1574,36 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		if isFlexible {
+			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
+		} else {
+			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+		}
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
 				}
+			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -1561,6 +1614,55 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 	{
 		v := v.StartTimestamp
 		dst = kbin.AppendInt64(dst, v)
+	}
+	if isFlexible {
+		var toEncode []uint32
+		if v.PreviousProducerID != -1 {
+			toEncode = append(toEncode, 0)
+		}
+		if v.NextProducerID != -1 {
+			toEncode = append(toEncode, 1)
+		}
+		if v.ClientTransactionVersion != 0 {
+			toEncode = append(toEncode, 2)
+		}
+		if v.NextProducerEpoch != -1 {
+			toEncode = append(toEncode, 3)
+		}
+		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
+		for _, tag := range toEncode {
+			switch tag {
+			case 0:
+				{
+					v := v.PreviousProducerID
+					dst = kbin.AppendUvarint(dst, 0)
+					dst = kbin.AppendUvarint(dst, 8)
+					dst = kbin.AppendInt64(dst, v)
+				}
+			case 1:
+				{
+					v := v.NextProducerID
+					dst = kbin.AppendUvarint(dst, 1)
+					dst = kbin.AppendUvarint(dst, 8)
+					dst = kbin.AppendInt64(dst, v)
+				}
+			case 2:
+				{
+					v := v.ClientTransactionVersion
+					dst = kbin.AppendUvarint(dst, 2)
+					dst = kbin.AppendUvarint(dst, 2)
+					dst = kbin.AppendInt16(dst, v)
+				}
+			case 3:
+				{
+					v := v.NextProducerEpoch
+					dst = kbin.AppendUvarint(dst, 3)
+					dst = kbin.AppendUvarint(dst, 2)
+					dst = kbin.AppendInt16(dst, v)
+				}
+			}
+		}
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -1579,6 +1681,8 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 	v.Version = b.Int16()
 	version := v.Version
 	_ = version
+	isFlexible := version >= 1
+	_ = isFlexible
 	s := v
 	{
 		v := b.Int64()
@@ -1605,7 +1709,14 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if version < 0 || l == 0 {
+			a = []TxnMetadataValueTopic{}
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -1620,9 +1731,17 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 			{
 				var v string
 				if unsafe {
-					v = b.UnsafeString()
+					if isFlexible {
+						v = b.UnsafeCompactString()
+					} else {
+						v = b.UnsafeString()
+					}
 				} else {
-					v = b.String()
+					if isFlexible {
+						v = b.CompactString()
+					} else {
+						v = b.String()
+					}
 				}
 				s.Topic = v
 			}
@@ -1630,7 +1749,11 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -1645,6 +1768,9 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 				v = a
 				s.Partitions = v
 			}
+			if isFlexible {
+				s.UnknownTags = internalReadTags(&b)
+			}
 		}
 		v = a
 		s.Topics = v
@@ -1657,12 +1783,52 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 		v := b.Int64()
 		s.StartTimestamp = v
 	}
+	if isFlexible {
+		for i := b.Uvarint(); i > 0; i-- {
+			switch key := b.Uvarint(); key {
+			default:
+				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
+			case 0:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+				v := b.Int64()
+				s.PreviousProducerID = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
+			case 1:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+				v := b.Int64()
+				s.NextProducerID = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
+			case 2:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+				v := b.Int16()
+				s.ClientTransactionVersion = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
+			case 3:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+				v := b.Int16()
+				s.NextProducerEpoch = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return b.Complete()
 }
+func (v *TxnMetadataValue) IsFlexible() bool { return v.Version >= 1 }
 
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to TxnMetadataValue.
 func (v *TxnMetadataValue) Default() {
+	v.PreviousProducerID = -1
+	v.NextProducerID = -1
+	v.NextProducerEpoch = -1
 }
 
 // NewTxnMetadataValue returns a default TxnMetadataValue
@@ -2613,8 +2779,8 @@ func (v *ControlRecordKey) AppendTo(dst []byte) []byte {
 	{
 		v := v.Type
 		{
-			v := int8(v)
-			dst = kbin.AppendInt8(dst, v)
+			v := int16(v)
+			dst = kbin.AppendInt16(dst, v)
 		}
 	}
 	return dst
@@ -2638,7 +2804,7 @@ func (v *ControlRecordKey) readFrom(src []byte, unsafe bool) error {
 	{
 		var t ControlRecordKeyType
 		{
-			v := b.Int8()
+			v := b.Int16()
 			t = ControlRecordKeyType(v)
 		}
 		v := t
@@ -2719,6 +2885,10 @@ func NewEndTxnMarker() EndTxnMarker {
 type LeaderChangeMessageVoter struct {
 	VoterID int32
 
+	// VoterDirectoryID is the directory ID of the voter.
+	// KAFKA-16915 commit da8fe6355b, proposed in KIP-853 and included in 3.9.
+	VoterDirectoryID [16]byte // v1+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
@@ -2736,7 +2906,7 @@ func NewLeaderChangeMessageVoter() LeaderChangeMessageVoter {
 	return v
 }
 
-// LeaderChangeMessage is the value for a control record when the key is type 3.
+// LeaderChangeMessage is the value for a control record when the key is type 2.
 type LeaderChangeMessage struct {
 	Version int16
 
@@ -2779,6 +2949,10 @@ func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
 				v := v.VoterID
 				dst = kbin.AppendInt32(dst, v)
 			}
+			if version >= 1 {
+				v := v.VoterDirectoryID
+				dst = kbin.AppendUuid(dst, v)
+			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
 				dst = v.UnknownTags.AppendEach(dst)
@@ -2797,6 +2971,10 @@ func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
 			{
 				v := v.VoterID
 				dst = kbin.AppendInt32(dst, v)
+			}
+			if version >= 1 {
+				v := v.VoterDirectoryID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -2856,6 +3034,10 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 				v := b.Int32()
 				s.VoterID = v
 			}
+			if version >= 1 {
+				v := b.Uuid()
+				s.VoterDirectoryID = v
+			}
 			if isFlexible {
 				s.UnknownTags = internalReadTags(&b)
 			}
@@ -2886,6 +3068,10 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 			{
 				v := b.Int32()
 				s.VoterID = v
+			}
+			if version >= 1 {
+				v := b.Uuid()
+				s.VoterDirectoryID = v
 			}
 			if isFlexible {
 				s.UnknownTags = internalReadTags(&b)
@@ -63274,6 +63460,8 @@ func (e *QuotasMatchType) UnmarshalText(text []byte) error {
 // * 1 (COMMIT)
 //
 // * 2 (QUORUM_REASSIGNMENT)
+// QUORUM_REASSIGNMENT was renamed to LEADER_CHANGE in Kafka 3.0
+// (KAFKA-12952 commit d3ec9f940c), but the meaning is the same.
 //
 // * 3 (SNAPSHOT_HEADER)
 //
@@ -63282,7 +63470,7 @@ func (e *QuotasMatchType) UnmarshalText(text []byte) error {
 // * 5 (KRAFT_VERSION)
 //
 // * 6 (KRAFT_VOTERS)
-type ControlRecordKeyType int8
+type ControlRecordKeyType int16
 
 func (v ControlRecordKeyType) String() string {
 	switch v {
