@@ -209,7 +209,16 @@ outer:
 				err = nil
 
 			case errors.Is(err, kerr.UnknownMemberID):
+				member, gen := g.memberGen.load()
 				g.memberGen.store(newStringUUID(), 0)
+				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat error, abandoning assignment and rejoining with new member id",
+					"group", g.cfg.group,
+					"member_id", member,
+					"generation", gen,
+					"err", err,
+				)
+				g.nowAssigned.store(nil)
+				continue outer
 
 			case errors.Is(err, kerr.FencedMemberEpoch),
 				errors.Is(err, kerr.GroupMaxSizeReached),
