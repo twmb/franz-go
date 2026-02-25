@@ -1038,10 +1038,6 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
 	}
 
-	if g.commitCancel != nil {
-		g.commitCancel() // cancel any prior commit
-	}
-	priorCancel := g.commitCancel
 	priorDone := g.commitDone
 
 	// Unlike the non-txn consumer, we use the group context for
@@ -1052,7 +1048,6 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 	commitCtx, commitCancel := context.WithCancel(g.ctx) // enable ours to be canceled and waited for
 	commitDone := make(chan struct{})
 
-	g.commitCancel = commitCancel
 	g.commitDone = commitDone
 
 	if ctx.Done() != nil {
@@ -1068,13 +1063,16 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 	go func() {
 		defer close(commitDone) // allow future commits to continue when we are done
 		defer commitCancel()
-		if priorDone != nil {
+		if priorDone != nil { // wait for any prior request to finish
+			// Same as commit(): we must NOT cancel the prior commit
+			// because canceling kills the TCP connection, and our
+			// subsequent request on a new connection can be processed
+			// out of order at the broker, rewinding committed offsets.
 			select {
 			case <-priorDone:
 			default:
-				g.cl.cfg.logger.Log(LogLevelDebug, "canceling prior txn offset commit to issue another")
-				priorCancel()
-				<-priorDone // wait for any prior request to finish
+				g.cl.cfg.logger.Log(LogLevelDebug, "waiting for prior txn offset commit to finish before issuing another")
+				<-priorDone
 			}
 		}
 		g.cl.cfg.logger.Log(LogLevelDebug, "issuing txn offset commit", "uncommitted", req)

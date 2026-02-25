@@ -148,12 +148,10 @@ type groupConsumer struct {
 	// expects, which would rotate a session.
 	memberGen groupMemberGen
 
-	// commitCancel and commitDone are set under mu before firing off an
-	// async commit request. If another commit happens, it cancels the
-	// prior commit, waits for the prior to be done, and then starts its
-	// own.
-	commitCancel func()
-	commitDone   chan struct{}
+	// commitDone is set under mu before firing off an async commit
+	// request. If another commit happens, it waits for the prior to be
+	// done, and then starts its own.
+	commitDone chan struct{}
 
 	// blockAuto is set and cleared in CommitOffsets{,Sync} to block
 	// autocommitting if autocommitting is active. This ensures that an
@@ -2918,13 +2916,11 @@ func (g *groupConsumer) commit(
 		return
 	}
 
-	priorCancel := g.commitCancel
 	priorDone := g.commitDone
 
 	commitCtx, commitCancel := context.WithCancel(ctx) // enable ours to be canceled and waited for
 	commitDone := make(chan struct{})
 
-	g.commitCancel = commitCancel
 	g.commitDone = commitDone
 
 	req := kmsg.NewPtrOffsetCommitRequest()
@@ -2948,11 +2944,24 @@ func (g *groupConsumer) commit(
 		defer close(commitDone) // allow future commits to continue when we are done
 		defer commitCancel()
 		if priorDone != nil { // wait for any prior request to finish
+			// We must NOT cancel the prior commit. Canceling an
+			// in-flight request kills the TCP connection. Our
+			// subsequent request would then use a new connection,
+			// and the broker can process the two requests out of
+			// order (different connections have no ordering
+			// guarantee). If the prior commit had a lower offset
+			// (e.g. autocommit HEAD vs. sync commit DIRTY), the
+			// broker could process it AFTER ours and overwrite
+			// our higher offset, causing duplicate consumption.
+			//
+			// By waiting for the prior commit to complete
+			// naturally, we keep the connection alive and
+			// guarantee our request is queued behind the prior on
+			// the same connection, preserving ordering.
 			select {
 			case <-priorDone:
 			default:
-				g.cfg.logger.Log(LogLevelDebug, "canceling prior commit to issue another", "group", g.cfg.group)
-				priorCancel()
+				g.cfg.logger.Log(LogLevelDebug, "waiting for prior commit to finish before issuing another", "group", g.cfg.group)
 				<-priorDone
 			}
 		}
