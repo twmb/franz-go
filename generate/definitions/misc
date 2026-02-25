@@ -321,7 +321,12 @@ TxnMetadataKey => not top level, with version field
 
 // TxnMetadataValue is the value for the Kafka internal __transaction_state
 // topic if the key is of TxnMetadataKey type.
-TxnMetadataValue => not top level, with version field
+//
+// Version 0 was introduced in 0.11.0.
+//
+// KAFKA-14869 commit 4b6dcf19dc, proposed in KIP-915 and included in 3.5
+// released version 1.
+TxnMetadataValue => not top level, with version field, flexible v1+
   // Version is the version of this value.
   Version: int16
   // ProducerID is the ID in use by the transactional ID.
@@ -335,7 +340,7 @@ TxnMetadataValue => not top level, with version field
   // CompleteCommit, 5 is CompleteAbort, 6 is Dead, and 7 is PrepareEpochFence.
   State: enum-TransactionState
   // Topics are topics that are involved in this transaction.
-  Topics: [=>]
+  Topics: nullable[=>]
     // Topic is a topic involved in this transaction.
     Topic: string
     // Partitions are partitions in this topic involved in the transaction.
@@ -345,6 +350,20 @@ TxnMetadataValue => not top level, with version field
   LastUpdateTimestamp: int64
   // StartTimestamp is the timestamp in millis of when this transaction started.
   StartTimestamp: int64
+  // PreviousProducerID is the producer ID used by the last committed
+  // transaction. KAFKA-14562 commit ede0c94aaa, proposed in KIP-890 and
+  // included in 4.0.
+  PreviousProducerID: int64(-1) // tag 0
+  // NextProducerID is the latest producer ID sent to the producer for the
+  // given transactional ID. KAFKA-14562 commit ede0c94aaa, proposed in
+  // KIP-890 and included in 4.0.
+  NextProducerID: int64(-1) // tag 1
+  // ClientTransactionVersion is the transaction version used by the client.
+  // KAFKA-14562 commit ede0c94aaa, proposed in KIP-890 and included in 4.0.
+  ClientTransactionVersion: int16 // tag 2
+  // NextProducerEpoch is the producer epoch associated with NextProducerID.
+  // KAFKA-15370 commit 247c0f0ba5, proposed in KIP-939 and included in 4.1.0.
+  NextProducerEpoch: int16(-1) // tag 3
 
 // StickyMemberMetadata is is what is encoded in UserData for
 // ConsumerMemberMetadata in group join requests with the sticky partitioning
@@ -461,8 +480,11 @@ EndTxnMarker => not top level, with version field
 
 LeaderChangeMessageVoter => not top level, no encoding, flexible v0+
   VoterID: int32
+  // VoterDirectoryID is the directory ID of the voter.
+  // KAFKA-16915 commit da8fe6355b, proposed in KIP-853 and included in 3.9.
+  VoterDirectoryID: uuid // v1+
 
-// LeaderChangeMessage is the value for a control record when the key is type 3.
+// LeaderChangeMessage is the value for a control record when the key is type 2.
 LeaderChangeMessage => not top level, with version field, flexible v0+
   Version: int16
   // The ID of the newly elected leader.

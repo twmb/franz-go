@@ -146,9 +146,11 @@ QuotasMatchType int8 (
 // MISC //
 //////////
 
-ControlRecordKeyType int8 (
+ControlRecordKeyType int16 (
   0: ABORT
   1: COMMIT
+  // QUORUM_REASSIGNMENT was renamed to LEADER_CHANGE in Kafka 3.0
+  // (KAFKA-12952 commit d3ec9f940c), but the meaning is the same.
   2: QUORUM_REASSIGNMENT
   3: SNAPSHOT_HEADER
   4: SNAPSHOT_FOOTER
