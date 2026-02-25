@@ -982,7 +982,7 @@ func (cl *Client) fetchBrokerMetadata(ctx context.Context) error {
 	return wait.err
 }
 
-func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics []string, results map[string]cachedMetaTopic) (*broker, *kmsg.MetadataResponse, error) {
+func (cl *Client) fetchMetadataByName(ctx context.Context, all bool, topics []string, results map[string]cachedMetaTopic) (*broker, *kmsg.MetadataResponse, error) {
 	req := kmsg.NewPtrMetadataRequest()
 	req.AllowAutoTopicCreation = cl.cfg.allowAutoTopicCreation
 	if all {
@@ -997,6 +997,34 @@ func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics [
 		}
 	}
 	return cl.fetchMetadata(ctx, req, true, results)
+}
+
+// resolveTopicMetaByID fetches metadata by TopicID and caches the results.
+// This is used when we only have topic IDs (e.g. v10+ OffsetFetch) and
+// need to resolve them to names before processing a response.
+func (cl *Client) resolveTopicMetaByID(ctx context.Context, ids [][16]byte) (map[string]cachedMetaTopic, error) {
+	// Check cache first.
+	cl.metaCache.mu.Lock()
+	var missing [][16]byte
+	for _, id := range ids {
+		if _, ok := cl.metaCache.byID[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	cl.metaCache.mu.Unlock()
+	if len(missing) == 0 {
+		return nil, nil
+	}
+
+	req := kmsg.NewPtrMetadataRequest()
+	for _, id := range missing {
+		reqTopic := kmsg.NewMetadataRequestTopic()
+		reqTopic.TopicID = id
+		req.Topics = append(req.Topics, reqTopic)
+	}
+	results := make(map[string]cachedMetaTopic)
+	_, _, err := cl.fetchMetadata(ctx, req, true, results)
+	return results, err
 }
 
 func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest, limitRetries bool, results map[string]cachedMetaTopic) (*broker, *kmsg.MetadataResponse, error) {
@@ -1383,7 +1411,7 @@ func (cl *Client) RequestCachedMetadata(ctx context.Context, req *kmsg.MetadataR
 	}
 
 	// Phase 3: fetch all resolved topic names, using the cache.
-	cached, err := cl.fetchTopicMeta(ctx, topics, true, limit)
+	cached, err := cl.resolveTopicMeta(ctx, topics, true, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -2778,7 +2806,7 @@ func (cl *Client) maybeDeleteCachedMeta(unknownTopic bool, ts ...string) (should
 	return shouldRetry
 }
 
-// fetchTopicMeta provides a convenience type of working with metadata;
+// resolveTopicMeta provides a convenience type of working with metadata;
 // this is garbage heavy, so it is only used in one off requests in this
 // package.
 //
@@ -2788,7 +2816,7 @@ func (cl *Client) maybeDeleteCachedMeta(unknownTopic bool, ts ...string) (should
 // requests that are sharded and use metadata, and the one this benefits most
 // is ListOffsets. Likely, ListOffsets for the same topic will be issued back
 // to back, so not caching for so long is ok.
-func (cl *Client) fetchTopicMeta(ctx context.Context, topics []string, useCache bool, limit time.Duration) (map[string]cachedMetaTopic, error) {
+func (cl *Client) resolveTopicMeta(ctx context.Context, topics []string, useCache bool, limit time.Duration) (map[string]cachedMetaTopic, error) {
 	if limit <= 0 {
 		limit = cl.cfg.metadataMinAge
 	}
@@ -2845,7 +2873,7 @@ func (cl *Client) fetchTopicMeta(ctx context.Context, topics []string, useCache 
 	if results == nil {
 		results = make(map[string]cachedMetaTopic)
 	}
-	_, _, err := cl.fetchMetadataForTopics(ctx, all, needed, results)
+	_, _, err := cl.fetchMetadataByName(ctx, all, needed, results)
 	return results, err
 }
 
@@ -2869,12 +2897,14 @@ func (cl *Client) storeCachedMeta(meta *kmsg.MetadataResponse, all bool, results
 	when := time.Now()
 	cl.metaCache.anyAt = when
 	var zeroID [16]byte
+	var stored int
 	for _, topic := range meta.Topics {
 		if topic.Topic == nil {
 			// ID-only responses with no resolved name (e.g.
 			// UnknownTopicID errors) cannot be cached by name.
 			continue
 		}
+		stored++
 		t := cachedMetaTopic{
 			id:   topic.TopicID,
 			t:    topic,
@@ -2893,8 +2923,15 @@ func (cl *Client) storeCachedMeta(meta *kmsg.MetadataResponse, all bool, results
 			results[*t.t.Topic] = t
 		}
 	}
+
 	if all {
 		cl.metaCache.allAt = when
+	}
+
+	// Prune entries older than metadataMinAge. If the number of
+	// topics we just stored equals the map size, every entry is
+	// fresh and there is nothing to prune.
+	if stored < len(cl.metaCache.topics) {
 		for topic, ct := range cl.metaCache.topics {
 			if ct.when.Equal(when) {
 				continue
@@ -3016,7 +3053,7 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request, _ er
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchTopicMeta(ctx, need, true, 0)
+	mapping, err := cl.resolveTopicMeta(ctx, need, true, 0)
 	if err != nil {
 		return nil, false, err
 	}
@@ -3211,6 +3248,48 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 	if len(req.Groups) == 0 {
 		req.Groups = append(req.Groups, offsetFetchReqToGroup(req))
 	}
+
+	// Fill in both Topic and TopicID on each request topic so that
+	// the request works regardless of the broker version (v10+ uses
+	// TopicID; v0-v9 uses Topic). This also means onResp can use
+	// the client's cached metadata to fill in response fields
+	// without any additional metadata fetches.
+	var (
+		unresolvedNames []string
+		unresolvedIDs   [][16]byte
+	)
+	for _, g := range req.Groups {
+		for _, t := range g.Topics {
+			if t.Topic == "" && t.TopicID != ([16]byte{}) {
+				unresolvedIDs = append(unresolvedIDs, t.TopicID)
+			}
+			if t.Topic != "" && t.TopicID == ([16]byte{}) {
+				unresolvedNames = append(unresolvedNames, t.Topic)
+			}
+		}
+	}
+	if len(unresolvedIDs) > 0 {
+		cl.resolveTopicMetaByID(ctx, unresolvedIDs)
+	}
+	var nameMeta map[string]cachedMetaTopic
+	if len(unresolvedNames) > 0 {
+		nameMeta, _ = cl.resolveTopicMeta(ctx, unresolvedNames, true, 0)
+	}
+	id2t := cl.id2tMap()
+	for i := range req.Groups {
+		for j := range req.Groups[i].Topics {
+			t := &req.Groups[i].Topics[j]
+			if t.Topic == "" && t.TopicID != ([16]byte{}) {
+				t.Topic = id2t[t.TopicID]
+			}
+			if t.TopicID == ([16]byte{}) && t.Topic != "" {
+				if ct, ok := nameMeta[t.Topic]; ok {
+					t.TopicID = ct.id
+				}
+			}
+		}
+	}
+
 	groups := make([]string, 0, len(req.Groups))
 	for i := range req.Groups {
 		groups = append(groups, req.Groups[i].Group)
@@ -3304,19 +3383,65 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 	req := kreq.(*kmsg.OffsetFetchRequest)
 	resp := kresp.(*kmsg.OffsetFetchResponse)
 
-	// v10+: response uses TopicID instead of Topic. Resolve using the
-	// client's metadata-populated id2t map so that downstream consumers
-	// (both kgo internal and kadm) see topic names.
-	if resp.Version >= 10 {
-		id2t := cl.id2tMap()
+	// All-topics fetches could leave topics nil, in which case we DONT
+	// bi-directionally resolve the name in shard. Thus, we have to handle
+	// here.
+	var unresolvedIDs [][16]byte
+	var unresolvedNames []string
+	for i := range resp.Groups {
+		for j := range resp.Groups[i].Topics {
+			t := &resp.Groups[i].Topics[j]
+			if t.Topic == "" && t.TopicID != ([16]byte{}) {
+				unresolvedIDs = append(unresolvedIDs, t.TopicID)
+			}
+			if t.TopicID == ([16]byte{}) && t.Topic != "" {
+				unresolvedNames = append(unresolvedNames, t.Topic)
+			}
+		}
+	}
+
+	// If anything is unresolved, resolve both, then do the walk again.
+	if len(unresolvedIDs) > 0 {
+		cl.resolveTopicMetaByID(cl.ctx, unresolvedIDs)
+	}
+	if len(unresolvedNames) > 0 {
+		cl.resolveTopicMeta(cl.ctx, unresolvedNames, false, 0)
+	}
+	if len(unresolvedIDs) > 0 || len(unresolvedNames) > 0 {
+		// Use metaCache which was just populated by the resolve
+		// calls above. If we cannot map topic ID or topic name,
+		// we inject an error. This SHOULDN'T happen, but we don't
+		// want to have a case where the user is expecting one
+		// or the other and don't have it.
+		cl.metaCache.mu.Lock()
 		for i := range resp.Groups {
 			for j := range resp.Groups[i].Topics {
 				t := &resp.Groups[i].Topics[j]
-				if t.Topic == "" {
-					t.Topic = id2t[t.TopicID]
+				if t.Topic == "" && t.TopicID != ([16]byte{}) {
+					t.Topic = cl.metaCache.byID[t.TopicID]
+					if t.Topic == "" {
+						for k := range t.Partitions {
+							if t.Partitions[k].ErrorCode == 0 {
+								t.Partitions[k].ErrorCode = kerr.UnknownTopicID.Code
+							}
+						}
+					}
+				}
+				if t.TopicID == ([16]byte{}) && t.Topic != "" {
+					if ct, ok := cl.metaCache.topics[t.Topic]; ok {
+						t.TopicID = ct.id
+					}
+					if t.TopicID == ([16]byte{}) {
+						for k := range t.Partitions {
+							if t.Partitions[k].ErrorCode == 0 {
+								t.Partitions[k].ErrorCode = kerr.UnknownTopicOrPartition.Code
+							}
+						}
+					}
 				}
 			}
 		}
+		cl.metaCache.mu.Unlock()
 	}
 
 	switch len(resp.Groups) {
@@ -3595,7 +3720,7 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request, _ 
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchTopicMeta(ctx, need, true, 0)
+	mapping, err := cl.resolveTopicMeta(ctx, need, true, 0)
 	if err != nil {
 		return nil, false, err
 	}
@@ -3716,7 +3841,7 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchTopicMeta(ctx, need, true, 0)
+	mapping, err := cl.resolveTopicMeta(ctx, need, true, 0)
 	if err != nil {
 		return nil, false, err
 	}
@@ -4036,7 +4161,7 @@ func (cl *writeTxnMarkersSharder) shard(ctx context.Context, kreq kmsg.Request, 
 			need = append(need, topic.Topic)
 		}
 	}
-	mapping, err := cl.fetchTopicMeta(ctx, need, true, 0)
+	mapping, err := cl.resolveTopicMeta(ctx, need, true, 0)
 	if err != nil {
 		return nil, false, err
 	}
@@ -4362,7 +4487,7 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 	for topic := range needMap {
 		need = append(need, topic)
 	}
-	mapping, err := cl.fetchTopicMeta(ctx, need, false, 0) // bypass cache, tricky to manage response
+	mapping, err := cl.resolveTopicMeta(ctx, need, false, 0) // bypass cache, tricky to manage response
 	if err != nil {
 		return nil, false, err
 	}
@@ -4510,7 +4635,7 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request, 
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchTopicMeta(ctx, need, false, 0) // bypass cache, tricky to manage response
+	mapping, err := cl.resolveTopicMeta(ctx, need, false, 0) // bypass cache, tricky to manage response
 	if err != nil {
 		return nil, false, err
 	}
@@ -4765,7 +4890,7 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchTopicMeta(ctx, need, true, 0)
+	mapping, err := cl.resolveTopicMeta(ctx, need, true, 0)
 	if err != nil {
 		return nil, false, err
 	}

@@ -600,7 +600,7 @@ func (mp metadataPartition) newPartition(cl *Client, isProduce bool) *topicParti
 // fetchTopicMetadata fetches metadata for all reqTopics and returns new
 // topicPartitionsData for each topic.
 func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*metadataTopic, error) {
-	_, meta, err := cl.fetchMetadataForTopics(cl.ctx, all, reqTopics, nil)
+	_, meta, err := cl.fetchMetadataByName(cl.ctx, all, reqTopics, nil)
 	if err != nil {
 		return nil, err
 	}

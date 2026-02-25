@@ -1667,9 +1667,12 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int
 	}()
 
 	// Our client maps the v0 to v7 format to v8+ when sharding this
-	// request, if we are only requesting one group, as well as maps the
-	// response back, so we do not need to worry about v8+ here.
+	// request, if we are only requesting one group. We iterate the v8+
+	// Groups format in the response rather than the v0-v7 resp.Topics
+	// because the sharder's onResp resolves TopicID -> Topic in the
+	// Groups format, and resp.Topics is a copy that may lose TopicID.
 	var staleRetries int
+	var unknownTopicIDRetries int
 start:
 	member, gen := g.memberGen.load()
 	req := kmsg.NewPtrOffsetFetchRequest()
@@ -1684,9 +1687,7 @@ start:
 	for topic, partitions := range added {
 		reqTopic := kmsg.NewOffsetFetchRequestGroupTopic()
 		reqTopic.Topic = topic
-		if td := groupTopics.loadTopic(topic); td != nil {
-			reqTopic.TopicID = td.id
-		}
+		reqTopic.TopicID = groupTopics.loadTopic(topic).id
 		reqTopic.Partitions = partitions
 		reqg.Topics = append(reqg.Topics, reqTopic)
 	}
@@ -1725,8 +1726,8 @@ start:
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		if errors.Is(err, kerr.StaleMemberEpoch) {
 			staleRetries++
-			if staleRetries > 5 {
-				g.cfg.logger.Log(LogLevelError, "fetch offsets failed: stale member epoch after 5 retries", "group", g.cfg.group)
+			if staleRetries > 3 {
+				g.cfg.logger.Log(LogLevelError, "fetch offsets failed: stale member epoch after 3 retries", "group", g.cfg.group)
 				return err
 			}
 			g.cfg.logger.Log(LogLevelInfo, "fetch offsets returned stale member epoch, forcing heartbeat and retrying",
@@ -1755,20 +1756,51 @@ start:
 	// cannot use the returned leader epoch.
 	kip320 := g.cl.supportsOffsetForLeaderEpoch()
 
+	id2t := g.cl.id2tMap()
 	offsets := make(map[string]map[int32]Offset)
-	for _, rTopic := range resp.Topics {
+	for _, rTopic := range resp.Groups[0].Topics {
+		topic := rTopic.Topic
+		if topic == "" {
+			topic = id2t[rTopic.TopicID]
+			if topic == "" {
+				for _, reqTopic := range req.Groups[0].Topics {
+					if reqTopic.TopicID == rTopic.TopicID {
+						topic = reqTopic.Topic
+						break
+					}
+				}
+				if topic == "" {
+					g.cfg.logger.Log(LogLevelError, "fetch offsets has an empty topic even after a TopicID lookup, this is unexpected, skipping response partition", "topic_id", rTopic.TopicID)
+					continue
+				}
+				g.cfg.logger.Log(LogLevelError, "fetch offsets response had an empty topic name for a TopicID that was in the request, using the request's topic name", "topic", topic, "topic_id", rTopic.TopicID)
+			}
+		}
 		topicOffsets := make(map[int32]Offset)
-		offsets[rTopic.Topic] = topicOffsets
+		offsets[topic] = topicOffsets
 		for _, rPartition := range rTopic.Partitions {
 			if err = kerr.ErrorForCode(rPartition.ErrorCode); err != nil {
-				// KIP-447: Unstable offset commit means there is a
-				// pending transaction that should be committing soon.
-				// We sleep for 1s and retry fetching offsets.
-				if errors.Is(err, kerr.UnstableOffsetCommit) {
-					g.cfg.logger.Log(LogLevelInfo, "fetch offsets failed with UnstableOffsetCommit, waiting 1s and retrying",
+				// Some partition errors are retryable:
+				//
+				// - UnstableOffsetCommit (KIP-447): a pending
+				//   transaction should be committing soon.
+				//
+				// - UnknownTopicID: the broker has not yet
+				//   propagated the topic ID for a newly created
+				//   topic. We now send TopicIDs in OffsetFetch
+				//   v10+. We cap retries because the topic may
+				//   have been legitimately deleted.
+				retryable := errors.Is(err, kerr.UnstableOffsetCommit) ||
+					errors.Is(err, kerr.UnknownTopicID) && unknownTopicIDRetries < 3
+				if errors.Is(err, kerr.UnknownTopicID) {
+					unknownTopicIDRetries++
+				}
+				if retryable {
+					g.cfg.logger.Log(LogLevelInfo, "fetch offsets failed with retryable partition error, waiting 1s and retrying",
 						"group", g.cfg.group,
-						"topic", rTopic.Topic,
+						"topic", topic,
 						"partition", rPartition.Partition,
+						"err", err,
 					)
 					select {
 					case <-ctx.Done():
@@ -1778,7 +1810,7 @@ start:
 				}
 				g.cfg.logger.Log(LogLevelError, "fetch offsets failed",
 					"group", g.cfg.group,
-					"topic", rTopic.Topic,
+					"topic", topic,
 					"partition", rPartition.Partition,
 					"err", err,
 				)
