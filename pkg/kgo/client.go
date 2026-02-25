@@ -3302,15 +3302,22 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 
 	// v10+: response uses TopicID instead of Topic. Resolve using the
 	// client's metadata-populated id2t map so that downstream consumers
-	// (both kgo internal and kadm) see topic names.
+	// (both kgo internal and kadm) see topic names. If both Topic and
+	// TopicID are empty, the request itself had no valid identifier
+	// (v10+ does not serialize Topic, so a zero TopicID means the
+	// broker received nothing useful).
 	if resp.Version >= 10 {
 		id2t := cl.id2tMap()
 		for i := range resp.Groups {
 			for j := range resp.Groups[i].Topics {
 				t := &resp.Groups[i].Topics[j]
-				if t.Topic == "" {
-					t.Topic = id2t[t.TopicID]
+				if t.TopicID == ([16]byte{}) {
+					cl.cfg.logger.Log(LogLevelError, "OffsetFetch response contains topic with empty name and zero TopicID; the request had no valid topic identifier",
+						"group", resp.Groups[i].Group,
+					)
+					return fmt.Errorf("OffsetFetch response contains topic with empty name and zero TopicID; the request had no valid topic identifier")
 				}
+				t.Topic = id2t[t.TopicID]
 			}
 		}
 	}
