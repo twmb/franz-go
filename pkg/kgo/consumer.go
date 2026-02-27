@@ -1873,17 +1873,17 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 		}
 	}()
 
+	// We must drain all results before returning so that the
+	// sub-goroutines complete within this worker's lifetime. If the
+	// session is stopped, the context cancellation propagates to each
+	// sub-goroutine's broker.waitResp, so they will finish quickly.
+	// Without draining, stopSession can return (having seen workers=0)
+	// and purgeTopics can modify tps while a sub-goroutine still
+	// references it.
 	for received != issued {
-		select {
-		case <-s.ctx.Done():
-			// If we return early, our session was canceled. We do
-			// not move loading list or epoch loads back to
-			// waiting; the session stopping manages that.
-			return
-		case loaded := <-results:
-			received++
-			reloads.mergeFrom(s.handleListOrEpochResults(loaded))
-		}
+		loaded := <-results
+		received++
+		reloads.mergeFrom(s.handleListOrEpochResults(loaded))
 	}
 }
 
@@ -2092,6 +2092,9 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 	kresp, err := broker.waitResp(ctx, req1)
 	wg.Wait()
 	if err != nil || err2 != nil {
+		if err == nil {
+			err = err2
+		}
 		results <- loaded.addAll(load.errToLoaded(err))
 		return
 	}
