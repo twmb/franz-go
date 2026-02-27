@@ -106,24 +106,31 @@ outer:
 			}
 		}
 
-		// Retriable errors from initialJoin should not be surfaced
+		// Retryable errors from initialJoin should not be surfaced
 		// to the user. Coordinator errors (unavailable, loading,
 		// moved) and broker-level errors (connection closed, EOF)
 		// are transient -- we backoff and retry without going
 		// through manageFailWait (which calls onLost and injects
 		// a fake fetch error to the user).
 		//
+		// UnreleasedInstanceID is also retryable here: after
+		// FencedMemberEpoch, we immediately retry initialJoin
+		// which sends epoch 0 to rejoin. If the server hasn't
+		// finished releasing the static instance from the old
+		// epoch, it returns UnreleasedInstanceID. We retry with
+		// backoff to give the server time to process the release.
+		//
 		// We can't rely on the client's default retry logic because
 		// ConsumerGroupHeartbeat cannot be retried by default.
-		if err != nil && (g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err) || isRetryableBrokerErr(err)) {
+		if err != nil && (g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err) || isRetryableBrokerErr(err) || errors.Is(err, kerr.UnreleasedInstanceID)) {
 			consecutiveErrors++
-			g.cfg.logger.Log(LogLevelInfo, "consumer group initial heartbeat hit retriable error, backing off and retrying",
+			g.cfg.logger.Log(LogLevelInfo, "consumer group initial heartbeat hit retryable error, backing off and retrying",
 				"group", g.cfg.group,
 				"err", err,
 				"consecutive_errors", consecutiveErrors,
 			)
 			backoff := g.cfg.retryBackoff(consecutiveErrors)
-			g.cl.waitmeta(g.ctx, backoff, "waitmeta during 848 retriable error backoff")
+			g.cl.waitmeta(g.ctx, backoff, "waitmeta during 848 retryable error backoff")
 			after := time.NewTimer(backoff)
 			select {
 			case <-g.ctx.Done():
@@ -190,10 +197,15 @@ outer:
 			case errors.Is(err, kerr.RebalanceInProgress):
 				err = nil
 
-			// Retriable broker errors (connection closed, EOF) and
+			// Retryable broker errors (connection closed, EOF) and
 			// coordinator errors (NOT_COORDINATOR, etc.) are
-			// handled in the heartbeat loop directly with
-			// exponential backoff, avoiding session teardown.
+			// retried in the heartbeat loop up to cfg.retries.
+			// If the cap is hit, the error propagates here. We
+			// treat it as a transient failure and restart the
+			// session to give the data path a fresh start.
+			case isRetryableBrokerErr(err),
+				g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err):
+				err = nil
 
 			case errors.Is(err, kerr.UnknownMemberID):
 				member, gen := g.memberGen.load()

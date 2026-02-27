@@ -1071,7 +1071,7 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 			continue
 		}
 
-		// For KIP-848, retriable broker errors (connection closed,
+		// For KIP-848, retryable broker errors (connection closed,
 		// EOF) and coordinator errors (NOT_COORDINATOR, etc.) are
 		// transient and do not invalidate the member's state on
 		// the broker. The classic protocol retries these
@@ -1081,16 +1081,35 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 		// retryable wrapper and retry in-place, avoiding the
 		// session teardown/rebuild that would occur if the error
 		// propagated to the manage848 loop.
+		//
+		// We reset the counter on each success so that intermittent
+		// failures do not accumulate across the session. Without
+		// resetting, a few scattered failures per heartbeat cycle
+		// compound until the counter hits the cap, triggering an
+		// unnecessary session restart even though most heartbeats
+		// succeed and the broker-side session is healthy.
+		//
+		// If cfg.retries consecutive failures occur without any
+		// success, the error propagates to manage848 which
+		// rebuilds the session.
 		if is848 && (isRetryableBrokerErr(err) || g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err)) {
-			hbBrokerRetries++
-			backoff := g.cfg.retryBackoff(hbBrokerRetries)
-			g.cfg.logger.Log(LogLevelInfo, "heartbeat hit retriable error, retrying",
+			if int64(hbBrokerRetries) < g.cfg.retries {
+				hbBrokerRetries++
+				backoff := g.cfg.retryBackoff(hbBrokerRetries)
+				g.cfg.logger.Log(LogLevelInfo, "heartbeat hit retryable error, retrying",
+					"group", g.cfg.group,
+					"err", err,
+					"backoff", backoff,
+					"retries", hbBrokerRetries,
+				)
+				timer.Reset(backoff)
+				continue
+			}
+			g.cfg.logger.Log(LogLevelInfo, "heartbeat hit retryable error, max retries reached",
 				"group", g.cfg.group,
 				"err", err,
-				"backoff", backoff,
+				"retries", hbBrokerRetries,
 			)
-			timer.Reset(backoff)
-			continue
 		}
 
 		// When the 848 closure detects an assignment change, it
