@@ -165,7 +165,19 @@ outer:
 			_, err = g.setupAssignedAndHeartbeat(initialHb, func() (time.Duration, error) {
 				req := g848.mkreq()
 				prerevoking := g848.prerevoking.Load()
-				topicsMatch := reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics)
+				// When the client has no partitions (Topics is empty),
+				// always send a full request rather than a keepalive.
+				// This ensures the server sees our actual empty
+				// assignment state. Without this, a lost response
+				// containing our assignment can leave the server
+				// thinking we acknowledged partitions we never
+				// received: the server marks the assignment as
+				// delivered, but we never got it. Keepalive
+				// (Topics=nil) means "no change", which doesn't
+				// correct the stale server state. Sending Topics=[]
+				// tells the server "I have nothing", forcing it to
+				// re-deliver.
+				topicsMatch := len(req.Topics) > 0 && reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics)
 				if prerevoking || topicsMatch {
 					req.InstanceID = nil
 					req.RackID = nil
@@ -176,13 +188,19 @@ outer:
 					req.Topics = nil
 				}
 				resp, err := req.RequestWith(g.ctx, g.cl)
-				if err != nil {
-					return g.cfg.heartbeatInterval, err
+				sleep := g.cfg.heartbeatInterval
+				if err == nil {
+					err = errCodeMessage(resp.ErrorCode, resp.ErrorMessage)
+					sleep = time.Duration(resp.HeartbeatIntervalMillis) * time.Millisecond
 				}
-
-				err = errCodeMessage(resp.ErrorCode, resp.ErrorMessage)
-				sleep := time.Duration(resp.HeartbeatIntervalMillis) * time.Millisecond
 				if err != nil {
+					// Reset last-sent state so the next attempt
+					// is a full request. If the server processed
+					// our request but we lost the response, the
+					// full retry corrects the server's view of
+					// our current partitions.
+					g848.lastTopics = nil
+					g848.lastSubscribedTopics = nil
 					return sleep, err
 				}
 				hbAssigned := g848.handleResp(req, resp)
