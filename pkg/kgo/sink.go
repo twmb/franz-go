@@ -2099,7 +2099,7 @@ func (cl *Client) maxRecordBatchBytesForTopic(topic string) int32 {
 	wireLengthLimit := cl.cfg.maxBrokerWriteBytes
 
 	recordBatchLimit := wireLengthLimit - minOnePartitionBatchLength
-	if cfgLimit := cl.cfg.maxRecordBatchBytes; cfgLimit < recordBatchLimit {
+	if cfgLimit := cl.cfg.maxRecordBatchBytes(topic); cfgLimit < recordBatchLimit {
 		recordBatchLimit = cfgLimit
 	}
 	return recordBatchLimit

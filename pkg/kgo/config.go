@@ -126,7 +126,7 @@ type cfg struct {
 
 	defaultProduceTopic       string
 	defaultProduceTopicAlways bool
-	maxRecordBatchBytes       int32
+	maxRecordBatchBytes       func(string) int32
 	maxBufferedRecords        int64
 	maxBufferedBytes          int64
 	produceTimeout            time.Duration
@@ -284,8 +284,8 @@ func (cfg *cfg) validate() error {
 		// For batches, we want at least 512 (reasonable), and the
 		// upper limit is the max num when a uvarint transitions from 4
 		// to 5 bytes. The upper limit is also more than reasonable (1G).
-		{name: "max record batch bytes", v: int64(cfg.maxRecordBatchBytes), allowed: 512, badcmp: i64lt},
-		{name: "max record batch bytes", v: int64(cfg.maxRecordBatchBytes), allowed: 1 << 30, badcmp: i64gt},
+		{name: "max record batch bytes", v: int64(cfg.maxRecordBatchBytes("")), allowed: 512, badcmp: i64lt},
+		{name: "max record batch bytes", v: int64(cfg.maxRecordBatchBytes("")), allowed: 1 << 30, badcmp: i64gt},
 
 		// We do not want the broker write bytes to be less than the
 		// record batch bytes, nor the read bytes to be less than what
@@ -293,7 +293,7 @@ func (cfg *cfg) validate() error {
 		//
 		// We cannot enforce if a single batch is larger than the max
 		// fetch bytes limit, but hopefully we do not run into that.
-		{v: int64(cfg.maxBrokerWriteBytes), allowed: int64(cfg.maxRecordBatchBytes), badcmp: i64lt, fmt: "max broker write bytes %v is erroneously less than max record batch bytes %v"},
+		{v: int64(cfg.maxBrokerWriteBytes), allowed: int64(cfg.maxRecordBatchBytes("")), badcmp: i64lt, fmt: "max broker write bytes %v is erroneously less than max record batch bytes %v"},
 		{v: int64(cfg.maxBrokerReadBytes), allowed: int64(cfg.maxBytes), badcmp: i64lt, fmt: "max broker read bytes %v is erroneously less than max fetch bytes %v"},
 
 		// 0 <= allowed concurrency
@@ -557,7 +557,7 @@ func defaultCfg() cfg {
 		acks:                AllISRAcks(),
 		maxProduceInflight:  1,
 		compression:         []CompressionCodec{SnappyCompression(), NoCompression()},
-		maxRecordBatchBytes: 1000012, // Kafka max.message.bytes default is 1000012
+		maxRecordBatchBytes: func(string) int32 { return 1000012 }, // Kafka max.message.bytes default is 1000012
 		maxBufferedRecords:  10000,
 		produceTimeout:      10 * time.Second,
 		recordRetries:       math.MaxInt64, // effectively unbounded
@@ -1104,8 +1104,21 @@ func WithCompressor(compressor Compressor) ProducerOpt {
 // Note that this is the maximum size of a record batch before compression. If
 // a batch compresses poorly and actually grows the batch, the uncompressed
 // form will be used.
+//
+// For per-topic control, see [ProducerBatchMaxBytesFn].
 func ProducerBatchMaxBytes(v int32) ProducerOpt {
-	return producerOpt{func(cfg *cfg) { cfg.maxRecordBatchBytes = v }}
+	return ProducerBatchMaxBytesFn(func(string) int32 { return v })
+}
+
+// ProducerBatchMaxBytesFn returns the upper bound on the size of a record
+// batch for the given topic, overriding the default 1,000,012 bytes. This is
+// the functional version of ProducerBatchMaxBytes, allowing per-topic batch
+// size limits. This is useful when different topics have different
+// max.message.bytes configurations on the broker.
+//
+// For a static limit applied to all topics, see [ProducerBatchMaxBytes].
+func ProducerBatchMaxBytesFn(fn func(string) int32) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.maxRecordBatchBytes = fn }}
 }
 
 // MaxBufferedRecords sets the max amount of records the client will buffer,
