@@ -314,9 +314,12 @@ issue:
 
 	if err == nil {
 		err = kerr.ErrorForCode(resp.Topics[0].ErrorCode)
+		// Topic names are randomly generated, so TopicAlreadyExists
+		// means our prior CreateTopics request succeeded but the
+		// response was lost (e.g. connection blip caused a retry).
+		// Treat it as success.
 		if errors.Is(err, kerr.TopicAlreadyExists) {
-			time.Sleep(10 * time.Millisecond)
-			goto issue
+			err = nil
 		}
 	}
 	if err != nil {
