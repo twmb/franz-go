@@ -9,11 +9,11 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -46,7 +46,7 @@ type groupConsumer struct {
 	// CommitOffsets, this lock ensures that only one sync commit can
 	// happen at once, and if it is happening, no other commit can be
 	// happening.
-	syncCommitMu sync.RWMutex
+	syncCommitMu xsync.RWMutex
 
 	rejoinCh chan string // cap 1; sent to if subscription changes (regex)
 
@@ -86,7 +86,7 @@ type groupConsumer struct {
 	// locations fetch callbacks are called. We only have to worry about
 	// onRevoked because fetching offsets occurs after onAssigned, and
 	// onLost happens after fetching offsets is done.
-	onFetchedMu sync.Mutex
+	onFetchedMu xsync.Mutex
 
 	// leader is whether we are the leader right now. This is set to false
 	//
@@ -111,12 +111,12 @@ type groupConsumer struct {
 	// join&sync, we occasionally see RebalanceInProgress or
 	// IllegalGeneration errors while cooperative consuming.
 	// Not relevant if using KIP-848.
-	noCommitDuringJoinAndSync sync.RWMutex
+	noCommitDuringJoinAndSync xsync.RWMutex
 
 	//////////////
 	// mu block //
 	//////////////
-	mu sync.Mutex
+	mu xsync.Mutex
 
 	// using is updated when finding new assignments, we always add to this
 	// if we want to consume a topic (or see there are more potential
@@ -2742,7 +2742,7 @@ func (g *groupConsumer) waitJoinSyncMu(ctx context.Context) error {
 
 	var (
 		blockJoinSyncCh = make(chan struct{})
-		mu              sync.Mutex
+		mu              xsync.Mutex
 		returned        bool
 		maybeRUnlock    = func() {
 			mu.Lock()

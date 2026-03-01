@@ -9,11 +9,11 @@ import (
 	"math"
 	"math/rand"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -313,7 +313,7 @@ type (
 		closedFirstObserve atomic.Bool
 
 		// mu is grabbed when accessing the map fields.
-		mu          sync.Mutex
+		mu          xsync.Mutex
 		unsupported atomic.Bool // set to true if the broker does not support client metrics; guards nil-ing the maps
 
 		pConnCreation metricRate

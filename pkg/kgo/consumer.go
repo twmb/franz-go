@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -184,13 +185,13 @@ type consumer struct {
 
 	cl *Client
 
-	pausedMu sync.Mutex   // grabbed when updating paused
+	pausedMu xsync.Mutex  // grabbed when updating paused
 	paused   atomic.Value // loaded when issuing fetches
 
 	// mu is grabbed when
 	//  - polling fetches, for quickly draining sources / updating group uncommitted
 	//  - calling assignPartitions (group / direct updates)
-	mu sync.Mutex
+	mu xsync.Mutex
 	d  *directConsumer // if non-nil, we are consuming partitions directly
 	g  *groupConsumer  // if non-nil, we are consuming as a group member
 
@@ -212,19 +213,19 @@ type consumer struct {
 	// sessionChangeMu is grabbed when a session is stopped and held through
 	// when a session can be started again. The sole purpose is to block an
 	// assignment change running concurrently with a metadata update.
-	sessionChangeMu sync.Mutex
+	sessionChangeMu xsync.Mutex
 
 	session atomic.Value // *consumerSession
 	kill    atomic.Bool
 
 	usingCursors usedCursors
 
-	sourcesReadyMu          sync.Mutex
+	sourcesReadyMu          xsync.Mutex
 	sourcesReadyCond        *sync.Cond
 	sourcesReadyForDraining []*source
 	fakeReadyForDraining    []Fetch
 
-	pollWaitMu    sync.Mutex
+	pollWaitMu    xsync.Mutex
 	pollWaitC     *sync.Cond
 	pollWaitState uint64 // 0 == nothing, low 32 bits: # pollers, high 32: # waiting rebalances
 }
@@ -1514,14 +1515,14 @@ type consumerSession struct {
 	// Workers signify the number of fetch and list / epoch goroutines that
 	// are currently running within the context of this consumer session.
 	// Stopping a session only returns once workers hits zero.
-	workersMu   sync.Mutex
+	workersMu   xsync.Mutex
 	workersCond *sync.Cond
 	workers     int
 
 	// listOrEpochMu largely guards the below. It is a sub-mutex of the
 	// consumer mutex to guard one concurrent data access (see below in
 	// assignPartitions).
-	listOrEpochMu           sync.Mutex
+	listOrEpochMu           xsync.Mutex
 	listOrEpochLoadsWaiting listOrEpochLoads
 	listOrEpochMetaCh       chan struct{} // non-nil if Loads is non-nil, signalled on meta update
 	listOrEpochLoadsLoading listOrEpochLoads
