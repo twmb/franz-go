@@ -186,7 +186,6 @@ type cfg struct {
 	sessionTimeout    time.Duration
 	rebalanceTimeout  time.Duration
 	heartbeatInterval time.Duration
-	requireStable     bool
 
 	onAssigned func(context.Context, *Client, map[string][]int32)
 	onRevoked  func(context.Context, *Client, map[string][]int32)
@@ -1732,22 +1731,13 @@ func HeartbeatInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.heartbeatInterval = interval }}
 }
 
-// RequireStableFetchOffsets sets the group consumer to require "stable" fetch
-// offsets before consuming from the group. Proposed in KIP-447 and introduced
-// in Kafka 2.5, stable offsets are important when consuming from partitions
-// that a transactional producer could be committing to.
+// RequireStableFetchOffsets previously set the group consumer to require
+// "stable" fetch offsets before consuming from the group.
 //
-// With this option, Kafka will block group consumers from fetching offsets for
-// partitions that are in an active transaction. This option is **strongly**
-// recommended to help prevent duplication problems. See this repo's KIP-447
-// doc to learn more.
-//
-// Because this can block consumption, it is strongly recommended to set
-// transactional timeouts to a small value (10s) rather than the default 60s.
-// Lowering the transactional timeout will reduce the chance that consumers are
-// entirely blocked.
+// Deprecated: RequireStable is now permanently enabled for all group
+// consumers. This function is a no-op.
 func RequireStableFetchOffsets() GroupOpt {
-	return groupOpt{func(cfg *cfg) { cfg.requireStable = true }}
+	return groupOpt{func(*cfg) {}}
 }
 
 // BlockRebalanceOnPoll switches the client to block rebalances whenever you

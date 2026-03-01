@@ -3,11 +3,15 @@ package kgo
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 // TestGroupETL tests:
@@ -34,12 +38,16 @@ func TestGroupETL(t *testing.T) {
 	////////////////////
 
 	go func() {
-		cl, _ := newTestClient(
+		producerOpts := []Opt{
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			MaxBufferedRecords(10000),
 			MaxBufferedBytes(50000),
 			UnknownTopicRetries(-1), // see txn_test comment
-		)
+		}
+		if testChaos {
+			producerOpts = append(producerOpts, Dialer(chaosDialer{}.DialContext))
+		}
+		cl, _ := newTestClient(producerOpts...)
 		defer cl.Close()
 
 		offsets := make(map[int32]int64)
@@ -97,20 +105,27 @@ func TestGroupETL(t *testing.T) {
 		{"sticky/848/static", StickyBalancer(), true, "static"},
 	}
 
+	var wg sync.WaitGroup
 	for _, tc := range tcs {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			testChainETL(
-				t,
-				topic1,
-				body,
-				false,
-				tc.balancer,
-				tc.enable848,
-				tc.instanceID,
-			)
-		})
+		etlSem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t.Run(tc.name, func(t *testing.T) {
+				defer func() { <-etlSem }()
+				testChainETL(
+					t,
+					topic1,
+					body,
+					false,
+					tc.balancer,
+					tc.enable848,
+					tc.instanceID,
+				)
+			})
+		}()
 	}
+	wg.Wait()
 }
 
 func (c *testConsumer) goGroupETL(etlsBeforeQuit int) {
@@ -151,6 +166,10 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 				return
 			}
 			if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+				if c.enable848 && errors.Is(err, kerr.StaleMemberEpoch) {
+					c.errCh <- errSkipChecks848
+					return
+				}
 				c.errCh <- fmt.Errorf("unable to commit in revoked: %v", err)
 			}
 		}),
@@ -164,6 +183,9 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 	if c.enable848 {
 		ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true) //nolint:revive,staticcheck // intentional string key for beta opt-in
 		opts = append(opts, WithContext(ctx848))
+	}
+	if testChaos {
+		opts = append(opts, Dialer(chaosDialer{}.DialContext))
 	}
 
 	cl, _ := newTestClient(opts...)

@@ -265,10 +265,10 @@ func (b *broker) do(
 
 	first, dead := b.reqs.push(pr)
 
-	if first {
-		go b.handleReqs(pr)
-	} else if dead {
+	if dead {
 		promise(nil, errChosenBrokerDead)
+	} else if first {
+		go b.handleReqs(pr)
 	}
 }
 
@@ -618,6 +618,22 @@ doConnect:
 
 	b.reapMu.Lock()
 	defer b.reapMu.Unlock()
+
+	// If stopForever ran while we were connecting, the broker is
+	// dead and we must not store the connection. stopForever kills
+	// cxnProduce/etc under reapMu, but if the connection was nil at
+	// that time (we were mid-connect), stopForever's die() was a
+	// no-op. Without this check, the connection escapes destruction
+	// and a produce request succeeds on a connection that will never
+	// be reused, which -- combined with other connections from other
+	// broker objects for the same nodeID -- breaks the single-
+	// connection-per-broker ordering guarantee that Kafka requires
+	// for idempotent produce.
+	if b.dead.Load() {
+		cxn.closeConn()
+		return nil, errChosenBrokerDead
+	}
+
 	*pcxn = cxn
 	return cxn, nil
 }

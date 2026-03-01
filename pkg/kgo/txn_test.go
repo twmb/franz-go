@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -121,20 +122,27 @@ func TestTxnEtl(t *testing.T) {
 		{"sticky/848/static", StickyBalancer(), true, "static"},
 	}
 
+	var wg sync.WaitGroup
 	for _, tc := range tcs {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			testChainETL(
-				t,
-				topic1,
-				body,
-				true,
-				tc.balancer,
-				tc.enable848,
-				tc.instanceID,
-			)
-		})
+		etlSem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t.Run(tc.name, func(t *testing.T) {
+				defer func() { <-etlSem }()
+				testChainETL(
+					t,
+					topic1,
+					body,
+					true,
+					tc.balancer,
+					tc.enable848,
+					tc.instanceID,
+				)
+			})
+		}()
 	}
+	wg.Wait()
 }
 
 func (c *testConsumer) goTransact(txnsBeforeQuit int) {
@@ -169,9 +177,6 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 	if c.instanceID != "" {
 		myInstanceID = fmt.Sprintf("%s-%s-%d", c.instanceID, c.group, c.instanceIDCounter.Add(1))
 		opts = append(opts, InstanceID(myInstanceID))
-	}
-	if requireStableFetch {
-		opts = append(opts, RequireStableFetchOffsets())
 	}
 	if c.enable848 {
 		ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true) //nolint:revive,staticcheck // intentional string key for beta opt-in

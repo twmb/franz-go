@@ -11,6 +11,18 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+var requireStable = func() *string { s := "require_stable"; return &s }()
+
+// RequireStable returns a context that causes [FetchOffsets],
+// [FetchOffsetsForTopics], and [FetchManyOffsets] to
+// set RequireStable on the underlying OffsetFetch request. When enabled,
+// the broker blocks until any pending transactional offset commits are
+// resolved (KIP-447, Kafka 2.5+). On older brokers, this field is
+// silently ignored.
+func RequireStable(ctx context.Context) context.Context {
+	return context.WithValue(ctx, requireStable, requireStable)
+}
+
 // GroupMemberMetadata is the metadata that a client sent in a JoinGroup request.
 // This can have one of three types:
 //
@@ -885,10 +897,16 @@ func (cl *Client) CommitAllOffsets(ctx context.Context, group string, os Offsets
 // fetch, this only returns an auth error if you are not authorized to describe
 // the group at all.
 //
+// Use [RequireStable] to block until pending transactional offset commits are
+// resolved.
+//
 // This method requires talking to Kafka v0.11+.
 func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetResponses, error) {
 	req := kmsg.NewPtrOffsetFetchRequest()
 	req.Group = group
+	if ctx.Value(requireStable) != nil {
+		req.RequireStable = true
+	}
 	resp, err := req.RequestWith(ctx, cl.cl)
 	if err != nil {
 		return nil, err
@@ -946,6 +964,9 @@ const FetchAllGroupTopics = "|fetch-all-group-topics|"
 // By default, this function returns offsets for only the requested topics. You
 // can use the special "topic" [FetchAllGroupTopics] to return all committed-to
 // topics in addition to all requested topics.
+//
+// Use [RequireStable] to block until pending transactional offset commits are
+// resolved.
 func (cl *Client) FetchOffsetsForTopics(ctx context.Context, group string, topics ...string) (OffsetResponses, error) {
 	os := make(Offsets)
 
@@ -1097,6 +1118,9 @@ func (rs FetchOffsetsResponses) Error() error {
 // CommitOffsets are important to provide as simple APIs for users that manage
 // group offsets outside of a consumer group. Each individual group may have an
 // auth error.
+//
+// Use [RequireStable] to block until pending transactional offset commits are
+// resolved.
 func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchOffsetsResponses {
 	fetched := make(FetchOffsetsResponses)
 	if len(groups) == 0 {
@@ -1104,6 +1128,9 @@ func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchO
 	}
 
 	req := kmsg.NewPtrOffsetFetchRequest()
+	if ctx.Value(requireStable) != nil {
+		req.RequireStable = true
+	}
 	for _, group := range groups {
 		rg := kmsg.NewOffsetFetchRequestGroup()
 		rg.Group = group

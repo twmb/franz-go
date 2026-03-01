@@ -148,12 +148,10 @@ type groupConsumer struct {
 	// expects, which would rotate a session.
 	memberGen groupMemberGen
 
-	// commitCancel and commitDone are set under mu before firing off an
-	// async commit request. If another commit happens, it cancels the
-	// prior commit, waits for the prior to be done, and then starts its
-	// own.
-	commitCancel func()
-	commitDone   chan struct{}
+	// commitDone is set under mu before firing off an async commit
+	// request. If another commit happens, it waits for the prior to be
+	// done, and then starts its own.
+	commitDone chan struct{}
 
 	// blockAuto is set and cleared in CommitOffsets{,Sync} to block
 	// autocommitting if autocommitting is active. This ensures that an
@@ -1015,6 +1013,7 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 	var heartbeat, didRevoke, stopHeartbeating bool
 	var rejoinWhy string
 	var lastErr error
+	var hbBrokerRetries int
 	heartbeatForceCh := g.heartbeatForceCh
 
 	ctxCh := g.ctx.Done()
@@ -1068,7 +1067,49 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 		}
 
 		if err == nil {
+			hbBrokerRetries = 0
 			continue
+		}
+
+		// For KIP-848, retryable broker errors (connection closed,
+		// EOF) and coordinator errors (NOT_COORDINATOR, etc.) are
+		// transient and do not invalidate the member's state on
+		// the broker. The classic protocol retries these
+		// transparently via the client's retryable request
+		// wrapper, but 848 heartbeats bypass that and manage
+		// retries here. We use exponential backoff matching the
+		// retryable wrapper and retry in-place, avoiding the
+		// session teardown/rebuild that would occur if the error
+		// propagated to the manage848 loop.
+		//
+		// We reset the counter on each success so that intermittent
+		// failures do not accumulate across the session. Without
+		// resetting, a few scattered failures per heartbeat cycle
+		// compound until the counter hits the cap, triggering an
+		// unnecessary session restart even though most heartbeats
+		// succeed and the broker-side session is healthy.
+		//
+		// If cfg.retries consecutive failures occur without any
+		// success, the error propagates to manage848 which
+		// rebuilds the session.
+		if is848 && (isRetryableBrokerErr(err) || g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err)) {
+			if int64(hbBrokerRetries) < g.cfg.retries {
+				hbBrokerRetries++
+				backoff := g.cfg.retryBackoff(hbBrokerRetries)
+				g.cfg.logger.Log(LogLevelInfo, "heartbeat hit retryable error, retrying",
+					"group", g.cfg.group,
+					"err", err,
+					"backoff", backoff,
+					"retries", hbBrokerRetries,
+				)
+				timer.Reset(backoff)
+				continue
+			}
+			g.cfg.logger.Log(LogLevelInfo, "heartbeat hit retryable error, max retries reached",
+				"group", g.cfg.group,
+				"err", err,
+				"retries", hbBrokerRetries,
+			)
 		}
 
 		// When the 848 closure detects an assignment change, it
@@ -1632,7 +1673,7 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int
 start:
 	member, gen := g.memberGen.load()
 	req := kmsg.NewPtrOffsetFetchRequest()
-	req.RequireStable = g.cfg.requireStable
+	req.RequireStable = true
 	reqg := kmsg.NewOffsetFetchRequestGroup()
 	reqg.Group = g.cfg.group
 	if member != "" {
@@ -1650,6 +1691,11 @@ start:
 	var resp *kmsg.OffsetFetchResponse
 	var err error
 
+	g.cfg.logger.Log(LogLevelDebug, "fetching offsets",
+		"group", g.cfg.group,
+		"require_stable", req.RequireStable,
+		"num_topics", len(reqg.Topics),
+	)
 	fetchDone := make(chan struct{})
 	go func() {
 		defer close(fetchDone)
@@ -1657,6 +1703,7 @@ start:
 	}()
 	select {
 	case <-fetchDone:
+		g.cfg.logger.Log(LogLevelDebug, "fetch offsets returned", "group", g.cfg.group, "err", err)
 	case <-ctx.Done():
 		g.cfg.logger.Log(LogLevelInfo, "fetch offsets failed due to context cancelation", "group", g.cfg.group)
 		return ctx.Err()
@@ -2918,13 +2965,11 @@ func (g *groupConsumer) commit(
 		return
 	}
 
-	priorCancel := g.commitCancel
 	priorDone := g.commitDone
 
 	commitCtx, commitCancel := context.WithCancel(ctx) // enable ours to be canceled and waited for
 	commitDone := make(chan struct{})
 
-	g.commitCancel = commitCancel
 	g.commitDone = commitDone
 
 	req := kmsg.NewPtrOffsetCommitRequest()
@@ -2948,11 +2993,24 @@ func (g *groupConsumer) commit(
 		defer close(commitDone) // allow future commits to continue when we are done
 		defer commitCancel()
 		if priorDone != nil { // wait for any prior request to finish
+			// We must NOT cancel the prior commit. Canceling an
+			// in-flight request kills the TCP connection. Our
+			// subsequent request would then use a new connection,
+			// and the broker can process the two requests out of
+			// order (different connections have no ordering
+			// guarantee). If the prior commit had a lower offset
+			// (e.g. autocommit HEAD vs. sync commit DIRTY), the
+			// broker could process it AFTER ours and overwrite
+			// our higher offset, causing duplicate consumption.
+			//
+			// By waiting for the prior commit to complete
+			// naturally, we keep the connection alive and
+			// guarantee our request is queued behind the prior on
+			// the same connection, preserving ordering.
 			select {
 			case <-priorDone:
 			default:
-				g.cfg.logger.Log(LogLevelDebug, "canceling prior commit to issue another", "group", g.cfg.group)
-				priorCancel()
+				g.cfg.logger.Log(LogLevelDebug, "waiting for prior commit to finish before issuing another", "group", g.cfg.group)
 				<-priorDone
 			}
 		}
@@ -2990,15 +3048,23 @@ func (g *groupConsumer) commit(
 			}
 			g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
 
-			// Kafka returns STALE_MEMBER_EPOCH when the epoch
-			// used in the commit doesn't match the member's
-			// current epoch. This can happen when a heartbeat
-			// and OffsetCommit are pipelined on the same
-			// connection and the server processes them in an
-			// order that bumps the epoch before seeing the
-			// commit. We sleep briefly to allow the heartbeat
-			// response (carrying the new epoch) to arrive and
-			// update memberGen, then retry with the new epoch.
+			// KIP-848 returns STALE_MEMBER_EPOCH when the
+			// commit's epoch doesn't match the server's current
+			// epoch. This commonly happens when a heartbeat and
+			// OffsetCommit are pipelined on the same connection
+			// and the server bumps the epoch before seeing the
+			// commit. The heartbeat response carrying the new
+			// epoch arrives before the commit response (same
+			// connection, ordered), but goroutine scheduling
+			// may let us process the commit response first. We
+			// sleep briefly to give the heartbeat loop time to
+			// update memberGen, then reload and retry.
+			//
+			// If the heartbeat loop has stopped (e.g. leave
+			// path with a canceled context), memberGen is not
+			// updated and we break without retrying. This is a
+			// known limitation without KIP-1251 (assignment
+			// epochs for consumer groups).
 			stale := false
 			for _, t := range resp.Topics {
 				for _, p := range t.Partitions {
@@ -3008,7 +3074,7 @@ func (g *groupConsumer) commit(
 				}
 			}
 			if stale {
-				time.Sleep(time.Second)
+				time.Sleep(500 * time.Millisecond)
 				_, newGen := g.memberGen.load()
 				if newGen != req.Generation {
 					g.cfg.logger.Log(LogLevelInfo, "offset commit got stale member epoch, retrying with updated epoch",

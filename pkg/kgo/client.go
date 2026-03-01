@@ -438,7 +438,7 @@ func (cl *Client) OptValues(opt any) []any {
 	case namefn(RebalanceTimeout):
 		return []any{cfg.rebalanceTimeout}
 	case namefn(RequireStableFetchOffsets):
-		return []any{cfg.requireStable}
+		return []any{true}
 	case namefn(SessionTimeout):
 		return []any{cfg.sessionTimeout}
 

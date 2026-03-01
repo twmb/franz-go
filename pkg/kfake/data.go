@@ -256,6 +256,17 @@ func (pd *partData) trimLeft() {
 		}
 		pd.batches = pd.batches[1:]
 		pd.nbytes -= int64(b0.nbytes)
+		pd.maxTimestampBatchIdx--
+	}
+	// If the max-timestamp batch was trimmed (index went negative) or
+	// all batches were removed, rebuild the index from remaining batches.
+	if pd.maxTimestampBatchIdx < 0 {
+		pd.maxTimestampBatchIdx = -1
+		for i, b := range pd.batches {
+			if pd.maxTimestampBatchIdx < 0 || b.MaxTimestamp >= pd.batches[pd.maxTimestampBatchIdx].MaxTimestamp {
+				pd.maxTimestampBatchIdx = i
+			}
+		}
 	}
 	// Prune aborted txn entries fully before logStartOffset.
 	// Entries are sorted by lastOffset, so binary search for the

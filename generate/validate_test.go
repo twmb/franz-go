@@ -611,6 +611,163 @@ func innerStructFields(typ Type) []StructField {
 	return nil
 }
 
+// miscEffectiveMaxVersion computes the effective max version for a non-top-level
+// DSL struct, since these don't have MaxVersion set. The effective max is the
+// highest of the flexible version and all field MinVersion values, recursing
+// into sub-structs.
+func miscEffectiveMaxVersion(s *Struct) int {
+	max := 0
+	if s.FromFlexible && s.FlexibleAt > max {
+		max = s.FlexibleAt
+	}
+	miscEffectiveMaxVersionFields(s.Fields, &max)
+	return max
+}
+
+func miscEffectiveMaxVersionFields(fields []StructField, max *int) {
+	for _, f := range fields {
+		if f.Tag >= 0 && f.MinVersion == -1 {
+			continue // tag-only fields don't define a version
+		}
+		if f.MinVersion > *max {
+			*max = f.MinVersion
+		}
+		if inner := innerStructFields(f.Type); inner != nil {
+			miscEffectiveMaxVersionFields(inner, max)
+		}
+	}
+}
+
+func TestValidateMiscDSLAgainstKafkaJSON(t *testing.T) {
+	kafkaDir := os.Getenv("KAFKA_DIR")
+	if kafkaDir == "" {
+		t.Skip("KAFKA_DIR not set; skipping Kafka JSON validation")
+	}
+
+	initDSL(t)
+
+	// Build a map from name → DSL struct for non-top-level types.
+	dslByName := make(map[string]*Struct)
+	for i := range newStructs {
+		s := &newStructs[i]
+		if !s.TopLevel {
+			dslByName[s.Name] = s
+		}
+	}
+
+	// Misc type mappings: Kafka JSON path (relative to KAFKA_DIR) → DSL name.
+	type miscMapping struct {
+		jsonPath string
+		dslName  string
+	}
+	mappings := []miscMapping{
+		{"group-coordinator/src/main/resources/common/message/OffsetCommitKey.json", "OffsetCommitKey"},
+		{"group-coordinator/src/main/resources/common/message/OffsetCommitValue.json", "OffsetCommitValue"},
+		{"group-coordinator/src/main/resources/common/message/GroupMetadataKey.json", "GroupMetadataKey"},
+		{"group-coordinator/src/main/resources/common/message/GroupMetadataValue.json", "GroupMetadataValue"},
+		{"transaction-coordinator/src/main/resources/common/message/TransactionLogKey.json", "TxnMetadataKey"},
+		{"transaction-coordinator/src/main/resources/common/message/TransactionLogValue.json", "TxnMetadataValue"},
+		{"clients/src/main/resources/common/message/DefaultPrincipalData.json", "DefaultPrincipalData"},
+		{"clients/src/main/resources/common/message/EndTxnMarker.json", "EndTxnMarker"},
+		{"clients/src/main/resources/common/message/LeaderChangeMessage.json", "LeaderChangeMessage"},
+	}
+
+	for _, m := range mappings {
+		jsonPath := filepath.Join(kafkaDir, m.jsonPath)
+		data, err := os.ReadFile(jsonPath) //nolint:gosec // path is constructed from test constant + env var, not user input
+		if err != nil {
+			t.Errorf("reading %s: %v", m.jsonPath, err)
+			continue
+		}
+		cleaned := stripJSONComments(data)
+		var msg kafkaMessage
+		if err := json.Unmarshal(cleaned, &msg); err != nil {
+			t.Errorf("parsing %s: %v", m.jsonPath, err)
+			continue
+		}
+
+		dsl, ok := dslByName[m.dslName]
+		if !ok {
+			t.Errorf("%s: DSL struct %q not found", m.jsonPath, m.dslName)
+			continue
+		}
+
+		t.Run(m.dslName, func(t *testing.T) {
+			validateMiscMessage(t, msg, dsl)
+		})
+	}
+}
+
+func validateMiscMessage(t *testing.T, msg kafkaMessage, dsl *Struct) {
+	t.Helper()
+
+	validVR := parseVersionRange(msg.ValidVersions)
+	flexVR := parseVersionRange(msg.FlexibleVersions)
+
+	jsonMax := validVR.maxVer()
+	dslMax := miscEffectiveMaxVersion(dsl)
+
+	if jsonMax >= 0 && dslMax > jsonMax {
+		t.Errorf("max version: DSL %d > JSON %d", dslMax, jsonMax)
+	} else if jsonMax >= 0 && dslMax < jsonMax {
+		fields := collectMissingFields(msg.Name, dslMax+1, jsonMax, msg.Fields)
+		detail := fmt.Sprintf("DSL v%d < JSON v%d", dslMax, jsonMax)
+		if len(fields) > 0 {
+			detail += ", new fields: " + strings.Join(fields, ", ")
+		}
+		t.Errorf("max version: %s", detail)
+	}
+
+	// Validate flexible version.
+	if flexVR.none {
+		if dsl.FromFlexible {
+			t.Errorf("flexible version: DSL has flexible at %d but JSON has none", dsl.FlexibleAt)
+		}
+	} else {
+		if !dsl.FromFlexible {
+			t.Errorf("flexible version: JSON has flexible at %d but DSL has none", flexVR.min)
+		} else if dsl.FlexibleAt != flexVR.min {
+			t.Errorf("flexible version: DSL %d != JSON %d", dsl.FlexibleAt, flexVR.min)
+		}
+	}
+
+	// Build commonStructs lookup.
+	commons := make(map[string]kafkaStruct)
+	for _, cs := range msg.CommonStructs {
+		commons[cs.Name] = cs
+	}
+
+	// The DSL's "with version field" adds Version as the first field,
+	// but coordinator JSON schemas don't include it. Skip it when the
+	// JSON has no corresponding Version field.
+	dslFields := dsl.Fields
+	if dsl.WithVersionField && len(dslFields) > 0 {
+		jsonHasVersion := false
+		for _, jf := range msg.Fields {
+			if strings.EqualFold(jf.Name, "Version") {
+				jsonHasVersion = true
+				break
+			}
+		}
+		if !jsonHasVersion && strings.EqualFold(dslFields[0].FieldName, "Version") {
+			dslFields = dslFields[1:]
+		}
+	}
+
+	flexibleAt := -1
+	if dsl.FromFlexible {
+		flexibleAt = dsl.FlexibleAt
+	}
+
+	maxV := dslMax
+	if jsonMax >= 0 && jsonMax < maxV {
+		maxV = jsonMax
+	}
+	for v := validVR.min; v <= maxV; v++ {
+		compareFieldsAtVersion(t, msg.Name, v, flexibleAt, msg.Fields, dslFields, commons)
+	}
+}
+
 // collectMissingFields returns a summary of JSON fields new in versions fromV..toV.
 func collectMissingFields(path string, fromV, toV int, jsonFields []kafkaField) []string {
 	var out []string

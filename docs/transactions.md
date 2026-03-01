@@ -140,22 +140,29 @@ Within Kafka when a transaction ends, Kafka propagates a commit marker to all
 partitions that were a part of the transaction. If a rebalance finishes and the
 new consumer fetches offsets _before_ the commit marker is propagated, then the
 new consumer will fetch the previously committed offsets, not the newly
-committed offsets. There is nothing a client can do to reliably prevent this
-scenario. Here, franz-go takes a heuristic approach: the assumption is that
-inter-broker communication is always inevitably faster than broker `<=>` client
-communication. On successful commit, if the client is not speaking to a 2.5+
-cluster (KIP-447 cluster) _or_ the client does not have
-`RequireStableFetchOffsets` enabled, then the client will sleep 200ms before
-releasing the lock that allows a rebalance to continue. The assumption is that
-200ms is enough time for Kafka to propagate transactional markers: the
-propagation should finish before a client is able to do the following: re-join,
-have a new leader assign partitions, sync the assignment, and issue the offset
-fetch request. In effect, the 200ms here is an attempt to provide KIP-447
-semantics (waiting for stable fetch offsets) in place it matters most even
-though the cluster does not support the wait officially. Internally, the sleep
-is concurrent and only blocks a rebalance from beginning, it does not block
-you from starting a new transaction (but, it does prevent you from _ending_
-a new transaction).
+committed offsets. This is especially dangerous with KIP-848, where heartbeat-
+driven reassignment can move partitions in under 200ms -- far faster than the
+classic JoinGroup/SyncGroup round-trips that previously gave markers time to
+materialize.
+
+KIP-447 (Kafka 2.5+) solves this with `RequireStable`: the broker blocks an
+OffsetFetch response until all pending transactional offset commits are
+resolved. franz-go now always sets `RequireStable=true` on group consumer
+OffsetFetch requests, matching the Java client's behavior. Any broker that
+supports KIP-848 necessarily supports KIP-447, so the fast reassignment path
+is always protected.
+
+For older brokers that do not support KIP-447, franz-go takes a heuristic
+approach: the assumption is that inter-broker communication is always
+inevitably faster than broker `<=>` client communication. On successful commit,
+the client sleeps 500ms before releasing the lock that allows a rebalance to
+continue. The assumption is that 500ms is enough time for Kafka to propagate
+transactional markers: the propagation should finish before a client is able to
+do the following: re-join, have a new leader assign partitions, sync the
+assignment, and issue the offset fetch request. Internally, the sleep is
+concurrent and only blocks a rebalance from beginning, it does not block you
+from starting a new transaction (but, it does prevent you from _ending_ a new
+transaction).
 
 One last flaw of the above approach is that a lot of it is dependent on timing.
 If the servers you are running on do not have reliable clocks and may be very
@@ -163,8 +170,8 @@ out of sync, then the timing aspects above may not work. However, it is likely
 your cluster will have other issues if some broker clocks are very off. It is
 recommended to have alerts on ntp clock drift.
 
-Thus, although we do support 2.5+ behavior, the client itself works around
-duplicates in a pre-2.5 world with a lot of edge case handling. It is
-_strongly_ recommended to use a 2.5+ cluster and to always enable
-`RequireStableFetchOffsets`. The option itself has more documentation on
-what other settings may need to be tweaked.
+Thus, the client works around duplicates in a pre-2.5 world with a lot of edge
+case handling, but it is _strongly_ recommended to use a 2.5+ cluster where
+`RequireStable` provides a proper server-side guarantee. The
+`RequireStableFetchOffsets` option is deprecated and is now a no-op; stable
+fetch offsets are always enabled.

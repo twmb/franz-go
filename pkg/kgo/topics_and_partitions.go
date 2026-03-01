@@ -753,16 +753,55 @@ func (k *kip951move) ensureBrokers(cl *Client) {
 		return
 	}
 
-	kbs := make([]kmsg.MetadataResponseBroker, 0, len(k.brokers))
+	// We only add or replace individual brokers here, never remove
+	// unrelated ones. updateBrokers does a full merge-sort that
+	// removes any existing broker not in the input list. The KIP-951
+	// response only includes brokers relevant to the move (a subset),
+	// so calling updateBrokers would destroy all other brokers. Those
+	// destroyed brokers get recreated on the next metadata refresh as
+	// new objects with new connections, which breaks the single-
+	// connection-per-broker ordering guarantee that Kafka requires
+	// for idempotent/transactional produce.
+	cl.brokersMu.Lock()
+	defer cl.brokersMu.Unlock()
+
+	if cl.stopBrokers {
+		return
+	}
+
+	var changed bool
 	for _, b := range k.brokers {
-		kbs = append(kbs, kmsg.MetadataResponseBroker{
+		nb := kmsg.MetadataResponseBroker{
 			NodeID: b.NodeID,
 			Host:   b.Host,
 			Port:   b.Port,
 			Rack:   b.Rack,
-		})
+		}
+		var found bool
+		for i, existing := range cl.brokers {
+			if existing.meta.NodeID != b.NodeID {
+				continue
+			}
+			found = true
+			if !existing.meta.equals(nb) {
+				existing.stopForever()
+				cl.brokers[i] = cl.newBroker(b.NodeID, b.Host, b.Port, b.Rack)
+				changed = true
+			}
+			break
+		}
+		if !found {
+			cl.brokers = append(cl.brokers, cl.newBroker(b.NodeID, b.Host, b.Port, b.Rack))
+			changed = true
+		}
 	}
-	cl.updateBrokers(kbs)
+
+	if changed {
+		sort.Slice(cl.brokers, func(i, j int) bool {
+			return cl.brokers[i].meta.NodeID < cl.brokers[j].meta.NodeID
+		})
+		cl.reinitAnyBrokerOrd()
+	}
 }
 
 func (k *kip951move) maybeBeginMove(cl *Client) {

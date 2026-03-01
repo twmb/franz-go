@@ -106,6 +106,41 @@ outer:
 			}
 		}
 
+		// Retryable errors from initialJoin should not be surfaced
+		// to the user. Coordinator errors (unavailable, loading,
+		// moved) and broker-level errors (connection closed, EOF)
+		// are transient -- we backoff and retry without going
+		// through manageFailWait (which calls onLost and injects
+		// a fake fetch error to the user).
+		//
+		// UnreleasedInstanceID is also retryable here: after
+		// FencedMemberEpoch, we immediately retry initialJoin
+		// which sends epoch 0 to rejoin. If the server hasn't
+		// finished releasing the static instance from the old
+		// epoch, it returns UnreleasedInstanceID. We retry with
+		// backoff to give the server time to process the release.
+		//
+		// We can't rely on the client's default retry logic because
+		// ConsumerGroupHeartbeat cannot be retried by default.
+		if err != nil && (g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err) || isRetryableBrokerErr(err) || errors.Is(err, kerr.UnreleasedInstanceID)) {
+			consecutiveErrors++
+			g.cfg.logger.Log(LogLevelInfo, "consumer group initial heartbeat hit retryable error, backing off and retrying",
+				"group", g.cfg.group,
+				"err", err,
+				"consecutive_errors", consecutiveErrors,
+			)
+			backoff := g.cfg.retryBackoff(consecutiveErrors)
+			g.cl.waitmeta(g.ctx, backoff, "waitmeta during 848 retryable error backoff")
+			after := time.NewTimer(backoff)
+			select {
+			case <-g.ctx.Done():
+				after.Stop()
+				return
+			case <-after.C:
+			}
+			continue
+		}
+
 		for err == nil {
 			consecutiveErrors = 0
 			var nowAssigned map[string][]int32
@@ -130,7 +165,19 @@ outer:
 			_, err = g.setupAssignedAndHeartbeat(initialHb, func() (time.Duration, error) {
 				req := g848.mkreq()
 				prerevoking := g848.prerevoking.Load()
-				topicsMatch := reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics)
+				// When the client has no partitions (Topics is empty),
+				// always send a full request rather than a keepalive.
+				// This ensures the server sees our actual empty
+				// assignment state. Without this, a lost response
+				// containing our assignment can leave the server
+				// thinking we acknowledged partitions we never
+				// received: the server marks the assignment as
+				// delivered, but we never got it. Keepalive
+				// (Topics=nil) means "no change", which doesn't
+				// correct the stale server state. Sending Topics=[]
+				// tells the server "I have nothing", forcing it to
+				// re-deliver.
+				topicsMatch := len(req.Topics) > 0 && reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics)
 				if prerevoking || topicsMatch {
 					req.InstanceID = nil
 					req.RackID = nil
@@ -141,13 +188,19 @@ outer:
 					req.Topics = nil
 				}
 				resp, err := req.RequestWith(g.ctx, g.cl)
-				if err != nil {
-					return g.cfg.heartbeatInterval, err
+				sleep := g.cfg.heartbeatInterval
+				if err == nil {
+					err = errCodeMessage(resp.ErrorCode, resp.ErrorMessage)
+					sleep = time.Duration(resp.HeartbeatIntervalMillis) * time.Millisecond
 				}
-
-				err = errCodeMessage(resp.ErrorCode, resp.ErrorMessage)
-				sleep := time.Duration(resp.HeartbeatIntervalMillis) * time.Millisecond
 				if err != nil {
+					// Reset last-sent state so the next attempt
+					// is a full request. If the server processed
+					// our request but we lost the response, the
+					// full retry corrects the server's view of
+					// our current partitions.
+					g848.lastTopics = nil
+					g848.lastSubscribedTopics = nil
 					return sleep, err
 				}
 				hbAssigned := g848.handleResp(req, resp)
@@ -162,15 +215,27 @@ outer:
 			case errors.Is(err, kerr.RebalanceInProgress):
 				err = nil
 
-			case err != nil && isRetryableBrokerErr(err):
-				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat hit retriable broker error, retrying",
-					"group", g.cfg.group,
-					"err", err,
-				)
+			// Retryable broker errors (connection closed, EOF) and
+			// coordinator errors (NOT_COORDINATOR, etc.) are
+			// retried in the heartbeat loop up to cfg.retries.
+			// If the cap is hit, the error propagates here. We
+			// treat it as a transient failure and restart the
+			// session to give the data path a fresh start.
+			case isRetryableBrokerErr(err),
+				g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err):
 				err = nil
 
 			case errors.Is(err, kerr.UnknownMemberID):
+				member, gen := g.memberGen.load()
 				g.memberGen.store(newStringUUID(), 0)
+				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat error, abandoning assignment and rejoining with new member id",
+					"group", g.cfg.group,
+					"member_id", member,
+					"generation", gen,
+					"err", err,
+				)
+				g.nowAssigned.store(nil)
+				continue outer
 
 			case errors.Is(err, kerr.FencedMemberEpoch),
 				errors.Is(err, kerr.GroupMaxSizeReached),

@@ -1787,13 +1787,19 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 		return
 	}
 
-	wait := true
-	if immediate {
-		s.c.cl.triggerUpdateMetadataNow(why)
-	} else {
-		wait = s.c.cl.triggerUpdateMetadata(false, why) // avoid trigger if within refresh interval
-	}
-
+	// We must set up listOrEpochMetaCh BEFORE triggering metadata. If we
+	// trigger first and set the channel second, there is a race where the
+	// metadata update completes and doOnMetadataUpdate checks for the
+	// channel before we create it, causing the signal to be lost. With the
+	// channel created first, doOnMetadataUpdate will always find the
+	// channel and signal it.
+	//
+	// Race without this ordering:
+	//   1. listOrEpoch: triggerUpdateMetadata -> sends trigger
+	//   2. listOrEpoch: goroutine descheduled under load
+	//   3. metadata loop: processes trigger, runs doOnMetadataUpdate
+	//   4. doOnMetadataUpdate: listOrEpochMetaCh is nil -> returns (signal lost)
+	//   5. listOrEpoch: resumes, creates listOrEpochMetaCh, waits forever
 	s.listOrEpochMu.Lock() // collapse any listOrEpochs that occur during meta update into one
 	if !s.listOrEpochLoadsWaiting.isEmpty() {
 		s.listOrEpochLoadsWaiting.mergeFrom(waiting)
@@ -1803,6 +1809,13 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 	s.listOrEpochLoadsWaiting = waiting
 	s.listOrEpochMetaCh = make(chan struct{}, 1)
 	s.listOrEpochMu.Unlock()
+
+	wait := true
+	if immediate {
+		s.c.cl.triggerUpdateMetadataNow(why)
+	} else {
+		wait = s.c.cl.triggerUpdateMetadata(false, why) // avoid trigger if within refresh interval
+	}
 
 	if wait {
 		select {
@@ -1860,17 +1873,17 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 		}
 	}()
 
+	// We must drain all results before returning so that the
+	// sub-goroutines complete within this worker's lifetime. If the
+	// session is stopped, the context cancellation propagates to each
+	// sub-goroutine's broker.waitResp, so they will finish quickly.
+	// Without draining, stopSession can return (having seen workers=0)
+	// and purgeTopics can modify tps while a sub-goroutine still
+	// references it.
 	for received != issued {
-		select {
-		case <-s.ctx.Done():
-			// If we return early, our session was canceled. We do
-			// not move loading list or epoch loads back to
-			// waiting; the session stopping manages that.
-			return
-		case loaded := <-results:
-			received++
-			reloads.mergeFrom(s.handleListOrEpochResults(loaded))
-		}
+		loaded := <-results
+		received++
+		reloads.mergeFrom(s.handleListOrEpochResults(loaded))
 	}
 }
 
@@ -2079,6 +2092,9 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 	kresp, err := broker.waitResp(ctx, req1)
 	wg.Wait()
 	if err != nil || err2 != nil {
+		if err == nil {
+			err = err2
+		}
 		results <- loaded.addAll(load.errToLoaded(err))
 		return
 	}

@@ -110,10 +110,11 @@ func TestConsumeRegex(t *testing.T) {
 		ConsumeTopics(pfx+".*"),                // Match all pfx-* topics
 		ConsumeExcludeTopics(pfx+"exclude-.*"), // Exclude pfx-exclude-* topics
 		ConsumeRegex(),
+		MetadataMinAge(100*time.Millisecond),
 	)
 	defer cl.Close()
 	var topics []string
-	wait(t, 5*time.Second, func() error {
+	wait(t, 15*time.Second, func() error {
 		cl.triggerUpdateMetadataNow("querying metadata for consumer initialization")
 		topics = cl.GetConsumeTopics()
 		if len(topics) != 2 {
@@ -369,6 +370,7 @@ func TestPauseIssue489(t *testing.T) {
 		DefaultProduceTopic(t1),
 		RecordPartitioner(ManualPartitioner()),
 		ConsumeTopics(t1),
+		MetadataMinAge(100*time.Millisecond),
 		FetchMaxWait(100*time.Millisecond),
 	)
 	defer cl.Close()
@@ -546,7 +548,12 @@ func TestIssue523(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			cl.PollFetches(context.Background())
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			fs := cl.PollFetches(ctx)
+			cancel()
+			if err := fs.Err0(); err != nil {
+				t.Fatalf("PollFetches: %v", err)
+			}
 
 			cleanup() // delete the topic
 

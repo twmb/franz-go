@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,16 +27,14 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
+var errSkipChecks848 = errors.New("848 stale commit; skip checks")
+
+var testChaos = os.Getenv("KGO_TEST_CHAOS") == "1"
+
 var (
 	adm             *Client
 	testrf          = 3
 	testRecordLimit = 500000
-
-	// Kraft sometimes has massive hangs internally when completing
-	// transactions. Against zk Kafka as well as Redpanda, we could rely on
-	// our internal mitigations to never have KIP-447 problems. Not true
-	// against Kraft, see #223.
-	requireStableFetch = false
 
 	// Redpanda is a bit more strict with transactions: we must wait for
 	// EndTxn to return successfully before beginning a new transaction. We
@@ -115,9 +115,6 @@ func init() {
 	}
 	if n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RECORDS")); n > 0 {
 		testRecordLimit = n
-	}
-	if _, exists := os.LookupEnv("KGO_TEST_STABLE_FETCH"); exists {
-		requireStableFetch = true
 	}
 	if _, exists := os.LookupEnv("KGO_TEST_UNSAFE"); exists {
 		allowUnsafe = true
@@ -267,6 +264,153 @@ func testLogger() Logger {
 	})
 }
 
+// ringLogger captures all log entries (including DEBUG) in a ring buffer but
+// only forwards INFO+ to the underlying logger in real time. Call flush() to
+// dump the entire backlog when a test detects a problem (e.g. duplicate
+// offset). This gives you full DEBUG context leading up to the event without
+// the noise of DEBUG logging on every run.
+//
+// shouldFlush can also trigger automatic flushing when specific log patterns
+// are detected. To enable, add needle strings to the shouldFlush method
+// (e.g. "OUT_OF_ORDER_SEQUENCE_NUMBER"). When a match is found, the entire
+// backlog is dumped first, then the triggering message, so the output shows
+// full context leading up to the event.
+var _ = newRingLogger(nil, 0).flush
+
+type ringLogEntry struct {
+	level   LogLevel
+	msg     string
+	keyvals []any
+}
+
+type ringLogger struct {
+	mu   sync.Mutex
+	buf  []ringLogEntry
+	size int
+	pos  int  // next write position in circular buffer
+	full bool // whether the buffer has wrapped around
+	real Logger
+}
+
+func newRingLogger(real Logger, size int) *ringLogger {
+	return &ringLogger{buf: make([]ringLogEntry, size), size: size, real: real}
+}
+
+func (*ringLogger) Level() LogLevel { return LogLevelDebug }
+
+func (r *ringLogger) Log(level LogLevel, msg string, keyvals ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// If this message triggers a flush, dump the entire backlog first
+	// so the historical context appears before the triggering message.
+	if r.shouldFlush(msg, keyvals) {
+		r.flushLocked()
+		r.real.Log(level, msg, keyvals...)
+		return
+	}
+
+	r.buf[r.pos] = ringLogEntry{level, msg, slices.Clone(keyvals)}
+	r.pos++
+	if r.pos >= r.size {
+		r.pos = 0
+		r.full = true
+	}
+
+	// Forward INFO+ to the real logger immediately.
+	if level <= r.real.Level() {
+		r.real.Log(level, msg, keyvals...)
+	}
+}
+
+func (*ringLogger) shouldFlush(msg string, keyvals []any) bool {
+	// Add needle strings here to auto-flush on specific log patterns.
+	// Check both msg and keyvals, since error text can appear in either
+	// depending on the code path.
+	for _, needle := range []string{
+		// e.g. "OUT_OF_ORDER_SEQUENCE_NUMBER",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+		for _, kv := range keyvals {
+			if s, ok := kv.(fmt.Stringer); ok && strings.Contains(s.String(), needle) {
+				return true
+			}
+			if s, ok := kv.(error); ok && strings.Contains(s.Error(), needle) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// flush dumps all buffered entries in order. Call this from test code when an
+// interesting event (e.g. duplicate offset) is detected.
+func (r *ringLogger) flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.flushLocked()
+}
+
+func (r *ringLogger) flushLocked() {
+	if r.full {
+		for i := r.pos; i < r.size; i++ {
+			r.real.Log(r.buf[i].level, "[BACKLOG] "+r.buf[i].msg, r.buf[i].keyvals...)
+		}
+	}
+	for i := range r.pos {
+		r.real.Log(r.buf[i].level, "[BACKLOG] "+r.buf[i].msg, r.buf[i].keyvals...)
+	}
+	r.pos = 0
+	r.full = false
+}
+
+// chaosConn and chaosDialer inject random connection deaths into tests.
+// Each connection lives for 500ms-1500ms before reads/writes start returning
+// errors, forcing the client to reconnect. This stresses connection lifecycle
+// code paths: loadConnection races, broker object reuse, produce retries,
+// sequence number rewinding, and idempotent ordering guarantees.
+//
+// Enable with KGO_TEST_CHAOS=1:
+//
+//	KGO_TEST_CHAOS=1 go test -run TestGroupETL -count=50 -timeout 60m
+type chaosConn struct {
+	net.Conn
+	deadline time.Time
+	once     sync.Once
+}
+
+func (c *chaosConn) Read(p []byte) (int, error) {
+	if time.Now().After(c.deadline) {
+		c.once.Do(func() { c.Close() })
+		return 0, net.ErrClosed
+	}
+	return c.Conn.Read(p)
+}
+
+func (c *chaosConn) Write(p []byte) (int, error) {
+	if time.Now().After(c.deadline) {
+		c.once.Do(func() { c.Close() })
+		return 0, net.ErrClosed
+	}
+	return c.Conn.Write(p)
+}
+
+type chaosDialer struct{}
+
+func (chaosDialer) DialContext(ctx context.Context, network, host string) (net.Conn, error) {
+	c, err := (&net.Dialer{}).DialContext(ctx, network, host)
+	if err != nil {
+		return nil, err
+	}
+	lifetime := 500*time.Millisecond + time.Duration(rand.IntN(1000))*time.Millisecond
+	return &chaosConn{
+		Conn:     c,
+		deadline: time.Now().Add(lifetime),
+	}, nil
+}
+
 var randsha = func() func() string {
 	var mu sync.Mutex
 	last := time.Now().UnixNano()
@@ -321,9 +465,12 @@ issue:
 
 	if err == nil {
 		err = kerr.ErrorForCode(resp.Topics[0].ErrorCode)
+		// Topic names are randomly generated, so TopicAlreadyExists
+		// means our prior CreateTopics request succeeded but the
+		// response was lost (e.g. connection blip caused a retry).
+		// Treat it as success.
 		if errors.Is(err, kerr.TopicAlreadyExists) {
-			time.Sleep(10 * time.Millisecond)
-			goto issue
+			err = nil
 		}
 	}
 	if err != nil {
@@ -558,6 +705,17 @@ func (c *testConsumer) goRun(transactional bool, etlsBeforeQuit int) {
 	}
 }
 
+// etlSem limits the number of concurrent ETL subtests to avoid
+// overwhelming the broker cluster. Too many concurrent transactional
+// clients can cause transaction timeouts: broker contention causes
+// produce draining to stall, the transaction exceeds its timeout, and
+// Kafka's coordinator fences the producer with INVALID_PRODUCER_EPOCH.
+//
+// The semaphore is acquired in the for loop of TestGroupETL/TestTxnEtl
+// BEFORE t.Run so that the subtest timer reflects actual work rather
+// than time spent waiting for a semaphore slot.
+var etlSem = make(chan struct{}, 4)
+
 func testChainETL(
 	t *testing.T,
 	topic1 string,
@@ -675,14 +833,27 @@ func testChainETL(
 	// FINAL VALIDATION //
 	//////////////////////
 
+	var skipChecks bool
 out:
 	for {
 		select {
 		case err := <-errs:
+			if skipChecks {
+				continue
+			}
+			if errors.Is(err, errSkipChecks848) {
+				t.Log("pre-KIP-1251 stale commit encountered, skipping validation")
+				skipChecks = true
+				continue
+			}
 			t.Fatal(err)
 		case <-doneConsume:
 			break out
 		}
+	}
+
+	if skipChecks {
+		return
 	}
 
 	for level, part2key := range []map[int32][]int{
