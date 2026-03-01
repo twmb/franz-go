@@ -38,12 +38,16 @@ func TestGroupETL(t *testing.T) {
 	////////////////////
 
 	go func() {
-		cl, _ := newTestClient(
+		producerOpts := []Opt{
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			MaxBufferedRecords(10000),
 			MaxBufferedBytes(50000),
 			UnknownTopicRetries(-1), // see txn_test comment
-		)
+		}
+		if testChaos {
+			producerOpts = append(producerOpts, Dialer(chaosDialer{}.DialContext))
+		}
+		cl, _ := newTestClient(producerOpts...)
 		defer cl.Close()
 
 		offsets := make(map[int32]int64)
@@ -179,6 +183,9 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 	if c.enable848 {
 		ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true) //nolint:revive,staticcheck // intentional string key for beta opt-in
 		opts = append(opts, WithContext(ctx848))
+	}
+	if testChaos {
+		opts = append(opts, Dialer(chaosDialer{}.DialContext))
 	}
 
 	cl, _ := newTestClient(opts...)

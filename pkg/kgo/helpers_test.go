@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +28,8 @@ import (
 )
 
 var errSkipChecks848 = errors.New("848 stale commit; skip checks")
+
+var testChaos = os.Getenv("KGO_TEST_CHAOS") == "1"
 
 var (
 	adm             *Client
@@ -258,6 +262,151 @@ func testLogger() Logger {
 	return BasicLogger(os.Stderr, testLogLevel, func() string {
 		return time.Now().UTC().Format("[15:04:05.999 ") + pfx + "]"
 	})
+}
+
+// ringLogger captures all log entries (including DEBUG) in a ring buffer but
+// only forwards INFO+ to the underlying logger in real time. Call flush() to
+// dump the entire backlog when a test detects a problem (e.g. duplicate
+// offset). This gives you full DEBUG context leading up to the event without
+// the noise of DEBUG logging on every run.
+//
+// shouldFlush can also trigger automatic flushing when specific log patterns
+// are detected. To enable, add needle strings to the shouldFlush method
+// (e.g. "OUT_OF_ORDER_SEQUENCE_NUMBER"). When a match is found, the entire
+// backlog is dumped first, then the triggering message, so the output shows
+// full context leading up to the event.
+type ringLogEntry struct {
+	level   LogLevel
+	msg     string
+	keyvals []any
+}
+
+type ringLogger struct {
+	mu   sync.Mutex
+	buf  []ringLogEntry
+	size int
+	pos  int  // next write position in circular buffer
+	full bool // whether the buffer has wrapped around
+	real Logger
+}
+
+func newRingLogger(real Logger, size int) *ringLogger {
+	return &ringLogger{buf: make([]ringLogEntry, size), size: size, real: real}
+}
+
+func (r *ringLogger) Level() LogLevel { return LogLevelDebug }
+
+func (r *ringLogger) Log(level LogLevel, msg string, keyvals ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// If this message triggers a flush, dump the entire backlog first
+	// so the historical context appears before the triggering message.
+	if r.shouldFlush(msg, keyvals) {
+		r.flushLocked()
+		r.real.Log(level, msg, keyvals...)
+		return
+	}
+
+	r.buf[r.pos] = ringLogEntry{level, msg, slices.Clone(keyvals)}
+	r.pos++
+	if r.pos >= r.size {
+		r.pos = 0
+		r.full = true
+	}
+
+	// Forward INFO+ to the real logger immediately.
+	if level <= r.real.Level() {
+		r.real.Log(level, msg, keyvals...)
+	}
+}
+
+func (r *ringLogger) shouldFlush(msg string, keyvals []any) bool {
+	// Add needle strings here to auto-flush on specific log patterns.
+	// Check both msg and keyvals, since error text can appear in either
+	// depending on the code path.
+	for _, needle := range []string{
+		// e.g. "OUT_OF_ORDER_SEQUENCE_NUMBER",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+		for _, kv := range keyvals {
+			if s, ok := kv.(fmt.Stringer); ok && strings.Contains(s.String(), needle) {
+				return true
+			}
+			if s, ok := kv.(error); ok && strings.Contains(s.Error(), needle) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// flush dumps all buffered entries in order. Call this from test code when an
+// interesting event (e.g. duplicate offset) is detected.
+func (r *ringLogger) flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.flushLocked()
+}
+
+func (r *ringLogger) flushLocked() {
+	if r.full {
+		for i := r.pos; i < r.size; i++ {
+			r.real.Log(r.buf[i].level, "[BACKLOG] "+r.buf[i].msg, r.buf[i].keyvals...)
+		}
+	}
+	for i := range r.pos {
+		r.real.Log(r.buf[i].level, "[BACKLOG] "+r.buf[i].msg, r.buf[i].keyvals...)
+	}
+	r.pos = 0
+	r.full = false
+}
+
+// chaosConn and chaosDialer inject random connection deaths into tests.
+// Each connection lives for 500ms-1500ms before reads/writes start returning
+// errors, forcing the client to reconnect. This stresses connection lifecycle
+// code paths: loadConnection races, broker object reuse, produce retries,
+// sequence number rewinding, and idempotent ordering guarantees.
+//
+// Enable with KGO_TEST_CHAOS=1:
+//
+//	KGO_TEST_CHAOS=1 go test -run TestGroupETL -count=50 -timeout 60m
+type chaosConn struct {
+	net.Conn
+	deadline time.Time
+	once     sync.Once
+}
+
+func (c *chaosConn) Read(p []byte) (int, error) {
+	if time.Now().After(c.deadline) {
+		c.once.Do(func() { c.Conn.Close() })
+		return 0, net.ErrClosed
+	}
+	return c.Conn.Read(p)
+}
+
+func (c *chaosConn) Write(p []byte) (int, error) {
+	if time.Now().After(c.deadline) {
+		c.once.Do(func() { c.Conn.Close() })
+		return 0, net.ErrClosed
+	}
+	return c.Conn.Write(p)
+}
+
+type chaosDialer struct{}
+
+func (chaosDialer) DialContext(ctx context.Context, network, host string) (net.Conn, error) {
+	c, err := (&net.Dialer{}).DialContext(ctx, network, host)
+	if err != nil {
+		return nil, err
+	}
+	lifetime := 500*time.Millisecond + time.Duration(rand.IntN(1000))*time.Millisecond
+	return &chaosConn{
+		Conn:     c,
+		deadline: time.Now().Add(lifetime),
+	}, nil
 }
 
 var randsha = func() func() string {
