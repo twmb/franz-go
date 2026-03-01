@@ -674,7 +674,7 @@ func TestValidateMiscDSLAgainstKafkaJSON(t *testing.T) {
 
 	for _, m := range mappings {
 		jsonPath := filepath.Join(kafkaDir, m.jsonPath)
-		data, err := os.ReadFile(jsonPath)
+		data, err := os.ReadFile(jsonPath) //nolint:gosec // path is constructed from test constant + env var, not user input
 		if err != nil {
 			t.Errorf("reading %s: %v", m.jsonPath, err)
 			continue

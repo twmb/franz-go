@@ -275,6 +275,8 @@ func testLogger() Logger {
 // (e.g. "OUT_OF_ORDER_SEQUENCE_NUMBER"). When a match is found, the entire
 // backlog is dumped first, then the triggering message, so the output shows
 // full context leading up to the event.
+var _ = newRingLogger(nil, 0).flush
+
 type ringLogEntry struct {
 	level   LogLevel
 	msg     string
@@ -294,7 +296,7 @@ func newRingLogger(real Logger, size int) *ringLogger {
 	return &ringLogger{buf: make([]ringLogEntry, size), size: size, real: real}
 }
 
-func (r *ringLogger) Level() LogLevel { return LogLevelDebug }
+func (*ringLogger) Level() LogLevel { return LogLevelDebug }
 
 func (r *ringLogger) Log(level LogLevel, msg string, keyvals ...any) {
 	r.mu.Lock()
@@ -321,7 +323,7 @@ func (r *ringLogger) Log(level LogLevel, msg string, keyvals ...any) {
 	}
 }
 
-func (r *ringLogger) shouldFlush(msg string, keyvals []any) bool {
+func (*ringLogger) shouldFlush(msg string, keyvals []any) bool {
 	// Add needle strings here to auto-flush on specific log patterns.
 	// Check both msg and keyvals, since error text can appear in either
 	// depending on the code path.
@@ -381,7 +383,7 @@ type chaosConn struct {
 
 func (c *chaosConn) Read(p []byte) (int, error) {
 	if time.Now().After(c.deadline) {
-		c.once.Do(func() { c.Conn.Close() })
+		c.once.Do(func() { c.Close() })
 		return 0, net.ErrClosed
 	}
 	return c.Conn.Read(p)
@@ -389,7 +391,7 @@ func (c *chaosConn) Read(p []byte) (int, error) {
 
 func (c *chaosConn) Write(p []byte) (int, error) {
 	if time.Now().After(c.deadline) {
-		c.once.Do(func() { c.Conn.Close() })
+		c.once.Do(func() { c.Close() })
 		return 0, net.ErrClosed
 	}
 	return c.Conn.Write(p)

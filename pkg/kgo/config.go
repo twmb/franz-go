@@ -186,6 +186,7 @@ type cfg struct {
 	sessionTimeout    time.Duration
 	rebalanceTimeout  time.Duration
 	heartbeatInterval time.Duration
+
 	onAssigned func(context.Context, *Client, map[string][]int32)
 	onRevoked  func(context.Context, *Client, map[string][]int32)
 	onLost     func(context.Context, *Client, map[string][]int32)
@@ -1736,7 +1737,7 @@ func HeartbeatInterval(interval time.Duration) GroupOpt {
 // Deprecated: RequireStable is now permanently enabled for all group
 // consumers. This function is a no-op.
 func RequireStableFetchOffsets() GroupOpt {
-	return groupOpt{func(cfg *cfg) {}}
+	return groupOpt{func(*cfg) {}}
 }
 
 // BlockRebalanceOnPoll switches the client to block rebalances whenever you
