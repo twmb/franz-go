@@ -882,6 +882,9 @@ func (cl *Client) producerID(ctxFn func() context.Context) (int64, int16, error)
 				// For the idempotent producer, as specified in KIP-360,
 				// if we had an ID, we can bump the epoch locally.
 				// If we are at the max epoch, we will ask for a new ID.
+				cl.cfg.logger.Log(LogLevelInfo, "locally bumping idempotent producer epoch to recover from a prior produce error",
+					"id", id.id, "old_epoch", id.epoch, "new_epoch", id.epoch+1,
+				)
 				cl.resetAllProducerSequences()
 				id = &producerID{
 					id:    id.id,
@@ -978,6 +981,9 @@ func (cl *Client) failProducerID(id int64, epoch int16, err error) {
 			return
 		}
 		if p.id.CompareAndSwap(current, new) {
+			cl.cfg.logger.Log(LogLevelInfo, "producer ID failed due to a produce error, next produce will reinitialize the producer epoch",
+				"id", id, "epoch", epoch, "err", err,
+			)
 			return
 		}
 	}

@@ -709,6 +709,8 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		updateMeta := !isRetryableBrokerErr(err)
 		if updateMeta {
 			s.cl.cfg.logger.Log(LogLevelInfo, "produce request failed, triggering metadata update", "broker", logID(s.nodeID), "err", err)
+		} else {
+			s.cl.cfg.logger.Log(LogLevelDebug, "produce request failed with a retryable error, retrying without a metadata update", "broker", logID(s.nodeID), "err", err)
 		}
 		s.handleRetryBatches(req.batches, nil, req.backoffSeq, updateMeta, false, "failed produce request triggered metadata update")
 
@@ -1050,6 +1052,10 @@ func (s *sink) handleReqRespBatch(
 			"partition", rp.Partition,
 			"producer_id", producerID,
 			"producer_epoch", producerEpoch,
+			"sequence", batch.seq,
+			"first_sequence", batch.owner.batch0Seq,
+			"num_records", nrec,
+			"base_offset", rp.BaseOffset,
 			"err", err,
 		)
 
@@ -1068,6 +1074,12 @@ func (s *sink) handleReqRespBatch(
 			"broker", logID(s.nodeID),
 			"topic", topic,
 			"partition", rp.Partition,
+			"producer_id", producerID,
+			"producer_epoch", producerEpoch,
+			"sequence", batch.seq,
+			"first_sequence", batch.owner.batch0Seq,
+			"num_records", nrec,
+			"base_offset", rp.BaseOffset,
 		)
 		err = nil
 		fallthrough
@@ -1642,6 +1654,13 @@ func (recBuf *recBuf) clearFailing() {
 }
 
 func (recBuf *recBuf) resetBatchDrainIdx() {
+	recBuf.cl.cfg.logger.Log(LogLevelDebug, "rewinding produce sequence to resend pending batches",
+		"topic", recBuf.topic,
+		"partition", recBuf.partition,
+		"rewind_from", recBuf.seq,
+		"rewind_to", recBuf.batch0Seq,
+		"pending_batches", len(recBuf.batches),
+	)
 	recBuf.seq = recBuf.batch0Seq
 	recBuf.batchDrainIdx = 0
 }
@@ -1934,6 +1953,10 @@ func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 			}
 		}
 		if recBuf.needSeqReset {
+			recBuf.cl.cfg.logger.Log(LogLevelDebug, "resetting produce sequence numbers to 0 for new producer epoch",
+				"topic", recBuf.topic,
+				"partition", recBuf.partition,
+			)
 			recBuf.needSeqReset = false
 			recBuf.seq = 0
 			recBuf.batch0Seq = 0
