@@ -35,8 +35,6 @@ type producer struct {
 		unbuffered  []HookProduceRecordUnbuffered
 	}
 
-	hasHookBatchWritten bool
-
 	// unknownTopics buffers all records for topics that are not loaded.
 	// The map is to a pointer to a slice for reasons documented in
 	// waitUnknownTopic.
@@ -203,9 +201,6 @@ func (p *producer) init(cl *Client) {
 		if h, ok := h.(HookProduceRecordUnbuffered); ok {
 			inithooks()
 			p.hooks.unbuffered = append(p.hooks.unbuffered, h)
-		}
-		if _, ok := h.(HookProduceBatchWritten); ok {
-			p.hasHookBatchWritten = true
 		}
 	})
 }
@@ -556,7 +551,10 @@ func (cl *Client) produce(
 
 	userSize := r.userSize()
 	if cl.cfg.maxBufferedBytes > 0 && userSize > cl.cfg.maxBufferedBytes {
-		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, kerr.MessageTooLarge)
+		p.promiseRecordBeforeBuf(
+			promisedRec{ctx, promise, r},
+			fmt.Errorf("%w (uncompressed_bytes=%d).", kerr.MessageTooLarge, userSize),
+		)
 		return
 	}
 

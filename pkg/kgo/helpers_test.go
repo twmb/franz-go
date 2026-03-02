@@ -430,18 +430,18 @@ var randsha = func() func() string {
 	}
 }()
 
-func tmpTopic(tb testing.TB) (string, func()) {
+func tmpTopic(tb testing.TB, configs ...kmsg.CreateTopicsRequestTopicConfig) (string, func()) {
 	partitions := npartitions[int(atomic.AddInt64(&npartitionsAt, 1))%len(npartitions)]
 	topic := randsha()
-	return tmpNamedTopicPartitions(tb, topic, partitions)
+	return tmpNamedTopicPartitions(tb, topic, partitions, configs...)
 }
 
-func tmpTopicPartitions(tb testing.TB, partitions int) (string, func()) {
+func tmpTopicPartitions(tb testing.TB, partitions int, configs ...kmsg.CreateTopicsRequestTopicConfig) (string, func()) {
 	topic := randsha()
-	return tmpNamedTopicPartitions(tb, topic, partitions)
+	return tmpNamedTopicPartitions(tb, topic, partitions, configs...)
 }
 
-func tmpNamedTopicPartitions(tb testing.TB, topic string, partitions int) (string, func()) {
+func tmpNamedTopicPartitions(tb testing.TB, topic string, partitions int, configs ...kmsg.CreateTopicsRequestTopicConfig) (string, func()) {
 	tb.Helper()
 
 	req := kmsg.NewPtrCreateTopicsRequest()
@@ -449,6 +449,7 @@ func tmpNamedTopicPartitions(tb testing.TB, topic string, partitions int) (strin
 	reqTopic.Topic = topic
 	reqTopic.NumPartitions = int32(partitions)
 	reqTopic.ReplicationFactor = int16(testrf)
+	reqTopic.Configs = append(reqTopic.Configs, configs...)
 	req.Topics = append(req.Topics, reqTopic)
 
 	start := time.Now()

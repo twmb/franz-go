@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"math/rand"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kbin"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -654,4 +656,80 @@ func BenchmarkAppendBatch(b *testing.B) {
 			b.Log(len(buf))
 		})
 	}
+}
+
+func TestClient_ProduceLargeMessages(t *testing.T) {
+	topicMaxMessageBytesValue := fmt.Sprint(50 * 1024) // 50 KB
+	topicCfg := kmsg.CreateTopicsRequestTopicConfig{
+		Name:  "max.message.bytes",
+		Value: &topicMaxMessageBytesValue,
+	}
+
+	topic, cleanup := tmpTopicPartitions(t, 1, topicCfg)
+	sampleRecord := func(recordSize int) *Record {
+		return &Record{
+			Value: []byte(strings.Repeat("x", recordSize)),
+			Topic: topic,
+		}
+	}
+	defer cleanup()
+
+	t.Run("LargeMessage_FailureClient", func(t *testing.T) {
+		recordSize := 50 * 1024
+		cl, _ := newTestClient(
+			UnknownTopicRetries(-1),
+			// set ProducerBatchMaxBytes to less than record size to trigger client-side error
+			ProducerBatchMaxBytes(int32(recordSize-100)),
+		)
+		defer cl.Close()
+
+		res := cl.ProduceSync(context.Background(), sampleRecord(recordSize))
+		err := res.FirstErr()
+		if err == nil {
+			t.Errorf("expected MessageTooLarge error to be returned but got nil")
+			return
+		}
+		if !errors.Is(err, kerr.MessageTooLarge) {
+			t.Errorf("expected MessageTooLarge error but got: %v", err)
+		}
+		// received error message must contain the record's uncompressed_bytes size
+		if !strings.Contains(err.Error(), fmt.Sprintf("uncompressed_bytes=%d", recordSize)) {
+			t.Errorf("expected error message to contain uncompressed_bytes=%d but got: %v", recordSize, err)
+		}
+	})
+
+	t.Run("LargeMessage_FailureBroker", func(t *testing.T) {
+		recordSize := 10 * 1024 * 1024
+		cl, err := newTestClient(
+			UnknownTopicRetries(-1),
+			// set ProducerBatchMaxBytes to more than topic max.message.bytes to trigger broker-side error
+			ProducerBatchMaxBytes(int32(recordSize+100)),
+		)
+		if err != nil {
+			t.Fatalf("failed to create test client: %v", err)
+		}
+		defer cl.Close()
+
+		res := cl.ProduceSync(context.Background(), sampleRecord(recordSize))
+		err = res.FirstErr()
+		// expecting MessageTooLarge error from broker - assumption here is that the 10 MB record when compressed
+		// would still be larger than the 50 KB topic max.message.bytes setting at broker-side
+		if err == nil {
+			t.Errorf("expected MessageTooLarge error to be returned but got nil")
+			return
+		}
+		if !errors.Is(err, kerr.MessageTooLarge) {
+			t.Errorf("expected MessageTooLarge error but got: %v", err)
+		}
+		// error message should contain the record's uncompressed_bytes size
+		if !strings.Contains(err.Error(), "uncompressed_bytes=") {
+			t.Errorf("expected error message to contain uncompressed_bytes=%d but got: %v", recordSize, err)
+		}
+
+		// error message should contain the record's compressed_bytes size
+		if !strings.Contains(err.Error(), " compressed_bytes=") {
+			t.Errorf("expected error message to contain compressed_bytes=%d but got: %v", recordSize, err)
+		}
+	})
+
 }
