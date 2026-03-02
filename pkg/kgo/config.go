@@ -106,6 +106,7 @@ type cfg struct {
 
 	sasls []sasl.Mechanism
 
+	alwaysRetryEOF         bool
 	allowAutoTopicCreation bool
 	disableClientMetrics   bool
 	userMetrics            func() iter.Seq[Metric]
@@ -984,6 +985,25 @@ func DisableClientMetrics() Opt {
 // details about enhancing client metrics with user metrics, see KIP-1076.
 func UserMetricsFn(fn func() iter.Seq[Metric]) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.userMetrics = fn }}
+}
+
+// AlwaysRetryEOF switches the client to *always* retry EOF.
+//
+// By default, if an EOF is experienced on the FIRST request being written to
+// or read from a connection, the client does not retry on the error. EOFs are
+// encountered for many reasons, and the client has no information available as
+// to what exact reason the EOF was encountered. If your configuration is
+// correct, then EOF is usually experienced during timeouts, or when you have
+// some high load systems and connections are being cut for some reason, etc.
+// If your configuration is incorrect (on the client or on the broker), EOF can
+// be experienced due to some TLS settings mismatch or missing SASL
+// credentials, and it's very hard to debug EOF in this case. Thus, after much
+// feedback, the client was changed to assume an EOF experienced immediately
+// means invalid configuration. If you *know* your configuration is correct,
+// this option opts into always retrying EOF, allowing requests to retry and
+// succeed as they normally should on very busy systems.
+func AlwaysRetryEOF() Opt {
+	return clientOpt{func(cfg *cfg) { cfg.alwaysRetryEOF = true }}
 }
 
 ////////////////////////////

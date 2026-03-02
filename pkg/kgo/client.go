@@ -310,6 +310,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.disableClientMetrics}
 	case namefn(UserMetricsFn):
 		return []any{cfg.userMetrics}
+	case namefn(AlwaysRetryEOF):
+		return []any{cfg.alwaysRetryEOF}
 
 	case namefn(DefaultProduceTopic):
 		return []any{cfg.defaultProduceTopic}
