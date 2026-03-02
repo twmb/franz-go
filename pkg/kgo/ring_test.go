@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"testing"
+	"time"
 )
 
 func TestRing(t *testing.T) {
@@ -27,26 +28,22 @@ func TestRing(t *testing.T) {
 		for i := 2; i < 10; i++ {
 			assertRingPush(t, r, i, false, false)
 			assertRingDropPeek(t, r, i, true, false)
-
-			if len(r.overflow) > 0 {
-				t.Error("unexpected overflow usage")
-			}
 		}
 
 		// Finally, drop the last element.
 		assertRingDropPeek(t, r, 0, false, false)
 	})
 
-	t.Run("push elements above the ring capacity and get them stored in the overflow", func(t *testing.T) {
+	t.Run("push elements above the initial capacity and verify growth", func(t *testing.T) {
 		r := &ring[int]{}
 
 		for i := 1; i <= 10; i++ {
 			assertRingPush(t, r, i, i == 1, false)
 		}
 
-		// We expect the overflow has been used.
-		if len(r.overflow) == 0 {
-			t.Error("unexpected empty overflow")
+		// We expect the buffer has grown beyond minRingCap.
+		if cap(r.elems) <= minRingCap {
+			t.Errorf("expected capacity > %d, got %d", minRingCap, cap(r.elems))
 		}
 
 		for i := 1; i <= 9; i++ {
@@ -54,9 +51,9 @@ func TestRing(t *testing.T) {
 		}
 		assertRingDropPeek(t, r, 0, false, false)
 
-		// At this point the overflow should have been cleared.
-		if len(r.overflow) > 0 {
-			t.Error("unexpected overflow usage")
+		// At this point the buffer should have shrunk back to minRingCap.
+		if cap(r.elems) != minRingCap {
+			t.Errorf("expected capacity %d after drain, got %d", minRingCap, cap(r.elems))
 		}
 	})
 
@@ -73,10 +70,10 @@ func TestRing(t *testing.T) {
 		assertRingDropPeek(t, r, 2, true, true)
 	})
 
-	t.Run("continuously keeping the items in the ring above the fixed size limit should not grow the overflow slice indefinitely", func(t *testing.T) {
+	t.Run("continuously keeping items above min capacity should not grow indefinitely", func(t *testing.T) {
 		r := &ring[int]{}
 
-		// Push an initial number of elements above the fixed size length.
+		// Push an initial number of elements above minRingCap.
 		for i := 1; i <= 10; i++ {
 			assertRingPush(t, r, i, i == 1, false)
 		}
@@ -87,12 +84,13 @@ func TestRing(t *testing.T) {
 			assertRingDropPeek(t, r, i-9, true, false)
 		}
 
-		if cap(r.overflow) > 20 {
-			t.Errorf("unexpected high overflow slice capacity, got: %d", cap(r.overflow))
+		// Capacity should stay bounded since we maintain ~10 elements.
+		if cap(r.elems) > 32 {
+			t.Errorf("unexpected high capacity, got: %d", cap(r.elems))
 		}
 	})
 
-	t.Run("having a temporarily high number of items in the ring should not keep the overflow slice capacity high indefinitely", func(t *testing.T) {
+	t.Run("temporarily high number of items should shrink back after drain", func(t *testing.T) {
 		r := &ring[int]{}
 
 		// Push a large number of elements.
@@ -100,29 +98,96 @@ func TestRing(t *testing.T) {
 			assertRingPush(t, r, i, i == 1, false)
 		}
 
-		if cap(r.overflow) < 1000 {
-			t.Errorf("unexpected low overflow slice capacity, got: %d, expected >= 1000", cap(r.overflow))
+		if cap(r.elems) < 1000 {
+			t.Errorf("unexpected low capacity, got: %d, expected >= 1000", cap(r.elems))
 		}
 
-		// Drop most of them, but keep it above the fixed size limit.
-		for i := 1; i <= 990; i++ {
-			assertRingDropPeek(t, r, i+1, true, false)
+		// Drop all but a few.
+		for i := 1; i <= 996; i++ {
+			r.dropPeek()
 		}
 
-		// Push few more items and then drop all the remaining ones.
-		for i := 1001; i <= 1010; i++ {
-			assertRingPush(t, r, i, false, false)
+		// Should have shrunk since we're at 4 elements (<=minRingCap/2).
+		if cap(r.elems) != minRingCap {
+			t.Errorf("expected capacity %d after partial drain, got %d", minRingCap, cap(r.elems))
 		}
 
-		for i := 991; i < 1010; i++ {
-			assertRingDropPeek(t, r, i+1, true, false)
-		}
+		// Verify remaining elements are correct.
+		assertRingDropPeek(t, r, 998, true, false)
+		assertRingDropPeek(t, r, 999, true, false)
+		assertRingDropPeek(t, r, 1000, true, false)
 		assertRingDropPeek(t, r, 0, false, false)
-
-		if cap(r.overflow) > 500 {
-			t.Errorf("unexpected high overflow slice capacity, got: %d", cap(r.overflow))
-		}
 	})
+}
+
+func TestRingMaxLen(t *testing.T) {
+	var r ring[int]
+	r.initMaxLen(3) // small limit for testing
+
+	// Fill buffer up to limit.
+	for i := range 3 {
+		first, dead := r.push(i)
+		if dead {
+			t.Fatal("unexpected dead")
+		}
+		if first != (i == 0) {
+			t.Fatalf("first mismatch at %d", i)
+		}
+	}
+
+	// Next push should block - verify with goroutine + timeout.
+	blocked := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(blocked)
+		r.push(99)
+		close(done)
+	}()
+
+	<-blocked
+	select {
+	case <-done:
+		t.Fatal("push should have blocked")
+	case <-time.After(100 * time.Millisecond):
+		// Expected - push is blocked
+	}
+
+	// Drain one element - should unblock the pusher.
+	r.dropPeek()
+
+	select {
+	case <-done:
+		// Expected - push completed
+	case <-time.After(time.Second):
+		t.Fatal("push should have unblocked after dropPeek")
+	}
+}
+
+func TestRingMaxLenDie(t *testing.T) {
+	var r ring[int]
+	r.initMaxLen(1)
+
+	// Fill to limit.
+	r.push(0)
+
+	// Next push should block.
+	done := make(chan bool)
+	go func() {
+		_, dead := r.push(99)
+		done <- dead
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	r.die()
+
+	select {
+	case dead := <-done:
+		if !dead {
+			t.Fatal("expected dead=true after die()")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("push should have unblocked after die()")
+	}
 }
 
 func assertRingPush(t *testing.T, r *ring[int], elem int, expectedFirst, expectedDead bool) {
@@ -149,5 +214,54 @@ func assertRingDropPeek(t *testing.T, r *ring[int], expectedNext int, expectedMo
 	}
 	if dead != expectedDead {
 		t.Errorf("unexpected dead: got %t, want %t", dead, expectedDead)
+	}
+}
+
+func BenchmarkRingPushPopSimple(b *testing.B) {
+	var r ring[int]
+	// Pre-warm
+	r.push(0)
+	r.dropPeek()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.push(i)
+		r.dropPeek()
+	}
+}
+
+func BenchmarkRingPushPopBatch100(b *testing.B) {
+	var r ring[int]
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 100; j++ {
+			r.push(j)
+		}
+		for j := 0; j < 100; j++ {
+			r.dropPeek()
+		}
+	}
+}
+
+func BenchmarkRingOverflowSteady(b *testing.B) {
+	var r ring[int]
+	// Fill beyond initial buffer size
+	for i := 0; i < 50; i++ {
+		r.push(i)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.push(i)
+		r.dropPeek()
+	}
+}
+
+func BenchmarkRingGrowDrain1000(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		var r ring[int]
+		for j := 0; j < 1000; j++ {
+			r.push(j)
+		}
+		for j := 0; j < 1000; j++ {
+			r.dropPeek()
+		}
 	}
 }
