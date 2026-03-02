@@ -1172,6 +1172,127 @@ func TestClientIntegration(t *testing.T) {
 			},
 			wantResult: 4, // Should skip ID 2 and use ID 4
 		},
+
+		// --- Context Methods ---
+		{
+			name: "Contexts - list all",
+			setup: func(t *testing.T, r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:topic-value", 1, 2, productSchema)
+			},
+			act: func(t *testing.T, cl *sr.Client) (any, error) {
+				return cl.Contexts(context.Background())
+			},
+			wantResult: []string{".", ".myctx"},
+		},
+		{
+			name: "Contexts - with prefix filter",
+			setup: func(t *testing.T, r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:topic-value", 1, 2, productSchema)
+				r.SeedSchema(":.other:topic-value", 1, 3, sr.Schema{
+					Schema: `{"type":"record","name":"Other","fields":[{"name":"id","type":"string"}]}`,
+					Type:   sr.TypeAvro,
+				})
+			},
+			act: func(t *testing.T, cl *sr.Client) (any, error) {
+				return cl.Contexts(sr.WithParams(context.Background(), sr.ContextPrefix(".my")))
+			},
+			wantResult: []string{".myctx"},
+		},
+		{
+			name: "DeleteContext - empty context",
+			setup: func(t *testing.T, r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+			},
+			act: func(t *testing.T, cl *sr.Client) (any, error) {
+				return nil, cl.DeleteContext(context.Background(), ".myctx")
+			},
+		},
+		{
+			name: "DeleteContext - non-empty context",
+			setup: func(t *testing.T, r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			act: func(t *testing.T, cl *sr.Client) (any, error) {
+				return nil, cl.DeleteContext(context.Background(), ".myctx")
+			},
+			wantErr: &sr.ResponseError{StatusCode: http.StatusConflict},
+		},
+		{
+			name: "Context Subjects - found",
+			setup: func(t *testing.T, r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+				r.SeedSchema("plain-topic", 1, 2, productSchema)
+			},
+			act: func(t *testing.T, cl *sr.Client) (any, error) {
+				return cl.Subjects(sr.WithSchemaContext(context.Background(), ".myctx"))
+			},
+			wantResult: []string{":.myctx:topic-value"},
+		},
+		{
+			name: "Context Subjects - empty context",
+			setup: func(t *testing.T, r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+			},
+			act: func(t *testing.T, cl *sr.Client) (any, error) {
+				return cl.Subjects(sr.WithSchemaContext(context.Background(), ".myctx"))
+			},
+			wantResult: []string{},
+		},
+		{
+			name: "Context SchemaByID - found",
+			setup: func(t *testing.T, r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			act: func(t *testing.T, cl *sr.Client) (any, error) {
+				return cl.SchemaByID(sr.WithSchemaContext(context.Background(), ".myctx"), 1)
+			},
+			wantResult: userSchema,
+		},
+		{
+			name: "Context SchemaByID - not in context",
+			setup: func(t *testing.T, r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+			},
+			act: func(t *testing.T, cl *sr.Client) (any, error) {
+				return cl.SchemaByID(sr.WithSchemaContext(context.Background(), ".myctx"), 1)
+			},
+			wantErr: &sr.ResponseError{StatusCode: http.StatusNotFound},
+		},
+		{
+			name: "Context SubjectsByID - found",
+			setup: func(t *testing.T, r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			act: func(t *testing.T, cl *sr.Client) (any, error) {
+				return cl.SubjectsByID(sr.WithSchemaContext(context.Background(), ".myctx"), 1)
+			},
+			wantResult: []string{":.myctx:topic-value"},
+		},
+		{
+			name: "Context SchemaVersionsByID - found",
+			setup: func(t *testing.T, r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			act: func(t *testing.T, cl *sr.Client) (any, error) {
+				return cl.SchemaVersionsByID(sr.WithSchemaContext(context.Background(), ".myctx"), 1)
+			},
+			wantResult: []sr.SubjectVersion{{Subject: ":.myctx:topic-value", Version: 1}},
+		},
+		{
+			name: "CreateSchema with context - end-to-end",
+			act: func(t *testing.T, cl *sr.Client) (any, error) {
+				ctx := sr.WithSchemaContext(context.Background(), ".myctx")
+				return cl.CreateSchema(ctx, ":.myctx:topic-value", userSchema)
+			},
+			wantResult: sr.SubjectSchema{
+				Subject: ":.myctx:topic-value",
+				Version: 1,
+				ID:      1,
+				Schema:  userSchema,
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1573,6 +1694,304 @@ func TestDeletionWithReferences(t *testing.T) {
 			t.Error("Schema should have been deleted")
 		}
 	})
+}
+
+func TestContextHandlers(t *testing.T) {
+	testCases := []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		setup      func(*srfake.Registry)
+		wantStatus int
+		wantBody   string
+	}{
+		// GET /contexts
+		{
+			name:   "GET /contexts - no subjects returns default context only",
+			method: "GET",
+			path:   "/contexts",
+			setup: func(r *srfake.Registry) {
+				// no setup needed
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `["."]`,
+		},
+		{
+			name:   "GET /contexts - plain + contexted subjects",
+			method: "GET",
+			path:   "/contexts",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:topic-value", 1, 2, productSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[".", ".myctx"]`,
+		},
+		{
+			name:   "GET /contexts - soft-deleted contexted subject excluded",
+			method: "GET",
+			path:   "/contexts",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:topic-value", 1, 2, productSchema)
+				// Soft-delete the contexted subject
+				req, _ := http.NewRequest(http.MethodDelete, r.URL()+"/subjects/:.myctx:topic-value", http.NoBody)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatalf("setup failed: could not delete subject: %v", err)
+				}
+				resp.Body.Close()
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `["."]`,
+		},
+		{
+			name:   "GET /contexts - contextPrefix filter",
+			method: "GET",
+			path:   "/contexts?contextPrefix=.my",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:topic-value", 1, 2, productSchema)
+				r.SeedSchema(":.other:topic-value", 1, 3, sr.Schema{
+					Schema: `{"type":"record","name":"Other","fields":[{"name":"id","type":"string"}]}`,
+					Type:   sr.TypeAvro,
+				})
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[".myctx"]`,
+		},
+		{
+			name:   "GET /contexts - offset and limit",
+			method: "GET",
+			path:   "/contexts?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+				r.SeedSchema(":.a:topic", 1, 2, productSchema)
+				r.SeedSchema(":.b:topic", 1, 3, sr.Schema{
+					Schema: `{"type":"record","name":"B","fields":[{"name":"id","type":"string"}]}`,
+					Type:   sr.TypeAvro,
+				})
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[".a"]`, // sorted: [".", ".a", ".b"], offset=1 limit=1 → [".a"]
+		},
+
+		// DELETE /contexts/{context}
+		{
+			name:   "DELETE /contexts/.myctx - empty context returns 204",
+			method: "DELETE",
+			path:   "/contexts/.myctx",
+			setup: func(r *srfake.Registry) {
+				// No subjects in .myctx context
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusNoContent,
+		},
+		{
+			name:   "DELETE /contexts/.myctx - non-empty context returns error",
+			method: "DELETE",
+			path:   "/contexts/.myctx",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusConflict,
+		},
+
+		// GET /contexts/{context}/schemas/ids/{id}
+		{
+			name:   "GET /contexts/.myctx/schemas/ids/{id} - schema in context",
+			method: "GET",
+			path:   "/contexts/.myctx/schemas/ids/1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
+		{
+			name:   "GET /contexts/.myctx/schemas/ids/{id} - schema not in context returns 404",
+			method: "GET",
+			path:   "/contexts/.myctx/schemas/ids/1",
+			setup: func(r *srfake.Registry) {
+				// Schema is in default context, not .myctx
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusNotFound,
+		},
+
+		// GET /contexts/{context}/schemas/ids/{id}/versions
+		{
+			name:   "GET /contexts/.myctx/schemas/ids/{id}/versions - versions in context",
+			method: "GET",
+			path:   "/contexts/.myctx/schemas/ids/1/versions",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"subject":":.myctx:topic-value","version":1}]`,
+		},
+		{
+			name:   "GET /contexts/.myctx/schemas/ids/{id}/versions - no versions in context returns 404",
+			method: "GET",
+			path:   "/contexts/.myctx/schemas/ids/1/versions",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusNotFound,
+		},
+
+		// GET /contexts/{context}/schemas/ids/{id}/subjects
+		{
+			name:   "GET /contexts/.myctx/schemas/ids/{id}/subjects - subjects in context",
+			method: "GET",
+			path:   "/contexts/.myctx/schemas/ids/1/subjects",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[":.myctx:topic-value"]`,
+		},
+		{
+			name:   "GET /contexts/.myctx/schemas/ids/{id}/subjects - no subjects in context returns 404",
+			method: "GET",
+			path:   "/contexts/.myctx/schemas/ids/1/subjects",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusNotFound,
+		},
+
+		// GET /contexts/{context}/subjects
+		{
+			name:   "GET /contexts/.myctx/subjects - subjects in context",
+			method: "GET",
+			path:   "/contexts/.myctx/subjects",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:other-topic", 1, 2, productSchema)
+				r.SeedSchema("plain-topic", 1, 3, sr.Schema{
+					Schema: `{"type":"record","name":"Plain","fields":[{"name":"id","type":"string"}]}`,
+					Type:   sr.TypeAvro,
+				})
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[":.myctx:other-topic", ":.myctx:topic-value"]`,
+		},
+		{
+			name:   "GET /contexts/.myctx/subjects - no subjects in context returns empty array",
+			method: "GET",
+			path:   "/contexts/.myctx/subjects",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[]`,
+		},
+
+		// Context-prefixed operations (via middleware stripping)
+		{
+			name:   "POST /contexts/.myctx/subjects/{s}/versions - register schema in context",
+			method: "POST",
+			path:   "/contexts/.myctx/subjects/:.myctx:topic-value/versions",
+			body:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup:  func(r *srfake.Registry) {},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 1}`,
+		},
+		{
+			name:   "GET /contexts/.myctx/subjects/{s}/versions - list versions in context",
+			method: "GET",
+			path:   "/contexts/.myctx/subjects/:.myctx:topic-value/versions",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:topic-value", 2, 2, userSchemaV2)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[1, 2]`,
+		},
+		{
+			name:   "GET /contexts/.myctx/subjects/{s}/versions/{v} - get version in context",
+			method: "GET",
+			path:   "/contexts/.myctx/subjects/:.myctx:topic-value/versions/1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"subject":":.myctx:topic-value","version":1,"id":1,"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
+		{
+			name:   "DELETE /contexts/.myctx/subjects/{s} - delete subject in context",
+			method: "DELETE",
+			path:   "/contexts/.myctx/subjects/:.myctx:topic-value",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[1]`,
+		},
+		{
+			name:   "GET /contexts/.myctx/config - get global config in context",
+			method: "GET",
+			path:   "/contexts/.myctx/config",
+			setup:  func(r *srfake.Registry) {},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"compatibilityLevel": "BACKWARD"}`,
+		},
+		{
+			name:   "GET /contexts/.myctx/schemas/ids/{id}/schema - get raw schema by ID in context",
+			method: "GET",
+			path:   "/contexts/.myctx/schemas/ids/1/schema",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := srfake.New()
+			t.Cleanup(reg.Close)
+			client := &http.Client{}
+
+			if tc.setup != nil {
+				tc.setup(reg)
+			}
+
+			var reqBody io.Reader = http.NoBody
+			if tc.body != "" {
+				reqBody = strings.NewReader(tc.body)
+			}
+			req, err := http.NewRequest(tc.method, reg.URL()+tc.path, reqBody)
+			if err != nil {
+				t.Fatalf("Failed to create request: %v", err)
+			}
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/vnd.schemaregistry.v1+json")
+			}
+
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Failed to execute request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tc.wantStatus {
+				bodyBytes, _ := io.ReadAll(resp.Body)
+				t.Errorf("got status %d, want %d\nbody: %s", resp.StatusCode, tc.wantStatus, string(bodyBytes))
+				return
+			}
+
+			if tc.wantBody != "" {
+				bodyBytes, _ := io.ReadAll(resp.Body)
+				if !jsonEqual(string(bodyBytes), tc.wantBody) {
+					t.Errorf("body mismatch:\ngot:  %s\nwant: %s", string(bodyBytes), tc.wantBody)
+				}
+			}
+		})
+	}
 }
 
 // jsonEqual compares two JSON strings for semantic equality, ignoring

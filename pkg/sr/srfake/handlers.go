@@ -1,13 +1,22 @@
 package srfake
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/twmb/franz-go/pkg/sr"
 )
+
+type ctxKey struct{}
+
+func requestContext(req *http.Request) string {
+	v, _ := req.Context().Value(ctxKey{}).(string)
+	return v
+}
 
 /* -------------------------------------------------------------------------
    Middleware
@@ -42,6 +51,56 @@ func (r *Registry) interceptorMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func (r *Registry) contextMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		p := req.URL.Path
+		if !strings.HasPrefix(p, "/contexts/") {
+			next.ServeHTTP(w, req)
+			return
+		}
+
+		rest := p[len("/contexts/"):]
+		slash := strings.IndexByte(rest, '/')
+		if slash < 0 {
+			next.ServeHTTP(w, req)
+			return
+		}
+
+		name := rest[:slash]
+		remaining := rest[slash:]
+
+		ctx := context.WithValue(req.Context(), ctxKey{}, name)
+		req = req.WithContext(ctx)
+		req.URL.Path = remaining
+		if req.URL.RawPath != "" {
+			raw := req.URL.RawPath
+			if strings.HasPrefix(raw, "/contexts/") {
+				rawRest := raw[len("/contexts/"):]
+				if i := strings.IndexByte(rawRest, '/'); i >= 0 {
+					req.URL.RawPath = rawRest[i:]
+				}
+			}
+		}
+
+		next.ServeHTTP(w, req)
+	})
+}
+
+// Caller must hold r.mu (at least RLock).
+func (r *Registry) schemaInContext(id int, ctx string) bool {
+	for subject, subj := range r.subjects {
+		if subj.isDeleted || subjectContext(subject) != ctx {
+			continue
+		}
+		for _, vd := range subj.versions {
+			if !vd.isDeleted && vd.schema.ID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 /* -------------------------------------------------------------------------
    Handlers – Schemas
    ------------------------------------------------------------------------- */
@@ -55,11 +114,18 @@ func (r *Registry) handleGetSchemaByID(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	sch, ok := r.schemasByID[id]
-	r.mu.RUnlock()
 	if !ok {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
+	}
+	if ctx := requestContext(req); ctx != "" {
+		if !r.schemaInContext(id, ctx) {
+			r.handleAPIError(w, errSchemaNotFound())
+			return
+		}
 	}
 	respondJSON(w, http.StatusOK, sch)
 }
@@ -73,11 +139,18 @@ func (r *Registry) handleGetRawSchemaByID(w http.ResponseWriter, req *http.Reque
 		return
 	}
 	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	sch, ok := r.schemasByID[id]
-	r.mu.RUnlock()
 	if !ok {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
+	}
+	if ctx := requestContext(req); ctx != "" {
+		if !r.schemaInContext(id, ctx) {
+			r.handleAPIError(w, errSchemaNotFound())
+			return
+		}
 	}
 	respondJSON(w, http.StatusOK, sch.Schema)
 }
@@ -90,6 +163,8 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
+
+	ctx := requestContext(req)
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -106,6 +181,9 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 		if subj.isDeleted {
 			continue
 		}
+		if ctx != "" && subjectContext(subject) != ctx {
+			continue
+		}
 		for version, versionData := range subj.versions {
 			if versionData.schema.ID == id {
 				// Skip soft-deleted versions
@@ -120,7 +198,60 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 		}
 	}
 
+	if ctx != "" && len(usages) == 0 {
+		r.handleAPIError(w, errSchemaNotFound())
+		return
+	}
+
 	respondJSON(w, http.StatusOK, usages)
+}
+
+// handleGetSubjectsByID emulates GET /schemas/ids/{id}/subjects.
+func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Request) {
+	id, err := strconv.Atoi(req.PathValue("id"))
+	if err != nil {
+		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
+		return
+	}
+
+	ctx := requestContext(req)
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if _, ok := r.schemasByID[id]; !ok {
+		r.handleAPIError(w, errSchemaNotFound())
+		return
+	}
+
+	subjectSet := make(map[string]bool)
+	for subject, subj := range r.subjects {
+		if subj.isDeleted {
+			continue
+		}
+		if ctx != "" && subjectContext(subject) != ctx {
+			continue
+		}
+		for _, vd := range subj.versions {
+			if !vd.isDeleted && vd.schema.ID == id {
+				subjectSet[subject] = true
+				break
+			}
+		}
+	}
+
+	if ctx != "" && len(subjectSet) == 0 {
+		r.handleAPIError(w, errSchemaNotFound())
+		return
+	}
+
+	subjects := make([]string, 0, len(subjectSet))
+	for s := range subjectSet {
+		subjects = append(subjects, s)
+	}
+	sort.Strings(subjects)
+
+	respondJSON(w, http.StatusOK, subjects)
 }
 
 /* -------------------------------------------------------------------------
@@ -131,6 +262,7 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 // subjects.
 func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
 	includeDeleted := req.URL.Query().Get("deleted") == "true"
+	ctx := requestContext(req)
 
 	r.mu.RLock()
 	subjects := make([]string, 0, len(r.subjects))
@@ -138,10 +270,16 @@ func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
 		if !includeDeleted && subj.isDeleted {
 			continue
 		}
+		if ctx != "" && subjectContext(s) != ctx {
+			continue
+		}
 		subjects = append(subjects, s)
 	}
 	r.mu.RUnlock()
 
+	if subjects == nil {
+		subjects = []string{}
+	}
 	sort.Strings(subjects)
 	respondJSON(w, http.StatusOK, subjects)
 }
@@ -475,6 +613,84 @@ func (r *Registry) handleDeleteSubjectConfig(w http.ResponseWriter, req *http.Re
 // mode.
 func (*Registry) handleGetMode(w http.ResponseWriter, _ *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"mode": "READWRITE"})
+}
+
+/* -------------------------------------------------------------------------
+   Handlers – Contexts
+   ------------------------------------------------------------------------- */
+
+// handleGetContexts emulates GET /contexts.
+func (r *Registry) handleGetContexts(w http.ResponseWriter, req *http.Request) {
+	contextPrefix := req.URL.Query().Get("contextPrefix")
+	offsetStr := req.URL.Query().Get("offset")
+	limitStr := req.URL.Query().Get("limit")
+
+	r.mu.RLock()
+	ctxSet := map[string]bool{".": true}
+	for subject, subj := range r.subjects {
+		if subj.isDeleted {
+			continue
+		}
+		hasActive := false
+		for _, vd := range subj.versions {
+			if !vd.isDeleted {
+				hasActive = true
+				break
+			}
+		}
+		if !hasActive {
+			continue
+		}
+		ctxSet[subjectContext(subject)] = true
+	}
+	r.mu.RUnlock()
+
+	contexts := make([]string, 0, len(ctxSet))
+	for c := range ctxSet {
+		if contextPrefix == "" || strings.HasPrefix(c, contextPrefix) {
+			contexts = append(contexts, c)
+		}
+	}
+	sort.Strings(contexts)
+
+	offset := 0
+	if offsetStr != "" {
+		if v, err := strconv.Atoi(offsetStr); err == nil && v > 0 {
+			offset = v
+		}
+	}
+	if offset > len(contexts) {
+		offset = len(contexts)
+	}
+	contexts = contexts[offset:]
+
+	if limitStr != "" {
+		if v, err := strconv.Atoi(limitStr); err == nil && v >= 0 && v < len(contexts) {
+			contexts = contexts[:v]
+		}
+	}
+
+	respondJSON(w, http.StatusOK, contexts)
+}
+
+// handleDeleteContext emulates DELETE /contexts/{context}.
+func (r *Registry) handleDeleteContext(w http.ResponseWriter, req *http.Request) {
+	ctx := req.PathValue("context")
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for subject, subj := range r.subjects {
+		if subj.isDeleted {
+			continue
+		}
+		if subjectContext(subject) == ctx {
+			r.handleAPIError(w, errContextNotEmpty(ctx))
+			return
+		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 /* -------------------------------------------------------------------------

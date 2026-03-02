@@ -63,12 +63,13 @@ func (e *ResponseError) SchemaError() *Error {
 // Client talks to a schema registry and contains helper functions to serialize
 // and deserialize objects according to schemas.
 type Client struct {
-	urls      []string
-	httpcl    *http.Client
-	dialTLS   *tls.Config
-	ua        string
-	defParams Param
-	opts      []ClientOpt
+	urls       []string
+	httpcl     *http.Client
+	dialTLS    *tls.Config
+	ua         string
+	defParams  Param
+	defContext string
+	opts       []ClientOpt
 	logFn     func(int8, string, ...any)
 	logLvlFn  func() int8
 
@@ -217,6 +218,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cl.bearerToken}
 	case namefn(PreReq):
 		return []any{cl.preReq}
+	case namefn(DefaultSchemaContext):
+		return []any{cl.defContext}
 	case namefn(DefaultParams):
 		return []any{cl.defParams}
 	case namefn(LogFn):
@@ -228,6 +231,21 @@ func (cl *Client) OptValues(opt any) []any {
 	default:
 		return nil
 	}
+}
+
+var schemaContextKey = "context_key"
+
+// WithSchemaContext returns a context that scopes schema registry requests
+// to the given context name. For client-wide scoping, use [DefaultSchemaContext].
+func WithSchemaContext(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, &schemaContextKey, name)
+}
+
+func (cl *Client) schemaContext(ctx context.Context) string {
+	if name, _ := ctx.Value(&schemaContextKey).(string); name != "" {
+		return name
+	}
+	return cl.defContext
 }
 
 // Do sends an HTTP request to the schema registry using the given method and
@@ -259,6 +277,11 @@ func (cl *Client) delete(ctx context.Context, path string, into any) error {
 }
 
 func (cl *Client) do(ctx context.Context, method, path string, v, into any) error {
+	ctxName := cl.schemaContext(ctx)
+	if ctxName != "" {
+		path = "/contexts/" + url.PathEscape(ctxName) + path
+	}
+
 	urls := cl.urls
 
 start:

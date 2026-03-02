@@ -9,9 +9,6 @@ import (
 	"sync/atomic"
 )
 
-// TODO
-// * /contexts (get) // looks niche right now
-
 // This file is an implementation of:
 //
 //     https://docs.confluent.io/platform/current/schema-registry/develop/api.html
@@ -164,6 +161,22 @@ func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSch
 	}
 
 	return luniq, runiq, common
+}
+
+// Contexts returns the contexts available in the schema registry.
+//
+// This supports params [ContextPrefix], [Offset], and [Limit].
+func (cl *Client) Contexts(ctx context.Context) ([]string, error) {
+	// GET /contexts
+	var contexts []string
+	err := cl.get(ctx, "/contexts", &contexts)
+	return contexts, err
+}
+
+// DeleteContext deletes a context from the schema registry.
+func (cl *Client) DeleteContext(ctx context.Context, context_ string) error {
+	// DELETE /contexts/{context}
+	return cl.delete(ctx, fmt.Sprintf("/contexts/%s", url.PathEscape(context_)), nil)
 }
 
 // Subjects returns subjects available in the registry.
@@ -412,8 +425,18 @@ func (cl *Client) CreateSchemaWithIDAndVersion(ctx context.Context, subject stri
 	if err != nil {
 		return SubjectSchema{}, err
 	}
+	// When using schema contexts, the registry stores subjects with a
+	// context prefix (e.g. ":.myctx:subject"). We need to match against
+	// both the plain subject and the context-prefixed form.
+	ctxName, _ := ctx.Value(&schemaContextKey).(string)
+	if ctxName == "" {
+		ctxName = cl.defContext
+	}
 	for _, usage := range usages {
 		if usage.Subject == subject {
+			return usage, nil
+		}
+		if ctxName != "" && usage.Subject == ":"+ctxName+":"+subject {
 			return usage, nil
 		}
 	}
