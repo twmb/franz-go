@@ -1794,11 +1794,32 @@ start:
 		}
 	}
 
+	// Validate the response against what we requested: drop any
+	// topic or partition the broker returned that we did not ask for.
+	// A buggy broker returning extra partitions can cause a data race
+	// if those partitions are already being consumed (see #1271).
 	groupTopics := g.tps.load()
-	for fetchedTopic := range offsets {
+	for fetchedTopic, topicOffsets := range offsets {
 		if !groupTopics.hasTopic(fetchedTopic) {
 			delete(offsets, fetchedTopic)
 			g.cfg.logger.Log(LogLevelWarn, "member was assigned topic that we did not ask for in ConsumeTopics! skipping assigning this topic!", "group", g.cfg.group, "topic", fetchedTopic)
+			continue
+		}
+		addedParts, ok := added[fetchedTopic]
+		if !ok {
+			delete(offsets, fetchedTopic)
+			g.cfg.logger.Log(LogLevelWarn, "broker returned topic in OffsetFetch response that we did not request, skipping", "group", g.cfg.group, "topic", fetchedTopic)
+			continue
+		}
+		requested := make(map[int32]struct{}, len(addedParts))
+		for _, p := range addedParts {
+			requested[p] = struct{}{}
+		}
+		for partition := range topicOffsets {
+			if _, ok := requested[partition]; !ok {
+				delete(topicOffsets, partition)
+				g.cfg.logger.Log(LogLevelWarn, "broker returned partition in OffsetFetch response that we did not request, skipping", "group", g.cfg.group, "topic", fetchedTopic, "partition", partition)
+			}
 		}
 	}
 
