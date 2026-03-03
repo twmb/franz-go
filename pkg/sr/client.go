@@ -281,7 +281,7 @@ func (cl *Client) delete(ctx context.Context, path string, into any) error {
 
 func (cl *Client) do(ctx context.Context, method, path string, v, into any) error {
 	ctxName := cl.schemaContext(ctx)
-	if ctxName != "" {
+	if ctxName != "" && !strings.HasPrefix(path, "/contexts/") {
 		path = "/contexts/" + url.PathEscape(ctxName) + path
 	}
 
