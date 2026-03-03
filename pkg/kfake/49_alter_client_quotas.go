@@ -89,6 +89,9 @@ func (c *Cluster) handleAlterClientQuotas(creq *clientReq) (kmsg.Response, error
 		resp.Entries = append(resp.Entries, re)
 	}
 
+	if !req.ValidateOnly {
+		c.persistQuotasState()
+	}
 	return resp, nil
 }
 

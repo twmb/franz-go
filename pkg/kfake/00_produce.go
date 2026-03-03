@@ -239,6 +239,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					}
 
 					batchptr := pd.pushBatch(len(rp.Records), b, txnal)
+					c.persistBatch(pd, batchptr)
 					if txnal {
 						pidinf.txBatches = append(pidinf.txBatches, batchptr)
 						// Track bytes for readCommitted watcher accounting at commit time
@@ -250,7 +251,8 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				// Non-idempotent produce, no pids validation needed
 				baseOffset = pd.highWatermark
 				lso = pd.logStartOffset
-				pd.pushBatch(len(rp.Records), b, txnal)
+				batchptr := pd.pushBatch(len(rp.Records), b, txnal)
+				c.persistBatch(pd, batchptr)
 			}
 
 			if errCode != 0 {

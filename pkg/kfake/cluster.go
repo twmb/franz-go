@@ -49,8 +49,23 @@ type (
 		fetchSessions fetchSessions
 		compactTicker *time.Ticker
 
-		die  chan struct{}
-		dead atomic.Bool
+		// Persistence
+		fs            fs
+		groupsLogMu   sync.Mutex
+		groupsLogFile file
+		pidsLogFile   file
+
+		// crashAbortedPIDs collects producer IDs that had in-flight
+		// transactions during a crash. Populated during loadPartitions
+		// (full replay path), consumed after loadPIDsLog to bump
+		// their epochs. Protected by crashAbortedPIDsMu since
+		// loadPartitions runs concurrent goroutines.
+		crashAbortedPIDsMu sync.Mutex
+		crashAbortedPIDs   map[int64]struct{}
+
+		die     chan struct{}
+		dead    atomic.Bool
+		running atomic.Bool
 	}
 
 	broker struct {
@@ -136,6 +151,8 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		quotas: make(map[string]quotaEntry),
 		telem:  make(map[[16]byte]int32),
 
+		fs: osFS{},
+
 		die: make(chan struct{}),
 	}
 	{
@@ -215,24 +232,45 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 	c.controller = c.bs[len(c.bs)-1]
 
-	seedTopics := make(map[string]int32)
-	for _, sts := range cfg.seedTopics {
-		p := sts.p
-		if p < 1 {
-			p = int32(cfg.defaultNumParts)
+	// Try to load persisted state from disk (after brokers are created,
+	// since partition leader assignment needs c.bs)
+	var loaded bool
+	if cfg.dataDir != "" {
+		loaded, err = c.loadFromDisk()
+		if err != nil {
+			return nil, fmt.Errorf("loading persisted state: %w", err)
 		}
-		for _, t := range sts.ts {
-			seedTopics[t] = p
-		}
-	}
-	for t, p := range seedTopics {
-		c.data.mkt(t, int(p), -1, nil)
 	}
 
-	for _, a := range cfg.seedACLs {
-		c.acls.add(a)
+	if !loaded {
+		seedTopics := make(map[string]int32)
+		for _, sts := range cfg.seedTopics {
+			p := sts.p
+			if p < 1 {
+				p = int32(cfg.defaultNumParts)
+			}
+			for _, t := range sts.ts {
+				seedTopics[t] = p
+			}
+		}
+		for t, p := range seedTopics {
+			c.data.mkt(t, int(p), -1, nil)
+		}
+
+		for _, a := range cfg.seedACLs {
+			c.acls.add(a)
+		}
+
+		// For SyncWrites, persist the initial state so crash recovery
+		// can find meta.json, topics.json, etc.
+		if cfg.dataDir != "" {
+			if err = c.saveToDisk(); err != nil {
+				return nil, fmt.Errorf("persisting initial state: %w", err)
+			}
+		}
 	}
 
+	c.running.Store(true)
 	go c.run()
 
 	return c, nil
@@ -254,10 +292,41 @@ func (c *Cluster) Close() {
 	if c.dead.Swap(true) {
 		return
 	}
-	close(c.die)
+
+	// Stop listeners first to prevent new connections
 	for _, b := range c.bs {
 		b.ln.Close()
 	}
+
+	// If persistence is configured, persist state before dying.
+	if c.cfg.dataDir != "" {
+		if c.running.Load() {
+			// run() is alive - send through adminCh so it runs
+			// single-threaded. The send must block - a non-blocking
+			// default would race with run() handling a request.
+			done := make(chan struct{})
+			c.adminCh <- func() {
+				for pidinf := range c.pids.txs {
+					if pidinf.inTx {
+						pidinf.endTx(false)
+					}
+				}
+				if err := c.saveToDisk(); err != nil {
+					c.cfg.logger.Logf(LogLevelError, "persist to disk: %v", err)
+				}
+				c.closeOpenFiles()
+				close(done)
+			}
+			<-done
+		} else {
+			// run() was never started (e.g., NewCluster failed).
+			// No concurrent state to worry about - just clean up
+			// open file handles.
+			c.closeOpenFiles()
+		}
+	}
+
+	close(c.die)
 }
 
 func newListener(port int, tc *tls.Config, fn func(network, address string) (net.Listener, error)) (net.Listener, error) {

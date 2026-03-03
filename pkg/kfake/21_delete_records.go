@@ -78,6 +78,10 @@ func (c *Cluster) handleDeleteRecords(creq *clientReq) (kmsg.Response, error) {
 				donep(rt.Topic, rp.Partition, kerr.OffsetOutOfRange.Code)
 				continue
 			}
+			// logStartOffset is not persisted live. On crash
+			// recovery without a snapshot it resets to 0,
+			// matching real Kafka unclean leader election.
+			// The snapshot captures it on clean shutdown.
 			pd.logStartOffset = to
 			pd.trimLeft()
 			sp := donep(rt.Topic, rp.Partition, 0)

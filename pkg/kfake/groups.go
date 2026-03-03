@@ -230,6 +230,7 @@ func (c *Cluster) notifyTopicChange() {
 				g.lastTopicMeta = snap
 				g.computeTargetAssignment(snap)
 				g.updateConsumerStateField()
+				g.persistMeta848()
 			}
 		}:
 		case <-g.quitCh:
@@ -728,6 +729,12 @@ func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 				continue
 			}
 			g.commits.delp(t.Topic, p.Partition)
+			g.c.persistGroupEntry(groupLogEntry{
+				Type:  "delete",
+				Group: g.name,
+				Topic: t.Topic,
+				Part:  p.Partition,
+			})
 			donep(t.Topic, p.Partition, 0)
 		}
 	}
@@ -920,6 +927,7 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 		}
 		if req.InstanceID != nil {
 			g.staticMembers[*req.InstanceID] = memberID
+			g.persistStaticMember(*req.InstanceID, memberID)
 		}
 		if req.Version >= 4 {
 			g.addPendingRebalance(m)
@@ -991,6 +999,7 @@ func (g *group) replaceStaticMember(oldMemberID string, creq *clientReq, req *km
 			join:       req,
 		}
 		g.staticMembers[*req.InstanceID] = memberID
+		g.persistStaticMember(*req.InstanceID, memberID)
 		if p, ok := g.pending[oldMemberID]; ok {
 			g.stopPending(p)
 		}
@@ -1033,6 +1042,7 @@ func (g *group) replaceStaticMember(oldMemberID string, creq *clientReq, req *km
 
 	// Register new member in static mapping.
 	g.staticMembers[*req.InstanceID] = memberID
+	g.persistStaticMember(*req.InstanceID, memberID)
 	g.members[memberID] = m
 	for _, p := range m.join.Protocols {
 		g.protocols[p.Name]++
@@ -1316,6 +1326,15 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 					leaderEpoch: p.LeaderEpoch,
 					metadata:    p.Metadata,
 				})
+				g.c.persistGroupEntry(groupLogEntry{
+					Type:     "commit",
+					Group:    g.name,
+					Topic:    t.Topic,
+					Part:     p.Partition,
+					Offset:   p.Offset,
+					Epoch:    p.LeaderEpoch,
+					Metadata: p.Metadata,
+				})
 			}
 		}
 		if m != nil {
@@ -1391,6 +1410,7 @@ func (g *group) completeRebalance() {
 	}
 	if len(g.members) == 0 {
 		g.state = groupEmpty
+		g.persistClassicMeta()
 		return
 	}
 	g.state = groupCompletingRebalance
@@ -1425,6 +1445,7 @@ func (g *group) completeRebalance() {
 		}
 	}
 	g.protocol = bestProto
+	g.persistClassicMeta()
 
 	// Track which members need to send SyncGroup.
 	g.pendingSyncIDs = make(map[string]struct{}, len(g.members))
@@ -1569,6 +1590,7 @@ func (g *group) removeMember(m *groupMember) {
 	delete(g.members, m.memberID)
 	if m.instanceID != nil {
 		delete(g.staticMembers, *m.instanceID)
+		g.persistStaticMemberDelete(*m.instanceID)
 	}
 	if m.t != nil {
 		m.t.Stop()
@@ -1989,6 +2011,10 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 	if g.groupEpoch == 0 || oldTopics == nil || !slices.Equal(oldTopics, m.subscribedTopics) {
 		g.groupEpoch++
 		g.computeTargetAssignment(g.lastTopicMeta)
+		g.persistMeta848()
+	}
+	if m.instanceID != nil {
+		g.persistStaticMember(*m.instanceID, memberID)
 	}
 
 	// Compute initial assignment for this new member.
@@ -2044,6 +2070,7 @@ func (g *group) updateMemberSubscriptions(m *consumerMember, req *kmsg.ConsumerG
 		}
 		m.serverAssignor = *req.ServerAssignor
 		g.assignorName = m.serverAssignor
+		changed = true
 	}
 	return changed, 0
 }
@@ -2067,6 +2094,7 @@ func (g *group) consumerRejoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeat
 	if hasSubscriptionChanged {
 		g.groupEpoch++
 		g.computeTargetAssignment(g.lastTopicMeta)
+		g.persistMeta848()
 	}
 
 	g.atConsumerSessionTimeout(m)
@@ -2101,11 +2129,13 @@ func (g *group) consumerLeave(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kms
 	// Full leave (-1): remove from static membership too.
 	if m.instanceID != nil {
 		delete(g.staticMembers, *m.instanceID)
+		g.persistStaticMemberDelete(*m.instanceID)
 	}
 
 	g.groupEpoch++
 	g.computeTargetAssignment(g.lastTopicMeta)
 	g.updateConsumerStateField()
+	g.persistMeta848()
 
 	resp.MemberID = &req.MemberID
 	resp.MemberEpoch = -1
@@ -2205,6 +2235,7 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 	if hasSubscriptionChanged {
 		g.groupEpoch++
 		g.computeTargetAssignment(g.lastTopicMeta)
+		g.persistMeta848()
 	}
 	resp.MemberID = &req.MemberID
 
@@ -2855,6 +2886,46 @@ func (g *group) updateConsumerStateField() {
 	g.state = groupStable
 }
 
+// persistMeta848 persists the current 848 group epoch to the append log.
+func (g *group) persistMeta848() {
+	g.c.persistGroupEntry(groupLogEntry{
+		Type:       "meta848",
+		Group:      g.name,
+		GroupType:  g.typ,
+		Assignor:   g.assignorName,
+		GroupEpoch: g.groupEpoch,
+	})
+}
+
+func (g *group) persistClassicMeta() {
+	g.c.persistGroupEntry(groupLogEntry{
+		Type:       "meta",
+		Group:      g.name,
+		GroupType:  g.typ,
+		ProtoType:  g.protocolType,
+		Protocol:   g.protocol,
+		Generation: g.generation,
+	})
+}
+
+func (g *group) persistStaticMember(instanceID, memberID string) {
+	g.c.persistGroupEntry(groupLogEntry{
+		Type:       "static",
+		Group:      g.name,
+		InstanceID: instanceID,
+		MemberID:   memberID,
+	})
+}
+
+func (g *group) persistStaticMemberDelete(instanceID string) {
+	g.c.persistGroupEntry(groupLogEntry{
+		Type:       "static",
+		Group:      g.name,
+		InstanceID: instanceID,
+		// Empty MemberID signals deletion.
+	})
+}
+
 // evictConsumerMember fences and removes a consumer member, then
 // recomputes the target assignment.
 func (g *group) evictConsumerMember(m *consumerMember) {
@@ -2863,6 +2934,7 @@ func (g *group) evictConsumerMember(m *consumerMember) {
 	g.groupEpoch++
 	g.computeTargetAssignment(g.lastTopicMeta)
 	g.updateConsumerStateField()
+	g.persistMeta848()
 }
 
 // atConsumerSessionTimeout sets up the session timeout for a consumer
@@ -3009,6 +3081,15 @@ func (g *group) handleConsumerOffsetCommit(creq *clientReq) *kmsg.OffsetCommitRe
 				offset:      p.Offset,
 				leaderEpoch: p.LeaderEpoch,
 				metadata:    p.Metadata,
+			})
+			g.c.persistGroupEntry(groupLogEntry{
+				Type:     "commit",
+				Group:    g.name,
+				Topic:    t.Topic,
+				Part:     p.Partition,
+				Offset:   p.Offset,
+				Epoch:    p.LeaderEpoch,
+				Metadata: p.Metadata,
 			})
 		}
 	}

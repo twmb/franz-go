@@ -49,6 +49,9 @@ type cfg struct {
 	superusers    map[string]struct{}
 	seedACLs      []acl
 	brokerConfigs map[string]string
+
+	dataDir    string
+	syncWrites bool
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
@@ -210,6 +213,21 @@ func BrokerConfigs(configs map[string]string) Opt {
 			cfg.brokerConfigs[k] = v
 		}
 	}}
+}
+
+// DataDir enables disk persistence: on Close the cluster snapshots all state
+// to the given directory, and on NewCluster it reloads persisted state from
+// that directory if it exists. The directory is created if needed.
+func DataDir(dir string) Opt {
+	return opt{func(cfg *cfg) { cfg.dataDir = dir }}
+}
+
+// SyncWrites enables live-sync mode: every mutation (produce, group commit,
+// PID event, etc.) is persisted and fsynced before the response is sent.
+// This allows crash recovery at any point, not just clean shutdown.
+// SyncWrites requires DataDir; without DataDir it is a no-op.
+func SyncWrites() Opt {
+	return opt{func(cfg *cfg) { cfg.syncWrites = true }}
 }
 
 // User adds a SASL user with optional ACLs. Unlike Superuser, this user is

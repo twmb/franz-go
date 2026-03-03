@@ -161,6 +161,7 @@ func (pids *pids) handleTimeout() {
 				minPid.txid, minPid.id, minPid.epoch, minPid.txTimeout, elapsed)
 			minPid = pids.bumpEpoch(minPid)
 			minPid.endTx(false)
+			pids.c.persistPIDEntry(pidLogEntry{Type: "timeout", PID: minPid.id, Epoch: minPid.epoch})
 		}
 	}
 	pids.expireTransactionalIDs()
@@ -193,6 +194,7 @@ func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
 		id, epoch := pids.create(nil, 0)
 		resp.ProducerID = id
 		resp.ProducerEpoch = epoch
+		pids.c.persistPIDEntry(pidLogEntry{Type: "init", PID: id, Epoch: epoch})
 		return resp
 	}
 
@@ -219,6 +221,7 @@ func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
 		pidinf.lastActive = time.Now()
 		resp.ProducerID = pidinf.id
 		resp.ProducerEpoch = pidinf.epoch
+		pids.c.persistPIDEntry(pidLogEntry{Type: "init", PID: pidinf.id, Epoch: pidinf.epoch, TxID: pidinf.txid, Timeout: pidinf.txTimeout})
 		return resp
 	}
 
@@ -227,6 +230,7 @@ func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
 	id, epoch := pids.create(req.TransactionalID, req.TransactionTimeoutMillis)
 	resp.ProducerID = id
 	resp.ProducerEpoch = epoch
+	pids.c.persistPIDEntry(pidLogEntry{Type: "init", PID: id, Epoch: epoch, TxID: *req.TransactionalID, Timeout: req.TransactionTimeoutMillis})
 	return resp
 }
 
@@ -524,6 +528,7 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 			pidinf.lastWasCommit = false
 			resp.ProducerID = pidinf.id
 			resp.ProducerEpoch = pidinf.epoch
+			pids.c.persistPIDEntry(pidLogEntry{Type: "init", PID: pidinf.id, Epoch: pidinf.epoch, TxID: pidinf.txid, Timeout: pidinf.txTimeout})
 			return resp
 		}
 		// Retry detection: return success if the retry matches the
@@ -543,11 +548,15 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 			req.ProducerID, req.ProducerEpoch, elapsed.Milliseconds(), nBatches, nGroups)
 	}
 
+	commit := req.Commit
+	pids.c.persistPIDEntry(pidLogEntry{Type: "endtx", PID: pidinf.id, Epoch: pidinf.epoch, Commit: &commit})
+
 	// KIP-890: For v5+ clients, bump epoch and return new ID/epoch.
 	if req.Version >= 5 {
 		pidinf = pids.bumpEpoch(pidinf)
 		resp.ProducerID = pidinf.id
 		resp.ProducerEpoch = pidinf.epoch
+		pids.c.persistPIDEntry(pidLogEntry{Type: "init", PID: pidinf.id, Epoch: pidinf.epoch, TxID: pidinf.txid, Timeout: pidinf.txTimeout})
 	}
 
 	return resp
@@ -695,6 +704,7 @@ func (pidinf *pidinfo) endTx(commit bool) {
 	}
 	pidinf.txParts.each(func(t string, p int32, pd *partData) {
 		controlBatch := pd.pushBatch(len(benc), b, false) // control record is not itself transactional
+		pidinf.pids.c.persistBatch(pd, controlBatch)
 		if !commit {
 			firstOffset, ok := pidinf.txPartFirstOffsets.getp(t, p)
 			if ok {
@@ -726,16 +736,27 @@ func (pidinf *pidinfo) endTx(commit bool) {
 			if !hasOffsets || len(groupOffsets) == 0 {
 				continue
 			}
-			var g *group
-			if pidinf.pids.c.groups.gs != nil {
-				g = pidinf.pids.c.groups.gs[groupID]
+			if pidinf.pids.c.groups.gs == nil {
+				pidinf.pids.c.groups.gs = make(map[string]*group)
 			}
+			g := pidinf.pids.c.groups.gs[groupID]
 			if g == nil {
-				continue
+				g = pidinf.pids.c.groups.newGroup(groupID)
+				pidinf.pids.c.groups.gs[groupID] = g
+				go g.manage(func() {})
 			}
 			g.waitControl(func() {
 				groupOffsets.each(func(t string, p int32, oc *offsetCommit) {
 					g.commits.set(t, p, *oc)
+					g.c.persistGroupEntry(groupLogEntry{
+						Type:     "commit",
+						Group:    g.name,
+						Topic:    t,
+						Part:     p,
+						Offset:   oc.offset,
+						Epoch:    oc.leaderEpoch,
+						Metadata: oc.metadata,
+					})
 				})
 			})
 		}

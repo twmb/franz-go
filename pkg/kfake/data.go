@@ -66,6 +66,12 @@ type (
 		watch map[*watchFetch]struct{}
 
 		createdAt time.Time
+
+		// Persistence - segment state (only used when dataDir is set).
+		activeSegFile file    // open handle for active segment (live sync)
+		activeSegBase int64   // base offset of the active segment
+		activeSegSize int64   // current size of the active segment in bytes
+		segmentBases  []int64 // base offsets of all segment files, sorted
 	}
 
 	followers []int32
@@ -141,7 +147,8 @@ func (d *data) mkt(t string, nparts, nreplicas int, configs map[string]*string) 
 	}
 	for i := 0; i < nparts; i++ {
 		p := int32(i)
-		d.tps.mkp(t, p, d.c.newPartData(p))
+		pd := d.tps.mkp(t, p, d.c.newPartData(p))
+		pd.t = t
 	}
 }
 
@@ -449,6 +456,8 @@ var validTopicConfigs = map[string]string{
 	"min.insync.replicas":    "min.insync.replicas",
 	"retention.bytes":        "log.retention.bytes",
 	"retention.ms":           "log.retention.ms",
+	"segment.bytes":          "log.segment.bytes",
+	"segment.ms":             "log.roll.ms",
 }
 
 // All valid broker configs we support, as well as their equivalent
@@ -472,6 +481,8 @@ var validBrokerConfigs = map[string]string{
 	"transactional.id.expiration.ms":            "",
 	"log.retention.bytes":                       "retention.bytes",
 	"log.retention.ms":                          "retention.ms",
+	"log.segment.bytes":                         "segment.bytes",
+	"log.roll.ms":                               "segment.ms",
 	"message.max.bytes":                         "max.message.bytes",
 	"min.insync.replicas":                       "min.insync.replicas",
 	"sasl.enabled.mechanisms":                   "",
@@ -491,7 +502,6 @@ var defHeartbeatInterval = 5000
 // defSessionTimeout is the default group.consumer.session.timeout.ms.
 var defSessionTimeout = 45000
 
-
 // Default topic and broker configs. Topic/broker pairs that share the same
 // underlying setting (e.g. max.message.bytes / message.max.bytes) both
 // appear here so that DescribeConfigs returns the correct default for
@@ -506,6 +516,9 @@ var configDefaults = map[string]string{
 	"retention.bytes":        "-1",
 	"retention.ms":           "604800000",
 
+	"segment.bytes": "1073741824",
+	"segment.ms":    "604800000",
+
 	"transaction.max.timeout.ms":     "900000",
 	"transactional.id.expiration.ms": "604800000",
 
@@ -519,6 +532,8 @@ var configDefaults = map[string]string{
 	"group.min.session.timeout.ms":              "6000",
 	"group.max.session.timeout.ms":              "300000",
 	"log.dir":                                   defLogDir,
+	"log.segment.bytes":                         "1073741824",
+	"log.roll.ms":                               "604800000",
 	"log.message.timestamp.type":                "CreateTime",
 	"log.retention.bytes":                       "-1",
 	"log.retention.ms":                          "604800000",
@@ -542,6 +557,8 @@ var configTypes = map[string]kmsg.ConfigType{
 	"group.max.session.timeout.ms":              kmsg.ConfigTypeInt,
 	"log.cleaner.backoff.ms":                    kmsg.ConfigTypeLong,
 	"log.dir":                                   kmsg.ConfigTypeString,
+	"log.segment.bytes":                         kmsg.ConfigTypeInt,
+	"log.roll.ms":                               kmsg.ConfigTypeLong,
 	"log.message.timestamp.type":                kmsg.ConfigTypeString,
 	"log.retention.bytes":                       kmsg.ConfigTypeLong,
 	"log.retention.ms":                          kmsg.ConfigTypeLong,
@@ -551,6 +568,8 @@ var configTypes = map[string]kmsg.ConfigType{
 	"min.insync.replicas":                       kmsg.ConfigTypeInt,
 	"retention.bytes":                           kmsg.ConfigTypeLong,
 	"retention.ms":                              kmsg.ConfigTypeLong,
+	"segment.bytes":                             kmsg.ConfigTypeInt,
+	"segment.ms":                                kmsg.ConfigTypeLong,
 	"sasl.enabled.mechanisms":                   kmsg.ConfigTypeList,
 	"super.users":                               kmsg.ConfigTypeList,
 	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
