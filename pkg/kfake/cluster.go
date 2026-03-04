@@ -49,7 +49,11 @@ type (
 		fetchSessions fetchSessions
 		compactTicker *time.Ticker
 
-		// Persistence
+		// Persistence - c.dataDir is always set (synthetic "/kfake"
+		// for memFS, user path for disk). State files (topics.json,
+		// groups.log, pids.log, etc.) only write when c.cfg.dataDir
+		// is set (user provided real path).
+		dataDir       string
 		fs            fs
 		groupsLogMu   sync.Mutex
 		groupsLogFile file
@@ -151,9 +155,14 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		quotas: make(map[string]quotaEntry),
 		telem:  make(map[[16]byte]int32),
 
-		fs: osFS{},
-
 		die: make(chan struct{}),
+	}
+	if cfg.dataDir != "" {
+		c.fs = osFS{}
+		c.dataDir = cfg.dataDir
+	} else {
+		c.fs = newMemFS()
+		c.dataDir = "/kfake"
 	}
 	{
 		m := make(map[string]*string, len(cfg.brokerConfigs))
@@ -261,8 +270,8 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			c.acls.add(a)
 		}
 
-		// For SyncWrites, persist the initial state so crash recovery
-		// can find meta.json, topics.json, etc.
+		// Persist the initial state so crash recovery can find
+		// meta.json, topics.json, etc.
 		if cfg.dataDir != "" {
 			if err = c.saveToDisk(); err != nil {
 				return nil, fmt.Errorf("persisting initial state: %w", err)
@@ -1285,9 +1294,9 @@ func (c *Cluster) compactAll() {
 	for t := range c.data.tps {
 		for _, pd := range c.data.tps[t] {
 			if c.data.isCompactTopic(t) {
-				pd.compact(&c.data, t)
+				c.compact(pd, t)
 			}
-			pd.applyRetention(&c.data, t)
+			c.applyRetention(pd, t)
 		}
 	}
 }
@@ -1297,7 +1306,7 @@ func (c *Cluster) compactAll() {
 func (c *Cluster) applyRetentionAll() {
 	for t := range c.data.tps {
 		for _, pd := range c.data.tps[t] {
-			pd.applyRetention(&c.data, t)
+			c.applyRetention(pd, t)
 		}
 	}
 }

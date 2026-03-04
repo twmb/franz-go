@@ -83,7 +83,7 @@ func (c *Cluster) handleDeleteRecords(creq *clientReq) (kmsg.Response, error) {
 			// matching real Kafka unclean leader election.
 			// The snapshot captures it on clean shutdown.
 			pd.logStartOffset = to
-			pd.trimLeft()
+			c.trimLeft(pd)
 			sp := donep(rt.Topic, rp.Partition, 0)
 			sp.LowWatermark = to
 		}

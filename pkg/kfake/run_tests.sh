@@ -12,6 +12,9 @@
 #   --server-log LEVEL     Set kfake server log level only
 #   -v, --version VERSION  Kafka version to emulate (e.g., 2.8, 3.5)
 #   --pprof ADDR           Enable pprof on server (e.g., :6060)
+#   --data-dir DIR         Persistence directory for kfake server
+#   --restart SECS         Kill and restart server after SECS seconds (requires --data-dir)
+#   --timeout DURATION     Test timeout (default: 90s, 300s with --race)
 #   -k, --kill             Kill processes on ports 9092-9094 and exit
 #   --clean                Kill servers and remove /tmp/kfake_test_logs
 #   -h, --help             Show this help
@@ -24,6 +27,9 @@ CLIENT_LOG=""
 SERVER_LOG_LEVEL=""
 KFAKE_VERSION="${KFAKE_VERSION:-}"
 PPROF_ADDR=""
+DATA_DIR=""
+CUSTOM_TIMEOUT=""
+RESTART_DELAY=""
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 KFAKE_DIR="$SCRIPT_DIR"
@@ -69,6 +75,18 @@ while [[ $# -gt 0 ]]; do
             PPROF_ADDR="$2"
             shift 2
             ;;
+        --data-dir)
+            DATA_DIR="$2"
+            shift 2
+            ;;
+        --restart)
+            RESTART_DELAY="$2"
+            shift 2
+            ;;
+        --timeout)
+            CUSTOM_TIMEOUT="$2"
+            shift 2
+            ;;
         -k|--kill)
             echo "Killing processes on ports 9092, 9093, 9094..."
             for port in 9092 9093 9094; do
@@ -106,6 +124,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --server-log LEVEL     Set kfake server log level only"
             echo "  -v, --version VERSION  Kafka version to emulate (e.g., 2.8, 3.5)"
             echo "  --pprof ADDR           Enable pprof on server (e.g., :6060)"
+            echo "  --data-dir DIR         Persistence directory for kfake server"
+            echo "  --restart SECS         Kill and restart server after SECS seconds"
+            echo "  --timeout DURATION     Test timeout (default: 90s, 300s with --race)"
             echo "  -k, --kill             Kill processes on ports 9092-9094 and exit"
             echo "  --clean                Kill servers and remove /tmp/kfake_test_logs"
             echo "  -h, --help             Show this help"
@@ -117,6 +138,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [ -n "$RESTART_DELAY" ] && [ -z "$DATA_DIR" ]; then
+    echo "ERROR: --restart requires --data-dir for state recovery"
+    exit 1
+fi
 
 # Build test pattern
 if [ -z "$TEST_TYPE" ]; then
@@ -154,11 +180,129 @@ port_in_use() {
     (echo >/dev/tcp/127.0.0.1/$1) 2>/dev/null
 }
 
-if [ -n "$RACE" ]; then
+if [ -n "$CUSTOM_TIMEOUT" ]; then
+    TIMEOUT="$CUSTOM_TIMEOUT"
+elif [ -n "$RACE" ]; then
     TIMEOUT="300s"
 else
     TIMEOUT="90s"
 fi
+
+# Build common server args once.
+SERVER_ARGS=""
+if [ -n "$KFAKE_VERSION" ]; then
+    SERVER_ARGS="$SERVER_ARGS --as-version $KFAKE_VERSION"
+fi
+if [ -n "$SERVER_LOG_LEVEL" ]; then
+    SERVER_ARGS="$SERVER_ARGS -l $SERVER_LOG_LEVEL"
+fi
+if [ -n "$PPROF_ADDR" ]; then
+    SERVER_ARGS="$SERVER_ARGS -pprof $PPROF_ADDR"
+fi
+if [ -n "$DATA_DIR" ]; then
+    SERVER_ARGS="$SERVER_ARGS --data-dir $DATA_DIR"
+fi
+SERVER_ARGS="$SERVER_ARGS -c group.consumer.heartbeat.interval.ms=1000"
+
+SERVER_PID_FILE="$LOG_DIR/server.pid"
+
+# Wait for server to be listening on port 9092 (max 5s).
+wait_for_server() {
+    for _ in $(seq 1 50); do
+        if port_in_use 9092; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+# Wait for port 9092 to be free (max 5s).
+wait_for_port_free() {
+    for _ in $(seq 1 50); do
+        if ! port_in_use 9092; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+# Start the server, wait for it to listen, verify it's alive.
+# Writes PID to SERVER_PID_FILE for coordination with restart loop.
+start_server() {
+    local log_mode="$1"  # "truncate" or "append"
+    if [ "$log_mode" = "append" ]; then
+        "$SERVER_BIN" $SERVER_ARGS >> "$SERVER_LOG" 2>&1 &
+    else
+        "$SERVER_BIN" $SERVER_ARGS > "$SERVER_LOG" 2>&1 &
+    fi
+    SERVER_PID=$!
+    echo "$SERVER_PID" > "$SERVER_PID_FILE"
+
+    wait_for_server
+    if ! kill -0 $SERVER_PID 2>/dev/null; then
+        echo "FAILED: Server crashed on startup"
+        echo "Server log:"
+        tail -20 "$SERVER_LOG"
+        return 1
+    fi
+    return 0
+}
+
+# Kill server and wait for clean exit.
+stop_server() {
+    local pid
+    pid=$(cat "$SERVER_PID_FILE" 2>/dev/null)
+    if [ -n "$pid" ]; then
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null
+    fi
+    SERVER_PID=""
+}
+
+# Wait for a process to exit (max 10s). Works across shell boundaries
+# unlike `wait` which only works on children of the current shell.
+wait_for_exit() {
+    local pid=$1
+    for _ in $(seq 1 100); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+# Background restart loop: kills server after delay seconds,
+# waits for clean shutdown, restarts. Repeats until killed.
+# Uses SERVER_PID_FILE to coordinate the current PID.
+restart_loop() {
+    local delay=$1
+    while true; do
+        sleep "$delay"
+        local pid
+        pid=$(cat "$SERVER_PID_FILE" 2>/dev/null)
+        if [ -z "$pid" ]; then
+            continue
+        fi
+        echo "  [restart] Killing server (pid $pid) after ${delay}s..."
+        kill "$pid" 2>/dev/null || true
+        wait_for_exit "$pid"
+        wait_for_port_free
+        echo "  [restart] Starting server..."
+        "$SERVER_BIN" $SERVER_ARGS >> "$SERVER_LOG" 2>&1 &
+        local new_pid=$!
+        echo "$new_pid" > "$SERVER_PID_FILE"
+        wait_for_server
+        if ! kill -0 "$new_pid" 2>/dev/null; then
+            echo "  [restart] FAILED: Server crashed on restart"
+            tail -20 "$SERVER_LOG"
+            return 1
+        fi
+        echo "  [restart] Server back (pid $new_pid)"
+    done
+}
 
 echo ""
 echo "Configuration:"
@@ -170,6 +314,8 @@ echo "  Client log level: ${CLIENT_LOG:-default}"
 echo "  Server log level: ${SERVER_LOG_LEVEL:-default}"
 echo "  Kafka version: ${KFAKE_VERSION:-latest}"
 echo "  Pprof: ${PPROF_ADDR:-disabled}"
+echo "  Data dir: ${DATA_DIR:-disabled}"
+echo "  Restart: ${RESTART_DELAY:-disabled}${RESTART_DELAY:+s}"
 echo "  Timeout: $TIMEOUT"
 echo "  Logs: $LOG_DIR"
 echo ""
@@ -178,41 +324,24 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     echo "=== Run $i of $MAX_ITERATIONS ==="
     RUN_START=$SECONDS
 
-    # Build server args
-    VERSION_ARG=""
-    if [ -n "$KFAKE_VERSION" ]; then
-        VERSION_ARG="--as-version $KFAKE_VERSION"
-    fi
-    LOG_ARG=""
-    if [ -n "$SERVER_LOG_LEVEL" ]; then
-        LOG_ARG="-l $SERVER_LOG_LEVEL"
-    fi
-    PPROF_ARG=""
-    if [ -n "$PPROF_ADDR" ]; then
-        PPROF_ARG="-pprof $PPROF_ADDR"
-    fi
-    "$SERVER_BIN" $VERSION_ARG $LOG_ARG $PPROF_ARG -c group.consumer.heartbeat.interval.ms=1000 > "$SERVER_LOG" 2>&1 &
-    SERVER_PID=$!
+    start_server "truncate" || exit 1
 
-    # Wait for server to be listening (max 5 seconds)
-    for _ in $(seq 1 50); do
-        if port_in_use 9092; then
-            break
-        fi
-        sleep 0.1
-    done
-
-    # Check if server is still running
-    if ! kill -0 $SERVER_PID 2>/dev/null; then
-        echo "FAILED: Server crashed on startup (run $i)"
-        echo "Server log:"
-        cat "$SERVER_LOG"
-        exit 1
+    # If --restart is set, run the restart loop in background.
+    RESTARTER_PID=""
+    if [ -n "$RESTART_DELAY" ]; then
+        restart_loop "$RESTART_DELAY" &
+        RESTARTER_PID=$!
     fi
 
     # Run the test
     KGO_TEST_RECORDS=$RECORDS KGO_LOG_LEVEL=$CLIENT_LOG "$TEST_BIN" $RUN_ARG -test.timeout $TIMEOUT > "$CLIENT_LOG_FILE" 2>&1
     TEST_EXIT=$?
+
+    # Stop restart loop if running
+    if [ -n "$RESTARTER_PID" ]; then
+        kill $RESTARTER_PID 2>/dev/null || true
+        wait $RESTARTER_PID 2>/dev/null
+    fi
 
     if [ $TEST_EXIT -ne 0 ]; then
         echo "FAILED on run $i"
@@ -229,10 +358,10 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         exit 1
     fi
 
-    # Kill server and wait for clean shutdown (ports freed by Close)
-    kill $SERVER_PID 2>/dev/null || true
-    wait $SERVER_PID 2>/dev/null
-
+    stop_server
+    if [ -n "$DATA_DIR" ]; then
+        rm -rf "$DATA_DIR"/*
+    fi
     echo "PASS (run $i) - $((SECONDS - RUN_START))s"
 done
 

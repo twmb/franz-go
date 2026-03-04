@@ -1,10 +1,13 @@
 package kfake
 
 import (
+	"cmp"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
 	"math/rand"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,11 +17,10 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TODO
-//
-// * Write to disk, if configured.
-
-var noID uuid
+var (
+	noID   uuid
+	crc32c = crc32.MakeTable(crc32.Castagnoli)
+)
 
 type (
 	uuid [16]byte
@@ -40,8 +42,34 @@ type (
 		lastOffset  int64 // offset of the abort control record
 	}
 
+	// segmentInfo tracks per-segment metadata. Designed for future
+	// LRU eviction of per-segment indexes (seg.index = nil to evict,
+	// rebuild by reading segment file).
+	segmentInfo struct {
+		base     int64       // base offset of first batch
+		endOff   int64       // offset after last batch (exclusive), 0 while active
+		minEpoch int32       // min epoch across all batches
+		maxEpoch int32       // max epoch across all batches
+		size     int64       // file size in bytes
+		index    []batchMeta // per-batch metadata, nil = evicted
+	}
+
+	// batchMeta is the in-memory index entry for a batch stored in a segment file.
+	batchMeta struct {
+		firstOffset         int64 // first record offset
+		segPos              int64 // byte position within segment file
+		maxEarlierTimestamp int64 // for ListOffsets binary search
+		firstTimestamp      int64
+		maxTimestamp        int64
+		producerID          int64 // needed for isBatchAborted in compaction
+		lastOffsetDelta     int32
+		nbytes              int32 // serialized batch size (RecordBatch wire bytes)
+		epoch               int32
+		numRecords          int32
+		inTx                bool  // in an uncommitted transaction
+	}
+
 	partData struct {
-		batches     []*partBatch
 		abortedTxns []abortedTxnEntry // sorted by lastOffset, for read_committed fetch
 		t           string
 		p           int32
@@ -50,14 +78,19 @@ type (
 		highWatermark    int64
 		lastStableOffset int64
 		logStartOffset   int64
-		earliestTxOffset int64 // earliest offset of uncommitted transaction, -1 if none
 		epoch            int32 // current epoch
 		maxTimestamp     int64 // max FirstTimestamp seen (for maxEarlierTimestamp optimization)
 		nbytes           int64
-		inTx             bool
 
-		// For ListOffsets timestamp -3 (KIP-734): track the batch with max timestamp
-		maxTimestampBatchIdx int // index of batch with highest MaxTimestamp, -1 if none
+		// PID-based LSO tracking: maps producer ID to earliest
+		// uncommitted offset on this partition. LSO = min of all
+		// values, or HWM if empty. Replaces per-batch inTx scanning.
+		uncommittedPIDs map[int64]int64
+
+		// For ListOffsets timestamp -3 (KIP-734): track the batch with max timestamp.
+		// Indexes into the flattened batchMeta across all segments.
+		maxTimestampSeg int // segment index, -1 if none
+		maxTimestampIdx int // index within that segment's batchMeta
 
 		rf        int8
 		leader    *broker
@@ -67,11 +100,12 @@ type (
 
 		createdAt time.Time
 
-		// Persistence - segment state (only used when dataDir is set).
-		activeSegFile file    // open handle for active segment (live sync)
-		activeSegBase int64   // base offset of the active segment
-		activeSegSize int64   // current size of the active segment in bytes
-		segmentBases  []int64 // base offsets of all segment files, sorted
+		// Segment state - used in all modes (memFS for in-memory, osFS for disk).
+		// Segment files (.dat) contain pure RecordBatch wire bytes.
+		// Index files (.idx) contain per-batch metadata (epoch, timestamp, flags).
+		activeSegFile file          // open handle for active segment
+		activeIdxFile file          // open handle for active index
+		segments      []segmentInfo // all segments, sorted by base offset
 	}
 
 	followers []int32
@@ -96,17 +130,24 @@ type (
 	}
 )
 
-func (b *partBatch) pid() (int64, int16) {
-	return b.ProducerID, b.ProducerEpoch
+func (b *partBatch) meta(segPos int64) batchMeta {
+	return batchMeta{
+		firstOffset:         b.FirstOffset,
+		segPos:              segPos,
+		maxEarlierTimestamp: b.maxEarlierTimestamp,
+		firstTimestamp:      b.FirstTimestamp,
+		maxTimestamp:        b.MaxTimestamp,
+		producerID:          b.ProducerID,
+		lastOffsetDelta:     b.LastOffsetDelta,
+		nbytes:              int32(b.nbytes),
+		epoch:               b.epoch,
+		numRecords:          b.NumRecords,
+		inTx:                b.inTx,
+	}
 }
 
-func (fs followers) has(b *broker) bool {
-	for _, f := range fs {
-		if f == b.node {
-			return true
-		}
-	}
-	return false
+func (b *partBatch) pid() (int64, int16) {
+	return b.ProducerID, b.ProducerEpoch
 }
 
 // normalizeTopicName normalizes a topic name for collision detection.
@@ -133,10 +174,7 @@ func (d *data) mkt(t string, nparts, nreplicas int, configs map[string]*string) 
 		nparts = d.c.cfg.defaultNumParts
 	}
 	if nreplicas < 0 {
-		nreplicas = 3 // cluster default
-		if nreplicas > len(d.c.bs) {
-			nreplicas = len(d.c.bs)
-		}
+		nreplicas = min(3, len(d.c.bs)) // cluster default
 	}
 	d.id2t[id] = t
 	d.t2id[t] = id
@@ -162,22 +200,24 @@ func (c *Cluster) noLeader() *broker {
 func (c *Cluster) newPartData(p int32) func() *partData {
 	return func() *partData {
 		return &partData{
-			p:                    p,
-			dir:                  defLogDir,
-			earliestTxOffset:     -1,
-			maxTimestampBatchIdx: -1,
-			leader:               c.bs[rand.Intn(len(c.bs))],
-			watch:                make(map[*watchFetch]struct{}),
-			createdAt:            time.Now(),
+			p:               p,
+			dir:             defLogDir,
+			maxTimestampSeg: -1,
+			maxTimestampIdx: -1,
+			leader:          c.bs[rand.Intn(len(c.bs))],
+			watch:           make(map[*watchFetch]struct{}),
+			createdAt:       time.Now(),
 		}
 	}
 }
 
-// Returns a pointer to the new batch.
-// If transactional, we mark ourselves in a tx.
-// Finishing a tx clears the inTx state on pd, but also re-sets it if needed.
-// If we are not in a tx, we can bump the stable offset here.
-func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool) *partBatch {
+// pushBatch appends a batch to the partition, writing it to the active
+// segment file and building a batchMeta index entry. Returns the
+// firstOffset assigned to the batch.
+//
+// If transactional, the producer's PID is registered in uncommittedPIDs
+// so the LSO stays at the earliest uncommitted offset.
+func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx bool) int64 {
 	maxEarlierTimestamp := b.FirstTimestamp
 	if maxEarlierTimestamp < pd.maxTimestamp {
 		maxEarlierTimestamp = pd.maxTimestamp
@@ -187,125 +227,230 @@ func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool) *partBa
 	b.FirstOffset = pd.highWatermark
 	b.PartitionLeaderEpoch = pd.epoch
 
-	// Track max timestamp batch for ListOffsets -3 (KIP-734)
-	newIdx := len(pd.batches) // index this batch will have after append
-	if pd.maxTimestampBatchIdx < 0 || b.MaxTimestamp >= pd.batches[pd.maxTimestampBatchIdx].MaxTimestamp {
-		pd.maxTimestampBatchIdx = newIdx
-	}
-
-	pd.batches = append(pd.batches, &partBatch{
+	// Build the partBatch for segment encoding
+	pb := &partBatch{
 		RecordBatch:         b,
 		nbytes:              nbytes,
 		epoch:               pd.epoch,
 		maxEarlierTimestamp: maxEarlierTimestamp,
 		inTx:                inTx,
-	})
+	}
+
+	// Write to segment file and build index entry.
+	// persistBatchToSegment creates the segment if needed.
+	segPos := c.persistBatchToSegment(pd, pb)
+	active := &pd.segments[len(pd.segments)-1]
+	active.index = append(active.index, pb.meta(segPos))
+	active.updateEpochRange(pd.epoch)
+
+	// Track max timestamp batch for ListOffsets -3 (KIP-734)
+	segIdx := len(pd.segments) - 1
+	metaIdx := len(active.index) - 1
+	if pd.maxTimestampSeg < 0 || b.MaxTimestamp >= pd.maxTimestampBatch().maxTimestamp {
+		pd.maxTimestampSeg = segIdx
+		pd.maxTimestampIdx = metaIdx
+	}
+
+	firstOffset := b.FirstOffset
 	pd.highWatermark += int64(b.NumRecords)
 	if inTx {
-		pd.inTx = true
-		// Track the earliest uncommitted transaction offset
-		if pd.earliestTxOffset == -1 {
-			pd.earliestTxOffset = b.FirstOffset
+		if pd.uncommittedPIDs == nil {
+			pd.uncommittedPIDs = make(map[int64]int64)
+		}
+		if existing, ok := pd.uncommittedPIDs[b.ProducerID]; !ok || b.FirstOffset < existing {
+			pd.uncommittedPIDs[b.ProducerID] = b.FirstOffset
 		}
 	}
-	if !pd.inTx {
+	if len(pd.uncommittedPIDs) == 0 {
 		pd.lastStableOffset += int64(b.NumRecords)
 	}
 	pd.nbytes += int64(nbytes)
 	for w := range pd.watch {
-		w.push(pd, nbytes)
+		w.push(pd, nbytes, inTx)
 	}
-	return pd.batches[len(pd.batches)-1]
+	return firstOffset
 }
 
-// index: the batch index the offset is in, if the offset is found
-// found: if the offset was found
-// atEnd: if true, the requested offset is one past the HWM - "requesting at the end, wait"
-func (pd *partData) searchOffset(o int64) (index int, found bool, atEnd bool) {
-	if o < pd.logStartOffset || o > pd.highWatermark {
-		return 0, false, false
-	}
-	if len(pd.batches) == 0 {
-		if o == 0 {
-			return 0, false, true
-		}
+// updateEpochRange updates the segment's min/max epoch from a batch epoch.
+func (si *segmentInfo) updateEpochRange(epoch int32) {
+	if len(si.index) <= 1 {
+		si.minEpoch = epoch
+		si.maxEpoch = epoch
 	} else {
-		lastBatch := pd.batches[len(pd.batches)-1]
-		if end := lastBatch.FirstOffset + int64(lastBatch.LastOffsetDelta) + 1; end == o {
-			return 0, false, true
+		if epoch < si.minEpoch {
+			si.minEpoch = epoch
+		}
+		if epoch > si.maxEpoch {
+			si.maxEpoch = epoch
+		}
+	}
+}
+
+// maxTimestampBatch returns the batchMeta for the max-timestamp batch.
+func (pd *partData) maxTimestampBatch() *batchMeta {
+	if pd.maxTimestampSeg < 0 {
+		return nil
+	}
+	return &pd.segments[pd.maxTimestampSeg].index[pd.maxTimestampIdx]
+}
+
+// rebuildMaxTimestampMeta rebuilds maxTimestampSeg/maxTimestampIdx from the
+// batchMeta index. Called after loading segments from disk.
+func (pd *partData) rebuildMaxTimestampMeta() {
+	pd.maxTimestampSeg = -1
+	pd.maxTimestampIdx = -1
+	for si := range pd.segments {
+		for mi := range pd.segments[si].index {
+			m := &pd.segments[si].index[mi]
+			if pd.maxTimestampSeg < 0 || m.maxTimestamp >= pd.maxTimestampBatch().maxTimestamp {
+				pd.maxTimestampSeg = si
+				pd.maxTimestampIdx = mi
+			}
+		}
+	}
+}
+
+// totalBatches returns the total number of batches across all segments.
+func (pd *partData) totalBatches() int {
+	n := 0
+	for i := range pd.segments {
+		n += len(pd.segments[i].index)
+	}
+	return n
+}
+
+// eachBatchMeta calls fn for each batchMeta across all segments.
+func (pd *partData) eachBatchMeta(fn func(segIdx, metaIdx int, m *batchMeta) bool) {
+	for si := range pd.segments {
+		for mi := range pd.segments[si].index {
+			if !fn(si, mi, &pd.segments[si].index[mi]) {
+				return
+			}
+		}
+	}
+}
+
+// batchMetaAt returns the nth batchMeta counting across all segments.
+// O(segments) per call - fine for a test tool with typically few segments.
+func (pd *partData) batchMetaAt(n int) *batchMeta {
+	for i := range pd.segments {
+		if n < len(pd.segments[i].index) {
+			return &pd.segments[i].index[n]
+		}
+		n -= len(pd.segments[i].index)
+	}
+	return nil
+}
+
+// batchMetaSegAt returns the segment index, index within that segment,
+// and batchMeta for the nth batch counting across all segments.
+func (pd *partData) batchMetaSegAt(n int) (segIdx, metaIdx int, meta *batchMeta) {
+	for i := range pd.segments {
+		if n < len(pd.segments[i].index) {
+			return i, n, &pd.segments[i].index[n]
+		}
+		n -= len(pd.segments[i].index)
+	}
+	return -1, -1, nil
+}
+
+// searchOffset finds the batch containing offset o in the batchMeta index.
+//
+// segIdx, metaIdx: position of the found batch within pd.segments
+// found: if the offset was found
+// atEnd: if true, the requested offset is at or past the HWM - "requesting at the end, wait"
+func (pd *partData) searchOffset(o int64) (segIdx int, metaIdx int, found bool, atEnd bool) {
+	if o < pd.logStartOffset || o > pd.highWatermark {
+		return 0, 0, false, false
+	}
+	total := pd.totalBatches()
+	if total == 0 {
+		return 0, 0, false, o == pd.logStartOffset
+	}
+
+	// Check if at the end (at or past last batch's end offset)
+	lastSeg := &pd.segments[len(pd.segments)-1]
+	if len(lastSeg.index) > 0 {
+		lastMeta := &lastSeg.index[len(lastSeg.index)-1]
+		if endOff := lastMeta.firstOffset + int64(lastMeta.lastOffsetDelta) + 1; o >= endOff {
+			return 0, 0, false, true
 		}
 	}
 
-	index, found = sort.Find(len(pd.batches), func(idx int) int {
-		b := pd.batches[idx]
-		if o < b.FirstOffset {
+	// Binary search for the batch containing offset o.
+	idx, ok := sort.Find(total, func(i int) int {
+		m := pd.batchMetaAt(i)
+		if o < m.firstOffset {
 			return -1
 		}
-		if o >= b.FirstOffset+int64(b.LastOffsetDelta)+1 {
+		if o >= m.firstOffset+int64(m.lastOffsetDelta)+1 {
 			return 1
 		}
 		return 0
 	})
+
 	// After compaction, offsets may land in gaps between batches.
 	// Skip forward to the next available batch.
-	if !found && index < len(pd.batches) {
-		found = true
+	if !ok && idx < total {
+		ok = true
 	}
-	return index, found, false
+	if !ok {
+		return 0, 0, false, false
+	}
+
+	segIdx, metaIdx, _ = pd.batchMetaSegAt(idx)
+	return segIdx, metaIdx, true, false
 }
 
-func (pd *partData) trimLeft() {
-	for len(pd.batches) > 0 {
-		b0 := pd.batches[0]
-		finRec := b0.FirstOffset + int64(b0.LastOffsetDelta)
-		if finRec >= pd.logStartOffset {
-			break
-		}
-		pd.batches = pd.batches[1:]
-		pd.nbytes -= int64(b0.nbytes)
-		pd.maxTimestampBatchIdx--
-	}
-	// If the max-timestamp batch was trimmed (index went negative) or
-	// all batches were removed, rebuild the index from remaining batches.
-	if pd.maxTimestampBatchIdx < 0 {
-		pd.maxTimestampBatchIdx = -1
-		for i, b := range pd.batches {
-			if pd.maxTimestampBatchIdx < 0 || b.MaxTimestamp >= pd.batches[pd.maxTimestampBatchIdx].MaxTimestamp {
-				pd.maxTimestampBatchIdx = i
+func (c *Cluster) trimLeft(pd *partData) {
+	// Trim batchMeta segments, deleting fully-trimmed segment + index files.
+	pdir := topicDir(c.dataDir, pd.t, pd.p)
+outer:
+	for len(pd.segments) > 0 {
+		seg := &pd.segments[0]
+		for len(seg.index) > 0 {
+			m := &seg.index[0]
+			finRec := m.firstOffset + int64(m.lastOffsetDelta)
+			if finRec >= pd.logStartOffset {
+				break outer
 			}
+			pd.nbytes -= int64(m.nbytes)
+			seg.index = seg.index[1:]
+		}
+		c.fs.Remove(filepath.Join(pdir, segmentFileName(seg.base)))
+		c.fs.Remove(filepath.Join(pdir, indexFileName(seg.base)))
+		pd.segments = pd.segments[1:]
+	}
+	// If all segments were trimmed, close active handles
+	// so the next produce creates fresh files.
+	if len(pd.segments) == 0 {
+		if pd.activeSegFile != nil {
+			pd.activeSegFile.Close()
+			pd.activeSegFile = nil
+		}
+		if pd.activeIdxFile != nil {
+			pd.activeIdxFile.Close()
+			pd.activeIdxFile = nil
 		}
 	}
-	// Prune aborted txn entries fully before logStartOffset.
-	// Entries are sorted by lastOffset, so binary search for the
-	// first entry still relevant.
-	i := sort.Search(len(pd.abortedTxns), func(i int) bool {
-		return pd.abortedTxns[i].lastOffset >= pd.logStartOffset
-	})
-	pd.abortedTxns = pd.abortedTxns[i:]
+	pd.rebuildMaxTimestampMeta()
+	pd.trimAbortedTxns()
 }
 
-// recalculateLSO recalculates the last stable offset.
+// recalculateLSO recalculates the last stable offset from uncommittedPIDs.
+// LSO = min of all uncommittedPIDs values, or HWM if empty.
 func (pd *partData) recalculateLSO() {
-	// Find the earliest uncommitted transaction
-	earliestUncommitted := int64(-1)
-	for _, b := range pd.batches {
-		if b.inTx {
-			earliestUncommitted = b.FirstOffset
-			break
+	if len(pd.uncommittedPIDs) == 0 {
+		pd.lastStableOffset = pd.highWatermark
+		return
+	}
+	lso := pd.highWatermark
+	for _, off := range pd.uncommittedPIDs {
+		if off < lso {
+			lso = off
 		}
 	}
-
-	if earliestUncommitted == -1 {
-		// No uncommitted transactions, LSO = HWM
-		pd.lastStableOffset = pd.highWatermark
-		pd.earliestTxOffset = -1
-		pd.inTx = false
-	} else {
-		// LSO is at the start of the earliest uncommitted transaction
-		pd.lastStableOffset = earliestUncommitted
-		pd.earliestTxOffset = earliestUncommitted
-		pd.inTx = true
-	}
+	pd.lastStableOffset = lso
 }
 
 /////////////
@@ -516,7 +661,7 @@ var configDefaults = map[string]string{
 	"retention.bytes":        "-1",
 	"retention.ms":           "604800000",
 
-	"segment.bytes": "1073741824",
+	"segment.bytes": strconv.Itoa(100 << 20),
 	"segment.ms":    "604800000",
 
 	"transaction.max.timeout.ms":     "900000",
@@ -532,7 +677,7 @@ var configDefaults = map[string]string{
 	"group.min.session.timeout.ms":              "6000",
 	"group.max.session.timeout.ms":              "300000",
 	"log.dir":                                   defLogDir,
-	"log.segment.bytes":                         "1073741824",
+	"log.segment.bytes":                         strconv.Itoa(100 << 20),
 	"log.roll.ms":                               "604800000",
 	"log.message.timestamp.type":                "CreateTime",
 	"log.retention.bytes":                       "-1",
@@ -751,14 +896,35 @@ func (pd *partData) isBatchAborted(batch *partBatch) bool {
 
 // compact removes superseded records from a compactable partition.
 // The last batch is treated as the active segment and is never compacted.
-func (pd *partData) compact(d *data, topic string) {
-	if len(pd.batches) < 2 {
+func (c *Cluster) compact(pd *partData, topic string) {
+	total := pd.totalBatches()
+	if total < 2 { // need at least 2 batches: compaction keeps the last batch unconditionally
+		return
+	}
+
+	// Read all batches from disk
+	var allBatches []*partBatch
+	pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
+		batch, err := c.readBatchFull(pd, si, m)
+		if err != nil {
+			c.cfg.logger.Logf(LogLevelWarn, "compact %s-%d: read batch: %v", pd.t, pd.p, err)
+			return false
+		}
+		allBatches = append(allBatches, batch)
+		return true
+	})
+	if len(allBatches) != total {
+		// Partial read - bail out to avoid data loss from rebuildSegments
+		// deleting segment files we couldn't fully read.
+		return
+	}
+	if len(allBatches) < 2 {
 		return
 	}
 
 	// Read delete.retention.ms from topic config, falling back to default.
 	deleteRetentionMs := int64(86400000)
-	if tcfg, ok := d.tcfgs[topic]; ok {
+	if tcfg, ok := c.data.tcfgs[topic]; ok {
 		if v, ok := tcfg["delete.retention.ms"]; ok && v != nil {
 			if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
 				deleteRetentionMs = n
@@ -767,7 +933,7 @@ func (pd *partData) compact(d *data, topic string) {
 	}
 	now := time.Now().UnixMilli()
 
-	cleanable := pd.batches[:len(pd.batches)-1]
+	cleanable := allBatches[:len(allBatches)-1]
 
 	// Pass 1: build key => highest offset map from cleanable range.
 	keyOffsets := make(map[string]int64)
@@ -858,30 +1024,24 @@ func (pd *partData) compact(d *data, topic string) {
 
 	// Sort kept batches by FirstOffset to maintain order (control batches
 	// were appended out of order in pass 3).
-	sort.Slice(kept, func(i, j int) bool {
-		return kept[i].FirstOffset < kept[j].FirstOffset
+	slices.SortFunc(kept, func(a, b *partBatch) int {
+		return cmp.Compare(a.FirstOffset, b.FirstOffset)
 	})
 
 	// Append the active segment (last batch).
-	kept = append(kept, pd.batches[len(pd.batches)-1])
+	kept = append(kept, allBatches[len(allBatches)-1])
 
 	// Rebuild partition metadata.
-	pd.batches = kept
 	pd.nbytes = 0
-	for _, b := range pd.batches {
+	for _, b := range kept {
 		pd.nbytes += int64(b.nbytes)
 	}
-	if len(pd.batches) > 0 {
-		pd.logStartOffset = pd.batches[0].FirstOffset
+	if len(kept) > 0 {
+		pd.logStartOffset = kept[0].FirstOffset
 	}
 
-	// Rebuild maxTimestampBatchIdx.
-	pd.maxTimestampBatchIdx = -1
-	for i, b := range pd.batches {
-		if pd.maxTimestampBatchIdx < 0 || b.MaxTimestamp >= pd.batches[pd.maxTimestampBatchIdx].MaxTimestamp {
-			pd.maxTimestampBatchIdx = i
-		}
-	}
+	// Rebuild segments and batchMeta from compacted batches.
+	c.rebuildSegments(pd, topic, kept)
 
 	// Prune aborted txn entries that are now before logStartOffset.
 	pd.trimAbortedTxns()
@@ -901,13 +1061,13 @@ func (pd *partData) trimAbortedTxns() {
 
 // applyRetention advances logStartOffset past batches that are expired by
 // retention.ms or that exceed retention.bytes, then trims them.
-func (pd *partData) applyRetention(d *data, topic string) {
-	if len(pd.batches) == 0 {
+func (c *Cluster) applyRetention(pd *partData, topic string) {
+	if pd.totalBatches() == 0 {
 		return
 	}
 
-	retMs := d.retentionMs(topic)
-	retBytes := d.retentionBytes(topic)
+	retMs := c.data.retentionMs(topic)
+	retBytes := c.data.retentionBytes(topic)
 	if retMs < 0 && retBytes < 0 {
 		return
 	}
@@ -918,35 +1078,37 @@ func (pd *partData) applyRetention(d *data, topic string) {
 	// Time-based retention: drop batches whose max timestamp is older
 	// than retention.ms.
 	if retMs >= 0 {
-		for _, b := range pd.batches {
-			if now-b.MaxTimestamp >= retMs {
-				end := b.FirstOffset + int64(b.LastOffsetDelta) + 1
+		pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
+			if now-m.maxTimestamp >= retMs {
+				end := m.firstOffset + int64(m.lastOffsetDelta) + 1
 				if end > newLogStart {
 					newLogStart = end
 				}
 			}
-		}
+			return true
+		})
 	}
 
 	// Size-based retention: drop oldest batches until total size is
 	// within retention.bytes.
 	if retBytes >= 0 && pd.nbytes > retBytes {
 		excess := pd.nbytes - retBytes
-		for _, b := range pd.batches {
+		pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
 			if excess <= 0 {
-				break
+				return false
 			}
-			end := b.FirstOffset + int64(b.LastOffsetDelta) + 1
+			end := m.firstOffset + int64(m.lastOffsetDelta) + 1
 			if end > newLogStart {
 				newLogStart = end
 			}
-			excess -= int64(b.nbytes)
-		}
+			excess -= int64(m.nbytes)
+			return true
+		})
 	}
 
 	if newLogStart > pd.logStartOffset {
 		pd.logStartOffset = newLogStart
-		pd.trimLeft()
+		c.trimLeft(pd)
 	}
 }
 

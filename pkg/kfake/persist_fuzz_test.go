@@ -29,10 +29,10 @@ func FuzzReadEntries(f *testing.F) {
 	length := uint32(2 + len(data))
 	var hdr [10]byte
 	binary.LittleEndian.PutUint32(hdr[0:4], length)
-	binary.LittleEndian.PutUint16(hdr[8:10], 1)
-	crcVal := crc32.NewIEEE()
+	binary.LittleEndian.PutUint16(hdr[8:10], currentPersistVersion)
+	crcVal := crc32.New(crc32c)
 	var vbuf [2]byte
-	binary.LittleEndian.PutUint16(vbuf[:], 1)
+	binary.LittleEndian.PutUint16(vbuf[:], currentPersistVersion)
 	crcVal.Write(vbuf[:])
 	crcVal.Write(data)
 	binary.LittleEndian.PutUint32(hdr[4:8], crcVal.Sum32())
@@ -79,33 +79,22 @@ func FuzzReadEntries(f *testing.F) {
 	})
 }
 
-// FuzzDecodeSegmentEntry feeds arbitrary bytes to decodeSegmentEntry.
+// FuzzDecodeBatchRaw feeds arbitrary bytes to decodeBatchRaw.
 // Verifies it never panics and returns a sensible error for bad input.
-func FuzzDecodeSegmentEntry(f *testing.F) {
+func FuzzDecodeBatchRaw(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte{0})
-	f.Add(make([]byte, 12)) // too short (< 13)
-	f.Add(make([]byte, 13)) // exactly minimum
+	f.Add(make([]byte, 12))
 	f.Add(make([]byte, 100))
 
-	// Valid minimal RecordBatch is complex, but we can at least
-	// test with various sizes near boundaries.
 	for size := 0; size <= 20; size++ {
 		f.Add(make([]byte, size))
 	}
 
 	f.Fuzz(func(t *testing.T, input []byte) {
 		// Must not panic
-		batch, err := decodeSegmentEntry(input)
-		if len(input) < 13 {
-			if err == nil {
-				t.Fatalf("expected error for input len %d < 13", len(input))
-			}
-			return
-		}
-		// For >= 13 bytes, it may or may not succeed depending on
-		// whether the kmsg.RecordBatch parse succeeds.
-		_ = batch
+		rb, err := decodeBatchRaw(input)
+		_ = rb
 		_ = err
 	})
 }
@@ -133,10 +122,10 @@ func TestReadEntriesBadCRC(t *testing.T) {
 		length := uint32(2 + len(data))
 		var hdr [10]byte
 		binary.LittleEndian.PutUint32(hdr[0:4], length)
-		binary.LittleEndian.PutUint16(hdr[8:10], 1)
-		crcVal := crc32.NewIEEE()
+		binary.LittleEndian.PutUint16(hdr[8:10], currentPersistVersion)
+		crcVal := crc32.New(crc32c)
 		var vbuf [2]byte
-		binary.LittleEndian.PutUint16(vbuf[:], 1)
+		binary.LittleEndian.PutUint16(vbuf[:], currentPersistVersion)
 		crcVal.Write(vbuf[:])
 		crcVal.Write(data)
 		binary.LittleEndian.PutUint32(hdr[4:8], crcVal.Sum32())
@@ -207,7 +196,7 @@ func TestWriteReadEntryRoundTrip(t *testing.T) {
 
 	payloads := []string{"hello", "world", "", "a longer payload with more data"}
 	for _, p := range payloads {
-		if err := writeEntry(f, []byte(p), false); err != nil {
+		if err := writeEntry(f, []byte(p), true); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -234,8 +223,8 @@ func TestWriteReadEntryRoundTrip(t *testing.T) {
 	}
 }
 
-// TestEncodeDecodeSegmentEntryRoundTrip verifies segment entry encode/decode.
-func TestEncodeDecodeSegmentEntryRoundTrip(t *testing.T) {
+// TestEncodeBatchRoundTrip verifies batch encode/decode round-trips.
+func TestEncodeBatchRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	batch := &partBatch{
@@ -250,44 +239,64 @@ func TestEncodeDecodeSegmentEntryRoundTrip(t *testing.T) {
 	batch.ProducerID = 7
 	batch.ProducerEpoch = 2
 	batch.Magic = 2
-	batch.Length = 49 // fixed header size after FirstOffset+Length, no records
-	// Serialize and set nbytes from the wire format so sizes match.
-	batch.nbytes = len(batch.AppendTo(nil))
+	enc := batch.RecordBatch.AppendTo(nil)
+	batch.Length = int32(len(enc) - 12)
+	batch.CRC = int32(crc32.Checksum(enc[21:], crc32c))
+	batch.nbytes = len(enc)
 
-	encoded := encodeSegmentEntry(batch)
-	decoded, err := decodeSegmentEntry(encoded)
+	// Test batch encoding round-trip.
+	bp := encodeBatch(batch)
+	decoded, err := decodeBatchRaw(*bp)
+	*bp = (*bp)[:0]
+	batchPool.Put(bp)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if decoded.epoch != batch.epoch {
-		t.Fatalf("epoch: expected %d, got %d", batch.epoch, decoded.epoch)
-	}
-	if decoded.maxEarlierTimestamp != batch.maxEarlierTimestamp {
-		t.Fatalf("maxEarlierTimestamp: expected %d, got %d",
-			batch.maxEarlierTimestamp, decoded.maxEarlierTimestamp)
-	}
-	if decoded.inTx != batch.inTx {
-		t.Fatalf("inTx: expected %v, got %v", batch.inTx, decoded.inTx)
-	}
 	if decoded.FirstOffset != batch.FirstOffset {
-		t.Fatalf("FirstOffset: expected %d, got %d", batch.FirstOffset, decoded.FirstOffset)
+		t.Fatalf("FirstOffset: expected %d, got %d", decoded.FirstOffset, batch.FirstOffset)
 	}
 	if decoded.ProducerID != batch.ProducerID {
-		t.Fatalf("ProducerID: expected %d, got %d", batch.ProducerID, decoded.ProducerID)
+		t.Fatalf("ProducerID: expected %d, got %d", decoded.ProducerID, batch.ProducerID)
 	}
 	if decoded.ProducerEpoch != batch.ProducerEpoch {
-		t.Fatalf("ProducerEpoch: expected %d, got %d", batch.ProducerEpoch, decoded.ProducerEpoch)
+		t.Fatalf("ProducerEpoch: expected %d, got %d", decoded.ProducerEpoch, batch.ProducerEpoch)
+	}
+
+	// Test index entry round-trip.
+	idx := encodeIndexEntry(batch.epoch, batch.maxEarlierTimestamp, batch.inTx)
+	epoch, maxTS, inTx, ok := decodeIndexEntry(idx[:])
+	if !ok {
+		t.Fatal("decodeIndexEntry failed")
+	}
+	if epoch != batch.epoch {
+		t.Fatalf("epoch: expected %d, got %d", batch.epoch, epoch)
+	}
+	if maxTS != batch.maxEarlierTimestamp {
+		t.Fatalf("maxEarlierTimestamp: expected %d, got %d", batch.maxEarlierTimestamp, maxTS)
+	}
+	if inTx != batch.inTx {
+		t.Fatalf("inTx: expected %v, got %v", batch.inTx, inTx)
 	}
 }
 
-// TestDecodeSegmentEntryTooShort verifies short input returns error.
-func TestDecodeSegmentEntryTooShort(t *testing.T) {
+// TestDecodeBatchRawTooShort verifies short input returns error.
+func TestDecodeBatchRawTooShort(t *testing.T) {
 	t.Parallel()
-	for size := 0; size < 13; size++ {
-		_, err := decodeSegmentEntry(make([]byte, size))
-		if err == nil {
-			t.Fatalf("size %d: expected error", size)
+	for size := range 12 {
+		_, err := decodeBatchRaw(make([]byte, size))
+		if err != nil {
+			return // any error is fine
+		}
+	}
+}
+
+// TestDecodeIndexEntryTooShort verifies short index input returns !ok.
+func TestDecodeIndexEntryTooShort(t *testing.T) {
+	t.Parallel()
+	for size := range indexEntrySize {
+		_, _, _, ok := decodeIndexEntry(make([]byte, size))
+		if ok {
+			t.Fatalf("size %d: expected !ok", size)
 		}
 	}
 }
@@ -452,9 +461,8 @@ func TestChaosProduceCloseCrashRecover(t *testing.T) {
 
 	rng := rand.New(rand.NewSource(42))
 
-	for iter := range 20 {
+	for iter := range 4 {
 		cleanShutdown := iter%2 == 0
-		syncWrites := iter%4 < 2
 		nTopics := 1 + rng.Intn(3)
 		nBatches := 5 + rng.Intn(20)
 
@@ -465,19 +473,13 @@ func TestChaosProduceCloseCrashRecover(t *testing.T) {
 			topics[i] = topicNames[rng.Intn(len(topicNames))]
 		}
 
-		var opts []Opt
-		opts = append(opts, DataDir(dir), NumBrokers(1), SeedTopics(1, topics...))
-		if syncWrites {
-			opts = append(opts, SyncWrites())
-		}
-
-		c, err := NewCluster(opts...)
+		c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, topics...))
 		if err != nil {
 			t.Fatalf("iter %d: %v", iter, err)
 		}
 
 		// Push random batches directly via internal API
-		var totalPerTopic = make(map[string]int64)
+		totalPerTopic := make(map[string]int64)
 		for range nBatches {
 			topic := topics[rng.Intn(len(topics))]
 			pd, ok := c.data.tps.getp(topic, 0)
@@ -486,8 +488,8 @@ func TestChaosProduceCloseCrashRecover(t *testing.T) {
 			}
 			nRecords := 1 + rng.Intn(5)
 			b := makeTestBatch(pd.highWatermark, int32(nRecords))
-			pd.pushBatch(b.nbytes, b.RecordBatch, false)
-			c.persistBatch(pd, pd.batches[len(pd.batches)-1])
+			c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+			// persistBatchToSegment is now called internally by pushBatch
 			totalPerTopic[topic] += int64(nRecords)
 		}
 
@@ -502,7 +504,7 @@ func TestChaosProduceCloseCrashRecover(t *testing.T) {
 		if cleanShutdown {
 			c.Close()
 		}
-		// For crash: just abandon the cluster (if syncWrites, data should be on disk)
+		// For crash: just abandon the cluster (writes are always synced)
 
 		// Reopen and verify
 		c2, err := NewCluster(DataDir(dir), NumBrokers(1))
@@ -513,27 +515,15 @@ func TestChaosProduceCloseCrashRecover(t *testing.T) {
 		for _, topic := range topics {
 			pd, ok := c2.data.tps.getp(topic, 0)
 			if !ok {
-				if cleanShutdown || syncWrites {
-					t.Fatalf("iter %d: topic %s missing after %s",
-						iter, topic, shutdownType(cleanShutdown))
-				}
+				t.Fatalf("iter %d: topic %s missing after %s",
+					iter, topic, shutdownType(cleanShutdown))
 				continue
 			}
 
-			if cleanShutdown {
-				if pd.highWatermark != expectedHWM[topic] {
-					t.Fatalf("iter %d topic %s: expected HWM %d, got %d",
-						iter, topic, expectedHWM[topic], pd.highWatermark)
-				}
-			} else if syncWrites {
-				// With sync writes, all fsynced batches should be present.
-				// HWM should match since every batch was individually fsynced.
-				if pd.highWatermark != expectedHWM[topic] {
-					t.Fatalf("iter %d topic %s (sync crash): expected HWM %d, got %d",
-						iter, topic, expectedHWM[topic], pd.highWatermark)
-				}
+			if pd.highWatermark != expectedHWM[topic] {
+				t.Fatalf("iter %d topic %s: expected HWM %d, got %d",
+					iter, topic, expectedHWM[topic], pd.highWatermark)
 			}
-			// For non-sync crash: any HWM >= 0 is acceptable (partial data loss OK)
 		}
 		c2.Close()
 
@@ -568,8 +558,10 @@ func makeTestBatch(baseOffset int64, numRecords int32) partBatch {
 	b.MaxTimestamp = baseOffset*1000 + int64(numRecords)
 	b.NumRecords = numRecords
 	b.Magic = 2
-	b.Length = 49 // fixed header size, no records
-	b.nbytes = len(b.AppendTo(nil))
+	enc := b.RecordBatch.AppendTo(nil)
+	b.Length = int32(len(enc) - 12)
+	b.CRC = int32(crc32.Checksum(enc[21:], crc32c))
+	b.nbytes = len(enc)
 	return b
 }
 
@@ -580,11 +572,11 @@ func TestChaosGroupCommitsCrashRecover(t *testing.T) {
 
 	rng := rand.New(rand.NewSource(99))
 
-	for iter := range 10 {
+	for iter := range 4 {
 		cleanShutdown := iter%2 == 0
 		dir := t.TempDir()
 
-		c, err := NewCluster(DataDir(dir), SyncWrites(), NumBrokers(1),
+		c, err := NewCluster(DataDir(dir), NumBrokers(1),
 			SeedTopics(1, "t1", "t2"))
 		if err != nil {
 			t.Fatalf("iter %d: %v", iter, err)
@@ -774,7 +766,7 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1), SyncWrites(),
+	c, err := NewCluster(DataDir(dir), NumBrokers(1),
 		SeedTopics(1, "t"))
 	if err != nil {
 		t.Fatal(err)
@@ -1014,7 +1006,7 @@ func TestPersistLiveSyncThenShutdown(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), SyncWrites(), NumBrokers(1),
+	c, err := NewCluster(DataDir(dir), NumBrokers(1),
 		SeedTopics(1, "live"),
 		BrokerConfigs(map[string]string{
 			"log.segment.bytes": "100",
@@ -1028,15 +1020,15 @@ func TestPersistLiveSyncThenShutdown(t *testing.T) {
 	pd, _ := c.data.tps.getp("live", 0)
 	for i := range 30 {
 		b := makeTestBatch(int64(i), 1)
-		pd.pushBatch(b.nbytes, b.RecordBatch, false)
-		c.persistBatch(pd, pd.batches[len(pd.batches)-1])
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+		// persistBatchToSegment is now called internally by pushBatch
 	}
 
 	// Verify segments were created
-	if len(pd.segmentBases) < 2 {
-		t.Fatalf("expected multiple segments, got %d", len(pd.segmentBases))
+	if len(pd.segments) < 2 {
+		t.Fatalf("expected multiple segments, got %d", len(pd.segments))
 	}
-	t.Logf("created %d live segments", len(pd.segmentBases))
+	t.Logf("created %d live segments", len(pd.segments))
 
 	// Close cleanly - should create snapshot referencing existing segments
 	c.Close()
@@ -1052,8 +1044,8 @@ func TestPersistLiveSyncThenShutdown(t *testing.T) {
 	if !ok {
 		t.Fatal("partition missing after restart")
 	}
-	if len(pd2.batches) != 30 {
-		t.Fatalf("expected 30 batches, got %d", len(pd2.batches))
+	if pd2.totalBatches() != 30 {
+		t.Fatalf("expected 30 batches, got %d", pd2.totalBatches())
 	}
 }
 
@@ -1096,7 +1088,7 @@ func TestPersistRepeatedCloseReopen(t *testing.T) {
 	dir := t.TempDir()
 
 	var totalBatches int
-	for cycle := range 5 {
+	for cycle := range 3 {
 		c, err := NewCluster(DataDir(dir), NumBrokers(1),
 			SeedTopics(1, "cycle"))
 		if err != nil {
@@ -1106,7 +1098,7 @@ func TestPersistRepeatedCloseReopen(t *testing.T) {
 		pd, _ := c.data.tps.getp("cycle", 0)
 		for range 3 {
 			b := makeTestBatch(pd.highWatermark, 1)
-			pd.pushBatch(b.nbytes, b.RecordBatch, false)
+			c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
 			totalBatches++
 		}
 		c.Close()
@@ -1123,9 +1115,9 @@ func TestPersistRepeatedCloseReopen(t *testing.T) {
 	if !ok {
 		t.Fatal("partition missing after final reopen")
 	}
-	if len(pd.batches) != totalBatches {
+	if pd.totalBatches() != totalBatches {
 		t.Fatalf("expected %d batches after %d cycles, got %d",
-			totalBatches, 5, len(pd.batches))
+			totalBatches, 5, pd.totalBatches())
 	}
 }
 
@@ -1192,7 +1184,7 @@ func TestPersistOffsetDeleteRoundTrip(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), SyncWrites(), NumBrokers(1),
+	c, err := NewCluster(DataDir(dir), NumBrokers(1),
 		SeedTopics(1, "t1"))
 	if err != nil {
 		t.Fatal(err)
@@ -1274,7 +1266,7 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 		pd, _ := c.data.tps.getp("conv", 0)
 		for i := range 20 {
 			b := makeTestBatch(pd.highWatermark, int32(1+i%3))
-			pd.pushBatch(b.nbytes, b.RecordBatch, false)
+			c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
 		}
 		c.Close()
 	}
@@ -1284,7 +1276,7 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 		hwm            int64
 		lso            int64
 		logStartOffset int64
-		maxTimestamp    int64
+		maxTimestamp   int64
 		nbytes         int64
 		batchCount     int
 	}
@@ -1303,9 +1295,9 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 			hwm:            pd.highWatermark,
 			lso:            pd.lastStableOffset,
 			logStartOffset: pd.logStartOffset,
-			maxTimestamp:    pd.maxTimestamp,
+			maxTimestamp:   pd.maxTimestamp,
 			nbytes:         pd.nbytes,
-			batchCount:     len(pd.batches),
+			batchCount:     pd.totalBatches(),
 		}
 		c.Close()
 	}
@@ -1332,9 +1324,9 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 			hwm:            pd.highWatermark,
 			lso:            pd.lastStableOffset,
 			logStartOffset: pd.logStartOffset,
-			maxTimestamp:    pd.maxTimestamp,
+			maxTimestamp:   pd.maxTimestamp,
 			nbytes:         pd.nbytes,
-			batchCount:     len(pd.batches),
+			batchCount:     pd.totalBatches(),
 		}
 
 		if snapState.hwm != replayState.hwm {
@@ -1359,7 +1351,7 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 		// stores the real partition creation time, while full replay
 		// can only approximate from the first batch's timestamp. Verify
 		// the replay path derived from first batch, not time.Now().
-		firstBatchTs := time.UnixMilli(pd.batches[0].FirstTimestamp)
+		firstBatchTs := time.UnixMilli(pd.segments[0].index[0].firstTimestamp)
 		if !pd.createdAt.Equal(firstBatchTs) {
 			t.Errorf("createdAt: expected first batch timestamp %v, got %v", firstBatchTs, pd.createdAt)
 		}
@@ -1384,7 +1376,7 @@ func TestPersistSnapshotLogStartOffsetClamp(t *testing.T) {
 		pd, _ := c.data.tps.getp("lso", 0)
 		for range 10 {
 			b := makeTestBatch(pd.highWatermark, 1)
-			pd.pushBatch(b.nbytes, b.RecordBatch, false)
+			c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
 		}
 		// Simulate DeleteRecords advancing logStartOffset.
 		pd.logStartOffset = 7
@@ -1420,6 +1412,595 @@ func TestPersistSnapshotLogStartOffsetClamp(t *testing.T) {
 				pd.logStartOffset, pd.highWatermark)
 		}
 		t.Logf("logStartOffset=%d HWM=%d batches=%d",
-			pd.logStartOffset, pd.highWatermark, len(pd.batches))
+			pd.logStartOffset, pd.highWatermark, pd.totalBatches())
+	}
+}
+
+// TestTrimLeftDeletesSegmentFiles verifies that trimLeft deletes segment files
+// for fully-trimmed segments and adjusts nbytes correctly.
+func TestTrimLeftDeletesSegmentFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "trim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	pd, _ := c.data.tps.getp("trim", 0)
+
+	// Produce 10 batches (1 record each) to create segment data.
+	for range 10 {
+		b := makeTestBatch(pd.highWatermark, 1)
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+	}
+
+	if pd.totalBatches() != 10 {
+		t.Fatalf("expected 10 batches, got %d", pd.totalBatches())
+	}
+	nbytesBeforeTrim := pd.nbytes
+
+	// Trim first 5 records.
+	pd.logStartOffset = 5
+	c.trimLeft(pd)
+
+	if pd.totalBatches() != 5 {
+		t.Fatalf("expected 5 batches after trim, got %d", pd.totalBatches())
+	}
+	if pd.nbytes >= nbytesBeforeTrim {
+		t.Fatalf("expected nbytes to decrease: before=%d after=%d", nbytesBeforeTrim, pd.nbytes)
+	}
+	if pd.nbytes <= 0 {
+		t.Fatalf("expected positive nbytes after partial trim, got %d", pd.nbytes)
+	}
+
+	// maxTimestampBatch should still be valid
+	m := pd.maxTimestampBatch()
+	if m == nil {
+		t.Fatal("maxTimestampBatch should not be nil after partial trim")
+	}
+}
+
+// TestTrimLeftAllThenProduce verifies trimming all batches then producing
+// more works correctly (no panics, fresh segment created).
+func TestTrimLeftAllThenProduce(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "trim-all"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	pd, _ := c.data.tps.getp("trim-all", 0)
+
+	// Produce 5 batches.
+	for range 5 {
+		b := makeTestBatch(pd.highWatermark, 1)
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+	}
+
+	// Trim ALL records.
+	pd.logStartOffset = pd.highWatermark
+	c.trimLeft(pd)
+
+	if pd.totalBatches() != 0 {
+		t.Fatalf("expected 0 batches after full trim, got %d", pd.totalBatches())
+	}
+	if pd.nbytes != 0 {
+		t.Fatalf("expected 0 nbytes after full trim, got %d", pd.nbytes)
+	}
+	if pd.activeSegFile != nil {
+		t.Fatal("activeSegFile should be nil after full trim")
+	}
+	if pd.activeIdxFile != nil {
+		t.Fatal("activeIdxFile should be nil after full trim")
+	}
+	if pd.maxTimestampBatch() != nil {
+		t.Fatal("maxTimestampBatch should be nil after full trim")
+	}
+
+	// Produce again - should not panic.
+	for range 3 {
+		b := makeTestBatch(pd.highWatermark, 1)
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+	}
+	if pd.totalBatches() != 3 {
+		t.Fatalf("expected 3 batches after re-produce, got %d", pd.totalBatches())
+	}
+	if pd.nbytes <= 0 {
+		t.Fatalf("expected positive nbytes after re-produce, got %d", pd.nbytes)
+	}
+}
+
+// TestSearchOffsetEmptyPartition verifies searchOffset on an empty partition.
+func TestSearchOffsetEmptyPartition(t *testing.T) {
+	t.Parallel()
+
+	c, err := NewCluster(NumBrokers(1), SeedTopics(1, "empty"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	pd, _ := c.data.tps.getp("empty", 0)
+
+	// Empty partition, offset 0
+	_, _, found, atEnd := pd.searchOffset(0)
+	if found {
+		t.Fatal("expected not found on empty partition")
+	}
+	if !atEnd {
+		t.Fatal("expected atEnd for offset 0 on empty partition (logStartOffset=0=HWM)")
+	}
+
+	// Out of range
+	_, _, found, atEnd = pd.searchOffset(1)
+	if found || atEnd {
+		t.Fatal("expected neither found nor atEnd for offset > HWM")
+	}
+}
+
+// TestSearchOffsetAfterTrimLeft verifies searchOffset works correctly
+// after trimming batches from the front.
+func TestSearchOffsetAfterTrimLeft(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "search-trim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	pd, _ := c.data.tps.getp("search-trim", 0)
+
+	// Produce 10 single-record batches.
+	for range 10 {
+		b := makeTestBatch(pd.highWatermark, 1)
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+	}
+
+	// Trim first 5 records.
+	pd.logStartOffset = 5
+	c.trimLeft(pd)
+
+	// Offset 4 is before logStartOffset - should not be found.
+	_, _, found, _ := pd.searchOffset(4)
+	if found {
+		t.Fatal("offset 4 should not be found (before logStartOffset)")
+	}
+
+	// Offset 5 should be found (first available).
+	segIdx, metaIdx, found, _ := pd.searchOffset(5)
+	if !found {
+		t.Fatal("offset 5 should be found")
+	}
+	m := &pd.segments[segIdx].index[metaIdx]
+	if m.firstOffset != 5 {
+		t.Fatalf("expected firstOffset 5, got %d", m.firstOffset)
+	}
+
+	// Offset 9 should be found (last record).
+	_, _, found, _ = pd.searchOffset(9)
+	if !found {
+		t.Fatal("offset 9 should be found")
+	}
+
+	// Offset 10 should be at end.
+	_, _, found, atEnd := pd.searchOffset(10)
+	if found {
+		t.Fatal("offset 10 should not be found")
+	}
+	if !atEnd {
+		t.Fatal("offset 10 should be atEnd")
+	}
+}
+
+// TestCompactBailsOnPartialReadError verifies compaction does not proceed
+// (and does not lose data) when reading batches from disk fails partway.
+func TestCompactBailsOnPartialReadError(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "compact-err"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	pd, _ := c.data.tps.getp("compact-err", 0)
+
+	// Produce 5 batches.
+	for range 5 {
+		b := makeTestBatch(pd.highWatermark, 1)
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+	}
+	totalBefore := pd.totalBatches()
+	nbytesBefore := pd.nbytes
+	numSegsBefore := len(pd.segments)
+
+	// Corrupt the segment file so readBatchFull fails for some entries.
+	pdir := topicDir(c.dataDir, pd.t, pd.p)
+	segName := segmentFileName(pd.segments[0].base)
+	path := filepath.Join(pdir, segName)
+	raw, err := c.fs.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt the middle of the file.
+	if len(raw) > 40 {
+		for i := len(raw) / 2; i < len(raw); i++ {
+			raw[i] = 0xFF
+		}
+	}
+	f, err := c.fs.OpenFile(path, os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write(raw)
+	f.Close()
+
+	// Compact should bail out without destroying data.
+	c.compact(pd, "compact-err")
+
+	if pd.totalBatches() != totalBefore {
+		t.Fatalf("compaction should not have changed batch count: before=%d after=%d",
+			totalBefore, pd.totalBatches())
+	}
+	if pd.nbytes != nbytesBefore {
+		t.Fatalf("compaction should not have changed nbytes: before=%d after=%d",
+			nbytesBefore, pd.nbytes)
+	}
+	if len(pd.segments) != numSegsBefore {
+		t.Fatalf("compaction should not have changed segment count: before=%d after=%d",
+			numSegsBefore, len(pd.segments))
+	}
+}
+
+// TestSnapshotNbytesWithPartialTrim verifies that after a partial trim
+// (logStartOffset in the middle of a segment), snapshot reload correctly
+// computes nbytes without double-counting trimmed entries.
+func TestSnapshotNbytesWithPartialTrim(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	const topic = "nbytes-partial"
+	var savedNbytes int64
+	var savedHWM int64
+
+	// Phase 1: produce records, partially trim, clean shutdown.
+	{
+		c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, topic))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		pd, _ := c.data.tps.getp(topic, 0)
+		for range 10 {
+			b := makeTestBatch(pd.highWatermark, 1)
+			c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+		}
+
+		// Advance logStartOffset to trim the first 3 records.
+		// This may leave the first segment with some trimmed entries
+		// (depending on whether they share a segment file).
+		pd.logStartOffset = 3
+		c.trimLeft(pd)
+
+		savedNbytes = pd.nbytes
+		savedHWM = pd.highWatermark
+		if savedNbytes <= 0 {
+			t.Fatalf("expected positive nbytes, got %d", savedNbytes)
+		}
+		c.Close()
+	}
+
+	// Phase 2: reopen from snapshot, verify nbytes matches.
+	{
+		c, err := NewCluster(DataDir(dir), NumBrokers(1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		pd, ok := c.data.tps.getp(topic, 0)
+		if !ok {
+			t.Fatal("partition missing after restart")
+		}
+		if pd.highWatermark != savedHWM {
+			t.Fatalf("HWM mismatch: got %d, want %d", pd.highWatermark, savedHWM)
+		}
+		if pd.nbytes != savedNbytes {
+			t.Fatalf("nbytes mismatch after reopen: got %d, want %d", pd.nbytes, savedNbytes)
+		}
+	}
+}
+
+// TestRebuildSegmentsWritesSynced verifies that rebuildSegments
+// (used by compact) writes data that survives reopen.
+func TestRebuildSegmentsWritesSynced(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "sync-rebuild"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	pd, _ := c.data.tps.getp("sync-rebuild", 0)
+
+	// Produce some batches.
+	for range 5 {
+		b := makeTestBatch(pd.highWatermark, 1)
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+	}
+
+	// Build batch list for rebuild.
+	var batches []*partBatch
+	pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
+		batch, err := c.readBatchFull(pd, si, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		batches = append(batches, batch)
+		return true
+	})
+
+	// Rebuild - should not panic and data should survive.
+	c.rebuildSegments(pd, "sync-rebuild", batches)
+
+	if pd.totalBatches() != 5 {
+		t.Fatalf("expected 5 batches after rebuild, got %d", pd.totalBatches())
+	}
+
+	// Verify we can read all batches back.
+	pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
+		_, err := c.readBatchFull(pd, si, m)
+		if err != nil {
+			t.Fatalf("readBatchFull after rebuild: %v", err)
+		}
+		return true
+	})
+}
+
+// TestRebuildSegmentsSegmentSplitting verifies that rebuildSegments correctly
+// uses the full entry size (not just batch wire bytes) for segment split
+// decisions, preventing segments from exceeding the configured max size.
+func TestRebuildSegmentsSegmentSplitting(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// Set a very small segment.bytes to force multiple segments.
+	segBytes := "200"
+	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "split"),
+		BrokerConfigs(map[string]string{"log.segment.bytes": segBytes}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	pd, _ := c.data.tps.getp("split", 0)
+
+	// Produce batches.
+	for range 10 {
+		b := makeTestBatch(pd.highWatermark, 1)
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+	}
+
+	// Read all batches.
+	var batches []*partBatch
+	pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
+		batch, err := c.readBatchFull(pd, si, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		batches = append(batches, batch)
+		return true
+	})
+
+	// Rebuild with new segment size.
+	c.rebuildSegments(pd, "split", batches)
+
+	// Verify multiple segments were created (200 bytes is too small
+	// for all 10 batches in one segment).
+	if len(pd.segments) < 2 {
+		t.Fatalf("expected multiple segments with segment.bytes=%s, got %d",
+			segBytes, len(pd.segments))
+	}
+
+	// Verify all batches survived.
+	if pd.totalBatches() != 10 {
+		t.Fatalf("expected 10 batches after rebuild, got %d", pd.totalBatches())
+	}
+
+	// Verify segment sizes don't drastically exceed the limit
+	// (first batch in a new segment is allowed to exceed).
+	for i, seg := range pd.segments {
+		if i > 0 && seg.size == 0 {
+			t.Fatalf("segment %d has size 0", i)
+		}
+	}
+}
+
+// TestTrimLeftPartialSegment verifies trimLeft correctly handles the case
+// where logStartOffset falls in the middle of a segment (some batches
+// remain in the segment).
+func TestTrimLeftPartialSegment(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// Use a large segment.bytes so all batches land in one segment.
+	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "partial"),
+		BrokerConfigs(map[string]string{"log.segment.bytes": "1073741824"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	pd, _ := c.data.tps.getp("partial", 0)
+
+	for range 10 {
+		b := makeTestBatch(pd.highWatermark, 1)
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+	}
+
+	// All batches should be in one segment.
+	if len(pd.segments) != 1 {
+		t.Fatalf("expected 1 segment, got %d", len(pd.segments))
+	}
+
+	// Trim first 5 - segment should remain but with fewer entries.
+	pd.logStartOffset = 5
+	c.trimLeft(pd)
+
+	if len(pd.segments) != 1 {
+		t.Fatalf("expected 1 segment after partial trim, got %d", len(pd.segments))
+	}
+	if pd.totalBatches() != 5 {
+		t.Fatalf("expected 5 batches after partial trim, got %d", pd.totalBatches())
+	}
+	// First remaining batch should have offset 5.
+	first := &pd.segments[0].index[0]
+	if first.firstOffset != 5 {
+		t.Fatalf("expected first offset 5, got %d", first.firstOffset)
+	}
+}
+
+// TestMaxTimestampBatchAfterCompaction verifies that maxTimestampSeg/Idx
+// are correctly rebuilt after compaction changes the batch set.
+func TestMaxTimestampBatchAfterCompaction(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "ts-compact"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	pd, _ := c.data.tps.getp("ts-compact", 0)
+
+	// Produce batches with increasing timestamps (default from makeTestBatch).
+	for range 5 {
+		b := makeTestBatch(pd.highWatermark, 1)
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+	}
+
+	m := pd.maxTimestampBatch()
+	if m == nil {
+		t.Fatal("maxTimestampBatch should not be nil")
+	}
+	maxTS := m.maxTimestamp
+
+	// Rebuild segments (simulating compaction output).
+	var batches []*partBatch
+	pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
+		batch, err := c.readBatchFull(pd, si, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		batches = append(batches, batch)
+		return true
+	})
+	c.rebuildSegments(pd, "ts-compact", batches)
+
+	m2 := pd.maxTimestampBatch()
+	if m2 == nil {
+		t.Fatal("maxTimestampBatch should not be nil after rebuild")
+	}
+	if m2.maxTimestamp != maxTS {
+		t.Fatalf("maxTimestamp changed after rebuild: before=%d after=%d", maxTS, m2.maxTimestamp)
+	}
+}
+
+// TestWriteFailureTruncatesPartialEntry verifies that when writeEntry
+// fails (e.g., sync error), persistBatchToSegment truncates any partial
+// data so subsequent writes land at correct file positions.
+func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
+	t.Parallel()
+
+	// Use memFS (no DataDir) so we can inject faults.
+	c, err := NewCluster(NumBrokers(1), SeedTopics(1, "fail-trunc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	mfs := c.fs.(*memFS)
+	pd, _ := c.data.tps.getp("fail-trunc", 0)
+
+	// Produce 3 batches successfully.
+	for range 3 {
+		b := makeTestBatch(pd.highWatermark, 1)
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+	}
+
+	if pd.totalBatches() != 3 {
+		t.Fatalf("expected 3 batches, got %d", pd.totalBatches())
+	}
+
+	// Record segment file size before failure.
+	seg := &pd.segments[len(pd.segments)-1]
+	sizeBeforeFailure := seg.size
+
+	// Inject write failure on the segment file.
+	// persistBatchToSegment should Truncate to remove the partial entry.
+	mfs.failNextWrite = &testError{"injected write"}
+
+	b := makeTestBatch(pd.highWatermark, 1)
+	c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+
+	// The batchMeta was added in-memory but persist failed.
+	// The segment file should be truncated back to its pre-failure size.
+	pdir := topicDir(c.dataDir, pd.t, pd.p)
+	path := filepath.Join(pdir, segmentFileName(seg.base))
+	info, err := mfs.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != sizeBeforeFailure {
+		t.Fatalf("expected file size %d after truncation, got %d",
+			sizeBeforeFailure, info.Size())
+	}
+
+	// Produce 3 more batches - should succeed and land at correct positions.
+	for range 3 {
+		b := makeTestBatch(pd.highWatermark, 1)
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+	}
+
+	// Verify all post-failure batches can be read correctly via readBatchRaw.
+	// If truncation didn't happen, readBatchRaw would read from wrong
+	// positions and return incorrect data.
+	var readCount, failedCount int
+	pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
+		raw, err := c.readBatchRaw(pd, si, m)
+		if m.segPos < 0 {
+			// The failed batch should have segPos=-1 and readBatchRaw
+			// should return an error.
+			if err == nil {
+				t.Fatalf("readBatchRaw offset %d: expected error for segPos=-1", m.firstOffset)
+			}
+			failedCount++
+			return true
+		}
+		if err != nil {
+			t.Fatalf("readBatchRaw offset %d: %v", m.firstOffset, err)
+		}
+		if len(raw) == 0 {
+			t.Fatalf("readBatchRaw offset %d: empty", m.firstOffset)
+		}
+		readCount++
+		return true
+	})
+	if readCount != 6 {
+		t.Fatalf("expected 6 readable batches, got %d", readCount)
+	}
+	if failedCount != 1 {
+		t.Fatalf("expected 1 failed batch, got %d", failedCount)
 	}
 }

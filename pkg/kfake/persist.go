@@ -1,14 +1,18 @@
 package kfake
 
 import (
+	"cmp"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -54,9 +58,9 @@ const currentPersistVersion = 1
 // All multi-byte integers are little-endian.
 const entryHeaderSize = 10 // 4 (length) + 4 (CRC) + 2 (version)
 
-// writeEntry frames data with length+CRC+version and writes it to f.
-// If syncWrites is true, fsync is called after the write.
-func writeEntry(f file, data []byte, syncWrites bool) error {
+// writeEntry frames data with length+CRC+version and writes it to f,
+// then fsyncs.
+func writeEntry(f file, data []byte, syncW bool) error {
 	// length = len(version) + len(data)
 	length := uint32(2 + len(data))
 	var hdr [entryHeaderSize]byte
@@ -64,7 +68,7 @@ func writeEntry(f file, data []byte, syncWrites bool) error {
 	// CRC covers version + data
 	var vbuf [2]byte
 	binary.LittleEndian.PutUint16(vbuf[:], currentPersistVersion)
-	crcVal := crc32.NewIEEE()
+	crcVal := crc32.New(crc32c)
 	crcVal.Write(vbuf[:])
 	crcVal.Write(data)
 	binary.LittleEndian.PutUint32(hdr[4:8], crcVal.Sum32())
@@ -76,7 +80,7 @@ func writeEntry(f file, data []byte, syncWrites bool) error {
 	if _, err := f.Write(data); err != nil {
 		return err
 	}
-	if syncWrites {
+	if syncW {
 		return f.Sync()
 	}
 	return nil
@@ -99,8 +103,7 @@ func readEntries(raw []byte) (entries []entryData, validBytes int) {
 		storedCRC := binary.LittleEndian.Uint32(raw[pos+4 : pos+8])
 		versionAndData := raw[pos+8 : pos+4+4+int(length)]
 
-		// Verify CRC
-		if crc32.ChecksumIEEE(versionAndData) != storedCRC {
+		if crc32.Checksum(versionAndData, crc32c) != storedCRC {
 			break
 		}
 
@@ -110,167 +113,246 @@ func readEntries(raw []byte) (entries []entryData, validBytes int) {
 		entries = append(entries, entryData{
 			version: version,
 			data:    data,
+			pos:     int64(pos),
 		})
-		pos = pos + 4 + 4 + int(length)
+		pos += 4 + 4 + int(length)
 	}
 	return entries, pos
 }
 
-type entryData struct {
-	version uint16
-	data    []byte
-}
+type (
+	entryData struct {
+		version uint16
+		data    []byte
+		pos     int64 // byte position of this entry within the file
+	}
 
-////////////////////
-// JSON FILE TYPES
-////////////////////
+	persistMeta struct {
+		Version   int    `json:"version"`
+		ClusterID string `json:"cluster_id"`
+	}
 
-type persistMeta struct {
-	Version   int    `json:"version"`
-	ClusterID string `json:"cluster_id"`
-}
+	persistTopics struct {
+		Version int            `json:"version"`
+		Topics  []persistTopic `json:"topics"`
+	}
 
-type persistTopics struct {
-	Version int            `json:"version"`
-	Topics  []persistTopic `json:"topics"`
-}
+	persistTopic struct {
+		Name       string            `json:"name"`
+		ID         uuid              `json:"id"`
+		Partitions int               `json:"partitions"`
+		Replicas   int               `json:"replicas"`
+		Configs    map[string]string `json:"configs,omitempty"`
+	}
 
-type persistTopic struct {
-	Name       string            `json:"name"`
-	ID         uuid              `json:"id"`
-	Partitions int               `json:"partitions"`
-	Replicas   int               `json:"replicas"`
-	Configs    map[string]string `json:"configs,omitempty"`
-}
+	persistACLs struct {
+		Version int          `json:"version"`
+		ACLs    []persistACL `json:"acls"`
+	}
 
-type persistACLs struct {
-	Version int          `json:"version"`
-	ACLs    []persistACL `json:"acls"`
-}
+	persistACL struct {
+		Principal    string `json:"principal"`
+		Host         string `json:"host"`
+		ResourceType int8   `json:"resource_type"`
+		ResourceName string `json:"resource_name"`
+		Pattern      int8   `json:"pattern"`
+		Operation    int8   `json:"operation"`
+		Permission   int8   `json:"permission"`
+	}
 
-type persistACL struct {
-	Principal    string `json:"principal"`
-	Host         string `json:"host"`
-	ResourceType int8   `json:"resource_type"`
-	ResourceName string `json:"resource_name"`
-	Pattern      int8   `json:"pattern"`
-	Operation    int8   `json:"operation"`
-	Permission   int8   `json:"permission"`
-}
+	persistSASL struct {
+		Version  int                     `json:"version"`
+		Plain    map[string]string       `json:"plain,omitempty"`
+		Scram256 map[string]persistScram `json:"scram256,omitempty"`
+		Scram512 map[string]persistScram `json:"scram512,omitempty"`
+	}
 
-type persistSASL struct {
-	Version  int                     `json:"version"`
-	Plain    map[string]string       `json:"plain,omitempty"`
-	Scram256 map[string]persistScram `json:"scram256,omitempty"`
-	Scram512 map[string]persistScram `json:"scram512,omitempty"`
-}
+	persistScram struct {
+		Mechanism  string `json:"mechanism"`
+		Salt       []byte `json:"salt"`
+		SaltedPass []byte `json:"salted_pass"`
+		Iterations int    `json:"iterations"`
+	}
 
-type persistScram struct {
-	Mechanism  string `json:"mechanism"`
-	Salt       []byte `json:"salt"`
-	SaltedPass []byte `json:"salted_pass"`
-	Iterations int    `json:"iterations"`
-}
+	persistBrokerConfigs struct {
+		Version int               `json:"version"`
+		Configs map[string]string `json:"configs"`
+	}
 
-type persistBrokerConfigs struct {
-	Version int               `json:"version"`
-	Configs map[string]string `json:"configs"`
-}
+	persistQuotas struct {
+		Version int            `json:"version"`
+		Quotas  []persistQuota `json:"quotas"`
+	}
 
-type persistQuotas struct {
-	Version int            `json:"version"`
-	Quotas  []persistQuota `json:"quotas"`
-}
+	persistQuota struct {
+		Entity []persistQuotaEntityComponent `json:"entity"`
+		Values map[string]float64            `json:"values"`
+	}
 
-type persistQuota struct {
-	Entity []persistQuotaEntityComponent `json:"entity"`
-	Values map[string]float64            `json:"values"`
-}
+	persistQuotaEntityComponent struct {
+		Type string  `json:"type"`
+		Name *string `json:"name"`
+	}
 
-type persistQuotaEntityComponent struct {
-	Type string  `json:"type"`
-	Name *string `json:"name"`
-}
+	persistSeqWindows struct {
+		Version int                     `json:"version"`
+		Windows []persistSeqWindowEntry `json:"windows"`
+	}
 
-type persistSeqWindows struct {
-	Version int                     `json:"version"`
-	Windows []persistSeqWindowEntry `json:"windows"`
-}
+	persistSeqWindowEntry struct {
+		PID     int64    `json:"pid"`
+		Topic   string   `json:"topic"`
+		Part    int32    `json:"partition"`
+		Seq     [5]int32 `json:"seq"`
+		Offsets [5]int64 `json:"offsets"`
+		At      uint8    `json:"at"`
+		Epoch   int16    `json:"epoch"`
+	}
 
-type persistSeqWindowEntry struct {
-	PID     int64    `json:"pid"`
-	Topic   string   `json:"topic"`
-	Part    int32    `json:"partition"`
-	Seq     [5]int32 `json:"seq"`
-	Offsets [5]int64 `json:"offsets"`
-	At      uint8    `json:"at"`
-	Epoch   int16    `json:"epoch"`
-}
+	persistPartSnapshot struct {
+		Version          int                  `json:"version"`
+		HighWatermark    int64                `json:"high_watermark"`
+		LastStableOffset int64                `json:"last_stable_offset"`
+		LogStartOffset   int64                `json:"log_start_offset"`
+		Epoch            int32                `json:"epoch"`
+		MaxTimestamp     int64                `json:"max_timestamp"`
+		CreatedAt        time.Time            `json:"created_at"`
+		AbortedTxns      []persistAbortedTxn  `json:"aborted_txns,omitempty"`
+		Segments         []persistSegmentInfo `json:"segments"`
+	}
 
-type persistPartSnapshot struct {
-	Version              int                  `json:"version"`
-	HighWatermark        int64                `json:"high_watermark"`
-	LastStableOffset     int64                `json:"last_stable_offset"`
-	LogStartOffset       int64                `json:"log_start_offset"`
-	Epoch                int32                `json:"epoch"`
-	MaxTimestamp         int64                `json:"max_timestamp"`
-	MaxTimestampBatchIdx int                  `json:"max_timestamp_batch_idx"`
-	CreatedAt            time.Time            `json:"created_at"`
-	AbortedTxns          []persistAbortedTxn  `json:"aborted_txns,omitempty"`
-	Segments             []persistSegmentInfo `json:"segments"`
-}
+	persistAbortedTxn struct {
+		ProducerID  int64 `json:"producer_id"`
+		FirstOffset int64 `json:"first_offset"`
+		LastOffset  int64 `json:"last_offset"`
+	}
 
-type persistAbortedTxn struct {
-	ProducerID  int64 `json:"producer_id"`
-	FirstOffset int64 `json:"first_offset"`
-	LastOffset  int64 `json:"last_offset"`
-}
-
-type persistSegmentInfo struct {
-	BaseOffset int64 `json:"base_offset"`
-	Size       int64 `json:"size"`
-}
+	persistSegmentInfo struct {
+		BaseOffset int64 `json:"base_offset"`
+		Size       int64 `json:"size"`
+		MinEpoch   int32 `json:"min_epoch,omitempty"`
+		MaxEpoch   int32 `json:"max_epoch,omitempty"`
+	}
+)
 
 /////////////////////
-// SEGMENT ENTRIES
+// SEGMENT + INDEX
 /////////////////////
 
-// Segment entry data payload (inside the CRC frame):
-//   [4 bytes: partition epoch, little-endian]
+// Segment files (.dat) contain pure RecordBatch wire bytes concatenated.
+// Entry boundaries are found via RecordBatch Length (big-endian int32 at byte 8).
+// RecordBatch has its own CRC for integrity.
+//
+// Index files (.idx) sit alongside each segment file and contain per-batch
+// metadata as fixed-size 15-byte entries:
+//   [1 byte: version]
+//   [1 byte: checksum (low byte of crc32c of remaining 13 bytes)]
+//   [4 bytes: epoch, little-endian]
 //   [8 bytes: maxEarlierTimestamp, little-endian]
 //   [1 byte: flags (bit 0 = inTx)]
-//   [N bytes: wire-format kmsg.RecordBatch via AppendTo]
 
-func encodeSegmentEntry(b *partBatch) []byte {
-	batchBytes := b.RecordBatch.AppendTo(nil)
-	entry := make([]byte, 4+8+1+len(batchBytes))
-	binary.LittleEndian.PutUint32(entry[0:4], uint32(b.epoch))
-	binary.LittleEndian.PutUint64(entry[4:12], uint64(b.maxEarlierTimestamp))
-	if b.inTx {
-		entry[12] = 1
-	}
-	copy(entry[13:], batchBytes)
-	return entry
+const indexEntrySize = 15
+
+func indexFileName(baseOffset int64) string {
+	return fmt.Sprintf("%d.idx", baseOffset)
 }
 
-func decodeSegmentEntry(data []byte) (*partBatch, error) {
-	if len(data) < 13 {
-		return nil, fmt.Errorf("segment entry too short: %d bytes", len(data))
-	}
-	epoch := int32(binary.LittleEndian.Uint32(data[0:4]))
-	maxEarlierTS := int64(binary.LittleEndian.Uint64(data[4:12]))
-	inTx := data[12]&1 != 0
+var batchPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 256)
+		return &b
+	},
+}
 
+func encodeBatch(b *partBatch) *[]byte {
+	bp := batchPool.Get().(*[]byte)
+	*bp = b.RecordBatch.AppendTo((*bp)[:0])
+	return bp
+}
+
+func encodeIndexEntry(epoch int32, maxEarlierTS int64, inTx bool) [indexEntrySize]byte {
+	var buf [indexEntrySize]byte
+	buf[0] = currentPersistVersion
+	binary.LittleEndian.PutUint32(buf[2:6], uint32(epoch))
+	binary.LittleEndian.PutUint64(buf[6:14], uint64(maxEarlierTS))
+	if inTx {
+		buf[14] = 1
+	}
+	buf[1] = byte(crc32.Checksum(buf[2:], crc32c))
+	return buf
+}
+
+func decodeIndexEntry(buf []byte) (epoch int32, maxEarlierTS int64, inTx bool, ok bool) {
+	if len(buf) < indexEntrySize {
+		return 0, 0, false, false
+	}
+	if byte(crc32.Checksum(buf[2:indexEntrySize], crc32c)) != buf[1] {
+		return 0, 0, false, false
+	}
+	epoch = int32(binary.LittleEndian.Uint32(buf[2:6]))
+	maxEarlierTS = int64(binary.LittleEndian.Uint64(buf[6:14]))
+	inTx = buf[14]&1 != 0
+	return epoch, maxEarlierTS, inTx, true
+}
+
+// decodeBatchRaw validates a RecordBatch CRC and parses it.
+func decodeBatchRaw(raw []byte) (*kmsg.RecordBatch, error) {
+	if len(raw) >= 21 {
+		stored := binary.BigEndian.Uint32(raw[17:21])
+		if computed := crc32.Checksum(raw[21:], crc32c); stored != computed {
+			return nil, fmt.Errorf("RecordBatch CRC mismatch: stored=%08x computed=%08x", stored, computed)
+		}
+	}
 	var rb kmsg.RecordBatch
-	if err := rb.ReadFrom(data[13:]); err != nil {
+	if err := rb.ReadFrom(raw); err != nil {
 		return nil, fmt.Errorf("decoding RecordBatch: %w", err)
+	}
+	return &rb, nil
+}
+
+// readBatchRaw reads the raw RecordBatch wire bytes for a batch from its
+// segment file. The returned bytes can be appended directly to a fetch
+// response. Segment files contain pure RecordBatch bytes.
+func (c *Cluster) readBatchRaw(pd *partData, segIdx int, meta *batchMeta) ([]byte, error) {
+	if meta.segPos < 0 {
+		return nil, fmt.Errorf("batch at offset %d was not persisted", meta.firstOffset)
+	}
+	seg := &pd.segments[segIdx]
+	path := filepath.Join(topicDir(c.dataDir, pd.t, pd.p), segmentFileName(seg.base))
+	f, err := c.fs.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(meta.segPos, io.SeekStart); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, meta.nbytes)
+	if _, err := io.ReadFull(f, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+// readBatchFull reads and decodes a full partBatch from its segment file.
+// Metadata (epoch, maxEarlierTimestamp, inTx) comes from the in-memory
+// batchMeta. Used by compaction and ListOffsets timestamp search.
+func (c *Cluster) readBatchFull(pd *partData, segIdx int, meta *batchMeta) (*partBatch, error) {
+	raw, err := c.readBatchRaw(pd, segIdx, meta)
+	if err != nil {
+		return nil, err
+	}
+	var rb kmsg.RecordBatch
+	if err := rb.ReadFrom(raw); err != nil {
+		return nil, err
 	}
 	return &partBatch{
 		RecordBatch:         rb,
-		nbytes:              len(data[13:]),
-		epoch:               epoch,
-		maxEarlierTimestamp: maxEarlierTS,
-		inTx:                inTx,
+		nbytes:              len(raw),
+		epoch:               meta.epoch,
+		maxEarlierTimestamp: meta.maxEarlierTimestamp,
+		inTx:                meta.inTx,
 	}, nil
 }
 
@@ -278,47 +360,49 @@ func decodeSegmentEntry(data []byte) (*partBatch, error) {
 // APPEND LOG ENTRIES
 //////////////////////////
 
-// Group log entry types
-type groupLogEntry struct {
-	Type     string  `json:"type"`
-	Group    string  `json:"g"`
-	Topic    string  `json:"t,omitempty"`
-	Part     int32   `json:"p,omitempty"`
-	Offset   int64   `json:"o,omitempty"`
-	Epoch    int32   `json:"e,omitempty"`
-	Metadata *string `json:"m,omitempty"`
+type (
+	groupLogEntry struct {
+		Type     string  `json:"type"`
+		Group    string  `json:"g"`
+		Topic    string  `json:"t,omitempty"`
+		Part     int32   `json:"p,omitempty"`
+		Offset   int64   `json:"o,omitempty"`
+		Epoch    int32   `json:"e,omitempty"`
+		Metadata *string `json:"m,omitempty"`
 
-	// For meta entries (classic groups)
-	GroupType  string `json:"typ,omitempty"`
-	ProtoType  string `json:"pt,omitempty"`
-	Protocol   string `json:"pr,omitempty"`
-	Generation int32  `json:"gen,omitempty"`
+		// For meta entries (classic groups)
+		GroupType  string `json:"typ,omitempty"`
+		ProtoType  string `json:"pt,omitempty"`
+		Protocol   string `json:"pr,omitempty"`
+		Generation int32  `json:"gen,omitempty"`
 
-	// For meta848 entries (consumer groups)
-	Assignor   string `json:"assignor,omitempty"`
-	GroupEpoch int32  `json:"epoch848,omitempty"`
+		// For meta848 entries (consumer groups)
+		Assignor   string `json:"assignor,omitempty"`
+		GroupEpoch int32  `json:"epoch848,omitempty"`
 
-	// For static member entries
-	InstanceID string `json:"instance,omitempty"`
-	MemberID   string `json:"member,omitempty"`
-}
+		// For static member entries
+		InstanceID string `json:"instance,omitempty"`
+		MemberID   string `json:"member,omitempty"`
+	}
 
-// PID log entry types
-type pidLogEntry struct {
-	Type    string `json:"type"` // init, endtx, timeout
-	PID     int64  `json:"pid"`
-	Epoch   int16  `json:"epoch"`
-	TxID    string `json:"txid,omitempty"`
-	Timeout int32  `json:"timeout,omitempty"`
-	Commit  *bool  `json:"commit,omitempty"`
-}
+	pidLogEntry struct {
+		Type    string `json:"type"` // init, endtx, timeout
+		PID     int64  `json:"pid"`
+		Epoch   int16  `json:"epoch"`
+		TxID    string `json:"txid,omitempty"`
+		Timeout int32  `json:"timeout,omitempty"`
+		Commit  *bool  `json:"commit,omitempty"`
+	}
+)
 
 /////////////////////
 // WRITE HELPERS
 /////////////////////
 
-// writeJSONFile writes a JSON file atomically via temp+rename.
-func writeJSONFile(fsys fs, path string, v any, syncWrites bool) error {
+// writeJSONFile atomically writes v as JSON to path by writing to a
+// temporary file, fsyncing, and renaming. This ensures readers never
+// see a partially-written file even if the process crashes mid-write.
+func writeJSONFile(fsys fs, path string, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("marshaling %s: %w", path, err)
@@ -328,29 +412,23 @@ func writeJSONFile(fsys fs, path string, v any, syncWrites bool) error {
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", tmpPath, err)
 	}
+	defer f.Close()
 	if _, err := f.Write(data); err != nil {
-		f.Close()
 		return fmt.Errorf("writing %s: %w", tmpPath, err)
 	}
-	if syncWrites {
-		if err := f.Sync(); err != nil {
-			f.Close()
-			return fmt.Errorf("syncing %s: %w", tmpPath, err)
-		}
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("closing %s: %w", tmpPath, err)
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("syncing %s: %w", tmpPath, err)
 	}
 	return fsys.Rename(tmpPath, path)
 }
 
 // appendLogEntry encodes v as JSON and appends it as a framed entry.
-func appendLogEntry(f file, v any, syncWrites bool) error {
+func appendLogEntry(f file, v any, syncW bool) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	return writeEntry(f, data, syncWrites)
+	return writeEntry(f, data, syncW)
 }
 
 // topicDir returns the directory name for a topic, URL-escaping for fs safety.
@@ -372,69 +450,29 @@ func segmentFileName(baseOffset int64) string {
 func (c *Cluster) saveToDisk() error {
 	fsys := c.fs
 	dir := c.cfg.dataDir
-	syncW := c.cfg.syncWrites
 
 	if err := fsys.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("creating data dir: %w", err)
 	}
 
-	// meta.json
-	if err := writeJSONFile(fsys, filepath.Join(dir, "meta.json"), persistMeta{
-		Version:   currentPersistVersion,
-		ClusterID: c.cfg.clusterID,
-	}, syncW); err != nil {
-		return err
-	}
-
-	// topics.json
-	if err := c.saveTopics(fsys, dir, syncW); err != nil {
-		return err
-	}
-
-	// acls.json
-	if err := c.saveACLs(fsys, dir, syncW); err != nil {
-		return err
-	}
-
-	// sasl.json
-	if err := c.saveSASL(fsys, dir, syncW); err != nil {
-		return err
-	}
-
-	// broker_configs.json
-	if err := c.saveBrokerConfigs(fsys, dir, syncW); err != nil {
-		return err
-	}
-
-	// quotas.json
-	if err := c.saveQuotas(fsys, dir, syncW); err != nil {
-		return err
-	}
-
-	// partitions - concurrent, one goroutine per partition
-	if err := c.savePartitions(fsys, dir, syncW); err != nil {
-		return err
-	}
-
-	// groups.log - compacted
-	if err := c.saveGroupsLog(fsys, dir, syncW); err != nil {
-		return err
-	}
-
-	// pids.log - compacted
-	if err := c.savePIDsLog(fsys, dir, syncW); err != nil {
-		return err
-	}
-
-	// seq_windows.json
-	if err := c.saveSeqWindows(fsys, dir, syncW); err != nil {
-		return err
-	}
-
-	return nil
+	return errors.Join(
+		writeJSONFile(fsys, filepath.Join(dir, "meta.json"), persistMeta{
+			Version:   currentPersistVersion,
+			ClusterID: c.cfg.clusterID,
+		}),
+		c.saveTopics(fsys, dir),
+		c.saveACLs(fsys, dir),
+		c.saveSASL(fsys, dir),
+		c.saveBrokerConfigs(fsys, dir),
+		c.saveQuotas(fsys, dir),
+		c.savePartitions(fsys, dir),
+		c.saveGroupsLog(fsys, dir),
+		c.savePIDsLog(fsys, dir),
+		c.saveSeqWindows(fsys, dir),
+	)
 }
 
-func (c *Cluster) saveTopics(fsys fs, dir string, syncW bool) error {
+func (c *Cluster) saveTopics(fsys fs, dir string) error {
 	var pts []persistTopic
 	for t, id := range c.data.t2id {
 		cfgs := make(map[string]string)
@@ -458,10 +496,10 @@ func (c *Cluster) saveTopics(fsys fs, dir string, syncW bool) error {
 	return writeJSONFile(fsys, filepath.Join(dir, "topics.json"), persistTopics{
 		Version: currentPersistVersion,
 		Topics:  pts,
-	}, syncW)
+	})
 }
 
-func (c *Cluster) saveACLs(fsys fs, dir string, syncW bool) error {
+func (c *Cluster) saveACLs(fsys fs, dir string) error {
 	var pa []persistACL
 	for _, a := range c.acls.acls {
 		pa = append(pa, persistACL{
@@ -477,16 +515,13 @@ func (c *Cluster) saveACLs(fsys fs, dir string, syncW bool) error {
 	return writeJSONFile(fsys, filepath.Join(dir, "acls.json"), persistACLs{
 		Version: currentPersistVersion,
 		ACLs:    pa,
-	}, syncW)
+	})
 }
 
-func (c *Cluster) saveSASL(fsys fs, dir string, syncW bool) error {
+func (c *Cluster) saveSASL(fsys fs, dir string) error {
 	ps := persistSASL{Version: currentPersistVersion}
 	if len(c.sasls.plain) > 0 {
-		ps.Plain = make(map[string]string)
-		for k, v := range c.sasls.plain {
-			ps.Plain[k] = v
-		}
+		ps.Plain = maps.Clone(c.sasls.plain)
 	}
 	if len(c.sasls.scram256) > 0 {
 		ps.Scram256 = make(map[string]persistScram)
@@ -510,10 +545,10 @@ func (c *Cluster) saveSASL(fsys fs, dir string, syncW bool) error {
 			}
 		}
 	}
-	return writeJSONFile(fsys, filepath.Join(dir, "sasl.json"), ps, syncW)
+	return writeJSONFile(fsys, filepath.Join(dir, "sasl.json"), ps)
 }
 
-func (c *Cluster) saveBrokerConfigs(fsys fs, dir string, syncW bool) error {
+func (c *Cluster) saveBrokerConfigs(fsys fs, dir string) error {
 	cfgs := make(map[string]string)
 	for k, v := range c.loadBcfgs() {
 		if v != nil {
@@ -523,10 +558,10 @@ func (c *Cluster) saveBrokerConfigs(fsys fs, dir string, syncW bool) error {
 	return writeJSONFile(fsys, filepath.Join(dir, "broker_configs.json"), persistBrokerConfigs{
 		Version: currentPersistVersion,
 		Configs: cfgs,
-	}, syncW)
+	})
 }
 
-func (c *Cluster) saveQuotas(fsys fs, dir string, syncW bool) error {
+func (c *Cluster) saveQuotas(fsys fs, dir string) error {
 	var pqs []persistQuota
 	for _, qe := range c.quotas {
 		var entity []persistQuotaEntityComponent
@@ -544,7 +579,7 @@ func (c *Cluster) saveQuotas(fsys fs, dir string, syncW bool) error {
 	return writeJSONFile(fsys, filepath.Join(dir, "quotas.json"), persistQuotas{
 		Version: currentPersistVersion,
 		Quotas:  pqs,
-	}, syncW)
+	})
 }
 
 // forEachPartition runs fn concurrently on every partition, returning
@@ -584,97 +619,50 @@ func (c *Cluster) forEachPartition(fn func(topic string, part int32, pd *partDat
 	return firstErr
 }
 
-func (c *Cluster) savePartitions(fsys fs, dir string, syncW bool) error {
+func (c *Cluster) savePartitions(fsys fs, dir string) error {
 	return c.forEachPartition(func(topic string, part int32, pd *partData) error {
-		return c.savePartition(fsys, dir, syncW, topic, part, pd)
+		return c.savePartition(fsys, dir, topic, part, pd)
 	})
 }
 
-func (c *Cluster) savePartition(fsys fs, dir string, syncW bool, topic string, part int32, pd *partData) error {
+func (c *Cluster) savePartition(fsys fs, dir string, topic string, part int32, pd *partData) error {
 	pdir := topicDir(dir, topic, part)
 	if err := fsys.MkdirAll(pdir, 0755); err != nil {
 		return err
 	}
 
-	// Close any open segment file from live sync
+	// Close open file handles from live sync
 	if pd.activeSegFile != nil {
+		pd.activeSegFile.Sync()
 		pd.activeSegFile.Close()
 		pd.activeSegFile = nil
 	}
-
-	// Write segment files - group batches by segment base offset
-	type segInfo struct {
-		baseOffset int64
-		batches    []*partBatch
-		size       int64 // running byte count
-	}
-	var segments []segInfo
-
-	if len(pd.batches) > 0 {
-		if len(pd.segmentBases) > 0 && syncW {
-			// Live sync mode - all batches already fsynced on disk; just record
-			// existing segment info for the snapshot.
-			for _, base := range pd.segmentBases {
-				segments = append(segments, segInfo{baseOffset: base})
-			}
-		} else {
-			// Shutdown-only mode (or loaded from prior session without syncWrites) -
-			// write all batches into segment files from scratch.
-			segMaxBytes := c.segmentBytes(topic)
-			for _, b := range pd.batches {
-				if len(segments) == 0 || segments[len(segments)-1].size >= segMaxBytes {
-					segments = append(segments, segInfo{baseOffset: b.FirstOffset})
-				}
-				seg := &segments[len(segments)-1]
-				seg.batches = append(seg.batches, b)
-				seg.size += int64(b.nbytes)
-			}
-		}
+	if pd.activeIdxFile != nil {
+		pd.activeIdxFile.Sync()
+		pd.activeIdxFile.Close()
+		pd.activeIdxFile = nil
 	}
 
-	// Write segment files (only for shutdown-only mode with batches to write)
+	// Build snapshot segment metadata from pd.segments.
+	// Segment files are already on disk (written by persistBatchToSegment
+	// on every produce, and updated by rebuildSegments after compaction).
 	var snapSegments []persistSegmentInfo
-	for i := range segments {
-		seg := &segments[i]
-		if len(seg.batches) == 0 {
-			// Live sync - segment file already on disk, just record its info
-			path := filepath.Join(pdir, segmentFileName(seg.baseOffset))
-			info, err := fsys.Stat(path)
-			if err != nil {
-				continue
-			}
-			snapSegments = append(snapSegments, persistSegmentInfo{
-				BaseOffset: seg.baseOffset,
-				Size:       info.Size(),
-			})
-			continue
+	for _, si := range pd.segments {
+		psi := persistSegmentInfo{
+			BaseOffset: si.base,
+			Size:       si.size,
+			MinEpoch:   si.minEpoch,
+			MaxEpoch:   si.maxEpoch,
 		}
-
-		path := filepath.Join(pdir, segmentFileName(seg.baseOffset))
-		f, err := fsys.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
-		if err != nil {
-			return err
-		}
-		var totalSize int64
-		for _, b := range seg.batches {
-			entryBytes := encodeSegmentEntry(b)
-			if err := writeEntry(f, entryBytes, false); err != nil {
-				f.Close()
-				return err
-			}
-			totalSize += int64(entryHeaderSize + len(entryBytes))
-		}
-		if syncW {
-			if err := f.Sync(); err != nil {
-				f.Close()
-				return err
+		// If size is not tracked (e.g., loaded from older snapshot),
+		// stat the file to get it.
+		if psi.Size == 0 {
+			path := filepath.Join(pdir, segmentFileName(si.base))
+			if info, err := fsys.Stat(path); err == nil {
+				psi.Size = info.Size()
 			}
 		}
-		f.Close()
-		snapSegments = append(snapSegments, persistSegmentInfo{
-			BaseOffset: seg.baseOffset,
-			Size:       totalSize,
-		})
+		snapSegments = append(snapSegments, psi)
 	}
 
 	// Write partition snapshot
@@ -687,18 +675,17 @@ func (c *Cluster) savePartition(fsys fs, dir string, syncW bool, topic string, p
 		})
 	}
 	snap := persistPartSnapshot{
-		Version:              currentPersistVersion,
-		HighWatermark:        pd.highWatermark,
-		LastStableOffset:     pd.lastStableOffset,
-		LogStartOffset:       pd.logStartOffset,
-		Epoch:                pd.epoch,
-		MaxTimestamp:         pd.maxTimestamp,
-		MaxTimestampBatchIdx: pd.maxTimestampBatchIdx,
-		CreatedAt:            pd.createdAt,
-		AbortedTxns:          abortedTxns,
-		Segments:             snapSegments,
+		Version:          currentPersistVersion,
+		HighWatermark:    pd.highWatermark,
+		LastStableOffset: pd.lastStableOffset,
+		LogStartOffset:   pd.logStartOffset,
+		Epoch:            pd.epoch,
+		MaxTimestamp:     pd.maxTimestamp,
+		CreatedAt:        pd.createdAt,
+		AbortedTxns:      abortedTxns,
+		Segments:         snapSegments,
 	}
-	return writeJSONFile(fsys, filepath.Join(pdir, "snapshot.json"), snap, syncW)
+	return writeJSONFile(fsys, filepath.Join(pdir, "snapshot.json"), snap)
 }
 
 // segmentBytes returns the max segment size for a topic.
@@ -715,10 +702,103 @@ func (c *Cluster) segmentBytes(topic string) int64 {
 			return n
 		}
 	}
-	return 1073741824 // 1GB default
+	return 100 << 20 // 100MiB default
 }
 
-func (c *Cluster) saveGroupsLog(fsys fs, dir string, syncW bool) error {
+// rebuildSegments deletes existing segment files for a partition and rewrites
+// them from the given batches, rebuilding pd.segments with batchMeta. Called
+// after compaction changes the batch set. Also resets active file handles.
+func (c *Cluster) rebuildSegments(pd *partData, topic string, batches []*partBatch) {
+	pdir := topicDir(c.dataDir, pd.t, pd.p)
+
+	// Close open file handles
+	if pd.activeSegFile != nil {
+		pd.activeSegFile.Close()
+		pd.activeSegFile = nil
+	}
+	if pd.activeIdxFile != nil {
+		pd.activeIdxFile.Close()
+		pd.activeIdxFile = nil
+	}
+
+	// Delete old segment + index files
+	for _, seg := range pd.segments {
+		c.fs.Remove(filepath.Join(pdir, segmentFileName(seg.base)))
+		c.fs.Remove(filepath.Join(pdir, indexFileName(seg.base)))
+	}
+	pd.segments = nil
+
+	if len(batches) == 0 {
+		pd.rebuildMaxTimestampMeta()
+		return
+	}
+
+	// Group batches into segments by size
+	segMaxBytes := c.segmentBytes(topic)
+	type segGroup struct {
+		base    int64
+		batches []*partBatch
+		size    int64
+	}
+	var groups []segGroup
+	for _, b := range batches {
+		if len(groups) == 0 || groups[len(groups)-1].size >= segMaxBytes {
+			groups = append(groups, segGroup{base: b.FirstOffset})
+		}
+		g := &groups[len(groups)-1]
+		g.batches = append(g.batches, b)
+		g.size += int64(b.nbytes)
+	}
+
+	// Write segment (.dat) and index (.idx) files.
+	c.fs.MkdirAll(pdir, 0755)
+	for _, g := range groups {
+		si := segmentInfo{base: g.base}
+		segPath := filepath.Join(pdir, segmentFileName(g.base))
+		idxPath := filepath.Join(pdir, indexFileName(g.base))
+		sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+		if err != nil {
+			c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: create %s: %v", pd.t, pd.p, segPath, err)
+			continue
+		}
+		xf, err := c.fs.OpenFile(idxPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+		if err != nil {
+			sf.Close()
+			c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: create %s: %v", pd.t, pd.p, idxPath, err)
+			continue
+		}
+		var pos int64
+		for _, b := range g.batches {
+			bp := encodeBatch(b)
+			meta := b.meta(pos)
+			_, err := sf.Write(*bp)
+			batchSize := int64(len(*bp))
+			*bp = (*bp)[:0]
+			batchPool.Put(bp)
+			if err != nil {
+				c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: write: %v", pd.t, pd.p, err)
+				break
+			}
+			idx := encodeIndexEntry(b.epoch, b.maxEarlierTimestamp, b.inTx)
+			if _, err := xf.Write(idx[:]); err != nil {
+				c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: write index: %v", pd.t, pd.p, err)
+				break
+			}
+			pos += batchSize
+			si.size += batchSize
+			si.index = append(si.index, meta)
+			si.updateEpochRange(b.epoch)
+		}
+		sf.Sync()
+		sf.Close()
+		xf.Sync()
+		xf.Close()
+		pd.segments = append(pd.segments, si)
+	}
+	pd.rebuildMaxTimestampMeta()
+}
+
+func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 	// Phase 1: collect entries via waitControl (no lock - holding
 	// groupsLogMu here would deadlock if a group goroutine is
 	// concurrently blocked on persistGroupEntry trying to acquire it).
@@ -745,20 +825,14 @@ func (c *Cluster) saveGroupsLog(fsys fs, dir string, syncW bool) error {
 		return err
 	}
 	for _, e := range allEntries {
-		if err := appendLogEntry(f, e, false); err != nil {
+		if err := appendLogEntry(f, e, true); err != nil {
 			f.Close()
 			return err
 		}
 	}
-	if syncW {
-		if err := f.Sync(); err != nil {
-			f.Close()
-			return err
-		}
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
+	// Close before rename - the file must be fully written and closed
+	// before we atomically swap it into place.
+	f.Close()
 	c.groupsLogMu.Lock()
 	defer c.groupsLogMu.Unlock()
 	if c.groupsLogFile != nil {
@@ -821,7 +895,7 @@ func (c *Cluster) collectGroupEntries(g *group) []groupLogEntry {
 	return entries
 }
 
-func (c *Cluster) savePIDsLog(fsys fs, dir string, syncW bool) error {
+func (c *Cluster) savePIDsLog(fsys fs, dir string) error {
 	// Close the live append handle before truncating, matching
 	// saveGroupsLog. No race here (pids are single-threaded from
 	// run()), but prevents a stale file descriptor.
@@ -849,18 +923,14 @@ func (c *Cluster) savePIDsLog(fsys fs, dir string, syncW bool) error {
 			entry.Timeout = pidinf.txTimeout
 			entry.Commit = &pidinf.lastWasCommit
 		}
-		if err := appendLogEntry(f, entry, false); err != nil {
+		if err := appendLogEntry(f, entry, true); err != nil {
 			return err
 		}
-	}
-
-	if syncW {
-		return f.Sync()
 	}
 	return nil
 }
 
-func (c *Cluster) saveSeqWindows(fsys fs, dir string, syncW bool) error {
+func (c *Cluster) saveSeqWindows(fsys fs, dir string) error {
 	var windows []persistSeqWindowEntry
 	for pid, pidinf := range c.pids.ids {
 		pidinf.windows.each(func(topic string, part int32, pw *pidwindow) {
@@ -878,7 +948,7 @@ func (c *Cluster) saveSeqWindows(fsys fs, dir string, syncW bool) error {
 	return writeJSONFile(fsys, filepath.Join(dir, "seq_windows.json"), persistSeqWindows{
 		Version: currentPersistVersion,
 		Windows: windows,
-	}, syncW)
+	})
 }
 
 //////////////////////
@@ -940,31 +1010,23 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 	// Clean up orphaned .tmp files from interrupted writeJSONFile calls
 	cleanupTmpFiles(fsys, dir)
 
-	// Load broker configs (before topics, so segment configs are available)
-	if err := c.loadBrokerConfigs(fsys, dir); err != nil {
-		return false, err
-	}
-
-	// Load topics
-	if err := c.loadTopics(fsys, dir); err != nil {
-		return false, err
-	}
-
-	// Load partitions (concurrent). Full replay may detect in-flight
-	// transactions and collect their PIDs for epoch bumping below.
+	// Load broker configs first (segment configs needed by topics),
+	// then topics (needed by partitions), then partitions (may
+	// detect crash-aborted PIDs).
 	c.crashAbortedPIDs = make(map[int64]struct{})
-	if err := c.loadPartitions(fsys, dir); err != nil {
+	if err := errors.Join(
+		c.loadBrokerConfigs(fsys, dir),
+		c.loadTopics(fsys, dir),
+		c.loadPartitions(fsys, dir),
+	); err != nil {
 		return false, err
 	}
 
-	// Load pids
+	// Load PIDs, then bump epoch for PIDs that had in-flight
+	// transactions at crash time.
 	if err := c.loadPIDsLog(fsys, dir); err != nil {
 		return false, err
 	}
-
-	// Bump epoch for PIDs that had in-flight transactions at crash
-	// time. This fences the old producer so it gets
-	// PRODUCER_FENCED on reconnect instead of silently continuing.
 	for pid := range c.crashAbortedPIDs {
 		if pidinf, ok := c.pids.ids[pid]; ok {
 			pidinf.epoch++
@@ -972,32 +1034,13 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 	}
 	c.crashAbortedPIDs = nil
 
-	// Load groups
-	if err := c.loadGroupsLog(fsys, dir); err != nil {
-		return false, err
-	}
-
-	// Load ACLs
-	if err := c.loadACLs(fsys, dir); err != nil {
-		return false, err
-	}
-
-	// Load SASL
-	if err := c.loadSASL(fsys, dir); err != nil {
-		return false, err
-	}
-
-	// Load quotas
-	if err := c.loadQuotas(fsys, dir); err != nil {
-		return false, err
-	}
-
-	// Load sequence windows
-	if err := c.loadSeqWindows(fsys, dir); err != nil {
-		return false, err
-	}
-
-	return true, nil
+	return true, errors.Join(
+		c.loadGroupsLog(fsys, dir),
+		c.loadACLs(fsys, dir),
+		c.loadSASL(fsys, dir),
+		c.loadQuotas(fsys, dir),
+		c.loadSeqWindows(fsys, dir),
+	)
 }
 
 func (c *Cluster) loadBrokerConfigs(fsys fs, dir string) error {
@@ -1015,7 +1058,6 @@ func (c *Cluster) loadBrokerConfigs(fsys fs, dir string) error {
 	// Merge: config overrides from NewCluster opts take precedence
 	m := make(map[string]*string, len(pbc.Configs))
 	for k, v := range pbc.Configs {
-		v := v
 		m[k] = &v
 	}
 	// Apply overrides from cfg.brokerConfigs
@@ -1023,7 +1065,6 @@ func (c *Cluster) loadBrokerConfigs(fsys fs, dir string) error {
 		if v == "" {
 			m[k] = nil
 		} else {
-			v := v
 			m[k] = &v
 		}
 	}
@@ -1053,7 +1094,6 @@ func (c *Cluster) loadTopics(fsys fs, dir string) error {
 		if len(t.Configs) > 0 {
 			cfgs := make(map[string]*string, len(t.Configs))
 			for k, v := range t.Configs {
-				v := v
 				cfgs[k] = &v
 			}
 			c.data.tcfgs[t.Name] = cfgs
@@ -1103,7 +1143,7 @@ func (c *Cluster) loadPartition(fsys fs, dir, topic string, part int32, pd *part
 			}
 		}
 	}
-	sort.Slice(segFiles, func(i, j int) bool { return segFiles[i] < segFiles[j] })
+	slices.Sort(segFiles)
 
 	// Try using snapshot for fast startup
 	if snapData != nil && len(segFiles) > 0 {
@@ -1141,9 +1181,16 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	pd.logStartOffset = snap.LogStartOffset
 	pd.epoch = snap.Epoch
 	pd.maxTimestamp = snap.MaxTimestamp
-	pd.maxTimestampBatchIdx = snap.MaxTimestampBatchIdx
 	pd.createdAt = snap.CreatedAt
-	pd.segmentBases = segFiles
+	for i, base := range segFiles {
+		si := segmentInfo{base: base}
+		if i < len(snap.Segments) {
+			si.size = snap.Segments[i].Size
+			si.minEpoch = snap.Segments[i].MinEpoch
+			si.maxEpoch = snap.Segments[i].MaxEpoch
+		}
+		pd.segments = append(pd.segments, si)
+	}
 
 	for _, a := range snap.AbortedTxns {
 		pd.abortedTxns = append(pd.abortedTxns, abortedTxnEntry{
@@ -1153,40 +1200,33 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 		})
 	}
 
-	// Load actual batch data from segments
+	// Load batchMeta index from segments
 	for _, base := range segFiles {
-		if err := c.loadSegmentBatches(pd, fsys, pdir, base); err != nil {
+		if _, err := c.loadSegmentBatches(pd, fsys, pdir, base); err != nil {
 			return err
 		}
 	}
 
-	// Clear stale inTx flags and accumulate nbytes. Segment files are
-	// never rewritten after endTx clears inTx in memory, so completed
-	// transactions' batches still have inTx=true on disk. The snapshot
-	// is written at clean shutdown when no transactions are in flight,
-	// so all batches are committed or aborted - inTx=false is correct.
-	for _, b := range pd.batches {
-		b.inTx = false
-		pd.nbytes += int64(b.nbytes)
-	}
-
-	// Validate MaxTimestampBatchIdx - a corrupt or truncated segment
-	// file could leave fewer batches than the snapshot expected.
-	if pd.maxTimestampBatchIdx >= len(pd.batches) {
-		pd.maxTimestampBatchIdx = -1
-		for i, b := range pd.batches {
-			if pd.maxTimestampBatchIdx < 0 || b.MaxTimestamp >= pd.batches[pd.maxTimestampBatchIdx].MaxTimestamp {
-				pd.maxTimestampBatchIdx = i
-			}
+	// Accumulate nbytes from batchMeta, skipping entries before
+	// logStartOffset (partially-trimmed segments may have stale entries).
+	pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
+		finRec := m.firstOffset + int64(m.lastOffsetDelta)
+		if finRec >= pd.logStartOffset {
+			pd.nbytes += int64(m.nbytes)
 		}
-	}
+		return true
+	})
+
+	pd.rebuildMaxTimestampMeta()
 
 	// Validate HWM, LSO, and logStartOffset against actual loaded
 	// batches. A truncated segment could leave fewer batches than the
 	// snapshot expected.
-	if len(pd.batches) > 0 {
-		last := pd.batches[len(pd.batches)-1]
-		maxHWM := last.FirstOffset + int64(last.LastOffsetDelta) + 1
+	total := pd.totalBatches()
+	if total > 0 {
+		lastSeg := &pd.segments[len(pd.segments)-1]
+		last := &lastSeg.index[len(lastSeg.index)-1]
+		maxHWM := last.firstOffset + int64(last.lastOffsetDelta) + 1
 		if pd.highWatermark > maxHWM {
 			pd.highWatermark = maxHWM
 		}
@@ -1201,26 +1241,36 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 		pd.logStartOffset = pd.highWatermark
 	}
 
-	// Initialize active segment state so persistBatch appends to
-	// the last segment instead of segment 0.
+	// Initialize active segment state so persistBatchToSegment
+	// appends to the last segment instead of segment 0.
 	c.initActiveSegment(pd, fsys, pdir)
 
 	return nil
 }
 
 func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys fs, pdir string) error {
-	pd.segmentBases = segFiles
-
 	for _, base := range segFiles {
-		if err := c.loadSegmentBatches(pd, fsys, pdir, base); err != nil {
-			return err
-		}
+		pd.segments = append(pd.segments, segmentInfo{base: base})
 	}
 
-	// Reconstruct partition metadata from batches
-	if len(pd.batches) > 0 {
-		last := pd.batches[len(pd.batches)-1]
-		pd.highWatermark = last.FirstOffset + int64(last.LastOffsetDelta) + 1
+	// Load segments, getting full batches for crash recovery txn state.
+	var batches []*partBatch
+	for _, base := range segFiles {
+		loaded, err := c.loadSegmentBatches(pd, fsys, pdir, base)
+		if err != nil {
+			return err
+		}
+		batches = append(batches, loaded...)
+	}
+
+	// Reconstruct partition metadata from batchMeta
+	total := pd.totalBatches()
+	if total > 0 {
+		firstSeg := &pd.segments[0]
+		first := &firstSeg.index[0]
+		lastSeg := &pd.segments[len(pd.segments)-1]
+		last := &lastSeg.index[len(lastSeg.index)-1]
+		pd.highWatermark = last.firstOffset + int64(last.lastOffsetDelta) + 1
 
 		// logStartOffset: lossy reconstruction. The true value
 		// (set by DeleteRecords) is only in the snapshot. On full
@@ -1228,22 +1278,21 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 		// bound - the true logStartOffset may point into the middle
 		// of this batch, so some "deleted" records may reappear.
 		// This matches Kafka unclean leader election behavior.
-		pd.logStartOffset = pd.batches[0].FirstOffset
+		pd.logStartOffset = first.firstOffset
 
 		// epoch: use the last batch's epoch (highest seen).
-		pd.epoch = pd.batches[len(pd.batches)-1].epoch
+		pd.epoch = last.epoch
 	}
 
-	// Rebuild abortedTxns from control batches and clear inTx on
-	// completed transactions. On disk, data batches are written with
-	// inTx=true at produce time; endTx clears it in memory but not
-	// on disk. During full replay we must clear inTx for any
-	// transaction that has a corresponding control batch.
+	// Rebuild abortedTxns from control batches. On disk, data batches
+	// are written with inTx=true at produce time; endTx clears it in
+	// memory but not on disk. During full replay we identify completed
+	// transactions by their control batches.
 	type txnState struct {
 		firstOffset int64
 	}
 	activeTxns := make(map[int64]*txnState) // producerID -> state
-	for _, b := range pd.batches {
+	for _, b := range batches {
 		isControl := b.Attributes&0x0020 != 0
 		if !isControl {
 			if b.inTx {
@@ -1288,7 +1337,7 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 		c.crashAbortedPIDsMu.Lock()
 		for pid, ts := range activeTxns {
 			last := ts.firstOffset
-			for _, b := range pd.batches {
+			for _, b := range batches {
 				if b.ProducerID == pid && b.inTx {
 					end := b.FirstOffset + int64(b.LastOffsetDelta)
 					if end > last {
@@ -1310,92 +1359,136 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 	// isBatchAborted and trimLeft. Implicit aborts (appended above) can
 	// have earlier lastOffset values than control-batch-derived entries,
 	// so we re-sort.
-	sort.Slice(pd.abortedTxns, func(i, j int) bool {
-		return pd.abortedTxns[i].lastOffset < pd.abortedTxns[j].lastOffset
+	slices.SortFunc(pd.abortedTxns, func(a, b abortedTxnEntry) int {
+		return cmp.Compare(a.lastOffset, b.lastOffset)
 	})
-
-	// Clear inTx on all data batches - completed transactions were
-	// handled above, and in-flight ones were just implicitly aborted.
-	for _, b := range pd.batches {
-		b.inTx = false
-	}
 
 	// Rebuild LSO and other metadata
 	pd.recalculateLSO()
 
-	// Rebuild maxTimestamp and maxTimestampBatchIdx
-	pd.maxTimestampBatchIdx = -1
-	for i, b := range pd.batches {
-		if b.FirstTimestamp > pd.maxTimestamp {
-			pd.maxTimestamp = b.FirstTimestamp
+	// Rebuild maxTimestamp and nbytes from batchMeta
+	pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
+		if m.firstTimestamp > pd.maxTimestamp {
+			pd.maxTimestamp = m.firstTimestamp
 		}
-		if pd.maxTimestampBatchIdx < 0 || b.MaxTimestamp >= pd.batches[pd.maxTimestampBatchIdx].MaxTimestamp {
-			pd.maxTimestampBatchIdx = i
-		}
-		pd.nbytes += int64(b.nbytes)
-	}
+		pd.nbytes += int64(m.nbytes)
+		return true
+	})
+	pd.rebuildMaxTimestampMeta()
 
 	// Restore createdAt from the first batch. newPartData sets createdAt
 	// to time.Now() but on full replay we want the original creation time.
-	if len(pd.batches) > 0 {
-		pd.createdAt = time.UnixMilli(pd.batches[0].FirstTimestamp)
+	if total > 0 {
+		pd.createdAt = time.UnixMilli(pd.segments[0].index[0].firstTimestamp)
 	}
 
-	// Initialize active segment state so persistBatch appends to
-	// the last segment instead of segment 0.
+	// Initialize active segment state so persistBatchToSegment
+	// appends to the last segment instead of segment 0.
 	c.initActiveSegment(pd, fsys, pdir)
 
 	return nil
 }
 
-// initActiveSegment sets pd.activeSegBase and pd.activeSegSize to the
-// last segment so that persistBatch appends to the right file. Without
-// this, activeSegBase stays at 0 and new batches go to segment 0.
+// initActiveSegment sets the last segment's size so that persistBatchToSegment
+// appends to the right file and knows when to roll.
 func (c *Cluster) initActiveSegment(pd *partData, fsys fs, pdir string) {
-	if len(pd.segmentBases) == 0 {
+	if len(pd.segments) == 0 {
 		return
 	}
-	pd.activeSegBase = pd.segmentBases[len(pd.segmentBases)-1]
-	path := filepath.Join(pdir, segmentFileName(pd.activeSegBase))
+	active := &pd.segments[len(pd.segments)-1]
+	if active.size > 0 {
+		return // already set from snapshot
+	}
+	path := filepath.Join(pdir, segmentFileName(active.base))
 	if info, err := fsys.Stat(path); err != nil {
-		c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d: stat active segment %d: %v", pd.t, pd.p, pd.activeSegBase, err)
+		c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d: stat active segment %d: %v", pd.t, pd.p, active.base, err)
 	} else {
-		pd.activeSegSize = info.Size()
+		active.size = info.Size()
 	}
 }
 
-func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base int64) error {
+// loadSegmentBatches reads batches from a segment file (.dat) and metadata
+// from the parallel index file (.idx). Segment files contain pure RecordBatch
+// wire bytes; entry boundaries are found via RecordBatch Length (big-endian
+// int32 at byte 8). Index entries are fixed-size (14 bytes each).
+func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base int64) ([]*partBatch, error) {
 	raw, err := fsys.ReadFile(filepath.Join(pdir, segmentFileName(base)))
 	if err != nil {
-		return err
+		return nil, err
+	}
+	idxRaw, _ := fsys.ReadFile(filepath.Join(pdir, indexFileName(base)))
+
+	// Find the segmentInfo for this base to update epoch ranges.
+	var seg *segmentInfo
+	for i := range pd.segments {
+		if pd.segments[i].base == base {
+			seg = &pd.segments[i]
+			break
+		}
 	}
 
-	entries, validBytes := readEntries(raw)
-	if validBytes < len(raw) {
-		// Truncate corrupt tail on crash recovery
+	// Parse RecordBatch entries from segment file.
+	var result []*partBatch
+	pos := 0
+	batchIdx := 0
+	for {
+		// Need at least FirstOffset(8) + Length(4) = 12 bytes.
+		if pos+12 > len(raw) {
+			break
+		}
+		batchLength := int(binary.BigEndian.Uint32(raw[pos+8 : pos+12]))
+		if batchLength < 0 || batchLength > 1<<30 {
+			break
+		}
+		batchSize := 12 + batchLength
+		if pos+batchSize > len(raw) {
+			break
+		}
+		rb, err := decodeBatchRaw(raw[pos : pos+batchSize])
+		if err != nil {
+			break // corruption - truncate
+		}
+
+		// Read metadata from index file (if available).
+		var epoch int32
+		var maxEarlierTS int64
+		var inTx bool
+		idxOff := batchIdx * indexEntrySize
+		if idxOff+indexEntrySize <= len(idxRaw) {
+			epoch, maxEarlierTS, inTx, _ = decodeIndexEntry(idxRaw[idxOff : idxOff+indexEntrySize])
+		}
+
+		batch := &partBatch{
+			RecordBatch:         *rb,
+			nbytes:              batchSize,
+			epoch:               epoch,
+			maxEarlierTimestamp: maxEarlierTS,
+			inTx:                inTx,
+		}
+		result = append(result, batch)
+		if seg != nil {
+			seg.index = append(seg.index, batch.meta(int64(pos)))
+			seg.updateEpochRange(batch.epoch)
+		}
+		pos += batchSize
+		batchIdx++
+	}
+
+	if pos < len(raw) {
 		c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d segment %d: truncating %d corrupt bytes",
-			pd.t, pd.p, base, len(raw)-validBytes)
+			pd.t, pd.p, base, len(raw)-pos)
 		path := filepath.Join(pdir, segmentFileName(base))
 		if f, err := fsys.OpenFile(path, os.O_WRONLY, 0644); err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d segment %d: open for truncate: %v", pd.t, pd.p, base, err)
 		} else {
-			if err := f.Truncate(int64(validBytes)); err != nil {
+			defer f.Close()
+			if err := f.Truncate(int64(pos)); err != nil {
 				c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d segment %d: truncate: %v", pd.t, pd.p, base, err)
-			}
-			if err := f.Close(); err != nil {
-				c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d segment %d: close after truncate: %v", pd.t, pd.p, base, err)
 			}
 		}
 	}
 
-	for _, e := range entries {
-		batch, err := decodeSegmentEntry(e.data)
-		if err != nil {
-			return fmt.Errorf("segment %d: %w", base, err)
-		}
-		pd.batches = append(pd.batches, batch)
-	}
-	return nil
+	return result, nil
 }
 
 func (c *Cluster) loadPIDsLog(fsys fs, dir string) error {
@@ -1688,65 +1781,98 @@ func (c *Cluster) loadSeqWindows(fsys fs, dir string) error {
 // LIVE SYNC PERSIST HELPERS
 ///////////////////////////////
 
-// persistBatch appends a batch to the active segment file for a partition.
-// Called from the produce path when syncWrites is enabled.
-func (c *Cluster) persistBatch(pd *partData, b *partBatch) error {
-	if c.cfg.dataDir == "" {
-		return nil
-	}
+// persistBatchToSegment writes a batch to the active segment file.
+// Returns the byte position of the entry within the segment file
+// (for batchMeta.segPos), or -1 on failure.
+func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 	fsys := c.fs
-	pdir := topicDir(c.cfg.dataDir, pd.t, pd.p)
+	pdir := topicDir(c.dataDir, pd.t, pd.p)
 
-	// Ensure partition directory exists
+	// Ensure segment exists in memory before any I/O that might fail.
+	if len(pd.segments) == 0 {
+		pd.segments = append(pd.segments, segmentInfo{base: b.FirstOffset})
+	}
+
 	if pd.activeSegFile == nil {
 		if err := fsys.MkdirAll(pdir, 0755); err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "persist batch mkdir %s: %v", pdir, err)
-			return err
+			return -1
 		}
-		// Open or create active segment
-		base := pd.activeSegBase
-		if len(pd.segmentBases) == 0 {
-			base = b.FirstOffset
-			pd.segmentBases = append(pd.segmentBases, base)
-			pd.activeSegBase = base
-		}
-		path := filepath.Join(pdir, segmentFileName(base))
-		f, err := fsys.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		active := &pd.segments[len(pd.segments)-1]
+		segPath := filepath.Join(pdir, segmentFileName(active.base))
+		sf, err := fsys.OpenFile(segPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
-			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s: %v", path, err)
-			return err
+			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s: %v", segPath, err)
+			return -1
 		}
-		pd.activeSegFile = f
+		idxPath := filepath.Join(pdir, indexFileName(active.base))
+		xf, err := fsys.OpenFile(idxPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			sf.Close()
+			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s: %v", idxPath, err)
+			return -1
+		}
+		pd.activeSegFile = sf
+		pd.activeIdxFile = xf
 	}
 
-	// Check if we need to roll the segment
+	// Check if we need to roll the segment.
+	active := &pd.segments[len(pd.segments)-1]
 	segMax := c.segmentBytes(pd.t)
-	if pd.activeSegSize >= segMax {
-		if err := pd.activeSegFile.Close(); err != nil {
-			c.cfg.logger.Logf(LogLevelWarn, "persist batch close segment %s-%d: %v", pd.t, pd.p, err)
-		}
+	if active.size >= segMax {
+		active.endOff = b.FirstOffset
+		pd.activeSegFile.Sync()
+		pd.activeIdxFile.Sync()
+		pd.activeSegFile.Close()
+		pd.activeIdxFile.Close()
 		pd.activeSegFile = nil
-		pd.activeSegBase = b.FirstOffset
-		pd.segmentBases = append(pd.segmentBases, pd.activeSegBase)
-		pd.activeSegSize = 0
-		path := filepath.Join(pdir, segmentFileName(pd.activeSegBase))
-		f, err := fsys.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		pd.activeIdxFile = nil
+		pd.segments = append(pd.segments, segmentInfo{base: b.FirstOffset})
+		active = &pd.segments[len(pd.segments)-1]
+		segPath := filepath.Join(pdir, segmentFileName(active.base))
+		sf, err := fsys.OpenFile(segPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
-			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s: %v", path, err)
-			return err
+			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s: %v", segPath, err)
+			return -1
 		}
-		pd.activeSegFile = f
+		idxPath := filepath.Join(pdir, indexFileName(active.base))
+		xf, err := fsys.OpenFile(idxPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			sf.Close()
+			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s: %v", idxPath, err)
+			return -1
+		}
+		pd.activeSegFile = sf
+		pd.activeIdxFile = xf
 	}
 
-	entryBytes := encodeSegmentEntry(b)
-	if err := writeEntry(pd.activeSegFile, entryBytes, c.cfg.syncWrites); err != nil {
+	// Write RecordBatch to segment file.
+	segPos := active.size
+	bp := encodeBatch(b)
+	defer func() { *bp = (*bp)[:0]; batchPool.Put(bp) }()
+	batchSize := int64(len(*bp))
+	if _, err := pd.activeSegFile.Write(*bp); err != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "persist batch write %s-%d: %v", pd.t, pd.p, err)
+		pd.activeSegFile.Truncate(active.size)
 		pd.activeSegFile.Close()
 		pd.activeSegFile = nil
-		return err
+		return -1
 	}
-	pd.activeSegSize += int64(entryHeaderSize + len(entryBytes))
-	return nil
+
+	// Write index entry.
+	idx := encodeIndexEntry(b.epoch, b.maxEarlierTimestamp, b.inTx)
+	pd.activeIdxFile.Write(idx[:])
+
+	// With SyncWrites, fsync every batch for immediate durability.
+	// Without it, we rely on the OS page cache and sync only on
+	// segment roll and shutdown (like real Kafka's default).
+	if c.cfg.syncWrites {
+		pd.activeSegFile.Sync()
+		pd.activeIdxFile.Sync()
+	}
+
+	active.size += batchSize
+	return segPos
 }
 
 // persistGroupEntry appends a group log entry.
@@ -1803,11 +1929,11 @@ func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
 
 // persistState is a shared helper for live-sync state file writes.
 // It calls the given save function and logs on error.
-func (c *Cluster) persistState(name string, fn func(fs, string, bool) error) {
+func (c *Cluster) persistState(name string, fn func(fs, string) error) {
 	if c.cfg.dataDir == "" {
 		return
 	}
-	if err := fn(c.fs, c.cfg.dataDir, c.cfg.syncWrites); err != nil {
+	if err := fn(c.fs, c.cfg.dataDir); err != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "persist %s: %v", name, err)
 	}
 }
@@ -1822,24 +1948,26 @@ func (c *Cluster) persistQuotasState()        { c.persistState("quotas", c.saveQ
 func (c *Cluster) closeOpenFiles() {
 	c.groupsLogMu.Lock()
 	if c.groupsLogFile != nil {
-		if err := c.groupsLogFile.Close(); err != nil {
-			c.cfg.logger.Logf(LogLevelWarn, "closing groups.log: %v", err)
-		}
+		c.groupsLogFile.Sync()
+		c.groupsLogFile.Close()
 		c.groupsLogFile = nil
 	}
 	c.groupsLogMu.Unlock()
 	if c.pidsLogFile != nil {
-		if err := c.pidsLogFile.Close(); err != nil {
-			c.cfg.logger.Logf(LogLevelWarn, "closing pids.log: %v", err)
-		}
+		c.pidsLogFile.Sync()
+		c.pidsLogFile.Close()
 		c.pidsLogFile = nil
 	}
-	c.data.tps.each(func(t string, p int32, pd *partData) {
+	c.data.tps.each(func(_ string, _ int32, pd *partData) {
 		if pd.activeSegFile != nil {
-			if err := pd.activeSegFile.Close(); err != nil {
-				c.cfg.logger.Logf(LogLevelWarn, "closing segment %s-%d: %v", t, p, err)
-			}
+			pd.activeSegFile.Sync()
+			pd.activeSegFile.Close()
 			pd.activeSegFile = nil
+		}
+		if pd.activeIdxFile != nil {
+			pd.activeIdxFile.Sync()
+			pd.activeIdxFile.Close()
+			pd.activeIdxFile = nil
 		}
 	})
 }

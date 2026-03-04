@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -154,11 +155,11 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 			if !ok {
 				continue
 			}
-			if pd.leader != creq.cc.b && !pd.followers.has(creq.cc.b) {
+			if pd.leader != creq.cc.b && !slices.Contains(pd.followers, creq.cc.b.node) {
 				returnEarly = true // NotLeaderForPartition
 				break out
 			}
-			i, ok, atEnd := pd.searchOffset(fp.fetchOffset)
+			si, mi, ok, atEnd := pd.searchOffset(fp.fetchOffset)
 			if atEnd {
 				continue
 			}
@@ -167,15 +168,23 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 				break out
 			}
 			pbytes := 0
-			for _, b := range pd.batches[i:] {
-				if readCommitted && b.inTx {
-					break
+			for segIdx := si; segIdx < len(pd.segments); segIdx++ {
+				seg := &pd.segments[segIdx]
+				startIdx := 0
+				if segIdx == si {
+					startIdx = mi
 				}
-				nbytes += b.nbytes
-				pbytes += b.nbytes
-				if pbytes >= int(fp.maxBytes) {
-					returnEarly = true
-					break out
+				for batchIdx := startIdx; batchIdx < len(seg.index); batchIdx++ {
+					m := &seg.index[batchIdx]
+					if readCommitted && m.firstOffset >= pd.lastStableOffset {
+						break
+					}
+					nbytes += int(m.nbytes)
+					pbytes += int(m.nbytes)
+					if pbytes >= int(fp.maxBytes) {
+						returnEarly = true
+						break out
+					}
 				}
 			}
 			needp.set(fp.topic, fp.partition, int(fp.maxBytes)-pbytes)
@@ -273,7 +282,7 @@ full:
 			}
 			continue
 		}
-		if pd.leader != creq.cc.b && !pd.followers.has(creq.cc.b) {
+		if pd.leader != creq.cc.b && !slices.Contains(pd.followers, creq.cc.b.node) {
 			p := donep(fp.topic, fp.topicID, fp.partition, kerr.NotLeaderForPartition.Code)
 			p.CurrentLeader.LeaderID = pd.leader.node
 			p.CurrentLeader.LeaderEpoch = pd.epoch
@@ -294,7 +303,7 @@ full:
 		sp.HighWatermark = pd.highWatermark
 		sp.LastStableOffset = pd.lastStableOffset
 		sp.LogStartOffset = pd.logStartOffset
-		i, ok, atEnd := pd.searchOffset(fp.fetchOffset)
+		si, mi, ok, atEnd := pd.searchOffset(fp.fetchOffset)
 		if atEnd {
 			continue
 		}
@@ -304,26 +313,41 @@ full:
 		}
 
 		var pbytes, pBatchesAdded int
-		for _, b := range pd.batches[i:] {
-			if readCommitted && b.inTx {
-				break
+		var lastMeta *batchMeta
+	segments:
+		for segIdx := si; segIdx < len(pd.segments); segIdx++ {
+			seg := &pd.segments[segIdx]
+			startIdx := 0
+			if segIdx == si {
+				startIdx = mi
 			}
-			if nbytes = nbytes + b.nbytes; nbytes > int(req.MaxBytes) && batchesAdded > 0 {
-				break full
+			for batchIdx := startIdx; batchIdx < len(seg.index); batchIdx++ {
+				m := &seg.index[batchIdx]
+				if readCommitted && m.firstOffset >= pd.lastStableOffset {
+					break segments
+				}
+				if nbytes += int(m.nbytes); nbytes > int(req.MaxBytes) && batchesAdded > 0 {
+					break full
+				}
+				if pbytes += int(m.nbytes); pbytes > int(fp.maxBytes) && batchesAdded > 0 {
+					break segments
+				}
+				batchesAdded++
+				pBatchesAdded++
+				lastMeta = m
+				raw, err := c.readBatchRaw(pd, segIdx, m)
+				if err != nil {
+					sp.ErrorCode = kerr.UnknownServerError.Code
+					break segments
+				}
+				sp.RecordBatches = append(sp.RecordBatches, raw...)
 			}
-			if pbytes = pbytes + b.nbytes; pbytes > int(fp.maxBytes) && batchesAdded > 0 {
-				break
-			}
-			batchesAdded++
-			pBatchesAdded++
-			sp.RecordBatches = b.AppendTo(sp.RecordBatches)
 		}
 
 		// For read_committed, look up aborted transactions that overlap
 		// the returned data range using the partition's aborted txn index.
 		if readCommitted && req.Version >= 4 && pBatchesAdded > 0 {
-			lastBatch := pd.batches[i+pBatchesAdded-1]
-			upperBound := lastBatch.FirstOffset + int64(lastBatch.LastOffsetDelta) + 1
+			upperBound := lastMeta.firstOffset + int64(lastMeta.lastOffsetDelta) + 1
 			// Binary search for the first entry whose abort marker
 			// is at or after the fetch offset.
 			j := sort.Search(len(pd.abortedTxns), func(k int) bool {
@@ -372,10 +396,10 @@ type watchFetch struct {
 	cleaned bool
 }
 
-func (w *watchFetch) push(pd *partData, nbytes int) {
+func (w *watchFetch) push(pd *partData, nbytes int, inTx bool) {
 	// For readCommitted consumers, skip counting bytes from uncommitted transactional batches.
 	// These bytes will be counted when the transaction commits via addBytes.
-	if w.readCommitted && pd.inTx {
+	if w.readCommitted && inTx {
 		return
 	}
 	w.addBytes(pd, nbytes)

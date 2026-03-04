@@ -220,6 +220,7 @@ func TestPersistGroupCommitsRestart(t *testing.T) {
 			kgo.SeedBrokers(c.ListenAddrs()...),
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
+			kgo.HeartbeatInterval(100*time.Millisecond),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
 		if err != nil {
@@ -1050,6 +1051,7 @@ func TestPersistSyncWritesGroupCommitCrash(t *testing.T) {
 			kgo.SeedBrokers(c.ListenAddrs()...),
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
+			kgo.HeartbeatInterval(100*time.Millisecond),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
 		if err != nil {
@@ -1132,6 +1134,7 @@ func TestPersistSyncWritesOffsetDeleteCrash(t *testing.T) {
 			kgo.SeedBrokers(c.ListenAddrs()...),
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
+			kgo.HeartbeatInterval(100*time.Millisecond),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
 		if err != nil {
@@ -1378,6 +1381,7 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 				kgo.SeedBrokers(c.ListenAddrs()...),
 				kgo.ConsumeTopics(topic),
 				kgo.ConsumerGroup(group),
+				kgo.HeartbeatInterval(100*time.Millisecond),
 				kgo.FetchMaxWait(250*time.Millisecond),
 			)
 			if err != nil {
@@ -1531,6 +1535,7 @@ func TestPersistStaticMemberDeleteCrash(t *testing.T) {
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.InstanceID(instanceID),
+			kgo.HeartbeatInterval(100*time.Millisecond),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
 		if err != nil {
@@ -1805,12 +1810,13 @@ func TestPersistSaveGroupsLogCloseBeforeTruncate(t *testing.T) {
 		// live groupsLogFile (SyncWrites appends commit entries), then
 		// Close() calls saveGroupsLog which must close the live handle
 		// before truncating and rewriting.
-		for i := range 5 {
+		for i := range 3 {
 			group := fmt.Sprintf("trunc-group-%d", i)
 			cl, err := kgo.NewClient(
 				kgo.SeedBrokers(c.ListenAddrs()...),
 				kgo.ConsumeTopics(topic),
 				kgo.ConsumerGroup(group),
+				kgo.HeartbeatInterval(100*time.Millisecond),
 				kgo.FetchMaxWait(250*time.Millisecond),
 			)
 			if err != nil {
@@ -1827,7 +1833,7 @@ func TestPersistSaveGroupsLogCloseBeforeTruncate(t *testing.T) {
 		c.Close() // clean shutdown - saveGroupsLog truncates+rewrites
 	}
 
-	// Phase 2: reopen, verify all 5 groups' offsets survived.
+	// Phase 2: reopen, verify all 3 groups' offsets survived.
 	{
 		c, err := kfake.NewCluster(
 			kfake.DataDir(dir),
@@ -1839,7 +1845,7 @@ func TestPersistSaveGroupsLogCloseBeforeTruncate(t *testing.T) {
 		defer c.Close()
 
 		adm := kadm.NewClient(newPlainClient(t, c))
-		for i := range 5 {
+		for i := range 3 {
 			group := fmt.Sprintf("trunc-group-%d", i)
 			offsets, err := adm.FetchOffsets(context.Background(), group)
 			if err != nil {

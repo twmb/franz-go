@@ -96,7 +96,8 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 
 			// If our epoch was bumped before anything was
 			// produced, return the epoch and a start offset of 0.
-			if len(pd.batches) == 0 {
+			total := pd.totalBatches()
+			if total == 0 {
 				sp.LeaderEpoch = pd.epoch
 				sp.EndOffset = 0
 				if rp.LeaderEpoch > pd.epoch {
@@ -108,18 +109,16 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 
 			// What is the largest epoch after the requested epoch?
 			nextEpoch := rp.LeaderEpoch + 1
-			idx, _ := sort.Find(len(pd.batches), func(idx int) int {
-				batchEpoch := pd.batches[idx].epoch
-				switch {
-				case nextEpoch <= batchEpoch:
+			idx, _ := sort.Find(total, func(idx int) int {
+				m := pd.batchMetaAt(idx)
+				if nextEpoch <= m.epoch {
 					return -1
-				default:
-					return 1
 				}
+				return 1
 			})
 
 			// Requested epoch is not yet known: keep -1 returns.
-			if idx == len(pd.batches) {
+			if idx == total {
 				sp.LeaderEpoch = -1
 				sp.EndOffset = -1
 				continue
@@ -133,8 +132,10 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 				continue
 			}
 
-			sp.LeaderEpoch = pd.batches[idx-1].epoch
-			sp.EndOffset = pd.batches[idx].FirstOffset
+			prev := pd.batchMetaAt(idx - 1)
+			cur := pd.batchMetaAt(idx)
+			sp.LeaderEpoch = prev.epoch
+			sp.EndOffset = cur.firstOffset
 		}
 	}
 	return resp, nil

@@ -2665,8 +2665,8 @@ func TestIssue1248(t *testing.T) {
 }
 
 // TestDeleteRecordsThenProduce verifies that producing after deleting all
-// records does not panic. trimLeft must properly adjust maxTimestampBatchIdx
-// so that a subsequent pushBatch does not access a stale index.
+// records does not panic. trimLeft must properly clean up segment state
+// so that a subsequent pushBatch works correctly.
 func TestDeleteRecordsThenProduce(t *testing.T) {
 	t.Parallel()
 	const topic = "delete-then-produce"
@@ -2697,8 +2697,7 @@ func TestDeleteRecordsThenProduce(t *testing.T) {
 	}
 
 	// Step 2: Delete all records (sets logStartOffset to HWM, trimLeft
-	// removes all batches). This is the operation that used to leave
-	// maxTimestampBatchIdx stale.
+	// removes all batches and segment files).
 	adm := kadm.NewClient(cl)
 	deleteOffsets := kadm.Offsets{}
 	deleteOffsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: -1}) // -1 = high watermark
@@ -2708,7 +2707,7 @@ func TestDeleteRecordsThenProduce(t *testing.T) {
 	}
 
 	// Step 3: Produce again. Before the fix, pushBatch would panic with
-	// "index out of range" accessing pd.batches[maxTimestampBatchIdx].
+	// "index out of range" accessing stale segment state.
 	for i := 0; i < 5; i++ {
 		if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
 			t.Fatal(err)

@@ -78,11 +78,13 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 						pd.activeSegFile.Close()
 						pd.activeSegFile = nil
 					}
-					if c.cfg.dataDir != "" {
-						pdir := topicDir(c.cfg.dataDir, td.topic, p)
-						if err := c.fs.RemoveAll(pdir); err != nil {
-							c.cfg.logger.Logf(LogLevelWarn, "delete topic %s partition %d dir: %v", td.topic, p, err)
-						}
+					if pd.activeIdxFile != nil {
+						pd.activeIdxFile.Close()
+						pd.activeIdxFile = nil
+					}
+					pdir := topicDir(c.dataDir, td.topic, p)
+					if err := c.fs.RemoveAll(pdir); err != nil {
+						c.cfg.logger.Logf(LogLevelWarn, "delete topic %s partition %d dir: %v", td.topic, p, err)
 					}
 				}
 			}

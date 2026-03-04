@@ -44,6 +44,13 @@ type (
 		c       *Cluster
 	}
 
+	// txBatchRef identifies a transactional batch without holding a pointer.
+	txBatchRef struct {
+		topic  string
+		part   int32
+		offset int64 // FirstOffset of the batch
+	}
+
 	// Seq/txn info for a given individual producer ID.
 	pidinfo struct {
 		pids *pids
@@ -55,7 +62,7 @@ type (
 		txid      string
 		txTimeout int32                        // millis
 		txParts   tps[partData]                // partitions in the transaction, if transactional
-		txBatches []*partBatch                 // batches in the transaction
+		txBatches []txBatchRef                 // batches in the transaction
 		txGroups  []string                     // consumer groups in the transaction
 		txOffsets map[string]tps[offsetCommit] // pending offset commits per group
 
@@ -699,25 +706,25 @@ func (pidinf *pidinfo) endTx(commit bool) {
 	b.Length = int32(len(benc) - 12)
 	b.CRC = int32(crc32.Checksum(benc[21:], crc32c))
 
-	for _, batch := range pidinf.txBatches {
-		batch.inTx = false
-	}
 	pidinf.txParts.each(func(t string, p int32, pd *partData) {
-		controlBatch := pd.pushBatch(len(benc), b, false) // control record is not itself transactional
-		pidinf.pids.c.persistBatch(pd, controlBatch)
+		// Remove PID from uncommittedPIDs before pushing control batch
+		delete(pd.uncommittedPIDs, pidinf.id)
+
+		c := pidinf.pids.c
+		controlOffset := c.pushBatch(pd, len(benc), b, false) // control record is not itself transactional
 		if !commit {
 			firstOffset, ok := pidinf.txPartFirstOffsets.getp(t, p)
 			if ok {
 				pd.abortedTxns = append(pd.abortedTxns, abortedTxnEntry{
 					producerID:  pidinf.id,
 					firstOffset: *firstOffset,
-					lastOffset:  controlBatch.FirstOffset,
+					lastOffset:  controlOffset,
 				})
 			}
 		}
 		pd.recalculateLSO()
 		// Count the now-committed bytes for readCommitted watchers.
-		// These bytes were skipped in push() because pd.inTx was true.
+		// These bytes were skipped in push() because inTx was true.
 		txnBytes, _ := pidinf.txPartBytes.getp(t, p)
 		if txnBytes != nil && *txnBytes > 0 {
 			for w := range pd.watch {

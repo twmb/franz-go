@@ -222,12 +222,14 @@ func DataDir(dir string) Opt {
 	return opt{func(cfg *cfg) { cfg.dataDir = dir }}
 }
 
-// SyncWrites enables live-sync mode: every mutation (produce, group commit,
-// PID event, etc.) is persisted and fsynced before the response is sent.
-// This allows crash recovery at any point, not just clean shutdown.
-// SyncWrites requires DataDir; without DataDir it is a no-op.
+// SyncWrites enables per-batch fsync for segment and index files.
+// Without this, writes rely on the OS page cache and are only explicitly
+// synced on segment roll and shutdown, matching real Kafka's default
+// (log.flush.interval.messages=MAX_VALUE). This is much faster but
+// in-flight batches can be lost on a crash. With SyncWrites, every
+// produce is durable immediately at the cost of throughput.
 func SyncWrites() Opt {
-	return opt{func(cfg *cfg) { cfg.syncWrites = true }}
+	return opt{func(c *cfg) { c.syncWrites = true }}
 }
 
 // User adds a SASL user with optional ACLs. Unlike Superuser, this user is

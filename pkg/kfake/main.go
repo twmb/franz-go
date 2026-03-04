@@ -43,7 +43,7 @@ func main() {
 	flag.StringVar(&pprofAddr, "pprof", ":6060", "pprof port on 127.0.0.1 (empty to disable)")
 	flag.StringVar(&dataDir, "data-dir", "", "Persistence directory (enables state survival across restarts)")
 	flag.StringVar(&dataDir, "d", "", "Persistence directory (shorthand)")
-	flag.BoolVar(&syncWrites, "sync", false, "Fsync every write (crash-safe but slower)")
+	flag.BoolVar(&syncWrites, "sync", false, "Fsync every write for immediate durability (slower)")
 	flag.Var(bcfgs, "broker-config", "Broker config key=value (repeatable)")
 	flag.Var(bcfgs, "c", "Broker config key=value (shorthand, repeatable)")
 	flag.Parse()
