@@ -157,6 +157,29 @@ func waitForStableGroup(t *testing.T, adm *kadm.Client, group string, nMembers i
 	}
 }
 
+// waitForStableGroupAssigned waits for a stable group with the expected member
+// count and total assigned partitions.
+func waitForStableGroupAssigned(t *testing.T, adm *kadm.Client, group string, nMembers, nAssigned int, timeout time.Duration) kadm.DescribedConsumerGroup {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		described, err := adm.DescribeConsumerGroups(ctx, group)
+		if err != nil {
+			t.Fatalf("describe failed: %v", err)
+		}
+		dg := described[group]
+		assigned := totalAssignedPartitions(dg)
+		if dg.State == "Stable" && len(dg.Members) == nMembers && assigned == nAssigned {
+			return dg
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("timeout waiting for stable group %q with %d members and %d assigned partitions (state=%s, members=%d, assigned=%d)", group, nMembers, nAssigned, dg.State, len(dg.Members), assigned)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // totalAssignedPartitions returns the total number of partitions assigned
 // across all members of a described consumer group.
 func totalAssignedPartitions(dg kadm.DescribedConsumerGroup) int {

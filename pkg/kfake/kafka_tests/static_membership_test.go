@@ -34,7 +34,7 @@ func TestStaticMember848RejoinGetsAssignmentBack(t *testing.T) {
 	c1 := newGroupConsumer(t, c, topic, group, kgo.InstanceID(instanceID))
 	consumeN(t, c1, nRecords, 10*time.Second)
 	adm := newAdminClient(t, c)
-	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	dg := waitForStableGroupAssigned(t, adm, group, 1, 2, 10*time.Second)
 	if totalAssignedPartitions(dg) != 2 {
 		t.Fatalf("expected 2 partitions, got %d", totalAssignedPartitions(dg))
 	}
@@ -46,7 +46,7 @@ func TestStaticMember848RejoinGetsAssignmentBack(t *testing.T) {
 	// Rejoin with same instanceID.
 	c2 := newGroupConsumer(t, c, topic, group, kgo.InstanceID(instanceID))
 	_ = c2
-	dg = waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	dg = waitForStableGroupAssigned(t, adm, group, 1, 2, 10*time.Second)
 	if totalAssignedPartitions(dg) != 2 {
 		t.Fatalf("expected 2 partitions after rejoin, got %d", totalAssignedPartitions(dg))
 	}
@@ -74,7 +74,7 @@ func TestStaticMember848FenceByInstanceID(t *testing.T) {
 	// Second consumer with same instanceID fences the first.
 	c2 := newGroupConsumer(t, c, topic, group, kgo.InstanceID(instanceID))
 	_ = c2
-	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	dg := waitForStableGroupAssigned(t, adm, group, 1, 2, 10*time.Second)
 	if totalAssignedPartitions(dg) != 2 {
 		t.Fatalf("expected 2 partitions after fencing, got %d", totalAssignedPartitions(dg))
 	}
