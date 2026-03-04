@@ -379,7 +379,7 @@ func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults
 		if pd == nil {
 			continue
 		}
-		if int(r.Partition) >= len(pd.partitions) {
+		if r.Partition < 0 || int(r.Partition) >= len(pd.partitions) {
 			continue
 		}
 		rb := pd.partitions[r.Partition].records
