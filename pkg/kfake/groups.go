@@ -2196,6 +2196,15 @@ func (g *group) consumerStaticLeave(req *kmsg.ConsumerGroupHeartbeatRequest, res
 func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.ConsumerGroupHeartbeatResponse) *kmsg.ConsumerGroupHeartbeatResponse {
 	m, ok := g.consumerMembers[req.MemberID]
 	if !ok {
+		// If the request carries an instanceID owned by a different
+		// member, return FENCED_INSTANCE_ID per Kafka's
+		// throwIfInstanceIdIsFenced (GroupMetadataManager.java:1647).
+		if req.InstanceID != nil {
+			if ownerID, ok := g.staticMembers[*req.InstanceID]; ok && ownerID != req.MemberID {
+				resp.ErrorCode = kerr.FencedInstanceID.Code
+				return resp
+			}
+		}
 		resp.ErrorCode = kerr.UnknownMemberID.Code
 		return resp
 	}

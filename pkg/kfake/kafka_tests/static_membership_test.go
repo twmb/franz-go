@@ -52,12 +52,12 @@ func TestStaticMember848RejoinGetsAssignmentBack(t *testing.T) {
 	}
 }
 
-// TestStaticMember848UnreleasedInstanceID verifies that a new consumer
-// joining with the same instanceID while the old member is still active
-// receives UNRELEASED_INSTANCE_ID, and can replace the member after the
-// old one performs a static leave (epoch -2).
-// Derived via LLM from testShouldThrowFencedInstanceIdExceptionWhenStaticMemberWithDifferentMemberIdJoins.
-func TestStaticMember848UnreleasedInstanceID(t *testing.T) {
+// TestStaticMember848FencedInstanceID verifies that a heartbeat from a
+// different memberID but the same instanceID returns FENCED_INSTANCE_ID.
+// Matches Kafka's throwIfInstanceIdIsFenced (GroupMetadataManager.java:1647),
+// called from getOrMaybeSubscribeStaticConsumerGroupMember (line 3187).
+// Derived from testShouldThrowFencedInstanceIdExceptionWhenStaticMemberWithDifferentMemberIdJoins.
+func TestStaticMember848FencedInstanceID(t *testing.T) {
 	t.Parallel()
 	topic := "t-static-fence"
 	group := "g-static-fence"
@@ -73,14 +73,14 @@ func TestStaticMember848UnreleasedInstanceID(t *testing.T) {
 	adm := newAdminClient(t, c)
 	waitForStableGroup(t, adm, group, 1, 10*time.Second)
 
-	// While c1 is active, a raw heartbeat with the same instanceID
-	// but a different memberID must get UNRELEASED_INSTANCE_ID.
+	// A heartbeat from a different memberID but the same instanceID
+	// must get FENCED_INSTANCE_ID.
 	raw := newClient848(t, c)
 	hbReq := kmsg.NewPtrConsumerGroupHeartbeatRequest()
 	hbReq.Group = group
-	hbReq.MemberID = "new-member-id"
-	hbReq.MemberEpoch = 0
-	hbReq.RebalanceTimeoutMillis = 45000
+	hbReq.MemberID = "unknown-member"
+	hbReq.MemberEpoch = 11
+	hbReq.RebalanceTimeoutMillis = 5000
 	hbReq.InstanceID = &instanceID
 	hbReq.SubscribedTopicNames = []string{topic}
 	hbReq.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
@@ -91,19 +91,8 @@ func TestStaticMember848UnreleasedInstanceID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("heartbeat request failed: %v", err)
 	}
-	if hbResp.ErrorCode != kerr.UnreleasedInstanceID.Code {
-		t.Fatalf("expected UNRELEASED_INSTANCE_ID, got %v", kerr.ErrorForCode(hbResp.ErrorCode))
-	}
-
-	// After c1 closes (static leave, epoch -2), a new consumer
-	// with the same instanceID can replace it.
-	c1.Close()
-
-	c2 := newGroupConsumer(t, c, topic, group, kgo.InstanceID(instanceID))
-	_ = c2
-	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
-	if totalAssignedPartitions(dg) != 2 {
-		t.Fatalf("expected 2 partitions after replacement, got %d", totalAssignedPartitions(dg))
+	if hbResp.ErrorCode != kerr.FencedInstanceID.Code {
+		t.Fatalf("expected FENCED_INSTANCE_ID, got %v", kerr.ErrorForCode(hbResp.ErrorCode))
 	}
 }
 
