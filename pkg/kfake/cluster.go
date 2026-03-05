@@ -327,15 +327,20 @@ func (c *Cluster) Close() {
 					c.cfg.logger.Logf(LogLevelError, "save session state: %v", err)
 				}
 				c.closeOpenFiles()
+				// Close c.die inside the admin function so run()
+				// exits immediately - prevents processing requests
+				// after saveToDisk which would create state not
+				// captured by the saved seq windows.
+				close(c.die)
 				close(done)
 			}
 			<-done
-		} else {
-			// run() was never started (e.g., NewCluster failed).
-			// No concurrent state to worry about - just clean up
-			// open file handles.
-			c.closeOpenFiles()
+			return
 		}
+		// run() was never started (e.g., NewCluster failed).
+		// No concurrent state to worry about - just clean up
+		// open file handles.
+		c.closeOpenFiles()
 	}
 
 	close(c.die)
@@ -373,6 +378,12 @@ func (b *broker) listen() {
 }
 
 func (c *Cluster) run() {
+	defer func() {
+		c.pids.txTimer.Stop()
+		if c.compactTicker != nil {
+			c.compactTicker.Stop()
+		}
+	}()
 outer:
 	for {
 		var (
@@ -387,10 +398,6 @@ outer:
 
 		select {
 		case <-c.die:
-			c.pids.txTimer.Stop()
-			if c.compactTicker != nil {
-				c.compactTicker.Stop()
-			}
 			return
 
 		case <-c.pids.txTimer.C:
@@ -403,6 +410,15 @@ outer:
 
 		case admin := <-c.adminCh:
 			admin()
+			// If the admin function closed c.die (shutdown persist),
+			// exit immediately. We can't rely on the outer select
+			// because Go's select is non-deterministic - it could
+			// pick reqCh over c.die even when both are ready.
+			select {
+			case <-c.die:
+				return
+			default:
+			}
 			continue
 
 		case creq = <-c.reqCh:
