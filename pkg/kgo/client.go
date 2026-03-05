@@ -1485,20 +1485,29 @@ type retryable struct {
 	parseRetryErr func(kmsg.Response, error) error
 }
 
-type failDial struct{ fails int8 }
+type failDial struct {
+	fails   int8
+	clearFn func()
+}
 
-// The controller and group/txn coordinators are cached. If dialing the broker
-// repeatedly fails, we need to forget our cache to force a re-load: the broker
-// may have completely died.
-func (d *failDial) isRepeatedDialFail(err error) bool {
-	if isAnyDialErr(err) {
-		d.fails++
-		if d.fails == 3 {
-			d.fails = 0
-			return true
-		}
+// The controller and group/txn coordinators are cached. If dialing the
+// cached broker fails, we clear the cache immediately so that the next
+// retry does a fresh lookup, and we return errChosenBrokerDead to make
+// the retryable loop actually retry with backoff (dial errors are
+// otherwise not retryable by shouldRetry, and shouldRetryNext cannot
+// help because loadCoordinator returns the same stale cached broker).
+//
+// After 3 dial failures we give up and return the original error.
+func (d *failDial) handleDialErr(err error) error {
+	if !isAnyDialErr(err) {
+		return err
 	}
-	return false
+	d.clearFn()
+	d.fails++
+	if d.fails <= 3 {
+		return errChosenBrokerDead
+	}
+	return err
 }
 
 func (r *retryable) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
@@ -2064,13 +2073,10 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 		cl.maybeDeleteCachedMeta(false, topics...)
 	}
 
-	var d failDial
+	d := failDial{clearFn: func() { cl.forgetControllerID(r.last.meta.NodeID) }}
 	r.parseRetryErr = func(resp kmsg.Response, err error) error {
 		if err != nil {
-			if d.isRepeatedDialFail(err) {
-				cl.forgetControllerID(r.last.meta.NodeID)
-			}
-			return err
+			return d.handleDialErr(err)
 		}
 		var code int16
 		switch t := resp.(type) {
@@ -2208,13 +2214,10 @@ func (cl *Client) handleReqWithCoordinator(
 	req kmsg.Request,
 ) (*broker, kmsg.Response, error) {
 	r := cl.retryableBrokerFn(coordinator)
-	var d failDial
+	d := failDial{clearFn: func() { cl.deleteStaleCoordinator(name, typ) }}
 	r.parseRetryErr = func(resp kmsg.Response, err error) error {
 		if err != nil {
-			if d.isRepeatedDialFail(err) {
-				cl.deleteStaleCoordinator(name, typ)
-			}
-			return err
+			return d.handleDialErr(err)
 		}
 		var code int16
 		switch t := resp.(type) {
