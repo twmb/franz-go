@@ -185,7 +185,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 	opts = append(opts, testClientOpts()...)
 
 	txnSess, _ := NewGroupTransactSession(opts...)
-	defer c.leaveGroupStatic(adm, myInstanceID)
+	defer c.leaveGroupStatic(adm(), myInstanceID)
 	defer txnSess.Close()
 
 	ntxns := 0 // for if txnsBeforeQuit is non-negative
