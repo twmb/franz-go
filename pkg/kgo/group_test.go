@@ -189,7 +189,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 	}
 
 	cl, _ := newTestClient(opts...)
-	defer c.leaveGroupStatic(adm, myInstanceID)
+	defer c.leaveGroupStatic(adm(), myInstanceID)
 	defer cl.Close()
 
 	defer func() {

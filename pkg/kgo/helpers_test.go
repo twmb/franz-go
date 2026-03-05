@@ -32,8 +32,10 @@ var errSkipChecks848 = errors.New("848 stale commit; skip checks")
 var testChaos = os.Getenv("KGO_TEST_CHAOS") == "1"
 
 var (
-	adm             *Client
-	testrf          = 3
+	admOnce sync.Once
+	admCl   *Client
+	testrf  = 3
+
 	testRecordLimit = 500000
 
 	// Redpanda is a bit more strict with transactions: we must wait for
@@ -109,7 +111,6 @@ func (s *slowDialer) DialContext(ctx context.Context, network, host string) (net
 }
 
 func init() {
-	var err error
 	if n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RF")); n > 0 {
 		testrf = n
 	}
@@ -199,28 +200,35 @@ func init() {
 			}
 		}
 	}
-	adm, err = newTestClient()
-	if err != nil {
-		panic(fmt.Sprintf("unable to create admin client: %v", err))
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		resp, err := adm.Request(context.Background(), kmsg.NewPtrApiVersionsRequest())
-		if err == nil {
-			versions := kversion.FromApiVersionsResponse(resp.(*kmsg.ApiVersionsResponse))
-			if v, ok := versions.LookupMaxKeyVersion(11); ok && v >= 5 { // 11 = JoinGroup
-				allowStaticMembership = true
-			}
-			if _, ok := versions.LookupMaxKeyVersion(68); ok { // 68 = ConsumerGroupHeartbeat
-				allow848 = true
-			}
-			break
+}
+
+func adm() *Client {
+	admOnce.Do(func() {
+		var err error
+		admCl, err = newTestClient()
+		if err != nil {
+			panic(fmt.Sprintf("unable to create admin client: %v", err))
 		}
-		if time.Now().After(deadline) {
-			panic(fmt.Sprintf("unable to issue ApiVersions: %v", err))
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			resp, err := admCl.Request(context.Background(), kmsg.NewPtrApiVersionsRequest())
+			if err == nil {
+				versions := kversion.FromApiVersionsResponse(resp.(*kmsg.ApiVersionsResponse))
+				if v, ok := versions.LookupMaxKeyVersion(11); ok && v >= 5 { // 11 = JoinGroup
+					allowStaticMembership = true
+				}
+				if _, ok := versions.LookupMaxKeyVersion(68); ok { // 68 = ConsumerGroupHeartbeat
+					allow848 = true
+				}
+				return
+			}
+			if time.Now().After(deadline) {
+				panic(fmt.Sprintf("unable to issue ApiVersions: %v", err))
+			}
+			time.Sleep(250 * time.Millisecond)
 		}
-		time.Sleep(250 * time.Millisecond)
-	}
+	})
+	return admCl
 }
 
 func testClientOpts(opts ...Opt) []Opt {
@@ -453,7 +461,7 @@ func tmpNamedTopicPartitions(tb testing.TB, topic string, partitions int) (strin
 
 	start := time.Now()
 issue:
-	resp, err := req.RequestWith(context.Background(), adm)
+	resp, err := req.RequestWith(context.Background(), adm())
 
 	// If we run tests in a container _immediately_ after the container
 	// starts, we can receive dial errors for a bit if the container is not
@@ -499,7 +507,7 @@ issue:
 		reqTopic.Topic = kmsg.StringPtr(topic)
 		req.Topics = append(req.Topics, reqTopic)
 
-		resp, err := req.RequestWith(context.Background(), adm)
+		resp, err := req.RequestWith(context.Background(), adm())
 		if err == nil {
 			err = kerr.ErrorForCode(resp.Topics[0].ErrorCode)
 		}
@@ -525,7 +533,7 @@ func tmpGroup(tb testing.TB) (string, func()) {
 
 		req := kmsg.NewPtrDeleteGroupsRequest()
 		req.Groups = []string{group}
-		resp, err := req.RequestWith(context.Background(), adm)
+		resp, err := req.RequestWith(context.Background(), adm())
 		if err == nil {
 			err = kerr.ErrorForCode(resp.Groups[0].ErrorCode)
 		}
