@@ -563,19 +563,9 @@ func (cl *Client) produce(
 	// We have to grab the produce lock to check if this record will exceed
 	// configured limits. We try to keep the logic tight since this is
 	// effectively a global lock around producing.
-	var (
-		nextBufRecs, nextBufBytes int64
-		overMaxRecs, overMaxBytes bool
-
-		calcNums = func() {
-			nextBufRecs = p.bufferedRecords + 1
-			nextBufBytes = p.bufferedBytes + userSize
-			overMaxRecs = nextBufRecs > cl.cfg.maxBufferedRecords
-			overMaxBytes = cl.cfg.maxBufferedBytes > 0 && nextBufBytes > cl.cfg.maxBufferedBytes
-		}
-	)
 	p.mu.Lock()
-	calcNums()
+	overMaxRecs := p.bufferedRecords >= cl.cfg.maxBufferedRecords
+	overMaxBytes := cl.cfg.maxBufferedBytes > 0 && p.bufferedBytes+userSize > cl.cfg.maxBufferedBytes
 	if overMaxRecs || overMaxBytes {
 		if !block || cl.cfg.manualFlushing {
 			p.mu.Unlock()
@@ -609,10 +599,9 @@ func (cl *Client) produce(
 		go func() {
 			defer close(wait)
 			p.mu.Lock()
-			calcNums()
-			for !quit && (overMaxRecs || overMaxBytes) {
+			for !quit && (p.bufferedRecords >= cl.cfg.maxBufferedRecords ||
+				(cl.cfg.maxBufferedBytes > 0 && p.bufferedBytes+userSize > cl.cfg.maxBufferedBytes)) {
 				p.c.Wait()
-				calcNums()
 			}
 			p.blocked.Add(-1)
 			p.blockedBytes -= userSize
@@ -653,8 +642,8 @@ func (cl *Client) produce(
 			return
 		}
 	}
-	p.bufferedRecords = nextBufRecs
-	p.bufferedBytes = nextBufBytes
+	p.bufferedRecords++
+	p.bufferedBytes += userSize
 	p.mu.Unlock()
 
 	cl.loadPartsAndPartition(promisedRec{ctx, promise, r})
