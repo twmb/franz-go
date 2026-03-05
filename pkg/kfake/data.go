@@ -656,6 +656,7 @@ var validBrokerConfigs = map[string]string{
 	"message.max.bytes":                         "max.message.bytes",
 	"min.insync.replicas":                       "min.insync.replicas",
 	"sasl.enabled.mechanisms":                   "",
+	"state.log.compact.bytes":                   "",
 	"super.users":                               "",
 }
 
@@ -691,6 +692,8 @@ var configDefaults = map[string]string{
 
 	"transaction.max.timeout.ms":     "900000",
 	"transactional.id.expiration.ms": "604800000",
+
+	"state.log.compact.bytes":                   "10485760",
 
 	"default.replication.factor":                "3",
 	"fetch.max.bytes":                           "57671680",
@@ -741,6 +744,7 @@ var configTypes = map[string]kmsg.ConfigType{
 	"segment.bytes":                             kmsg.ConfigTypeInt,
 	"segment.ms":                                kmsg.ConfigTypeLong,
 	"sasl.enabled.mechanisms":                   kmsg.ConfigTypeList,
+	"state.log.compact.bytes":                   kmsg.ConfigTypeLong,
 	"super.users":                               kmsg.ConfigTypeList,
 	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
 	"transactional.id.expiration.ms":            kmsg.ConfigTypeInt,

@@ -440,12 +440,13 @@ func readJSONFile(fsys fs, path string, v any) (bool, error) {
 }
 
 // appendLogEntry encodes v as JSON and appends it as a framed entry.
-func appendLogEntry(f file, v any, syncW bool) error {
+// Returns the total bytes written (header + data).
+func appendLogEntry(f file, v any, syncW bool) (int, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return writeEntry(f, data, syncW)
+	return entryHeaderSize + len(data), writeEntry(f, data, syncW)
 }
 
 // partDir returns the partition directory path, URL-escaping for fs safety.
@@ -830,7 +831,7 @@ func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 		return err
 	}
 	for _, e := range allEntries {
-		if err := appendLogEntry(f, e, c.cfg.syncWrites); err != nil {
+		if _, err := appendLogEntry(f, e, c.cfg.syncWrites); err != nil {
 			f.Close()
 			return err
 		}
@@ -875,20 +876,20 @@ func (c *Cluster) collectGroupEntries(g *group) []groupLogEntry {
 }
 
 func (c *Cluster) savePIDsLog(fsys fs, dir string) error {
-	// Close the live append handle before truncating, matching
-	// saveGroupsLog. No race here (pids are single-threaded from
-	// run()), but prevents a stale file descriptor.
+	// Close the live append handle before rewriting. No race here
+	// (pids are single-threaded from run()), but prevents a stale
+	// file descriptor.
 	if c.pidsLogFile != nil {
 		c.pidsLogFile.Close()
 		c.pidsLogFile = nil
 	}
 
 	path := filepath.Join(dir, "pids.log")
-	f, err := fsys.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	tmpPath := path + ".tmp"
+	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
 	for _, pidinf := range c.pids.ids {
 		// Write the latest state for each PID
@@ -902,11 +903,13 @@ func (c *Cluster) savePIDsLog(fsys fs, dir string) error {
 			entry.Timeout = pidinf.txTimeout
 			entry.Commit = &pidinf.lastWasCommit
 		}
-		if err := appendLogEntry(f, entry, c.cfg.syncWrites); err != nil {
+		if _, err := appendLogEntry(f, entry, c.cfg.syncWrites); err != nil {
+			f.Close()
 			return err
 		}
 	}
-	return nil
+	f.Close()
+	return fsys.Rename(tmpPath, path)
 }
 
 func (c *Cluster) saveSeqWindows(fsys fs, dir string) error {
@@ -1472,6 +1475,7 @@ func (c *Cluster) loadPIDsLog(fsys fs, dir string) error {
 		}
 		return err
 	}
+	c.pidsLogSize.Store(int64(len(raw)))
 
 	entries, validBytes := readEntries(raw)
 	if validBytes < len(raw) {
@@ -1528,6 +1532,7 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 		}
 		return err
 	}
+	c.groupsLogSize.Store(int64(len(raw)))
 
 	// Replay: latest per key wins
 	type commitKey struct {
@@ -1810,11 +1815,15 @@ func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
 		}
 		c.groupsLogFile = f
 	}
-	if err := appendLogEntry(c.groupsLogFile, entry, c.cfg.syncWrites); err != nil {
+	n, err := appendLogEntry(c.groupsLogFile, entry, c.cfg.syncWrites)
+	if err != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "persist group entry write: %v", err)
 		c.groupsLogFile.Close()
 		c.groupsLogFile = nil
 		return err
+	}
+	if c.groupsLogSize.Add(int64(n)) >= c.stateLogCompactBytes() {
+		c.needsGroupsCompact.Store(true)
 	}
 	return nil
 }
@@ -1834,11 +1843,15 @@ func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
 		}
 		c.pidsLogFile = f
 	}
-	if err := appendLogEntry(c.pidsLogFile, entry, c.cfg.syncWrites); err != nil {
+	n, err := appendLogEntry(c.pidsLogFile, entry, c.cfg.syncWrites)
+	if err != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "persist pid entry write: %v", err)
 		c.pidsLogFile.Close()
 		c.pidsLogFile = nil
 		return err
+	}
+	if c.pidsLogSize.Add(int64(n)) >= c.stateLogCompactBytes() {
+		c.compactPIDsLog()
 	}
 	return nil
 }
@@ -1851,6 +1864,38 @@ func (c *Cluster) persistState(name string, fn func(fs, string) error) {
 	}
 	if err := fn(c.fs, c.cfg.dataDir); err != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "persist %s: %v", name, err)
+	}
+}
+
+func (c *Cluster) stateLogCompactBytes() int64 {
+	if v, ok := c.loadBcfgs()["state.log.compact.bytes"]; ok && v != nil {
+		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
+			return n
+		}
+	}
+	return 10 << 20
+}
+
+func (c *Cluster) compactPIDsLog() {
+	if err := c.savePIDsLog(c.fs, c.cfg.dataDir); err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "compact pids.log: %v", err)
+		return
+	}
+	path := filepath.Join(c.cfg.dataDir, "pids.log")
+	if info, err := c.fs.Stat(path); err == nil {
+		c.pidsLogSize.Store(info.Size())
+	}
+}
+
+func (c *Cluster) compactGroupsLog() {
+	c.needsGroupsCompact.Store(false)
+	if err := c.saveGroupsLog(c.fs, c.cfg.dataDir); err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: %v", err)
+		return
+	}
+	path := filepath.Join(c.cfg.dataDir, "groups.log")
+	if info, err := c.fs.Stat(path); err == nil {
+		c.groupsLogSize.Store(info.Size())
 	}
 }
 

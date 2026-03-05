@@ -55,9 +55,12 @@ type (
 		// is set (user provided real path).
 		dataDir       string
 		fs            fs
-		groupsLogMu   sync.Mutex
-		groupsLogFile file
-		pidsLogFile   file
+		groupsLogMu        sync.Mutex
+		groupsLogFile      file
+		pidsLogFile        file
+		groupsLogSize      atomic.Int64
+		pidsLogSize        atomic.Int64
+		needsGroupsCompact atomic.Bool
 
 		// crashAbortedPIDs collects producer IDs that had in-flight
 		// transactions during a crash. Populated during loadPartitions
@@ -603,6 +606,9 @@ outer:
 		c.pids.updateTimer()
 
 	afterControl:
+		if c.needsGroupsCompact.Load() {
+			c.compactGroupsLog()
+		}
 		// If s is non-nil, this is either a previously slept control
 		// that finished but was not handled, or a previously slept
 		// waiting request. In either case, we need to signal to the

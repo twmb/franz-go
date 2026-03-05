@@ -9,6 +9,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -3197,6 +3198,412 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 		// UNKNOWN_MEMBER_ID is expected (the member doesn't exist),
 		// but the group itself is alive.
 		t.Logf("heartbeat error (expected): %s - group is alive", ec)
+	}
+}
+
+func TestPersistLogCompaction(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	const topic = "compact-topic"
+	const group = "compact-group"
+
+	// Use a low threshold so compaction triggers quickly.
+	c, err := kfake.NewCluster(
+		kfake.DataDir(dir),
+		kfake.NumBrokers(1),
+		kfake.SeedTopics(1, topic),
+		kfake.BrokerConfigs(map[string]string{
+			"state.log.compact.bytes": "1024",
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.HeartbeatInterval(100*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Produce records
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 50 {
+		r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
+		if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prodCl.Close()
+
+	// Consume and commit in a loop to grow groups.log past threshold.
+	var totalConsumed int
+	for totalConsumed < 50 {
+		fetches := cl.PollFetches(ctx)
+		fetches.EachRecord(func(_ *kgo.Record) { totalConsumed++ })
+		if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Keep committing to grow the log further, triggering compaction.
+	for range 100 {
+		if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cl.Close()
+
+	// Verify groups.log was compacted (size should be small).
+	groupsLogPath := filepath.Join(dir, "groups.log")
+	info, err := os.Stat(groupsLogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// After compaction, the file should be much smaller than 100 commits
+	// would produce (~100 * ~80 bytes = ~8KB raw, compacted to ~2 entries).
+	if info.Size() > 1024 {
+		t.Fatalf("groups.log not compacted: size %d > 1024", info.Size())
+	}
+
+	// Verify state is correct after compaction - offsets still readable.
+	adm := kadm.NewClient(newPlainClient(t, c))
+	offsets, err := adm.FetchOffsets(ctx, group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, ok := offsets.Lookup(topic, 0)
+	if !ok {
+		t.Fatal("expected committed offset for partition 0")
+	}
+	if o.At != 50 {
+		t.Fatalf("expected committed offset 50, got %d", o.At)
+	}
+
+	c.Close()
+
+	// Reopen and verify state survives restart after compaction.
+	c2, err := kfake.NewCluster(
+		kfake.DataDir(dir),
+		kfake.NumBrokers(1),
+		kfake.BrokerConfigs(map[string]string{
+			"state.log.compact.bytes": "1024",
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close()
+
+	adm2 := kadm.NewClient(newPlainClient(t, c2))
+	offsets2, err := adm2.FetchOffsets(ctx, group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o2, ok := offsets2.Lookup(topic, 0)
+	if !ok {
+		t.Fatal("expected committed offset after restart")
+	}
+	if o2.At != 50 {
+		t.Fatalf("expected committed offset 50 after restart, got %d", o2.At)
+	}
+}
+
+// TestPersistLogCompactionCrashGroups verifies that groups.log compaction
+// doesn't lose committed offsets if the process crashes right after compaction.
+// It snapshots the data dir mid-operation (simulating a crash) and verifies
+// that offsets survive loading from the snapshot.
+func TestPersistLogCompactionCrashGroups(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	const topic = "crash-topic"
+
+	c, err := kfake.NewCluster(
+		kfake.DataDir(dir),
+		kfake.NumBrokers(1),
+		kfake.SeedTopics(1, topic),
+		kfake.BrokerConfigs(map[string]string{
+			"state.log.compact.bytes": "128", // very aggressive
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Produce records
+	prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 20 {
+		r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
+		if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prodCl.Close()
+
+	// Run 3 groups concurrently doing rapid commits to trigger compaction
+	// while groups are actively writing to groups.log.
+	const nGroups = 3
+	const nCommits = 100
+	var wg errgroup
+	for g := range nGroups {
+		group := fmt.Sprintf("crash-group-%d", g)
+		wg.do(func() error {
+			cl, err := kgo.NewClient(
+				kgo.SeedBrokers(c.ListenAddrs()...),
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.HeartbeatInterval(100*time.Millisecond),
+				kgo.FetchMaxWait(250*time.Millisecond),
+			)
+			if err != nil {
+				return err
+			}
+			defer cl.Close()
+
+			// Consume all records
+			consumed := 0
+			for consumed < 20 {
+				fetches := cl.PollFetches(ctx)
+				fetches.EachRecord(func(_ *kgo.Record) { consumed++ })
+				if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+					return err
+				}
+			}
+			// Hammer commits to grow the log and trigger compaction
+			for range nCommits {
+				if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	if err := wg.wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Snapshot: copy data dir to simulate crash state.
+	// The groups.log on disk may have been compacted, losing any
+	// entries written between collect and rename.
+	crashDir := t.TempDir()
+	copyDir(t, dir, crashDir)
+
+	// Record what the live cluster thinks the offsets are.
+	adm := kadm.NewClient(newPlainClient(t, c))
+	liveOffsets := make(map[string]int64)
+	for g := range nGroups {
+		group := fmt.Sprintf("crash-group-%d", g)
+		offsets, err := adm.FetchOffsets(ctx, group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		offsets.Each(func(o kadm.OffsetResponse) {
+			if o.Err == nil {
+				liveOffsets[fmt.Sprintf("%s/%s-%d", group, o.Topic, o.Partition)] = o.At
+			}
+		})
+	}
+	c.Close()
+
+	// Open from crash snapshot (no Close was called on original - simulates crash).
+	c2, err := kfake.NewCluster(
+		kfake.DataDir(crashDir),
+		kfake.NumBrokers(1),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close()
+
+	adm2 := kadm.NewClient(newPlainClient(t, c2))
+	for g := range nGroups {
+		group := fmt.Sprintf("crash-group-%d", g)
+		offsets, err := adm2.FetchOffsets(ctx, group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		offsets.Each(func(o kadm.OffsetResponse) {
+			if o.Err != nil {
+				return
+			}
+			key := fmt.Sprintf("%s/%s-%d", group, o.Topic, o.Partition)
+			live := liveOffsets[key]
+			if o.At != live {
+				t.Errorf("crash recovery %s: expected offset %d, got %d", key, live, o.At)
+			}
+		})
+	}
+}
+
+// TestPersistLogCompactionCrashPIDs verifies pids.log compaction crash safety.
+// This test triggers compaction and verifies PID state survives loading
+// from a crash-simulated snapshot.
+func TestPersistLogCompactionCrashPIDs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	const topic = "txn-crash-topic"
+
+	c, err := kfake.NewCluster(
+		kfake.DataDir(dir),
+		kfake.NumBrokers(1),
+		kfake.SeedTopics(1, topic),
+		kfake.BrokerConfigs(map[string]string{
+			"state.log.compact.bytes": "128", // very aggressive
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Do many transactional produce cycles to grow pids.log
+	const nTxns = 50
+	for i := range nTxns {
+		txid := fmt.Sprintf("txn-%d", i%5) // reuse 5 txn IDs
+		cl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.TransactionalID(txid),
+			kgo.TransactionTimeout(30*time.Second),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cl.BeginTransaction(); err != nil {
+			cl.Close()
+			t.Fatal(err)
+		}
+		r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("txn-v%d", i))}
+		if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+			cl.Close()
+			t.Fatal(err)
+		}
+		if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+			cl.Close()
+			t.Fatal(err)
+		}
+		cl.Close()
+	}
+
+	// Check pids.log size - should have been compacted
+	pidsPath := filepath.Join(dir, "pids.log")
+	info, err := os.Stat(pidsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("pids.log size after %d txns: %d bytes", nTxns, info.Size())
+
+	// Snapshot for crash simulation
+	crashDir := t.TempDir()
+	copyDir(t, dir, crashDir)
+
+	c.Close()
+
+	// Open from crash snapshot
+	c2, err := kfake.NewCluster(
+		kfake.DataDir(crashDir),
+		kfake.NumBrokers(1),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close()
+
+	// Verify we can still produce with the same txn IDs (PIDs survived)
+	for i := range 5 {
+		txid := fmt.Sprintf("txn-%d", i)
+		cl, err := kgo.NewClient(
+			kgo.SeedBrokers(c2.ListenAddrs()...),
+			kgo.TransactionalID(txid),
+			kgo.TransactionTimeout(30*time.Second),
+		)
+		if err != nil {
+			t.Fatalf("txn %s: new client: %v", txid, err)
+		}
+		if err := cl.BeginTransaction(); err != nil {
+			cl.Close()
+			t.Fatalf("txn %s: begin: %v", txid, err)
+		}
+		r := &kgo.Record{Topic: topic, Value: []byte("post-crash")}
+		if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+			cl.Close()
+			t.Fatalf("txn %s: produce after crash: %v", txid, err)
+		}
+		if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+			cl.Close()
+			t.Fatalf("txn %s: end after crash: %v", txid, err)
+		}
+		cl.Close()
+	}
+}
+
+type errgroup struct {
+	wg   sync.WaitGroup
+	mu   sync.Mutex
+	errs []error
+}
+
+func (eg *errgroup) do(fn func() error) {
+	eg.wg.Add(1)
+	go func() {
+		defer eg.wg.Done()
+		if err := fn(); err != nil {
+			eg.mu.Lock()
+			eg.errs = append(eg.errs, err)
+			eg.mu.Unlock()
+		}
+	}()
+}
+
+func (eg *errgroup) wait() error {
+	eg.wg.Wait()
+	return errors.Join(eg.errs...)
+}
+
+// copyDir recursively copies src to dst for crash simulation.
+func copyDir(t *testing.T, src, dst string) {
+	t.Helper()
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		sp := filepath.Join(src, e.Name())
+		dp := filepath.Join(dst, e.Name())
+		if e.IsDir() {
+			if err := os.MkdirAll(dp, 0755); err != nil {
+				t.Fatal(err)
+			}
+			copyDir(t, sp, dp)
+		} else {
+			data, err := os.ReadFile(sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(dp, data, 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 }
 
