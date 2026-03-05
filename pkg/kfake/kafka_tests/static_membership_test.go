@@ -52,10 +52,12 @@ func TestStaticMember848RejoinGetsAssignmentBack(t *testing.T) {
 	}
 }
 
-// TestStaticMember848FenceByInstanceID verifies that a new consumer joining
-// with the same instanceID fences the old one.
+// TestStaticMember848UnreleasedInstanceID verifies that a new consumer
+// joining with the same instanceID while the old member is still active
+// receives UNRELEASED_INSTANCE_ID, and can replace the member after the
+// old one performs a static leave (epoch -2).
 // Derived via LLM from testShouldThrowFencedInstanceIdExceptionWhenStaticMemberWithDifferentMemberIdJoins.
-func TestStaticMember848FenceByInstanceID(t *testing.T) {
+func TestStaticMember848UnreleasedInstanceID(t *testing.T) {
 	t.Parallel()
 	topic := "t-static-fence"
 	group := "g-static-fence"
@@ -71,12 +73,37 @@ func TestStaticMember848FenceByInstanceID(t *testing.T) {
 	adm := newAdminClient(t, c)
 	waitForStableGroup(t, adm, group, 1, 10*time.Second)
 
-	// Second consumer with same instanceID fences the first.
+	// While c1 is active, a raw heartbeat with the same instanceID
+	// but a different memberID must get UNRELEASED_INSTANCE_ID.
+	raw := newClient848(t, c)
+	hbReq := kmsg.NewPtrConsumerGroupHeartbeatRequest()
+	hbReq.Group = group
+	hbReq.MemberID = "new-member-id"
+	hbReq.MemberEpoch = 0
+	hbReq.RebalanceTimeoutMillis = 45000
+	hbReq.InstanceID = &instanceID
+	hbReq.SubscribedTopicNames = []string{topic}
+	hbReq.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hbResp, err := hbReq.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("heartbeat request failed: %v", err)
+	}
+	if hbResp.ErrorCode != kerr.UnreleasedInstanceID.Code {
+		t.Fatalf("expected UNRELEASED_INSTANCE_ID, got %v", kerr.ErrorForCode(hbResp.ErrorCode))
+	}
+
+	// After c1 closes (static leave, epoch -2), a new consumer
+	// with the same instanceID can replace it.
+	c1.Close()
+
 	c2 := newGroupConsumer(t, c, topic, group, kgo.InstanceID(instanceID))
 	_ = c2
 	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
 	if totalAssignedPartitions(dg) != 2 {
-		t.Fatalf("expected 2 partitions after fencing, got %d", totalAssignedPartitions(dg))
+		t.Fatalf("expected 2 partitions after replacement, got %d", totalAssignedPartitions(dg))
 	}
 }
 

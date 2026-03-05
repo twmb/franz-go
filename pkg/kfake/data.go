@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"cmp"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -129,6 +130,20 @@ type (
 		inTx bool
 	}
 )
+
+// MarshalText implements encoding.TextMarshaler, encoding uuid as base64.
+// This enables uuid as JSON map keys and struct fields.
+func (u uuid) MarshalText() ([]byte, error) {
+	dst := make([]byte, base64.StdEncoding.EncodedLen(len(u)))
+	base64.StdEncoding.Encode(dst, u[:])
+	return dst, nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler, decoding uuid from base64.
+func (u *uuid) UnmarshalText(text []byte) error {
+	_, err := base64.StdEncoding.Decode(u[:], text)
+	return err
+}
 
 func (b *partBatch) meta(segPos int64) batchMeta {
 	return batchMeta{

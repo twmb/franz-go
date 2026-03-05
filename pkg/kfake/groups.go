@@ -749,15 +749,22 @@ func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 func (g *group) manage(detachNew func()) {
 	// On the first join only, we want to ensure that if the join is
 	// invalid, we clean the group up before we detach from the cluster
-	// serialization loop that is initializing us.
+	// serialization loop that is initializing us. Groups loaded from
+	// disk pass nil to skip this cleanup - they are legitimate groups
+	// that should not self-destruct if the first post-restart request
+	// happens to fail validation.
 	var firstJoin func(bool)
-	firstJoin = func(ok bool) {
+	if detachNew == nil {
 		firstJoin = func(bool) {}
-		if !ok {
-			delete(g.gs.gs, g.name)
-			g.quitOnce()
+	} else {
+		firstJoin = func(ok bool) {
+			firstJoin = func(bool) {}
+			if !ok {
+				delete(g.gs.gs, g.name)
+				g.quitOnce()
+			}
+			detachNew()
 		}
-		detachNew()
 	}
 
 	defer func() {
@@ -1568,16 +1575,7 @@ func (g *group) timerControlFn(d time.Duration, fn func()) *time.Timer {
 }
 
 func (g *group) atSessionTimeout(m *groupMember, fn func()) {
-	if m.t != nil {
-		m.t.Stop()
-	}
-	timeout := time.Millisecond * time.Duration(m.join.SessionTimeoutMillis)
-	m.last = time.Now()
-	m.t = g.timerControlFn(timeout, func() {
-		if time.Since(m.last) >= timeout {
-			fn()
-		}
-	})
+	g.atSessionTimeoutIn(m, time.Millisecond*time.Duration(m.join.SessionTimeoutMillis), fn)
 }
 
 // removeMember removes a member from the group, cleaning up its protocol
@@ -1921,19 +1919,24 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 	}
 
 	// Static member: if this instanceID maps to a different member,
-	// inherit state from epoch -2 members then fence the old member.
+	// the old member must have sent a static leave (epoch -2) before
+	// replacement is allowed. If the old member is still active, we
+	// return UNRELEASED_INSTANCE_ID per Kafka's
+	// throwIfInstanceIdIsUnreleased (GroupMetadataManager.java:3163).
 	var inheritSent, inheritTarget map[uuid][]int32
 	var inheritAssignEpochs map[uuid]map[int32]int32
 	var oldTopics []string
 	if req.InstanceID != nil {
 		if oldMemberID, ok := g.staticMembers[*req.InstanceID]; ok && oldMemberID != memberID {
 			if old := g.consumerMembers[oldMemberID]; old != nil {
-				oldTopics = old.subscribedTopics
-				if old.memberEpoch == -2 {
-					inheritSent = copyAssignment(old.lastReconciledSent)
-					inheritTarget = copyAssignment(old.targetAssignment)
-					inheritAssignEpochs = old.partAssignmentEpochs
+				if old.memberEpoch != -2 {
+					resp.ErrorCode = kerr.UnreleasedInstanceID.Code
+					return resp
 				}
+				oldTopics = old.subscribedTopics
+				inheritSent = copyAssignment(old.lastReconciledSent)
+				inheritTarget = copyAssignment(old.targetAssignment)
+				inheritAssignEpochs = old.partAssignmentEpochs
 				g.fenceConsumerMember(old)
 				delete(g.consumerMembers, oldMemberID)
 			}
@@ -2942,18 +2945,7 @@ func (g *group) evictConsumerMember(m *consumerMember) {
 // group.consumer.session.timeout.ms and fences the member entirely if
 // no heartbeats are received within the timeout.
 func (g *group) atConsumerSessionTimeout(m *consumerMember) {
-	if m.t != nil {
-		m.t.Stop()
-	}
-	timeout := time.Duration(g.c.consumerSessionTimeoutMs()) * time.Millisecond
-	m.last = time.Now()
-	m.t = g.timerControlFn(timeout, func() {
-		if time.Since(m.last) >= timeout {
-			g.c.cfg.logger.Logf(LogLevelWarn, "consumerSessionTimeout: group=%s member=%s epoch=%d remaining=%d",
-				g.logName(), m.memberID, m.memberEpoch, len(g.consumerMembers)-1)
-			g.evictConsumerMember(m)
-		}
-	})
+	g.atConsumerSessionTimeoutIn(m, time.Duration(g.c.consumerSessionTimeoutMs())*time.Millisecond)
 }
 
 // scheduleConsumerRebalanceTimeout starts a per-member rebalance
@@ -3274,4 +3266,118 @@ func (g *group) validateMemberGeneration(memberID string, generation int32) int1
 		}
 	}
 	return 0
+}
+
+// restoreClassicMembers restores classic group members from persisted
+// session state. Members whose session has expired (elapsed time since
+// shutdown >= session timeout) are skipped.
+func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGroup) {
+	g.state = groupStable
+	g.leader = sg.Leader
+	for _, sm := range sg.Members {
+		remaining := time.Duration(sm.SessionTimeoutMs)*time.Millisecond - time.Since(shutdownAt)
+		if remaining <= 0 {
+			continue
+		}
+		m := &groupMember{
+			memberID:   sm.ID,
+			instanceID: sm.InstanceID,
+			clientID:   sm.ClientID,
+			clientHost: sm.ClientHost,
+			assignment: sm.Assignment,
+			join: &kmsg.JoinGroupRequest{
+				SessionTimeoutMillis:   sm.SessionTimeoutMs,
+				RebalanceTimeoutMillis: sm.RebalanceTimeoutMs,
+			},
+		}
+		for _, name := range sm.Protocols {
+			m.join.Protocols = append(m.join.Protocols, kmsg.JoinGroupRequestProtocol{Name: name})
+			g.protocols[name]++
+		}
+		g.members[m.memberID] = m
+		if m.instanceID != nil {
+			g.staticMembers[*m.instanceID] = m.memberID
+		}
+		g.atSessionTimeoutIn(m, remaining, func() {
+			g.removeMember(m)
+			g.rebalance()
+		})
+	}
+	if len(g.members) == 0 {
+		g.state = groupEmpty
+		g.leader = ""
+	}
+}
+
+// atSessionTimeoutIn starts a session timeout timer with a custom duration.
+// atSessionTimeout is a convenience wrapper that reads the timeout from the
+// member's join request.
+func (g *group) atSessionTimeoutIn(m *groupMember, d time.Duration, fn func()) {
+	if m.t != nil {
+		m.t.Stop()
+	}
+	m.last = time.Now()
+	m.t = g.timerControlFn(d, func() {
+		if time.Since(m.last) >= d {
+			fn()
+		}
+	})
+}
+
+// restoreConsumerMembers restores 848 consumer group members from persisted
+// session state. If all sessions have expired, no members are restored.
+func (g *group) restoreConsumerMembers(shutdownAt time.Time, sg sessionConsumerGroup) {
+	sessionTimeout := time.Duration(g.c.consumerSessionTimeoutMs()) * time.Millisecond
+	remaining := sessionTimeout - time.Since(shutdownAt)
+	if remaining <= 0 {
+		return
+	}
+
+	g.partitionEpochs = sg.PartitionEpochs
+	g.targetAssignmentEpoch = sg.TargetAssignmentEpoch
+
+	for _, sm := range sg.Members {
+		m := &consumerMember{
+			memberID:                    sm.ID,
+			instanceID:                  sm.InstanceID,
+			clientID:                    sm.ClientID,
+			clientHost:                  sm.ClientHost,
+			memberEpoch:                 sm.Epoch,
+			previousMemberEpoch:         sm.PrevEpoch,
+			state:                       consumerMemberState(sm.CmState),
+			subscribedTopics:            sm.Topics,
+			lastReconciledSent:          sm.Reconciled,
+			partitionsPendingRevocation: sm.PendingRevoke,
+			targetAssignment:            sm.Target,
+			partAssignmentEpochs:        sm.PartAssignmentEpochs,
+			rackID:                      sm.Rack,
+			serverAssignor:              sm.Assignor,
+			rebalanceTimeoutMs:          sm.RebalanceTimeoutMs,
+		}
+		if m.instanceID != nil {
+			g.staticMembers[*m.instanceID] = m.memberID
+		}
+		g.consumerMembers[m.memberID] = m
+		g.atConsumerSessionTimeoutIn(m, remaining)
+	}
+	if len(g.consumerMembers) == 0 {
+		return
+	}
+	g.updateConsumerStateField()
+}
+
+// atConsumerSessionTimeoutIn starts a consumer session timeout timer with a
+// custom initial duration. Used after loading session state.
+func (g *group) atConsumerSessionTimeoutIn(m *consumerMember, d time.Duration) {
+	if m.t != nil {
+		m.t.Stop()
+	}
+	m.last = time.Now()
+	m.t = g.timerControlFn(d, func() {
+		if time.Since(m.last) >= d {
+			g.c.cfg.logger.Logf(LogLevelWarn, "consumerSessionTimeout: group=%s member=%s epoch=%d remaining=%d",
+				g.logName(), m.memberID, m.memberEpoch, len(g.consumerMembers)-1)
+			g.evictConsumerMember(m)
+		}
+	})
 }

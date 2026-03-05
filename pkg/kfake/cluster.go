@@ -323,6 +323,9 @@ func (c *Cluster) Close() {
 				if err := c.saveToDisk(); err != nil {
 					c.cfg.logger.Logf(LogLevelError, "persist to disk: %v", err)
 				}
+				if err := c.saveSessionState(); err != nil {
+					c.cfg.logger.Logf(LogLevelError, "save session state: %v", err)
+				}
 				c.closeOpenFiles()
 				close(done)
 			}

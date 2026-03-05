@@ -109,6 +109,10 @@ while [[ $# -gt 0 ]]; do
             done
             rm -rf "$LOG_DIR"
             echo "Removed $LOG_DIR"
+            if [ -n "$DATA_DIR" ] && [ -d "$DATA_DIR" ]; then
+                rm -rf "$DATA_DIR"/*
+                echo "Cleaned $DATA_DIR"
+            fi
             exit 0
             ;;
         -h|--help)

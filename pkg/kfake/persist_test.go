@@ -17,6 +17,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 )
 
@@ -2670,6 +2671,532 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 		if len(records) != 5 {
 			t.Fatalf("expected 5 records in kept topic, got %d", len(records))
 		}
+	}
+}
+
+func TestPersistSessionStateClassicGroup(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	const topic = "session-classic-topic"
+	const group = "session-classic-group"
+
+	// Phase 1: produce, create a classic consumer group with one member, close
+	{
+		c, err := kfake.NewCluster(
+			kfake.DataDir(dir),
+			kfake.NumBrokers(1),
+			kfake.SeedTopics(1, topic),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Produce records
+		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for i := range 10 {
+			r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
+			if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		prodCl.Close()
+
+		// Create consumer group, consume some records, commit
+		consCl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.ConsumeTopics(topic),
+			kgo.ConsumerGroup(group),
+			kgo.HeartbeatInterval(100*time.Millisecond),
+			kgo.FetchMaxWait(250*time.Millisecond),
+			kgo.SessionTimeout(45*time.Second),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var consumed int
+		for consumed < 5 {
+			fetches := consCl.PollFetches(ctx)
+			fetches.EachRecord(func(_ *kgo.Record) { consumed++ })
+		}
+		if err := consCl.CommitUncommittedOffsets(ctx); err != nil {
+			t.Fatal(err)
+		}
+		// Close cluster first - simulates server restart while client
+		// is still connected. The client's LeaveGroup will fail (conn
+		// closed), preserving members in the group.
+		c.Close()
+		consCl.Close()
+	}
+
+	// Verify session_state.json was written
+	ssPath := filepath.Join(dir, "session_state.json")
+	if _, err := os.Stat(ssPath); err != nil {
+		t.Fatalf("session_state.json should exist after clean shutdown: %v", err)
+	}
+
+	// Phase 2: reopen - session state should be loaded and file deleted
+	{
+		c, err := kfake.NewCluster(
+			kfake.DataDir(dir),
+			kfake.NumBrokers(1),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		// session_state.json should be deleted after load
+		if _, err := os.Stat(ssPath); !os.IsNotExist(err) {
+			t.Fatal("session_state.json should be deleted after load")
+		}
+
+		// Describe the classic group - should have members in Stable state
+		adm := kadm.NewClient(newPlainClient(t, c))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		described, err := adm.DescribeGroups(ctx, group)
+		if err != nil {
+			t.Fatalf("describe groups: %v", err)
+		}
+		dg, ok := described[group]
+		if !ok {
+			t.Fatal("group not found in describe response")
+		}
+		if dg.Err != nil {
+			t.Fatalf("describe group error: %v", dg.Err)
+		}
+		if dg.State != "Stable" {
+			t.Fatalf("expected Stable state, got %s", dg.State)
+		}
+		if len(dg.Members) == 0 {
+			t.Fatal("expected at least one member in restored group")
+		}
+	}
+}
+
+func TestPersistSessionStateExpired(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	const topic = "session-expire-topic"
+	const group = "session-expire-group"
+
+	// Phase 1: produce, create classic consumer group, close cluster first
+	{
+		c, err := kfake.NewCluster(
+			kfake.DataDir(dir),
+			kfake.NumBrokers(1),
+			kfake.SeedTopics(1, topic),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for i := range 5 {
+			r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
+			if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		prodCl.Close()
+
+		consCl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.ConsumeTopics(topic),
+			kgo.ConsumerGroup(group),
+			kgo.HeartbeatInterval(100*time.Millisecond),
+			kgo.FetchMaxWait(250*time.Millisecond),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var consumed int
+		for consumed < 3 {
+			fetches := consCl.PollFetches(ctx)
+			fetches.EachRecord(func(_ *kgo.Record) { consumed++ })
+		}
+		if err := consCl.CommitUncommittedOffsets(ctx); err != nil {
+			t.Fatal(err)
+		}
+		c.Close()
+		consCl.Close()
+	}
+
+	// Manually edit the session state file to make the shutdown time old
+	// enough that all sessions have expired.
+	ssPath := filepath.Join(dir, "session_state.json")
+	data, err := os.ReadFile(ssPath)
+	if err != nil {
+		t.Fatalf("reading session_state.json: %v", err)
+	}
+	var ss map[string]json.RawMessage
+	if err := json.Unmarshal(data, &ss); err != nil {
+		t.Fatalf("parsing session_state.json: %v", err)
+	}
+	// Set shutdownAt to 1 hour ago to guarantee expiry
+	oldTime, _ := json.Marshal(time.Now().Add(-1 * time.Hour))
+	ss["shutdownAt"] = oldTime
+	newData, _ := json.Marshal(ss)
+	if err := os.WriteFile(ssPath, newData, 0644); err != nil {
+		t.Fatalf("writing modified session_state.json: %v", err)
+	}
+
+	// Phase 2: reopen - sessions expired, members should NOT be restored
+	{
+		c, err := kfake.NewCluster(
+			kfake.DataDir(dir),
+			kfake.NumBrokers(1),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		// session_state.json should still be deleted
+		if _, err := os.Stat(ssPath); !os.IsNotExist(err) {
+			t.Fatal("session_state.json should be deleted even when sessions are expired")
+		}
+
+		// Group should exist (from groups.log) but be Empty (no members)
+		adm := kadm.NewClient(newPlainClient(t, c))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		described, err := adm.DescribeGroups(ctx, group)
+		if err != nil {
+			t.Fatalf("describe groups: %v", err)
+		}
+		dg, ok := described[group]
+		if !ok {
+			t.Fatal("group not found in describe response")
+		}
+		if dg.Err != nil {
+			t.Fatalf("describe group error: %v", dg.Err)
+		}
+		if dg.State != "Empty" {
+			t.Fatalf("expected Empty state (expired sessions), got %s", dg.State)
+		}
+		if len(dg.Members) != 0 {
+			t.Fatalf("expected no members (expired sessions), got %d", len(dg.Members))
+		}
+	}
+}
+
+func TestPersistSessionStateNoDataDir(t *testing.T) {
+	t.Parallel()
+
+	// Without DataDir, session state should not be saved
+	c, err := kfake.NewCluster(kfake.NumBrokers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Just close - this should not panic or error
+	c.Close()
+}
+
+// TestPersistSeqWindowDedup verifies that sequence window deduplication
+// works correctly across a clean restart. A produce retry after restart
+// should return the original offset, not write a duplicate batch.
+func TestPersistSeqWindowDedup(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	const topic = "dedup-topic"
+
+	buildProduce := func(pid int64, epoch int16, seq int32) *kmsg.ProduceRequest {
+		rec := kmsg.Record{Key: []byte(fmt.Sprintf("k-%d", seq)), Value: []byte(fmt.Sprintf("v-%d", seq))}
+		rec.Length = int32(len(rec.AppendTo(nil)) - 1)
+		now := time.Now().UnixMilli()
+		batch := kmsg.RecordBatch{
+			PartitionLeaderEpoch: -1,
+			Magic:                2,
+			LastOffsetDelta:      0,
+			FirstTimestamp:       now,
+			MaxTimestamp:         now,
+			ProducerID:           pid,
+			ProducerEpoch:        epoch,
+			FirstSequence:        seq,
+			NumRecords:           1,
+			Records:              rec.AppendTo(nil),
+		}
+		raw := batch.AppendTo(nil)
+		batch.Length = int32(len(raw) - 12)
+		raw = batch.AppendTo(nil)
+		batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+
+		req := kmsg.NewProduceRequest()
+		req.Version = 11
+		req.Acks = -1
+		req.TimeoutMillis = 5000
+		rt := kmsg.NewProduceRequestTopic()
+		rt.Topic = topic
+		rp := kmsg.NewProduceRequestTopicPartition()
+		rp.Partition = 0
+		rp.Records = batch.AppendTo(nil)
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		return &req
+	}
+
+	var pid int64
+	var epoch int16
+	var origOffset int64
+
+	// Phase 1: init PID, produce 3 batches, close cleanly
+	{
+		c, err := kfake.NewCluster(
+			kfake.DataDir(dir),
+			kfake.NumBrokers(1),
+			kfake.SeedTopics(1, topic),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		v := kversion.Stable()
+		v.SetMaxKeyVersion(0, 11) // produce: cap at v11 (topic names, not IDs)
+		cl := newPlainClient(t, c, kgo.MaxVersions(v))
+
+		// InitProducerID (idempotent, no txid)
+		initReq := kmsg.NewInitProducerIDRequest()
+		initReq.ProducerID = -1
+		initReq.ProducerEpoch = -1
+		initResp, err := initReq.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if initResp.ErrorCode != 0 {
+			t.Fatalf("InitProducerID: error code %d", initResp.ErrorCode)
+		}
+		pid = initResp.ProducerID
+		epoch = initResp.ProducerEpoch
+
+		// Produce 3 batches: seq=0, seq=1, seq=2
+		for seq := int32(0); seq < 3; seq++ {
+			resp, err := buildProduce(pid, epoch, seq).RequestWith(ctx, cl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ec := resp.Topics[0].Partitions[0].ErrorCode; ec != 0 {
+				t.Fatalf("produce seq=%d: error %v", seq, kerr.ErrorForCode(ec))
+			}
+			if seq == 2 {
+				origOffset = resp.Topics[0].Partitions[0].BaseOffset
+			}
+		}
+
+		cl.Close()
+		c.Close()
+	}
+
+	// Phase 2: reopen, retry the last produce - should be a dup
+	{
+		c, err := kfake.NewCluster(
+			kfake.DataDir(dir),
+			kfake.NumBrokers(1),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		v := kversion.Stable()
+		v.SetMaxKeyVersion(0, 11)
+		cl := newPlainClient(t, c, kgo.MaxVersions(v))
+		defer cl.Close()
+
+		// Retry the last produce (seq=2) - should be deduplicated
+		resp, err := buildProduce(pid, epoch, 2).RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := resp.Topics[0].Partitions[0]
+		if p.ErrorCode != 0 {
+			t.Fatalf("dup produce: error %v", kerr.ErrorForCode(p.ErrorCode))
+		}
+		if p.BaseOffset != origOffset {
+			t.Fatalf("dup produce: expected offset %d (original), got %d (duplicate written!)", origOffset, p.BaseOffset)
+		}
+
+		// Produce the NEXT batch (seq=3) - should succeed as new
+		resp2, err := buildProduce(pid, epoch, 3).RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p2 := resp2.Topics[0].Partitions[0]
+		if p2.ErrorCode != 0 {
+			t.Fatalf("new produce: error %v", kerr.ErrorForCode(p2.ErrorCode))
+		}
+		if p2.BaseOffset <= origOffset {
+			t.Fatalf("new produce: expected offset > %d, got %d", origOffset, p2.BaseOffset)
+		}
+
+		// Verify record count: should have exactly 4 records (3 original + 1 new, no dups)
+		consumer, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.FetchMaxWait(250*time.Millisecond),
+			kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+				topic: {0: kgo.NewOffset().AtStart()},
+			}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer consumer.Close()
+
+		var records []*kgo.Record
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			fetches := consumer.PollFetches(ctx)
+			fetches.EachRecord(func(r *kgo.Record) {
+				records = append(records, r)
+			})
+			if len(records) >= 4 {
+				break
+			}
+		}
+		if len(records) != 4 {
+			var offsets []int64
+			for _, r := range records {
+				offsets = append(offsets, r.Offset)
+			}
+			t.Fatalf("expected exactly 4 records (no dups), got %d; offsets=%v", len(records), offsets)
+		}
+	}
+}
+
+// TestPersistLoadedGroupNotKilledByOffsetCommit ensures that a group loaded
+// from disk is not deleted when the first post-restart OffsetCommit fails
+// validation (e.g., generation mismatch on an empty group). This was the root
+// cause of GROUP_ID_NOT_FOUND after restart.
+func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	const (
+		topic = "t"
+		group = "g"
+	)
+
+	// Phase 1: create cluster, join group, commit offsets, close.
+	{
+		c, err := kfake.NewCluster(
+			kfake.NumBrokers(1),
+			kfake.DataDir(dir),
+			kfake.SeedTopics(-1, topic),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.ConsumerGroup(group),
+			kgo.ConsumeTopics(topic),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Poll once to trigger JoinGroup/SyncGroup.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cl.PollRecords(ctx, 1)
+		cancel()
+
+		// Commit an offset so the group has state in groups.json.
+		if err := cl.CommitUncommittedOffsets(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		cl.Close()
+		c.Close()
+	}
+
+	// Phase 2: reopen cluster. The group is loaded from groups.json with
+	// metadata and committed offsets, but no live members (session state
+	// only saves Stable groups with members - none survive since the client
+	// was closed). Send a raw OffsetCommit with a stale generation - this
+	// should fail with IllegalGeneration but NOT kill the group.
+	{
+		c, err := kfake.NewCluster(
+			kfake.NumBrokers(1),
+			kfake.DataDir(dir),
+			kfake.Ports(0),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		cl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+
+		// Send a raw OffsetCommit with generation=1 to an empty group.
+		// This exercises the code path that previously triggered
+		// firstJoin(false) and killed the group.
+		req := kmsg.NewPtrOffsetCommitRequest()
+		req.Group = group
+		req.Generation = 1
+		req.MemberID = "fake-member"
+		rt := kmsg.NewOffsetCommitRequestTopic()
+		rt.Topic = topic
+		rp := kmsg.NewOffsetCommitRequestTopicPartition()
+		rp.Partition = 0
+		rp.Offset = 0
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+
+		resp, err := req.RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Should get an error (IllegalGeneration or UnknownMemberID) but
+		// NOT crash the group.
+		if len(resp.Topics) == 0 || len(resp.Topics[0].Partitions) == 0 {
+			t.Fatal("expected partition response")
+		}
+		errCode := resp.Topics[0].Partitions[0].ErrorCode
+		if errCode == 0 {
+			t.Fatal("expected error code for stale commit, got 0")
+		}
+		t.Logf("offset commit error (expected): %s", kerr.ErrorForCode(errCode))
+
+		// Verify the group is still alive by sending a Heartbeat.
+		// Heartbeat goes through handleHijack - if the group was
+		// killed, handleHijack returns false and the response is
+		// GROUP_ID_NOT_FOUND.
+		hbReq := kmsg.NewPtrHeartbeatRequest()
+		hbReq.Group = group
+		hbReq.Generation = 1
+		hbReq.MemberID = "fake-member"
+
+		hbResp, err := hbReq.RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ec := kerr.ErrorForCode(hbResp.ErrorCode)
+		if ec == kerr.GroupIDNotFound {
+			t.Fatal("group was killed after OffsetCommit - the firstJoin bug is present")
+		}
+		// UNKNOWN_MEMBER_ID is expected (the member doesn't exist),
+		// but the group itself is alive.
+		t.Logf("heartbeat error (expected): %s - group is alive", ec)
 	}
 }
 

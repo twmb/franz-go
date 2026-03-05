@@ -215,6 +215,7 @@ type (
 		LastStableOffset int64                `json:"last_stable_offset"`
 		LogStartOffset   int64                `json:"log_start_offset"`
 		Epoch            int32                `json:"epoch"`
+		LeaderNode       int32                `json:"leader_node,omitempty"`
 		MaxTimestamp     int64                `json:"max_timestamp"`
 		CreatedAt        time.Time            `json:"created_at"`
 		AbortedTxns      []persistAbortedTxn  `json:"aborted_txns,omitempty"`
@@ -680,6 +681,7 @@ func (c *Cluster) savePartition(fsys fs, dir string, topic string, part int32, p
 		LastStableOffset: pd.lastStableOffset,
 		LogStartOffset:   pd.logStartOffset,
 		Epoch:            pd.epoch,
+		LeaderNode:       pd.leader.node,
 		MaxTimestamp:     pd.maxTimestamp,
 		CreatedAt:        pd.createdAt,
 		AbortedTxns:      abortedTxns,
@@ -1034,13 +1036,21 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 	}
 	c.crashAbortedPIDs = nil
 
-	return true, errors.Join(
+	if err := errors.Join(
 		c.loadGroupsLog(fsys, dir),
 		c.loadACLs(fsys, dir),
 		c.loadSASL(fsys, dir),
 		c.loadQuotas(fsys, dir),
 		c.loadSeqWindows(fsys, dir),
-	)
+	); err != nil {
+		return false, err
+	}
+
+	if err := c.loadSessionState(); err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "load session state: %v", err)
+	}
+
+	return true, nil
 }
 
 func (c *Cluster) loadBrokerConfigs(fsys fs, dir string) error {
@@ -1180,6 +1190,9 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	pd.lastStableOffset = snap.LastStableOffset
 	pd.logStartOffset = snap.LogStartOffset
 	pd.epoch = snap.Epoch
+	if int(snap.LeaderNode) < len(c.bs) {
+		pd.leader = c.bs[snap.LeaderNode]
+	}
 	pd.maxTimestamp = snap.MaxTimestamp
 	pd.createdAt = snap.CreatedAt
 	for i, base := range segFiles {
@@ -1616,7 +1629,7 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 			g.generation = meta.Generation
 		}
 		c.groups.gs[name] = g
-		go g.manage(func() {})
+		go g.manage(nil) // loaded from disk - no firstJoin cleanup
 	}
 
 	// Apply commits
@@ -1625,7 +1638,7 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 		if !ok {
 			g = c.groups.newGroup(ck.group)
 			c.groups.gs[ck.group] = g
-			go g.manage(func() {})
+			go g.manage(nil) // loaded from disk - no firstJoin cleanup
 		}
 		oc := offsetCommit{
 			offset:      entry.Offset,
@@ -1943,6 +1956,174 @@ func (c *Cluster) persistACLsState()          { c.persistState("acls", c.saveACL
 func (c *Cluster) persistSASLState()          { c.persistState("sasl", c.saveSASL) }
 func (c *Cluster) persistBrokerConfigsState() { c.persistState("broker configs", c.saveBrokerConfigs) }
 func (c *Cluster) persistQuotasState()        { c.persistState("quotas", c.saveQuotas) }
+
+// Session state types - written as a one-shot JSON file on clean shutdown,
+// loaded on startup to restore ephemeral group member state.
+type (
+	sessionState struct {
+		ShutdownAt     time.Time                       `json:"shutdownAt"`
+		ClassicGroups  map[string]sessionClassicGroup  `json:"classicGroups,omitempty"`
+		ConsumerGroups map[string]sessionConsumerGroup `json:"consumerGroups,omitempty"`
+	}
+
+	sessionClassicGroup struct {
+		Leader  string                 `json:"leader"`
+		Members []sessionClassicMember `json:"members"`
+	}
+
+	sessionClassicMember struct {
+		ID                 string   `json:"id"`
+		InstanceID         *string  `json:"instance,omitempty"`
+		ClientID           string   `json:"clientID"`
+		ClientHost         string   `json:"clientHost"`
+		Protocols          []string `json:"protocols"`
+		Assignment         []byte   `json:"assignment,omitempty"`
+		SessionTimeoutMs   int32    `json:"sessionTimeoutMs"`
+		RebalanceTimeoutMs int32    `json:"rebalanceTimeoutMs"`
+	}
+
+	sessionConsumerGroup struct {
+		PartitionEpochs       map[uuid]map[int32]int32 `json:"partitionEpochs"`
+		TargetAssignmentEpoch int32                    `json:"targetAssignmentEpoch"`
+		Members               []sessionConsumerMember  `json:"members"`
+	}
+
+	sessionConsumerMember struct {
+		ID                   string                   `json:"id"`
+		InstanceID           *string                  `json:"instance,omitempty"`
+		ClientID             string                   `json:"clientID"`
+		ClientHost           string                   `json:"clientHost"`
+		Epoch                int32                    `json:"epoch"`
+		PrevEpoch            int32                    `json:"prevEpoch"`
+		Topics               []string                 `json:"topics"`
+		Reconciled           map[uuid][]int32         `json:"reconciled"`
+		PendingRevoke        map[uuid][]int32         `json:"pendingRevoke,omitempty"`
+		Target               map[uuid][]int32         `json:"target"`
+		PartAssignmentEpochs map[uuid]map[int32]int32 `json:"partAssignmentEpochs,omitempty"`
+		CmState              int8                     `json:"cmState"`
+		Rack                 *string                  `json:"rack,omitempty"`
+		Assignor             string                   `json:"assignor"`
+		RebalanceTimeoutMs   int32                    `json:"rebalanceTimeoutMs"`
+	}
+)
+
+func (c *Cluster) saveSessionState() error {
+	ss := sessionState{ShutdownAt: time.Now()}
+	for _, g := range c.groups.gs {
+		g.waitControl(func() {
+			c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: group=%s state=%s members=%d consumerMembers=%d",
+				g.name, g.state, len(g.members), len(g.consumerMembers))
+			switch {
+			case len(g.members) > 0:
+				sg := sessionClassicGroup{Leader: g.leader}
+				for _, m := range g.members {
+					sm := sessionClassicMember{
+						ID:                 m.memberID,
+						InstanceID:         m.instanceID,
+						ClientID:           m.clientID,
+						ClientHost:         m.clientHost,
+						Assignment:         m.assignment,
+						SessionTimeoutMs:   m.join.SessionTimeoutMillis,
+						RebalanceTimeoutMs: m.join.RebalanceTimeoutMillis,
+					}
+					for _, p := range m.join.Protocols {
+						sm.Protocols = append(sm.Protocols, p.Name)
+					}
+					sg.Members = append(sg.Members, sm)
+				}
+				if ss.ClassicGroups == nil {
+					ss.ClassicGroups = make(map[string]sessionClassicGroup)
+				}
+				ss.ClassicGroups[g.name] = sg
+
+			case len(g.consumerMembers) > 0:
+				sg := sessionConsumerGroup{
+					PartitionEpochs:       g.partitionEpochs,
+					TargetAssignmentEpoch: g.targetAssignmentEpoch,
+				}
+				for _, m := range g.consumerMembers {
+					sm := sessionConsumerMember{
+						ID:                   m.memberID,
+						InstanceID:           m.instanceID,
+						ClientID:             m.clientID,
+						ClientHost:           m.clientHost,
+						Epoch:                m.memberEpoch,
+						PrevEpoch:            m.previousMemberEpoch,
+						Topics:               m.subscribedTopics,
+						Reconciled:           m.lastReconciledSent,
+						PendingRevoke:        m.partitionsPendingRevocation,
+						Target:               m.targetAssignment,
+						PartAssignmentEpochs: m.partAssignmentEpochs,
+						CmState:              int8(m.state),
+						Rack:                 m.rackID,
+						Assignor:             m.serverAssignor,
+						RebalanceTimeoutMs:   m.rebalanceTimeoutMs,
+					}
+					sg.Members = append(sg.Members, sm)
+				}
+				if ss.ConsumerGroups == nil {
+					ss.ConsumerGroups = make(map[string]sessionConsumerGroup)
+				}
+				ss.ConsumerGroups[g.name] = sg
+			}
+		})
+	}
+	if len(ss.ClassicGroups) == 0 && len(ss.ConsumerGroups) == 0 {
+		c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: nothing to save")
+		return nil
+	}
+	c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: saving classic=%d consumer=%d", len(ss.ClassicGroups), len(ss.ConsumerGroups))
+	return writeJSONFile(c.fs, filepath.Join(c.cfg.dataDir, "session_state.json"), ss)
+}
+
+func (c *Cluster) loadSessionState() error {
+	path := filepath.Join(c.cfg.dataDir, "session_state.json")
+	data, err := c.fs.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer c.fs.Remove(path)
+
+	var ss sessionState
+	if err := json.Unmarshal(data, &ss); err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "session_state.json: corrupt, ignoring: %v", err)
+		return nil
+	}
+
+	c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: classic=%d consumer=%d shutdownAt=%v elapsed=%v",
+		len(ss.ClassicGroups), len(ss.ConsumerGroups), ss.ShutdownAt, time.Since(ss.ShutdownAt))
+
+	for name, sg := range ss.ClassicGroups {
+		g, ok := c.groups.gs[name]
+		if !ok {
+			c.cfg.logger.Logf(LogLevelWarn, "loadSessionState: classic group %s not found in groups.gs", name)
+			continue
+		}
+		g.waitControl(func() {
+			g.restoreClassicMembers(ss.ShutdownAt, sg)
+			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored classic group=%s members=%d state=%s",
+				name, len(g.members), g.state)
+		})
+	}
+
+	for name, sg := range ss.ConsumerGroups {
+		g, ok := c.groups.gs[name]
+		if !ok {
+			c.cfg.logger.Logf(LogLevelWarn, "loadSessionState: consumer group %s not found in groups.gs", name)
+			continue
+		}
+		g.waitControl(func() {
+			g.restoreConsumerMembers(ss.ShutdownAt, sg)
+			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored consumer group=%s members=%d state=%s",
+				name, len(g.consumerMembers), g.state)
+		})
+	}
+
+	return nil
+}
 
 // closeOpenFiles closes all open file handles for persistence.
 func (c *Cluster) closeOpenFiles() {
