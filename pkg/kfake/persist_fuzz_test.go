@@ -1623,7 +1623,7 @@ func TestCompactBailsOnPartialReadError(t *testing.T) {
 	numSegsBefore := len(pd.segments)
 
 	// Corrupt the segment file so readBatchFull fails for some entries.
-	pdir := topicDir(c.dataDir, pd.t, pd.p)
+	pdir := partDir(c.dataDir, pd.t, pd.p)
 	segName := segmentFileName(pd.segments[0].base)
 	path := filepath.Join(pdir, segName)
 	raw, err := c.fs.ReadFile(path)
@@ -1956,7 +1956,7 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 
 	// The batchMeta was added in-memory but persist failed.
 	// The segment file should be truncated back to its pre-failure size.
-	pdir := topicDir(c.dataDir, pd.t, pd.p)
+	pdir := partDir(c.dataDir, pd.t, pd.p)
 	path := filepath.Join(pdir, segmentFileName(seg.base))
 	info, err := mfs.Stat(path)
 	if err != nil {

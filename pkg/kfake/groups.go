@@ -1328,19 +1328,10 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 		allowed := g.fillOffsetCommitWithACL(creq, req, resp)
 		for _, t := range allowed {
 			for _, p := range t.Partitions {
-				g.commits.set(t.Topic, p.Partition, offsetCommit{
+				g.commitAndPersist(t.Topic, p.Partition, offsetCommit{
 					offset:      p.Offset,
 					leaderEpoch: p.LeaderEpoch,
 					metadata:    p.Metadata,
-				})
-				g.c.persistGroupEntry(groupLogEntry{
-					Type:     "commit",
-					Group:    g.name,
-					Topic:    t.Topic,
-					Part:     p.Partition,
-					Offset:   p.Offset,
-					Epoch:    p.LeaderEpoch,
-					Metadata: p.Metadata,
 				})
 			}
 		}
@@ -1588,7 +1579,7 @@ func (g *group) removeMember(m *groupMember) {
 	delete(g.members, m.memberID)
 	if m.instanceID != nil {
 		delete(g.staticMembers, *m.instanceID)
-		g.persistStaticMemberDelete(*m.instanceID)
+		g.persistStaticMember(*m.instanceID, "")
 	}
 	if m.t != nil {
 		m.t.Stop()
@@ -2132,7 +2123,7 @@ func (g *group) consumerLeave(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kms
 	// Full leave (-1): remove from static membership too.
 	if m.instanceID != nil {
 		delete(g.staticMembers, *m.instanceID)
-		g.persistStaticMemberDelete(*m.instanceID)
+		g.persistStaticMember(*m.instanceID, "")
 	}
 
 	g.groupEpoch++
@@ -2898,44 +2889,61 @@ func (g *group) updateConsumerStateField() {
 	g.state = groupStable
 }
 
-// persistMeta848 persists the current 848 group epoch to the append log.
-func (g *group) persistMeta848() {
-	g.c.persistGroupEntry(groupLogEntry{
+func (g *group) meta848Entry() groupLogEntry {
+	return groupLogEntry{
 		Type:       "meta848",
 		Group:      g.name,
 		GroupType:  g.typ,
 		Assignor:   g.assignorName,
 		GroupEpoch: g.groupEpoch,
-	})
+	}
 }
 
-func (g *group) persistClassicMeta() {
-	g.c.persistGroupEntry(groupLogEntry{
+func (g *group) persistMeta848() { g.c.persistGroupEntry(g.meta848Entry()) }
+
+func (g *group) classicMetaEntry() groupLogEntry {
+	return groupLogEntry{
 		Type:       "meta",
 		Group:      g.name,
 		GroupType:  g.typ,
 		ProtoType:  g.protocolType,
 		Protocol:   g.protocol,
 		Generation: g.generation,
-	})
+	}
 }
 
-func (g *group) persistStaticMember(instanceID, memberID string) {
-	g.c.persistGroupEntry(groupLogEntry{
+func (g *group) persistClassicMeta() { g.c.persistGroupEntry(g.classicMetaEntry()) }
+
+func (g *group) commitEntry(topic string, part int32, oc offsetCommit) groupLogEntry {
+	return groupLogEntry{
+		Type:     "commit",
+		Group:    g.name,
+		Topic:    topic,
+		Part:     part,
+		Offset:   oc.offset,
+		Epoch:    oc.leaderEpoch,
+		Metadata: oc.metadata,
+	}
+}
+
+func (g *group) commitAndPersist(topic string, part int32, oc offsetCommit) {
+	g.commits.set(topic, part, oc)
+	g.c.persistGroupEntry(g.commitEntry(topic, part, oc))
+}
+
+// staticMemberEntry builds a static member log entry. Empty memberID
+// signals deletion on replay.
+func (g *group) staticMemberEntry(instanceID, memberID string) groupLogEntry {
+	return groupLogEntry{
 		Type:       "static",
 		Group:      g.name,
 		InstanceID: instanceID,
 		MemberID:   memberID,
-	})
+	}
 }
 
-func (g *group) persistStaticMemberDelete(instanceID string) {
-	g.c.persistGroupEntry(groupLogEntry{
-		Type:       "static",
-		Group:      g.name,
-		InstanceID: instanceID,
-		// Empty MemberID signals deletion.
-	})
+func (g *group) persistStaticMember(instanceID, memberID string) {
+	g.c.persistGroupEntry(g.staticMemberEntry(instanceID, memberID))
 }
 
 // evictConsumerMember fences and removes a consumer member, then
@@ -3078,19 +3086,10 @@ func (g *group) handleConsumerOffsetCommit(creq *clientReq) *kmsg.OffsetCommitRe
 					}
 				}
 			}
-			g.commits.set(t.Topic, p.Partition, offsetCommit{
+			g.commitAndPersist(t.Topic, p.Partition, offsetCommit{
 				offset:      p.Offset,
 				leaderEpoch: p.LeaderEpoch,
 				metadata:    p.Metadata,
-			})
-			g.c.persistGroupEntry(groupLogEntry{
-				Type:     "commit",
-				Group:    g.name,
-				Topic:    t.Topic,
-				Part:     p.Partition,
-				Offset:   p.Offset,
-				Epoch:    p.LeaderEpoch,
-				Metadata: p.Metadata,
 			})
 		}
 	}

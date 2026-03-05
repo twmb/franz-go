@@ -754,16 +754,7 @@ func (pidinf *pidinfo) endTx(commit bool) {
 			}
 			g.waitControl(func() {
 				groupOffsets.each(func(t string, p int32, oc *offsetCommit) {
-					g.commits.set(t, p, *oc)
-					g.c.persistGroupEntry(groupLogEntry{
-						Type:     "commit",
-						Group:    g.name,
-						Topic:    t,
-						Part:     p,
-						Offset:   oc.offset,
-						Epoch:    oc.leaderEpoch,
-						Metadata: oc.metadata,
-					})
+					g.commitAndPersist(t, p, *oc)
 				})
 			})
 		}

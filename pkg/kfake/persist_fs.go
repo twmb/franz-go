@@ -3,6 +3,7 @@ package kfake
 import (
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -129,18 +130,15 @@ func (m *memFS) Remove(name string) error {
 func (m *memFS) RemoveAll(path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	prefix := path + "/"
 	for k := range m.files {
-		if len(k) >= len(path) && k[:len(path)] == path {
-			if len(k) == len(path) || k[len(path)] == '/' {
-				delete(m.files, k)
-			}
+		if k == path || strings.HasPrefix(k, prefix) {
+			delete(m.files, k)
 		}
 	}
 	for k := range m.dirs {
-		if len(k) >= len(path) && k[:len(path)] == path {
-			if len(k) == len(path) || k[len(path)] == '/' {
-				delete(m.dirs, k)
-			}
+		if k == path || strings.HasPrefix(k, prefix) {
+			delete(m.dirs, k)
 		}
 	}
 	return nil
@@ -158,20 +156,19 @@ func (m *memFS) ReadDir(name string) ([]os.DirEntry, error) {
 	defer m.mu.Unlock()
 
 	prefix := name
-	if prefix != "/" && !endsWith(prefix, "/") {
+	if prefix != "/" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
 
 	seen := make(map[string]bool)
 	var entries []os.DirEntry
 	for k, d := range m.files {
-		if !hasPrefix(k, prefix) {
+		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
 		rest := k[len(prefix):]
 		// Only direct children (no further /).
-		slash := indexOf(rest, '/')
-		if slash >= 0 {
+		if slash := strings.IndexByte(rest, '/'); slash >= 0 {
 			dirName := rest[:slash]
 			if !seen[dirName] {
 				seen[dirName] = true
@@ -185,11 +182,11 @@ func (m *memFS) ReadDir(name string) ([]os.DirEntry, error) {
 		}
 	}
 	for k := range m.dirs {
-		if !hasPrefix(k, prefix) {
+		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
 		rest := k[len(prefix):]
-		if rest != "" && indexOf(rest, '/') < 0 && !seen[rest] {
+		if rest != "" && !strings.Contains(rest, "/") && !seen[rest] {
 			seen[rest] = true
 			entries = append(entries, memDirEntry{name: rest, isDir: true})
 		}
@@ -322,18 +319,3 @@ func (i memFileInfo) ModTime() time.Time { return time.Time{} }
 func (i memFileInfo) IsDir() bool        { return i.isDir }
 func (i memFileInfo) Sys() any           { return nil }
 
-// Simple string helpers to avoid importing strings.
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-func endsWith(s, suffix string) bool {
-	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
-}
-func indexOf(s string, c byte) int {
-	for i := range len(s) {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
-}

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,10 +69,9 @@ func writeEntry(f file, data []byte, syncW bool) error {
 	// CRC covers version + data
 	var vbuf [2]byte
 	binary.LittleEndian.PutUint16(vbuf[:], currentPersistVersion)
-	crcVal := crc32.New(crc32c)
-	crcVal.Write(vbuf[:])
-	crcVal.Write(data)
-	binary.LittleEndian.PutUint32(hdr[4:8], crcVal.Sum32())
+	crc := crc32.Update(0, crc32c, vbuf[:])
+	crc = crc32.Update(crc, crc32c, data)
+	binary.LittleEndian.PutUint32(hdr[4:8], crc)
 	binary.LittleEndian.PutUint16(hdr[8:10], currentPersistVersion)
 
 	if _, err := f.Write(hdr[:]); err != nil {
@@ -319,7 +319,7 @@ func (c *Cluster) readBatchRaw(pd *partData, segIdx int, meta *batchMeta) ([]byt
 		return nil, fmt.Errorf("batch at offset %d was not persisted", meta.firstOffset)
 	}
 	seg := &pd.segments[segIdx]
-	path := filepath.Join(topicDir(c.dataDir, pd.t, pd.p), segmentFileName(seg.base))
+	path := filepath.Join(partDir(c.dataDir, pd.t, pd.p), segmentFileName(seg.base))
 	f, err := c.fs.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
@@ -344,12 +344,12 @@ func (c *Cluster) readBatchFull(pd *partData, segIdx int, meta *batchMeta) (*par
 	if err != nil {
 		return nil, err
 	}
-	var rb kmsg.RecordBatch
-	if err := rb.ReadFrom(raw); err != nil {
+	rb, err := decodeBatchRaw(raw)
+	if err != nil {
 		return nil, err
 	}
 	return &partBatch{
-		RecordBatch:         rb,
+		RecordBatch:         *rb,
 		nbytes:              len(raw),
 		epoch:               meta.epoch,
 		maxEarlierTimestamp: meta.maxEarlierTimestamp,
@@ -423,6 +423,22 @@ func writeJSONFile(fsys fs, path string, v any) error {
 	return fsys.Rename(tmpPath, path)
 }
 
+// readJSONFile reads and unmarshals a JSON file. Returns false if the
+// file does not exist. Mirrors writeJSONFile for save/load symmetry.
+func readJSONFile(fsys fs, path string, v any) (bool, error) {
+	data, err := fsys.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := json.Unmarshal(data, v); err != nil {
+		return false, fmt.Errorf("parsing %s: %w", filepath.Base(path), err)
+	}
+	return true, nil
+}
+
 // appendLogEntry encodes v as JSON and appends it as a framed entry.
 func appendLogEntry(f file, v any, syncW bool) error {
 	data, err := json.Marshal(v)
@@ -432,8 +448,8 @@ func appendLogEntry(f file, v any, syncW bool) error {
 	return writeEntry(f, data, syncW)
 }
 
-// topicDir returns the directory name for a topic, URL-escaping for fs safety.
-func topicDir(dataDir, topic string, part int32) string {
+// partDir returns the partition directory path, URL-escaping for fs safety.
+func partDir(dataDir, topic string, part int32) string {
 	escaped := url.PathEscape(topic)
 	return filepath.Join(dataDir, "partitions", fmt.Sprintf("%s-%d", escaped, part))
 }
@@ -476,9 +492,12 @@ func (c *Cluster) saveToDisk() error {
 func (c *Cluster) saveTopics(fsys fs, dir string) error {
 	var pts []persistTopic
 	for t, id := range c.data.t2id {
-		cfgs := make(map[string]string)
+		var cfgs map[string]string
 		for k, v := range c.data.tcfgs[t] {
 			if v != nil {
+				if cfgs == nil {
+					cfgs = make(map[string]string)
+				}
 				cfgs[k] = *v
 			}
 		}
@@ -519,33 +538,35 @@ func (c *Cluster) saveACLs(fsys fs, dir string) error {
 	})
 }
 
+func scramToPersist(m map[string]scramAuth) map[string]persistScram {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]persistScram, len(m))
+	for k, v := range m {
+		out[k] = persistScram{Mechanism: v.mechanism, Salt: v.salt, SaltedPass: v.saltedPass, Iterations: v.iterations}
+	}
+	return out
+}
+
+func persistToScram(m map[string]persistScram) map[string]scramAuth {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]scramAuth, len(m))
+	for k, v := range m {
+		out[k] = scramAuth{mechanism: v.Mechanism, salt: v.Salt, saltedPass: v.SaltedPass, iterations: v.Iterations}
+	}
+	return out
+}
+
 func (c *Cluster) saveSASL(fsys fs, dir string) error {
 	ps := persistSASL{Version: currentPersistVersion}
 	if len(c.sasls.plain) > 0 {
 		ps.Plain = maps.Clone(c.sasls.plain)
 	}
-	if len(c.sasls.scram256) > 0 {
-		ps.Scram256 = make(map[string]persistScram)
-		for k, v := range c.sasls.scram256 {
-			ps.Scram256[k] = persistScram{
-				Mechanism:  v.mechanism,
-				Salt:       v.salt,
-				SaltedPass: v.saltedPass,
-				Iterations: v.iterations,
-			}
-		}
-	}
-	if len(c.sasls.scram512) > 0 {
-		ps.Scram512 = make(map[string]persistScram)
-		for k, v := range c.sasls.scram512 {
-			ps.Scram512[k] = persistScram{
-				Mechanism:  v.mechanism,
-				Salt:       v.salt,
-				SaltedPass: v.saltedPass,
-				Iterations: v.iterations,
-			}
-		}
-	}
+	ps.Scram256 = scramToPersist(c.sasls.scram256)
+	ps.Scram512 = scramToPersist(c.sasls.scram512)
 	return writeJSONFile(fsys, filepath.Join(dir, "sasl.json"), ps)
 }
 
@@ -627,22 +648,12 @@ func (c *Cluster) savePartitions(fsys fs, dir string) error {
 }
 
 func (c *Cluster) savePartition(fsys fs, dir string, topic string, part int32, pd *partData) error {
-	pdir := topicDir(dir, topic, part)
+	pdir := partDir(dir, topic, part)
 	if err := fsys.MkdirAll(pdir, 0755); err != nil {
 		return err
 	}
 
-	// Close open file handles from live sync
-	if pd.activeSegFile != nil {
-		pd.activeSegFile.Sync()
-		pd.activeSegFile.Close()
-		pd.activeSegFile = nil
-	}
-	if pd.activeIdxFile != nil {
-		pd.activeIdxFile.Sync()
-		pd.activeIdxFile.Close()
-		pd.activeIdxFile = nil
-	}
+	pd.closeActiveFiles(true)
 
 	// Build snapshot segment metadata from pd.segments.
 	// Segment files are already on disk (written by persistBatchToSegment
@@ -711,17 +722,9 @@ func (c *Cluster) segmentBytes(topic string) int64 {
 // them from the given batches, rebuilding pd.segments with batchMeta. Called
 // after compaction changes the batch set. Also resets active file handles.
 func (c *Cluster) rebuildSegments(pd *partData, topic string, batches []*partBatch) {
-	pdir := topicDir(c.dataDir, pd.t, pd.p)
+	pdir := partDir(c.dataDir, pd.t, pd.p)
 
-	// Close open file handles
-	if pd.activeSegFile != nil {
-		pd.activeSegFile.Close()
-		pd.activeSegFile = nil
-	}
-	if pd.activeIdxFile != nil {
-		pd.activeIdxFile.Close()
-		pd.activeIdxFile = nil
-	}
+	pd.closeActiveFiles(false)
 
 	// Delete old segment + index files
 	for _, seg := range pd.segments {
@@ -853,45 +856,19 @@ func (c *Cluster) collectGroupEntries(g *group) []groupLogEntry {
 	// Group metadata
 	switch g.typ {
 	case "consumer":
-		entries = append(entries, groupLogEntry{
-			Type:       "meta848",
-			Group:      g.name,
-			GroupType:  g.typ,
-			Assignor:   g.assignorName,
-			GroupEpoch: g.groupEpoch,
-		})
+		entries = append(entries, g.meta848Entry())
 	default:
-		entries = append(entries, groupLogEntry{
-			Type:       "meta",
-			Group:      g.name,
-			GroupType:  g.typ,
-			ProtoType:  g.protocolType,
-			Protocol:   g.protocol,
-			Generation: g.generation,
-		})
+		entries = append(entries, g.classicMetaEntry())
 	}
 
 	// Static members
 	for instanceID, memberID := range g.staticMembers {
-		entries = append(entries, groupLogEntry{
-			Type:       "static",
-			Group:      g.name,
-			InstanceID: instanceID,
-			MemberID:   memberID,
-		})
+		entries = append(entries, g.staticMemberEntry(instanceID, memberID))
 	}
 
 	// Committed offsets
 	g.commits.each(func(topic string, part int32, oc *offsetCommit) {
-		entries = append(entries, groupLogEntry{
-			Type:     "commit",
-			Group:    g.name,
-			Topic:    topic,
-			Part:     part,
-			Offset:   oc.offset,
-			Epoch:    oc.leaderEpoch,
-			Metadata: oc.metadata,
-		})
+		entries = append(entries, g.commitEntry(topic, part, *oc))
 	})
 
 	return entries
@@ -967,7 +944,7 @@ func cleanupTmpFiles(fsys fs, dir string) {
 			return
 		}
 		for _, e := range entries {
-			if !e.IsDir() && endsWith(e.Name(), ".tmp") {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".tmp") {
 				fsys.Remove(filepath.Join(d, e.Name()))
 			}
 		}
@@ -1054,16 +1031,9 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 }
 
 func (c *Cluster) loadBrokerConfigs(fsys fs, dir string) error {
-	data, err := fsys.ReadFile(filepath.Join(dir, "broker_configs.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
 	var pbc persistBrokerConfigs
-	if err := json.Unmarshal(data, &pbc); err != nil {
-		return fmt.Errorf("parsing broker_configs.json: %w", err)
+	if found, err := readJSONFile(fsys, filepath.Join(dir, "broker_configs.json"), &pbc); err != nil || !found {
+		return err
 	}
 	// Merge: config overrides from NewCluster opts take precedence
 	m := make(map[string]*string, len(pbc.Configs))
@@ -1083,16 +1053,9 @@ func (c *Cluster) loadBrokerConfigs(fsys fs, dir string) error {
 }
 
 func (c *Cluster) loadTopics(fsys fs, dir string) error {
-	data, err := fsys.ReadFile(filepath.Join(dir, "topics.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
 	var pt persistTopics
-	if err := json.Unmarshal(data, &pt); err != nil {
-		return fmt.Errorf("parsing topics.json: %w", err)
+	if found, err := readJSONFile(fsys, filepath.Join(dir, "topics.json"), &pt); err != nil || !found {
+		return err
 	}
 
 	for _, t := range pt.Topics {
@@ -1125,7 +1088,7 @@ func (c *Cluster) loadPartitions(fsys fs, dir string) error {
 }
 
 func (c *Cluster) loadPartition(fsys fs, dir, topic string, part int32, pd *partData) error {
-	pdir := topicDir(dir, topic, part)
+	pdir := partDir(dir, topic, part)
 	pd.t = topic
 
 	// Try snapshot first
@@ -1301,16 +1264,13 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 	// are written with inTx=true at produce time; endTx clears it in
 	// memory but not on disk. During full replay we identify completed
 	// transactions by their control batches.
-	type txnState struct {
-		firstOffset int64
-	}
-	activeTxns := make(map[int64]*txnState) // producerID -> state
+	activeTxns := make(map[int64]int64) // producerID -> firstOffset
 	for _, b := range batches {
 		isControl := b.Attributes&0x0020 != 0
 		if !isControl {
 			if b.inTx {
 				if _, ok := activeTxns[b.ProducerID]; !ok {
-					activeTxns[b.ProducerID] = &txnState{firstOffset: b.FirstOffset}
+					activeTxns[b.ProducerID] = b.FirstOffset
 				}
 			}
 			continue
@@ -1332,11 +1292,11 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 			c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d: empty control batch at offset %d, treating as abort",
 				pd.t, pd.p, b.FirstOffset)
 		}
-		ts := activeTxns[b.ProducerID]
-		if isAbort && ts != nil {
+		firstOff, ok := activeTxns[b.ProducerID]
+		if isAbort && ok {
 			pd.abortedTxns = append(pd.abortedTxns, abortedTxnEntry{
 				producerID:  b.ProducerID,
-				firstOffset: ts.firstOffset,
+				firstOffset: firstOff,
 				lastOffset:  b.FirstOffset,
 			})
 		}
@@ -1348,8 +1308,8 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 	// treat these as aborted so the LSO is not stuck forever.
 	if len(activeTxns) > 0 {
 		c.crashAbortedPIDsMu.Lock()
-		for pid, ts := range activeTxns {
-			last := ts.firstOffset
+		for pid, firstOff := range activeTxns {
+			last := firstOff
 			for _, b := range batches {
 				if b.ProducerID == pid && b.inTx {
 					end := b.FirstOffset + int64(b.LastOffsetDelta)
@@ -1360,7 +1320,7 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 			}
 			pd.abortedTxns = append(pd.abortedTxns, abortedTxnEntry{
 				producerID:  pid,
-				firstOffset: ts.firstOffset,
+				firstOffset: firstOff,
 				lastOffset:  last,
 			})
 			c.crashAbortedPIDs[pid] = struct{}{}
@@ -1423,7 +1383,7 @@ func (c *Cluster) initActiveSegment(pd *partData, fsys fs, pdir string) {
 // loadSegmentBatches reads batches from a segment file (.dat) and metadata
 // from the parallel index file (.idx). Segment files contain pure RecordBatch
 // wire bytes; entry boundaries are found via RecordBatch Length (big-endian
-// int32 at byte 8). Index entries are fixed-size (14 bytes each).
+// int32 at byte 8). Index entries are fixed-size (15 bytes each).
 func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base int64) ([]*partBatch, error) {
 	raw, err := fsys.ReadFile(filepath.Join(pdir, segmentFileName(base)))
 	if err != nil {
@@ -1668,16 +1628,9 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 }
 
 func (c *Cluster) loadACLs(fsys fs, dir string) error {
-	data, err := fsys.ReadFile(filepath.Join(dir, "acls.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
 	var pa persistACLs
-	if err := json.Unmarshal(data, &pa); err != nil {
-		return fmt.Errorf("parsing acls.json: %w", err)
+	if found, err := readJSONFile(fsys, filepath.Join(dir, "acls.json"), &pa); err != nil || !found {
+		return err
 	}
 	for _, a := range pa.ACLs {
 		c.acls.add(acl{
@@ -1694,56 +1647,22 @@ func (c *Cluster) loadACLs(fsys fs, dir string) error {
 }
 
 func (c *Cluster) loadSASL(fsys fs, dir string) error {
-	data, err := fsys.ReadFile(filepath.Join(dir, "sasl.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
 	var ps persistSASL
-	if err := json.Unmarshal(data, &ps); err != nil {
-		return fmt.Errorf("parsing sasl.json: %w", err)
+	if found, err := readJSONFile(fsys, filepath.Join(dir, "sasl.json"), &ps); err != nil || !found {
+		return err
 	}
 	if len(ps.Plain) > 0 {
 		c.sasls.plain = ps.Plain
 	}
-	if len(ps.Scram256) > 0 {
-		c.sasls.scram256 = make(map[string]scramAuth, len(ps.Scram256))
-		for k, v := range ps.Scram256 {
-			c.sasls.scram256[k] = scramAuth{
-				mechanism:  v.Mechanism,
-				salt:       v.Salt,
-				saltedPass: v.SaltedPass,
-				iterations: v.Iterations,
-			}
-		}
-	}
-	if len(ps.Scram512) > 0 {
-		c.sasls.scram512 = make(map[string]scramAuth, len(ps.Scram512))
-		for k, v := range ps.Scram512 {
-			c.sasls.scram512[k] = scramAuth{
-				mechanism:  v.Mechanism,
-				salt:       v.Salt,
-				saltedPass: v.SaltedPass,
-				iterations: v.Iterations,
-			}
-		}
-	}
+	c.sasls.scram256 = persistToScram(ps.Scram256)
+	c.sasls.scram512 = persistToScram(ps.Scram512)
 	return nil
 }
 
 func (c *Cluster) loadQuotas(fsys fs, dir string) error {
-	data, err := fsys.ReadFile(filepath.Join(dir, "quotas.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
 	var pq persistQuotas
-	if err := json.Unmarshal(data, &pq); err != nil {
-		return fmt.Errorf("parsing quotas.json: %w", err)
+	if found, err := readJSONFile(fsys, filepath.Join(dir, "quotas.json"), &pq); err != nil || !found {
+		return err
 	}
 	for _, q := range pq.Quotas {
 		entity := make(quotaEntity, len(q.Entity))
@@ -1763,16 +1682,9 @@ func (c *Cluster) loadQuotas(fsys fs, dir string) error {
 }
 
 func (c *Cluster) loadSeqWindows(fsys fs, dir string) error {
-	data, err := fsys.ReadFile(filepath.Join(dir, "seq_windows.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
 	var psw persistSeqWindows
-	if err := json.Unmarshal(data, &psw); err != nil {
-		return fmt.Errorf("parsing seq_windows.json: %w", err)
+	if found, err := readJSONFile(fsys, filepath.Join(dir, "seq_windows.json"), &psw); err != nil || !found {
+		return err
 	}
 	for _, w := range psw.Windows {
 		pidinf, ok := c.pids.ids[w.PID]
@@ -1794,12 +1706,32 @@ func (c *Cluster) loadSeqWindows(fsys fs, dir string) error {
 // LIVE SYNC PERSIST HELPERS
 ///////////////////////////////
 
+// openSegmentFiles opens the active segment and index files for writing.
+// Uses the last entry in pd.segments as the base offset.
+func (c *Cluster) openSegmentFiles(pd *partData, pdir string) error {
+	base := pd.segments[len(pd.segments)-1].base
+	segPath := filepath.Join(pdir, segmentFileName(base))
+	sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	idxPath := filepath.Join(pdir, indexFileName(base))
+	idxF, err := c.fs.OpenFile(idxPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		sf.Close()
+		return err
+	}
+	pd.activeSegFile = sf
+	pd.activeIdxFile = idxF
+	return nil
+}
+
 // persistBatchToSegment writes a batch to the active segment file.
 // Returns the byte position of the entry within the segment file
 // (for batchMeta.segPos), or -1 on failure.
 func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 	fsys := c.fs
-	pdir := topicDir(c.dataDir, pd.t, pd.p)
+	pdir := partDir(c.dataDir, pd.t, pd.p)
 
 	// Ensure segment exists in memory before any I/O that might fail.
 	if len(pd.segments) == 0 {
@@ -1811,52 +1743,23 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 			c.cfg.logger.Logf(LogLevelWarn, "persist batch mkdir %s: %v", pdir, err)
 			return -1
 		}
-		active := &pd.segments[len(pd.segments)-1]
-		segPath := filepath.Join(pdir, segmentFileName(active.base))
-		sf, err := fsys.OpenFile(segPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s: %v", segPath, err)
+		if err := c.openSegmentFiles(pd, pdir); err != nil {
+			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s-%d: %v", pd.t, pd.p, err)
 			return -1
 		}
-		idxPath := filepath.Join(pdir, indexFileName(active.base))
-		xf, err := fsys.OpenFile(idxPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			sf.Close()
-			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s: %v", idxPath, err)
-			return -1
-		}
-		pd.activeSegFile = sf
-		pd.activeIdxFile = xf
 	}
 
-	// Check if we need to roll the segment.
+	// Roll the segment if needed.
 	active := &pd.segments[len(pd.segments)-1]
-	segMax := c.segmentBytes(pd.t)
-	if active.size >= segMax {
+	if active.size >= c.segmentBytes(pd.t) {
 		active.endOff = b.FirstOffset
-		pd.activeSegFile.Sync()
-		pd.activeIdxFile.Sync()
-		pd.activeSegFile.Close()
-		pd.activeIdxFile.Close()
-		pd.activeSegFile = nil
-		pd.activeIdxFile = nil
+		pd.closeActiveFiles(true)
 		pd.segments = append(pd.segments, segmentInfo{base: b.FirstOffset})
+		if err := c.openSegmentFiles(pd, pdir); err != nil {
+			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s-%d: %v", pd.t, pd.p, err)
+			return -1
+		}
 		active = &pd.segments[len(pd.segments)-1]
-		segPath := filepath.Join(pdir, segmentFileName(active.base))
-		sf, err := fsys.OpenFile(segPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s: %v", segPath, err)
-			return -1
-		}
-		idxPath := filepath.Join(pdir, indexFileName(active.base))
-		xf, err := fsys.OpenFile(idxPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			sf.Close()
-			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s: %v", idxPath, err)
-			return -1
-		}
-		pd.activeSegFile = sf
-		pd.activeIdxFile = xf
 	}
 
 	// Write RecordBatch to segment file.
@@ -1919,7 +1822,7 @@ func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
 // persistPIDEntry appends a PID log entry.
 // Called from txn handlers when dataDir is set.
 func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
-	if c.cfg.dataDir == "" {
+	if c.cfg.dataDir == "" || c.dead.Load() {
 		return nil
 	}
 	if c.pidsLogFile == nil {
@@ -2140,15 +2043,6 @@ func (c *Cluster) closeOpenFiles() {
 		c.pidsLogFile = nil
 	}
 	c.data.tps.each(func(_ string, _ int32, pd *partData) {
-		if pd.activeSegFile != nil {
-			pd.activeSegFile.Sync()
-			pd.activeSegFile.Close()
-			pd.activeSegFile = nil
-		}
-		if pd.activeIdxFile != nil {
-			pd.activeIdxFile.Sync()
-			pd.activeIdxFile.Close()
-			pd.activeIdxFile = nil
-		}
+		pd.closeActiveFiles(true)
 	})
 }

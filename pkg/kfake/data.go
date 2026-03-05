@@ -419,7 +419,7 @@ func (pd *partData) searchOffset(o int64) (segIdx int, metaIdx int, found bool, 
 
 func (c *Cluster) trimLeft(pd *partData) {
 	// Trim batchMeta segments, deleting fully-trimmed segment + index files.
-	pdir := topicDir(c.dataDir, pd.t, pd.p)
+	pdir := partDir(c.dataDir, pd.t, pd.p)
 outer:
 	for len(pd.segments) > 0 {
 		seg := &pd.segments[0]
@@ -439,17 +439,27 @@ outer:
 	// If all segments were trimmed, close active handles
 	// so the next produce creates fresh files.
 	if len(pd.segments) == 0 {
-		if pd.activeSegFile != nil {
-			pd.activeSegFile.Close()
-			pd.activeSegFile = nil
-		}
-		if pd.activeIdxFile != nil {
-			pd.activeIdxFile.Close()
-			pd.activeIdxFile = nil
-		}
+		pd.closeActiveFiles(false)
 	}
 	pd.rebuildMaxTimestampMeta()
 	pd.trimAbortedTxns()
+}
+
+func (pd *partData) closeActiveFiles(doSync bool) {
+	if pd.activeSegFile != nil {
+		if doSync {
+			pd.activeSegFile.Sync()
+		}
+		pd.activeSegFile.Close()
+		pd.activeSegFile = nil
+	}
+	if pd.activeIdxFile != nil {
+		if doSync {
+			pd.activeIdxFile.Sync()
+		}
+		pd.activeIdxFile.Close()
+		pd.activeIdxFile = nil
+	}
 }
 
 // recalculateLSO recalculates the last stable offset from uncommittedPIDs.
