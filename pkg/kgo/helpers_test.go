@@ -46,7 +46,8 @@ var (
 	// Static membership (KIP-345) requires JoinGroup v5+.
 	allowStaticMembership = false
 
-	// KIP-848 requires ConsumerGroupHeartbeat (key 68).
+	// KIP-848 requires ConsumerGroupHeartbeat v1 (key 68, stable).
+	// Must match should848() which calls supportsKIP848v1().
 	allow848 = false
 
 	// KGO_TEST_TLS: DSL syntax is ({ca|cert|key}:path),{1,3}
@@ -217,7 +218,7 @@ func adm() *Client {
 				if v, ok := versions.LookupMaxKeyVersion(11); ok && v >= 5 { // 11 = JoinGroup
 					allowStaticMembership = true
 				}
-				if _, ok := versions.LookupMaxKeyVersion(68); ok { // 68 = ConsumerGroupHeartbeat
+				if v, ok := versions.LookupMaxKeyVersion(68); ok && v >= 1 { // 68 = ConsumerGroupHeartbeat v1 (KIP-848 stable)
 					allow848 = true
 				}
 				return
