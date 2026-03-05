@@ -653,7 +653,7 @@ func (c *Cluster) savePartition(fsys fs, dir string, topic string, part int32, p
 		return err
 	}
 
-	pd.closeActiveFiles(true)
+	pd.closeActiveFiles(c.cfg.syncWrites)
 
 	// Build snapshot segment metadata from pd.segments.
 	// Segment files are already on disk (written by persistBatchToSegment
@@ -830,7 +830,7 @@ func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 		return err
 	}
 	for _, e := range allEntries {
-		if err := appendLogEntry(f, e, true); err != nil {
+		if err := appendLogEntry(f, e, c.cfg.syncWrites); err != nil {
 			f.Close()
 			return err
 		}
@@ -902,7 +902,7 @@ func (c *Cluster) savePIDsLog(fsys fs, dir string) error {
 			entry.Timeout = pidinf.txTimeout
 			entry.Commit = &pidinf.lastWasCommit
 		}
-		if err := appendLogEntry(f, entry, true); err != nil {
+		if err := appendLogEntry(f, entry, c.cfg.syncWrites); err != nil {
 			return err
 		}
 	}
@@ -1753,7 +1753,7 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 	active := &pd.segments[len(pd.segments)-1]
 	if active.size >= c.segmentBytes(pd.t) {
 		active.endOff = b.FirstOffset
-		pd.closeActiveFiles(true)
+		pd.closeActiveFiles(c.cfg.syncWrites)
 		pd.segments = append(pd.segments, segmentInfo{base: b.FirstOffset})
 		if err := c.openSegmentFiles(pd, pdir); err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s-%d: %v", pd.t, pd.p, err)
@@ -2032,17 +2032,21 @@ func (c *Cluster) loadSessionState() error {
 func (c *Cluster) closeOpenFiles() {
 	c.groupsLogMu.Lock()
 	if c.groupsLogFile != nil {
-		c.groupsLogFile.Sync()
+		if c.cfg.syncWrites {
+			c.groupsLogFile.Sync()
+		}
 		c.groupsLogFile.Close()
 		c.groupsLogFile = nil
 	}
 	c.groupsLogMu.Unlock()
 	if c.pidsLogFile != nil {
-		c.pidsLogFile.Sync()
+		if c.cfg.syncWrites {
+			c.pidsLogFile.Sync()
+		}
 		c.pidsLogFile.Close()
 		c.pidsLogFile = nil
 	}
 	c.data.tps.each(func(_ string, _ int32, pd *partData) {
-		pd.closeActiveFiles(true)
+		pd.closeActiveFiles(c.cfg.syncWrites)
 	})
 }
