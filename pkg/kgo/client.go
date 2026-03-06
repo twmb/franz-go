@@ -326,6 +326,8 @@ func (cl *Client) OptValues(opt any) []any {
 	case namefn(WithCompressor):
 		return []any{cfg.compressor}
 	case namefn(ProducerBatchMaxBytes):
+		return []any{cfg.maxRecordBatchBytes("")}
+	case namefn(ProducerBatchMaxBytesFn):
 		return []any{cfg.maxRecordBatchBytes}
 	case namefn(MaxBufferedRecords):
 		return []any{cfg.maxBufferedRecords}
