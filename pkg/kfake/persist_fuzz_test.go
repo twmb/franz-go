@@ -1273,12 +1273,12 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 
 	// Phase 2: open with snapshot, record state
 	type partState struct {
-		hwm            int64
-		lso            int64
-		logStartOffset int64
-		maxTimestamp   int64
-		nbytes         int64
-		batchCount     int
+		hwm               int64
+		lso               int64
+		logStartOffset    int64
+		maxFirstTimestamp int64
+		nbytes            int64
+		batchCount        int
 	}
 
 	var snapState partState
@@ -1292,12 +1292,12 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 			t.Fatal("partition missing after snapshot load")
 		}
 		snapState = partState{
-			hwm:            pd.highWatermark,
-			lso:            pd.lastStableOffset,
-			logStartOffset: pd.logStartOffset,
-			maxTimestamp:   pd.maxTimestamp,
-			nbytes:         pd.nbytes,
-			batchCount:     pd.totalBatches(),
+			hwm:               pd.highWatermark,
+			lso:               pd.lastStableOffset,
+			logStartOffset:    pd.logStartOffset,
+			maxFirstTimestamp: pd.maxFirstTimestamp,
+			nbytes:            pd.nbytes,
+			batchCount:        pd.totalBatches(),
 		}
 		c.Close()
 	}
@@ -1321,12 +1321,12 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 			t.Fatal("partition missing after full replay")
 		}
 		replayState := partState{
-			hwm:            pd.highWatermark,
-			lso:            pd.lastStableOffset,
-			logStartOffset: pd.logStartOffset,
-			maxTimestamp:   pd.maxTimestamp,
-			nbytes:         pd.nbytes,
-			batchCount:     pd.totalBatches(),
+			hwm:               pd.highWatermark,
+			lso:               pd.lastStableOffset,
+			logStartOffset:    pd.logStartOffset,
+			maxFirstTimestamp: pd.maxFirstTimestamp,
+			nbytes:            pd.nbytes,
+			batchCount:        pd.totalBatches(),
 		}
 
 		if snapState.hwm != replayState.hwm {
@@ -1338,8 +1338,8 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 		if snapState.logStartOffset != replayState.logStartOffset {
 			t.Errorf("logStartOffset: snapshot=%d replay=%d", snapState.logStartOffset, replayState.logStartOffset)
 		}
-		if snapState.maxTimestamp != replayState.maxTimestamp {
-			t.Errorf("maxTimestamp: snapshot=%d replay=%d", snapState.maxTimestamp, replayState.maxTimestamp)
+		if snapState.maxFirstTimestamp != replayState.maxFirstTimestamp {
+			t.Errorf("maxFirstTimestamp: snapshot=%d replay=%d", snapState.maxFirstTimestamp, replayState.maxFirstTimestamp)
 		}
 		if snapState.nbytes != replayState.nbytes {
 			t.Errorf("nbytes: snapshot=%d replay=%d", snapState.nbytes, replayState.nbytes)
@@ -1623,7 +1623,7 @@ func TestCompactBailsOnPartialReadError(t *testing.T) {
 	numSegsBefore := len(pd.segments)
 
 	// Corrupt the segment file so readBatchFull fails for some entries.
-	pdir := partDir(c.dataDir, pd.t, pd.p)
+	pdir := partDir(c.storageDir, pd.t, pd.p)
 	segName := segmentFileName(pd.segments[0].base)
 	path := filepath.Join(pdir, segName)
 	raw, err := c.fs.ReadFile(path)
@@ -1956,7 +1956,7 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 
 	// The batchMeta was added in-memory but persist failed.
 	// The segment file should be truncated back to its pre-failure size.
-	pdir := partDir(c.dataDir, pd.t, pd.p)
+	pdir := partDir(c.storageDir, pd.t, pd.p)
 	path := filepath.Join(pdir, segmentFileName(seg.base))
 	info, err := mfs.Stat(path)
 	if err != nil {

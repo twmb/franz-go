@@ -44,13 +44,6 @@ type (
 		c       *Cluster
 	}
 
-	// txBatchRef identifies a transactional batch without holding a pointer.
-	txBatchRef struct {
-		topic  string
-		part   int32
-		offset int64 // FirstOffset of the batch
-	}
-
 	// Seq/txn info for a given individual producer ID.
 	pidinfo struct {
 		pids *pids
@@ -59,12 +52,12 @@ type (
 		epoch   int16
 		windows tps[pidwindow] // topic/partition 5-window pid sequences
 
-		txid      string
-		txTimeout int32                        // millis
-		txParts   tps[partData]                // partitions in the transaction, if transactional
-		txBatches []txBatchRef                 // batches in the transaction
-		txGroups  []string                     // consumer groups in the transaction
-		txOffsets map[string]tps[offsetCommit] // pending offset commits per group
+		txid         string
+		txTimeout    int32                        // millis
+		txParts      tps[partData]                // partitions in the transaction, if transactional
+		txBatchCount int                          // number of batches in the transaction
+		txGroups     []string                     // consumer groups in the transaction
+		txOffsets    map[string]tps[offsetCommit] // pending offset commits per group
 
 		// Track per-partition first offset for this transaction.
 		// Used for AbortedTransactions in fetch response.
@@ -160,7 +153,7 @@ func (pids *pids) handleTimeout() {
 		if elapsed >= 30*time.Second && elapsed < timeout {
 			pids.c.cfg.logger.Logf(LogLevelWarn,
 				"txn long-running: txn_id=%s pid=%d epoch=%d elapsed=%v timeout=%dms batches=%d",
-				minPid.txid, minPid.id, minPid.epoch, elapsed, minPid.txTimeout, len(minPid.txBatches))
+				minPid.txid, minPid.id, minPid.epoch, elapsed, minPid.txTimeout, minPid.txBatchCount)
 		}
 		if elapsed >= timeout {
 			pids.c.cfg.logger.Logf(LogLevelWarn,
@@ -547,7 +540,7 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 		return resp
 	}
 
-	nBatches, nGroups := len(pidinf.txBatches), len(pidinf.txGroups)
+	nBatches, nGroups := pidinf.txBatchCount, len(pidinf.txGroups)
 	endTxStart := time.Now()
 	pidinf.endTx(req.Commit)
 	if elapsed := time.Since(endTxStart); elapsed > 5*time.Millisecond {
@@ -712,6 +705,11 @@ func (pidinf *pidinfo) endTx(commit bool) {
 
 		c := pidinf.pids.c
 		controlOffset := c.pushBatch(pd, len(benc), b, false) // control record is not itself transactional
+		if controlOffset < 0 {
+			c.cfg.logger.Logf(LogLevelError, "endTx: failed to persist control batch for %s p%d pid %d", t, p, pidinf.id)
+			pd.recalculateLSO()
+			return
+		}
 		if !commit {
 			firstOffset, ok := pidinf.txPartFirstOffsets.getp(t, p)
 			if ok {
@@ -765,7 +763,7 @@ func (pidinf *pidinfo) endTx(commit bool) {
 
 func (pidinf *pidinfo) resetTx(wasCommit bool) {
 	pidinf.txParts = nil
-	pidinf.txBatches = nil
+	pidinf.txBatchCount = 0
 	pidinf.txGroups = nil
 	pidinf.txOffsets = nil
 	pidinf.txPartFirstOffsets = nil

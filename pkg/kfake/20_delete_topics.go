@@ -74,8 +74,8 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 			// Close active segment files before removing partition directories.
 			if t, ok := c.data.tps.gett(td.topic); ok {
 				for p, pd := range t {
-					pd.closeActiveFiles(false)
-					pdir := partDir(c.dataDir, td.topic, p)
+					pd.closeAllFiles(false)
+					pdir := partDir(c.storageDir, td.topic, p)
 					if err := c.fs.RemoveAll(pdir); err != nil {
 						c.cfg.logger.Logf(LogLevelWarn, "delete topic %s partition %d dir: %v", td.topic, p, err)
 					}

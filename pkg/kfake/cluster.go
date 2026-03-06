@@ -49,12 +49,12 @@ type (
 		fetchSessions fetchSessions
 		compactTicker *time.Ticker
 
-		// Persistence - c.dataDir is always set (synthetic "/kfake"
-		// for memFS, user path for disk). State files (topics.json,
-		// groups.log, pids.log, etc.) only write when c.cfg.dataDir
-		// is set (user provided real path).
-		dataDir       string
-		fs            fs
+		// storageDir is the root directory for segment and index files.
+		// Always set: "/kfake" for in-memory (memFS) or the user's
+		// DataDir path for on-disk persistence. State files (topics.json,
+		// groups.log, pids.log, etc.) only write when persistEnabled().
+		storageDir         string
+		fs                 fs
 		groupsLogMu        sync.Mutex
 		groupsLogFile      file
 		pidsLogFile        file
@@ -98,6 +98,12 @@ type (
 		handled bool
 	}
 )
+
+// persistEnabled returns true if the cluster is configured with a DataDir
+// for on-disk state persistence. Segment I/O always happens (via storageDir),
+// but state files (topics.json, groups.log, etc.) are only written when
+// persistence is enabled.
+func (c *Cluster) persistEnabled() bool { return c.cfg.dataDir != "" }
 
 func (b *broker) hostport() (string, int32) {
 	h, p, _ := net.SplitHostPort(b.ln.Addr().String())
@@ -162,10 +168,10 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 	if cfg.dataDir != "" {
 		c.fs = osFS{}
-		c.dataDir = cfg.dataDir
+		c.storageDir = cfg.dataDir
 	} else {
 		c.fs = newMemFS()
-		c.dataDir = "/kfake"
+		c.storageDir = "/kfake"
 	}
 	{
 		m := make(map[string]*string, len(cfg.brokerConfigs))
@@ -247,7 +253,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	// Try to load persisted state from disk (after brokers are created,
 	// since partition leader assignment needs c.bs)
 	var loaded bool
-	if cfg.dataDir != "" {
+	if c.persistEnabled() {
 		loaded, err = c.loadFromDisk()
 		if err != nil {
 			return nil, fmt.Errorf("loading persisted state: %w", err)
@@ -275,7 +281,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 
 		// Persist the initial state so crash recovery can find
 		// meta.json, topics.json, etc.
-		if cfg.dataDir != "" {
+		if c.persistEnabled() {
 			if err = c.saveToDisk(); err != nil {
 				return nil, fmt.Errorf("persisting initial state: %w", err)
 			}
@@ -305,13 +311,20 @@ func (c *Cluster) Close() {
 		return
 	}
 
-	// Stop listeners first to prevent new connections
+	// Shutdown sequence:
+	//  1. dead=true rejects duplicate Close calls (above).
+	//  2. Close listeners to stop accepting new connections.
+	//  3. If persistence is enabled and run() is alive, send a
+	//     shutdown function through adminCh. This runs single-
+	//     threaded inside run(), ensuring no concurrent state
+	//     mutations during save. The shutdown function closes
+	//     c.die, causing run() to exit immediately after.
 	for _, b := range c.bs {
 		b.ln.Close()
 	}
 
 	// If persistence is configured, persist state before dying.
-	if c.cfg.dataDir != "" {
+	if c.persistEnabled() {
 		if c.running.Load() {
 			// run() is alive - send through adminCh so it runs
 			// single-threaded. The send must block - a non-blocking

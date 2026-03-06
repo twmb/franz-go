@@ -51,6 +51,11 @@ import (
 //      code, then upgrade to v(N+1).
 //
 //   6. Unchanged types need no migration.
+//
+// Segment files (.dat) use raw Kafka RecordBatch wire format and are
+// version-independent. Index files (.idx) have a per-entry version
+// byte, so .idx format changes follow the per-entry versioning
+// pattern (step 4 above) without requiring segment file changes.
 
 const currentPersistVersion = 1
 
@@ -59,25 +64,28 @@ const currentPersistVersion = 1
 // All multi-byte integers are little-endian.
 const entryHeaderSize = 10 // 4 (length) + 4 (CRC) + 2 (version)
 
-// writeEntry frames data with length+CRC+version and writes it to f,
-// then fsyncs.
+// writeEntry frames data with length+CRC+version and writes it to f
+// in a single write call, then optionally fsyncs.
 func writeEntry(f file, data []byte, syncW bool) error {
+	bp := batchPool.Get().(*[]byte)
+	buf := slices.Grow((*bp)[:0], entryHeaderSize+len(data))[:entryHeaderSize+len(data)]
+	copy(buf[entryHeaderSize:], data)
+
 	// length = len(version) + len(data)
 	length := uint32(2 + len(data))
-	var hdr [entryHeaderSize]byte
-	binary.LittleEndian.PutUint32(hdr[0:4], length)
+	binary.LittleEndian.PutUint32(buf[0:4], length)
 	// CRC covers version + data
 	var vbuf [2]byte
 	binary.LittleEndian.PutUint16(vbuf[:], currentPersistVersion)
 	crc := crc32.Update(0, crc32c, vbuf[:])
 	crc = crc32.Update(crc, crc32c, data)
-	binary.LittleEndian.PutUint32(hdr[4:8], crc)
-	binary.LittleEndian.PutUint16(hdr[8:10], currentPersistVersion)
+	binary.LittleEndian.PutUint32(buf[4:8], crc)
+	binary.LittleEndian.PutUint16(buf[8:10], currentPersistVersion)
 
-	if _, err := f.Write(hdr[:]); err != nil {
-		return err
-	}
-	if _, err := f.Write(data); err != nil {
+	_, err := f.Write(buf)
+	*bp = buf[:0]
+	batchPool.Put(bp)
+	if err != nil {
 		return err
 	}
 	if syncW {
@@ -258,6 +266,10 @@ func indexFileName(baseOffset int64) string {
 	return fmt.Sprintf("%d.idx", baseOffset)
 }
 
+// batchPool pools []byte buffers for batch encoding (encodeBatch) and
+// log entry framing (writeEntry). Used in both osFS and memFS modes -
+// memFS copies the buffer into its in-memory map, so the pooled slice
+// is safe to reuse after Write returns.
 var batchPool = sync.Pool{
 	New: func() any {
 		b := make([]byte, 0, 256)
@@ -318,14 +330,10 @@ func (c *Cluster) readBatchRaw(pd *partData, segIdx int, meta *batchMeta) ([]byt
 	if meta.segPos < 0 {
 		return nil, fmt.Errorf("batch at offset %d was not persisted", meta.firstOffset)
 	}
-	seg := &pd.segments[segIdx]
-	path := filepath.Join(partDir(c.dataDir, pd.t, pd.p), segmentFileName(seg.base))
-	f, err := c.fs.OpenFile(path, os.O_RDONLY, 0)
+	f, err := c.segReadFile(pd, segIdx)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
 	if _, err := f.Seek(meta.segPos, io.SeekStart); err != nil {
 		return nil, err
 	}
@@ -334,6 +342,29 @@ func (c *Cluster) readBatchRaw(pd *partData, segIdx int, meta *batchMeta) ([]byt
 		return nil, err
 	}
 	return buf, nil
+}
+
+// segReadFile returns a read handle for the given segment. For the
+// active segment (last in pd.segments), it reuses pd.activeSegFile
+// which is opened O_RDWR|O_APPEND so it supports both reads and writes.
+// For sealed segments, it lazily opens and caches seg.readFile.
+// Safe because all I/O runs in the single Cluster.run() goroutine,
+// and O_APPEND writes always seek to end regardless of read position.
+func (c *Cluster) segReadFile(pd *partData, segIdx int) (file, error) {
+	if segIdx == len(pd.segments)-1 && pd.activeSegFile != nil {
+		return pd.activeSegFile, nil
+	}
+	seg := &pd.segments[segIdx]
+	if seg.readFile != nil {
+		return seg.readFile, nil
+	}
+	path := filepath.Join(partDir(c.storageDir, pd.t, pd.p), segmentFileName(seg.base))
+	f, err := c.fs.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	seg.readFile = f
+	return f, nil
 }
 
 // readBatchFull reads and decodes a full partBatch from its segment file.
@@ -654,7 +685,7 @@ func (c *Cluster) savePartition(fsys fs, dir string, topic string, part int32, p
 		return err
 	}
 
-	pd.closeActiveFiles(c.cfg.syncWrites)
+	pd.closeAllFiles(c.cfg.syncWrites)
 
 	// Build snapshot segment metadata from pd.segments.
 	// Segment files are already on disk (written by persistBatchToSegment
@@ -694,7 +725,7 @@ func (c *Cluster) savePartition(fsys fs, dir string, topic string, part int32, p
 		LogStartOffset:   pd.logStartOffset,
 		Epoch:            pd.epoch,
 		LeaderNode:       pd.leader.node,
-		MaxTimestamp:     pd.maxTimestamp,
+		MaxTimestamp:     pd.maxFirstTimestamp,
 		CreatedAt:        pd.createdAt,
 		AbortedTxns:      abortedTxns,
 		Segments:         snapSegments,
@@ -702,30 +733,13 @@ func (c *Cluster) savePartition(fsys fs, dir string, topic string, part int32, p
 	return writeJSONFile(fsys, filepath.Join(pdir, "snapshot.json"), snap)
 }
 
-// segmentBytes returns the max segment size for a topic.
-func (c *Cluster) segmentBytes(topic string) int64 {
-	if tcfg, ok := c.data.tcfgs[topic]; ok {
-		if v, ok := tcfg["segment.bytes"]; ok && v != nil {
-			if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
-				return n
-			}
-		}
-	}
-	if v, ok := c.loadBcfgs()["log.segment.bytes"]; ok && v != nil {
-		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
-			return n
-		}
-	}
-	return 100 << 20 // 100MiB default
-}
-
 // rebuildSegments deletes existing segment files for a partition and rewrites
 // them from the given batches, rebuilding pd.segments with batchMeta. Called
 // after compaction changes the batch set. Also resets active file handles.
 func (c *Cluster) rebuildSegments(pd *partData, topic string, batches []*partBatch) {
-	pdir := partDir(c.dataDir, pd.t, pd.p)
+	pdir := partDir(c.storageDir, pd.t, pd.p)
 
-	pd.closeActiveFiles(false)
+	pd.closeAllFiles(false)
 
 	// Delete old segment + index files
 	for _, seg := range pd.segments {
@@ -820,10 +834,12 @@ func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 	}
 
 	// Phase 2: write compacted entries to a temp file, then atomically
-	// rename over groups.log. This prevents a crash mid-write from
-	// truncating the old file and losing all group state. We hold
-	// the lock across the rename to prevent a concurrent
-	// persistGroupEntry from writing between close and rename.
+	// rename over groups.log. We hold groupsLogMu across the entire
+	// phase to prevent a concurrent persistGroupEntry from appending
+	// to the old file between our tmp write and the rename (which
+	// would lose that entry).
+	c.groupsLogMu.Lock()
+	defer c.groupsLogMu.Unlock()
 	path := filepath.Join(dir, "groups.log")
 	tmpPath := path + ".tmp"
 	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
@@ -836,11 +852,7 @@ func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 			return err
 		}
 	}
-	// Close before rename - the file must be fully written and closed
-	// before we atomically swap it into place.
 	f.Close()
-	c.groupsLogMu.Lock()
-	defer c.groupsLogMu.Unlock()
 	if c.groupsLogFile != nil {
 		c.groupsLogFile.Close()
 		c.groupsLogFile = nil
@@ -1159,7 +1171,7 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	if int(snap.LeaderNode) < len(c.bs) {
 		pd.leader = c.bs[snap.LeaderNode]
 	}
-	pd.maxTimestamp = snap.MaxTimestamp
+	pd.maxFirstTimestamp = snap.MaxTimestamp
 	pd.createdAt = snap.CreatedAt
 	for i, base := range segFiles {
 		si := segmentInfo{base: base}
@@ -1185,6 +1197,7 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 			return err
 		}
 	}
+	pd.pruneEmptySegments()
 
 	// Accumulate nbytes from batchMeta, skipping entries before
 	// logStartOffset (partially-trimmed segments may have stale entries).
@@ -1241,6 +1254,7 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 		}
 		batches = append(batches, loaded...)
 	}
+	pd.pruneEmptySegments()
 
 	// Reconstruct partition metadata from batchMeta
 	total := pd.totalBatches()
@@ -1344,8 +1358,8 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 
 	// Rebuild maxTimestamp and nbytes from batchMeta
 	pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
-		if m.firstTimestamp > pd.maxTimestamp {
-			pd.maxTimestamp = m.firstTimestamp
+		if m.firstTimestamp > pd.maxFirstTimestamp {
+			pd.maxFirstTimestamp = m.firstTimestamp
 		}
 		pd.nbytes += int64(m.nbytes)
 		return true
@@ -1394,7 +1408,10 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 	}
 	idxRaw, _ := fsys.ReadFile(filepath.Join(pdir, indexFileName(base)))
 
-	// Find the segmentInfo for this base to update epoch ranges.
+	// Find the segmentInfo for this base to rebuild epoch ranges and index
+	// from the actual batch data. The snapshot stores segment metadata
+	// (base, size, epoch ranges), but on load we rebuild from the segment
+	// file contents for crash safety - the snapshot may be stale.
 	var seg *segmentInfo
 	for i := range pd.segments {
 		if pd.segments[i].base == base {
@@ -1461,6 +1478,17 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 			if err := f.Truncate(int64(pos)); err != nil {
 				c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d segment %d: truncate: %v", pd.t, pd.p, base, err)
 			}
+		}
+	}
+
+	// Truncate orphaned index entries that may remain from a prior
+	// crash where the index write succeeded but the segment did not.
+	expectedIdxBytes := int64(batchIdx * indexEntrySize)
+	if int64(len(idxRaw)) > expectedIdxBytes {
+		idxPath := filepath.Join(pdir, indexFileName(base))
+		if f, err := fsys.OpenFile(idxPath, os.O_WRONLY, 0644); err == nil {
+			f.Truncate(expectedIdxBytes)
+			f.Close()
 		}
 	}
 
@@ -1711,12 +1739,12 @@ func (c *Cluster) loadSeqWindows(fsys fs, dir string) error {
 // LIVE SYNC PERSIST HELPERS
 ///////////////////////////////
 
-// openSegmentFiles opens the active segment and index files for writing.
-// Uses the last entry in pd.segments as the base offset.
+// openSegmentFiles opens the active segment (O_RDWR for read+write) and
+// index file (O_WRONLY) for the last segment in pd.segments.
 func (c *Cluster) openSegmentFiles(pd *partData, pdir string) error {
 	base := pd.segments[len(pd.segments)-1].base
 	segPath := filepath.Join(pdir, segmentFileName(base))
-	sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
 	if err != nil {
 		return err
 	}
@@ -1736,7 +1764,7 @@ func (c *Cluster) openSegmentFiles(pd *partData, pdir string) error {
 // (for batchMeta.segPos), or -1 on failure.
 func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 	fsys := c.fs
-	pdir := partDir(c.dataDir, pd.t, pd.p)
+	pdir := partDir(c.storageDir, pd.t, pd.p)
 
 	// Ensure segment exists in memory before any I/O that might fail.
 	if len(pd.segments) == 0 {
@@ -1782,7 +1810,15 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 
 	// Write index entry.
 	idx := encodeIndexEntry(b.epoch, b.maxEarlierTimestamp, b.inTx)
-	pd.activeIdxFile.Write(idx[:])
+	if _, err := pd.activeIdxFile.Write(idx[:]); err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "persist index write %s-%d: %v", pd.t, pd.p, err)
+		pd.activeSegFile.Truncate(active.size)
+		pd.activeSegFile.Close()
+		pd.activeSegFile = nil
+		pd.activeIdxFile.Close()
+		pd.activeIdxFile = nil
+		return -1
+	}
 
 	// With SyncWrites, fsync every batch for immediate durability.
 	// Without it, we rely on the OS page cache and sync only on
@@ -1801,7 +1837,7 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 // Multiple group manage() goroutines may call this concurrently,
 // so writes are serialized with groupsLogMu.
 func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
-	if c.cfg.dataDir == "" || c.dead.Load() {
+	if !c.persistEnabled() || c.dead.Load() {
 		return nil
 	}
 	c.groupsLogMu.Lock()
@@ -1831,7 +1867,7 @@ func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
 // persistPIDEntry appends a PID log entry.
 // Called from txn handlers when dataDir is set.
 func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
-	if c.cfg.dataDir == "" || c.dead.Load() {
+	if !c.persistEnabled() || c.dead.Load() {
 		return nil
 	}
 	if c.pidsLogFile == nil {
@@ -1859,7 +1895,7 @@ func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
 // persistState is a shared helper for live-sync state file writes.
 // It calls the given save function and logs on error.
 func (c *Cluster) persistState(name string, fn func(fs, string) error) {
-	if c.cfg.dataDir == "" {
+	if !c.persistEnabled() {
 		return
 	}
 	if err := fn(c.fs, c.cfg.dataDir); err != nil {
@@ -2047,7 +2083,7 @@ func (c *Cluster) loadSessionState() error {
 	for name, sg := range ss.ClassicGroups {
 		g, ok := c.groups.gs[name]
 		if !ok {
-			c.cfg.logger.Logf(LogLevelWarn, "loadSessionState: classic group %s not found in groups.gs", name)
+			c.cfg.logger.Logf(LogLevelInfo, "loadSessionState: classic group %s not found in groups.gs", name)
 			continue
 		}
 		g.waitControl(func() {
@@ -2060,7 +2096,7 @@ func (c *Cluster) loadSessionState() error {
 	for name, sg := range ss.ConsumerGroups {
 		g, ok := c.groups.gs[name]
 		if !ok {
-			c.cfg.logger.Logf(LogLevelWarn, "loadSessionState: consumer group %s not found in groups.gs", name)
+			c.cfg.logger.Logf(LogLevelInfo, "loadSessionState: consumer group %s not found in groups.gs", name)
 			continue
 		}
 		g.waitControl(func() {
@@ -2092,6 +2128,6 @@ func (c *Cluster) closeOpenFiles() {
 		c.pidsLogFile = nil
 	}
 	c.data.tps.each(func(_ string, _ int32, pd *partData) {
-		pd.closeActiveFiles(c.cfg.syncWrites)
+		pd.closeAllFiles(c.cfg.syncWrites)
 	})
 }

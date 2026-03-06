@@ -230,6 +230,10 @@ func (f *memFile) Write(b []byte) (int, error) {
 		f.fs.failNextWrite = nil
 		return 0, err
 	}
+	// Match POSIX O_APPEND: writes always go to the end.
+	if f.flag&os.O_APPEND != 0 {
+		f.pos = int64(len(f.d.data))
+	}
 	end := f.pos + int64(len(b))
 	if end > int64(len(f.d.data)) {
 		grown := make([]byte, end)
@@ -318,4 +322,3 @@ func (i memFileInfo) Mode() os.FileMode  { return 0644 }
 func (i memFileInfo) ModTime() time.Time { return time.Time{} }
 func (i memFileInfo) IsDir() bool        { return i.isDir }
 func (i memFileInfo) Sys() any           { return nil }
-
