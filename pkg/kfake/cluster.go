@@ -1,3 +1,4 @@
+// Package kfake provides a fake Kafka broker for testing.
 package kfake
 
 import (
@@ -241,7 +242,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			bsIdx: len(c.bs),
 		}
 		c.bs = append(c.bs, b)
-		defer func() { go b.listen() }()
+		defer func() { go b.listen() }() //nolint:gocritic,revive // intentional - each broker's listener starts after loop iter
 	}
 	c.controller = c.bs[len(c.bs)-1]
 
@@ -756,7 +757,7 @@ func (c *Cluster) CurrentNode() int32 {
 	return -1
 }
 
-func (c *Cluster) tryControl(creq *clientReq) (kresp kmsg.Response, err error, handled bool) {
+func (c *Cluster) tryControl(creq *clientReq) (kresp kmsg.Response, err error, handled bool) { //nolint:revive // control handler signature
 	c.controlMu.Lock()
 	defer c.controlMu.Unlock()
 	if len(c.control) == 0 {
@@ -769,7 +770,7 @@ func (c *Cluster) tryControl(creq *clientReq) (kresp kmsg.Response, err error, h
 	return kresp, err, handled
 }
 
-func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, error, bool) {
+func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, error, bool) { //nolint:revive // control handler signature
 	for _, cctx := range c.control[key] {
 		if cctx.lastReq[creq.cc] == creq {
 			continue
@@ -958,10 +959,7 @@ func (bs *bsleep) enqueue(s *slept) bool {
 		go bs.wait() // Case (2)
 		return true
 	}
-	var q0 *slept
-	if !bs.c.cfg.sleepOutOfOrder {
-		q0 = bs.queue[0] // Case (3b) or (3c) -- just update values below
-	} else {
+	if bs.c.cfg.sleepOutOfOrder {
 		// Case (3a), out of order sleep: we need to check the entire
 		// queue to see if this request was already sleeping and, if
 		// so, update the values. If it was not already sleeping, we
@@ -969,6 +967,7 @@ func (bs *bsleep) enqueue(s *slept) bool {
 		bs.keep(s)
 		return true
 	}
+	q0 := bs.queue[0] // Case (3b) or (3c) -- just update values below
 	if q0.creq != s.creq {
 		panic("internal error: sleeping request not head request")
 	}
@@ -1242,19 +1241,20 @@ func (c *Cluster) RemoveNode(nodeID int32) error {
 	var err error
 	c.admin(func() {
 		for i, b := range c.bs {
-			if b.node == nodeID {
-				if len(c.bs) == 1 {
-					err = errors.New("cannot remove all brokers")
-					return
-				}
-				b.ln.Close()
-				c.cfg.nbrokers--
-				c.bs[i] = c.bs[len(c.bs)-1]
-				c.bs[i].bsIdx = i
-				c.bs = c.bs[:len(c.bs)-1]
-				c.shufflePartitionsLocked()
+			if b.node != nodeID {
+				continue
+			}
+			if len(c.bs) == 1 {
+				err = errors.New("cannot remove all brokers")
 				return
 			}
+			b.ln.Close()
+			c.cfg.nbrokers--
+			c.bs[i] = c.bs[len(c.bs)-1]
+			c.bs[i].bsIdx = i
+			c.bs = c.bs[:len(c.bs)-1]
+			c.shufflePartitionsLocked()
+			return
 		}
 		err = fmt.Errorf("node %d not found", nodeID)
 	})

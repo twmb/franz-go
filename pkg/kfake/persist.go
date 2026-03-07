@@ -289,7 +289,7 @@ func encodeIndexEntry(epoch int32, maxEarlierTS int64, inTx bool) [indexEntrySiz
 	return buf
 }
 
-func decodeIndexEntry(buf []byte) (epoch int32, maxEarlierTS int64, inTx bool, ok bool) {
+func decodeIndexEntry(buf []byte) (epoch int32, maxEarlierTS int64, inTx, ok bool) {
 	if len(buf) < indexEntrySize {
 		return 0, 0, false, false
 	}
@@ -480,7 +480,7 @@ func writeJSONFile(fsys fs, path string, v any) error {
 		return fmt.Errorf("marshaling %s: %w", path, err)
 	}
 	tmpPath := path + ".tmp"
-	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", tmpPath, err)
 	}
@@ -540,7 +540,7 @@ func (c *Cluster) saveToDisk() error {
 	fsys := c.fs
 	dir := c.cfg.dataDir
 
-	if err := fsys.MkdirAll(dir, 0755); err != nil {
+	if err := fsys.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating data dir: %w", err)
 	}
 
@@ -719,9 +719,9 @@ func (c *Cluster) savePartitions(fsys fs, dir string) error {
 	})
 }
 
-func (c *Cluster) savePartition(fsys fs, dir string, topic string, part int32, pd *partData) error {
+func (c *Cluster) savePartition(fsys fs, dir, topic string, part int32, pd *partData) error {
 	pdir := partDir(dir, topic, part)
-	if err := fsys.MkdirAll(pdir, 0755); err != nil {
+	if err := fsys.MkdirAll(pdir, 0o755); err != nil {
 		return err
 	}
 
@@ -811,17 +811,17 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 	}
 
 	// Write segment (.dat) and index (.idx) files.
-	c.fs.MkdirAll(pdir, 0755)
+	c.fs.MkdirAll(pdir, 0o755)
 	for _, g := range groups {
 		si := segmentInfo{base: g.base}
 		segPath := filepath.Join(pdir, segmentFileName(g.base))
 		idxPath := filepath.Join(pdir, indexFileName(g.base))
-		sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+		sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		if err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: create %s: %v", pd.t, pd.p, segPath, err)
 			continue
 		}
-		xf, err := c.fs.OpenFile(idxPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+		xf, err := c.fs.OpenFile(idxPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		if err != nil {
 			sf.Close()
 			c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: create %s: %v", pd.t, pd.p, idxPath, err)
@@ -873,7 +873,7 @@ func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 
 	path := filepath.Join(dir, "groups.log")
 	tmpPath := path + ".tmp"
-	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
@@ -893,7 +893,7 @@ func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 // collectGroupEntries gathers all persistable state from a group.
 // This must be called from within the group's manage goroutine via
 // waitControl, OR after the group has been stopped (shutdown).
-func (c *Cluster) collectGroupEntries(g *group) []groupLogEntry {
+func (*Cluster) collectGroupEntries(g *group) []groupLogEntry {
 	var entries []groupLogEntry
 
 	// Group metadata
@@ -928,7 +928,7 @@ func (c *Cluster) savePIDsLog(fsys fs, dir string) error {
 
 	path := filepath.Join(dir, "pids.log")
 	tmpPath := path + ".tmp"
-	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
@@ -1492,7 +1492,7 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 		c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d segment %d: truncating %d corrupt bytes",
 			pd.t, pd.p, base, len(raw)-pos)
 		path := filepath.Join(pdir, segmentFileName(base))
-		if f, err := fsys.OpenFile(path, os.O_WRONLY, 0644); err != nil {
+		if f, err := fsys.OpenFile(path, os.O_WRONLY, 0o644); err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d segment %d: open for truncate: %v", pd.t, pd.p, base, err)
 		} else {
 			defer f.Close()
@@ -1507,7 +1507,7 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 	expectedIdxBytes := int64(batchIdx * indexEntrySize)
 	if int64(len(idxRaw)) > expectedIdxBytes {
 		idxPath := filepath.Join(pdir, indexFileName(base))
-		if f, err := fsys.OpenFile(idxPath, os.O_WRONLY, 0644); err == nil {
+		if f, err := fsys.OpenFile(idxPath, os.O_WRONLY, 0o644); err == nil {
 			f.Truncate(expectedIdxBytes)
 			f.Close()
 		}
@@ -1739,12 +1739,12 @@ func (c *Cluster) loadSeqWindows(fsys fs, dir string) error {
 func (c *Cluster) openSegmentFiles(pd *partData, pdir string) error {
 	base := pd.segments[len(pd.segments)-1].base
 	segPath := filepath.Join(pdir, segmentFileName(base))
-	sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
+	sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
 	idxPath := filepath.Join(pdir, indexFileName(base))
-	idxF, err := c.fs.OpenFile(idxPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	idxF, err := c.fs.OpenFile(idxPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		sf.Close()
 		return err
@@ -1767,7 +1767,7 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 	}
 
 	if pd.activeSegFile == nil {
-		if err := fsys.MkdirAll(pdir, 0755); err != nil {
+		if err := fsys.MkdirAll(pdir, 0o755); err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "persist batch mkdir %s: %v", pdir, err)
 			return -1
 		}
@@ -1831,7 +1831,7 @@ func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
 	defer c.groupsLogMu.Unlock()
 	if c.groupsLogFile == nil {
 		path := filepath.Join(c.cfg.dataDir, "groups.log")
-		f, err := c.fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		f, err := c.fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "persist group entry open: %v", err)
 			return err
@@ -1859,7 +1859,7 @@ func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
 	}
 	if c.pidsLogFile == nil {
 		path := filepath.Join(c.cfg.dataDir, "pids.log")
-		f, err := c.fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		f, err := c.fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "persist pid entry open: %v", err)
 			return err
@@ -1944,7 +1944,7 @@ func (c *Cluster) compactGroupsLog() {
 
 	// Write compacted entries to tmp, then atomic rename.
 	tmpPath := path + ".tmp"
-	f, err := c.fs.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	f, err := c.fs.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: create: %v", err)
 		return

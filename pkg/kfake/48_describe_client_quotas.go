@@ -94,6 +94,8 @@ func matchesQuotaFilter(quota quotaEntry, components []kmsg.DescribeClientQuotas
 			if !exists || name == nil {
 				return false
 			}
+		default:
+			return false
 		}
 	}
 

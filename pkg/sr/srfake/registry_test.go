@@ -416,7 +416,7 @@ func TestConfigHandlers(t *testing.T) {
 
 	t.Run("Global config", func(t *testing.T) {
 		// 1. Get initial global config
-		req, _ := http.NewRequest("GET", reg.URL()+"/config", http.NoBody)
+		req, _ := http.NewRequest(http.MethodGet, reg.URL()+"/config", http.NoBody)
 		resp, _ := client.Do(req)
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -425,7 +425,7 @@ func TestConfigHandlers(t *testing.T) {
 		}
 
 		// 2. Update global config
-		putReq, _ := http.NewRequest("PUT", reg.URL()+"/config", strings.NewReader(`{"compatibility": "FORWARD"}`))
+		putReq, _ := http.NewRequest(http.MethodPut, reg.URL()+"/config", strings.NewReader(`{"compatibility": "FORWARD"}`))
 		putReq.Header.Set("Content-Type", "application/json")
 		putResp, _ := client.Do(putReq)
 		putResp.Body.Close()
@@ -434,7 +434,7 @@ func TestConfigHandlers(t *testing.T) {
 		}
 
 		// 3. Get updated global config
-		req2, _ := http.NewRequest("GET", reg.URL()+"/config", http.NoBody)
+		req2, _ := http.NewRequest(http.MethodGet, reg.URL()+"/config", http.NoBody)
 		resp2, _ := client.Do(req2)
 		body2, _ := io.ReadAll(resp2.Body)
 		resp2.Body.Close()
@@ -448,7 +448,7 @@ func TestConfigHandlers(t *testing.T) {
 		subject := "my-topic"
 
 		// 1. Get subject config, should fallback to global
-		req, _ := http.NewRequest("GET", reg.URL()+"/config/"+subject, http.NoBody)
+		req, _ := http.NewRequest(http.MethodGet, reg.URL()+"/config/"+subject, http.NoBody)
 		resp, _ := client.Do(req)
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -457,7 +457,7 @@ func TestConfigHandlers(t *testing.T) {
 		}
 
 		// 2. Set subject config
-		putReq, _ := http.NewRequest("PUT", reg.URL()+"/config/"+subject, strings.NewReader(`{"compatibility": "FULL"}`))
+		putReq, _ := http.NewRequest(http.MethodPut, reg.URL()+"/config/"+subject, strings.NewReader(`{"compatibility": "FULL"}`))
 		putResp, _ := client.Do(putReq)
 		putResp.Body.Close()
 		if putResp.StatusCode != http.StatusOK {
@@ -465,7 +465,7 @@ func TestConfigHandlers(t *testing.T) {
 		}
 
 		// 3. Get subject config, should show specific level
-		req2, _ := http.NewRequest("GET", reg.URL()+"/config/"+subject, http.NoBody)
+		req2, _ := http.NewRequest(http.MethodGet, reg.URL()+"/config/"+subject, http.NoBody)
 		resp2, _ := client.Do(req2)
 		body2, _ := io.ReadAll(resp2.Body)
 		resp2.Body.Close()
@@ -482,7 +482,7 @@ func TestConfigHandlers(t *testing.T) {
 		}
 
 		// 5. Get subject config again, should fall back to global
-		req3, _ := http.NewRequest("GET", reg.URL()+"/config/"+subject, http.NoBody)
+		req3, _ := http.NewRequest(http.MethodGet, reg.URL()+"/config/"+subject, http.NoBody)
 		resp3, _ := client.Do(req3)
 		body3, _ := io.ReadAll(resp3.Body)
 		resp3.Body.Close()
@@ -522,7 +522,7 @@ func TestAuthMiddleware(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req, _ := http.NewRequest("GET", reg.URL()+"/subjects", http.NoBody)
+			req, _ := http.NewRequest(http.MethodGet, reg.URL()+"/subjects", http.NoBody)
 			if tc.authHeader != "" {
 				req.Header.Set("Authorization", tc.authHeader)
 			}
@@ -2037,7 +2037,7 @@ func TestErrorHandling(t *testing.T) {
 		})
 
 		// Soft-delete the subject by making an HTTP request
-		req, _ := http.NewRequest("DELETE", registry.URL()+"/subjects/test", http.NoBody)
+		req, _ := http.NewRequest(http.MethodDelete, registry.URL()+"/subjects/test", http.NoBody)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("failed to delete subject: %v", err)

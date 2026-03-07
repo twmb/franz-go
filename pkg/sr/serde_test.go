@@ -239,7 +239,6 @@ func TestConfluentHeader(t *testing.T) {
 			t.Errorf("#%d: UpdateID(%v) != exp(%v)", i, b, test.expEncUpd)
 			continue
 		}
-
 	}
 
 	if _, _, err := h.DecodeID([]byte{1, 0, 0, 0, 0, 1}); err != ErrBadHeader {

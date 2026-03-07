@@ -1,6 +1,7 @@
 package kfake_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -320,7 +321,7 @@ func TestPersistPIDEpochRestart(t *testing.T) {
 		}
 		for _, txn := range txns {
 			origPID = txn.ProducerID
-			origEpoch = int16(txn.ProducerEpoch)
+			origEpoch = txn.ProducerEpoch
 		}
 		cl.Close()
 		c.Close()
@@ -373,7 +374,7 @@ func TestPersistPIDEpochRestart(t *testing.T) {
 			if txn.ProducerID != origPID {
 				t.Fatalf("expected same PID %d after restart, got %d", origPID, txn.ProducerID)
 			}
-			if int16(txn.ProducerEpoch) <= origEpoch {
+			if txn.ProducerEpoch <= origEpoch {
 				t.Fatalf("expected epoch > %d after restart, got %d", origEpoch, txn.ProducerEpoch)
 			}
 		}
@@ -636,7 +637,7 @@ func TestPersistCRCCorruption(t *testing.T) {
 				// Corrupt the last few bytes
 				data[len(data)-3] ^= 0xFF
 				data[len(data)-5] ^= 0xFF
-				os.WriteFile(path, data, 0644)
+				os.WriteFile(path, data, 0o644)
 			}
 		}
 	}
@@ -871,7 +872,7 @@ func TestPersistEntryFraming(t *testing.T) {
 	// Create a temp file and write an entry
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.log")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -918,7 +919,7 @@ func TestPersistEntryFraming(t *testing.T) {
 	}
 
 	recoveredData := raw[10:]
-	if string(recoveredData) != string(testData) {
+	if !bytes.Equal(recoveredData, testData) {
 		t.Fatalf("data mismatch: %q vs %q", recoveredData, testData)
 	}
 }
@@ -1415,7 +1416,7 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 		cl := newPlainClient(t, c)
 		defer cl.Close()
 
-		recoveredGen := rawJoinGeneration(t, ctx, cl, group, topic)
+		recoveredGen := rawJoinGeneration(ctx, t, cl, group, topic)
 		// After recovery, the next join should produce generation > lastGeneration.
 		if recoveredGen <= lastGeneration {
 			t.Fatalf("expected recovered generation > %d, got %d", lastGeneration, recoveredGen)
@@ -1424,7 +1425,7 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 }
 
 // rawJoinGeneration performs a raw JoinGroup+SyncGroup to observe the generation.
-func rawJoinGeneration(t *testing.T, ctx context.Context, cl *kgo.Client, group, topic string, instanceID ...string) int32 {
+func rawJoinGeneration(ctx context.Context, t *testing.T, cl *kgo.Client, group, topic string, instanceID ...string) int32 {
 	t.Helper()
 
 	proto := kmsg.NewJoinGroupRequestProtocol()
@@ -1618,7 +1619,7 @@ func TestPersistStaticMemberDeleteCrash(t *testing.T) {
 		cl := newPlainClient(t, c)
 		defer cl.Close()
 
-		gen := rawJoinGeneration(t, ctx, cl, group, topic, instanceID)
+		gen := rawJoinGeneration(ctx, t, cl, group, topic, instanceID)
 		if gen <= 0 {
 			t.Fatalf("expected positive generation, got %d", gen)
 		}
@@ -2261,17 +2262,18 @@ func TestPersistSnapshotTruncatedSegment(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if filepath.Ext(e.Name()) == ".dat" {
-			path := filepath.Join(partDir, e.Name())
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Truncate to half the file size.
-			half := len(data) / 2
-			if half > 0 {
-				os.WriteFile(path, data[:half], 0644)
-			}
+		if filepath.Ext(e.Name()) != ".dat" {
+			continue
+		}
+		path := filepath.Join(partDir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Truncate to half the file size.
+		half := len(data) / 2
+		if half > 0 {
+			os.WriteFile(path, data[:half], 0o644)
 		}
 	}
 
@@ -2839,7 +2841,7 @@ func TestPersistSessionStateExpired(t *testing.T) {
 	oldTime, _ := json.Marshal(time.Now().Add(-1 * time.Hour))
 	ss["shutdownAt"] = oldTime
 	newData, _ := json.Marshal(ss)
-	if err := os.WriteFile(ssPath, newData, 0644); err != nil {
+	if err := os.WriteFile(ssPath, newData, 0o644); err != nil {
 		t.Fatalf("writing modified session_state.json: %v", err)
 	}
 
@@ -3573,7 +3575,7 @@ func copyDir(t *testing.T, src, dst string) {
 		sp := filepath.Join(src, e.Name())
 		dp := filepath.Join(dst, e.Name())
 		if e.IsDir() {
-			if err := os.MkdirAll(dp, 0755); err != nil {
+			if err := os.MkdirAll(dp, 0o755); err != nil {
 				t.Fatal(err)
 			}
 			copyDir(t, sp, dp)
@@ -3582,7 +3584,7 @@ func copyDir(t *testing.T, src, dst string) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(dp, data, 0644); err != nil {
+			if err := os.WriteFile(dp, data, 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}

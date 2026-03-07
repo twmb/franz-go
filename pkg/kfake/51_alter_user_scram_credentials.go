@@ -50,10 +50,9 @@ func (c *Cluster) handleAlterUserSCRAMCredentials(creq *clientReq) (kmsg.Respons
 		resp.Results = append(resp.Results, sr)
 		return &resp.Results[len(resp.Results)-1]
 	}
-	doneu := func(u string, code int16) *kmsg.AlterUserSCRAMCredentialsResponseResult {
+	doneu := func(u string, code int16) {
 		sr := addr(u)
 		sr.ErrorCode = code
-		return sr
 	}
 
 	users := make(map[string]int16)

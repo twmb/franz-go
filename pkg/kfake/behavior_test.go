@@ -477,7 +477,7 @@ func Test848TransactionalConsume(t *testing.T) {
 		t.Fatalf("expected 15 committed records, got %d", len(records))
 	}
 	for _, r := range records {
-		if string(r.Value) == "" {
+		if len(r.Value) == 0 {
 			continue
 		}
 		v := string(r.Value)
@@ -1571,7 +1571,7 @@ func TestTxnConcurrentDescribeAndInit(t *testing.T) {
 				req.TransactionTimeoutMillis = 60000
 				req.ProducerID = -1
 				req.ProducerEpoch = -1
-				req.RequestWith(ctx, cl) //nolint:errcheck
+				req.RequestWith(ctx, cl) //nolint:errcheck // fire-and-forget request
 			}
 		}()
 		wg.Add(1)
@@ -1579,7 +1579,7 @@ func TestTxnConcurrentDescribeAndInit(t *testing.T) {
 			defer wg.Done()
 			for ctx.Err() == nil {
 				req := kmsg.NewListTransactionsRequest()
-				req.RequestWith(ctx, cl) //nolint:errcheck
+				req.RequestWith(ctx, cl) //nolint:errcheck // fire-and-forget request
 			}
 		}()
 	}
@@ -2387,7 +2387,8 @@ func TestFetchSessionEviction(t *testing.T) {
 func fetchRequest(sessionID, sessionEpoch int32, topic string, partitions ...struct {
 	p      int32
 	offset int64
-}) *kmsg.FetchRequest {
+},
+) *kmsg.FetchRequest {
 	req := kmsg.NewPtrFetchRequest()
 	req.Version = 11
 	req.MaxWaitMillis = 100

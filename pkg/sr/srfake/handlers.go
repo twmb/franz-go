@@ -51,7 +51,7 @@ func (r *Registry) interceptorMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (r *Registry) contextMiddleware(next http.Handler) http.Handler {
+func (*Registry) contextMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		p := req.URL.Path
 		if !strings.HasPrefix(p, "/contexts/") {

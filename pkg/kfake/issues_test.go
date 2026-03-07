@@ -476,10 +476,10 @@ func TestIssueTimestampInclusivity(t *testing.T) {
 			offset := i * 4
 			r1 := kgo.StringRecord(strconv.Itoa(offset))
 			r1.Timestamp = time.UnixMilli(10_000 + int64(offset))
-			offset += 1
+			offset++
 			r2 := kgo.StringRecord(strconv.Itoa(offset))
 			r2.Timestamp = time.UnixMilli(10_000 + int64(offset))
-			offset += 1
+			offset++
 			r3 := kgo.StringRecord(strconv.Itoa(offset))
 			r3.Timestamp = time.UnixMilli(10_000 + int64(offset))
 			err := cl.ProduceSync(context.Background(), r1, r2, r3).FirstErr()
@@ -1510,7 +1510,6 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	}
 }
 
-
 // TestKIP447RequireStable verifies that OffsetFetch with RequireStable=true
 // returns UNSTABLE_OFFSET_COMMIT when there are pending transactional offset commits.
 func TestKIP447RequireStable(t *testing.T) {
@@ -2140,7 +2139,7 @@ func TestKadmCachedMetadata(t *testing.T) {
 	}
 
 	var metadataRequests atomic.Int32
-	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+	c.ControlKey(int16(kmsg.Metadata), func(_ kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
 		metadataRequests.Add(1)
 		return nil, nil, false

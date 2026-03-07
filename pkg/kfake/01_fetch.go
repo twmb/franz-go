@@ -542,7 +542,7 @@ func (fs *fetchSessions) getOrCreate(brokerNode, sessionID, sessionEpoch int32, 
 	return session, false, 0
 }
 
-func (s *fetchSession) updatePartition(topic string, partition int32, fetchOffset int64, maxBytes int32, currentEpoch int32) {
+func (s *fetchSession) updatePartition(topic string, partition int32, fetchOffset int64, maxBytes, currentEpoch int32) {
 	if s == nil {
 		return
 	}

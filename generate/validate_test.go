@@ -157,7 +157,7 @@ func initDSL(t *testing.T) {
 		const enumsFile = "enums"
 
 		path := filepath.Join(dir, enumsFile)
-		f, err := os.ReadFile(path) //nolint:gosec // reading known definitions directory
+		f, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("reading enums: %v", err)
 		}
@@ -172,7 +172,7 @@ func initDSL(t *testing.T) {
 				continue
 			}
 			path := filepath.Join(dir, ent.Name())
-			f, err := os.ReadFile(path) //nolint:gosec // reading known definitions directory
+			f, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatalf("reading %s: %v", path, err)
 			}
@@ -330,7 +330,7 @@ func TestValidateDSLAgainstKafkaJSON(t *testing.T) {
 	}
 
 	jsonDir := filepath.Join(kafkaDir, "clients", "src", "main", "resources", "common", "message")
-	if _, err := os.Stat(jsonDir); err != nil { //nolint:gosec // path from trusted env var
+	if _, err := os.Stat(jsonDir); err != nil {
 		t.Fatalf("Kafka message dir not found at %s: %v", jsonDir, err)
 	}
 
@@ -374,7 +374,7 @@ func TestValidateDSLAgainstKafkaJSON(t *testing.T) {
 		if !strings.HasSuffix(ent.Name(), ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(jsonDir, ent.Name())) //nolint:gosec // reading from trusted KAFKA_DIR
+		data, err := os.ReadFile(filepath.Join(jsonDir, ent.Name()))
 		if err != nil {
 			t.Fatalf("reading %s: %v", ent.Name(), err)
 		}
@@ -674,7 +674,7 @@ func TestValidateMiscDSLAgainstKafkaJSON(t *testing.T) {
 
 	for _, m := range mappings {
 		jsonPath := filepath.Join(kafkaDir, m.jsonPath)
-		data, err := os.ReadFile(jsonPath) //nolint:gosec // path is constructed from test constant + env var, not user input
+		data, err := os.ReadFile(jsonPath)
 		if err != nil {
 			t.Errorf("reading %s: %v", m.jsonPath, err)
 			continue
