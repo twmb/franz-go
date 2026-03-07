@@ -52,10 +52,12 @@ func TestStaticMember848RejoinGetsAssignmentBack(t *testing.T) {
 	}
 }
 
-// TestStaticMember848FenceByInstanceID verifies that a new consumer joining
-// with the same instanceID fences the old one.
-// Derived via LLM from testShouldThrowFencedInstanceIdExceptionWhenStaticMemberWithDifferentMemberIdJoins.
-func TestStaticMember848FenceByInstanceID(t *testing.T) {
+// TestStaticMember848FencedInstanceID verifies that a heartbeat from a
+// different memberID but the same instanceID returns FENCED_INSTANCE_ID.
+// Matches Kafka's throwIfInstanceIdIsFenced (GroupMetadataManager.java:1647),
+// called from getOrMaybeSubscribeStaticConsumerGroupMember (line 3187).
+// Derived from testShouldThrowFencedInstanceIdExceptionWhenStaticMemberWithDifferentMemberIdJoins.
+func TestStaticMember848FencedInstanceID(t *testing.T) {
 	t.Parallel()
 	topic := "t-static-fence"
 	group := "g-static-fence"
@@ -71,12 +73,26 @@ func TestStaticMember848FenceByInstanceID(t *testing.T) {
 	adm := newAdminClient(t, c)
 	waitForStableGroup(t, adm, group, 1, 10*time.Second)
 
-	// Second consumer with same instanceID fences the first.
-	c2 := newGroupConsumer(t, c, topic, group, kgo.InstanceID(instanceID))
-	_ = c2
-	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
-	if totalAssignedPartitions(dg) != 2 {
-		t.Fatalf("expected 2 partitions after fencing, got %d", totalAssignedPartitions(dg))
+	// A heartbeat from a different memberID but the same instanceID
+	// must get FENCED_INSTANCE_ID.
+	raw := newClient848(t, c)
+	hbReq := kmsg.NewPtrConsumerGroupHeartbeatRequest()
+	hbReq.Group = group
+	hbReq.MemberID = "unknown-member"
+	hbReq.MemberEpoch = 11
+	hbReq.RebalanceTimeoutMillis = 5000
+	hbReq.InstanceID = &instanceID
+	hbReq.SubscribedTopicNames = []string{topic}
+	hbReq.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hbResp, err := hbReq.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("heartbeat request failed: %v", err)
+	}
+	if hbResp.ErrorCode != kerr.FencedInstanceID.Code {
+		t.Fatalf("expected FENCED_INSTANCE_ID, got %v", kerr.ErrorForCode(hbResp.ErrorCode))
 	}
 }
 

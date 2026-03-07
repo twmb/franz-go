@@ -65,16 +65,26 @@ jobs:
   integration-test-kfake:
     if: github.repository == 'twmb/franz-go'
     runs-on: ubuntu-latest
-    name: "integration test kfake ${{ matrix.version }}"
+    name: "integration test kfake ${{ matrix.version }}${{ matrix.data-dir && ' (persist)' || '' }}"
     container: golang:latest
     strategy:
       matrix:
-        version: ["0.11.0", "1.1", "2.8", "3.9", "4.1"]
+        include:
+          - version: "0.11.0"
+            data-dir: ""
+          - version: "1.1"
+            data-dir: "/tmp/kfake_data"
+          - version: "2.8"
+            data-dir: ""
+          - version: "3.9"
+            data-dir: "/tmp/kfake_data"
+          - version: "4.1"
+            data-dir: ""
     steps:
       - uses: actions/checkout@v4
       - name: Start kfake and run tests
         run: |
-          (cd pkg/kfake && go work init . ../.. ../kadm ../kmsg && go run main.go --as-version ${{ matrix.version }} -c group.consumer.heartbeat.interval.ms=1000 -l debug) > /tmp/kfake.log 2>&1 &
+          (cd pkg/kfake && go work init . ../.. ../kadm ../kmsg && go run main.go --as-version ${{ matrix.version }} ${{ matrix.data-dir && format('--data-dir {0}', matrix.data-dir) || '' }} -c group.consumer.heartbeat.interval.ms=1000 -l debug) > /tmp/kfake.log 2>&1 &
           sleep 2
           go test -timeout 5m ./...
         env:
@@ -84,7 +94,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: kfake-logs-${{ matrix.version }}
+          name: kfake-logs-${{ matrix.version }}${{ matrix.data-dir && '-persist' || '' }}
           path: /tmp/kfake.log
 
   integration-test-kafka:

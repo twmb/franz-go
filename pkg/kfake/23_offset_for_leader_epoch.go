@@ -1,8 +1,6 @@
 package kfake
 
 import (
-	"sort"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -32,7 +30,7 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 	}
 
 	tidx := make(map[string]int)
-	donet := func(t string, errCode int16) *kmsg.OffsetForLeaderEpochResponseTopic {
+	donet := func(t string) *kmsg.OffsetForLeaderEpochResponseTopic {
 		if i, ok := tidx[t]; ok {
 			return &resp.Topics[i]
 		}
@@ -46,7 +44,7 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 		sp := kmsg.NewOffsetForLeaderEpochResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
-		st := donet(t, 0)
+		st := donet(t)
 		st.Partitions = append(st.Partitions, sp)
 		return &st.Partitions[len(st.Partitions)-1]
 	}
@@ -96,7 +94,7 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 
 			// If our epoch was bumped before anything was
 			// produced, return the epoch and a start offset of 0.
-			if len(pd.batches) == 0 {
+			if !pd.hasBatches() {
 				sp.LeaderEpoch = pd.epoch
 				sp.EndOffset = 0
 				if rp.LeaderEpoch > pd.epoch {
@@ -106,20 +104,12 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 				continue
 			}
 
-			// What is the largest epoch after the requested epoch?
+			// Two-level binary search for the first batch with epoch > requested.
 			nextEpoch := rp.LeaderEpoch + 1
-			idx, _ := sort.Find(len(pd.batches), func(idx int) int {
-				batchEpoch := pd.batches[idx].epoch
-				switch {
-				case nextEpoch <= batchEpoch:
-					return -1
-				default:
-					return 1
-				}
-			})
+			si, mi, cur := pd.findBatchMeta(int64(nextEpoch), func(m *batchMeta) int64 { return int64(m.epoch) })
 
 			// Requested epoch is not yet known: keep -1 returns.
-			if idx == len(pd.batches) {
+			if cur == nil {
 				sp.LeaderEpoch = -1
 				sp.EndOffset = -1
 				continue
@@ -127,14 +117,22 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 
 			// Next epoch is actually the first epoch: return the
 			// requested epoch and the LSO.
-			if idx == 0 {
+			if si == 0 && mi == 0 {
 				sp.LeaderEpoch = rp.LeaderEpoch
 				sp.EndOffset = pd.logStartOffset
 				continue
 			}
 
-			sp.LeaderEpoch = pd.batches[idx-1].epoch
-			sp.EndOffset = pd.batches[idx].FirstOffset
+			// Get the batch before cur.
+			var prev *batchMeta
+			if mi > 0 {
+				prev = &pd.segments[si].index[mi-1]
+			} else {
+				prevSeg := &pd.segments[si-1]
+				prev = &prevSeg.index[len(prevSeg.index)-1]
+			}
+			sp.LeaderEpoch = prev.epoch
+			sp.EndOffset = cur.firstOffset
 		}
 	}
 	return resp, nil

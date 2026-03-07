@@ -71,6 +71,16 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 	var toDeletes []toDelete
 	defer func() {
 		for _, td := range toDeletes {
+			// Close active segment files before removing partition directories.
+			if t, ok := c.data.tps.gett(td.topic); ok {
+				for p, pd := range t {
+					pd.closeAllFiles(false)
+					pdir := partDir(c.storageDir, td.topic, p)
+					if err := c.fs.RemoveAll(pdir); err != nil {
+						c.cfg.logger.Logf(LogLevelWarn, "delete topic %s partition %d dir: %v", td.topic, p, err)
+					}
+				}
+			}
 			delete(c.data.tps, td.topic)
 			delete(c.data.id2t, td.id)
 			delete(c.data.t2id, td.topic)
@@ -120,6 +130,7 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 	if len(toDeletes) > 0 {
 		c.notifyTopicChange()
 		c.refreshCompactTicker()
+		c.persistTopicsState()
 	}
 
 	return resp, nil

@@ -61,5 +61,6 @@ func (c *Cluster) handleDeleteACLs(creq *clientReq) (kmsg.Response, error) {
 		resp.Results = append(resp.Results, result)
 	}
 
+	c.persistACLsState()
 	return resp, nil
 }

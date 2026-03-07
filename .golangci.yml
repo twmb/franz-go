@@ -89,6 +89,7 @@ linters:
         - G115
         - G117
         - G602 # https://github.com/securego/gosec/issues/1406
+        - G118 # does not track cancel funcs passed to goroutines or stored in structs
 
     nolintlint:
       require-explanation: true

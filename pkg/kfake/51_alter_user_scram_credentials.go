@@ -145,5 +145,6 @@ func (c *Cluster) handleAlterUserSCRAMCredentials(creq *clientReq) (kmsg.Respons
 		doneu(u.Name, 0)
 	}
 
+	c.persistSASLState()
 	return resp, nil
 }

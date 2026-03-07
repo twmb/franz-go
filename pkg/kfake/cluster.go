@@ -49,6 +49,19 @@ type (
 		fetchSessions fetchSessions
 		compactTicker *time.Ticker
 
+		// storageDir is the root directory for segment and index files.
+		// Always set: "/kfake" for in-memory (memFS) or the user's
+		// DataDir path for on-disk persistence. State files (topics.json,
+		// groups.log, pids.log, etc.) only write when persist().
+		storageDir         string
+		fs                 fs
+		groupsLogMu        sync.Mutex
+		groupsLogFile      file
+		pidsLogFile        file
+		groupsLogSize      atomic.Int64
+		pidsLogSize        atomic.Int64
+		needsGroupsCompact atomic.Bool
+
 		die  chan struct{}
 		dead atomic.Bool
 	}
@@ -76,6 +89,12 @@ type (
 		handled bool
 	}
 )
+
+// persist returns true if the cluster is configured with a DataDir
+// for on-disk state persistence. Segment I/O always happens (via storageDir),
+// but state files (topics.json, groups.log, etc.) are only written when
+// persistence is enabled.
+func (c *Cluster) persist() bool { return c.cfg.dataDir != "" }
 
 func (b *broker) hostport() (string, int32) {
 	h, p, _ := net.SplitHostPort(b.ln.Addr().String())
@@ -138,6 +157,13 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 
 		die: make(chan struct{}),
 	}
+	if cfg.dataDir != "" {
+		c.fs = osFS{}
+		c.storageDir = cfg.dataDir
+	} else {
+		c.fs = newMemFS()
+		c.storageDir = "/kfake"
+	}
 	{
 		m := make(map[string]*string, len(cfg.brokerConfigs))
 		for k, v := range cfg.brokerConfigs {
@@ -161,7 +187,11 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	var err error
 	defer func() {
 		if err != nil {
-			c.Close()
+			for _, b := range c.bs {
+				b.ln.Close()
+			}
+			c.closeOpenFiles()
+			close(c.die)
 		}
 	}()
 
@@ -215,22 +245,42 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 	c.controller = c.bs[len(c.bs)-1]
 
-	seedTopics := make(map[string]int32)
-	for _, sts := range cfg.seedTopics {
-		p := sts.p
-		if p < 1 {
-			p = int32(cfg.defaultNumParts)
+	// Try to load persisted state from disk (after brokers are created,
+	// since partition leader assignment needs c.bs)
+	var loaded bool
+	if c.persist() {
+		loaded, err = c.loadFromDisk()
+		if err != nil {
+			return nil, fmt.Errorf("loading persisted state: %w", err)
 		}
-		for _, t := range sts.ts {
-			seedTopics[t] = p
-		}
-	}
-	for t, p := range seedTopics {
-		c.data.mkt(t, int(p), -1, nil)
 	}
 
-	for _, a := range cfg.seedACLs {
-		c.acls.add(a)
+	if !loaded {
+		seedTopics := make(map[string]int32)
+		for _, sts := range cfg.seedTopics {
+			p := sts.p
+			if p < 1 {
+				p = int32(cfg.defaultNumParts)
+			}
+			for _, t := range sts.ts {
+				seedTopics[t] = p
+			}
+		}
+		for t, p := range seedTopics {
+			c.data.mkt(t, int(p), -1, nil)
+		}
+
+		for _, a := range cfg.seedACLs {
+			c.acls.add(a)
+		}
+
+		// Persist the initial state so crash recovery can find
+		// meta.json, topics.json, etc.
+		if c.persist() {
+			if err = c.saveToDisk(); err != nil {
+				return nil, fmt.Errorf("persisting initial state: %w", err)
+			}
+		}
 	}
 
 	go c.run()
@@ -254,10 +304,49 @@ func (c *Cluster) Close() {
 	if c.dead.Swap(true) {
 		return
 	}
-	close(c.die)
+
+	// Shutdown sequence:
+	//  1. dead=true rejects duplicate Close calls (above).
+	//  2. Close listeners to stop accepting new connections.
+	//  3. If persistence is enabled, send a shutdown function
+	//     through adminCh. This runs single-threaded inside
+	//     run(), ensuring no concurrent state mutations during
+	//     save. The shutdown function closes c.die, causing
+	//     run() to exit immediately after.
 	for _, b := range c.bs {
 		b.ln.Close()
 	}
+
+	if c.persist() {
+		// Send through adminCh so it runs single-threaded.
+		// The send must block - a non-blocking default would
+		// race with run() handling a request.
+		done := make(chan struct{})
+		c.adminCh <- func() {
+			for pidinf := range c.pids.txs {
+				if pidinf.inTx {
+					pidinf.endTx(false)
+				}
+			}
+			if err := c.saveToDisk(); err != nil {
+				c.cfg.logger.Logf(LogLevelError, "persist to disk: %v", err)
+			}
+			if err := c.saveSessionState(); err != nil {
+				c.cfg.logger.Logf(LogLevelError, "save session state: %v", err)
+			}
+			c.closeOpenFiles()
+			// Close c.die inside the admin function so run()
+			// exits immediately - prevents processing requests
+			// after saveToDisk which would create state not
+			// captured by the saved seq windows.
+			close(c.die)
+			close(done)
+		}
+		<-done
+		return
+	}
+
+	close(c.die)
 }
 
 func newListener(port int, tc *tls.Config, fn func(network, address string) (net.Listener, error)) (net.Listener, error) {
@@ -292,6 +381,12 @@ func (b *broker) listen() {
 }
 
 func (c *Cluster) run() {
+	defer func() {
+		c.pids.txTimer.Stop()
+		if c.compactTicker != nil {
+			c.compactTicker.Stop()
+		}
+	}()
 outer:
 	for {
 		var (
@@ -306,10 +401,6 @@ outer:
 
 		select {
 		case <-c.die:
-			c.pids.txTimer.Stop()
-			if c.compactTicker != nil {
-				c.compactTicker.Stop()
-			}
 			return
 
 		case <-c.pids.txTimer.C:
@@ -322,6 +413,15 @@ outer:
 
 		case admin := <-c.adminCh:
 			admin()
+			// If the admin function closed c.die (shutdown persist),
+			// exit immediately. We can't rely on the outer select
+			// because Go's select is non-deterministic - it could
+			// pick reqCh over c.die even when both are ready.
+			select {
+			case <-c.die:
+				return
+			default:
+			}
 			continue
 
 		case creq = <-c.reqCh:
@@ -506,6 +606,9 @@ outer:
 		c.pids.updateTimer()
 
 	afterControl:
+		if c.needsGroupsCompact.Load() {
+			c.compactGroupsLog()
+		}
 		// If s is non-nil, this is either a previously slept control
 		// that finished but was not handled, or a previously slept
 		// waiting request. In either case, we need to signal to the
@@ -1216,9 +1319,9 @@ func (c *Cluster) compactAll() {
 	for t := range c.data.tps {
 		for _, pd := range c.data.tps[t] {
 			if c.data.isCompactTopic(t) {
-				pd.compact(&c.data, t)
+				c.compact(pd, t)
 			}
-			pd.applyRetention(&c.data, t)
+			c.applyRetention(pd, t)
 		}
 	}
 }
@@ -1228,7 +1331,7 @@ func (c *Cluster) compactAll() {
 func (c *Cluster) applyRetentionAll() {
 	for t := range c.data.tps {
 		for _, pd := range c.data.tps[t] {
-			pd.applyRetention(&c.data, t)
+			c.applyRetention(pd, t)
 		}
 	}
 }

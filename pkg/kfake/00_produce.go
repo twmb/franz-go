@@ -238,9 +238,10 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 						}
 					}
 
-					batchptr := pd.pushBatch(len(rp.Records), b, txnal)
-					if txnal {
-						pidinf.txBatches = append(pidinf.txBatches, batchptr)
+					if c.pushBatch(pd, len(rp.Records), b, txnal) < 0 {
+						errCode = kerr.UnknownServerError.Code
+					} else if txnal {
+						pidinf.txBatchCount++
 						// Track bytes for readCommitted watcher accounting at commit time
 						bytesPtr := pidinf.txPartBytes.mkp(rt.Topic, rp.Partition, func() *int { return new(int) })
 						*bytesPtr += len(rp.Records)
@@ -250,7 +251,9 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				// Non-idempotent produce, no pids validation needed
 				baseOffset = pd.highWatermark
 				lso = pd.logStartOffset
-				pd.pushBatch(len(rp.Records), b, txnal)
+				if c.pushBatch(pd, len(rp.Records), b, txnal) < 0 {
+					errCode = kerr.UnknownServerError.Code
+				}
 			}
 
 			if errCode != 0 {
@@ -275,5 +278,3 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 	}
 	return toresp(), nil
 }
-
-var crc32c = crc32.MakeTable(crc32.Castagnoli)

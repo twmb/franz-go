@@ -49,6 +49,9 @@ type cfg struct {
 	superusers    map[string]struct{}
 	seedACLs      []acl
 	brokerConfigs map[string]string
+
+	dataDir    string
+	syncWrites bool
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
@@ -210,6 +213,23 @@ func BrokerConfigs(configs map[string]string) Opt {
 			cfg.brokerConfigs[k] = v
 		}
 	}}
+}
+
+// DataDir enables disk persistence: the cluster continuously writes state
+// to the given directory, and on NewCluster it reloads persisted state from
+// that directory if it exists. The directory is created if needed.
+func DataDir(dir string) Opt {
+	return opt{func(cfg *cfg) { cfg.dataDir = dir }}
+}
+
+// SyncWrites enables per-batch fsync for segment and index files.
+// Without this, writes rely on the OS page cache and are only explicitly
+// synced on segment roll and shutdown, matching real Kafka's default
+// (log.flush.interval.messages=MAX_VALUE). This is much faster but
+// in-flight batches can be lost on a crash. With SyncWrites, every
+// produce is durable immediately at the cost of throughput.
+func SyncWrites() Opt {
+	return opt{func(c *cfg) { c.syncWrites = true }}
 }
 
 // User adds a SASL user with optional ACLs. Unlike Superuser, this user is

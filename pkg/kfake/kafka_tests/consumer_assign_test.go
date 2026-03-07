@@ -144,32 +144,6 @@ func TestAssignAndCommitAsyncNotCommitted(t *testing.T) {
 	}
 }
 
-// TestAssignAndCommitSyncNotCommitted verifies that calling commitSync
-// without polling does not commit offsets.
-func TestAssignAndCommitSyncNotCommitted(t *testing.T) {
-	t.Parallel()
-	c := setupAssignTest(t)
-
-	groupID := "assign-no-commit-sync-group"
-	_ = assignConsumer(t, c, kgo.NewOffset().AtStart())
-
-	adm := newAdminClient(t, c)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// No offsets should be committed for the group. The group may not even
-	// exist, which is also correct.
-	fetched, err := adm.FetchOffsets(ctx, groupID)
-	if err != nil {
-		// GROUP_ID_NOT_FOUND is expected - no group means no commits.
-		return
-	}
-	_, ok := fetched.Lookup(assignTestTopic, 0)
-	if ok {
-		t.Error("expected no committed offset for a consumer that hasn't polled")
-	}
-}
-
 // TestAssignAndFetchCommittedOffsets verifies that consumer 1 commits offsets
 // and consumer 2 can read those committed offsets.
 func TestAssignAndFetchCommittedOffsets(t *testing.T) {

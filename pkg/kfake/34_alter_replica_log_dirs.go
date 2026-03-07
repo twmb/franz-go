@@ -46,7 +46,7 @@ func (c *Cluster) handleAlterReplicaLogDirs(creq *clientReq) (kmsg.Response, err
 	}
 
 	tidx := make(map[string]int)
-	donet := func(t string, errCode int16) *kmsg.AlterReplicaLogDirsResponseTopic {
+	donet := func(t string) *kmsg.AlterReplicaLogDirsResponseTopic {
 		if i, ok := tidx[t]; ok {
 			return &resp.Topics[i]
 		}
@@ -60,7 +60,7 @@ func (c *Cluster) handleAlterReplicaLogDirs(creq *clientReq) (kmsg.Response, err
 		sp := kmsg.NewAlterReplicaLogDirsResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
-		st := donet(t, 0)
+		st := donet(t)
 		st.Partitions = append(st.Partitions, sp)
 		return &st.Partitions[len(st.Partitions)-1]
 	}

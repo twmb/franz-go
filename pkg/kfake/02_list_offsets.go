@@ -1,8 +1,6 @@
 package kfake
 
 import (
-	"sort"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -37,7 +35,7 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 	}
 
 	tidx := make(map[string]int)
-	donet := func(t string, errCode int16) *kmsg.ListOffsetsResponseTopic {
+	donet := func(t string) *kmsg.ListOffsetsResponseTopic {
 		if i, ok := tidx[t]; ok {
 			return &resp.Topics[i]
 		}
@@ -51,7 +49,7 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 		sp := kmsg.NewListOffsetsResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
-		st := donet(t, 0)
+		st := donet(t)
 		st.Partitions = append(st.Partitions, sp)
 		return &st.Partitions[len(st.Partitions)-1]
 	}
@@ -101,34 +99,29 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 				}
 			case -3:
 				// KIP-734: Return offset and timestamp of record with max timestamp
-				if pd.maxTimestampBatchIdx < 0 {
+				m := pd.maxTimestampBatch()
+				if m == nil {
 					sp.Offset = -1
 					sp.Timestamp = -1
 				} else {
-					batch := pd.batches[pd.maxTimestampBatchIdx]
-					sp.Offset = batch.FirstOffset + int64(batch.LastOffsetDelta)
-					sp.Timestamp = batch.MaxTimestamp
+					sp.Offset = m.firstOffset + int64(m.lastOffsetDelta)
+					sp.Timestamp = m.maxTimestamp
 				}
 			default:
-				// returns the index of the first batch _after_ the requested timestamp
-				idx, _ := sort.Find(len(pd.batches), func(idx int) int {
-					maxTimestamp := pd.batches[idx].MaxTimestamp
-					switch {
-					case maxTimestamp > rp.Timestamp:
-						return -1
-					case maxTimestamp == rp.Timestamp:
-						return 0
-					default:
-						return 1
-					}
-				})
-				if idx == len(pd.batches) {
+				// Two-level binary search for the first batch whose maxTimestamp >= requested timestamp.
+				segIdx, _, meta := pd.findBatchMeta(rp.Timestamp, func(m *batchMeta) int64 { return m.maxTimestamp })
+				if meta == nil {
 					sp.Offset = -1
 				} else {
-					batch := pd.batches[idx]
-					sp.Offset = batch.FirstOffset
-					sp.Timestamp = batch.FirstTimestamp
-					err := forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) error {
+					sp.Offset = meta.firstOffset
+					sp.Timestamp = meta.firstTimestamp
+					// Read the full batch to iterate records for precise timestamp
+					batch, err := c.readBatchFull(pd, segIdx, meta)
+					if err != nil {
+						sp.ErrorCode = kerr.CorruptMessage.Code
+						continue
+					}
+					err = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) error {
 						timestamp := batch.FirstTimestamp + rec.TimestampDelta64
 						offset := batch.FirstOffset + int64(rec.OffsetDelta)
 						if timestamp <= rp.Timestamp {
@@ -138,7 +131,7 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 						return nil
 					})
 					if err != nil {
-						donep(rt.Topic, rp.Partition, kerr.CorruptMessage.Code)
+						sp.ErrorCode = kerr.CorruptMessage.Code
 						continue
 					}
 				}

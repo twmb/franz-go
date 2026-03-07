@@ -122,20 +122,22 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 					if len(a.Replicas) > 1 {
 						followers = a.Replicas[1:]
 					}
-					c.data.tps.mkp(rt.Topic, partNum, func() *partData {
+					pd := c.data.tps.mkp(rt.Topic, partNum, func() *partData {
 						return &partData{
-							p:                    partNum,
-							dir:                  defLogDir,
-							earliestTxOffset:     -1,
-							maxTimestampBatchIdx: -1,
-							leader:               leader,
-							followers:            followers,
-							watch:                make(map[*watchFetch]struct{}),
-							createdAt:            time.Now(),
+							p:               partNum,
+							dir:             defLogDir,
+							maxTimestampSeg: -1,
+							maxTimestampIdx: -1,
+							leader:          leader,
+							followers:       followers,
+							watch:           make(map[*watchFetch]struct{}),
+							createdAt:       time.Now(),
 						}
 					})
+					pd.t = rt.Topic
 				} else {
-					c.data.tps.mkp(rt.Topic, partNum, c.newPartData(partNum))
+					pd := c.data.tps.mkp(rt.Topic, partNum, c.newPartData(partNum))
+					pd.t = rt.Topic
 				}
 			}
 		}
@@ -144,6 +146,7 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 
 	if !req.ValidateOnly {
 		c.notifyTopicChange()
+		c.persistTopicsState()
 	}
 
 	return resp, nil

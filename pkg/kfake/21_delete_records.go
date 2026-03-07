@@ -29,7 +29,7 @@ func (c *Cluster) handleDeleteRecords(creq *clientReq) (kmsg.Response, error) {
 	}
 
 	tidx := make(map[string]int)
-	donet := func(t string, errCode int16) *kmsg.DeleteRecordsResponseTopic {
+	donet := func(t string) *kmsg.DeleteRecordsResponseTopic {
 		if i, ok := tidx[t]; ok {
 			return &resp.Topics[i]
 		}
@@ -43,7 +43,7 @@ func (c *Cluster) handleDeleteRecords(creq *clientReq) (kmsg.Response, error) {
 		sp := kmsg.NewDeleteRecordsResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
-		st := donet(t, 0)
+		st := donet(t)
 		st.Partitions = append(st.Partitions, sp)
 		return &st.Partitions[len(st.Partitions)-1]
 	}
@@ -78,8 +78,12 @@ func (c *Cluster) handleDeleteRecords(creq *clientReq) (kmsg.Response, error) {
 				donep(rt.Topic, rp.Partition, kerr.OffsetOutOfRange.Code)
 				continue
 			}
+			// logStartOffset is not persisted live. On crash
+			// recovery without a snapshot it resets to 0,
+			// matching real Kafka unclean leader election.
+			// The snapshot captures it on clean shutdown.
 			pd.logStartOffset = to
-			pd.trimLeft()
+			c.trimLeft(pd)
 			sp := donep(rt.Topic, rp.Partition, 0)
 			sp.LowWatermark = to
 		}

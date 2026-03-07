@@ -81,6 +81,7 @@ outer:
 				continue
 			}
 			c.storeBcfgs(newBcfgs)
+			c.persistBrokerConfigsState()
 
 		case kmsg.ConfigResourceTypeTopic:
 			if !c.allowedACL(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationAlterConfigs) {
@@ -109,6 +110,7 @@ outer:
 				rc := &rr.Configs[i]
 				c.data.setTopicConfig(rr.ResourceName, rc.Name, rc.Value, false)
 			}
+			c.persistTopicsState()
 
 		default:
 			doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
