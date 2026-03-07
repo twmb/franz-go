@@ -1164,6 +1164,20 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	cl.reinitAnyBrokerOrd()
 }
 
+// brokerRacks returns a map of broker node ID to rack for all known brokers
+// that have a rack configured.
+func (cl *Client) brokerRacks() map[int32]string {
+	cl.brokersMu.Lock()
+	defer cl.brokersMu.Unlock()
+	racks := make(map[int32]string, len(cl.brokers))
+	for _, b := range cl.brokers {
+		if b.meta.Rack != nil {
+			racks[b.meta.NodeID] = *b.meta.Rack
+		}
+	}
+	return racks
+}
+
 // CloseAllowingRebalance allows rebalances, leaves any group, and closes all
 // connections and goroutines. This function is only useful if you are using
 // the BlockRebalanceOnPoll option. Close itself does not allow rebalances and
