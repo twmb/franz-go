@@ -16,8 +16,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TODO server-error-value in serverFinal
-
 const (
 	saslPlain       = "PLAIN"
 	saslScram256    = "SCRAM-SHA-256"

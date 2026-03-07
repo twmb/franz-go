@@ -3877,3 +3877,120 @@ func TestApiVersionsSupportedFeatures(t *testing.T) {
 		t.Fatal("group.version should still be present")
 	}
 }
+
+// TestOffsetExpiration verifies that committed offsets for a simple group
+// (no protocolType) expire after offsets.retention.minutes and that the
+// empty group is auto-deleted (KIP-211).
+func TestOffsetExpiration(t *testing.T) {
+	t.Parallel()
+	topic := "offset-expire"
+	group := "offset-expire-group"
+
+	// 50ms retention, 50ms check interval for fast expiration.
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic),
+		kfake.BrokerConfigs(map[string]string{
+			"group.consumer.heartbeat.interval.ms": "100",
+			"offset.retention.ms":                  "50",
+			"offsets.retention.check.interval.ms":  "50",
+		}))
+
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Commit offsets to a simple group (no consumer group join).
+	offsets := kadm.Offsets{}
+	offsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: 5})
+	_, err := adm.CommitOffsets(ctx, group, offsets)
+	if err != nil {
+		t.Fatalf("commit failed: %v", err)
+	}
+
+	// Verify offsets exist immediately after commit.
+	fetched, err := adm.FetchOffsets(ctx, group)
+	if err != nil {
+		t.Fatalf("fetch offsets failed: %v", err)
+	}
+	if _, ok := fetched.Lookup(topic, 0); !ok {
+		t.Fatal("expected committed offset")
+	}
+
+	// Wait for expiration check to fire.
+	time.Sleep(300 * time.Millisecond)
+
+	// Group should be auto-deleted (offsets expired + empty group).
+	listed, err := adm.ListGroupsByType(ctx, nil)
+	if err != nil {
+		t.Fatalf("list groups failed: %v", err)
+	}
+	if _, ok := listed[group]; ok {
+		t.Fatal("expected group to be auto-deleted after offset expiration")
+	}
+}
+
+// TestOffsetExpirationActiveGroup verifies that offsets do NOT expire while
+// a consumer group is active (Stable state), but do expire after the group
+// becomes empty.
+func TestOffsetExpirationActiveGroup(t *testing.T) {
+	t.Parallel()
+	topic := "offset-expire-active"
+	group := "offset-expire-active-group"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic),
+		kfake.BrokerConfigs(map[string]string{
+			"group.consumer.heartbeat.interval.ms": "100",
+			"offset.retention.ms":                  "50",
+			"offsets.retention.check.interval.ms":  "50",
+		}))
+
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	produceNStrings(t, producer, topic, 10)
+
+	// Join a consumer group and consume records.
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.DisableAutoCommit(),
+	)
+	_ = consumeN(t, consumer, 10, 10*time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Explicitly commit offsets while the group is active.
+	if err := consumer.CommitUncommittedOffsets(ctx); err != nil {
+		t.Fatalf("commit failed: %v", err)
+	}
+
+	adm := kadm.NewClient(newPlainClient(t, c))
+
+	// Wait for several expiration checks - offsets must NOT expire while active.
+	time.Sleep(300 * time.Millisecond)
+
+	fetched, err := adm.FetchOffsets(ctx, group)
+	if err != nil {
+		t.Fatalf("fetch offsets failed: %v", err)
+	}
+	if _, ok := fetched.Lookup(topic, 0); !ok {
+		t.Fatal("offsets should NOT expire while group is active")
+	}
+
+	// Leave group - now the group becomes empty.
+	consumer.Close()
+
+	// Wait for expiration check after empty.
+	time.Sleep(300 * time.Millisecond)
+
+	// Group should be auto-deleted (offsets expired + empty group).
+	listed, err := adm.ListGroupsByType(ctx, nil)
+	if err != nil {
+		t.Fatalf("list groups failed: %v", err)
+	}
+	if _, ok := listed[group]; ok {
+		t.Fatal("expected group to be auto-deleted")
+	}
+}
