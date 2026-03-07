@@ -180,6 +180,7 @@ func (p *producer) init(cl *Client) {
 		err:   errReloadProducerID,
 	})
 	p.c = sync.NewCond(&p.mu)
+	p.batchPromises.initMaxLen(max(int(cl.cfg.maxBufferedRecords), 8192))
 
 	inithooks := func() {
 		if p.hooks == nil {
