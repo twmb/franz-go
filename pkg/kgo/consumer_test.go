@@ -885,7 +885,7 @@ func TestGroupSimple(t *testing.T) {
 				UnknownTopicRetries(-1),
 			}
 			if tc.enable848 {
-				ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true) //nolint:revive,staticcheck // intentional string key for beta opt-in
+				ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
 				opts = append(opts, WithContext(ctx848))
 			}
 

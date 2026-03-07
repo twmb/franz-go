@@ -14,8 +14,10 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-const assignTestTopic = "assign-test"
-const assignTestRecords = 10
+const (
+	assignTestTopic   = "assign-test"
+	assignTestRecords = 10
+)
 
 // setupAssignTest creates a cluster with one partition, produces records, and
 // returns the cluster.

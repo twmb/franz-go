@@ -41,7 +41,6 @@ linters:
     - spancheck
     - sqlclosecheck
     - unconvert
-    - unparam
     - usestdlibvars
     - usetesting
     - wastedassign
@@ -64,6 +63,7 @@ linters:
         - evalOrder
         - ifElseChain
         - importShadow
+        - nestingReduce # stylistic - sometimes the positive condition reads better
         - ptrToRefParam
         - sloppyReassign
         - tooManyResultsChecker
@@ -85,11 +85,17 @@ linters:
     gosec:
       excludes:
         - G104
+        - G109 # int overflow from Atoi to int32 - all instances are small values (broker IDs, ports)
         - G404
         - G115
         - G117
+        - G301 # directory permissions 0o755 - standard for data directories
+        - G302 # file permissions 0o644 - standard for data files
+        - G304 # file inclusion via variable - unavoidable for any filesystem code
+        - G306 # WriteFile permissions 0o644 - standard for data files
         - G602 # https://github.com/securego/gosec/issues/1406
         - G118 # does not track cancel funcs passed to goroutines or stored in structs
+        - G703 # path traversal via taint analysis - all instances are tests or kfake persistence writing to controlled directories
 
     nolintlint:
       require-explanation: true
@@ -147,9 +153,12 @@ linters:
         - all
         - -SA1012
         - -SA1019
+        - -SA1029 # context.WithValue with string key - deliberate for 848 opt-in
         - -ST1003
         - -ST1016
         - -QF1001
+        - -QF1006 # suggests lifting break condition into for - doesn't fit when loops have multiple break conditions
+        - -QF1008 # suggests removing embedded field from selector - explicit selector is clearer
 
   exclusions:
     generated: lax
@@ -157,6 +166,16 @@ linters:
       - third_party$
       - builtin$
       - examples$
+      - pkg/kmsg/generated\.go$ # generated from generate/definitions - fix typos there, not here
+    rules:
+      - linters: [noctx] # test code doesn't need request contexts
+        path: _test\.go$
+      - linters: [revive]
+        text: "unused-parameter" # test callbacks must match required function signatures
+        path: _test\.go$
+      - linters: [revive]
+        text: "context-keys-type" # 848 opt-in uses deliberate string key
+        path: _test\.go$
 
 issues:
   max-same-issues: 0

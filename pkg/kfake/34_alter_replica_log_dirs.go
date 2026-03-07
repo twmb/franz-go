@@ -56,13 +56,12 @@ func (c *Cluster) handleAlterReplicaLogDirs(creq *clientReq) (kmsg.Response, err
 		resp.Topics = append(resp.Topics, st)
 		return &resp.Topics[len(resp.Topics)-1]
 	}
-	donep := func(t string, p int32, errCode int16) *kmsg.AlterReplicaLogDirsResponseTopicPartition {
+	donep := func(t string, p int32, errCode int16) {
 		sp := kmsg.NewAlterReplicaLogDirsResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
 		st := donet(t)
 		st.Partitions = append(st.Partitions, sp)
-		return &st.Partitions[len(st.Partitions)-1]
 	}
 
 	for _, rd := range req.Dirs {

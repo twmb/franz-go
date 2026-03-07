@@ -502,7 +502,7 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 					sg.ErrorCode = kerr.GroupIDNotFound.Code
 				case groupEmpty:
 					g.quitOnce()
-				case groupPreparingRebalance, groupCompletingRebalance, groupStable:
+				case groupPreparingRebalance, groupCompletingRebalance, groupStable, groupReconciling:
 					sg.ErrorCode = kerr.NonEmptyGroup.Code
 				}
 			}
@@ -678,13 +678,12 @@ func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 		resp.Topics = append(resp.Topics, st)
 		return &resp.Topics[len(resp.Topics)-1]
 	}
-	donep := func(t string, p int32, errCode int16) *kmsg.OffsetDeleteResponseTopicPartition {
+	donep := func(t string, p int32, errCode int16) {
 		sp := kmsg.NewOffsetDeleteResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
 		st := donet(t)
 		st.Partitions = append(st.Partitions, sp)
-		return &st.Partitions[len(st.Partitions)-1]
 	}
 
 	// empty: delete everything in request
@@ -1938,20 +1937,19 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 	// Same-memberID: handle static rejoin from epoch -2 or
 	// non-static rejoin (update in place).
 	if prev := g.consumerMembers[memberID]; prev != nil {
-		if prev.memberEpoch == -2 {
-			if inheritSent == nil {
-				oldTopics = prev.subscribedTopics
-				inheritSent = copyAssignment(prev.lastReconciledSent)
-				inheritTarget = copyAssignment(prev.targetAssignment)
-				inheritAssignEpochs = prev.partAssignmentEpochs
-			}
-			g.fenceConsumerMember(prev)
-			delete(g.consumerMembers, memberID)
-		} else {
+		if prev.memberEpoch != -2 {
 			// Active non-static rejoin: update subscription
 			// in place, preserving partition state.
 			return g.consumerRejoin(creq, req, resp, prev)
 		}
+		if inheritSent == nil {
+			oldTopics = prev.subscribedTopics
+			inheritSent = copyAssignment(prev.lastReconciledSent)
+			inheritTarget = copyAssignment(prev.targetAssignment)
+			inheritAssignEpochs = prev.partAssignmentEpochs
+		}
+		g.fenceConsumerMember(prev)
+		delete(g.consumerMembers, memberID)
 	}
 
 	m := &consumerMember{
@@ -2608,9 +2606,10 @@ func (g *group) assignRange(allTPs []assignorTP, memberIDs []string, memberSubs 
 // the new assigned and pending maps plus whether the assignment
 // changed.
 func (g *group) computeNextAssignment(m *consumerMember,
-	ownedTopicPartitions []kmsg.ConsumerGroupHeartbeatRequestTopic) (
-	newAssigned, newPending map[uuid][]int32, changed bool) {
-
+	ownedTopicPartitions []kmsg.ConsumerGroupHeartbeatRequestTopic,
+) (
+	newAssigned, newPending map[uuid][]int32, changed bool,
+) {
 	// Collect all topic IDs from both maps.
 	allTopics := make(map[uuid]struct{})
 	for id := range m.lastReconciledSent {
@@ -2712,16 +2711,18 @@ func (g *group) computeNextAssignment(m *consumerMember,
 	}
 
 	changed = !maps.EqualFunc(m.lastReconciledSent, newAssigned, slices.Equal) || !maps.EqualFunc(m.partitionsPendingRevocation, newPending, slices.Equal)
-	return
+
+	return newAssigned, newPending, changed
 }
 
 // updateCurrentAssignment handles subscription changes for a member
 // that is waiting for revocations. It only removes partitions for
 // unsubscribed topics from lastReconciledSent.
 func (g *group) updateCurrentAssignment(m *consumerMember,
-	ownedTopicPartitions []kmsg.ConsumerGroupHeartbeatRequestTopic) (
-	newAssigned, newPending map[uuid][]int32, changed bool) {
-
+	ownedTopicPartitions []kmsg.ConsumerGroupHeartbeatRequestTopic,
+) (
+	newAssigned, newPending map[uuid][]int32, changed bool,
+) {
 	// Compute subscribed topic IDs from subscriptions + regex.
 	subscribedIDs := make(map[uuid]struct{})
 	snap := g.lastTopicMeta
@@ -2765,7 +2766,7 @@ func (g *group) updateCurrentAssignment(m *consumerMember,
 	// Epoch doesn't change for subscription-only updates.
 
 	changed = true
-	return
+	return newAssigned, newPending, changed
 }
 
 // clearConfirmedRevocations removes partitions from
@@ -2773,8 +2774,8 @@ func (g *group) updateCurrentAssignment(m *consumerMember,
 // ownedTopicPartitions (the client confirmed releasing them).
 // Updates the partition epoch map accordingly.
 func (g *group) clearConfirmedRevocations(m *consumerMember,
-	ownedTopicPartitions []kmsg.ConsumerGroupHeartbeatRequestTopic) {
-
+	ownedTopicPartitions []kmsg.ConsumerGroupHeartbeatRequestTopic,
+) {
 	reported := topicsToAssignment(ownedTopicPartitions)
 
 	oldPending := m.partitionsPendingRevocation
@@ -2801,8 +2802,8 @@ func (g *group) clearConfirmedRevocations(m *consumerMember,
 // maybeReconcile dispatches to the appropriate reconciliation path
 // based on the member's current state.
 func (g *group) maybeReconcile(m *consumerMember, hasSubscriptionChanged bool,
-	ownedTopicPartitions []kmsg.ConsumerGroupHeartbeatRequestTopic) bool {
-
+	ownedTopicPartitions []kmsg.ConsumerGroupHeartbeatRequestTopic,
+) bool {
 	// Clear confirmed revocations first.
 	if ownedTopicPartitions != nil {
 		g.clearConfirmedRevocations(m, ownedTopicPartitions)
@@ -2988,7 +2989,7 @@ func (g *group) scheduleConsumerRebalanceTimeout(m *consumerMember) {
 	})
 }
 
-func (g *group) cancelConsumerRebalanceTimeout(m *consumerMember) {
+func (*group) cancelConsumerRebalanceTimeout(m *consumerMember) {
 	if m.tRebal != nil {
 		m.tRebal.Stop()
 		m.tRebal = nil
@@ -3047,8 +3048,7 @@ func (g *group) handleConsumerOffsetCommit(creq *clientReq) *kmsg.OffsetCommitRe
 	// (admin / kadm commits). Use activeConsumerCount to skip
 	// epoch -2 (static leave) members.
 	var cm *consumerMember
-	if g.activeConsumerCount() == 0 && req.Generation < 0 {
-		// Fall through to commit.
+	if g.activeConsumerCount() == 0 && req.Generation < 0 { //nolint:revive // intentional empty block, falls through to commit
 	} else if req.MemberID == "" {
 		fillOffsetCommit(req, resp, kerr.UnknownMemberID.Code)
 		return resp

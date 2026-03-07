@@ -13,7 +13,7 @@ DescribeTransactionsResponse =>
     // NOT_COORDINATOR is returned if the broker receiving this transactional
     // ID does not own the ID.
     //
-    // COORDINATOR_LOAD_IN_PROGRESS is returned if the coordiantor is laoding.
+    // COORDINATOR_LOAD_IN_PROGRESS is returned if the coordinator is loading.
     //
     // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is being shutdown.
     //

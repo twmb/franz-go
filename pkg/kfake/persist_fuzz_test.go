@@ -91,7 +91,7 @@ func FuzzDecodeBatchRaw(f *testing.F) {
 		f.Add(make([]byte, size))
 	}
 
-	f.Fuzz(func(t *testing.T, input []byte) {
+	f.Fuzz(func(_ *testing.T, input []byte) {
 		// Must not panic
 		rb, err := decodeBatchRaw(input)
 		_ = rb
@@ -189,7 +189,7 @@ func TestWriteReadEntryRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	mfs := newMemFS()
-	f, err := mfs.OpenFile("test.log", os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := mfs.OpenFile("test.log", os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,12 +307,12 @@ func TestMemFSRoundTrip(t *testing.T) {
 	mfs := newMemFS()
 
 	// MkdirAll
-	if err := mfs.MkdirAll("/a/b/c", 0755); err != nil {
+	if err := mfs.MkdirAll("/a/b/c", 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// WriteFile via OpenFile
-	f, err := mfs.OpenFile("/a/b/c/test.txt", os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := mfs.OpenFile("/a/b/c/test.txt", os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +375,7 @@ func TestMemFSFaultInjection(t *testing.T) {
 	t.Parallel()
 	mfs := newMemFS()
 
-	f, err := mfs.OpenFile("/test.dat", os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := mfs.OpenFile("/test.dat", os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,12 +416,12 @@ func TestMemFSAppendMode(t *testing.T) {
 	mfs := newMemFS()
 
 	// Write initial data
-	f, _ := mfs.OpenFile("/test.log", os.O_CREATE|os.O_WRONLY, 0644)
+	f, _ := mfs.OpenFile("/test.log", os.O_CREATE|os.O_WRONLY, 0o644)
 	f.Write([]byte("initial"))
 	f.Close()
 
 	// Append
-	f, _ = mfs.OpenFile("/test.log", os.O_APPEND|os.O_WRONLY, 0644)
+	f, _ = mfs.OpenFile("/test.log", os.O_APPEND|os.O_WRONLY, 0o644)
 	f.Write([]byte("-appended"))
 	f.Close()
 
@@ -437,12 +437,12 @@ func TestMemFSTruncateFlag(t *testing.T) {
 	mfs := newMemFS()
 
 	// Write initial data
-	f, _ := mfs.OpenFile("/test.dat", os.O_CREATE|os.O_WRONLY, 0644)
+	f, _ := mfs.OpenFile("/test.dat", os.O_CREATE|os.O_WRONLY, 0o644)
 	f.Write([]byte("old data that is very long"))
 	f.Close()
 
 	// Truncate on open
-	f, _ = mfs.OpenFile("/test.dat", os.O_TRUNC|os.O_WRONLY, 0644)
+	f, _ = mfs.OpenFile("/test.dat", os.O_TRUNC|os.O_WRONLY, 0o644)
 	f.Write([]byte("new"))
 	f.Close()
 
@@ -517,7 +517,6 @@ func TestChaosProduceCloseCrashRecover(t *testing.T) {
 			if !ok {
 				t.Fatalf("iter %d: topic %s missing after %s",
 					iter, topic, shutdownType(cleanShutdown))
-				continue
 			}
 
 			if pd.highWatermark != expectedHWM[topic] {
@@ -662,7 +661,7 @@ func TestChaosTopicCreateDeleteRestart(t *testing.T) {
 	rng := rand.New(rand.NewSource(77))
 	dir := t.TempDir()
 
-	var allTopics = []string{"alpha", "beta", "gamma", "delta", "epsilon"}
+	allTopics := []string{"alpha", "beta", "gamma", "delta", "epsilon"}
 
 	c, err := NewCluster(DataDir(dir), NumBrokers(1))
 	if err != nil {
@@ -1389,7 +1388,7 @@ func TestPersistSnapshotLogStartOffsetClamp(t *testing.T) {
 			path := filepath.Join(segDir, e.Name())
 			raw, _ := os.ReadFile(path)
 			// Keep roughly 1/3 of the file.
-			os.WriteFile(path, raw[:len(raw)/3], 0644)
+			os.WriteFile(path, raw[:len(raw)/3], 0o644)
 		}
 	}
 
@@ -1632,7 +1631,7 @@ func TestCompactBailsOnPartialReadError(t *testing.T) {
 			raw[i] = 0xFF
 		}
 	}
-	f, err := c.fs.OpenFile(path, os.O_TRUNC|os.O_WRONLY, 0644)
+	f, err := c.fs.OpenFile(path, os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}

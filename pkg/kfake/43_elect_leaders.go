@@ -70,9 +70,9 @@ func (c *Cluster) handleElectLeaders(creq *clientReq) (kmsg.Response, error) {
 				pd, ok := c.data.tps.getp(rt.Topic, p)
 				if !ok {
 					donep(rt.Topic, p, kerr.UnknownTopicOrPartition.Code)
-				} else {
-					elect(rt.Topic, p, pd)
+					continue
 				}
+				elect(rt.Topic, p, pd)
 			}
 		}
 	}

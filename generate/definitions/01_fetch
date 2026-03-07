@@ -187,7 +187,7 @@ FetchResponse =>
       // LastStableOffset is the offset at which all prior offsets have
       // been "decided". Non transactional records are always decided
       // immediately, but transactional records are only decided once
-      // they are commited or aborted.
+      // they are committed or aborted.
       //
       // The LastStableOffset will always be at or under the HighWatermark.
       LastStableOffset: int64(-1) // v4+

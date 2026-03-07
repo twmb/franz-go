@@ -141,7 +141,7 @@ func init() {
 			}
 		}
 		if caPath != "" {
-			ca, err := os.ReadFile(caPath) //nolint:gosec // we are deliberately including a file from a variable
+			ca, err := os.ReadFile(caPath)
 			if err != nil {
 				panic(fmt.Sprintf("unable to read ca: %v", err))
 			}

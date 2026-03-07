@@ -9,8 +9,7 @@ import (
 
 func TestDialTLSConfigOpt(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
-		tlscfg := &tls.Config{} //nolint:gosec // not relevant for this test case
-
+		tlscfg := &tls.Config{}
 		rcl, err := NewClient(DialTLSConfig(tlscfg))
 		if err != nil {
 			t.Fatalf("unable to create client: %s", err)
@@ -28,8 +27,7 @@ func TestDialTLSConfigOpt(t *testing.T) {
 
 	t.Run("CustomHTTPClient", func(t *testing.T) {
 		httpcl := &http.Client{}
-		tlscfg := &tls.Config{} //nolint:gosec // not relevant for this test case
-
+		tlscfg := &tls.Config{}
 		rcl, err := NewClient(
 			HTTPClient(httpcl),
 			DialTLSConfig(tlscfg),
@@ -51,8 +49,7 @@ func TestDialTLSConfigOpt(t *testing.T) {
 	t.Run("CustomHTTPTransport", func(t *testing.T) {
 		httptr := &http.Transport{}
 		httpcl := &http.Client{Transport: httptr}
-		tlscfg := &tls.Config{} //nolint:gosec // not relevant for this test case
-
+		tlscfg := &tls.Config{}
 		rcl, err := NewClient(
 			HTTPClient(httpcl),
 			DialTLSConfig(tlscfg),
@@ -75,8 +72,7 @@ func TestDialTLSConfigOpt(t *testing.T) {
 		dialFn := func(_, _ string) (net.Conn, error) { return nil, nil }
 		httptr := &http.Transport{Dial: dialFn}
 		httpcl := &http.Client{Transport: httptr}
-		tlscfg := &tls.Config{} //nolint:gosec // not relevant for this test case
-
+		tlscfg := &tls.Config{}
 		_, err := NewClient(
 			HTTPClient(httpcl),
 			DialTLSConfig(tlscfg),

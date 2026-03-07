@@ -414,7 +414,7 @@ func main() {
 
 	{ // first parse all enums for use in definitions
 		path := filepath.Join(dir, enums)
-		f, err := os.ReadFile(path) //nolint:gosec // reading known definitions directory
+		f, err := os.ReadFile(path)
 		if err != nil {
 			die("unable to read %s: %v", path, err)
 		}
@@ -426,7 +426,7 @@ func main() {
 			continue
 		}
 		path := filepath.Join(dir, ent.Name())
-		f, err := os.ReadFile(path) //nolint:gosec // reading known definitions directory
+		f, err := os.ReadFile(path)
 		if err != nil {
 			die("unable to read %s: %v", path, err)
 		}

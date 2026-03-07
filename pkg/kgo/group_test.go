@@ -181,7 +181,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		opts = append(opts, InstanceID(myInstanceID))
 	}
 	if c.enable848 {
-		ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true) //nolint:revive,staticcheck // intentional string key for beta opt-in
+		ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
 		opts = append(opts, WithContext(ctx848))
 	}
 	if testChaos {

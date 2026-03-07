@@ -15,7 +15,7 @@ DescribeLogDirsResponse =>
   // The error code, or 0 if there was no error.
   ErrorCode: int16 // v3+
   // Dirs pairs log directories with the topics and partitions that are
-  // stored in those directores.
+  // stored in those directories.
   Dirs: [=>]
     // ErrorCode is the error code returned for describing log dirs.
     //

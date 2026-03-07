@@ -98,7 +98,6 @@ type (
 		maxTimestampSeg int // segment index, -1 if none
 		maxTimestampIdx int // index within that segment's batchMeta
 
-		rf        int8
 		leader    *broker
 		followers followers
 
@@ -418,7 +417,7 @@ func (pd *partData) findBatchMeta(target int64, field func(*batchMeta) int64) (s
 // segIdx, metaIdx: position of the found batch within pd.segments
 // found: if the offset was found
 // atEnd: if true, the requested offset is at or past the HWM - "requesting at the end, wait"
-func (pd *partData) searchOffset(o int64) (segIdx int, metaIdx int, found bool, atEnd bool) {
+func (pd *partData) searchOffset(o int64) (segIdx, metaIdx int, found, atEnd bool) {
 	if o < pd.logStartOffset || o > pd.highWatermark {
 		return 0, 0, false, false
 	}
@@ -668,6 +667,7 @@ func validateBrokerConfig(k string, v *string) bool {
 			if _, err := strconv.ParseInt(*v, 10, 64); err != nil {
 				return false
 			}
+		default: // Boolean, String, List, etc. accept any string value
 		}
 	}
 	return true
@@ -957,7 +957,7 @@ func forEachBatchRecord(batch kmsg.RecordBatch, cb func(kmsg.Record) error) erro
 	return nil
 }
 
-// BatchRecord returns the raw kmsg.Record's within a record batch, or an error
+// BatchRecords returns the raw kmsg.Record's within a record batch, or an error
 // if they could not be processed.
 func BatchRecords(b kmsg.RecordBatch) ([]kmsg.Record, error) {
 	var rs []kmsg.Record
@@ -1102,10 +1102,8 @@ func (c *Cluster) compact(pd *partData, topic string) {
 				return nil
 			}
 
-			k := string(rec.Key)
-
 			// Drop superseded records (a later record has the same key).
-			if keyOffsets[k] > absOffset {
+			if keyOffsets[string(rec.Key)] > absOffset {
 				return nil
 			}
 

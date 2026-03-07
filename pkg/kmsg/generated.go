@@ -5242,7 +5242,7 @@ type FetchResponseTopicPartition struct {
 	// LastStableOffset is the offset at which all prior offsets have
 	// been "decided". Non transactional records are always decided
 	// immediately, but transactional records are only decided once
-	// they are commited or aborted.
+	// they are committed or aborted.
 	//
 	// The LastStableOffset will always be at or under the HighWatermark.
 	//
@@ -16516,7 +16516,8 @@ type ListGroupsRequest struct {
 	// StatesFilter, proposed in KIP-518 and introduced in Kafka 2.6.0,
 	// allows filtering groups by state, where a state is any of
 	// "Preparing", "PreparingRebalance", "CompletingRebalance", "Stable",
-	// "Dead", or "Empty". If empty, all groups are returned.
+	// "Dead", "Empty", "Assigning", "Reconciling", or "NotReady".
+	// If empty, all groups are returned.
 	StatesFilter []string // v4+
 
 	// TypesFilter, part of KIP-848, filters the types of groups we want
@@ -28408,7 +28409,7 @@ type DescribeLogDirsResponse struct {
 	ErrorCode int16 // v3+
 
 	// Dirs pairs log directories with the topics and partitions that are
-	// stored in those directores.
+	// stored in those directories.
 	Dirs []DescribeLogDirsResponseDir
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -38994,7 +38995,7 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 						v := v.LeaderEpoch
 						dst = kbin.AppendInt32(dst, v)
 					}
-					{
+					if version >= 0 && version <= 0 {
 						v := v.PreferredSuccessors
 						if isFlexible {
 							dst = kbin.AppendCompactArrayLen(dst, len(v))
@@ -39185,7 +39186,7 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 						v := b.Int32()
 						s.LeaderEpoch = v
 					}
-					{
+					if version >= 0 && version <= 0 {
 						v := s.PreferredSuccessors
 						a := v
 						var l int32
@@ -40761,7 +40762,7 @@ type AlterPartitionRequestTopicPartitionNewEpochISR struct {
 	// The broker's epoch; -1 if the epoch check is not supported.
 	//
 	// This field has a default of -1.
-	BrokerEpoch int32
+	BrokerEpoch int64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
@@ -40961,7 +40962,7 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.BrokerEpoch
-								dst = kbin.AppendInt32(dst, v)
+								dst = kbin.AppendInt64(dst, v)
 							}
 							if isFlexible {
 								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -41137,7 +41138,7 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 								s.BrokerID = v
 							}
 							{
-								v := b.Int32()
+								v := b.Int64()
 								s.BrokerEpoch = v
 							}
 							if isFlexible {
@@ -41848,7 +41849,7 @@ type UpdateFeaturesResponse struct {
 	ErrorMessage *string
 
 	// The results for each feature update request.
-	Results []UpdateFeaturesResponseResult
+	Results []UpdateFeaturesResponseResult // v0-v1
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
@@ -41886,7 +41887,7 @@ func (v *UpdateFeaturesResponse) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendNullableString(dst, v)
 		}
 	}
-	{
+	if version >= 0 && version <= 1 {
 		v := v.Results
 		if isFlexible {
 			dst = kbin.AppendCompactArrayLen(dst, len(v))
@@ -41969,7 +41970,7 @@ func (v *UpdateFeaturesResponse) readFrom(src []byte, unsafe bool) error {
 		}
 		s.ErrorMessage = v
 	}
-	{
+	if version >= 0 && version <= 1 {
 		v := s.Results
 		a := v
 		var l int32
@@ -45825,7 +45826,7 @@ type DescribeTransactionsResponseTransactionState struct {
 	// NOT_COORDINATOR is returned if the broker receiving this transactional
 	// ID does not own the ID.
 	//
-	// COORDINATOR_LOAD_IN_PROGRESS is returned if the coordiantor is laoding.
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the coordinator is loading.
 	//
 	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is being shutdown.
 	//
@@ -51218,7 +51219,7 @@ func NewDescribeTopicPartitionsRequest() DescribeTopicPartitionsRequest {
 
 type DescribeTopicPartitionsResponseTopicPartition struct {
 	// The partition error, or 0 if there is no error.
-	ErrorCode int32
+	ErrorCode int16
 
 	// The partition this is a response for.
 	Partition int32
@@ -51266,7 +51267,7 @@ func NewDescribeTopicPartitionsResponseTopicPartition() DescribeTopicPartitionsR
 
 type DescribeTopicPartitionsResponseTopic struct {
 	// The topic error, or 0 if there is no error.
-	ErrorCode int32
+	ErrorCode int16
 
 	// The topic name.
 	Topic *string
@@ -51381,7 +51382,7 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.ErrorCode
-				dst = kbin.AppendInt32(dst, v)
+				dst = kbin.AppendInt16(dst, v)
 			}
 			{
 				v := v.Topic
@@ -51410,7 +51411,7 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 					v := &v[i]
 					{
 						v := v.ErrorCode
-						dst = kbin.AppendInt32(dst, v)
+						dst = kbin.AppendInt16(dst, v)
 					}
 					{
 						v := v.Partition
@@ -51572,7 +51573,7 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 			v.Default()
 			s := v
 			{
-				v := b.Int32()
+				v := b.Int16()
 				s.ErrorCode = v
 			}
 			{
@@ -51621,7 +51622,7 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 					v.Default()
 					s := v
 					{
-						v := b.Int32()
+						v := b.Int16()
 						s.ErrorCode = v
 					}
 					{
@@ -53585,7 +53586,7 @@ func (v *ShareFetchRequest) AppendTo(dst []byte) []byte {
 						v := v.Partition
 						dst = kbin.AppendInt32(dst, v)
 					}
-					{
+					if version >= 0 && version <= 0 {
 						v := v.PartitionMaxBytes
 						dst = kbin.AppendInt32(dst, v)
 					}
@@ -53796,7 +53797,7 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 						v := b.Int32()
 						s.Partition = v
 					}
-					{
+					if version >= 0 && version <= 0 {
 						v := b.Int32()
 						s.PartitionMaxBytes = v
 					}
@@ -55632,7 +55633,7 @@ type AddRaftVoterRequestListener struct {
 	Host string
 
 	// The port.
-	Port int16
+	Port uint16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
@@ -55755,7 +55756,7 @@ func (v *AddRaftVoterRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Port
-				dst = kbin.AppendInt16(dst, v)
+				dst = kbin.AppendUint16(dst, v)
 			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -55870,7 +55871,7 @@ func (v *AddRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 				s.Host = v
 			}
 			{
-				v := b.Int16()
+				v := b.Uint16()
 				s.Port = v
 			}
 			if isFlexible {
@@ -56298,7 +56299,7 @@ type UpdateRaftVoterRequestListener struct {
 	Host string
 
 	// The port.
-	Port int16
+	Port uint16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
@@ -56441,7 +56442,7 @@ func (v *UpdateRaftVoterRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Port
-				dst = kbin.AppendInt16(dst, v)
+				dst = kbin.AppendUint16(dst, v)
 			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -56571,7 +56572,7 @@ func (v *UpdateRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 				s.Host = v
 			}
 			{
-				v := b.Int16()
+				v := b.Uint16()
 				s.Port = v
 			}
 			if isFlexible {

@@ -36,13 +36,12 @@ func (c *Cluster) handleIncrementalAlterConfigs(creq *clientReq) (kmsg.Response,
 		return nil, err
 	}
 
-	doner := func(n string, t kmsg.ConfigResourceType, errCode int16) *kmsg.IncrementalAlterConfigsResponseResource {
+	doner := func(n string, t kmsg.ConfigResourceType, errCode int16) {
 		st := kmsg.NewIncrementalAlterConfigsResponseResource()
 		st.ResourceName = n
 		st.ResourceType = t
 		st.ErrorCode = errCode
 		resp.Resources = append(resp.Resources, st)
-		return &resp.Resources[len(resp.Resources)-1]
 	}
 
 outer:
@@ -54,11 +53,9 @@ outer:
 				doner(rr.ResourceName, rr.ResourceType, kerr.ClusterAuthorizationFailed.Code)
 				continue outer
 			}
-			id := int32(-1)
 			if rr.ResourceName != "" {
 				iid, err := strconv.Atoi(rr.ResourceName)
-				id = int32(iid)
-				if err != nil || id != b.node {
+				if err != nil || int32(iid) != b.node {
 					doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
 					continue outer
 				}

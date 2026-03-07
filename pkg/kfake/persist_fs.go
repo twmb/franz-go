@@ -293,7 +293,7 @@ func (f *memFile) Sync() error {
 	return nil
 }
 
-func (f *memFile) Close() error { return nil }
+func (*memFile) Close() error { return nil }
 
 // memDirEntry implements os.DirEntry for memFS.
 type memDirEntry struct {
@@ -302,9 +302,9 @@ type memDirEntry struct {
 	size  int64
 }
 
-func (e memDirEntry) Name() string      { return e.name }
-func (e memDirEntry) IsDir() bool       { return e.isDir }
-func (e memDirEntry) Type() os.FileMode { return 0 }
+func (e memDirEntry) Name() string    { return e.name }
+func (e memDirEntry) IsDir() bool     { return e.isDir }
+func (memDirEntry) Type() os.FileMode { return 0 }
 func (e memDirEntry) Info() (os.FileInfo, error) {
 	return memFileInfo{name: e.name, isDir: e.isDir, size: e.size}, nil
 }
@@ -316,9 +316,9 @@ type memFileInfo struct {
 	isDir bool
 }
 
-func (i memFileInfo) Name() string       { return i.name }
-func (i memFileInfo) Size() int64        { return i.size }
-func (i memFileInfo) Mode() os.FileMode  { return 0644 }
-func (i memFileInfo) ModTime() time.Time { return time.Time{} }
-func (i memFileInfo) IsDir() bool        { return i.isDir }
-func (i memFileInfo) Sys() any           { return nil }
+func (i memFileInfo) Name() string     { return i.name }
+func (i memFileInfo) Size() int64      { return i.size }
+func (memFileInfo) Mode() os.FileMode  { return 0o644 }
+func (memFileInfo) ModTime() time.Time { return time.Time{} }
+func (i memFileInfo) IsDir() bool      { return i.isDir }
+func (memFileInfo) Sys() any           { return nil }

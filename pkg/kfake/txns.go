@@ -408,12 +408,11 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 	// KIP-890 Part 2: For v5+ requests, implicitly start the transaction
 	// if not already started. For v0-4, require transaction to be active.
 	if !pidinf.inTx {
-		if req.Version >= 5 {
-			pidinf.maybeStart()
-		} else {
+		if req.Version < 5 {
 			doneall(kerr.InvalidTxnState.Code)
 			return resp
 		}
+		pidinf.maybeStart()
 	}
 
 	// Check if group exists. For generation >= 0, return
@@ -451,12 +450,11 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 	// KIP-890: For v5+ requests, implicitly add the group to the transaction
 	// if it's not already there. This allows clients to skip AddOffsetsToTxn.
 	if !groupInTx {
-		if req.Version >= 5 {
-			pidinf.txGroups = append(pidinf.txGroups, req.Group)
-		} else {
+		if req.Version < 5 {
 			doneall(kerr.InvalidTxnState.Code)
 			return resp
 		}
+		pidinf.txGroups = append(pidinf.txGroups, req.Group)
 	}
 
 	// Store pending offset commits; will be actually mirrored into

@@ -42,11 +42,11 @@ type (
 	}
 )
 
-func (o serdeOpt) serdeOrEncodingOpt() { /* satisfy interface */ }
-func (o serdeOpt) apply(s *Serde)      { o.fn(s) }
+func (serdeOpt) serdeOrEncodingOpt() { /* satisfy interface */ }
+func (o serdeOpt) apply(s *Serde)    { o.fn(s) }
 
-func (o encodingOpt) serdeOrEncodingOpt() { /* satisfy interface */ }
-func (o encodingOpt) apply(t *tserde)     { o.fn(t) }
+func (encodingOpt) serdeOrEncodingOpt() { /* satisfy interface */ }
+func (o encodingOpt) apply(t *tserde)   { o.fn(t) }
 
 // EncodeFn allows Serde to encode a value.
 func EncodeFn(fn func(any) ([]byte, error)) EncodingOpt {

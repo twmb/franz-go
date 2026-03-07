@@ -55,16 +55,23 @@ func (a *acl) matchesOp(op kmsg.ACLOperation) bool {
 	// Implied permissions only for ALLOW:
 	// DESCRIBE implied by READ, WRITE, DELETE, ALTER
 	// DESCRIBE_CONFIGS implied by ALTER_CONFIGS
-	if a.permission == kmsg.ACLPermissionTypeAllow {
-		switch op {
-		case kmsg.ACLOperationDescribe:
-			switch a.operation {
-			case kmsg.ACLOperationRead, kmsg.ACLOperationWrite, kmsg.ACLOperationDelete, kmsg.ACLOperationAlter:
-				return true
-			}
-		case kmsg.ACLOperationDescribeConfigs:
-			return a.operation == kmsg.ACLOperationAlterConfigs
+	// Implied permissions only apply to ALLOW ACLs.
+	if a.permission != kmsg.ACLPermissionTypeAllow {
+		return false
+	}
+	// KIP-253: Describe is implied by Read, Write, Delete, Alter.
+	// DescribeConfigs is implied by AlterConfigs. No other ops have
+	// implied permissions.
+	switch op {
+	case kmsg.ACLOperationDescribe:
+		switch a.operation {
+		case kmsg.ACLOperationRead, kmsg.ACLOperationWrite, kmsg.ACLOperationDelete, kmsg.ACLOperationAlter:
+			return true
+		default: // no other ops imply Describe
 		}
+	case kmsg.ACLOperationDescribeConfigs:
+		return a.operation == kmsg.ACLOperationAlterConfigs
+	default: // only Describe and DescribeConfigs have implied permissions
 	}
 	return false
 }
