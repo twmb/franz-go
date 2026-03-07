@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 )
 
 type metawait struct {
-	mu         sync.Mutex
+	mu         xsync.Mutex
 	c          *sync.Cond
 	lastUpdate time.Time
 }
