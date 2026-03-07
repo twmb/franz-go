@@ -195,6 +195,53 @@ func TestIssue769(t *testing.T) {
 	}
 }
 
+func TestIssueProduceSyncManualPartitionNegativeDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	topic, cleanup := tmpTopicPartitions(t, 1)
+	defer cleanup()
+
+	cl, _ := newTestClient(
+		UnknownTopicRetries(-1),
+		RecordPartitioner(ManualPartitioner()),
+		ProducerLinger(50*time.Millisecond),
+	)
+	defer cl.Close()
+
+	warmup := cl.ProduceSync(context.Background(), &Record{
+		Topic:     topic,
+		Partition: 0,
+		Value:     []byte("warmup"),
+	})
+	if err := warmup.FirstErr(); err != nil {
+		t.Fatalf("warmup produce failed: %v", err)
+	}
+
+	var recovered any
+	var err error
+	func() {
+		defer func() {
+			recovered = recover()
+		}()
+		res := cl.ProduceSync(context.Background(), &Record{
+			Topic:     topic,
+			Partition: -1,
+			Value:     []byte("bad"),
+		})
+		err = res.FirstErr()
+	}()
+
+	if recovered != nil {
+		t.Fatalf("ProduceSync panicked for an invalid partition: %v", recovered)
+	}
+	if err == nil {
+		t.Fatal("expected produce error for invalid manual partition, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid record partitioning choice") {
+		t.Fatalf("unexpected error for invalid manual partition: %v", err)
+	}
+}
+
 func TestIssue831(t *testing.T) {
 	t.Parallel()
 
