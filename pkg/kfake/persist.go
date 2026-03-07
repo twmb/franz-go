@@ -396,6 +396,9 @@ type (
 		Epoch    int32   `json:"e,omitempty"`
 		Metadata *string `json:"m,omitempty"`
 
+		// For commit entries: unix millis of last commit time (KIP-211)
+		LastCommit *int64 `json:"lc,omitempty"`
+
 		// For meta entries (classic groups)
 		GroupType  string `json:"typ,omitempty"`
 		ProtoType  string `json:"pt,omitempty"`
@@ -1630,6 +1633,9 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 			offset:      entry.Offset,
 			leaderEpoch: entry.Epoch,
 			metadata:    entry.Metadata,
+		}
+		if entry.LastCommit != nil {
+			oc.lastCommit = time.UnixMilli(*entry.LastCommit)
 		}
 		g.waitControl(func() {
 			g.commits.set(ck.topic, ck.part, oc)

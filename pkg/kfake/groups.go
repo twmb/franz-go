@@ -15,12 +15,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TODO offset expiration: v5+ uses broker config offsets.retention.minutes
-// (KIP-211), v0-4 uses request-provided RetentionTimeMillis (or broker
-// default if <= 0). Expired offsets should be pruned, and empty groups
-// with no remaining offsets should be auto-deleted.
-//      we need lastCommit, and need to better prune empty groups
-
 type (
 	groups struct {
 		c  *Cluster
@@ -33,7 +27,8 @@ type (
 		name string
 		typ  string
 
-		state groupState
+		state   groupState
+		emptyAt time.Time // when classic group entered Empty state (for offset expiration)
 
 		leader        string
 		members       map[string]*groupMember
@@ -124,6 +119,7 @@ type (
 		offset      int64
 		leaderEpoch int32
 		metadata    *string
+		lastCommit  time.Time
 	}
 
 	// topicMetaSnap is a snapshot of topic metadata taken in Cluster.run
@@ -690,7 +686,7 @@ func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 	// preparingRebalance, completingRebalance, stable:
 	//   * if consumer, delete everything not subscribed to
 	//   * if not consumer, delete nothing, error with non_empty_group
-	subTopics := make(map[string]struct{})
+	var subTopics map[string]struct{}
 	switch g.state {
 	default:
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
@@ -701,24 +697,7 @@ func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 			resp.ErrorCode = kerr.NonEmptyGroup.Code
 			return resp
 		}
-		for _, m := range []map[string]*groupMember{
-			g.members,
-			g.pending,
-		} {
-			for _, m := range m {
-				if m.join == nil {
-					continue
-				}
-				for _, proto := range m.join.Protocols {
-					var m kmsg.ConsumerMemberMetadata
-					if err := m.ReadFrom(proto.Metadata); err == nil {
-						for _, topic := range m.Topics {
-							subTopics[topic] = struct{}{}
-						}
-					}
-				}
-			}
-		}
+		subTopics = g.classicSubscribedTopics()
 	}
 
 	for _, t := range req.Topics {
@@ -727,13 +706,7 @@ func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 				donep(t.Topic, p.Partition, kerr.GroupSubscribedToTopic.Code)
 				continue
 			}
-			g.commits.delp(t.Topic, p.Partition)
-			g.c.persistGroupEntry(groupLogEntry{
-				Type:  "delete",
-				Group: g.name,
-				Topic: t.Topic,
-				Part:  p.Partition,
-			})
+			g.deleteCommitAndPersist(t.Topic, p.Partition)
 			donep(t.Topic, p.Partition, 0)
 		}
 	}
@@ -1407,6 +1380,7 @@ func (g *group) completeRebalance() {
 	}
 	if len(g.members) == 0 {
 		g.state = groupEmpty
+		g.emptyAt = time.Now()
 		g.persistClassicMeta()
 		return
 	}
@@ -2916,7 +2890,7 @@ func (g *group) classicMetaEntry() groupLogEntry {
 func (g *group) persistClassicMeta() { g.c.persistGroupEntry(g.classicMetaEntry()) }
 
 func (g *group) commitEntry(topic string, part int32, oc offsetCommit) groupLogEntry {
-	return groupLogEntry{
+	entry := groupLogEntry{
 		Type:     "commit",
 		Group:    g.name,
 		Topic:    topic,
@@ -2925,11 +2899,152 @@ func (g *group) commitEntry(topic string, part int32, oc offsetCommit) groupLogE
 		Epoch:    oc.leaderEpoch,
 		Metadata: oc.metadata,
 	}
+	if !oc.lastCommit.IsZero() {
+		ms := oc.lastCommit.UnixMilli()
+		entry.LastCommit = &ms
+	}
+	return entry
 }
 
 func (g *group) commitAndPersist(topic string, part int32, oc offsetCommit) {
+	oc.lastCommit = time.Now()
 	g.commits.set(topic, part, oc)
 	g.c.persistGroupEntry(g.commitEntry(topic, part, oc))
+}
+
+func (g *group) deleteCommitAndPersist(topic string, part int32) {
+	g.commits.delp(topic, part)
+	g.c.persistGroupEntry(groupLogEntry{
+		Type:  "delete",
+		Group: g.name,
+		Topic: topic,
+		Part:  part,
+	})
+}
+
+// classicSubscribedTopics returns the set of topics subscribed by any
+// member of a classic consumer group (from join protocol metadata).
+func (g *group) classicSubscribedTopics() map[string]struct{} {
+	sub := make(map[string]struct{})
+	for _, ms := range []map[string]*groupMember{g.members, g.pending} {
+		for _, m := range ms {
+			if m.join == nil {
+				continue
+			}
+			for _, proto := range m.join.Protocols {
+				var meta kmsg.ConsumerMemberMetadata
+				if err := meta.ReadFrom(proto.Metadata); err == nil {
+					for _, topic := range meta.Topics {
+						sub[topic] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+	return sub
+}
+
+// expireOffsets removes committed offsets that have exceeded the retention
+// period (KIP-211). Returns true if all offsets expired and the group can
+// be deleted (no members, no pending txn offsets).
+//
+// Must be called from within the group's manage goroutine.
+func (g *group) expireOffsets(retentionMs int64, hasUnstableOffsets bool) bool {
+	subscribed := g.offsetExpirationFilter()
+	if subscribed == nil {
+		return false // no expiration applies in this state
+	}
+
+	now := time.Now()
+	retention := time.Duration(retentionMs) * time.Millisecond
+
+	// Collect expired offsets. We can't delete during iteration since
+	// delp may remove the inner map.
+	type tp struct {
+		t string
+		p int32
+	}
+	var expired []tp
+	g.commits.each(func(topic string, part int32, oc *offsetCommit) {
+		if _, ok := subscribed[topic]; ok {
+			return // subscribed - skip
+		}
+		if oc.lastCommit.IsZero() {
+			return // no timestamp (pre-KIP-211 data) - skip
+		}
+		base := oc.lastCommit
+		// For empty classic groups with protocolType, use max(emptyAt, commitTimestamp)
+		if g.protocolType != "" && g.state == groupEmpty && g.emptyAt.After(base) {
+			base = g.emptyAt
+		}
+		if now.Sub(base) >= retention {
+			expired = append(expired, tp{topic, part})
+		}
+	})
+
+	for _, e := range expired {
+		g.deleteCommitAndPersist(e.t, e.p)
+	}
+
+	if hasUnstableOffsets || len(g.commits) > 0 {
+		return false
+	}
+	if g.typ == "consumer" {
+		return g.activeConsumerCount() == 0
+	}
+	return g.state == groupEmpty
+}
+
+// expireAllTopics is a non-nil empty sentinel for offsetExpirationFilter:
+// no topics are subscribed, so all are eligible for expiration.
+var expireAllTopics = map[string]struct{}{}
+
+// offsetExpirationFilter returns the set of subscribed topics whose
+// offsets should NOT be expired, or nil if no expiration applies.
+// A non-nil empty map means all topics are eligible for expiration.
+//
+// Expiration conditions per Kafka (KIP-211):
+//   - Simple group (no protocolType): all topics, any state
+//   - Classic with protocolType, Empty: all topics
+//   - Classic consumer, Stable: unsubscribed topics only
+//   - Classic with protocolType, other states: no expiration
+//   - 848 consumer: unsubscribed topics, any state
+func (g *group) offsetExpirationFilter() map[string]struct{} {
+	switch g.typ {
+	case "consumer":
+		// 848: expire unsubscribed topics in any state
+		var sub map[string]struct{}
+		for _, m := range g.consumerMembers {
+			if m.memberEpoch == -2 {
+				continue
+			}
+			for _, t := range m.subscribedTopics {
+				if sub == nil {
+					sub = make(map[string]struct{})
+				}
+				sub[t] = struct{}{}
+			}
+		}
+		if sub == nil {
+			return expireAllTopics
+		}
+		return sub
+
+	default:
+		// Classic group
+		if g.protocolType == "" {
+			return expireAllTopics // simple group - expire all
+		}
+		switch g.state {
+		case groupEmpty:
+			return expireAllTopics
+		case groupStable:
+			if g.protocolType == "consumer" {
+				return g.classicSubscribedTopics()
+			}
+		}
+		return nil // no expiration in this state
+	}
 }
 
 // staticMemberEntry builds a static member log entry. Empty memberID
@@ -3313,6 +3428,7 @@ func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGro
 	}
 	if len(g.members) == 0 {
 		g.state = groupEmpty
+		g.emptyAt = time.Now()
 		g.leader = ""
 	}
 }

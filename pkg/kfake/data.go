@@ -725,6 +725,9 @@ var validBrokerConfigs = map[string]string{
 	"log.roll.ms":                               "segment.ms",
 	"message.max.bytes":                         "max.message.bytes",
 	"min.insync.replicas":                       "min.insync.replicas",
+	"offsets.retention.minutes":                 "",
+	"offset.retention.ms":                       "",
+	"offsets.retention.check.interval.ms":       "",
 	"sasl.enabled.mechanisms":                   "",
 	"state.log.compact.bytes":                   "",
 	"super.users":                               "",
@@ -781,6 +784,8 @@ var configDefaults = map[string]string{
 	"log.retention.bytes":                       "-1",
 	"log.retention.ms":                          "604800000",
 	"message.max.bytes":                         strconv.Itoa(defMaxMessageBytes),
+	"offsets.retention.minutes":                 "10080",
+	"offsets.retention.check.interval.ms":       "600000",
 }
 
 // configTypes maps config names to their data types for DescribeConfigs v3+.
@@ -809,6 +814,9 @@ var configTypes = map[string]kmsg.ConfigType{
 	"message.max.bytes":                         kmsg.ConfigTypeInt,
 	"message.timestamp.type":                    kmsg.ConfigTypeString,
 	"min.insync.replicas":                       kmsg.ConfigTypeInt,
+	"offset.retention.ms":                       kmsg.ConfigTypeLong,
+	"offsets.retention.minutes":                 kmsg.ConfigTypeInt,
+	"offsets.retention.check.interval.ms":       kmsg.ConfigTypeLong,
 	"retention.bytes":                           kmsg.ConfigTypeLong,
 	"retention.ms":                              kmsg.ConfigTypeLong,
 	"segment.bytes":                             kmsg.ConfigTypeInt,
@@ -881,6 +889,22 @@ func (c *Cluster) txnIDExpirationMs() int32 {
 
 func (c *Cluster) fetchSessionCacheSlots() int32 {
 	return c.brokerConfigInt("max.incremental.fetch.session.cache.slots", defMaxFetchSessionCacheSlots)
+}
+
+const defOffsetsRetentionMinutes = 10080 // 7 days
+
+func (c *Cluster) offsetsRetentionMs() int64 {
+	// offset.retention.ms takes precedence when present (kfake extension for testing).
+	if v, ok := c.loadBcfgs()["offset.retention.ms"]; ok && v != nil {
+		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
+			return n
+		}
+	}
+	return int64(c.brokerConfigInt("offsets.retention.minutes", defOffsetsRetentionMinutes)) * 60 * 1000
+}
+
+func (c *Cluster) offsetsRetentionCheckIntervalMs() int64 {
+	return int64(c.brokerConfigInt("offsets.retention.check.interval.ms", 600000))
 }
 
 // maxMessageBytes returns the max.message.bytes for a topic, falling back to

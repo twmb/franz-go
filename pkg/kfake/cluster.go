@@ -38,17 +38,18 @@ type (
 		sleeping       map[*clientConn]*bsleep
 		controlSleep   chan sleepChs
 
-		data          data
-		pids          pids
-		groups        groups
-		sasls         sasls
-		acls          clusterACLs
-		bcfgs         atomic.Pointer[map[string]*string]
-		quotas        map[string]quotaEntry
-		telem         map[[16]byte]int32
-		telemNextID   int32
-		fetchSessions fetchSessions
-		compactTicker *time.Ticker
+		data               data
+		pids               pids
+		groups             groups
+		sasls              sasls
+		acls               clusterACLs
+		bcfgs              atomic.Pointer[map[string]*string]
+		quotas             map[string]quotaEntry
+		telem              map[[16]byte]int32
+		telemNextID        int32
+		fetchSessions      fetchSessions
+		compactTicker      *time.Ticker
+		offsetExpireTicker *time.Ticker
 
 		// storageDir is the root directory for segment and index files.
 		// Always set: "/kfake" for in-memory (memFS) or the user's
@@ -387,7 +388,9 @@ func (c *Cluster) run() {
 		if c.compactTicker != nil {
 			c.compactTicker.Stop()
 		}
+		c.offsetExpireTicker.Stop()
 	}()
+	c.offsetExpireTicker = time.NewTicker(time.Duration(c.offsetsRetentionCheckIntervalMs()) * time.Millisecond)
 outer:
 	for {
 		var (
@@ -410,6 +413,10 @@ outer:
 
 		case <-c.compactTickerC():
 			c.compactAll()
+			continue
+
+		case <-c.offsetExpireTicker.C:
+			c.expireGroupOffsets()
 			continue
 
 		case admin := <-c.adminCh:
@@ -1372,5 +1379,29 @@ func (c *Cluster) refreshCompactTicker() {
 	} else if !needsTicker && c.compactTicker != nil {
 		c.compactTicker.Stop()
 		c.compactTicker = nil
+	}
+}
+
+// expireGroupOffsets iterates all groups and expires stale offsets.
+// Groups with all offsets expired and no members are auto-deleted.
+// Must be called from Cluster.run().
+func (c *Cluster) expireGroupOffsets() {
+	retentionMs := c.offsetsRetentionMs()
+	for name, g := range c.groups.gs {
+		unstable := c.pids.hasUnstableOffsets(name)
+		var shouldDelete bool
+		if !g.waitControl(func() {
+			shouldDelete = g.expireOffsets(retentionMs, unstable)
+			if shouldDelete {
+				g.quitOnce()
+			}
+		}) {
+			continue
+		}
+		select {
+		case <-g.quitCh:
+			delete(c.groups.gs, name)
+		default:
+		}
 	}
 }
