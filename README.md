@@ -412,6 +412,7 @@ generation.
 | [KIP-858](https://cwiki.apache.org/confluence/display/KAFKA/KIP-858%3A+Handle+JBOD+broker+disk+failure+in+KRaft) — JBOD in KRaft (protocol) | 3.7 | Supported |
 | [KIP-860](https://cwiki.apache.org/confluence/display/KAFKA/KIP-860%3A+Add+client-provided+option+to+guard+against+replication+factor+change+during+partition+reassignments) - Client side AlterPartitionAssignments RF change guard | 4.1 | Supported (kadm v1.17+) |
 | [KIP-866](https://cwiki.apache.org/confluence/display/KAFKA/KIP-866+ZooKeeper+to+KRaft+Migration) — ZK to Raft RPC changes | 3.4 | Supported |
+| [KIP-881](https://cwiki.apache.org/confluence/display/KAFKA/KIP-881%3A+Rack-aware+Partition+Assignment+for+Kafka+Consumers) — Rack-aware consumer partition assignment | 3.5 | Supported (range & sticky) |
 | [KIP-890](https://cwiki.apache.org/confluence/display/KAFKA/KIP-890%3A+Transactions+Server-Side+Defense) — Transactions server side defense | 3.8, 4.0 | Supported |
 | [KIP-893](https://cwiki.apache.org/confluence/display/KAFKA/KIP-893%3A+The+Kafka+protocol+should+support+nullable+structs) — Nullable structs in the protocol | 3.5 | Supported |
 | [KIP-899](https://cwiki.apache.org/confluence/display/KAFKA/KIP-899%3A+Allow+clients+to+rebootstrap) — Allow clients to rebootstrap | ? | Supported (`UpdateSeedBrokers`) |
@@ -445,4 +446,3 @@ Missing from above but included in librdkafka is:
 - [KIP-421](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=100829515) for dynamic values in configs; librdkafka mentions it does not support it, and neither does franz-go for the same reason (we do not use a config file)
 - [KIP-436](https://cwiki.apache.org/confluence/display/KAFKA/KIP-436%3A+Add+a+metric+indicating+start+time) is about yet another metric
 - [KIP-517](https://cwiki.apache.org/confluence/display/KAFKA/KIP-517%3A+Add+consumer+metrics+to+observe+user+poll+behavior), more metrics
-- [KIP-881](https://cwiki.apache.org/confluence/display/KAFKA/KIP-881%3A+Rack-aware+Partition+Assignment+for+Kafka+Consumers), rack aware rebalancing: probably useful, but the implementation is not clear, and the motivation is confusing with follower fetching and whether to consider replicas while rebalancing
