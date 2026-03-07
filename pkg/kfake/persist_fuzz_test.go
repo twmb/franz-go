@@ -1976,18 +1976,11 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 	// Verify all post-failure batches can be read correctly via readBatchRaw.
 	// If truncation didn't happen, readBatchRaw would read from wrong
 	// positions and return incorrect data.
-	var readCount, failedCount int
+	// pushBatch returns -1 on persist failure and does not add the
+	// batch to the index, so we should have exactly 6 readable batches.
+	var readCount int
 	pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
 		raw, err := c.readBatchRaw(pd, si, m)
-		if m.segPos < 0 {
-			// The failed batch should have segPos=-1 and readBatchRaw
-			// should return an error.
-			if err == nil {
-				t.Fatalf("readBatchRaw offset %d: expected error for segPos=-1", m.firstOffset)
-			}
-			failedCount++
-			return true
-		}
 		if err != nil {
 			t.Fatalf("readBatchRaw offset %d: %v", m.firstOffset, err)
 		}
@@ -1999,8 +1992,5 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 	})
 	if readCount != 6 {
 		t.Fatalf("expected 6 readable batches, got %d", readCount)
-	}
-	if failedCount != 1 {
-		t.Fatalf("expected 1 failed batch, got %d", failedCount)
 	}
 }

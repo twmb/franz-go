@@ -166,10 +166,6 @@ func (b *partBatch) meta(segPos int64) batchMeta {
 	}
 }
 
-func (b *partBatch) pid() (int64, int16) {
-	return b.ProducerID, b.ProducerEpoch
-}
-
 // normalizeTopicName normalizes a topic name for collision detection.
 // Kafka considers topics that differ only in . vs _ as colliding.
 func normalizeTopicName(t string) string {

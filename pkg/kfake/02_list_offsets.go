@@ -37,7 +37,7 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 	}
 
 	tidx := make(map[string]int)
-	donet := func(t string, errCode int16) *kmsg.ListOffsetsResponseTopic {
+	donet := func(t string) *kmsg.ListOffsetsResponseTopic {
 		if i, ok := tidx[t]; ok {
 			return &resp.Topics[i]
 		}
@@ -51,7 +51,7 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 		sp := kmsg.NewListOffsetsResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
-		st := donet(t, 0)
+		st := donet(t)
 		st.Partitions = append(st.Partitions, sp)
 		return &st.Partitions[len(st.Partitions)-1]
 	}

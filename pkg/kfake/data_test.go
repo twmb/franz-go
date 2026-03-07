@@ -44,7 +44,7 @@ func TestValidServerAssignor(t *testing.T) {
 
 // testGroup builds a group with the given assignor and members for
 // testing computeTargetAssignment.
-func testGroup(assignor string, members map[string][]string, snap topicMetaSnap) *group {
+func testGroup(assignor string, members map[string][]string) *group {
 	g := &group{
 		assignorName:    assignor,
 		consumerMembers: make(map[string]*consumerMember, len(members)),
@@ -72,7 +72,7 @@ func TestAssignUniform(t *testing.T) {
 	g := testGroup("uniform", map[string][]string{
 		"m0": {"topicA", "topicB"},
 		"m1": {"topicA", "topicB"},
-	}, snap)
+	})
 	g.computeTargetAssignment(snap)
 
 	// Uniform round-robin: 6 total partitions across 2 members => 3 each.
@@ -100,7 +100,7 @@ func TestAssignRangeTwoMembersTwoTopics(t *testing.T) {
 	g := testGroup("range", map[string][]string{
 		"m0": {"topicA", "topicB"},
 		"m1": {"topicA", "topicB"},
-	}, snap)
+	})
 	g.computeTargetAssignment(snap)
 
 	// Range: topicA [0,1] to m0, [2] to m1; topicB [0,1] to m0, [2] to m1.
@@ -131,7 +131,7 @@ func TestAssignRangeUnevenPartitions(t *testing.T) {
 	g := testGroup("range", map[string][]string{
 		"m0": {"topic"},
 		"m1": {"topic"},
-	}, snap)
+	})
 	g.computeTargetAssignment(snap)
 
 	// 7 partitions, 2 members => m0 gets [0,1,2,3], m1 gets [4,5,6].
@@ -156,7 +156,7 @@ func TestAssignRangeMoreMembersThanPartitions(t *testing.T) {
 		"m0": {"topic"},
 		"m1": {"topic"},
 		"m2": {"topic"},
-	}, snap)
+	})
 	g.computeTargetAssignment(snap)
 
 	// 2 partitions, 3 members => m0 gets [0], m1 gets [1], m2 gets nothing.
@@ -188,7 +188,7 @@ func TestAssignRangeHeterogeneousSubscriptions(t *testing.T) {
 		"m0": {"topicA", "topicB"},
 		"m1": {"topicA"},
 		"m2": {"topicB"},
-	}, snap)
+	})
 	g.computeTargetAssignment(snap)
 
 	// topicA: subscribed by m0, m1 => m0 gets [0,1], m1 gets [2,3]
@@ -224,7 +224,7 @@ func TestAssignUniformStickyOnLeave(t *testing.T) {
 		"m2": {"topic"},
 		"m3": {"topic"},
 		"m4": {"topic"},
-	}, snap)
+	})
 	g.computeTargetAssignment(snap)
 
 	// Record the initial assignment for all members.
@@ -274,7 +274,7 @@ func TestAssignUniformStickyRapidJoinsThenLeave(t *testing.T) {
 		"topic": {id: id, partitions: 31},
 	}
 
-	g := testGroup("uniform", map[string][]string{}, snap)
+	g := testGroup("uniform", map[string][]string{})
 	allMembers := []string{"m0", "m1", "m2", "m3", "m4"}
 
 	// Simulate rapid joins: each member joins and triggers

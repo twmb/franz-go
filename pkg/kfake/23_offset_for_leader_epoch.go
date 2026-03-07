@@ -32,7 +32,7 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 	}
 
 	tidx := make(map[string]int)
-	donet := func(t string, errCode int16) *kmsg.OffsetForLeaderEpochResponseTopic {
+	donet := func(t string) *kmsg.OffsetForLeaderEpochResponseTopic {
 		if i, ok := tidx[t]; ok {
 			return &resp.Topics[i]
 		}
@@ -46,7 +46,7 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 		sp := kmsg.NewOffsetForLeaderEpochResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
-		st := donet(t, 0)
+		st := donet(t)
 		st.Partitions = append(st.Partitions, sp)
 		return &st.Partitions[len(st.Partitions)-1]
 	}
