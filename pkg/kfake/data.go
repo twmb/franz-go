@@ -319,14 +319,37 @@ func (pd *partData) rebuildMaxTimestampMeta() {
 	pd.maxTimestampSeg = -1
 	pd.maxTimestampIdx = -1
 	for si := range pd.segments {
-		for mi := range pd.segments[si].index {
-			m := &pd.segments[si].index[mi]
+		seg := &pd.segments[si]
+		for mi := range seg.index {
+			m := &seg.index[mi]
 			if pd.maxTimestampSeg < 0 || m.maxTimestamp >= pd.maxTimestampBatch().maxTimestamp {
 				pd.maxTimestampSeg = si
 				pd.maxTimestampIdx = mi
 			}
 		}
 	}
+}
+
+// hasBatches returns true if there is at least one batch in any segment.
+func (pd *partData) hasBatches() bool {
+	for i := range pd.segments {
+		if len(pd.segments[i].index) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNBatches returns true if there are at least n batches across all segments.
+func (pd *partData) hasNBatches(n int) bool {
+	count := 0
+	for i := range pd.segments {
+		count += len(pd.segments[i].index)
+		if count >= n {
+			return true
+		}
+	}
+	return false
 }
 
 // totalBatches returns the total number of batches across all segments.
@@ -355,38 +378,37 @@ func (pd *partData) pruneEmptySegments() {
 // eachBatchMeta calls fn for each batchMeta across all segments.
 func (pd *partData) eachBatchMeta(fn func(segIdx, metaIdx int, m *batchMeta) bool) {
 	for si := range pd.segments {
-		for mi := range pd.segments[si].index {
-			if !fn(si, mi, &pd.segments[si].index[mi]) {
+		seg := &pd.segments[si]
+		for mi := range seg.index {
+			if !fn(si, mi, &seg.index[mi]) {
 				return
 			}
 		}
 	}
 }
 
-// batchMetaAt returns the nth batchMeta counting across all segments.
-// O(segments) per call. Callers that use this in sort.Find pay
-// O(log(batches) * segments) total - acceptable for a test tool with
-// typically few segments, but degrades with many small segments.
-func (pd *partData) batchMetaAt(n int) *batchMeta {
-	for i := range pd.segments {
-		if n < len(pd.segments[i].index) {
-			return &pd.segments[i].index[n]
-		}
-		n -= len(pd.segments[i].index)
+// findBatchMeta does a two-level binary search for the first batch where
+// field(batch) >= target. The field must be monotonically non-decreasing
+// across batches (e.g. epoch, maxTimestamp). Returns (-1, -1, nil) if no
+// batch satisfies the condition.
+func (pd *partData) findBatchMeta(target int64, field func(*batchMeta) int64) (segIdx, metaIdx int, meta *batchMeta) {
+	// Level 1: find first segment whose last batch has field >= target.
+	si := sort.Search(len(pd.segments), func(i int) bool {
+		seg := &pd.segments[i]
+		return len(seg.index) > 0 && field(&seg.index[len(seg.index)-1]) >= target
+	})
+	if si >= len(pd.segments) {
+		return -1, -1, nil
 	}
-	return nil
-}
-
-// batchMetaSegAt returns the segment index, index within that segment,
-// and batchMeta for the nth batch counting across all segments.
-func (pd *partData) batchMetaSegAt(n int) (segIdx, metaIdx int, meta *batchMeta) {
-	for i := range pd.segments {
-		if n < len(pd.segments[i].index) {
-			return i, n, &pd.segments[i].index[n]
-		}
-		n -= len(pd.segments[i].index)
+	// Level 2: find first batch in that segment with field >= target.
+	seg := &pd.segments[si]
+	mi := sort.Search(len(seg.index), func(i int) bool {
+		return field(&seg.index[i]) >= target
+	})
+	if mi >= len(seg.index) {
+		return -1, -1, nil
 	}
-	return -1, -1, nil
+	return si, mi, &seg.index[mi]
 }
 
 // searchOffset finds the batch containing offset o in the batchMeta index.
@@ -400,7 +422,7 @@ func (pd *partData) searchOffset(o int64) (segIdx int, metaIdx int, found bool, 
 	if o < pd.logStartOffset || o > pd.highWatermark {
 		return 0, 0, false, false
 	}
-	if len(pd.segments) == 0 || pd.totalBatches() == 0 {
+	if len(pd.segments) == 0 || !pd.hasBatches() {
 		return 0, 0, false, o == pd.logStartOffset
 	}
 
@@ -991,10 +1013,10 @@ func (pd *partData) isBatchAborted(batch *partBatch) bool {
 // compact removes superseded records from a compactable partition.
 // The last batch is treated as the active segment and is never compacted.
 func (c *Cluster) compact(pd *partData, topic string) {
-	total := pd.totalBatches()
-	if total < 2 { // need at least 2 batches: compaction keeps the last batch unconditionally
+	if !pd.hasNBatches(2) { // need at least 2 batches: compaction keeps the last batch unconditionally
 		return
 	}
+	total := pd.totalBatches()
 
 	// Read delete.retention.ms from topic config, falling back to default.
 	deleteRetentionMs := int64(86400000)
@@ -1149,7 +1171,7 @@ func (c *Cluster) compact(pd *partData, topic string) {
 	}
 
 	// Rebuild segments and batchMeta from compacted batches.
-	c.rebuildSegments(pd, topic, kept)
+	c.rebuildSegments(pd, kept)
 
 	// Prune aborted txn entries that are now before logStartOffset.
 	pd.trimAbortedTxns()
@@ -1170,7 +1192,7 @@ func (pd *partData) trimAbortedTxns() {
 // applyRetention advances logStartOffset past batches that are expired by
 // retention.ms or that exceed retention.bytes, then trims them.
 func (c *Cluster) applyRetention(pd *partData, topic string) {
-	if pd.totalBatches() == 0 {
+	if !pd.hasBatches() {
 		return
 	}
 

@@ -215,7 +215,7 @@ func BrokerConfigs(configs map[string]string) Opt {
 	}}
 }
 
-// DataDir enables disk persistence: on Close the cluster snapshots all state
+// DataDir enables disk persistence: the cluster continuously writes state
 // to the given directory, and on NewCluster it reloads persisted state from
 // that directory if it exists. The directory is created if needed.
 func DataDir(dir string) Opt {

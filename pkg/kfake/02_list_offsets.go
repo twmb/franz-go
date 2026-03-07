@@ -1,8 +1,6 @@
 package kfake
 
 import (
-	"sort"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -110,23 +108,11 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 					sp.Timestamp = m.maxTimestamp
 				}
 			default:
-				// Binary search for the first batch whose maxTimestamp >= requested timestamp
-				total := pd.totalBatches()
-				idx, _ := sort.Find(total, func(idx int) int {
-					m := pd.batchMetaAt(idx)
-					switch {
-					case m.maxTimestamp > rp.Timestamp:
-						return -1
-					case m.maxTimestamp == rp.Timestamp:
-						return 0
-					default:
-						return 1
-					}
-				})
-				if idx == total {
+				// Two-level binary search for the first batch whose maxTimestamp >= requested timestamp.
+				segIdx, _, meta := pd.findBatchMeta(rp.Timestamp, func(m *batchMeta) int64 { return m.maxTimestamp })
+				if meta == nil {
 					sp.Offset = -1
 				} else {
-					segIdx, _, meta := pd.batchMetaSegAt(idx)
 					sp.Offset = meta.firstOffset
 					sp.Timestamp = meta.firstTimestamp
 					// Read the full batch to iterate records for precise timestamp

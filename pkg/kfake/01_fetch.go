@@ -159,7 +159,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 				returnEarly = true // NotLeaderForPartition
 				break out
 			}
-			si, mi, ok, atEnd := pd.searchOffset(fp.fetchOffset)
+			segIdx, metaIdx, ok, atEnd := pd.searchOffset(fp.fetchOffset)
 			if atEnd {
 				continue
 			}
@@ -168,11 +168,13 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 				break out
 			}
 			pbytes := 0
-			for segIdx := si; segIdx < len(pd.segments); segIdx++ {
-				seg := &pd.segments[segIdx]
+			// Walk batches starting from the found position (segIdx, metaIdx).
+			// The first segment starts at metaIdx; subsequent segments start at 0.
+			for si := segIdx; si < len(pd.segments); si++ {
+				seg := &pd.segments[si]
 				startIdx := 0
-				if segIdx == si {
-					startIdx = mi
+				if si == segIdx {
+					startIdx = metaIdx
 				}
 				for batchIdx := startIdx; batchIdx < len(seg.index); batchIdx++ {
 					m := &seg.index[batchIdx]
@@ -303,7 +305,7 @@ full:
 		sp.HighWatermark = pd.highWatermark
 		sp.LastStableOffset = pd.lastStableOffset
 		sp.LogStartOffset = pd.logStartOffset
-		si, mi, ok, atEnd := pd.searchOffset(fp.fetchOffset)
+		segIdx, metaIdx, ok, atEnd := pd.searchOffset(fp.fetchOffset)
 		if atEnd {
 			continue
 		}
@@ -314,12 +316,14 @@ full:
 
 		var pbytes, pBatchesAdded int
 		var lastMeta *batchMeta
+		// Walk batches starting from the found position (segIdx, metaIdx).
+		// The first segment starts at metaIdx; subsequent segments start at 0.
 	segments:
-		for segIdx := si; segIdx < len(pd.segments); segIdx++ {
-			seg := &pd.segments[segIdx]
+		for si := segIdx; si < len(pd.segments); si++ {
+			seg := &pd.segments[si]
 			startIdx := 0
-			if segIdx == si {
-				startIdx = mi
+			if si == segIdx {
+				startIdx = metaIdx
 			}
 			for batchIdx := startIdx; batchIdx < len(seg.index); batchIdx++ {
 				m := &seg.index[batchIdx]
@@ -335,7 +339,7 @@ full:
 				batchesAdded++
 				pBatchesAdded++
 				lastMeta = m
-				raw, err := c.readBatchRaw(pd, segIdx, m)
+				raw, err := c.readBatchRaw(pd, si, m)
 				if err != nil {
 					sp.ErrorCode = kerr.UnknownServerError.Code
 					break segments

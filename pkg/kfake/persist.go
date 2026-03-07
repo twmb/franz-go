@@ -74,13 +74,9 @@ func writeEntry(f file, data []byte, syncW bool) error {
 	// length = len(version) + len(data)
 	length := uint32(2 + len(data))
 	binary.LittleEndian.PutUint32(buf[0:4], length)
-	// CRC covers version + data
-	var vbuf [2]byte
-	binary.LittleEndian.PutUint16(vbuf[:], currentPersistVersion)
-	crc := crc32.Update(0, crc32c, vbuf[:])
-	crc = crc32.Update(crc, crc32c, data)
-	binary.LittleEndian.PutUint32(buf[4:8], crc)
+	// CRC covers version + data (buf[8:] = version ++ data)
 	binary.LittleEndian.PutUint16(buf[8:10], currentPersistVersion)
+	binary.LittleEndian.PutUint32(buf[4:8], crc32.Checksum(buf[8:], crc32c))
 
 	_, err := f.Write(buf)
 	*bp = buf[:0]
@@ -121,7 +117,6 @@ func readEntries(raw []byte) (entries []entryData, validBytes int) {
 		entries = append(entries, entryData{
 			version: version,
 			data:    data,
-			pos:     int64(pos),
 		})
 		pos += 4 + 4 + int(length)
 	}
@@ -132,7 +127,6 @@ type (
 	entryData struct {
 		version uint16
 		data    []byte
-		pos     int64 // byte position of this entry within the file
 	}
 
 	persistMeta struct {
@@ -426,6 +420,52 @@ type (
 		Commit  *bool  `json:"commit,omitempty"`
 	}
 )
+
+type (
+	glCommitKey struct {
+		group, topic string
+		part         int32
+	}
+	glStaticKey struct {
+		group, instance string
+	}
+	glReplay struct {
+		metas   map[string][]byte
+		commits map[glCommitKey][]byte
+		statics map[glStaticKey][]byte
+	}
+)
+
+// replayGroupsLog replays append log entries keeping the latest per key.
+// Used by both loadGroupsLog (startup) and compactGroupsLog (live).
+func replayGroupsLog(entries []entryData) glReplay {
+	r := glReplay{
+		metas:   make(map[string][]byte),
+		commits: make(map[glCommitKey][]byte),
+		statics: make(map[glStaticKey][]byte),
+	}
+	for _, e := range entries {
+		var entry groupLogEntry
+		if err := json.Unmarshal(e.data, &entry); err != nil {
+			continue
+		}
+		switch entry.Type {
+		case "commit":
+			r.commits[glCommitKey{entry.Group, entry.Topic, entry.Part}] = e.data
+		case "delete":
+			delete(r.commits, glCommitKey{entry.Group, entry.Topic, entry.Part})
+		case "meta", "meta848":
+			r.metas[entry.Group] = e.data
+		case "static":
+			if entry.MemberID == "" {
+				delete(r.statics, glStaticKey{entry.Group, entry.InstanceID})
+			} else {
+				r.statics[glStaticKey{entry.Group, entry.InstanceID}] = e.data
+			}
+		}
+	}
+	return r
+}
 
 /////////////////////
 // WRITE HELPERS
@@ -736,7 +776,7 @@ func (c *Cluster) savePartition(fsys fs, dir string, topic string, part int32, p
 // rebuildSegments deletes existing segment files for a partition and rewrites
 // them from the given batches, rebuilding pd.segments with batchMeta. Called
 // after compaction changes the batch set. Also resets active file handles.
-func (c *Cluster) rebuildSegments(pd *partData, topic string, batches []*partBatch) {
+func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 	pdir := partDir(c.storageDir, pd.t, pd.p)
 
 	pd.closeAllFiles(false)
@@ -754,7 +794,7 @@ func (c *Cluster) rebuildSegments(pd *partData, topic string, batches []*partBat
 	}
 
 	// Group batches into segments by size
-	segMaxBytes := c.segmentBytes(topic)
+	segMaxBytes := c.segmentBytes(pd.t)
 	type segGroup struct {
 		base    int64
 		batches []*partBatch
@@ -818,41 +858,31 @@ func (c *Cluster) rebuildSegments(pd *partData, topic string, batches []*partBat
 	pd.rebuildMaxTimestampMeta()
 }
 
+// saveGroupsLog writes a compacted groups.log from live group state.
+// Called only at shutdown, where run() is blocked in the admin function
+// and no new persistGroupEntry calls can occur.
 func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
-	// Phase 1: collect entries via waitControl (no lock - holding
-	// groupsLogMu here would deadlock if a group goroutine is
-	// concurrently blocked on persistGroupEntry trying to acquire it).
 	var allEntries []groupLogEntry
-	if c.groups.gs != nil {
-		for _, g := range c.groups.gs {
-			var entries []groupLogEntry
-			g.waitControl(func() {
-				entries = c.collectGroupEntries(g)
-			})
-			allEntries = append(allEntries, entries...)
-		}
+	for _, g := range c.groups.gs {
+		var entries []groupLogEntry
+		g.waitControl(func() {
+			entries = c.collectGroupEntries(g)
+		})
+		allEntries = append(allEntries, entries...)
 	}
 
-	// Phase 2: write compacted entries to a temp file, then atomically
-	// rename over groups.log. We hold groupsLogMu across the entire
-	// phase to prevent a concurrent persistGroupEntry from appending
-	// to the old file between our tmp write and the rename (which
-	// would lose that entry).
-	c.groupsLogMu.Lock()
-	defer c.groupsLogMu.Unlock()
 	path := filepath.Join(dir, "groups.log")
 	tmpPath := path + ".tmp"
 	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 	for _, e := range allEntries {
 		if _, err := appendLogEntry(f, e, c.cfg.syncWrites); err != nil {
-			f.Close()
 			return err
 		}
 	}
-	f.Close()
 	if c.groupsLogFile != nil {
 		c.groupsLogFile.Close()
 		c.groupsLogFile = nil
@@ -902,6 +932,7 @@ func (c *Cluster) savePIDsLog(fsys fs, dir string) error {
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 
 	for _, pidinf := range c.pids.ids {
 		// Write the latest state for each PID
@@ -916,11 +947,9 @@ func (c *Cluster) savePIDsLog(fsys fs, dir string) error {
 			entry.Commit = &pidinf.lastWasCommit
 		}
 		if _, err := appendLogEntry(f, entry, c.cfg.syncWrites); err != nil {
-			f.Close()
 			return err
 		}
 	}
-	f.Close()
 	return fsys.Rename(tmpPath, path)
 }
 
@@ -1007,11 +1036,14 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 	// Load broker configs first (segment configs needed by topics),
 	// then topics (needed by partitions), then partitions (may
 	// detect crash-aborted PIDs).
-	c.crashAbortedPIDs = make(map[int64]struct{})
+	var (
+		crashAbortedMu   sync.Mutex
+		crashAbortedPIDs = make(map[int64]struct{})
+	)
 	if err := errors.Join(
 		c.loadBrokerConfigs(fsys, dir),
 		c.loadTopics(fsys, dir),
-		c.loadPartitions(fsys, dir),
+		c.loadPartitions(fsys, dir, &crashAbortedMu, crashAbortedPIDs),
 	); err != nil {
 		return false, err
 	}
@@ -1021,12 +1053,11 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 	if err := c.loadPIDsLog(fsys, dir); err != nil {
 		return false, err
 	}
-	for pid := range c.crashAbortedPIDs {
+	for pid := range crashAbortedPIDs {
 		if pidinf, ok := c.pids.ids[pid]; ok {
 			pidinf.epoch++
 		}
 	}
-	c.crashAbortedPIDs = nil
 
 	if err := errors.Join(
 		c.loadGroupsLog(fsys, dir),
@@ -1096,15 +1127,14 @@ func (c *Cluster) loadTopics(fsys fs, dir string) error {
 	return nil
 }
 
-func (c *Cluster) loadPartitions(fsys fs, dir string) error {
+func (c *Cluster) loadPartitions(fsys fs, dir string, crashAbortedMu *sync.Mutex, crashAbortedPIDs map[int64]struct{}) error {
 	return c.forEachPartition(func(topic string, part int32, pd *partData) error {
-		return c.loadPartition(fsys, dir, topic, part, pd)
+		return c.loadPartition(fsys, dir, topic, part, pd, crashAbortedMu, crashAbortedPIDs)
 	})
 }
 
-func (c *Cluster) loadPartition(fsys fs, dir, topic string, part int32, pd *partData) error {
+func (c *Cluster) loadPartition(fsys fs, dir, topic string, part int32, pd *partData, crashAbortedMu *sync.Mutex, crashAbortedPIDs map[int64]struct{}) error {
 	pdir := partDir(dir, topic, part)
-	pd.t = topic
 
 	// Try snapshot first
 	snapData, err := fsys.ReadFile(filepath.Join(pdir, "snapshot.json"))
@@ -1144,7 +1174,7 @@ func (c *Cluster) loadPartition(fsys fs, dir, topic string, part int32, pd *part
 	}
 
 	// Full replay - scan all segments
-	return c.loadPartitionFullReplay(pd, segFiles, fsys, pdir)
+	return c.loadPartitionFullReplay(pd, segFiles, fsys, pdir, crashAbortedMu, crashAbortedPIDs)
 }
 
 func snapshotMatchesSegments(snap persistPartSnapshot, segFiles []int64, fsys fs, pdir string) bool {
@@ -1168,19 +1198,22 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	pd.lastStableOffset = snap.LastStableOffset
 	pd.logStartOffset = snap.LogStartOffset
 	pd.epoch = snap.Epoch
-	if int(snap.LeaderNode) < len(c.bs) {
+	if snap.LeaderNode >= 0 && int(snap.LeaderNode) < len(c.bs) {
 		pd.leader = c.bs[snap.LeaderNode]
 	}
 	pd.maxFirstTimestamp = snap.MaxTimestamp
 	pd.createdAt = snap.CreatedAt
 	for i, base := range segFiles {
-		si := segmentInfo{base: base}
-		if i < len(snap.Segments) {
-			si.size = snap.Segments[i].Size
-			si.minEpoch = snap.Segments[i].MinEpoch
-			si.maxEpoch = snap.Segments[i].MaxEpoch
+		ss := snap.Segments[i]
+		pd.segments = append(pd.segments, segmentInfo{
+			base:     base,
+			size:     ss.Size,
+			minEpoch: ss.MinEpoch,
+			maxEpoch: ss.MaxEpoch,
+		})
+		if _, err := c.loadSegmentBatches(pd, fsys, pdir, base); err != nil {
+			return err
 		}
-		pd.segments = append(pd.segments, si)
 	}
 
 	for _, a := range snap.AbortedTxns {
@@ -1189,13 +1222,6 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 			firstOffset: a.FirstOffset,
 			lastOffset:  a.LastOffset,
 		})
-	}
-
-	// Load batchMeta index from segments
-	for _, base := range segFiles {
-		if _, err := c.loadSegmentBatches(pd, fsys, pdir, base); err != nil {
-			return err
-		}
 	}
 	pd.pruneEmptySegments()
 
@@ -1214,8 +1240,7 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	// Validate HWM, LSO, and logStartOffset against actual loaded
 	// batches. A truncated segment could leave fewer batches than the
 	// snapshot expected.
-	total := pd.totalBatches()
-	if total > 0 {
+	if pd.hasBatches() {
 		lastSeg := &pd.segments[len(pd.segments)-1]
 		last := &lastSeg.index[len(lastSeg.index)-1]
 		maxHWM := last.firstOffset + int64(last.lastOffsetDelta) + 1
@@ -1240,14 +1265,11 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	return nil
 }
 
-func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys fs, pdir string) error {
-	for _, base := range segFiles {
-		pd.segments = append(pd.segments, segmentInfo{base: base})
-	}
-
+func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys fs, pdir string, crashAbortedMu *sync.Mutex, crashAbortedPIDs map[int64]struct{}) error {
 	// Load segments, getting full batches for crash recovery txn state.
 	var batches []*partBatch
 	for _, base := range segFiles {
+		pd.segments = append(pd.segments, segmentInfo{base: base})
 		loaded, err := c.loadSegmentBatches(pd, fsys, pdir, base)
 		if err != nil {
 			return err
@@ -1257,8 +1279,7 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 	pd.pruneEmptySegments()
 
 	// Reconstruct partition metadata from batchMeta
-	total := pd.totalBatches()
-	if total > 0 {
+	if pd.hasBatches() {
 		firstSeg := &pd.segments[0]
 		first := &firstSeg.index[0]
 		lastSeg := &pd.segments[len(pd.segments)-1]
@@ -1324,7 +1345,7 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 	// activeTxns had a transaction open when the crash happened. We
 	// treat these as aborted so the LSO is not stuck forever.
 	if len(activeTxns) > 0 {
-		c.crashAbortedPIDsMu.Lock()
+		crashAbortedMu.Lock()
 		for pid, firstOff := range activeTxns {
 			last := firstOff
 			for _, b := range batches {
@@ -1340,9 +1361,9 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 				firstOffset: firstOff,
 				lastOffset:  last,
 			})
-			c.crashAbortedPIDs[pid] = struct{}{}
+			crashAbortedPIDs[pid] = struct{}{}
 		}
-		c.crashAbortedPIDsMu.Unlock()
+		crashAbortedMu.Unlock()
 	}
 
 	// abortedTxns must be sorted by lastOffset for binary search in
@@ -1368,7 +1389,7 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 
 	// Restore createdAt from the first batch. newPartData sets createdAt
 	// to time.Now() but on full replay we want the original creation time.
-	if total > 0 {
+	if pd.hasBatches() {
 		pd.createdAt = time.UnixMilli(pd.segments[0].index[0].firstTimestamp)
 	}
 
@@ -1562,50 +1583,20 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 	}
 	c.groupsLogSize.Store(int64(len(raw)))
 
-	// Replay: latest per key wins
-	type commitKey struct {
-		group, topic string
-		part         int32
-	}
-	commits := make(map[commitKey]groupLogEntry)
-	groupMetas := make(map[string]groupLogEntry)
-	type staticKey struct {
-		group, instance string
-	}
-	statics := make(map[staticKey]groupLogEntry)
-
 	entries, validBytes := readEntries(raw)
 	if validBytes < len(raw) {
 		c.cfg.logger.Logf(LogLevelWarn, "groups.log: discarding %d corrupt trailing bytes", len(raw)-validBytes)
 	}
-	for _, e := range entries {
-		var entry groupLogEntry
-		if err := json.Unmarshal(e.data, &entry); err != nil {
-			c.cfg.logger.Logf(LogLevelWarn, "groups.log: skipping corrupt entry: %v", err)
-			continue
-		}
-		switch entry.Type {
-		case "commit":
-			commits[commitKey{entry.Group, entry.Topic, entry.Part}] = entry
-		case "delete":
-			delete(commits, commitKey{entry.Group, entry.Topic, entry.Part})
-		case "meta", "meta848":
-			groupMetas[entry.Group] = entry
-		case "static":
-			if entry.MemberID == "" {
-				delete(statics, staticKey{entry.Group, entry.InstanceID})
-			} else {
-				statics[staticKey{entry.Group, entry.InstanceID}] = entry
-			}
-		}
-	}
+	r := replayGroupsLog(entries)
 
 	// Initialize groups from replayed state
 	if c.groups.gs == nil {
 		c.groups.gs = make(map[string]*group)
 	}
 	topicSnap := c.snapshotTopicMeta()
-	for name, meta := range groupMetas {
+	for name, data := range r.metas {
+		var meta groupLogEntry
+		json.Unmarshal(data, &meta)
 		g := c.groups.newGroup(name)
 		switch meta.Type {
 		case "meta848":
@@ -1626,7 +1617,9 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 	}
 
 	// Apply commits
-	for ck, entry := range commits {
+	for ck, data := range r.commits {
+		var entry groupLogEntry
+		json.Unmarshal(data, &entry)
 		g, ok := c.groups.gs[ck.group]
 		if !ok {
 			g = c.groups.newGroup(ck.group)
@@ -1644,7 +1637,9 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 	}
 
 	// Apply static members
-	for sk, entry := range statics {
+	for sk, data := range r.statics {
+		var entry groupLogEntry
+		json.Unmarshal(data, &entry)
 		g, ok := c.groups.gs[sk.group]
 		if !ok {
 			continue
@@ -1795,28 +1790,20 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 		active = &pd.segments[len(pd.segments)-1]
 	}
 
-	// Write RecordBatch to segment file.
+	// Write RecordBatch to segment file, then index entry.
 	segPos := active.size
 	bp := encodeBatch(b)
 	defer func() { *bp = (*bp)[:0]; batchPool.Put(bp) }()
 	batchSize := int64(len(*bp))
-	if _, err := pd.activeSegFile.Write(*bp); err != nil {
-		c.cfg.logger.Logf(LogLevelWarn, "persist batch write %s-%d: %v", pd.t, pd.p, err)
-		pd.activeSegFile.Truncate(active.size)
-		pd.activeSegFile.Close()
-		pd.activeSegFile = nil
-		return -1
+	_, segErr := pd.activeSegFile.Write(*bp)
+	if segErr == nil {
+		idx := encodeIndexEntry(b.epoch, b.maxEarlierTimestamp, b.inTx)
+		_, segErr = pd.activeIdxFile.Write(idx[:])
 	}
-
-	// Write index entry.
-	idx := encodeIndexEntry(b.epoch, b.maxEarlierTimestamp, b.inTx)
-	if _, err := pd.activeIdxFile.Write(idx[:]); err != nil {
-		c.cfg.logger.Logf(LogLevelWarn, "persist index write %s-%d: %v", pd.t, pd.p, err)
+	if segErr != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "persist batch %s-%d: %v", pd.t, pd.p, segErr)
 		pd.activeSegFile.Truncate(active.size)
-		pd.activeSegFile.Close()
-		pd.activeSegFile = nil
-		pd.activeIdxFile.Close()
-		pd.activeIdxFile = nil
+		pd.closeActiveFiles(false)
 		return -1
 	}
 
@@ -1837,7 +1824,7 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 // Multiple group manage() goroutines may call this concurrently,
 // so writes are serialized with groupsLogMu.
 func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
-	if !c.persistEnabled() || c.dead.Load() {
+	if !c.persist() || c.dead.Load() {
 		return nil
 	}
 	c.groupsLogMu.Lock()
@@ -1867,7 +1854,7 @@ func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
 // persistPIDEntry appends a PID log entry.
 // Called from txn handlers when dataDir is set.
 func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
-	if !c.persistEnabled() || c.dead.Load() {
+	if !c.persist() || c.dead.Load() {
 		return nil
 	}
 	if c.pidsLogFile == nil {
@@ -1895,7 +1882,7 @@ func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
 // persistState is a shared helper for live-sync state file writes.
 // It calls the given save function and logs on error.
 func (c *Cluster) persistState(name string, fn func(fs, string) error) {
-	if !c.persistEnabled() {
+	if !c.persist() {
 		return
 	}
 	if err := fn(c.fs, c.cfg.dataDir); err != nil {
@@ -1923,13 +1910,77 @@ func (c *Cluster) compactPIDsLog() {
 	}
 }
 
+// compactGroupsLog rewrites groups.log keeping only the latest entry per
+// key. Unlike saveGroupsLog (which collects from live group state via
+// waitControl), this compacts from the file itself under groupsLogMu,
+// ensuring no entries are lost to a race with persistGroupEntry.
 func (c *Cluster) compactGroupsLog() {
 	c.needsGroupsCompact.Store(false)
-	if err := c.saveGroupsLog(c.fs, c.cfg.dataDir); err != nil {
-		c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: %v", err)
+
+	c.groupsLogMu.Lock()
+	defer c.groupsLogMu.Unlock()
+
+	// Close the live append handle so any pending data is flushed
+	// before we read the file.
+	if c.groupsLogFile != nil {
+		if c.cfg.syncWrites {
+			c.groupsLogFile.Sync()
+		}
+		c.groupsLogFile.Close()
+		c.groupsLogFile = nil
+	}
+
+	path := filepath.Join(c.cfg.dataDir, "groups.log")
+	raw, err := c.fs.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: read: %v", err)
+		}
 		return
 	}
-	path := filepath.Join(c.cfg.dataDir, "groups.log")
+
+	entries, _ := readEntries(raw)
+	r := replayGroupsLog(entries)
+
+	// Write compacted entries to tmp, then atomic rename.
+	tmpPath := path + ".tmp"
+	f, err := c.fs.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: create: %v", err)
+		return
+	}
+	defer f.Close()
+	var writeErr error
+	write := func(data []byte) {
+		if writeErr == nil {
+			writeErr = writeEntry(f, data, false)
+		}
+	}
+	for _, data := range r.metas {
+		write(data)
+	}
+	for _, data := range r.statics {
+		write(data)
+	}
+	for _, data := range r.commits {
+		write(data)
+	}
+	if writeErr != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: write: %v", writeErr)
+		c.fs.Remove(tmpPath)
+		return
+	}
+	if c.cfg.syncWrites {
+		if err := f.Sync(); err != nil {
+			c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: sync: %v", err)
+			c.fs.Remove(tmpPath)
+			return
+		}
+	}
+	if err := c.fs.Rename(tmpPath, path); err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: rename: %v", err)
+		return
+	}
 	if info, err := c.fs.Stat(path); err == nil {
 		c.groupsLogSize.Store(info.Size())
 	}

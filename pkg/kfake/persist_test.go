@@ -693,7 +693,6 @@ func TestPersistCRCCorruption(t *testing.T) {
 		if len(records) >= 5 {
 			t.Fatalf("expected fewer than 5 records after corruption, got %d", len(records))
 		}
-		t.Logf("recovered %d of 5 records after corruption (HWM=%d)", len(records), pi.HighWatermark)
 	}
 }
 
@@ -746,8 +745,6 @@ func TestPersistSegmentRollover(t *testing.T) {
 	if segCount < 2 {
 		t.Fatalf("expected multiple segment files with tiny segment size, got %d", segCount)
 	}
-	t.Logf("created %d segment files", segCount)
-
 	// Reopen and verify all records
 	{
 		c, err := kfake.NewCluster(
@@ -1398,8 +1395,6 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 		if lastGeneration < 3 {
 			t.Fatalf("expected generation >= 3 after 3 rebalances, got %d", lastGeneration)
 		}
-		t.Logf("generation before crash: %d", lastGeneration)
-
 		// Crash: don't call c.Close()
 	}
 
@@ -1425,7 +1420,6 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 		if recoveredGen <= lastGeneration {
 			t.Fatalf("expected recovered generation > %d, got %d", lastGeneration, recoveredGen)
 		}
-		t.Logf("recovered generation: %d (was %d)", recoveredGen, lastGeneration)
 	}
 }
 
@@ -1886,7 +1880,6 @@ func readGroupsLogEntries(t *testing.T, path string) []map[string]any {
 		jsonData := raw[pos+10 : end]
 		var entry map[string]any
 		if err := json.Unmarshal(jsonData, &entry); err != nil {
-			t.Logf("skipping unparseable entry: %v", err)
 			pos = end
 			continue
 		}
@@ -2152,8 +2145,6 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 		if savedNbytes <= 0 {
 			t.Fatalf("expected positive nbytes before shutdown, got %d", savedNbytes)
 		}
-		t.Logf("nbytes before shutdown: %d", savedNbytes)
-
 		c.Close()
 	}
 
@@ -2218,7 +2209,6 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 		if pi2.LogStartOffset <= 0 {
 			t.Fatalf("expected logStartOffset > 0 after retention, got %d", pi2.LogStartOffset)
 		}
-		t.Logf("after retention: logStartOffset=%d nbytes=%d (was %d)", pi2.LogStartOffset, pi2.NumBytes, savedNbytes)
 	}
 }
 
@@ -2337,7 +2327,6 @@ func TestPersistSnapshotTruncatedSegment(t *testing.T) {
 		if len(records) == 0 {
 			t.Fatal("expected at least 1 record after truncated segment load")
 		}
-		t.Logf("recovered %d of 10 records, HWM=%d", len(records), pi.HighWatermark)
 	}
 }
 
@@ -3112,7 +3101,7 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Poll once to trigger JoinGroup/SyncGroup.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		cl.PollRecords(ctx, 1)
 		cancel()
 
@@ -3176,8 +3165,6 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 		if errCode == 0 {
 			t.Fatal("expected error code for stale commit, got 0")
 		}
-		t.Logf("offset commit error (expected): %s", kerr.ErrorForCode(errCode))
-
 		// Verify the group is still alive by sending a Heartbeat.
 		// Heartbeat goes through handleHijack - if the group was
 		// killed, handleHijack returns false and the response is
@@ -3195,9 +3182,6 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 		if ec == kerr.GroupIDNotFound {
 			t.Fatal("group was killed after OffsetCommit - the firstJoin bug is present")
 		}
-		// UNKNOWN_MEMBER_ID is expected (the member doesn't exist),
-		// but the group itself is alive.
-		t.Logf("heartbeat error (expected): %s - group is alive", ec)
 	}
 }
 
@@ -3507,12 +3491,10 @@ func TestPersistLogCompactionCrashPIDs(t *testing.T) {
 
 	// Check pids.log size - should have been compacted
 	pidsPath := filepath.Join(dir, "pids.log")
-	info, err := os.Stat(pidsPath)
+	_, err = os.Stat(pidsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("pids.log size after %d txns: %d bytes", nTxns, info.Size())
-
 	// Snapshot for crash simulation
 	crashDir := t.TempDir()
 	copyDir(t, dir, crashDir)

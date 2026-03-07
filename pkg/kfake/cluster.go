@@ -52,7 +52,7 @@ type (
 		// storageDir is the root directory for segment and index files.
 		// Always set: "/kfake" for in-memory (memFS) or the user's
 		// DataDir path for on-disk persistence. State files (topics.json,
-		// groups.log, pids.log, etc.) only write when persistEnabled().
+		// groups.log, pids.log, etc.) only write when persist().
 		storageDir         string
 		fs                 fs
 		groupsLogMu        sync.Mutex
@@ -62,17 +62,8 @@ type (
 		pidsLogSize        atomic.Int64
 		needsGroupsCompact atomic.Bool
 
-		// crashAbortedPIDs collects producer IDs that had in-flight
-		// transactions during a crash. Populated during loadPartitions
-		// (full replay path), consumed after loadPIDsLog to bump
-		// their epochs. Protected by crashAbortedPIDsMu since
-		// loadPartitions runs concurrent goroutines.
-		crashAbortedPIDsMu sync.Mutex
-		crashAbortedPIDs   map[int64]struct{}
-
-		die     chan struct{}
-		dead    atomic.Bool
-		running atomic.Bool
+		die  chan struct{}
+		dead atomic.Bool
 	}
 
 	broker struct {
@@ -99,11 +90,11 @@ type (
 	}
 )
 
-// persistEnabled returns true if the cluster is configured with a DataDir
+// persist returns true if the cluster is configured with a DataDir
 // for on-disk state persistence. Segment I/O always happens (via storageDir),
 // but state files (topics.json, groups.log, etc.) are only written when
 // persistence is enabled.
-func (c *Cluster) persistEnabled() bool { return c.cfg.dataDir != "" }
+func (c *Cluster) persist() bool { return c.cfg.dataDir != "" }
 
 func (b *broker) hostport() (string, int32) {
 	h, p, _ := net.SplitHostPort(b.ln.Addr().String())
@@ -196,7 +187,11 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	var err error
 	defer func() {
 		if err != nil {
-			c.Close()
+			for _, b := range c.bs {
+				b.ln.Close()
+			}
+			c.closeOpenFiles()
+			close(c.die)
 		}
 	}()
 
@@ -253,7 +248,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	// Try to load persisted state from disk (after brokers are created,
 	// since partition leader assignment needs c.bs)
 	var loaded bool
-	if c.persistEnabled() {
+	if c.persist() {
 		loaded, err = c.loadFromDisk()
 		if err != nil {
 			return nil, fmt.Errorf("loading persisted state: %w", err)
@@ -281,14 +276,13 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 
 		// Persist the initial state so crash recovery can find
 		// meta.json, topics.json, etc.
-		if c.persistEnabled() {
+		if c.persist() {
 			if err = c.saveToDisk(); err != nil {
 				return nil, fmt.Errorf("persisting initial state: %w", err)
 			}
 		}
 	}
 
-	c.running.Store(true)
 	go c.run()
 
 	return c, nil
@@ -314,49 +308,42 @@ func (c *Cluster) Close() {
 	// Shutdown sequence:
 	//  1. dead=true rejects duplicate Close calls (above).
 	//  2. Close listeners to stop accepting new connections.
-	//  3. If persistence is enabled and run() is alive, send a
-	//     shutdown function through adminCh. This runs single-
-	//     threaded inside run(), ensuring no concurrent state
-	//     mutations during save. The shutdown function closes
-	//     c.die, causing run() to exit immediately after.
+	//  3. If persistence is enabled, send a shutdown function
+	//     through adminCh. This runs single-threaded inside
+	//     run(), ensuring no concurrent state mutations during
+	//     save. The shutdown function closes c.die, causing
+	//     run() to exit immediately after.
 	for _, b := range c.bs {
 		b.ln.Close()
 	}
 
-	// If persistence is configured, persist state before dying.
-	if c.persistEnabled() {
-		if c.running.Load() {
-			// run() is alive - send through adminCh so it runs
-			// single-threaded. The send must block - a non-blocking
-			// default would race with run() handling a request.
-			done := make(chan struct{})
-			c.adminCh <- func() {
-				for pidinf := range c.pids.txs {
-					if pidinf.inTx {
-						pidinf.endTx(false)
-					}
+	if c.persist() {
+		// Send through adminCh so it runs single-threaded.
+		// The send must block - a non-blocking default would
+		// race with run() handling a request.
+		done := make(chan struct{})
+		c.adminCh <- func() {
+			for pidinf := range c.pids.txs {
+				if pidinf.inTx {
+					pidinf.endTx(false)
 				}
-				if err := c.saveToDisk(); err != nil {
-					c.cfg.logger.Logf(LogLevelError, "persist to disk: %v", err)
-				}
-				if err := c.saveSessionState(); err != nil {
-					c.cfg.logger.Logf(LogLevelError, "save session state: %v", err)
-				}
-				c.closeOpenFiles()
-				// Close c.die inside the admin function so run()
-				// exits immediately - prevents processing requests
-				// after saveToDisk which would create state not
-				// captured by the saved seq windows.
-				close(c.die)
-				close(done)
 			}
-			<-done
-			return
+			if err := c.saveToDisk(); err != nil {
+				c.cfg.logger.Logf(LogLevelError, "persist to disk: %v", err)
+			}
+			if err := c.saveSessionState(); err != nil {
+				c.cfg.logger.Logf(LogLevelError, "save session state: %v", err)
+			}
+			c.closeOpenFiles()
+			// Close c.die inside the admin function so run()
+			// exits immediately - prevents processing requests
+			// after saveToDisk which would create state not
+			// captured by the saved seq windows.
+			close(c.die)
+			close(done)
 		}
-		// run() was never started (e.g., NewCluster failed).
-		// No concurrent state to worry about - just clean up
-		// open file handles.
-		c.closeOpenFiles()
+		<-done
+		return
 	}
 
 	close(c.die)

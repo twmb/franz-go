@@ -1028,8 +1028,6 @@ func TestPersistLiveSyncThenShutdown(t *testing.T) {
 	if len(pd.segments) < 2 {
 		t.Fatalf("expected multiple segments, got %d", len(pd.segments))
 	}
-	t.Logf("created %d live segments", len(pd.segments))
-
 	// Close cleanly - should create snapshot referencing existing segments
 	c.Close()
 
@@ -1411,8 +1409,6 @@ func TestPersistSnapshotLogStartOffsetClamp(t *testing.T) {
 			t.Fatalf("logStartOffset %d > HWM %d after truncation",
 				pd.logStartOffset, pd.highWatermark)
 		}
-		t.Logf("logStartOffset=%d HWM=%d batches=%d",
-			pd.logStartOffset, pd.highWatermark, pd.totalBatches())
 	}
 }
 
@@ -1751,7 +1747,7 @@ func TestRebuildSegmentsWritesSynced(t *testing.T) {
 	})
 
 	// Rebuild - should not panic and data should survive.
-	c.rebuildSegments(pd, "sync-rebuild", batches)
+	c.rebuildSegments(pd, batches)
 
 	if pd.totalBatches() != 5 {
 		t.Fatalf("expected 5 batches after rebuild, got %d", pd.totalBatches())
@@ -1803,7 +1799,7 @@ func TestRebuildSegmentsSegmentSplitting(t *testing.T) {
 	})
 
 	// Rebuild with new segment size.
-	c.rebuildSegments(pd, "split", batches)
+	c.rebuildSegments(pd, batches)
 
 	// Verify multiple segments were created (200 bytes is too small
 	// for all 10 batches in one segment).
@@ -1906,7 +1902,7 @@ func TestMaxTimestampBatchAfterCompaction(t *testing.T) {
 		batches = append(batches, batch)
 		return true
 	})
-	c.rebuildSegments(pd, "ts-compact", batches)
+	c.rebuildSegments(pd, batches)
 
 	m2 := pd.maxTimestampBatch()
 	if m2 == nil {

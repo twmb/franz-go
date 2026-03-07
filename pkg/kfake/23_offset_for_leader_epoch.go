@@ -1,8 +1,6 @@
 package kfake
 
 import (
-	"sort"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -96,8 +94,7 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 
 			// If our epoch was bumped before anything was
 			// produced, return the epoch and a start offset of 0.
-			total := pd.totalBatches()
-			if total == 0 {
+			if !pd.hasBatches() {
 				sp.LeaderEpoch = pd.epoch
 				sp.EndOffset = 0
 				if rp.LeaderEpoch > pd.epoch {
@@ -107,18 +104,12 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 				continue
 			}
 
-			// What is the largest epoch after the requested epoch?
+			// Two-level binary search for the first batch with epoch > requested.
 			nextEpoch := rp.LeaderEpoch + 1
-			idx, _ := sort.Find(total, func(idx int) int {
-				m := pd.batchMetaAt(idx)
-				if nextEpoch <= m.epoch {
-					return -1
-				}
-				return 1
-			})
+			si, mi, cur := pd.findBatchMeta(int64(nextEpoch), func(m *batchMeta) int64 { return int64(m.epoch) })
 
 			// Requested epoch is not yet known: keep -1 returns.
-			if idx == total {
+			if cur == nil {
 				sp.LeaderEpoch = -1
 				sp.EndOffset = -1
 				continue
@@ -126,14 +117,20 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 
 			// Next epoch is actually the first epoch: return the
 			// requested epoch and the LSO.
-			if idx == 0 {
+			if si == 0 && mi == 0 {
 				sp.LeaderEpoch = rp.LeaderEpoch
 				sp.EndOffset = pd.logStartOffset
 				continue
 			}
 
-			prev := pd.batchMetaAt(idx - 1)
-			cur := pd.batchMetaAt(idx)
+			// Get the batch before cur.
+			var prev *batchMeta
+			if mi > 0 {
+				prev = &pd.segments[si].index[mi-1]
+			} else {
+				prevSeg := &pd.segments[si-1]
+				prev = &prevSeg.index[len(prevSeg.index)-1]
+			}
 			sp.LeaderEpoch = prev.epoch
 			sp.EndOffset = cur.firstOffset
 		}
