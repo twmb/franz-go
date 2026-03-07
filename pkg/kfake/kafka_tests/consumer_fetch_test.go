@@ -108,54 +108,39 @@ func TestFetchOutOfRangeResetLatest(t *testing.T) {
 	}
 }
 
-// TestFetchRecordLargerThanFetchMaxBytes verifies that a record larger than
-// FetchMaxBytes is still returned (KIP-74: a single record is always returned
-// even if it exceeds max bytes).
-func TestFetchRecordLargerThanFetchMaxBytes(t *testing.T) {
+// TestFetchRecordLargerThanMaxBytes verifies that a record larger than the
+// max bytes setting is still returned (KIP-74: a single record is always
+// returned even if it exceeds max bytes). Tests both FetchMaxBytes and
+// FetchMaxPartitionBytes.
+func TestFetchRecordLargerThanMaxBytes(t *testing.T) {
 	t.Parallel()
-	topic := "fetch-large-record"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	for _, tt := range []struct {
+		name string
+		opt  kgo.Opt
+	}{
+		{"FetchMaxBytes", kgo.FetchMaxBytes(1024)},
+		{"FetchMaxPartitionBytes", kgo.FetchMaxPartitionBytes(1024)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "fetch-large-" + tt.name
+			c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 
-	// Produce a record much larger than our fetch max bytes.
-	largeValue := []byte(strings.Repeat("x", 10_000))
-	r := &kgo.Record{Value: largeValue}
-	produceSync(t, producer, r)
+			largeValue := []byte(strings.Repeat("x", 10_000))
+			produceSync(t, producer, &kgo.Record{Value: largeValue})
 
-	// Consume with a very small FetchMaxBytes.
-	consumer := newClient848(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.FetchMaxBytes(1024),
-	)
+			consumer := newClient848(t, c,
+				kgo.ConsumeTopics(topic),
+				tt.opt,
+			)
 
-	records := consumeN(t, consumer, 1, 5*time.Second)
-	if !bytes.Equal(records[0].Value, largeValue) {
-		t.Errorf("large record was not returned correctly: got %d bytes, expected %d", len(records[0].Value), len(largeValue))
-	}
-}
-
-// TestFetchRecordLargerThanMaxPartitionFetchBytes verifies that a record
-// larger than FetchMaxPartitionBytes is still returned (same KIP-74 guarantee).
-func TestFetchRecordLargerThanMaxPartitionFetchBytes(t *testing.T) {
-	t.Parallel()
-	topic := "fetch-large-partition"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-
-	largeValue := []byte(strings.Repeat("y", 10_000))
-	r := &kgo.Record{Value: largeValue}
-	produceSync(t, producer, r)
-
-	consumer := newClient848(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.FetchMaxPartitionBytes(1024),
-	)
-
-	records := consumeN(t, consumer, 1, 5*time.Second)
-	if !bytes.Equal(records[0].Value, largeValue) {
-		t.Errorf("large record was not returned correctly: got %d bytes, expected %d", len(records[0].Value), len(largeValue))
+			records := consumeN(t, consumer, 1, 5*time.Second)
+			if !bytes.Equal(records[0].Value, largeValue) {
+				t.Errorf("large record was not returned correctly: got %d bytes, expected %d", len(records[0].Value), len(largeValue))
+			}
+		})
 	}
 }
 

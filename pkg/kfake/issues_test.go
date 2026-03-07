@@ -863,6 +863,12 @@ func TestTransactionAbort(t *testing.T) {
 		}
 	}
 
+	// Verify LSO advanced past the aborted transaction.
+	pi := c.PartitionInfo(testTopic, 0)
+	if pi.LastStableOffset != pi.HighWatermark {
+		t.Errorf("LSO should equal HWM after abort, got LSO=%d HWM=%d", pi.LastStableOffset, pi.HighWatermark)
+	}
+
 	// Verify read_committed consumer sees only the non-aborted messages
 	consumer, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -1504,103 +1510,6 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	}
 }
 
-func TestTransactionAbortedMetadata(t *testing.T) {
-	t.Parallel()
-	const testTopic = "txn-aborted-metadata-test"
-
-	c, err := NewCluster(
-		NumBrokers(1),
-		SeedTopics(1, testTopic),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Produce and abort a transaction
-	producer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic(testTopic),
-		kgo.TransactionalID("test-txn-metadata"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer producer.Close()
-
-	if err := producer.BeginTransaction(); err != nil {
-		t.Fatalf("failed to begin transaction: %v", err)
-	}
-
-	for i := 0; i < 3; i++ {
-		if err := producer.ProduceSync(ctx, kgo.StringRecord("aborted-"+strconv.Itoa(i))).FirstErr(); err != nil {
-			t.Fatalf("failed to produce: %v", err)
-		}
-	}
-
-	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
-		t.Fatalf("failed to abort transaction: %v", err)
-	}
-
-	// Produce committed messages after the abort to verify filtering
-	nonTxnProducer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic(testTopic),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer nonTxnProducer.Close()
-
-	for i := 0; i < 2; i++ {
-		if err := nonTxnProducer.ProduceSync(ctx, kgo.StringRecord("committed-"+strconv.Itoa(i))).FirstErr(); err != nil {
-			t.Fatalf("failed to produce non-txn: %v", err)
-		}
-	}
-
-	// Verify partition info shows LSO advanced after abort
-	pi := c.PartitionInfo(testTopic, 0)
-	if pi.LastStableOffset != pi.HighWatermark {
-		t.Errorf("LSO should equal HWM after abort, got LSO=%d HWM=%d", pi.LastStableOffset, pi.HighWatermark)
-	}
-
-	// Verify read_committed consumer sees only committed messages, not aborted ones
-	consumer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics(testTopic),
-		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer consumer.Close()
-
-	var consumed int
-	var records []string
-	for consumed < 2 {
-		fs := consumer.PollFetches(ctx)
-		if errs := fs.Errors(); len(errs) > 0 {
-			t.Fatalf("fetch errors: %v", errs)
-		}
-		fs.EachRecord(func(r *kgo.Record) {
-			records = append(records, string(r.Value))
-		})
-		consumed += fs.NumRecords()
-	}
-
-	// Verify we only got committed messages
-	if consumed != 2 {
-		t.Errorf("expected 2 committed messages, got %d", consumed)
-	}
-	for _, rec := range records {
-		if len(rec) >= 7 && rec[:7] == "aborted" {
-			t.Errorf("read_committed consumer saw aborted message: %s", rec)
-		}
-	}
-}
 
 // TestKIP447RequireStable verifies that OffsetFetch with RequireStable=true
 // returns UNSTABLE_OFFSET_COMMIT when there are pending transactional offset commits.
