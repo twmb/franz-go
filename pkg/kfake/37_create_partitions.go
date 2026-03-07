@@ -81,7 +81,8 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 			continue
 		}
 
-		numNewPartitions := int(rt.Count) - len(t)
+		existingPartitions := len(t)
+		numNewPartitions := int(rt.Count) - existingPartitions
 
 		// Validate assignment if provided
 		if len(rt.Assignment) > 0 {
@@ -113,7 +114,7 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 
 		if !req.ValidateOnly {
 			for i := range numNewPartitions {
-				partNum := int32(len(t)) + int32(i)
+				partNum := int32(existingPartitions) + int32(i)
 				if len(rt.Assignment) > 0 {
 					// Use explicit assignment: first replica is leader
 					a := rt.Assignment[i]

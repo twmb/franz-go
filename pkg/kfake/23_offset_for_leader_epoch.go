@@ -58,7 +58,7 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 		}
 		ps, ok := c.data.tps.gett(rt.Topic)
 		for _, rp := range rt.Partitions {
-			if req.ReplicaID != -1 {
+			if req.ReplicaID >= 0 {
 				donep(rt.Topic, rp.Partition, kerr.UnknownServerError.Code)
 				continue
 			}
@@ -75,12 +75,14 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 				donep(rt.Topic, rp.Partition, kerr.NotLeaderForPartition.Code)
 				continue
 			}
-			if rp.CurrentLeaderEpoch < pd.epoch {
-				donep(rt.Topic, rp.Partition, kerr.FencedLeaderEpoch.Code)
-				continue
-			} else if rp.CurrentLeaderEpoch > pd.epoch {
-				donep(rt.Topic, rp.Partition, kerr.UnknownLeaderEpoch.Code)
-				continue
+			if le := rp.CurrentLeaderEpoch; le != -1 {
+				if le < pd.epoch {
+					donep(rt.Topic, rp.Partition, kerr.FencedLeaderEpoch.Code)
+					continue
+				} else if le > pd.epoch {
+					donep(rt.Topic, rp.Partition, kerr.UnknownLeaderEpoch.Code)
+					continue
+				}
 			}
 
 			sp := donep(rt.Topic, rp.Partition, 0)

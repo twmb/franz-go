@@ -3042,8 +3042,11 @@ func (g *group) offsetExpirationFilter() map[string]struct{} {
 			if g.protocolType == "consumer" {
 				return g.classicSubscribedTopics()
 			}
+			return nil
+		case groupPreparingRebalance, groupCompletingRebalance, groupDead, groupReconciling:
+			return nil
 		}
-		return nil // no expiration in this state
+		return nil
 	}
 }
 
