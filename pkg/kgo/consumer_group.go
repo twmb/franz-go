@@ -1586,6 +1586,22 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 		proto := kmsg.NewJoinGroupRequestProtocol()
 		proto.Name = balancer.ProtocolName()
 		proto.Metadata = balancer.JoinGroupMetadata(topics, lastDup, gen)
+
+		// KIP-881: inject our rack into the consumer metadata so the
+		// leader can do rack-aware assignment. We only set Rack if
+		// the balancer did not already set it (a user's custom
+		// balancer might use the field for something else).
+		if g.cfg.rack != "" {
+			var meta kmsg.ConsumerMemberMetadata
+			if err := meta.ReadFrom(proto.Metadata); err == nil && meta.Rack == nil {
+				meta.Rack = &g.cfg.rack
+				if meta.Version < 3 {
+					meta.Version = 3
+				}
+				proto.Metadata = meta.AppendTo(nil)
+			}
+		}
+
 		protos = append(protos, proto)
 	}
 	return protos

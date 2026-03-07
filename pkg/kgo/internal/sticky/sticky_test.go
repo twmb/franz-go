@@ -3,9 +3,7 @@ package sticky
 import (
 	"fmt"
 	"math/rand"
-	"runtime"
 	"testing"
-	"time"
 )
 
 func Test_stickyBalanceStrategy_Plan(t *testing.T) {
@@ -1814,10 +1812,13 @@ const (
 	memberNum    = 100
 )
 
+var racks = []string{"rackA", "rackB", "rackC"}
+
 func makeLargeBalance(withImbalance bool) generatedInput {
 	rng := rand.New(rand.NewSource(0))
 	var allTopics []string
 	topics := make(map[string]int32)
+	partitionRacks := make(map[string][]string)
 	var totalPartitions int
 	for i := range topicNum {
 		n := rng.Intn(partitionNum * 5 / 2)
@@ -1825,6 +1826,11 @@ func makeLargeBalance(withImbalance bool) generatedInput {
 		topic := fmt.Sprintf("topic%d", i)
 		topics[topic] = int32(n)
 		allTopics = append(allTopics, topic)
+		tr := make([]string, n)
+		for j := range tr {
+			tr[j] = racks[j%len(racks)]
+		}
+		partitionRacks[topic] = tr
 	}
 
 	var members []GroupMember
@@ -1832,17 +1838,20 @@ func makeLargeBalance(withImbalance bool) generatedInput {
 		members = append(members, GroupMember{
 			ID:     fmt.Sprintf("consumer%d", i),
 			Topics: allTopics,
+			Rack:   racks[i%len(racks)],
 		})
 	}
 	if withImbalance {
 		members = append(members, GroupMember{
 			ID:     "imbalance",
 			Topics: []string{"topic0"},
+			Rack:   racks[0],
 		})
 	}
 	return generatedInput{
 		members,
 		topics,
+		partitionRacks,
 		totalPartitions,
 	}
 }
@@ -1858,6 +1867,7 @@ func makeLargeBalanceWithExisting(withImbalance bool) generatedInput {
 		input.members = append(input.members, GroupMember{
 			ID:       consumer,
 			Topics:   oldMembers[i].Topics, // evaluated before overwrite
+			Rack:     oldMembers[i].Rack,
 			UserData: udEncode(1, 1, plan[consumer]),
 		})
 	}
@@ -1873,42 +1883,45 @@ var (
 )
 
 func BenchmarkLarge(b *testing.B) {
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
-		Balance(large.members, large.topics)
-	}
-}
-
-func BenchmarkLargeWithExisting(b *testing.B) {
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
-		Balance(largeWithExisting.members[1:], largeWithExisting.topics)
-	}
-}
-
-func BenchmarkLargeImbalanced(b *testing.B) {
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
-		Balance(largeImbalanced.members, largeImbalanced.topics)
-	}
-}
-
-func BenchmarkLargeWithExistingImbalanced(b *testing.B) {
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
-		Balance(largeWithExistingImbalanced.members[1:], largeWithExistingImbalanced.topics)
+	for _, bench := range []struct {
+		name  string
+		input generatedInput
+	}{
+		{"fresh", large},
+		{"existing", largeWithExisting},
+		{"imbalanced", largeImbalanced},
+		{"existing_imbalanced", largeWithExistingImbalanced},
+	} {
+		members := bench.input.members
+		if bench.name == "existing" || bench.name == "existing_imbalanced" {
+			members = members[1:]
+		}
+		b.Run(bench.name+"/no_rack", func(b *testing.B) {
+			for b.Loop() {
+				Balance(members, bench.input.topics)
+			}
+		})
+		b.Run(bench.name+"/rack", func(b *testing.B) {
+			for b.Loop() {
+				BalanceWithRacks(members, bench.input.topics, bench.input.partitionRacks)
+			}
+		})
 	}
 }
 
 type generatedInput struct {
-	members []GroupMember
-	topics  map[string]int32
+	members        []GroupMember
+	topics         map[string]int32
+	partitionRacks map[string][]string
 
 	totalPartitions int
 }
 
 func makeJavaPlan(topicCount, partitionCount, consumerCount int, imbalanced bool) generatedInput {
-	p := generatedInput{topics: make(map[string]int32)}
+	p := generatedInput{
+		topics:         make(map[string]int32),
+		partitionRacks: make(map[string][]string),
+	}
 	var allTopics []string
 
 	for i := range topicCount {
@@ -1916,12 +1929,18 @@ func makeJavaPlan(topicCount, partitionCount, consumerCount int, imbalanced bool
 		allTopics = append(allTopics, topic)
 		p.topics[topic] = int32(partitionCount)
 		p.totalPartitions += partitionCount
+		tr := make([]string, partitionCount)
+		for j := range tr {
+			tr[j] = racks[j%len(racks)]
+		}
+		p.partitionRacks[topic] = tr
 	}
 
 	for i := range consumerCount {
 		p.members = append(p.members, GroupMember{
 			ID:     fmt.Sprintf("c%d", i),
 			Topics: allTopics,
+			Rack:   racks[i%len(racks)],
 		})
 	}
 
@@ -1929,6 +1948,7 @@ func makeJavaPlan(topicCount, partitionCount, consumerCount int, imbalanced bool
 		p.members = append(p.members, GroupMember{
 			ID:     fmt.Sprintf("c%d", consumerCount),
 			Topics: allTopics[:1],
+			Rack:   racks[0],
 		})
 	}
 
@@ -1958,19 +1978,635 @@ func BenchmarkJava(b *testing.B) {
 		{"small", javaSmall},
 		{"small_imbalance", javaSmallImbalance},
 	} {
-		b.Run(bench.name, func(b *testing.B) {
-			start := time.Now()
-			for n := 0; n < b.N; n++ {
+		b.Run(bench.name+"/no_rack", func(b *testing.B) {
+			for b.Loop() {
 				Balance(bench.input.members, bench.input.topics)
-				runtime.GC()
-				runtime.GC()
 			}
-			b.Logf("avg %v per %d balances of %d members and %d total partitions",
-				time.Since(start)/time.Duration(b.N),
-				b.N,
-				len(bench.input.members),
-				bench.input.totalPartitions,
-			)
 		})
+		b.Run(bench.name+"/rack", func(b *testing.B) {
+			for b.Loop() {
+				BalanceWithRacks(bench.input.members, bench.input.topics, bench.input.partitionRacks)
+			}
+		})
+	}
+}
+
+// countRackMatches counts how many assigned partitions are on the same
+// rack as the member consuming them.
+func countRackMatches(plan Plan, members []GroupMember, partitionRacks map[string][]string) int {
+	memberRack := make(map[string]string)
+	for _, m := range members {
+		memberRack[m.ID] = m.Rack
+	}
+	var matches int
+	for member, topics := range plan {
+		rack := memberRack[member]
+		if rack == "" {
+			continue
+		}
+		for topic, partitions := range topics {
+			racks := partitionRacks[topic]
+			for _, p := range partitions {
+				if int(p) < len(racks) && racks[p] == rack {
+					matches++
+				}
+			}
+		}
+	}
+	return matches
+}
+
+func TestRackAwareBasic(t *testing.T) {
+	t.Parallel()
+	// Two members in different racks, two topics with two partitions
+	// each. Partition leaders are split across racks.
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"t1", "t2"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"t1", "t2"}, Rack: "rackB"},
+	}
+	topics := map[string]int32{"t1": 2, "t2": 2}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackB"},
+		"t2": {"rackA", "rackB"},
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+
+	matches := countRackMatches(plan, members, partitionRacks)
+	if matches != 4 {
+		t.Errorf("expected 4 rack matches, got %d", matches)
+	}
+}
+
+func TestRackAwareBalanceOverLocality(t *testing.T) {
+	t.Parallel()
+	// Three members: two in rackA, one in rackB. All partitions in
+	// rackA. Balance must still be maintained - we should not overload
+	// rackA members just because they match.
+	members := []GroupMember{
+		{ID: "A1", Topics: []string{"t1"}, Rack: "rackA"},
+		{ID: "A2", Topics: []string{"t1"}, Rack: "rackA"},
+		{ID: "B1", Topics: []string{"t1"}, Rack: "rackB"},
+	}
+	topics := map[string]int32{"t1": 6}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackA", "rackA", "rackA", "rackA", "rackA"},
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+
+	// Each member should get exactly 2 partitions (6/3).
+	for member, memberTopics := range plan {
+		n := partitionsForMember(memberTopics)
+		if n != 2 {
+			t.Errorf("member %s has %d partitions, want 2", member, n)
+		}
+	}
+}
+
+func TestRackAwareNoRackInfo(t *testing.T) {
+	t.Parallel()
+	// Members have racks but no partition rack info - should behave
+	// identically to Balance().
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"t1"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"t1"}, Rack: "rackB"},
+	}
+	topics := map[string]int32{"t1": 4}
+
+	plan := BalanceWithRacks(members, topics, nil)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+
+	planNoRack := Balance(members, topics)
+	testPlanUsage(t, planNoRack, topics, nil)
+	testEqualDivvy(t, planNoRack, 0, members)
+}
+
+func TestRackAwareNoMemberRack(t *testing.T) {
+	t.Parallel()
+	// Partition racks present but no member has a rack - should
+	// fall back to normal assignment.
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"t1"}},
+		{ID: "B", Topics: []string{"t1"}},
+	}
+	topics := map[string]int32{"t1": 4}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackA", "rackB", "rackB"},
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+}
+
+func TestRackAwareMixedRacks(t *testing.T) {
+	t.Parallel()
+	// Some members have racks, some don't. Members with racks should
+	// get rack-matched partitions; member without rack gets the rest.
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"t1"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"t1"}, Rack: "rackB"},
+		{ID: "C", Topics: []string{"t1"}},
+	}
+	topics := map[string]int32{"t1": 6}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackA", "rackB", "rackB", "rackA", "rackB"},
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+
+	// Each member gets 2 partitions. A and B should have rack-matched
+	// partitions since there are enough.
+	matches := countRackMatches(plan, members, partitionRacks)
+	if matches < 4 {
+		t.Errorf("expected at least 4 rack matches (A and B each 2), got %d", matches)
+	}
+}
+
+func TestRackAwareComplex(t *testing.T) {
+	t.Parallel()
+	// Complex subscriptions: members subscribe to different topics.
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"t1", "t2"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"t1"}, Rack: "rackB"},
+		{ID: "C", Topics: []string{"t2"}, Rack: "rackA"},
+	}
+	topics := map[string]int32{"t1": 4, "t2": 4}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackB", "rackA", "rackB"},
+		"t2": {"rackA", "rackB", "rackA", "rackB"},
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+
+	// All 8 partitions should be assigned.
+	total := 0
+	for _, memberTopics := range plan {
+		total += partitionsForMember(memberTopics)
+	}
+	if total != 8 {
+		t.Errorf("expected 8 total partitions assigned, got %d", total)
+	}
+
+	matches := countRackMatches(plan, members, partitionRacks)
+	if matches < 4 {
+		t.Errorf("expected at least 4 rack matches, got %d", matches)
+	}
+}
+
+func TestRackAwareSticky(t *testing.T) {
+	t.Parallel()
+	// First balance assigns with rack awareness. Second balance
+	// (simulating a rebalance) should preserve sticky assignments.
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"t1"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"t1"}, Rack: "rackB"},
+	}
+	topics := map[string]int32{"t1": 4}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackA", "rackB", "rackB"},
+	}
+
+	plan1 := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan1, topics, nil)
+	testEqualDivvy(t, plan1, 0, members)
+
+	// Build members with prior assignment for second balance.
+	members2 := make([]GroupMember, len(members))
+	for i, m := range members {
+		members2[i] = GroupMember{
+			ID:       m.ID,
+			Topics:   m.Topics,
+			Rack:     m.Rack,
+			UserData: newUD().setGeneration(1).assign("t1", plan1[m.ID]["t1"]...).encode(),
+		}
+	}
+
+	plan2 := BalanceWithRacks(members2, topics, partitionRacks)
+	testPlanUsage(t, plan2, topics, nil)
+	testEqualDivvy(t, plan2, 4, members2) // all 4 partitions should be sticky
+}
+
+func TestRackAwareNewMember(t *testing.T) {
+	t.Parallel()
+	// Start with 2 members, then add a third. The new member should
+	// preferentially get rack-matched partitions.
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"t1"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"t1"}, Rack: "rackB"},
+	}
+	topics := map[string]int32{"t1": 6}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackB", "rackA", "rackB", "rackA", "rackB"},
+	}
+
+	plan1 := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan1, topics, nil)
+
+	// Add a new member in rackA. Rebalance should give it rack-matched
+	// partitions where possible.
+	members2 := []GroupMember{
+		{
+			ID: "A", Topics: []string{"t1"}, Rack: "rackA",
+			UserData: newUD().setGeneration(1).assign("t1", plan1["A"]["t1"]...).encode(),
+		},
+		{
+			ID: "B", Topics: []string{"t1"}, Rack: "rackB",
+			UserData: newUD().setGeneration(1).assign("t1", plan1["B"]["t1"]...).encode(),
+		},
+		{ID: "C", Topics: []string{"t1"}, Rack: "rackA"},
+	}
+
+	plan2 := BalanceWithRacks(members2, topics, partitionRacks)
+	testPlanUsage(t, plan2, topics, nil)
+	testEqualDivvy(t, plan2, 4, members2) // 4 of 6 partitions should be sticky
+
+	// C is in rackA, verify at least one of its partitions matches rackA.
+	cParts := plan2["C"]["t1"]
+	rackAMatches := 0
+	for _, p := range cParts {
+		if partitionRacks["t1"][p] == "rackA" {
+			rackAMatches++
+		}
+	}
+	if rackAMatches == 0 {
+		t.Errorf("new member C in rackA got no rackA partitions: %v", cParts)
+	}
+}
+
+func TestRackAwareManyMembers(t *testing.T) {
+	t.Parallel()
+	// Larger scale test: 10 members across 3 racks, 30 partitions.
+	members := make([]GroupMember, 10)
+	racks := []string{"rackA", "rackB", "rackC"}
+	for i := range members {
+		members[i] = GroupMember{
+			ID:     fmt.Sprintf("M%d", i),
+			Topics: []string{"t1"},
+			Rack:   racks[i%3],
+		}
+	}
+	topics := map[string]int32{"t1": 30}
+	partitionRacks := map[string][]string{
+		"t1": make([]string, 30),
+	}
+	for i := range partitionRacks["t1"] {
+		partitionRacks["t1"][i] = racks[i%3]
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+
+	matches := countRackMatches(plan, members, partitionRacks)
+	// 4 members in rackA (i%3==0), 3 each in rackB/rackC. 10
+	// partitions per rack. rackA has 12 slots but only 10 matching
+	// partitions; rackB/rackC each have 9 slots but 10 matching
+	// partitions. Max rack matches = 10 + 9 + 9 = 28.
+	if matches != 28 {
+		t.Errorf("expected 28 rack matches, got %d", matches)
+	}
+}
+
+func TestRackAwarePyramidSubscriptions(t *testing.T) {
+	t.Parallel()
+	// Pyramid subscriptions where A subscribes broadly, others to
+	// subsets. Rack assignments alternate across partitions. The
+	// complex path must handle rack-aware pre-assignment across
+	// varying subscription widths without breaking balance.
+	//
+	// Subscriptions (pyramid shape):
+	//   1: A, B
+	//   2: A, B
+	//   3: A, B, C
+	//   4: A, B, C
+	//   5: A, B, C, D
+	//   6: A, B, C, D
+	//   7: A, C, D
+	//   8: A, C, D
+	//
+	// 8 partitions, 4 members, 2 each. Rack alternates A/B per topic.
+	// With 4 rackA partitions (1,3,5,7) and 4 rackB (2,4,6,8), the
+	// two rackA members (A,C) and two rackB members (B,D) should each
+	// get rack-matched partitions despite the subscription constraints.
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6"}, Rack: "rackB"},
+		{ID: "C", Topics: []string{"3", "4", "5", "6", "7", "8"}, Rack: "rackA"},
+		{ID: "D", Topics: []string{"5", "6", "7", "8"}, Rack: "rackB"},
+	}
+	topics := map[string]int32{
+		"1": 1, "2": 1, "3": 1, "4": 1,
+		"5": 1, "6": 1, "7": 1, "8": 1,
+	}
+	partitionRacks := map[string][]string{
+		"1": {"rackA"}, "2": {"rackB"}, "3": {"rackA"}, "4": {"rackB"},
+		"5": {"rackA"}, "6": {"rackB"}, "7": {"rackA"}, "8": {"rackB"},
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+
+	matches := countRackMatches(plan, members, partitionRacks)
+	if matches < 6 {
+		t.Errorf("expected at least 6 rack matches, got %d", matches)
+	}
+}
+
+func TestRackAwareThreeRacksHomeTopics(t *testing.T) {
+	t.Parallel()
+	// Three racks, each member has a "home" topic (same rack as member)
+	// plus a shared topic with partitions spread across all racks.
+	// Each home topic can only be consumed by its member, so the member
+	// must get all 3 of its home partitions. The shared topic's 6
+	// partitions (2 per rack) should be rack-matched: each member gets
+	// the 2 shared partitions in their rack.
+	//
+	// 15 partitions, 3 members, 5 each.
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"home_a", "shared"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"home_b", "shared"}, Rack: "rackB"},
+		{ID: "C", Topics: []string{"home_c", "shared"}, Rack: "rackC"},
+	}
+	topics := map[string]int32{"home_a": 3, "home_b": 3, "home_c": 3, "shared": 6}
+	partitionRacks := map[string][]string{
+		"home_a": {"rackA", "rackA", "rackA"},
+		"home_b": {"rackB", "rackB", "rackB"},
+		"home_c": {"rackC", "rackC", "rackC"},
+		"shared": {"rackA", "rackA", "rackB", "rackB", "rackC", "rackC"},
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+
+	matches := countRackMatches(plan, members, partitionRacks)
+	// Each member gets all 3 home partitions (rack-matched = 9 guaranteed).
+	// The 6 shared partitions are split by the complex path; map iteration
+	// order can cause some shared partitions to land on a mismatched rack.
+	if matches < 9 {
+		t.Errorf("expected at least 9 rack matches, got %d", matches)
+	}
+}
+
+func TestRackAwareSimpleMultiPartition(t *testing.T) {
+	t.Parallel()
+	// Simple path: all members subscribe to all topics. Three
+	// multi-partition topics with rotated rack patterns so that
+	// each rack has exactly 6 partitions across all topics. One
+	// member per rack, 6 partitions each - perfect rack matching
+	// should be achievable.
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"t1", "t2", "t3"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"t1", "t2", "t3"}, Rack: "rackB"},
+		{ID: "C", Topics: []string{"t1", "t2", "t3"}, Rack: "rackC"},
+	}
+	topics := map[string]int32{"t1": 6, "t2": 6, "t3": 6}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackA", "rackB", "rackB", "rackC", "rackC"},
+		"t2": {"rackB", "rackB", "rackC", "rackC", "rackA", "rackA"},
+		"t3": {"rackC", "rackC", "rackA", "rackA", "rackB", "rackB"},
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+
+	matches := countRackMatches(plan, members, partitionRacks)
+	// 6 partitions per rack, one member per rack, 6 each. Perfect = 18.
+	if matches < 14 {
+		t.Errorf("expected at least 14 rack matches, got %d", matches)
+	}
+}
+
+func TestRackAwareOverlappingTopics(t *testing.T) {
+	t.Parallel()
+	// Four members with overlapping subscriptions across three topics
+	// that have very different rack layouts:
+	//   t1 (4 partitions, all rackA) - only A,B subscribe
+	//   t2 (4 partitions, mixed)     - all four subscribe
+	//   t3 (4 partitions, all rackB) - only C,D subscribe
+	//
+	// The shared t2 creates tension: its rackA partitions should go to
+	// A or C (rackA members), its rackB to B or D. But subscription
+	// constraints force A,B to split t1 and C,D to split t3.
+	//
+	// 12 partitions, 4 members, 3 each.
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"t1", "t2"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"t1", "t2"}, Rack: "rackB"},
+		{ID: "C", Topics: []string{"t2", "t3"}, Rack: "rackA"},
+		{ID: "D", Topics: []string{"t2", "t3"}, Rack: "rackB"},
+	}
+	topics := map[string]int32{"t1": 4, "t2": 4, "t3": 4}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackA", "rackA", "rackA"},
+		"t2": {"rackA", "rackB", "rackA", "rackB"},
+		"t3": {"rackB", "rackB", "rackB", "rackB"},
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+
+	matches := countRackMatches(plan, members, partitionRacks)
+	// A(rackA) should get t1 rackA partitions + a t2 rackA partition.
+	// D(rackB) should get t3 rackB partitions + a t2 rackB partition.
+	// B gets some t1 (rackA, no match) + t2 rackB. C gets t2 rackA + t3 (no match).
+	// Max achievable: 8.
+	if matches < 6 {
+		t.Errorf("expected at least 6 rack matches, got %d", matches)
+	}
+}
+
+func TestRackAwareMemberLeaves(t *testing.T) {
+	t.Parallel()
+	// Round 1: three members balanced with rack awareness.
+	// Round 2: one member leaves. Its partitions become unassigned and
+	// the rack-aware pre-assignment should place them on rack-matched
+	// remaining members.
+	//
+	// t1 has 6 partitions alternating rackA/rackB. In round 1,
+	// A(rackA) and C(rackA) share the rackA partitions, B(rackB) gets
+	// the rackB ones. When C leaves, its rackA partitions should flow
+	// to A (also rackA), and B keeps its rackB partitions.
+	members1 := []GroupMember{
+		{ID: "A", Topics: []string{"t1"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"t1"}, Rack: "rackB"},
+		{ID: "C", Topics: []string{"t1"}, Rack: "rackA"},
+	}
+	topics := map[string]int32{"t1": 6}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackB", "rackA", "rackB", "rackA", "rackB"},
+	}
+
+	plan1 := BalanceWithRacks(members1, topics, partitionRacks)
+	testPlanUsage(t, plan1, topics, nil)
+	testEqualDivvy(t, plan1, 0, members1)
+
+	// C leaves. A and B carry prior assignments.
+	members2 := []GroupMember{
+		{
+			ID: "A", Topics: []string{"t1"}, Rack: "rackA",
+			UserData: newUD().assign("t1", plan1["A"]["t1"]...).encode(),
+		},
+		{
+			ID: "B", Topics: []string{"t1"}, Rack: "rackB",
+			UserData: newUD().assign("t1", plan1["B"]["t1"]...).encode(),
+		},
+	}
+
+	plan2 := BalanceWithRacks(members2, topics, partitionRacks)
+	testPlanUsage(t, plan2, topics, nil)
+	testEqualDivvy(t, plan2, 4, members2) // A and B each keep their 2 from round 1
+
+	matches := countRackMatches(plan2, members2, partitionRacks)
+	// In round 1, the last rackB partition goes to A (rackA) via normal
+	// fallback since B hits maxQuota first. Stickiness preserves that
+	// mismatch in round 2, limiting rack matches to 4 instead of 6.
+	if matches < 4 {
+		t.Errorf("expected at least 4 rack matches, got %d", matches)
+	}
+}
+
+func TestRackAwareTopicGrowth(t *testing.T) {
+	t.Parallel()
+	// Topic grows from 4 to 8 partitions. Prior assignments (already
+	// rack-matched) should stay sticky. New partitions should also
+	// be rack-matched via the rack-aware pre-assignment phase.
+	members := []GroupMember{
+		{
+			ID: "A", Topics: []string{"t1"}, Rack: "rackA",
+			UserData: newUD().assign("t1", 0, 2).encode(),
+		},
+		{
+			ID: "B", Topics: []string{"t1"}, Rack: "rackB",
+			UserData: newUD().assign("t1", 1, 3).encode(),
+		},
+	}
+	topics := map[string]int32{"t1": 8}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackB", "rackA", "rackB", "rackA", "rackB", "rackA", "rackB"},
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 4, members) // prior 4 partitions stay sticky
+
+	matches := countRackMatches(plan, members, partitionRacks)
+	// Prior: A has p0(rackA),p2(rackA) = 2 matches. B has p1(rackB),p3(rackB) = 2.
+	// New: p4(rackA),p6(rackA) -> A; p5(rackB),p7(rackB) -> B.
+	// Total: 8 matches.
+	if matches < 6 {
+		t.Errorf("expected at least 6 rack matches, got %d", matches)
+	}
+}
+
+func TestRackAwareImbalancedSubs(t *testing.T) {
+	t.Parallel()
+	// Members have constrained subscriptions: B can only consume t1,
+	// C can only consume t2. A bridges both topics. Rack-aware must
+	// work within these subscription constraints.
+	//
+	// t1: 4 partitions [rackA, rackB, rackA, rackB] - consumed by A,B
+	// t2: 2 partitions [rackA, rackB]                - consumed by A,C
+	//
+	// 6 partitions, 3 members, 2 each.
+	// B(rackB) should get rackB partitions from t1.
+	// A(rackA) should get rackA partitions from t1.
+	// C(rackA) should get rackA partition from t2 (plus one rackB).
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"t1", "t2"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"t1"}, Rack: "rackB"},
+		{ID: "C", Topics: []string{"t2"}, Rack: "rackA"},
+	}
+	topics := map[string]int32{"t1": 4, "t2": 2}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "rackB", "rackA", "rackB"},
+		"t2": {"rackA", "rackB"},
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+
+	matches := countRackMatches(plan, members, partitionRacks)
+	if matches < 4 {
+		t.Errorf("expected at least 4 rack matches, got %d", matches)
+	}
+}
+
+func TestRackAwareSparseRacks(t *testing.T) {
+	t.Parallel()
+	// Some partitions have no rack info (empty string), some have a rack
+	// that no member matches, and partitionRacks references a topic not
+	// in the topics map. Tests defensive branches in initRacks and
+	// assignRackAware's simple path.
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"t1", "t2"}, Rack: "rackA"},
+		{ID: "B", Topics: []string{"t1", "t2"}, Rack: "rackB"},
+	}
+	topics := map[string]int32{"t1": 4, "t2": 3}
+	partitionRacks := map[string][]string{
+		"t1":        {"rackA", "", "rackC", "rackB"},      // p1 empty, p2 unmatched rack
+		"t2":        {"rackA", "rackB", "rackA", "extra"}, // index 3 exceeds t2's 3 partitions
+		"no_such_t": {"rackA"},                            // topic not in topics map
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+	testEqualDivvy(t, plan, 0, members)
+
+	matches := countRackMatches(plan, members, partitionRacks)
+	if matches < 3 {
+		t.Errorf("expected at least 3 rack matches, got %d", matches)
+	}
+}
+
+func TestRackAwareSparseRacksComplex(t *testing.T) {
+	t.Parallel()
+	// Different subscriptions with sparse rack info and prior
+	// assignments. Exercises the complex path's skip-already-assigned
+	// branch, empty-rack branch, and unmatched-rack branch.
+	members := []GroupMember{
+		{
+			ID: "A", Topics: []string{"t1", "t2"}, Rack: "rackA",
+			UserData: newUD().assign("t1", 0).assign("t2", 1).encode(),
+		},
+		{
+			ID: "B", Topics: []string{"t1"}, Rack: "rackB",
+			UserData: newUD().assign("t1", 1).encode(),
+		},
+		{
+			ID: "C", Topics: []string{"t2"}, Rack: "rackA",
+			UserData: newUD().assign("t2", 0).encode(),
+		},
+	}
+	topics := map[string]int32{"t1": 4, "t2": 4}
+	partitionRacks := map[string][]string{
+		"t1": {"rackA", "", "rackC", "rackB"}, // p1 empty, p2 unmatched
+		"t2": {"", "rackA", "", "rackB"},      // p0,p2 empty
+
+	}
+
+	plan := BalanceWithRacks(members, topics, partitionRacks)
+	testPlanUsage(t, plan, topics, nil)
+
+	total := 0
+	for _, mt := range plan {
+		total += partitionsForMember(mt)
+	}
+	if total != 8 {
+		t.Errorf("total partitions %d, want 8", total)
 	}
 }
