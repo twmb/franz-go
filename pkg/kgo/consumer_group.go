@@ -1747,6 +1747,17 @@ start:
 			}
 			goto start
 		}
+		if errors.Is(err, kerr.UnstableOffsetCommit) {
+			g.cfg.logger.Log(LogLevelInfo, "fetch offsets returned unstable offset commit at group level, waiting 1s and retrying",
+				"group", g.cfg.group,
+			)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+				goto start
+			}
+		}
 		g.cfg.logger.Log(LogLevelError, "fetch offsets failed with group-level error", "group", g.cfg.group, "err", err)
 		return err
 	}
@@ -1834,7 +1845,7 @@ start:
 	// topic or partition the broker returned that we did not ask for.
 	// A buggy broker returning extra partitions can cause a data race
 	// if those partitions are already being consumed (see #1271).
-	groupTopics := g.tps.load()
+	groupTopics = g.tps.load()
 	for fetchedTopic, topicOffsets := range offsets {
 		if !groupTopics.hasTopic(fetchedTopic) {
 			delete(offsets, fetchedTopic)

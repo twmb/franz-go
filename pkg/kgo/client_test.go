@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -329,4 +330,72 @@ func TestSCRAMAuthBadCredentials(t *testing.T) {
 	}
 	// The error should indicate authentication failure
 	t.Logf("got expected error with bad credentials: %v", err)
+}
+
+func TestShareGroup(t *testing.T) {
+	t.Parallel()
+
+	const totalRecords = 200
+
+	topic, topicCleanup := tmpTopicPartitions(t, 1)
+	defer topicCleanup()
+	group := randsha()
+	// Share groups cannot be reliably deleted immediately after leave
+	// (the broker may still be processing state transitions), and
+	// the Java tests don't delete them either. We rely on the broker
+	// to expire the group after session timeout.
+
+	admin, _ := newTestClient(DefaultProduceTopic(topic))
+	defer admin.Close()
+	setShareAutoOffsetReset(t, admin, group)
+
+	// Produce all records upfront.
+	for i := 0; i < totalRecords; i++ {
+		admin.Produce(context.Background(), StringRecord(strconv.Itoa(i)), func(_ *Record, err error) {
+			if err != nil {
+				t.Errorf("produce %d: %v", i, err)
+			}
+		})
+	}
+	if err := admin.Flush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	cl, err := newTestClient(
+		ConsumeTopics(topic),
+		ShareGroup(group),
+		FetchMaxWait(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var consumed atomic.Int64
+	for {
+		fetches := cl.PollFetches(ctx)
+		for _, e := range fetches.Errors() {
+			if e.Err != nil {
+				t.Errorf("fetch error: %v", e)
+			}
+		}
+		n := int64(len(fetches.Records()))
+		if n > 0 {
+			t.Logf("got %d records (total %d)", n, consumed.Load()+n)
+			consumed.Add(n)
+		}
+		if consumed.Load() >= totalRecords {
+			break
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+
+	if n := consumed.Load(); n != totalRecords {
+		t.Fatalf("expected %d records, got %d", totalRecords, n)
+	}
 }

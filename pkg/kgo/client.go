@@ -412,6 +412,14 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.blockRebalanceOnPoll}
 	case namefn(ConsumerGroup):
 		return []any{cfg.group}
+	case namefn(ShareGroup):
+		return []any{cfg.shareGroup}
+	case namefn(ShareMaxRecords):
+		return []any{cfg.shareMaxRecords}
+	case namefn(ShareMaxRecordsStrict):
+		return []any{cfg.shareMaxRecordsStrict}
+	case namefn(ShareAckCallback):
+		return []any{cfg.shareAckCallback}
 	case namefn(DisableAutoCommit):
 		return []any{cfg.autocommitDisable}
 	case namefn(GreedyAutoCommit):
@@ -447,6 +455,55 @@ func (cl *Client) OptValues(opt any) []any {
 	}
 }
 
+// MarkAcks sets the acknowledgement status for share group records.
+//
+// If specific records are provided, their status is set unconditionally,
+// overriding any previously set status (unless the record has already been
+// finalized and sent to the broker).
+//
+// If no records are provided, all records from the most recent poll that
+// have not already been explicitly marked are filled in with the given
+// status. This is useful as a default: mark specific records with a
+// different status first, then call MarkAcks with no records to fill in
+// the rest.
+//
+// This only marks records locally. To send the acknowledgements to the
+// broker, call [Client.CommitAcks].
+func (cl *Client) MarkAcks(status AckStatus, records ...*Record) {
+	s := cl.consumer.s
+	if s == nil {
+		return
+	}
+	s.markAcks(status, records)
+}
+
+// CommitAcks sends all marked share group acknowledgements to the broker
+// and returns per-partition results. Records marked via [Record.Ack] or
+// [Client.MarkAcks] are sent with their assigned status; unmarked records
+// are skipped (they will be auto-accepted on the next PollFetches call).
+//
+// Each [ShareAckResult] contains the Topic, Partition, and any Err from
+// the broker. A nil Err means the broker successfully processed that
+// partition's acknowledgements. Retryable errors are re-queued
+// automatically and do not appear in the results.
+//
+// When CommitAcks is used, the [ShareAckCallback] is NOT called for
+// the committed acks -- the results are returned directly instead.
+// The callback is still called for piggybacked acks sent during
+// PollFetches.
+//
+// This must not be called concurrently with PollFetches or PollRecords. Both
+// share per-broker session epochs, and concurrent calls risk
+// INVALID_SHARE_SESSION_EPOCH errors that force session resets. The intended
+// usage is sequential: poll, process, ack, commit, repeat.
+func (cl *Client) CommitAcks(ctx context.Context) (ShareAckResults, error) {
+	s := cl.consumer.s
+	if s == nil {
+		return nil, errNotShareGroup
+	}
+	return s.commitAcks(ctx)
+}
+
 // NewClient returns a new Kafka client with the given options or an error if
 // the options are invalid. Connections to brokers are lazily created only when
 // requests are written to them.
@@ -471,7 +528,10 @@ func NewClient(opts ...Opt) (*Client, error) {
 			case ((*kmsg.JoinGroupRequest)(nil)).Key(),
 				((*kmsg.SyncGroupRequest)(nil)).Key(),
 				((*kmsg.HeartbeatRequest)(nil)).Key(),
-				((*kmsg.ConsumerGroupHeartbeatRequest)(nil)).Key():
+				((*kmsg.ConsumerGroupHeartbeatRequest)(nil)).Key(),
+				((*kmsg.ShareGroupHeartbeatRequest)(nil)).Key(),
+				((*kmsg.ShareFetchRequest)(nil)).Key(),
+				((*kmsg.ShareAcknowledgeRequest)(nil)).Key():
 				return cfg.sessionTimeout
 			}
 			return 30 * time.Second
@@ -1153,6 +1213,9 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 	if c.g != nil {
 		rerr = cl.LeaveGroupContext(ctx)
 		<-c.g.left
+	} else if c.s != nil {
+		c.s.leave(ctx)
+		<-c.s.left
 	} else if c.d != nil {
 		c.mu.Lock()                                           // lock for assign
 		c.assignPartitions(nil, assignInvalidateAll, nil, "") // we do not use a log message when not in a group
@@ -1604,6 +1667,12 @@ type ResponseShard struct {
 // request to the first seed broker. This will show up as a seed broker node ID
 // (min int32) and the response will likely contain purely errors.
 //
+// For requests that conditionally use topic names vs. topic IDs depending
+// on the broker version (e.g. OffsetFetchRequest v10+), the client fills
+// in both the Topic and TopicID fields on response topics using metadata.
+// Topics that cannot be mapped have the resolvable field filled in and the
+// other left empty.
+//
 // The response shards are ordered by broker metadata.
 func (cl *Client) RequestSharded(ctx context.Context, req kmsg.Request) []ResponseShard {
 	resps, _ := cl.shardedRequest(ctx, req)
@@ -1660,25 +1729,26 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 	// to fall into the handleCoordinatorReq logic.
 	switch t := req.(type) {
 	case *kmsg.ListOffsetsRequest, // key 2
-		*kmsg.OffsetFetchRequest,             // key 9
-		*kmsg.FindCoordinatorRequest,         // key 10
-		*kmsg.DescribeGroupsRequest,          // key 15
-		*kmsg.ListGroupsRequest,              // key 16
-		*kmsg.DeleteRecordsRequest,           // key 21
-		*kmsg.OffsetForLeaderEpochRequest,    // key 23
-		*kmsg.AddPartitionsToTxnRequest,      // key 24
-		*kmsg.WriteTxnMarkersRequest,         // key 27
-		*kmsg.DescribeConfigsRequest,         // key 32
-		*kmsg.AlterConfigsRequest,            // key 33
-		*kmsg.AlterReplicaLogDirsRequest,     // key 34
-		*kmsg.DescribeLogDirsRequest,         // key 35
-		*kmsg.DeleteGroupsRequest,            // key 42
-		*kmsg.IncrementalAlterConfigsRequest, // key 44
-		*kmsg.DescribeProducersRequest,       // key 61
-		*kmsg.DescribeTransactionsRequest,    // key 65
-		*kmsg.ListTransactionsRequest,        // key 66
-		*kmsg.ConsumerGroupDescribeRequest,   // key 69
-		*kmsg.ShareGroupDescribeRequest:      // key 77
+		*kmsg.OffsetFetchRequest,               // key 9
+		*kmsg.FindCoordinatorRequest,           // key 10
+		*kmsg.DescribeGroupsRequest,            // key 15
+		*kmsg.ListGroupsRequest,                // key 16
+		*kmsg.DeleteRecordsRequest,             // key 21
+		*kmsg.OffsetForLeaderEpochRequest,      // key 23
+		*kmsg.AddPartitionsToTxnRequest,        // key 24
+		*kmsg.WriteTxnMarkersRequest,           // key 27
+		*kmsg.DescribeConfigsRequest,           // key 32
+		*kmsg.AlterConfigsRequest,              // key 33
+		*kmsg.AlterReplicaLogDirsRequest,       // key 34
+		*kmsg.DescribeLogDirsRequest,           // key 35
+		*kmsg.DeleteGroupsRequest,              // key 42
+		*kmsg.IncrementalAlterConfigsRequest,   // key 44
+		*kmsg.DescribeProducersRequest,         // key 61
+		*kmsg.DescribeTransactionsRequest,      // key 65
+		*kmsg.ListTransactionsRequest,          // key 66
+		*kmsg.ConsumerGroupDescribeRequest,     // key 69
+		*kmsg.ShareGroupDescribeRequest,        // key 77
+		*kmsg.DescribeShareGroupOffsetsRequest: // key 90
 		return cl.handleShardedReq(ctx, req)
 
 	case *kmsg.MetadataRequest:
@@ -1816,6 +1886,11 @@ func (cl *Client) forgetControllerID(id int32) {
 const (
 	coordinatorTypeGroup int8 = 0
 	coordinatorTypeTxn   int8 = 1
+	// coordinatorTypeShare is for internal share-group state requests
+	// (Initialize/Read/Write/Delete ShareGroupState) that this client
+	// does not currently manage. User-facing share group requests
+	// (heartbeat, describe, alter/delete offsets) use the group
+	// coordinator (type 0).
 	coordinatorTypeShare int8 = 2
 )
 
@@ -2180,7 +2255,6 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 	case *kmsg.OffsetDeleteRequest:
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 
-	// ConsumerGroupHeartbeat cannot be retried at all
 	case *kmsg.ConsumerGroupHeartbeatRequest:
 		br, err := cl.loadCoordinator(ctx, coordinatorTypeGroup, t.Group)
 		var resp kmsg.Response
@@ -2188,6 +2262,29 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 			resp, err = br.waitResp(ctx, req)
 		}
 		return shard(br, req, resp, err)
+
+	// ConsumerGroupHeartbeat and ShareGroupHeartbeat cannot be
+	// retried because the member epoch in the response is critical
+	// for the next heartbeat -- retrying could cause epoch mismatch.
+	case *kmsg.ShareGroupHeartbeatRequest:
+		br, err := cl.loadCoordinator(ctx, coordinatorTypeGroup, t.GroupID)
+		var resp kmsg.Response
+		if err == nil {
+			resp, err = br.waitResp(ctx, req)
+		}
+		return shard(br, req, resp, err)
+	case *kmsg.StreamsGroupHeartbeatRequest:
+		br, err := cl.loadCoordinator(ctx, coordinatorTypeGroup, t.Group)
+		var resp kmsg.Response
+		if err == nil {
+			resp, err = br.waitResp(ctx, req)
+		}
+		return shard(br, req, resp, err)
+
+	case *kmsg.AlterShareGroupOffsetsRequest:
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.GroupID, req)
+	case *kmsg.DeleteShareGroupOffsetsRequest:
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.GroupID, req)
 	}
 }
 
@@ -2492,6 +2589,8 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		sharder = &consumerGroupDescribeSharder{cl}
 	case *kmsg.ShareGroupDescribeRequest:
 		sharder = &shareGroupDescribeSharder{cl}
+	case *kmsg.DescribeShareGroupOffsetsRequest:
+		sharder = &describeShareGroupOffsetsSharder{cl}
 	}
 
 	// If a request fails, we re-shard it (in case it needs to be split
@@ -3211,6 +3310,25 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 	if len(req.Groups) == 0 {
 		req.Groups = append(req.Groups, offsetFetchReqToGroup(req))
 	}
+
+	// Fill in both Topic and TopicID on each request topic so that
+	// the request works regardless of the broker version (v10+ uses
+	// TopicID; v0-v9 uses Topic). This also means onResp can use the
+	// request's mapping to fill in response fields.
+	id2t := cl.id2tMap()
+	t2id := cl.t2idMap(id2t)
+	for i := range req.Groups {
+		for j := range req.Groups[i].Topics {
+			t := &req.Groups[i].Topics[j]
+			if t.Topic == "" && t.TopicID != ([16]byte{}) {
+				t.Topic = id2t[t.TopicID]
+			}
+			if t.TopicID == ([16]byte{}) && t.Topic != "" {
+				t.TopicID = t2id[t.Topic]
+			}
+		}
+	}
+
 	groups := make([]string, 0, len(req.Groups))
 	for i := range req.Groups {
 		groups = append(groups, req.Groups[i].Group)
@@ -3304,24 +3422,61 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 	req := kreq.(*kmsg.OffsetFetchRequest)
 	resp := kresp.(*kmsg.OffsetFetchResponse)
 
-	// v10+: response uses TopicID instead of Topic. Resolve using the
-	// client's metadata-populated id2t map so that downstream consumers
-	// (both kgo internal and kadm) see topic names. If both Topic and
-	// TopicID are empty, the request itself had no valid identifier
-	// (v10+ does not serialize Topic, so a zero TopicID means the
-	// broker received nothing useful).
-	if resp.Version >= 10 {
+	// Fill in both Topic and TopicID on every response topic. v10+
+	// responses have TopicID but no Topic; v0-v9 responses have Topic
+	// but no TopicID. We resolve using the client's metadata cache so
+	// that downstream consumers (kgo internal and kadm) always see
+	// both fields populated.
+	// Resolve Topic <-> TopicID in both directions. First try the
+	// client's metadata cache. If any TopicIDs remain unresolved,
+	// do a synchronous all-topics metadata request to populate the
+	// cache and retry. This handles the case where a topic was
+	// created by another client and this client's background
+	// metadata loop hasn't seen it yet.
+	resolve := func() {
 		id2t := cl.id2tMap()
+		t2id := cl.t2idMap(id2t)
 		for i := range resp.Groups {
 			for j := range resp.Groups[i].Topics {
 				t := &resp.Groups[i].Topics[j]
-				if t.TopicID == ([16]byte{}) {
-					cl.cfg.logger.Log(LogLevelError, "OffsetFetch response contains topic with empty name and zero TopicID; the request had no valid topic identifier",
-						"group", resp.Groups[i].Group,
-					)
-					return fmt.Errorf("OffsetFetch response contains topic with empty name and zero TopicID; the request had no valid topic identifier")
+				if t.Topic == "" && t.TopicID != ([16]byte{}) {
+					t.Topic = id2t[t.TopicID]
 				}
-				t.Topic = id2t[t.TopicID]
+				if t.TopicID == ([16]byte{}) && t.Topic != "" {
+					t.TopicID = t2id[t.Topic]
+				}
+			}
+		}
+	}
+	resolve()
+
+	// If any TopicIDs are still unresolved, do a synchronous
+	// metadata fetch by ID to populate the id2t cache and retry.
+	var unresolved [][16]byte
+	for i := range resp.Groups {
+		for _, t := range resp.Groups[i].Topics {
+			if t.Topic == "" && t.TopicID != ([16]byte{}) {
+				unresolved = append(unresolved, t.TopicID)
+			}
+		}
+	}
+	if len(unresolved) > 0 {
+		resolved, _ := cl.fetchTopicMetadataByID(cl.ctx, unresolved)
+		for i := range resp.Groups {
+			for j := range resp.Groups[i].Topics {
+				t := &resp.Groups[i].Topics[j]
+				if t.Topic == "" && t.TopicID != ([16]byte{}) {
+					if resolved != nil {
+						t.Topic = resolved[t.TopicID]
+					}
+					if t.Topic == "" {
+						// Still unresolved after sync metadata
+						// fetch. Set all partitions to error.
+						for k := range t.Partitions {
+							t.Partitions[k].ErrorCode = kerr.UnknownTopicID.Code
+						}
+					}
+				}
 			}
 		}
 	}
@@ -5158,6 +5313,93 @@ func (*shareGroupDescribeSharder) merge(sresps []ResponseShard) (kmsg.Response, 
 	merged := kmsg.NewPtrShareGroupDescribeResponse()
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.ShareGroupDescribeResponse)
+		merged.Version = resp.Version
+		merged.ThrottleMillis = resp.ThrottleMillis
+		merged.Groups = append(merged.Groups, resp.Groups...)
+	})
+}
+
+// handles sharding DescribeShareGroupOffsetsRequest
+type describeShareGroupOffsetsSharder struct{ *Client }
+
+func (cl *describeShareGroupOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
+	req := kreq.(*kmsg.DescribeShareGroupOffsetsRequest)
+	groupIDs := make([]string, len(req.Groups))
+	for i, g := range req.Groups {
+		groupIDs[i] = g.GroupID
+	}
+	coordinators := cl.loadCoordinators(ctx, coordinatorTypeGroup, groupIDs...)
+	type unkerr struct {
+		err     error
+		groupID string
+	}
+	var (
+		brokerReqs = make(map[int32]*kmsg.DescribeShareGroupOffsetsRequest)
+		kerrs      = make(map[*kerr.Error][]kmsg.DescribeShareGroupOffsetsRequestGroup)
+		unkerrs    []unkerr
+	)
+	newReq := func(groups ...kmsg.DescribeShareGroupOffsetsRequestGroup) *kmsg.DescribeShareGroupOffsetsRequest {
+		r := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+		r.Groups = groups
+		return r
+	}
+	for _, g := range req.Groups {
+		berr := coordinators[g.GroupID]
+		var ke *kerr.Error
+		switch {
+		case berr.err == nil:
+			brokerReq := brokerReqs[berr.b.meta.NodeID]
+			if brokerReq == nil {
+				brokerReq = newReq()
+				brokerReqs[berr.b.meta.NodeID] = brokerReq
+			}
+			brokerReq.Groups = append(brokerReq.Groups, g)
+		case errors.As(berr.err, &ke):
+			kerrs[ke] = append(kerrs[ke], g)
+		default:
+			unkerrs = append(unkerrs, unkerr{berr.err, g.GroupID})
+		}
+	}
+	var issues []issueShard
+	for id, req := range brokerReqs {
+		issues = append(issues, issueShard{
+			req:    req,
+			broker: id,
+		})
+	}
+	for _, unkerr := range unkerrs {
+		g := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+		g.GroupID = unkerr.groupID
+		issues = append(issues, issueShard{
+			req: newReq(g),
+			err: unkerr.err,
+		})
+	}
+	for kerr, groups := range kerrs {
+		issues = append(issues, issueShard{
+			req: newReq(groups...),
+			err: kerr,
+		})
+	}
+	return issues, true, nil
+}
+
+func (cl *describeShareGroupOffsetsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+	resp := kresp.(*kmsg.DescribeShareGroupOffsetsResponse)
+	var retErr error
+	for i := range resp.Groups {
+		group := &resp.Groups[i]
+		err := kerr.ErrorForCode(group.ErrorCode)
+		cl.maybeDeleteStaleCoordinator(group.GroupID, coordinatorTypeGroup, err)
+		onRespShardErr(&retErr, err)
+	}
+	return retErr
+}
+
+func (*describeShareGroupOffsetsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+	merged := kmsg.NewPtrDescribeShareGroupOffsetsResponse()
+	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
+		resp := kresp.(*kmsg.DescribeShareGroupOffsetsResponse)
 		merged.Version = resp.Version
 		merged.ThrottleMillis = resp.ThrottleMillis
 		merged.Groups = append(merged.Groups, resp.Groups...)

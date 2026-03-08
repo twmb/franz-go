@@ -200,6 +200,10 @@ var (
 	// cannot see stale assignment state and miss a revocation.
 	errReassigned848 = errors.New("848 reassignment detected")
 
+	// Returned when trying to call share group functions when the client
+	// is not configured as a share group consumer.
+	errNotShareGroup = errors.New("client is not configured as a share group consumer")
+
 	//////////////
 	// EXTERNAL //
 	//////////////

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 type metawait struct {
@@ -86,6 +87,15 @@ func (cl *Client) id2tMap() map[[16]byte]string {
 	m := v.(map[[16]byte]string)
 	if m == nil {
 		return noid2t
+	}
+	return m
+}
+
+// t2idMap builds a reverse map from topic name to topic ID.
+func (*Client) t2idMap(id2t map[[16]byte]string) map[string][16]byte {
+	m := make(map[string][16]byte, len(id2t))
+	for id, name := range id2t {
+		m[name] = id
 	}
 	return m
 }
@@ -324,6 +334,8 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		groupExternal = c.g.loadExternal()
 	case c.d != nil:
 		tpsConsumer = c.d.tps
+	case c.s != nil:
+		tpsConsumer = c.s.tps
 	}
 
 	if !all {
@@ -599,14 +611,16 @@ func (mp metadataPartition) newPartition(cl *Client, isProduce bool) *topicParti
 
 // fetchTopicMetadata fetches metadata for all reqTopics and returns new
 // topicPartitionsData for each topic.
-func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*metadataTopic, error) {
-	_, meta, err := cl.fetchMetadataForTopics(cl.ctx, all, reqTopics, nil)
-	if err != nil {
-		return nil, err
-	}
-
+// cacheMetadataResp processes a metadata response into topic metadata
+// and an id2t map. It merges the new id2t entries into the existing
+// cache and stores the result. Used by both fetchTopicMetadata and
+// fetchTopicMetadataByID.
+func (cl *Client) cacheMetadataResp(meta *kmsg.MetadataResponse) (map[string]*metadataTopic, map[[16]byte]string) {
 	topics := make(map[string]*metadataTopic, len(meta.Topics))
-	id2t := make(map[[16]byte]string, len(meta.Topics))
+	id2t := make(map[[16]byte]string)
+	for k, v := range cl.id2tMap() {
+		id2t[k] = v
+	}
 	defer cl.id2t.Store(id2t)
 
 	// Even if metadata returns a leader epoch, we do not use it unless we
@@ -676,7 +690,7 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 				leaderEpoch: leaderEpoch,
 			}
 			if mp.loadErr != 0 {
-				mp.leader = unknownSeedID(0) // ensure every records & cursor can use a sink or source
+				mp.leader = unknownSeedID(0)
 			}
 			cl.sinksAndSourcesMu.Lock()
 			sns, exists := cl.sinksAndSources[mp.leader]
@@ -704,6 +718,39 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 		}
 	}
 
+	return topics, id2t
+}
+
+// fetchTopicMetadataByID issues a synchronous metadata request for
+// the given topic IDs, processes the response through the standard
+// metadata caching path, and returns the resolved id-to-name map.
+func (cl *Client) fetchTopicMetadataByID(ctx context.Context, ids [][16]byte) (map[[16]byte]string, error) {
+	req := kmsg.NewPtrMetadataRequest()
+	for _, id := range ids {
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.TopicID = id
+		req.Topics = append(req.Topics, rt)
+	}
+	_, meta, err := cl.fetchMetadata(ctx, req, true, nil)
+	if err != nil {
+		return nil, err
+	}
+	_, id2t := cl.cacheMetadataResp(meta)
+	resolved := make(map[[16]byte]string, len(ids))
+	for _, id := range ids {
+		if name := id2t[id]; name != "" {
+			resolved[id] = name
+		}
+	}
+	return resolved, nil
+}
+
+func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*metadataTopic, error) {
+	_, meta, err := cl.fetchMetadataForTopics(cl.ctx, all, reqTopics, nil)
+	if err != nil {
+		return nil, err
+	}
+	topics, _ := cl.cacheMetadataResp(meta)
 	return topics, nil
 }
 

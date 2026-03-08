@@ -727,41 +727,32 @@ func (k *kip951move) maybeAddFetchPartition(resp *kmsg.FetchResponse, p *kmsg.Fe
 }
 
 func (k *kip951move) ensureSinksAndSources(cl *Client) {
-	cl.sinksAndSourcesMu.Lock()
-	defer cl.sinksAndSourcesMu.Unlock()
-
-	ensure := func(leader int32) {
-		if _, exists := cl.sinksAndSources[leader]; exists {
-			return
-		}
-		cl.sinksAndSources[leader] = sinkAndSource{
-			sink:   cl.newSink(leader),
-			source: cl.newSource(leader),
-		}
-	}
-
+	leaders := make([]int32, 0, len(k.recBufs)+len(k.cursors))
 	for _, td := range k.recBufs {
-		ensure(td.leader)
+		leaders = append(leaders, td.leader)
 	}
 	for _, td := range k.cursors {
-		ensure(td.leader)
+		leaders = append(leaders, td.leader)
 	}
+	cl.ensureSinksAndSources(leaders)
 }
 
 func (k *kip951move) ensureBrokers(cl *Client) {
-	if len(k.brokers) == 0 {
+	cl.ensureBrokers(k.brokers)
+}
+
+// ensureBrokers adds or replaces individual brokers without removing
+// unrelated ones. This is used for KIP-951 and share group moves where
+// the response only includes a subset of brokers. A full updateBrokers
+// merge-sort would destroy all other brokers; those destroyed brokers
+// get recreated on the next metadata refresh as new objects with new
+// connections, which breaks the single-connection-per-broker ordering
+// guarantee that Kafka requires for idempotent/transactional produce.
+func (cl *Client) ensureBrokers(brokers []BrokerMetadata) {
+	if len(brokers) == 0 {
 		return
 	}
 
-	// We only add or replace individual brokers here, never remove
-	// unrelated ones. updateBrokers does a full merge-sort that
-	// removes any existing broker not in the input list. The KIP-951
-	// response only includes brokers relevant to the move (a subset),
-	// so calling updateBrokers would destroy all other brokers. Those
-	// destroyed brokers get recreated on the next metadata refresh as
-	// new objects with new connections, which breaks the single-
-	// connection-per-broker ordering guarantee that Kafka requires
-	// for idempotent/transactional produce.
 	cl.brokersMu.Lock()
 	defer cl.brokersMu.Unlock()
 
@@ -770,7 +761,7 @@ func (k *kip951move) ensureBrokers(cl *Client) {
 	}
 
 	var changed bool
-	for _, b := range k.brokers {
+	for _, b := range brokers {
 		nb := kmsg.MetadataResponseBroker{
 			NodeID: b.NodeID,
 			Host:   b.Host,
@@ -801,6 +792,21 @@ func (k *kip951move) ensureBrokers(cl *Client) {
 			return cl.brokers[i].meta.NodeID < cl.brokers[j].meta.NodeID
 		})
 		cl.reinitAnyBrokerOrd()
+	}
+}
+
+// ensureSinksAndSources creates sinks and sources for the given leader
+// node IDs if they do not already exist.
+func (cl *Client) ensureSinksAndSources(leaders []int32) {
+	cl.sinksAndSourcesMu.Lock()
+	defer cl.sinksAndSourcesMu.Unlock()
+	for _, leader := range leaders {
+		if _, exists := cl.sinksAndSources[leader]; !exists {
+			cl.sinksAndSources[leader] = sinkAndSource{
+				sink:   cl.newSink(leader),
+				source: cl.newSource(leader),
+			}
+		}
 	}
 }
 

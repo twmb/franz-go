@@ -867,12 +867,12 @@ func TestGroupSimple(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if tc.enable848 && !allow848 {
-				t.Skip("broker does not support KIP-848 (requires ConsumerGroupHeartbeat, key 68)")
-			}
 
 			t1, cleanup := tmpTopicPartitions(t, 1)
 			defer cleanup()
+			if tc.enable848 && !allow848 {
+				t.Skip("broker does not support KIP-848 (requires ConsumerGroupHeartbeat, key 68)")
+			}
 			g1, gcleanup := tmpGroup(t)
 			defer gcleanup()
 

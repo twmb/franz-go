@@ -193,6 +193,7 @@ type consumer struct {
 	mu sync.Mutex
 	d  *directConsumer // if non-nil, we are consuming partitions directly
 	g  *groupConsumer  // if non-nil, we are consuming as a group member
+	s  *shareConsumer  // if non-nil, we are consuming as a share group member
 
 	// On metadata update, if the consumer is set (direct or group), the
 	// client begins a goroutine that updates the consumer kind's
@@ -339,7 +340,9 @@ func (c *consumer) init(cl *Client) {
 		defer cl.triggerUpdateMetadataNow("querying metadata for consumer initialization") // we definitely want to trigger a metadata update
 	}
 
-	if len(cl.cfg.group) == 0 {
+	if len(cl.cfg.shareGroup) > 0 {
+		c.initShare()
+	} else if len(cl.cfg.group) == 0 {
 		c.initDirect()
 	} else {
 		c.initGroup()
@@ -347,7 +350,7 @@ func (c *consumer) init(cl *Client) {
 }
 
 func (c *consumer) consuming() bool {
-	return c.g != nil || c.d != nil
+	return c.g != nil || c.d != nil || c.s != nil
 }
 
 // addSourceReadyForDraining tracks that a source needs its buffered fetch
@@ -373,6 +376,31 @@ func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err er
 	}}})
 	c.sourcesReadyMu.Unlock()
 	c.sourcesReadyCond.Broadcast()
+	// Share consumers block in shareConsumer.poll on assignChanged,
+	// not sourcesReadyCond. Wake them so injected errors (e.g.,
+	// fatal heartbeat failures) are surfaced even with no share
+	// cursors.
+	if c.s != nil {
+		c.s.assignChanged.Broadcast()
+	}
+}
+
+// hasFakeReady reports whether any injected error fetches are pending.
+// Called from shareConsumer.poll under c.mu; the lock ordering c.mu ->
+// sourcesReadyMu is safe because nothing holds sourcesReadyMu then c.mu.
+func (c *consumer) hasFakeReady() bool {
+	c.sourcesReadyMu.Lock()
+	defer c.sourcesReadyMu.Unlock()
+	return len(c.fakeReadyForDraining) > 0
+}
+
+// drainFakeReady returns and clears all pending injected error fetches.
+func (c *consumer) drainFakeReady() []Fetch {
+	c.sourcesReadyMu.Lock()
+	fake := c.fakeReadyForDraining
+	c.fakeReadyForDraining = nil
+	c.sourcesReadyMu.Unlock()
+	return fake
 }
 
 // NewErrFetch returns a fake fetch containing a single empty topic with a
@@ -433,6 +461,12 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 // accidentally commit to partitions that you no longer own. You can prevent
 // this by using BlockRebalanceOnPoll, but this comes with different tradeoffs.
 // See the documentation on BlockRebalanceOnPoll for more information.
+//
+// For share group consumers, PollFetches / PollRecords and CommitAcks must not
+// be called concurrently. Both operate on per-broker share session epochs;
+// concurrent calls can cause the broker to reject one request with
+// INVALID_SHARE_SESSION_EPOCH, forcing a session reset. The intended pattern
+// is sequential: poll, process, ack, commit, repeat.
 func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	if maxPollRecords == 0 {
 		maxPollRecords = -1
@@ -451,6 +485,15 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 			return NewErrFetch(ctx.Err())
 		default:
 		}
+	}
+
+	// Share consumers use a pull model: we send ShareFetch requests
+	// synchronously within PollFetches so records are only acquired
+	// from the broker when the user is ready to process them. This
+	// avoids starting the broker's ack timer while records sit in an
+	// internal buffer.
+	if c.s != nil {
+		return c.s.poll(ctx, maxPollRecords)
 	}
 
 	var fetches Fetches
@@ -725,7 +768,7 @@ func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bo
 // that metadata does not load the tps we are changing. Basically, we ensure
 // everything w.r.t. consuming is at a stand still.
 func (c *consumer) purgeTopics(topics []string) {
-	if c.g == nil && c.d == nil {
+	if c.g == nil && c.d == nil && c.s == nil {
 		return
 	}
 
@@ -751,7 +794,9 @@ func (c *consumer) purgeTopics(topics []string) {
 	// this cannot run concurrent with findNewAssignments. Thus, we first
 	// purge tps, then clear using, and once the lock releases, findNewAssignments
 	// will use the now-purged tps and will not add back to using.
-	if c.g != nil {
+	if c.s != nil {
+		c.s.purgeTopics(topics)
+	} else if c.g != nil {
 		c.g.mu.Lock() // required when updating using
 		defer c.g.mu.Unlock()
 		c.assignPartitions(purgeAssignments, assignPurgeMatching, c.g.tps, fmt.Sprintf("purge of %v requested", topics))
@@ -781,7 +826,7 @@ func (c *consumer) purgeTopics(topics []string) {
 // entire topic is purged.
 func (cl *Client) AddConsumeTopics(topics ...string) {
 	c := &cl.consumer
-	if len(topics) == 0 || c.g == nil && c.d == nil || cl.cfg.regex {
+	if len(topics) == 0 || c.g == nil && c.d == nil && c.s == nil || cl.cfg.regex {
 		return
 	}
 
@@ -790,7 +835,9 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.g != nil {
+	if c.s != nil {
+		c.s.tps.storeTopics(topics)
+	} else if c.g != nil {
 		c.g.tps.storeTopics(topics)
 	} else {
 		c.d.tps.storeTopics(topics)
@@ -804,12 +851,14 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 // GetConsumeTopics retrieves a list of current topics being consumed.
 func (cl *Client) GetConsumeTopics() []string {
 	c := &cl.consumer
-	if c.g == nil && c.d == nil {
+	if c.g == nil && c.d == nil && c.s == nil {
 		return nil
 	}
 	var m map[string]*topicPartitions
 	var ok bool
-	if c.g != nil {
+	if c.s != nil {
+		m, ok = c.s.tps.v.Load().(topicsPartitionsData)
+	} else if c.g != nil {
 		m, ok = c.g.tps.v.Load().(topicsPartitionsData)
 	} else {
 		m, ok = c.d.tps.v.Load().(topicsPartitionsData)
@@ -1233,9 +1282,12 @@ func (c *consumer) filterMetadataAllTopics(topics []string) []string {
 	defer rns.log(&c.cl.cfg)
 
 	var reSeen map[string]bool
-	if c.d != nil {
+	switch {
+	case c.d != nil:
 		reSeen = c.d.reSeen
-	} else {
+	case c.s != nil:
+		reSeen = c.s.reSeen
+	default:
 		reSeen = c.g.reSeen
 	}
 
@@ -1290,6 +1342,8 @@ func (c *consumer) doOnMetadataUpdate() {
 				if new := c.d.findNewAssignments(); len(new) > 0 {
 					c.assignPartitions(new, assignWithoutInvalidating, c.d.tps, "new assignments from direct consumer")
 				}
+			case c.s != nil:
+				c.s.findNewAssignments()
 			case c.g != nil:
 				c.g.findNewAssignments()
 			}
