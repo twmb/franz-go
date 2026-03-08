@@ -412,6 +412,12 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.blockRebalanceOnPoll}
 	case namefn(ConsumerGroup):
 		return []any{cfg.group}
+	case namefn(ShareGroup):
+		return []any{cfg.shareGroup}
+	case namefn(ShareMaxRecords):
+		return []any{cfg.shareMaxRecords}
+	case namefn(ShareStrictMaxRecords):
+		return []any{cfg.shareStrictMaxRecords}
 	case namefn(DisableAutoCommit):
 		return []any{cfg.autocommitDisable}
 	case namefn(GreedyAutoCommit):
@@ -447,6 +453,39 @@ func (cl *Client) OptValues(opt any) []any {
 	}
 }
 
+// MarkAcks sets the acknowledgement status for share group records. If no
+// records are provided, all unmarked records from the current poll are marked.
+// If specific records are provided, only those records are marked.
+//
+// Unlike Record.Ack, MarkAcks does not override records that already have an
+// explicit status -- it only fills in records that are still pending (unmarked
+// and not finalized). Use Record.Ack to override a previously set status.
+//
+// This only marks records locally. To send the acknowledgements to the broker,
+// call Client.CommitAcks.
+func (cl *Client) MarkAcks(status AckStatus, records ...*Record) {
+	s := cl.consumer.s
+	if s == nil {
+		return
+	}
+	s.markAcks(status, records)
+}
+
+// CommitAcks sends all pending share group acknowledgements to the broker.
+// Records are marked for acknowledgement by calling Record.Ack or
+// Client.MarkAcks; this method sends those marks to the broker via
+// ShareAcknowledge requests.
+//
+// Records that are not explicitly acknowledged before the next PollFetches /
+// PollRecords call are automatically accepted.
+func (cl *Client) CommitAcks(ctx context.Context) error {
+	s := cl.consumer.s
+	if s == nil {
+		return errNotShareGroup
+	}
+	return s.commitAcks(ctx)
+}
+
 // NewClient returns a new Kafka client with the given options or an error if
 // the options are invalid. Connections to brokers are lazily created only when
 // requests are written to them.
@@ -471,7 +510,11 @@ func NewClient(opts ...Opt) (*Client, error) {
 			case ((*kmsg.JoinGroupRequest)(nil)).Key(),
 				((*kmsg.SyncGroupRequest)(nil)).Key(),
 				((*kmsg.HeartbeatRequest)(nil)).Key(),
-				((*kmsg.ConsumerGroupHeartbeatRequest)(nil)).Key():
+				((*kmsg.ConsumerGroupHeartbeatRequest)(nil)).Key(),
+				((*kmsg.ShareGroupHeartbeatRequest)(nil)).Key():
+				return cfg.sessionTimeout
+			case ((*kmsg.ShareFetchRequest)(nil)).Key(),
+				((*kmsg.ShareAcknowledgeRequest)(nil)).Key():
 				return cfg.sessionTimeout
 			}
 			return 30 * time.Second
@@ -1153,6 +1196,9 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 	if c.g != nil {
 		rerr = cl.LeaveGroupContext(ctx)
 		<-c.g.left
+	} else if c.s != nil {
+		c.s.leave(ctx)
+		<-c.s.left
 	} else if c.d != nil {
 		c.mu.Lock()                                           // lock for assign
 		c.assignPartitions(nil, assignInvalidateAll, nil, "") // we do not use a log message when not in a group
@@ -2182,6 +2228,15 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 	// ConsumerGroupHeartbeat cannot be retried at all
 	case *kmsg.ConsumerGroupHeartbeatRequest:
 		br, err := cl.loadCoordinator(ctx, coordinatorTypeGroup, t.Group)
+		var resp kmsg.Response
+		if err == nil {
+			resp, err = br.waitResp(ctx, req)
+		}
+		return shard(br, req, resp, err)
+
+	// ShareGroupHeartbeat cannot be retried at all
+	case *kmsg.ShareGroupHeartbeatRequest:
+		br, err := cl.loadCoordinator(ctx, coordinatorTypeGroup, t.GroupID)
 		var resp kmsg.Response
 		if err == nil {
 			resp, err = br.waitResp(ctx, req)

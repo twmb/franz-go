@@ -128,7 +128,7 @@ func TestTxnEtl(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			t.Run(tc.name, func(t *testing.T) {
+			if !t.Run(tc.name, func(t *testing.T) {
 				defer func() { <-etlSem }()
 				testChainETL(
 					t,
@@ -139,7 +139,9 @@ func TestTxnEtl(t *testing.T) {
 					tc.enable848,
 					tc.instanceID,
 				)
-			})
+			}) {
+				<-etlSem
+			}
 		}()
 	}
 	wg.Wait()

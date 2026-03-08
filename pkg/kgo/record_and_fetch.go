@@ -186,6 +186,40 @@ func (r *Record) AppendFormat(b []byte, layout string) ([]byte, error) {
 	return f.AppendRecord(b, r), nil
 }
 
+// DeliveryCount returns the share group delivery count for this record, or 0
+// if the record is not from a share group. The delivery count indicates how
+// many times the broker has delivered this record (including the current
+// delivery).
+func (r *Record) DeliveryCount() int32 {
+	st := shareAckFromCtx(r)
+	if st == nil {
+		return 0
+	}
+	return st.deliveryCount
+}
+
+// Ack sets the acknowledgement status for this share group record. The status
+// determines how the broker handles the record: AckAccept commits it,
+// AckRelease returns it for redelivery, AckReject marks it as unprocessable,
+// and AckRenew extends the acquisition lock.
+//
+// This only marks the record locally. To send the acknowledgements to the
+// broker, call Client.CommitAcks.
+//
+// If this record is not from a share group or was already finalized, this
+// is a no-op.
+func (r *Record) Ack(status AckStatus) {
+	st := shareAckFromCtx(r)
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	if st.status&ackFinalized == 0 {
+		st.status = uint8(status)
+	}
+	st.mu.Unlock()
+}
+
 // StringRecord returns a Record with the Value field set to the input value
 // string. For producing, this function is useful in tandem with the
 // client-level DefaultProduceTopic option.

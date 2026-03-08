@@ -193,6 +193,7 @@ type consumer struct {
 	mu sync.Mutex
 	d  *directConsumer // if non-nil, we are consuming partitions directly
 	g  *groupConsumer  // if non-nil, we are consuming as a group member
+	s  *shareConsumer  // if non-nil, we are consuming as a share group member
 
 	// On metadata update, if the consumer is set (direct or group), the
 	// client begins a goroutine that updates the consumer kind's
@@ -339,7 +340,9 @@ func (c *consumer) init(cl *Client) {
 		defer cl.triggerUpdateMetadataNow("querying metadata for consumer initialization") // we definitely want to trigger a metadata update
 	}
 
-	if len(cl.cfg.group) == 0 {
+	if len(cl.cfg.shareGroup) > 0 {
+		c.initShare()
+	} else if len(cl.cfg.group) == 0 {
 		c.initDirect()
 	} else {
 		c.initGroup()
@@ -347,7 +350,7 @@ func (c *consumer) init(cl *Client) {
 }
 
 func (c *consumer) consuming() bool {
-	return c.g != nil || c.d != nil
+	return c.g != nil || c.d != nil || c.s != nil
 }
 
 // addSourceReadyForDraining tracks that a source needs its buffered fetch
@@ -453,6 +456,15 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 		}
 	}
 
+	// Share consumers use a pull model: we send ShareFetch requests
+	// synchronously within PollFetches so records are only acquired
+	// from the broker when the user is ready to process them. This
+	// avoids starting the broker's ack timer while records sit in an
+	// internal buffer.
+	if c.s != nil {
+		return c.s.pollShareFetches(ctx)
+	}
+
 	var fetches Fetches
 	fill := func() {
 		if c.cl.cfg.blockRebalanceOnPoll {
@@ -522,6 +534,7 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 		if c.g != nil {
 			c.g.updateUncommitted(realFetches)
 		}
+
 	}
 
 	// We try filling fetches once before waiting. If we have no context,
@@ -1233,9 +1246,12 @@ func (c *consumer) filterMetadataAllTopics(topics []string) []string {
 	defer rns.log(&c.cl.cfg)
 
 	var reSeen map[string]bool
-	if c.d != nil {
+	switch {
+	case c.d != nil:
 		reSeen = c.d.reSeen
-	} else {
+	case c.s != nil:
+		reSeen = c.s.reSeen
+	default:
 		reSeen = c.g.reSeen
 	}
 
@@ -1290,6 +1306,8 @@ func (c *consumer) doOnMetadataUpdate() {
 				if new := c.d.findNewAssignments(); len(new) > 0 {
 					c.assignPartitions(new, assignWithoutInvalidating, c.d.tps, "new assignments from direct consumer")
 				}
+			case c.s != nil:
+				c.s.findNewAssignments()
 			case c.g != nil:
 				c.g.findNewAssignments()
 			}

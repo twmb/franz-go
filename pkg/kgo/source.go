@@ -44,6 +44,12 @@ type source struct {
 	cursorsMu    sync.Mutex
 	cursors      []*cursor // contains all partitions being consumed on this source
 	cursorsStart int       // incremented every fetch req to ensure all partitions are fetched
+
+	shareCursors []*shareCursor
+
+	shareSessionEpoch int32                                // 0=new, incremented on success, -1=close
+	sharePendingAcks  map[string]map[int32][]shareAckBatch // topic -> partition -> ack batches to piggyback
+	shareForgotten    map[[16]byte][]int32                 // topicID -> partitions to forget
 }
 
 func (cl *Client) newSource(nodeID int32) *source {
@@ -91,6 +97,34 @@ func (s *source) removeCursor(rm *cursor) {
 	if s.cursorsStart == len(s.cursors) {
 		s.cursorsStart = 0
 	}
+}
+
+func (s *source) addShareCursor(add *shareCursor) {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	add.cursorsIdx = len(s.shareCursors)
+	s.shareCursors = append(s.shareCursors, add)
+}
+
+func (s *source) removeShareCursor(rm *shareCursor) {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+
+	if rm.cursorsIdx != len(s.shareCursors)-1 {
+		s.shareCursors[rm.cursorsIdx], s.shareCursors[len(s.shareCursors)-1] = s.shareCursors[len(s.shareCursors)-1], nil
+		s.shareCursors[rm.cursorsIdx].cursorsIdx = rm.cursorsIdx
+	} else {
+		s.shareCursors[rm.cursorsIdx] = nil
+	}
+
+	s.shareCursors = s.shareCursors[:len(s.shareCursors)-1]
+
+	// Track removed partition so the next ShareFetch tells the broker
+	// to forget it from the share session.
+	if s.shareForgotten == nil {
+		s.shareForgotten = make(map[[16]byte][]int32)
+	}
+	s.shareForgotten[rm.topicID] = append(s.shareForgotten[rm.topicID], rm.partition)
 }
 
 // cursor is where we are consuming from for an individual partition.
@@ -649,6 +683,28 @@ func (s *source) takeBufferedFn(polled bool, offsetFn func(usedOffsets)) Fetch {
 	s.hook(&r.fetch, false, polled) // unbuffered, potentially polled
 
 	return r.fetch
+}
+
+func (s *source) addShareAcks(topic string, partition int32, batches []shareAckBatch) {
+	s.cursorsMu.Lock()
+	if s.sharePendingAcks == nil {
+		s.sharePendingAcks = make(map[string]map[int32][]shareAckBatch)
+	}
+	parts := s.sharePendingAcks[topic]
+	if parts == nil {
+		parts = make(map[int32][]shareAckBatch)
+		s.sharePendingAcks[topic] = parts
+	}
+	parts[partition] = append(parts[partition], batches...)
+	s.cursorsMu.Unlock()
+}
+
+func (s *source) drainShareAcks() map[string]map[int32][]shareAckBatch {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	acks := s.sharePendingAcks
+	s.sharePendingAcks = nil
+	return acks
 }
 
 // createReq actually creates a fetch request.
