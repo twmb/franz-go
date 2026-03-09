@@ -51955,11 +51955,12 @@ type ShareGroupHeartbeatRequest struct {
 	UnknownTags Tags
 }
 
-func (*ShareGroupHeartbeatRequest) Key() int16                 { return 76 }
-func (*ShareGroupHeartbeatRequest) MaxVersion() int16          { return 1 }
-func (v *ShareGroupHeartbeatRequest) SetVersion(version int16) { v.Version = version }
-func (v *ShareGroupHeartbeatRequest) GetVersion() int16        { return v.Version }
-func (v *ShareGroupHeartbeatRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*ShareGroupHeartbeatRequest) Key() int16                   { return 76 }
+func (*ShareGroupHeartbeatRequest) MaxVersion() int16            { return 1 }
+func (v *ShareGroupHeartbeatRequest) SetVersion(version int16)   { v.Version = version }
+func (v *ShareGroupHeartbeatRequest) GetVersion() int16          { return v.Version }
+func (v *ShareGroupHeartbeatRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *ShareGroupHeartbeatRequest) IsGroupCoordinatorRequest() {}
 func (v *ShareGroupHeartbeatRequest) ResponseKind() Response {
 	r := &ShareGroupHeartbeatResponse{Version: v.Version}
 	r.Default()
@@ -52544,11 +52545,12 @@ type ShareGroupDescribeRequest struct {
 	UnknownTags Tags
 }
 
-func (*ShareGroupDescribeRequest) Key() int16                 { return 77 }
-func (*ShareGroupDescribeRequest) MaxVersion() int16          { return 1 }
-func (v *ShareGroupDescribeRequest) SetVersion(version int16) { v.Version = version }
-func (v *ShareGroupDescribeRequest) GetVersion() int16        { return v.Version }
-func (v *ShareGroupDescribeRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*ShareGroupDescribeRequest) Key() int16                   { return 77 }
+func (*ShareGroupDescribeRequest) MaxVersion() int16            { return 1 }
+func (v *ShareGroupDescribeRequest) SetVersion(version int16)   { v.Version = version }
+func (v *ShareGroupDescribeRequest) GetVersion() int16          { return v.Version }
+func (v *ShareGroupDescribeRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *ShareGroupDescribeRequest) IsGroupCoordinatorRequest() {}
 func (v *ShareGroupDescribeRequest) ResponseKind() Response {
 	r := &ShareGroupDescribeResponse{Version: v.Version}
 	r.Default()
@@ -57092,11 +57094,12 @@ type InitializeShareGroupStateRequest struct {
 	UnknownTags Tags
 }
 
-func (*InitializeShareGroupStateRequest) Key() int16                 { return 83 }
-func (*InitializeShareGroupStateRequest) MaxVersion() int16          { return 0 }
-func (v *InitializeShareGroupStateRequest) SetVersion(version int16) { v.Version = version }
-func (v *InitializeShareGroupStateRequest) GetVersion() int16        { return v.Version }
-func (v *InitializeShareGroupStateRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*InitializeShareGroupStateRequest) Key() int16                   { return 83 }
+func (*InitializeShareGroupStateRequest) MaxVersion() int16            { return 0 }
+func (v *InitializeShareGroupStateRequest) SetVersion(version int16)   { v.Version = version }
+func (v *InitializeShareGroupStateRequest) GetVersion() int16          { return v.Version }
+func (v *InitializeShareGroupStateRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *InitializeShareGroupStateRequest) IsShareCoordinatorRequest() {}
 func (v *InitializeShareGroupStateRequest) ResponseKind() Response {
 	r := &InitializeShareGroupStateResponse{Version: v.Version}
 	r.Default()
@@ -57638,11 +57641,12 @@ type ReadShareGroupStateRequest struct {
 	UnknownTags Tags
 }
 
-func (*ReadShareGroupStateRequest) Key() int16                 { return 84 }
-func (*ReadShareGroupStateRequest) MaxVersion() int16          { return 0 }
-func (v *ReadShareGroupStateRequest) SetVersion(version int16) { v.Version = version }
-func (v *ReadShareGroupStateRequest) GetVersion() int16        { return v.Version }
-func (v *ReadShareGroupStateRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*ReadShareGroupStateRequest) Key() int16                   { return 84 }
+func (*ReadShareGroupStateRequest) MaxVersion() int16            { return 0 }
+func (v *ReadShareGroupStateRequest) SetVersion(version int16)   { v.Version = version }
+func (v *ReadShareGroupStateRequest) GetVersion() int16          { return v.Version }
+func (v *ReadShareGroupStateRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *ReadShareGroupStateRequest) IsShareCoordinatorRequest() {}
 func (v *ReadShareGroupStateRequest) ResponseKind() Response {
 	r := &ReadShareGroupStateResponse{Version: v.Version}
 	r.Default()
@@ -58358,11 +58362,12 @@ type WriteShareGroupStateRequest struct {
 	UnknownTags Tags
 }
 
-func (*WriteShareGroupStateRequest) Key() int16                 { return 85 }
-func (*WriteShareGroupStateRequest) MaxVersion() int16          { return 1 }
-func (v *WriteShareGroupStateRequest) SetVersion(version int16) { v.Version = version }
-func (v *WriteShareGroupStateRequest) GetVersion() int16        { return v.Version }
-func (v *WriteShareGroupStateRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*WriteShareGroupStateRequest) Key() int16                   { return 85 }
+func (*WriteShareGroupStateRequest) MaxVersion() int16            { return 1 }
+func (v *WriteShareGroupStateRequest) SetVersion(version int16)   { v.Version = version }
+func (v *WriteShareGroupStateRequest) GetVersion() int16          { return v.Version }
+func (v *WriteShareGroupStateRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *WriteShareGroupStateRequest) IsShareCoordinatorRequest() {}
 func (v *WriteShareGroupStateRequest) ResponseKind() Response {
 	r := &WriteShareGroupStateResponse{Version: v.Version}
 	r.Default()
@@ -58994,11 +58999,12 @@ type DeleteShareGroupStateRequest struct {
 	UnknownTags Tags
 }
 
-func (*DeleteShareGroupStateRequest) Key() int16                 { return 86 }
-func (*DeleteShareGroupStateRequest) MaxVersion() int16          { return 0 }
-func (v *DeleteShareGroupStateRequest) SetVersion(version int16) { v.Version = version }
-func (v *DeleteShareGroupStateRequest) GetVersion() int16        { return v.Version }
-func (v *DeleteShareGroupStateRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*DeleteShareGroupStateRequest) Key() int16                   { return 86 }
+func (*DeleteShareGroupStateRequest) MaxVersion() int16            { return 0 }
+func (v *DeleteShareGroupStateRequest) SetVersion(version int16)   { v.Version = version }
+func (v *DeleteShareGroupStateRequest) GetVersion() int16          { return v.Version }
+func (v *DeleteShareGroupStateRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *DeleteShareGroupStateRequest) IsShareCoordinatorRequest() {}
 func (v *DeleteShareGroupStateRequest) ResponseKind() Response {
 	r := &DeleteShareGroupStateResponse{Version: v.Version}
 	r.Default()
@@ -59528,11 +59534,12 @@ type ReadShareGroupStateSummaryRequest struct {
 	UnknownTags Tags
 }
 
-func (*ReadShareGroupStateSummaryRequest) Key() int16                 { return 87 }
-func (*ReadShareGroupStateSummaryRequest) MaxVersion() int16          { return 1 }
-func (v *ReadShareGroupStateSummaryRequest) SetVersion(version int16) { v.Version = version }
-func (v *ReadShareGroupStateSummaryRequest) GetVersion() int16        { return v.Version }
-func (v *ReadShareGroupStateSummaryRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*ReadShareGroupStateSummaryRequest) Key() int16                   { return 87 }
+func (*ReadShareGroupStateSummaryRequest) MaxVersion() int16            { return 1 }
+func (v *ReadShareGroupStateSummaryRequest) SetVersion(version int16)   { v.Version = version }
+func (v *ReadShareGroupStateSummaryRequest) GetVersion() int16          { return v.Version }
+func (v *ReadShareGroupStateSummaryRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *ReadShareGroupStateSummaryRequest) IsShareCoordinatorRequest() {}
 func (v *ReadShareGroupStateSummaryRequest) ResponseKind() Response {
 	r := &ReadShareGroupStateSummaryResponse{Version: v.Version}
 	r.Default()
@@ -65512,11 +65519,12 @@ type DescribeShareGroupOffsetsRequest struct {
 	UnknownTags Tags
 }
 
-func (*DescribeShareGroupOffsetsRequest) Key() int16                 { return 90 }
-func (*DescribeShareGroupOffsetsRequest) MaxVersion() int16          { return 1 }
-func (v *DescribeShareGroupOffsetsRequest) SetVersion(version int16) { v.Version = version }
-func (v *DescribeShareGroupOffsetsRequest) GetVersion() int16        { return v.Version }
-func (v *DescribeShareGroupOffsetsRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*DescribeShareGroupOffsetsRequest) Key() int16                   { return 90 }
+func (*DescribeShareGroupOffsetsRequest) MaxVersion() int16            { return 1 }
+func (v *DescribeShareGroupOffsetsRequest) SetVersion(version int16)   { v.Version = version }
+func (v *DescribeShareGroupOffsetsRequest) GetVersion() int16          { return v.Version }
+func (v *DescribeShareGroupOffsetsRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *DescribeShareGroupOffsetsRequest) IsGroupCoordinatorRequest() {}
 func (v *DescribeShareGroupOffsetsRequest) ResponseKind() Response {
 	r := &DescribeShareGroupOffsetsResponse{Version: v.Version}
 	r.Default()
@@ -66309,11 +66317,12 @@ type AlterShareGroupOffsetsRequest struct {
 	UnknownTags Tags
 }
 
-func (*AlterShareGroupOffsetsRequest) Key() int16                 { return 91 }
-func (*AlterShareGroupOffsetsRequest) MaxVersion() int16          { return 0 }
-func (v *AlterShareGroupOffsetsRequest) SetVersion(version int16) { v.Version = version }
-func (v *AlterShareGroupOffsetsRequest) GetVersion() int16        { return v.Version }
-func (v *AlterShareGroupOffsetsRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*AlterShareGroupOffsetsRequest) Key() int16                   { return 91 }
+func (*AlterShareGroupOffsetsRequest) MaxVersion() int16            { return 0 }
+func (v *AlterShareGroupOffsetsRequest) SetVersion(version int16)   { v.Version = version }
+func (v *AlterShareGroupOffsetsRequest) GetVersion() int16          { return v.Version }
+func (v *AlterShareGroupOffsetsRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *AlterShareGroupOffsetsRequest) IsGroupCoordinatorRequest() {}
 func (v *AlterShareGroupOffsetsRequest) ResponseKind() Response {
 	r := &AlterShareGroupOffsetsResponse{Version: v.Version}
 	r.Default()
@@ -66930,11 +66939,12 @@ type DeleteShareGroupOffsetsRequest struct {
 	UnknownTags Tags
 }
 
-func (*DeleteShareGroupOffsetsRequest) Key() int16                 { return 92 }
-func (*DeleteShareGroupOffsetsRequest) MaxVersion() int16          { return 0 }
-func (v *DeleteShareGroupOffsetsRequest) SetVersion(version int16) { v.Version = version }
-func (v *DeleteShareGroupOffsetsRequest) GetVersion() int16        { return v.Version }
-func (v *DeleteShareGroupOffsetsRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*DeleteShareGroupOffsetsRequest) Key() int16                   { return 92 }
+func (*DeleteShareGroupOffsetsRequest) MaxVersion() int16            { return 0 }
+func (v *DeleteShareGroupOffsetsRequest) SetVersion(version int16)   { v.Version = version }
+func (v *DeleteShareGroupOffsetsRequest) GetVersion() int16          { return v.Version }
+func (v *DeleteShareGroupOffsetsRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *DeleteShareGroupOffsetsRequest) IsGroupCoordinatorRequest() {}
 func (v *DeleteShareGroupOffsetsRequest) ResponseKind() Response {
 	r := &DeleteShareGroupOffsetsResponse{Version: v.Version}
 	r.Default()
