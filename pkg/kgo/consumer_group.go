@@ -1092,7 +1092,7 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 		// If cfg.retries consecutive failures occur without any
 		// success, the error propagates to manage848 which
 		// rebuilds the session.
-		if is848 && (isRetryableBrokerErr(err) || g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err)) {
+		if is848 && (isRetryableBrokerErr(err) || isAnyDialErr(err) || g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err)) {
 			if int64(hbBrokerRetries) < g.cfg.retries {
 				hbBrokerRetries++
 				backoff := g.cfg.retryBackoff(hbBrokerRetries)
