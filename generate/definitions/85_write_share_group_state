@@ -1,6 +1,6 @@
 // WriteShareGroupStateRequest is a request to write share group state.
 // Version 1, introduced in Kafka 4.2, adds DeliveryCompleteCount (KIP-1226).
-WriteShareGroupStateRequest => key 85, max version 1, flexible v0+
+WriteShareGroupStateRequest => key 85, max version 1, flexible v0+, share coordinator
   // GroupID is the group identifier.
   GroupID: string
   // Topics are the data for the topics.
