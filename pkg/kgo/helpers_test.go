@@ -620,6 +620,16 @@ type testConsumer struct {
 	partOffsets map[partOffset]struct{}
 }
 
+// sendErr non-blocking sends an error to errCh. Only the first error
+// matters; if the reader already called t.Fatal, additional sends must
+// not block or the goroutine leaks and holds the ETL semaphore forever.
+func (c *testConsumer) sendErr(err error) {
+	select {
+	case c.errCh <- err:
+	default:
+	}
+}
+
 type partOffset struct {
 	part   int32
 	offset int64
@@ -740,7 +750,7 @@ func testChainETL(
 	if enable848 && !allow848 {
 		t.Skip("broker does not support KIP-848 (requires ConsumerGroupHeartbeat, key 68)")
 	}
-	errs := make(chan error)
+	errs := make(chan error, 1)
 	var (
 		/////////////
 		// LEVEL 1 //
