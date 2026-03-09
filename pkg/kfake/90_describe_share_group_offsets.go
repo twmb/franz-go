@@ -26,19 +26,37 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 		rsg := kmsg.NewDescribeShareGroupOffsetsResponseGroup()
 		rsg.GroupID = rg.GroupID
 
-		sg := c.shareGroups.gs[rg.GroupID]
-		if sg == nil {
-			rsg.ErrorCode = kerr.GroupIDNotFound.Code
+		// ACL: require GROUP DESCRIBE.
+		if !c.allowedACL(creq, rg.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
+			rsg.ErrorCode = kerr.GroupAuthorizationFailed.Code
 			resp.Groups = append(resp.Groups, rsg)
 			continue
 		}
 
-		sg.mu.Lock()
+		sg := c.shareGroups.gs[rg.GroupID]
+		if sg == nil {
+			rsg.ErrorCode = kerr.GroupIDNotFound.Code
+		} else {
+			sg.mu.Lock()
+		}
 		for j := range rg.Topics {
 			rt := &rg.Topics[j]
 			rst := kmsg.NewDescribeShareGroupOffsetsResponseGroupTopic()
 			rst.Topic = rt.Topic
 			rst.TopicID = c.data.t2id[rt.Topic]
+
+			// ACL: per-topic DESCRIBE check.
+			if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+				for _, partition := range rt.Partitions {
+					rsp := kmsg.NewDescribeShareGroupOffsetsResponseGroupTopicPartition()
+					rsp.Partition = partition
+					rsp.ErrorCode = kerr.TopicAuthorizationFailed.Code
+					rsp.StartOffset = -1
+					rst.Partitions = append(rst.Partitions, rsp)
+				}
+				rsg.Topics = append(rsg.Topics, rst)
+				continue
+			}
 
 			for _, partition := range rt.Partitions {
 				rsp := kmsg.NewDescribeShareGroupOffsetsResponseGroupTopicPartition()
@@ -53,8 +71,10 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 				}
 
 				rsp.LeaderEpoch = pd.epoch
-				sp, ok := sg.partitions.getp(rt.Topic, partition)
-				if !ok {
+				if sg == nil {
+					// Group doesn't exist -- no share state.
+					rsp.StartOffset = -1
+				} else if sp, ok := sg.partitions.getp(rt.Topic, partition); !ok {
 					// No share state yet -- SPSO not initialized.
 					rsp.StartOffset = -1
 				} else {
@@ -71,7 +91,9 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 
 			rsg.Topics = append(rsg.Topics, rst)
 		}
-		sg.mu.Unlock()
+		if sg != nil {
+			sg.mu.Unlock()
+		}
 
 		resp.Groups = append(resp.Groups, rsg)
 	}

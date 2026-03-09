@@ -20,6 +20,12 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 		return nil, err
 	}
 
+	// ACL: require GROUP DELETE.
+	if !c.allowedACL(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete) {
+		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+		return resp, nil
+	}
+
 	sg := c.shareGroups.gs[req.GroupID]
 	if sg == nil {
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
@@ -48,8 +54,17 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 			resp.Topics = append(resp.Topics, rst)
 		}
 		sg.mu.Unlock()
+
+		sg.maybeQuit()
 	}) {
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
+	}
+
+	// Clean up from shareGroups.gs if the group shut down.
+	select {
+	case <-sg.quitCh:
+		delete(c.shareGroups.gs, req.GroupID)
+	default:
 	}
 
 	return resp, nil

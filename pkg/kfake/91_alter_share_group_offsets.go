@@ -20,6 +20,12 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 		return nil, err
 	}
 
+	// ACL: require GROUP READ (Kafka uses READ, not ALTER).
+	if !c.allowedACL(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
+		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+		return resp, nil
+	}
+
 	sg := c.shareGroups.gs[req.GroupID]
 	if sg == nil {
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
@@ -69,16 +75,18 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 					continue
 				}
 
-				// Reset SPSO and clear all record state.
+				// Reset SPSO, scan cursor, and all record state.
 				sp, ok := sg.partitions.getp(rt.Topic, rp.Partition)
 				if ok {
 					sp.spso = rp.StartOffset
+					sp.scanOffset = rp.StartOffset
 					sp.records = make(map[int64]*shareRecord)
 				} else {
 					sg.partitions.mkp(rt.Topic, rp.Partition, func() *sharePartition {
 						return &sharePartition{
-							spso:    rp.StartOffset,
-							records: make(map[int64]*shareRecord),
+							spso:       rp.StartOffset,
+							scanOffset: rp.StartOffset,
+							records:    make(map[int64]*shareRecord),
 						}
 					})
 				}

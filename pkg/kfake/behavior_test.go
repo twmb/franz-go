@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -4906,5 +4907,238 @@ func TestDeleteShareGroupOffsetsNonEmpty(t *testing.T) {
 	}
 	if resp.ErrorCode != kerr.NonEmptyGroup.Code {
 		t.Errorf("expected NON_EMPTY_GROUP (%d), got %d", kerr.NonEmptyGroup.Code, resp.ErrorCode)
+	}
+}
+
+// TestShareGroupForgottenTopics verifies that when a share group reassignment
+// removes all partitions from a source, the client still sends a ShareFetch
+// with ForgottenTopicsData to that source so the broker can clean up its
+// share session state.
+func TestShareGroupForgottenTopics(t *testing.T) {
+	t.Parallel()
+	topic := "share-forgotten"
+	group := "share-test-forgotten"
+
+	c := newCluster(t, kfake.SeedTopics(1, topic), kfake.BrokerConfigs(map[string]string{
+		"group.share.heartbeat.interval.ms": "100",
+	}))
+
+	admin, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(topic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	setShareAutoOffsetReset(t, admin, group)
+
+	// Produce records.
+	const total = 5
+	for i := range total {
+		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
+			if err != nil {
+				t.Errorf("produce: %v", err)
+			}
+		})
+	}
+	if err := admin.Flush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	// gotForgotten is closed when the ShareFetch observer sees
+	// ForgottenTopicsData in a request.
+	gotForgotten := make(chan struct{})
+	var forgottenOnce sync.Once
+	var shareFetchCount atomic.Int64
+
+	// Observe ShareFetch (key 78) for ForgottenTopicsData.
+	c.ControlKey(78, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.ShareFetchRequest)
+		n := shareFetchCount.Add(1)
+		t.Logf("ShareFetch #%d: epoch=%d topics=%d forgotten=%d", n, req.ShareSessionEpoch, len(req.Topics), len(req.ForgottenTopicsData))
+		if len(req.ForgottenTopicsData) > 0 {
+			forgottenOnce.Do(func() { close(gotForgotten) })
+		}
+		return nil, nil, false // pass through
+	})
+
+	// Share consumer with fast heartbeat.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	// Consume all records.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var got int
+	for got < total {
+		fetches := cl.PollFetches(ctx)
+		got += len(fetches.Records())
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if got != total {
+		t.Fatalf("expected %d records, got %d", total, got)
+	}
+
+	// Intercept the next heartbeat to return an empty assignment,
+	// which removes all share cursors. With the fix, the source
+	// is still visited on the next poll to send ForgottenTopicsData.
+	var heartbeatCount atomic.Int64
+	c.ControlKey(76, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		n := heartbeatCount.Add(1)
+		req := kreq.(*kmsg.ShareGroupHeartbeatRequest)
+		t.Logf("heartbeat #%d: member=%s epoch=%d", n, req.MemberID, req.MemberEpoch)
+		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
+		resp.MemberID = &req.MemberID
+		resp.MemberEpoch = req.MemberEpoch
+		resp.HeartbeatIntervalMillis = 100
+		resp.Assignment = &kmsg.ShareGroupHeartbeatResponseAssignment{}
+		return resp, nil, true
+	})
+
+	// Poll until we observe ForgottenTopicsData in a ShareFetch.
+	deadline := time.After(10 * time.Second)
+	var pollCount int
+	for {
+		select {
+		case <-gotForgotten:
+			t.Logf("success after %d polls, %d ShareFetch reqs, %d heartbeats",
+				pollCount, shareFetchCount.Load(), heartbeatCount.Load())
+			return
+		case <-deadline:
+			t.Fatalf("timed out after %d polls, %d ShareFetch reqs, %d heartbeats",
+				pollCount, shareFetchCount.Load(), heartbeatCount.Load())
+		default:
+		}
+		pollCount++
+		pollCtx, pollCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		fetches := cl.PollFetches(pollCtx)
+		pollCancel()
+		var nrecs int
+		for _, e := range fetches.Errors() {
+			if e.Err != context.DeadlineExceeded {
+				t.Logf("poll %d: error: %v", pollCount, e.Err)
+			}
+		}
+		nrecs = len(fetches.Records())
+		if nrecs > 0 {
+			t.Logf("poll %d: got %d records (unexpected after consume phase)", pollCount, nrecs)
+		}
+	}
+}
+
+// TestShareGroupAckRequeue verifies that when ShareAcknowledge returns a
+// retryable per-partition error, the client re-queues the acks and delivers
+// them on the next ShareFetch (piggybacked). This tests fix for the gap
+// where piggybacked or standalone ack errors were silently dropped.
+func TestShareGroupAckRequeue(t *testing.T) {
+	t.Parallel()
+
+	topic, group := "share-ack-requeue", "share-test-ack-requeue"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	defer admin.Close()
+
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 10)
+
+	cl1 := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	defer cl1.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Poll all records and mark them as accepted.
+	var got1 int
+	for got1 < 10 {
+		fetches := cl1.PollFetches(ctx)
+		for _, r := range fetches.Records() {
+			r.Ack(kgo.AckAccept)
+			got1++
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if got1 != 10 {
+		t.Fatalf("consumer 1: expected 10 records, got %d", got1)
+	}
+
+	// Intercept the first ShareAcknowledge to return a retryable error
+	// (REQUEST_TIMED_OUT) for each partition. The client should re-queue
+	// the acks rather than dropping them.
+	var intercepted atomic.Bool
+	c.ControlKey(int16(kmsg.ShareAcknowledge), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		if !intercepted.CompareAndSwap(false, true) {
+			return nil, nil, false
+		}
+		saReq := kreq.(*kmsg.ShareAcknowledgeRequest)
+		resp := saReq.ResponseKind().(*kmsg.ShareAcknowledgeResponse)
+		for _, rt := range saReq.Topics {
+			respTopic := kmsg.NewShareAcknowledgeResponseTopic()
+			respTopic.TopicID = rt.TopicID
+			for _, rp := range rt.Partitions {
+				respPart := kmsg.NewShareAcknowledgeResponseTopicPartition()
+				respPart.Partition = rp.Partition
+				respPart.ErrorCode = kerr.RequestTimedOut.Code
+				respTopic.Partitions = append(respTopic.Partitions, respPart)
+			}
+			resp.Topics = append(resp.Topics, respTopic)
+		}
+		return resp, nil, true
+	})
+
+	// CommitAcks sends standalone ShareAcknowledge. Our control intercepts
+	// it with a retryable error. The client re-queues the acks, and
+	// CommitAcks returns nil (no permanent errors).
+	if err := cl1.CommitAcks(ctx); err != nil {
+		t.Fatalf("CommitAcks should return nil for retryable ack errors: %v", err)
+	}
+	if !intercepted.Load() {
+		t.Fatal("ShareAcknowledge was not intercepted")
+	}
+
+	// Poll again: the re-queued acks are piggybacked on the ShareFetch
+	// request, which goes through normally (the control was one-shot).
+	pollCtx, pollCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	cl1.PollFetches(pollCtx)
+	pollCancel()
+
+	// Consumer 2: should see 0 records since all acks were re-queued and
+	// delivered via piggybacked ShareFetch.
+	cl2 := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	defer cl2.Close()
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	var got2 int
+	for ctx2.Err() == nil {
+		fetches := cl2.PollFetches(ctx2)
+		got2 += len(fetches.Records())
+	}
+	if got2 > 0 {
+		t.Errorf("consumer 2: expected 0 records after re-queued acks, got %d", got2)
 	}
 }

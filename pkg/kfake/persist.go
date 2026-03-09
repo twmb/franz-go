@@ -2006,6 +2006,7 @@ type (
 		ClassicGroups  map[string]sessionClassicGroup  `json:"classicGroups,omitempty"`
 		ConsumerGroups map[string]sessionConsumerGroup `json:"consumerGroups,omitempty"`
 		ShareGroups    map[string]sessionShareGroup    `json:"shareGroups,omitempty"`
+		GroupConfigs   map[string]map[string]*string   `json:"groupConfigs,omitempty"`
 	}
 
 	sessionClassicGroup struct {
@@ -2052,12 +2053,12 @@ type (
 	// Members are NOT persisted -- they reconnect after restart. Only the
 	// partition tracking state matters for continuity.
 	sessionShareGroup struct {
-		GroupEpoch int32                                       `json:"groupEpoch"`
+		GroupEpoch int32                                      `json:"groupEpoch"`
 		Partitions map[string]map[int32]sessionSharePartition `json:"partitions"` // topic -> partition -> state
 	}
 
 	sessionSharePartition struct {
-		SPSO    int64                       `json:"spso"`
+		SPSO    int64                        `json:"spso"`
 		Records map[int64]sessionShareRecord `json:"records,omitempty"`
 	}
 
@@ -2131,7 +2132,7 @@ func (c *Cluster) saveSessionState() error {
 	// Save share group partition state (SPSO + per-record tracking).
 	// Members are not persisted -- they reconnect after restart.
 	for name, sg := range c.shareGroups.gs {
-		sg.waitControl(func() {
+		if !sg.waitControl(func() {
 			ssg := sessionShareGroup{
 				GroupEpoch: sg.groupEpoch,
 				Partitions: make(map[string]map[int32]sessionSharePartition),
@@ -2162,15 +2163,21 @@ func (c *Cluster) saveSessionState() error {
 				}
 				ss.ShareGroups[name] = ssg
 			}
-		})
+		}) {
+			c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: share group %s manage loop exited, skipping", name)
+		}
 	}
 
-	if len(ss.ClassicGroups) == 0 && len(ss.ConsumerGroups) == 0 && len(ss.ShareGroups) == 0 {
+	if len(c.groupConfigs) > 0 {
+		ss.GroupConfigs = c.groupConfigs
+	}
+
+	if len(ss.ClassicGroups) == 0 && len(ss.ConsumerGroups) == 0 && len(ss.ShareGroups) == 0 && len(ss.GroupConfigs) == 0 {
 		c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: nothing to save")
 		return nil
 	}
-	c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: saving classic=%d consumer=%d share=%d",
-		len(ss.ClassicGroups), len(ss.ConsumerGroups), len(ss.ShareGroups))
+	c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: saving classic=%d consumer=%d share=%d groupConfigs=%d",
+		len(ss.ClassicGroups), len(ss.ConsumerGroups), len(ss.ShareGroups), len(ss.GroupConfigs))
 	return writeJSONFile(c.fs, filepath.Join(c.cfg.dataDir, "session_state.json"), ss)
 }
 
@@ -2260,6 +2267,11 @@ func (c *Cluster) loadSessionState() error {
 			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored share group=%s epoch=%d",
 				name, sg.groupEpoch)
 		})
+	}
+
+	if len(ss.GroupConfigs) > 0 {
+		c.groupConfigs = ss.GroupConfigs
+		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored %d group configs", len(ss.GroupConfigs))
 	}
 
 	return nil

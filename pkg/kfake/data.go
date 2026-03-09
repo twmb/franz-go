@@ -101,7 +101,8 @@ type (
 		leader    *broker
 		followers followers
 
-		watch map[*watchFetch]struct{}
+		watch      map[*watchFetch]struct{}
+		shareWatch map[*watchShareFetch]struct{}
 
 		createdAt time.Time
 
@@ -221,6 +222,7 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 			maxTimestampIdx: -1,
 			leader:          c.bs[rand.Intn(len(c.bs))],
 			watch:           make(map[*watchFetch]struct{}),
+			shareWatch:      make(map[*watchShareFetch]struct{}),
 			createdAt:       time.Now(),
 		}
 	}
@@ -285,6 +287,9 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 	pd.nbytes += int64(nbytes)
 	for w := range pd.watch {
 		w.push(pd, nbytes, inTx)
+	}
+	for w := range pd.shareWatch {
+		w.do()
 	}
 	return firstOffset
 }
@@ -729,8 +734,11 @@ var validBrokerConfigs = map[string]string{
 	"offset.retention.ms":                       "",
 	"offsets.retention.check.interval.ms":       "",
 	"sasl.enabled.mechanisms":                   "",
-	"share.record.lock.duration.ms":             "",
+	"group.share.heartbeat.interval.ms":         "",
+	"group.share.session.timeout.ms":            "",
 	"share.max.delivery.attempts":               "",
+	"share.record.lock.duration.ms":             "",
+	"share.record.lock.sweep.interval.ms":       "",
 	"state.log.compact.bytes":                   "",
 	"super.users":                               "",
 }
@@ -788,8 +796,11 @@ var configDefaults = map[string]string{
 	"message.max.bytes":                         strconv.Itoa(defMaxMessageBytes),
 	"offsets.retention.minutes":                 "10080",
 	"offsets.retention.check.interval.ms":       "600000",
-	"share.record.lock.duration.ms":             "30000",
+	"group.share.heartbeat.interval.ms":         strconv.Itoa(defHeartbeatInterval),
+	"group.share.session.timeout.ms":            "45000",
 	"share.max.delivery.attempts":               "5",
+	"share.record.lock.duration.ms":             "30000",
+	"share.record.lock.sweep.interval.ms":       "5000",
 }
 
 // configTypes maps config names to their data types for DescribeConfigs v3+.
@@ -826,8 +837,11 @@ var configTypes = map[string]kmsg.ConfigType{
 	"segment.bytes":                             kmsg.ConfigTypeInt,
 	"segment.ms":                                kmsg.ConfigTypeLong,
 	"sasl.enabled.mechanisms":                   kmsg.ConfigTypeList,
-	"share.record.lock.duration.ms":             kmsg.ConfigTypeLong,
+	"group.share.heartbeat.interval.ms":         kmsg.ConfigTypeInt,
+	"group.share.session.timeout.ms":            kmsg.ConfigTypeInt,
 	"share.max.delivery.attempts":               kmsg.ConfigTypeInt,
+	"share.record.lock.duration.ms":             kmsg.ConfigTypeLong,
+	"share.record.lock.sweep.interval.ms":       kmsg.ConfigTypeLong,
 	"state.log.compact.bytes":                   kmsg.ConfigTypeLong,
 	"super.users":                               kmsg.ConfigTypeList,
 	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
@@ -911,6 +925,10 @@ func (c *Cluster) offsetsRetentionMs() int64 {
 
 func (c *Cluster) offsetsRetentionCheckIntervalMs() int64 {
 	return int64(c.brokerConfigInt("offsets.retention.check.interval.ms", 600000))
+}
+
+func (c *Cluster) shareHeartbeatIntervalMs() int32 {
+	return c.brokerConfigInt("group.share.heartbeat.interval.ms", defHeartbeatInterval)
 }
 
 func (c *Cluster) shareSessionTimeoutMs() int32 {

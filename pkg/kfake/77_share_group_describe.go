@@ -21,6 +21,13 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 		rg := kmsg.NewShareGroupDescribeResponseGroup()
 		rg.GroupID = groupID
 
+		// ACL: require GROUP DESCRIBE.
+		if !c.allowedACL(creq, groupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
+			rg.ErrorCode = kerr.GroupAuthorizationFailed.Code
+			resp.Groups = append(resp.Groups, rg)
+			continue
+		}
+
 		sg := c.shareGroups.gs[groupID]
 		if sg == nil {
 			rg.ErrorCode = kerr.GroupIDNotFound.Code
@@ -57,9 +64,15 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 
 				a := kmsg.NewShareGroupDescribeResponseGroupMemberAssignment()
 				for tid, parts := range m.assignment {
+					topicName := id2t[tid]
+					// Filter topics the client is not authorized
+					// to DESCRIBE.
+					if !c.allowedACL(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+						continue
+					}
 					tp := kmsg.NewShareGroupDescribeResponseGroupMemberAssignmentTopicPartition()
 					tp.TopicID = tid
-					tp.Topic = id2t[tid]
+					tp.Topic = topicName
 					tp.Partitions = parts
 					a.TopicPartitions = append(a.TopicPartitions, tp)
 				}
@@ -67,6 +80,8 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 				rg.Members = append(rg.Members, sm)
 			}
 		}) {
+			// Group's manage goroutine quit -- treat as dead.
+			rg.GroupState = "Dead"
 			rg.ErrorCode = kerr.GroupIDNotFound.Code
 		}
 

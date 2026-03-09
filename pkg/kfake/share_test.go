@@ -221,8 +221,6 @@ func TestShareGroupAckAndRedelivery(t *testing.T) {
 	t.Logf("consumer 2: got %d redelivered records", got2)
 }
 
-// TestShareGroupMultiConsumer tests multiple consumers in the same share group
-// processing records concurrently with different ack strategies.
 // TestShareGroupReject verifies that rejected records are archived and not
 // redelivered to subsequent consumers.
 func TestShareGroupReject(t *testing.T) {
@@ -319,7 +317,6 @@ func TestShareGroupReject(t *testing.T) {
 	}
 }
 
-// TestShareGroupMarkAcks verifies that Client.MarkAcks bulk-marks records.
 // TestShareGroupMaxDeliveryCount verifies that records are archived after
 // reaching the max delivery attempt count. After archival, a second consumer
 // should not see those records.
@@ -609,7 +606,7 @@ func TestShareGroupAcquisitionLockExpiry(t *testing.T) {
 
 	hbReq := kmsg.NewPtrShareGroupHeartbeatRequest()
 	hbReq.GroupID = group
-	hbReq.MemberID = ""
+	hbReq.MemberID = "test-member-1"
 	hbReq.MemberEpoch = 0
 	hbReq.SubscribedTopicNames = []string{"share-lockexp"}
 	hbResp, err := hbReq.RequestWith(context.Background(), cl1)
@@ -727,7 +724,7 @@ func TestShareGroupSessionEpoch(t *testing.T) {
 	// Join the share group.
 	hbReq := kmsg.NewPtrShareGroupHeartbeatRequest()
 	hbReq.GroupID = group
-	hbReq.MemberID = ""
+	hbReq.MemberID = "test-member-1"
 	hbReq.MemberEpoch = 0
 	hbReq.SubscribedTopicNames = []string{"share-epoch"}
 	hbResp, err := hbReq.RequestWith(context.Background(), cl)
@@ -867,7 +864,7 @@ func TestShareGroupSessionTimeout(t *testing.T) {
 
 	hbReq := kmsg.NewPtrShareGroupHeartbeatRequest()
 	hbReq.GroupID = group
-	hbReq.MemberID = ""
+	hbReq.MemberID = "test-member-1"
 	hbReq.MemberEpoch = 0
 	hbReq.SubscribedTopicNames = []string{"share-sessexp"}
 	hbResp, err := hbReq.RequestWith(context.Background(), cl1)
@@ -996,7 +993,7 @@ func TestShareGroupStandaloneAcknowledge(t *testing.T) {
 	// Join share group.
 	hbReq := kmsg.NewPtrShareGroupHeartbeatRequest()
 	hbReq.GroupID = group
-	hbReq.MemberID = ""
+	hbReq.MemberID = "test-member-1"
 	hbReq.MemberEpoch = 0
 	hbReq.SubscribedTopicNames = []string{"share-standalone-ack"}
 	hbResp, err := hbReq.RequestWith(context.Background(), cl)
@@ -1034,9 +1031,11 @@ func TestShareGroupStandaloneAcknowledge(t *testing.T) {
 	}
 
 	// Build standalone ShareAcknowledge: accept first half, release second half.
+	// ShareFetch above used epoch 0 (new session), advancing to 1.
 	ackReq := kmsg.NewPtrShareAcknowledgeRequest()
 	ackReq.GroupID = &group
 	ackReq.MemberID = &memberID
+	ackReq.ShareSessionEpoch = 1
 	at := kmsg.NewShareAcknowledgeRequestTopic()
 	at.TopicID = topicID
 	ap := kmsg.NewShareAcknowledgeRequestTopicPartition()
@@ -1206,8 +1205,6 @@ func TestShareGroupMultiPartition(t *testing.T) {
 	t.Logf("records by partition: %v", partitionsSeen)
 }
 
-// TestShareGroupDeliveryCount verifies that the delivery count increments
-// correctly across multiple release/reacquire cycles.
 // TestShareGroupCloseReleasesRecords verifies that closing a share consumer
 // without explicit acks releases records (not rejects them), making them
 // available for redelivery.

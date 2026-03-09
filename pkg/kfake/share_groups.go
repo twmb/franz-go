@@ -3,6 +3,7 @@ package kfake
 import (
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -16,14 +17,15 @@ import (
 // acquired each record, the delivery count, and whether the record has been
 // acknowledged (accepted/rejected/released).
 
-const (
-	// Default sweep interval for expired acquisition locks.
-	defaultShareAcqLockSweepInterval = 5 * time.Second
-)
-
 type shareGroups struct {
-	c  *Cluster
+	c *Cluster
+
 	gs map[string]*shareGroup
+
+	// sweepCh receives notifications from manage goroutines when the
+	// sweep timer releases records. run() receives from this and fires
+	// share watchers (pd.shareWatch is only safe from run()).
+	sweepCh chan *shareGroup
 }
 
 type shareGroup struct {
@@ -33,6 +35,22 @@ type shareGroup struct {
 	groupEpoch    int32
 	members       map[string]*shareMember
 	lastTopicMeta topicMetaSnap // cached snapshot from run(), for recomputation on member removal/fencing
+
+	// memberIDs is an atomically published snapshot of member keys.
+	//
+	// Why atomic: members is owned by the manage() goroutine, but
+	// ShareFetch/ShareAcknowledge run in the cluster's run() goroutine
+	// and need to validate that a memberID is known before acquiring
+	// records. We can't use sg.mu (which protects partitions, not
+	// members), and waitControl would block run() on every fetch.
+	//
+	// Safety: manage() creates a new immutable map on each membership
+	// change and stores the pointer atomically. run() loads the pointer
+	// and reads the map -- no concurrent writes to the same map
+	// instance. The check is best-effort: a member could be fenced
+	// between the check and record acquisition, but the per-record
+	// acquiredBy field provides the actual safety guarantee.
+	memberIDs atomic.Pointer[map[string]struct{}]
 
 	// Per-(topic,partition) record acquisition state.
 	// Accessed from both the run() goroutine (ShareFetch/ShareAcknowledge)
@@ -54,8 +72,9 @@ type shareMember struct {
 	clientHost string
 	rackID     *string
 
-	memberEpoch      int32
-	subscribedTopics []string
+	memberEpoch         int32
+	previousMemberEpoch int32
+	subscribedTopics    []string
 
 	// assignment: topicID -> partitions
 	assignment map[uuid][]int32
@@ -83,9 +102,20 @@ type shareRecord struct {
 }
 
 // sharePartition tracks the SPSO and per-record state for one (group, topic, partition).
+//
+// records is a sparse map from offset to state. Entries are created on
+// first acquisition and deleted when SPSO advances past them. The map
+// may grow large if a consumer acquires many records without acking --
+// acceptable for a test broker.
 type sharePartition struct {
 	spso    int64 // Share-Partition Start Offset: first unfinalized offset
 	records map[int64]*shareRecord
+
+	// scanOffset tracks the next offset to scan for available records.
+	// Advances past acquired/archived records to avoid re-scanning them.
+	// Reset back toward SPSO when records are released (ack release,
+	// sweep, member fencing).
+	scanOffset int64
 }
 
 // shareSessionKey identifies a share session.
@@ -99,8 +129,32 @@ type shareSession struct {
 	epoch int32
 }
 
-type shareSessions struct {
-	sessions map[shareSessionKey]*shareSession
+// watchShareFetch suspends a ShareFetch request until new records are
+// available or MaxWait expires. Registered on partData.shareWatch;
+// when pushBatch adds records, the watcher fires via do(). The
+// cleanup and re-invocation happen in the cluster run() loop.
+type watchShareFetch struct {
+	creq *clientReq
+	in   []*partData
+	cb   func()
+	t    *time.Timer
+
+	once    sync.Once
+	cleaned bool
+}
+
+func (w *watchShareFetch) do() {
+	w.once.Do(func() {
+		go w.cb()
+	})
+}
+
+func (w *watchShareFetch) cleanup() {
+	w.cleaned = true
+	for _, pd := range w.in {
+		delete(pd.shareWatch, w)
+	}
+	w.t.Stop()
 }
 
 func (sgs *shareGroups) handleHeartbeat(creq *clientReq) {
@@ -182,66 +236,58 @@ func (g *shareGroup) manage() {
 
 // sweepExpiredAcquisitions releases records whose acquisition lock has
 // expired. If a record has been delivered maxDeliveryCount times, it is
-// archived instead of released.
+// archived instead of released. After releasing records, notifies run()
+// via sweepNotifyCh so it can fire share watchers (pd.shareWatch is only
+// safe to access from run()).
 func (g *shareGroup) sweepExpiredAcquisitions() {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	now := time.Now()
+	lockDuration := time.Duration(g.c.shareRecordLockDurationMs()) * time.Millisecond
+	maxDelivery := g.c.shareMaxDeliveryAttempts()
+	released := false
 	g.partitions.each(func(_ string, _ int32, sp *sharePartition) {
-		for _, sr := range sp.records {
+		for offset, sr := range sp.records {
 			if sr.state != shareRecordAcquired {
 				continue
 			}
-			if now.Sub(sr.acquireTime) < time.Duration(g.c.shareRecordLockDurationMs())*time.Millisecond {
+			if now.Sub(sr.acquireTime) < lockDuration {
 				continue
 			}
-			if sr.deliveryCount >= g.c.shareMaxDeliveryAttempts() {
+			if sr.deliveryCount >= maxDelivery {
 				sr.state = shareRecordArchived
 			} else {
 				sr.state = shareRecordAvailable
+				released = true
+				if offset < sp.scanOffset {
+					sp.scanOffset = offset
+				}
 			}
 			sr.acquiredBy = ""
 		}
 		sp.advanceSPSO()
 	})
+	g.mu.Unlock()
+	if released {
+		select {
+		case g.c.shareGroups.sweepCh <- g:
+		default:
+		}
+	}
 }
 
 // waitControl sends fn to the manage loop's controlCh and blocks until
 // it completes. Used for external callers (persistence, shutdown) that
 // need safe access to share group state.
 func (g *shareGroup) waitControl(fn func()) bool {
-	wait := make(chan struct{})
-	wfn := func() { fn(); close(wait) }
-	for {
-		select {
-		case <-g.quitCh:
-			return false
-		case <-g.c.die:
-			return false
-		case g.controlCh <- wfn:
-			goto sent
-		case admin := <-g.c.adminCh:
-			admin()
-		}
-	}
-sent:
-	// Once sent, the manage goroutine will run fn synchronously.
-	// We must not select on quitCh here: fn itself may call
-	// quitOnce (e.g. deleting an empty group), closing quitCh
-	// before close(wait) executes. If the scheduler preempts
-	// between the two closes, a quitCh select case would see
-	// quitCh ready but wait not yet closed and incorrectly
-	// return false.
-	for {
-		select {
-		case <-wait:
-			return true
-		case <-g.c.die:
-			return false
-		case admin := <-g.c.adminCh:
-			admin()
-		}
-	}
+	return waitManageControl(g.controlCh, g.quitCh, g.c, fn)
+}
+
+// quitOnce shuts down the manage goroutine. Called when the group is
+// truly empty (no members and no partition state).
+func (g *shareGroup) quitOnce() {
+	g.quit.Do(func() {
+		close(g.quitCh)
+	})
 }
 
 func (g *shareGroup) reply(creq *clientReq, kresp kmsg.Response) {
@@ -255,7 +301,7 @@ func (g *shareGroup) reply(creq *clientReq, kresp kmsg.Response) {
 func (g *shareGroup) handleHeartbeat(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.ShareGroupHeartbeatRequest)
 	resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
-	resp.HeartbeatIntervalMillis = 5000
+	resp.HeartbeatIntervalMillis = g.c.shareHeartbeatIntervalMs()
 
 	switch req.MemberEpoch {
 	case 0:
@@ -269,9 +315,6 @@ func (g *shareGroup) handleHeartbeat(creq *clientReq) kmsg.Response {
 
 func (g *shareGroup) handleJoin(creq *clientReq, req *kmsg.ShareGroupHeartbeatRequest, resp *kmsg.ShareGroupHeartbeatResponse) *kmsg.ShareGroupHeartbeatResponse {
 	memberID := req.MemberID
-	if memberID == "" {
-		memberID = generateMemberID(creq.cid, nil)
-	}
 
 	// If existing member, treat as rejoin.
 	if m := g.members[memberID]; m != nil {
@@ -281,6 +324,7 @@ func (g *shareGroup) handleJoin(creq *clientReq, req *kmsg.ShareGroupHeartbeatRe
 		g.resetSessionTimeout(m)
 		g.groupEpoch++
 		g.recomputeAssignments()
+		g.reconcileMember(m)
 		resp.MemberID = &memberID
 		resp.MemberEpoch = m.memberEpoch
 		resp.Assignment = g.makeAssignment(m)
@@ -303,7 +347,9 @@ func (g *shareGroup) handleJoin(creq *clientReq, req *kmsg.ShareGroupHeartbeatRe
 	g.members[memberID] = m
 	g.groupEpoch++
 	g.recomputeAssignments()
+	g.reconcileMember(m)
 	g.resetSessionTimeout(m)
+	g.publishMemberIDs()
 
 	resp.MemberID = &memberID
 	resp.MemberEpoch = m.memberEpoch
@@ -325,9 +371,12 @@ func (g *shareGroup) handleLeave(req *kmsg.ShareGroupHeartbeatRequest, resp *kms
 	if len(g.members) > 0 {
 		g.recomputeAssignments()
 	}
+	g.publishMemberIDs()
 
 	// Release any records acquired by this member.
 	g.releaseRecordsForMember(req.MemberID)
+
+	g.maybeQuit()
 
 	resp.MemberID = &req.MemberID
 	resp.MemberEpoch = -1
@@ -340,7 +389,11 @@ func (g *shareGroup) handleRegularHeartbeat(req *kmsg.ShareGroupHeartbeatRequest
 		resp.ErrorCode = kerr.UnknownMemberID.Code
 		return resp
 	}
-	if req.MemberEpoch != m.memberEpoch {
+
+	// Epoch validation matching Kafka's throwIfShareGroupMemberEpochIsInvalid
+	// (GroupMetadataManager.java:1605-1625): accept the current epoch or the
+	// previous epoch (in case the response that bumped the epoch was lost).
+	if req.MemberEpoch != m.memberEpoch && req.MemberEpoch != m.previousMemberEpoch {
 		resp.ErrorCode = kerr.FencedMemberEpoch.Code
 		return resp
 	}
@@ -359,6 +412,12 @@ func (g *shareGroup) handleRegularHeartbeat(req *kmsg.ShareGroupHeartbeatRequest
 		}
 	}
 
+	// Reconcile: bump this member's epoch to the group epoch if behind.
+	// Like Kafka's ShareGroupAssignmentBuilder.build(), the epoch is only
+	// advanced during the member's own heartbeat, not when other members
+	// join/leave.
+	g.reconcileMember(m)
+
 	resp.MemberID = &req.MemberID
 	resp.MemberEpoch = m.memberEpoch
 
@@ -370,6 +429,10 @@ func (g *shareGroup) handleRegularHeartbeat(req *kmsg.ShareGroupHeartbeatRequest
 // recomputeAssignments computes target assignments for all members.
 // In share groups, all members that subscribe to a topic get all partitions
 // of that topic -- there is no exclusive partitioning.
+//
+// Like Kafka's ShareGroupAssignmentBuilder, this updates the assignment but
+// does NOT bump member epochs. Each member's epoch is only bumped when it
+// heartbeats and receives the updated assignment (via reconcileMember).
 //
 // Must only be called from the manage() goroutine. Uses lastTopicMeta
 // (set from creq.topicMeta or notifyTopicChange) to avoid reading c.data
@@ -390,8 +453,27 @@ func (g *shareGroup) recomputeAssignments() {
 			newAssign[si.id] = parts
 		}
 		m.assignment = newAssign
+	}
+}
+
+// reconcileMember bumps the member's epoch to the current group epoch if
+// it is behind, mirroring Kafka's ShareGroupAssignmentBuilder.build()
+// which only advances a member's epoch during that member's own heartbeat.
+func (g *shareGroup) reconcileMember(m *shareMember) {
+	if m.memberEpoch != g.groupEpoch {
+		m.previousMemberEpoch = m.memberEpoch
 		m.memberEpoch = g.groupEpoch
 	}
+}
+
+// publishMemberIDs atomically publishes the current member ID set so
+// that run() can validate ShareFetch memberIDs without blocking.
+func (g *shareGroup) publishMemberIDs() {
+	snap := make(map[string]struct{}, len(g.members))
+	for id := range g.members {
+		snap[id] = struct{}{}
+	}
+	g.memberIDs.Store(&snap)
 }
 
 func (g *shareGroup) makeAssignment(m *shareMember) *kmsg.ShareGroupHeartbeatResponseAssignment {
@@ -430,11 +512,30 @@ func (g *shareGroup) fenceMember(memberID string) {
 		m.t.Stop()
 	}
 	delete(g.members, memberID)
+	g.publishMemberIDs()
 	g.releaseRecordsForMember(memberID)
 	if len(g.members) > 0 {
 		g.groupEpoch++
 		g.recomputeAssignments()
 	}
+	g.maybeQuit()
+}
+
+// maybeQuit shuts down the manage goroutine if the group is truly empty:
+// no members and no partition state. Only called from manage(), which
+// owns g.members. Holds mu while checking partitions AND calling quitOnce
+// to prevent run() from creating partition state (via getSharePartition)
+// between the check and the quit.
+func (g *shareGroup) maybeQuit() {
+	if len(g.members) > 0 {
+		return
+	}
+	g.mu.Lock()
+	empty := len(g.partitions) == 0
+	if empty {
+		g.quitOnce()
+	}
+	g.mu.Unlock()
 }
 
 // releaseRecordsForMember releases all records acquired by the given member.
@@ -443,12 +544,15 @@ func (g *shareGroup) releaseRecordsForMember(memberID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.partitions.each(func(_ string, _ int32, sp *sharePartition) {
-		for _, sr := range sp.records {
+		for offset, sr := range sp.records {
 			if sr.state == shareRecordAcquired && sr.acquiredBy == memberID {
 				if sr.deliveryCount >= g.c.shareMaxDeliveryAttempts() {
 					sr.state = shareRecordArchived
 				} else {
 					sr.state = shareRecordAvailable
+					if offset < sp.scanOffset {
+						sp.scanOffset = offset
+					}
 				}
 				sr.acquiredBy = ""
 			}
@@ -479,18 +583,20 @@ func (g *shareGroup) getSharePartition(topic string, partition int32, pd *partDa
 	return sp
 }
 
-// acquireRecords acquires available records from [spso, hwm) for the given member,
-// up to maxRecords. Records that have hit maxDeliveryCount are archived instead
-// of acquired. Returns the list of acquired offset ranges with delivery counts.
+// acquireRecords acquires available records from [scanOffset, hwm) for the
+// given member, up to maxRecords. Records that have hit maxDeliveryCount are
+// archived instead of acquired. Returns the list of acquired offset ranges
+// with delivery counts.
 func (sp *sharePartition) acquireRecords(memberID string, hwm int64, maxRecords int32, maxDeliveryCount int32) []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord {
-	if maxRecords <= 0 {
-		maxRecords = 500
-	}
 	var acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord
 	var count int32
 
-	// Walk offsets from SPSO to HWM looking for available records.
-	for offset := sp.spso; offset < hwm && count < maxRecords; offset++ {
+	if sp.scanOffset < sp.spso {
+		sp.scanOffset = sp.spso
+	}
+
+	// Walk offsets from scanOffset to HWM looking for available records.
+	for offset := sp.scanOffset; offset < hwm && count < maxRecords; offset++ {
 		sr := sp.records[offset]
 		if sr == nil {
 			// No state yet -- new record, available.
@@ -534,6 +640,12 @@ func (sp *sharePartition) acquireRecords(memberID string, hwm int64, maxRecords 
 		acquired = append(acquired, ar)
 	}
 
+	// Advance scanOffset past what we just scanned so subsequent
+	// acquire calls skip already-acquired/archived offsets.
+	if len(acquired) > 0 {
+		sp.scanOffset = acquired[len(acquired)-1].LastOffset + 1
+	}
+
 	// After acquiring, advance SPSO in case we archived some records
 	// at the front.
 	sp.advanceSPSO()
@@ -541,25 +653,7 @@ func (sp *sharePartition) acquireRecords(memberID string, hwm int64, maxRecords 
 	return acquired
 }
 
-// processAcks processes piggybacked acknowledgement batches from ShareFetch.
-func (sp *sharePartition) processAcks(batches []kmsg.ShareFetchRequestTopicPartitionAcknowledgementBatche) int16 {
-	for _, batch := range batches {
-		sp.applyAcks(batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes)
-	}
-	sp.advanceSPSO()
-	return 0
-}
-
-// processStandaloneAcks processes acknowledgement batches from ShareAcknowledge.
-func (sp *sharePartition) processStandaloneAcks(batches []kmsg.ShareAcknowledgeRequestTopicPartitionAcknowledgementBatche) int16 {
-	for _, batch := range batches {
-		sp.applyAcks(batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes)
-	}
-	sp.advanceSPSO()
-	return 0
-}
-
-// applyAcks applies ack types to the offset range [first, last].
+// processAcks applies ack types to the offset range [first, last].
 //
 // AcknowledgeTypes can be:
 //   - empty or single element: uniform type for the whole range
@@ -567,8 +661,8 @@ func (sp *sharePartition) processStandaloneAcks(batches []kmsg.ShareAcknowledgeR
 //
 // Types: 0=Gap (skip), 1=Accept, 2=Release, 3=Reject, 4=Renew.
 // Offsets below SPSO are silently skipped (already finalized).
-// Non-acquired records are silently skipped (already acked or not yet acquired).
-func (sp *sharePartition) applyAcks(first, last int64, ackTypes []int8) {
+// Records not acquired by memberID are silently skipped.
+func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTypes []int8) {
 	perOffset := len(ackTypes) > 1
 	uniformType := int8(1) // default: accept
 	if len(ackTypes) == 1 {
@@ -582,6 +676,9 @@ func (sp *sharePartition) applyAcks(first, last int64, ackTypes []int8) {
 		if sr == nil || sr.state != shareRecordAcquired {
 			continue
 		}
+		if sr.acquiredBy != memberID {
+			continue
+		}
 		ackType := uniformType
 		if perOffset {
 			idx := int(offset - first)
@@ -590,13 +687,15 @@ func (sp *sharePartition) applyAcks(first, last int64, ackTypes []int8) {
 			}
 		}
 		switch ackType {
-		case 0: // Gap -- no ack for this offset, skip
-		case 1: // Accept
+		case 0, 1: // Gap (0) and Accept (1) both finalize the offset
 			sr.state = shareRecordAcknowledged
 			sr.acquiredBy = ""
 		case 2: // Release
 			sr.state = shareRecordAvailable
 			sr.acquiredBy = ""
+			if offset < sp.scanOffset {
+				sp.scanOffset = offset
+			}
 		case 3: // Reject
 			sr.state = shareRecordArchived
 			sr.acquiredBy = ""
@@ -619,5 +718,38 @@ func (sp *sharePartition) advanceSPSO() {
 		}
 		delete(sp.records, sp.spso)
 		sp.spso++
+	}
+}
+
+// fireShareWatchers wakes any pending ShareFetch watchers on the given
+// partition. Called after acks that may have released records.
+// Must only be called from run().
+func fireShareWatchers(pd *partData) {
+	for w := range pd.shareWatch {
+		w.do()
+	}
+}
+
+// fireAllShareWatchers wakes share watchers on all partitions tracked by
+// this share group. Called from run() when the manage goroutine's sweep
+// timer releases records.
+func (sg *shareGroup) fireAllShareWatchers(c *Cluster) {
+	sg.mu.Lock()
+	topics := make([]string, 0, len(sg.partitions))
+	partsByTopic := make(map[string][]int32, len(sg.partitions))
+	for topic, ps := range sg.partitions {
+		topics = append(topics, topic)
+		for p := range ps {
+			partsByTopic[topic] = append(partsByTopic[topic], p)
+		}
+	}
+	sg.mu.Unlock()
+	for _, topic := range topics {
+		for _, p := range partsByTopic[topic] {
+			pd, ok := c.data.tps.getp(topic, p)
+			if ok {
+				fireShareWatchers(pd)
+			}
+		}
 	}
 }

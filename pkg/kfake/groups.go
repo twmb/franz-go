@@ -833,21 +833,27 @@ func (g *group) manage(detachNew func()) {
 // writes; but that write is fast. There is no long-blocking code in the manage
 // loop.
 func (g *group) waitControl(fn func()) bool {
+	return waitManageControl(g.controlCh, g.quitCh, g.c, fn)
+}
+
+// waitManageControl sends fn to a manage goroutine's controlCh and blocks
+// until it completes. Used by group.waitControl and shareGroup.waitControl.
+//
+// Drains adminCh while waiting to avoid deadlock: the pids manage loop may
+// call c.admin() (e.g. transaction timeout abort) while we're blocked sending
+// to controlCh or waiting for the function to complete.
+func waitManageControl(controlCh chan func(), quitCh chan struct{}, c *Cluster, fn func()) bool {
 	wait := make(chan struct{})
 	wfn := func() { fn(); close(wait) }
-	// Drain adminCh while waiting to avoid deadlock: the pids
-	// manage loop may call c.admin() (e.g. transaction timeout
-	// abort) while we're blocked sending to controlCh or waiting
-	// for the function to complete.
 	for {
 		select {
-		case <-g.quitCh:
+		case <-quitCh:
 			return false
-		case <-g.c.die:
+		case <-c.die:
 			return false
-		case g.controlCh <- wfn:
+		case controlCh <- wfn:
 			goto sent
-		case admin := <-g.c.adminCh:
+		case admin := <-c.adminCh:
 			admin()
 		}
 	}
@@ -863,9 +869,9 @@ sent:
 		select {
 		case <-wait:
 			return true
-		case <-g.c.die:
+		case <-c.die:
 			return false
-		case admin := <-g.c.adminCh:
+		case admin := <-c.adminCh:
 			admin()
 		}
 	}

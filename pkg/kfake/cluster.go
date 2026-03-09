@@ -50,7 +50,8 @@ type (
 		fetchSessions      fetchSessions
 		groupConfigs       map[string]map[string]*string // group -> config key -> config value
 		shareGroups        shareGroups
-		shareSessions      shareSessions
+		shareSessions      map[shareSessionKey]*shareSession
+		watchShareFetchCh  chan *watchShareFetch
 		compactTicker      *time.Ticker
 		offsetExpireTicker *time.Ticker
 
@@ -184,7 +185,9 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	c.data.c = c
 	c.groups.c = c
 	c.shareGroups.c = c
-	c.shareSessions.sessions = make(map[shareSessionKey]*shareSession)
+	c.shareGroups.sweepCh = make(chan *shareGroup, 16)
+	c.shareSessions = make(map[shareSessionKey]*shareSession)
+	c.watchShareFetchCh = make(chan *watchShareFetch, 16)
 	c.pids.c = c
 	c.pids.ids = make(map[int64]*pidinfo)
 	c.pids.byTxid = make(map[string]*pidinfo)
@@ -401,6 +404,7 @@ outer:
 		var (
 			creq    *clientReq
 			w       *watchFetch
+			wsf     *watchShareFetch
 			s       *slept
 			kreq    kmsg.Request
 			kresp   kmsg.Response
@@ -422,6 +426,10 @@ outer:
 
 		case <-c.offsetExpireTicker.C:
 			c.expireGroupOffsets()
+			continue
+
+		case sg := <-c.shareGroups.sweepCh:
+			sg.fireAllShareWatchers(c)
 			continue
 
 		case admin := <-c.adminCh:
@@ -495,6 +503,13 @@ outer:
 			}
 			w.cleanup()
 			creq = w.creq
+
+		case wsf = <-c.watchShareFetchCh:
+			if wsf.cleaned {
+				continue
+			}
+			wsf.cleanup()
+			creq = wsf.creq
 		}
 
 		kresp, err, handled = c.tryControl(creq)
@@ -618,7 +633,7 @@ outer:
 		case kmsg.ShareGroupDescribe:
 			kresp, err = c.handleShareGroupDescribe(creq)
 		case kmsg.ShareFetch:
-			kresp, err = c.handleShareFetch(creq)
+			kresp, err = c.handleShareFetch(creq, wsf)
 		case kmsg.ShareAcknowledge:
 			kresp, err = c.handleShareAcknowledge(creq)
 		case kmsg.DescribeShareGroupOffsets:
