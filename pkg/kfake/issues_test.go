@@ -224,6 +224,7 @@ func TestIssue905(t *testing.T) {
 
 	var leaderReqs, followerReqs atomic.Int32
 	allowFollower := make(chan struct{}, 1)
+	followerHandled := make(chan struct{}, 5)
 	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
 
@@ -265,6 +266,7 @@ func TestIssue905(t *testing.T) {
 
 		<-allowFollower
 		followerReqs.Add(1)
+		followerHandled <- struct{}{}
 
 		return nil, nil, false
 	})
@@ -305,6 +307,7 @@ func TestIssue905(t *testing.T) {
 	{
 		allowFollower <- struct{}{}
 		fs := cl.PollFetches(ctx)
+		<-followerHandled // drain signal from the first follower fetch
 		chkfs(fs, 0)
 		if lr := leaderReqs.Load(); lr != 1 {
 			t.Errorf("stage 1 leader reqs %d != exp 1", lr)
@@ -315,24 +318,35 @@ func TestIssue905(t *testing.T) {
 		allowFollower <- struct{}{} // allow a background buffered fetch
 	}
 
-	// Sleep past the recheck interval so the client rechecks the preferred replica.
-	time.Sleep(150 * time.Millisecond)
-	for followerReqs.Load() != 2 {
-		time.Sleep(50 * time.Millisecond)
+	// Wait for the background fetch to complete. After the follower
+	// handler fires, the source is either processing the response or
+	// blocked on its internal semaphore (waiting for PollFetches to
+	// drain the buffer). Either way, no new createReq has run, so
+	// leaderReqs is stable -- check it now.
+	<-followerHandled
+	if lr := leaderReqs.Load(); lr != 1 {
+		t.Errorf("stage 2 leader reqs %d != exp 1", lr)
 	}
+
+	// Sleep past the recheck interval WHILE the source is blocked on
+	// its semaphore. The cursor's moveAt (set in stage 1) becomes
+	// stale (>100ms old). When PollFetches below drains the buffer and
+	// unblocks the semaphore, the source's next createReq will see
+	// the stale moveAt and trigger a recheck.
+	time.Sleep(150 * time.Millisecond)
+
 	{
 		fs := cl.PollFetches(ctx)
 		chkfs(fs, 1)
-		if lr := leaderReqs.Load(); lr != 1 {
-			t.Errorf("stage 2 leader reqs %d != exp 1", lr)
-		}
 		if fr := followerReqs.Load(); fr != 2 {
 			t.Errorf("stage 2 follower reqs reqs %d != exp 2", fr)
 		}
 	}
 
-	// Poll again. This should go back to the leader, then the follower
-	// again.
+	// PollFetches unblocked the source. Its createReq sees stale
+	// moveAt and triggers a recheck: cursor goes to leader
+	// (leaderReqs=2), redirected back to follower, follower fetch
+	// blocks on allowFollower. Send a token and poll again.
 	{
 		allowFollower <- struct{}{}
 		fs := cl.PollFetches(ctx)
