@@ -5,7 +5,7 @@
 #   -t, --test PATTERN     Test to run (default: all tests)
 #                          Examples: Txn, Group, Txn/range, Group/sticky
 #   -n, --iterations NUM   Max iterations (default: 50)
-#   -r, --records NUM      Number of records (default: 100000)
+#   -r, --records NUM      Number of records (default: 500000)
 #   --race                 Enable race detector (default: off)
 #   -l, --log-level LEVEL  Set log level for both client and server
 #   --client-log LEVEL     Set KGO_LOG_LEVEL for the test client only
@@ -14,7 +14,7 @@
 #   --pprof ADDR           Enable pprof on server (e.g., :6060)
 #   --data-dir DIR         Persistence directory for kfake server
 #   --restart SECS         Kill and restart server after SECS seconds (requires --data-dir)
-#   --timeout DURATION     Test timeout (default: 90s, 300s with --race)
+#   --timeout DURATION     Test timeout (default: 300s, 600s with --race)
 #   -k, --kill             Kill processes on ports 9092-9094 and exit
 #   --clean                Kill servers and remove /tmp/kfake_test_logs
 #   -h, --help             Show this help
@@ -121,7 +121,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -t, --test PATTERN     Test to run (default: all tests)"
             echo "                         Examples: Txn, Group, Txn/range, Group/sticky"
             echo "  -n, --iterations NUM   Max iterations (default: 50)"
-            echo "  -r, --records NUM      Number of records (default: 100000)"
+            echo "  -r, --records NUM      Number of records (default: 500000)"
             echo "  --race                 Enable race detector (default: off)"
             echo "  -l, --log-level LEVEL  Set log level for both client and server"
             echo "  --client-log LEVEL     Set KGO_LOG_LEVEL for the test client only"
@@ -130,7 +130,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --pprof ADDR           Enable pprof on server (e.g., :6060)"
             echo "  --data-dir DIR         Persistence directory for kfake server"
             echo "  --restart SECS         Kill and restart server after SECS seconds"
-            echo "  --timeout DURATION     Test timeout (default: 90s, 300s with --race)"
+            echo "  --timeout DURATION     Test timeout (default: 300s, 600s with --race)"
             echo "  -k, --kill             Kill processes on ports 9092-9094 and exit"
             echo "  --clean                Kill servers and remove /tmp/kfake_test_logs"
             echo "  -h, --help             Show this help"
@@ -189,7 +189,7 @@ if [ -n "$CUSTOM_TIMEOUT" ]; then
 elif [ -n "$RACE" ]; then
     TIMEOUT="300s"
 else
-    TIMEOUT="90s"
+    TIMEOUT="180s"
 fi
 
 # Build common server args once.

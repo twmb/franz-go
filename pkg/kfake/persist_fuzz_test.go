@@ -1142,10 +1142,9 @@ func TestPersistSeqWindowsCleanShutdown(t *testing.T) {
 
 	// Add sequence window entries
 	sw := pidinf.windows.mkpDefault("seq", 0)
-	sw.seq[0] = 1
-	sw.seq[1] = 2
-	sw.offsets[0] = 100
-	sw.offsets[1] = 101
+	sw.entries[0] = pidEntry{firstSeq: 1, nextSeq: 2, offset: 100}
+	sw.entries[1] = pidEntry{firstSeq: 2, nextSeq: 5, offset: 101}
+	sw.count = 2
 	sw.at = 2
 	sw.epoch = 0
 
@@ -1169,8 +1168,14 @@ func TestPersistSeqWindowsCleanShutdown(t *testing.T) {
 	if sw2.at != 2 {
 		t.Fatalf("expected at 2, got %d", sw2.at)
 	}
-	if sw2.seq[0] != 1 || sw2.seq[1] != 2 {
-		t.Fatalf("unexpected seq values: %v", sw2.seq)
+	if sw2.count != 2 {
+		t.Fatalf("expected count 2, got %d", sw2.count)
+	}
+	if sw2.entries[0].firstSeq != 1 || sw2.entries[0].nextSeq != 2 {
+		t.Fatalf("unexpected entry 0: %+v", sw2.entries[0])
+	}
+	if sw2.entries[1].firstSeq != 2 || sw2.entries[1].nextSeq != 5 {
+		t.Fatalf("unexpected entry 1: %+v", sw2.entries[1])
 	}
 }
 

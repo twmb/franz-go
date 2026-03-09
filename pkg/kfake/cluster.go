@@ -48,6 +48,8 @@ type (
 		telem              map[[16]byte]int32
 		telemNextID        int32
 		fetchSessions      fetchSessions
+		groupConfigs       map[string]map[string]*string // group -> config key -> config value
+		shareGroups        shareGroups
 		compactTicker      *time.Ticker
 		offsetExpireTicker *time.Ticker
 
@@ -133,6 +135,9 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	if len(cfg.ports) > 0 {
 		cfg.nbrokers = len(cfg.ports)
 	}
+	if cfg.injectFS != nil && cfg.dataDir == "" {
+		cfg.dataDir = "/kfake"
+	}
 
 	c := &Cluster{
 		cfg: cfg,
@@ -159,7 +164,10 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 
 		die: make(chan struct{}),
 	}
-	if cfg.dataDir != "" {
+	if cfg.injectFS != nil {
+		c.fs = cfg.injectFS
+		c.storageDir = cfg.dataDir
+	} else if cfg.dataDir != "" {
 		c.fs = osFS{}
 		c.storageDir = cfg.dataDir
 	} else {
@@ -180,6 +188,13 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 	c.data.c = c
 	c.groups.c = c
+	c.shareGroups.c = c
+	c.shareGroups.gs = make(map[string]*shareGroup)
+	c.shareGroups.sweepCh = make(chan *shareGroup, 16)
+	c.shareGroups.sessions = make(map[shareSessionKey]*shareSession)
+	c.shareGroups.connWatch = make(map[*clientConn]struct{})
+	c.shareGroups.disconnCh = make(chan *clientConn, 16)
+	c.shareGroups.watchFetchCh = make(chan *watchShareFetch, 16)
 	c.pids.c = c
 	c.pids.ids = make(map[int64]*pidinfo)
 	c.pids.byTxid = make(map[string]*pidinfo)
@@ -325,11 +340,7 @@ func (c *Cluster) Close() {
 		// race with run() handling a request.
 		done := make(chan struct{})
 		c.adminCh <- func() {
-			for pidinf := range c.pids.txs {
-				if pidinf.inTx {
-					pidinf.endTx(false)
-				}
-			}
+			c.drainReqChForShutdown()
 			if err := c.saveToDisk(); err != nil {
 				c.cfg.logger.Logf(LogLevelError, "persist to disk: %v", err)
 			}
@@ -351,6 +362,29 @@ func (c *Cluster) Close() {
 	close(c.die)
 }
 
+// drainReqChForShutdown processes any pending OffsetCommit requests in
+// c.reqCh, dispatching them to the appropriate group goroutines. This
+// is called at the start of the shutdown admin function, before
+// saveToDisk. Without this, Go's select in run() may pick adminCh over
+// reqCh, causing committed offsets to be lost across restarts.
+//
+// TxnOffsetCommitRequest is not handled here: transactional offset
+// staging is processed inline in run() (not dispatched to a group
+// goroutine), so any in-flight TxnOffsetCommit simply fails on the
+// client side and the client must abort/retry the transaction.
+func (c *Cluster) drainReqChForShutdown() {
+	for {
+		select {
+		case creq := <-c.reqCh:
+			if _, ok := creq.kreq.(*kmsg.OffsetCommitRequest); ok {
+				c.groups.handleOffsetCommit(creq)
+			}
+		default:
+			return
+		}
+	}
+}
+
 func newListener(port int, tc *tls.Config, fn func(network, address string) (net.Listener, error)) (net.Listener, error) {
 	l, err := fn("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
@@ -370,12 +404,15 @@ func (b *broker) listen() {
 			return
 		}
 
+		mute := make(chan bool, 1)
+		mute <- true // first request proceeds immediately
 		cc := &clientConn{
 			c:      b.c,
 			b:      b,
 			conn:   conn,
 			respCh: make(chan clientResp, 2),
 			done:   make(chan struct{}),
+			mute:   mute,
 		}
 		go cc.read()
 		go cc.write()
@@ -396,6 +433,7 @@ outer:
 		var (
 			creq    *clientReq
 			w       *watchFetch
+			wsf     *watchShareFetch
 			s       *slept
 			kreq    kmsg.Request
 			kresp   kmsg.Response
@@ -403,6 +441,35 @@ outer:
 			handled bool
 		)
 
+		// Drain ready watchers before the main select so that
+		// completed long-polls are dispatched promptly. Under
+		// heavy parallel load (many tests with -race), the
+		// main select's random pick can starve watchers in
+		// favor of reqCh, causing fetch timeouts.
+		for {
+			select {
+			case w = <-c.watchFetchCh:
+				if w.cleaned {
+					w = nil
+					continue
+				}
+				w.cleanup()
+				creq = w.creq
+			case wsf = <-c.shareGroups.watchFetchCh:
+				if wsf.cleaned {
+					wsf = nil
+					continue
+				}
+				wsf.cleanup()
+				creq = wsf.creq
+			default:
+				goto mainSelect
+			}
+			break
+		}
+		goto handleReq
+
+	mainSelect:
 		select {
 		case <-c.die:
 			return
@@ -417,6 +484,15 @@ outer:
 
 		case <-c.offsetExpireTicker.C:
 			c.expireGroupOffsets()
+			continue
+
+		case sg := <-c.shareGroups.sweepCh:
+			sg.fireAllShareWatchers()
+			continue
+
+		case cc := <-c.shareGroups.disconnCh:
+			delete(c.shareGroups.connWatch, cc)
+			c.shareGroups.cleanupSessionsForConn(cc)
 			continue
 
 		case admin := <-c.adminCh:
@@ -490,8 +566,16 @@ outer:
 			}
 			w.cleanup()
 			creq = w.creq
+
+		case wsf = <-c.shareGroups.watchFetchCh:
+			if wsf.cleaned {
+				continue
+			}
+			wsf.cleanup()
+			creq = wsf.creq
 		}
 
+	handleReq:
 		kresp, err, handled = c.tryControl(creq)
 		if handled {
 			goto afterControl
@@ -608,6 +692,20 @@ outer:
 			kresp, err = c.handleConsumerGroupHeartbeat(creq)
 		case kmsg.ConsumerGroupDescribe:
 			kresp, err = c.handleConsumerGroupDescribe(creq)
+		case kmsg.ShareGroupHeartbeat:
+			kresp, err = c.handleShareGroupHeartbeat(creq)
+		case kmsg.ShareGroupDescribe:
+			kresp, err = c.handleShareGroupDescribe(creq)
+		case kmsg.ShareFetch:
+			kresp, err = c.handleShareFetch(creq, wsf)
+		case kmsg.ShareAcknowledge:
+			kresp, err = c.handleShareAcknowledge(creq)
+		case kmsg.DescribeShareGroupOffsets:
+			kresp, err = c.handleDescribeShareGroupOffsets(creq)
+		case kmsg.AlterShareGroupOffsets:
+			kresp, err = c.handleAlterShareGroupOffsets(creq)
+		case kmsg.DeleteShareGroupOffsets:
+			kresp, err = c.handleDeleteShareGroupOffsets(creq)
 		default:
 			err = fmt.Errorf("unhandled key %v", k)
 		}
@@ -624,7 +722,17 @@ outer:
 		if s != nil {
 			s.continueDequeue <- struct{}{}
 		}
-		if kresp == nil && err == nil { // produce request with no acks, or otherwise hijacked request (group, sleep)
+		if kresp == nil && err == nil {
+			// Group requests (JoinGroup, SyncGroup, Heartbeat, etc.)
+			// are dispatched to goroutines that send the response
+			// later via creq.reply(). The mute stays held until
+			// cc.write() processes the response.
+			//
+			// acks=0 produce requests have no response at all.
+			// Unmute immediately so cc.read() can proceed.
+			if req, ok := kreq.(*kmsg.ProduceRequest); ok && req.Acks == 0 {
+				creq.cc.unmute(true)
+			}
 			continue
 		}
 
