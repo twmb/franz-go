@@ -1,6 +1,6 @@
 // DescribeShareGroupOffsetsRequest is a request to describe share group offsets.
 // Version 1, introduced in Kafka 4.2, adds Lag to the response (KIP-1226).
-DescribeShareGroupOffsetsRequest => key 90, max version 1, flexible v0+
+DescribeShareGroupOffsetsRequest => key 90, max version 1, flexible v0+, group coordinator
   // Groups are the groups to describe offsets for.
   Groups: [=>]
     // GroupID is the group identifier.

@@ -4,7 +4,7 @@
 // removed in Apacke Kafka 4.1.
 //
 // Version 1 is the initial stable version (KIP-932).
-ShareGroupDescribeRequest => key 77, max version 1, flexible v0+
+ShareGroupDescribeRequest => key 77, max version 1, flexible v0+, group coordinator
   // GroupIDs are the IDs of the groups to describe.
   GroupIDs: [string]
   // IncludeAuthorizedOperations is whether to include authorized operations.
