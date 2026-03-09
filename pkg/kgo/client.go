@@ -1816,6 +1816,7 @@ func (cl *Client) forgetControllerID(id int32) {
 const (
 	coordinatorTypeGroup int8 = 0
 	coordinatorTypeTxn   int8 = 1
+	coordinatorTypeShare int8 = 2
 )
 
 type coordinatorKey struct {

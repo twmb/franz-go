@@ -681,6 +681,10 @@ func (s Struct) WriteTxnCoordinatorFunc(l *LineWriter) {
 	l.Write("func (v *%s) IsTxnCoordinatorRequest() {}", s.Name)
 }
 
+func (s Struct) WriteShareCoordinatorFunc(l *LineWriter) {
+	l.Write("func (v *%s) IsShareCoordinatorRequest() {}", s.Name)
+}
+
 func (s Struct) WriteResponseKindFunc(l *LineWriter) {
 	l.Write("func (v *%s) ResponseKind() Response {", s.Name)
 	l.Write("r := &%s{Version: v.Version }", s.ResponseKind)
