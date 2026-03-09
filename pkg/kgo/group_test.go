@@ -169,10 +169,10 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 			}
 			if err := cl.CommitUncommittedOffsets(ctx); err != nil {
 				if c.enable848 && errors.Is(err, kerr.StaleMemberEpoch) {
-					c.errCh <- errSkipChecks848
+					c.sendErr(errSkipChecks848)
 					return
 				}
-				c.errCh <- fmt.Errorf("unable to commit in revoked: %v", err)
+				c.sendErr(fmt.Errorf("unable to commit in revoked: %v", err))
 			}
 		}),
 		OnPartitionsLost(func(context.Context, *Client, map[string][]int32) {}),
@@ -198,7 +198,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		defer cl.LeaveGroup()
 
 		if err := cl.Flush(context.Background()); err != nil {
-			c.errCh <- fmt.Errorf("unable to flush: %v", err)
+			c.sendErr(fmt.Errorf("unable to flush: %v", err))
 		}
 	}()
 
@@ -211,7 +211,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		// Thus, the final poll will remain uncommitted.
 		if etlsBeforeQuit > 0 {
 			if err := cl.CommitUncommittedOffsets(context.Background()); err != nil {
-				c.errCh <- fmt.Errorf("unable to commit: %v", err)
+				c.sendErr(fmt.Errorf("unable to commit: %v", err))
 			}
 		}
 
@@ -237,11 +237,11 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 				if fetches.NumRecords() == 0 {
 					continue
 				}
-				c.errCh <- fmt.Errorf("poll got err %s but also unexpectedly received %d records", err, fetches.NumRecords())
+				c.sendErr(fmt.Errorf("poll got err %s but also unexpectedly received %d records", err, fetches.NumRecords()))
 				return
 			}
 			if fetchErrs := fetches.Errors(); len(fetchErrs) > 0 {
-				c.errCh <- fmt.Errorf("poll got unexpected errs: %v", fetchErrs)
+				c.sendErr(fmt.Errorf("poll got unexpected errs: %v", fetchErrs))
 				return
 			}
 
@@ -252,17 +252,17 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 			for r := range fetches.RecordsAll() {
 				keyNum, err := strconv.Atoi(string(r.Key))
 				if err != nil {
-					c.errCh <- err
+					c.sendErr(err)
 					return
 				}
 				if !bytes.Equal(r.Value, c.expBody) {
-					c.errCh <- fmt.Errorf("body not what was expected")
+					c.sendErr(fmt.Errorf("body not what was expected"))
 					return
 				}
 
 				c.mu.Lock()
 				if _, exists := c.partOffsets[partOffset{r.Partition, r.Offset}]; exists {
-					c.errCh <- fmt.Errorf("saw double offset t %s p%do%d", r.Topic, r.Partition, r.Offset)
+					c.sendErr(fmt.Errorf("saw double offset t %s p%do%d", r.Topic, r.Partition, r.Offset))
 					c.mu.Unlock()
 					return
 				}
@@ -281,7 +281,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 					},
 					func(_ *Record, err error) {
 						if err != nil {
-							c.errCh <- fmt.Errorf("unexpected etl produce err: %v", err)
+							c.sendErr(fmt.Errorf("unexpected etl produce err: %v", err))
 						}
 					},
 				)
