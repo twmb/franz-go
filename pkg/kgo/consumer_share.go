@@ -35,13 +35,21 @@ const (
 // for sending. After this bit is set, Acknowledge() is a no-op.
 const ackFinalized = 0x80
 
+// ackGap is the wire type for gap offsets (compacted records within an
+// acquired range that have no physical record). The broker uses this to
+// release the acquisition without treating the offset as processed or
+// rejected.
+const ackGap int8 = 0
+
 // shareAckState is injected into each share group Record's Context via
 // context.WithValue. It tracks the ack status (pending, user-set, or
 // finalized) and the delivery count from the broker.
 type shareAckState struct {
-	mu            sync.Mutex
-	status        uint8 // 0=pending, low 7 bits=AckStatus, high bit=ackFinalized
-	deliveryCount int32
+	mu                     sync.Mutex
+	status                 uint8 // 0=pending, low 7 bits=AckStatus, high bit=ackFinalized
+	deliveryCount          int32
+	acquisitionLockTimeout time.Duration
+	source                 *source // the source that fetched this record
 }
 
 var ctxShareAck = new(string) // pointer key for context.WithValue
@@ -65,9 +73,9 @@ type shareAckBatch struct {
 	ackType     int8 // single type for the whole batch
 }
 
-// sharePartKey identifies a partition for ack routing, using topicID
-// to avoid topic-name-to-ID lookups when building ack requests.
-type sharePartKey struct {
+// topicPartIdx identifies a topic+partition by topicID, used as a map key
+// for O(1) partition lookup when building ShareFetch requests.
+type topicPartIdx struct {
 	topicID   [16]byte
 	partition int32
 }
@@ -100,6 +108,7 @@ type shareCursor struct {
 // auto-ack and route the ack to the right source.
 type sharePolledRecord struct {
 	state     *shareAckState
+	source    *source // the source that fetched this record
 	topic     string
 	partition int32
 	offset    int64
@@ -132,8 +141,8 @@ type shareConsumer struct {
 
 	// sourcesWithForgotten tracks sources that had share cursors
 	// removed and may still need to send ForgottenTopicsData to the
-	// broker. Cleaned up lazily in collectShareSources once the
-	// forgotten state is drained. Protected by c.mu.
+	// broker. Cleaned up by cleanupForgottenSources after poll
+	// rounds drain the state. Protected by c.mu.
 	sourcesWithForgotten map[*source]struct{}
 
 	// cursorsChanged is signaled by assignSharePartitions (under c.mu)
@@ -287,29 +296,31 @@ func (s *shareConsumer) manageShareGroup() {
 		case errors.Is(err, kerr.UnknownMemberID):
 			member, gen := s.memberGen.load()
 			s.memberGen.store(newStringUUID(), 0)
-			s.cfg.logger.Log(LogLevelInfo, "share group heartbeat error, restarting with new member id",
+			s.cfg.logger.Log(LogLevelInfo, "share group heartbeat unknown member, restarting with new member id",
 				"group", s.cfg.shareGroup,
 				"member_id", member,
 				"generation", gen,
-				"err", err,
 			)
-			// Clear all cursors immediately so in-flight polls
-			// stop sending ShareFetch with the old member ID.
 			s.reconcileAssignment(nil)
+			s.clearSourceShareState()
 			s.unresolvedAssigned = nil
 			consecutiveErrors = 0
 			continue
 
 		case errors.Is(err, kerr.FencedMemberEpoch):
+			// The broker fenced our epoch but still knows our
+			// member ID. Keep the same ID and reset the epoch
+			// so the broker can reconnect us to existing state.
+			// This matches the Java client's behavior.
 			member, gen := s.memberGen.load()
-			s.memberGen.store(newStringUUID(), 0)
-			s.cfg.logger.Log(LogLevelInfo, "share group heartbeat fenced, restarting with new member id",
+			s.memberGen.storeGeneration(0)
+			s.cfg.logger.Log(LogLevelInfo, "share group heartbeat fenced, resetting epoch",
 				"group", s.cfg.shareGroup,
 				"member_id", member,
 				"generation", gen,
-				"err", err,
 			)
 			s.reconcileAssignment(nil)
+			s.clearSourceShareState()
 			s.unresolvedAssigned = nil
 			consecutiveErrors = 0
 			continue
@@ -388,10 +399,10 @@ func (s *shareConsumer) sendHeartbeat() (time.Duration, error) {
 func (s *shareConsumer) handleResp(resp *kmsg.ShareGroupHeartbeatResponse) map[string][]int32 {
 	if resp.MemberID != nil {
 		s.memberGen.store(*resp.MemberID, resp.MemberEpoch)
-		s.cl.cfg.logger.Log(LogLevelDebug, "storing share member and epoch", "group", s.cfg.shareGroup, "member", *resp.MemberID, "epoch", resp.MemberEpoch)
+		s.cfg.logger.Log(LogLevelDebug, "storing share member and epoch", "group", s.cfg.shareGroup, "member", *resp.MemberID, "epoch", resp.MemberEpoch)
 	} else {
 		s.memberGen.storeGeneration(resp.MemberEpoch)
-		s.cl.cfg.logger.Log(LogLevelDebug, "storing share epoch", "group", s.cfg.shareGroup, "epoch", resp.MemberEpoch)
+		s.cfg.logger.Log(LogLevelDebug, "storing share epoch", "group", s.cfg.shareGroup, "epoch", resp.MemberEpoch)
 	}
 
 	if resp.Assignment == nil {
@@ -538,13 +549,12 @@ func (s *shareConsumer) assignSharePartitions(assignments map[string][]int32) {
 }
 
 // routeAcksToSources iterates lastPolled, finalizes records, and routes their
-// acks to sources. If autoAcceptPending is true, records with no explicit ack
-// status (status==0) are auto-accepted; otherwise they are skipped.
+// acks directly to each source's pending ack queue. If autoAcceptPending is
+// true, records with no explicit ack status (status==0) are auto-accepted;
+// otherwise they are skipped.
 //
 // Must be called under consumer.mu.
 func (s *shareConsumer) routeAcksToSources(autoAcceptPending bool) {
-	bySource := make(map[*source]map[sharePartKey][]shareAckBatch)
-
 	for i := range s.lastPolled {
 		pr := &s.lastPolled[i]
 		st := pr.state
@@ -576,26 +586,23 @@ func (s *shareConsumer) routeAcksToSources(autoAcceptPending bool) {
 		if sc == nil {
 			continue
 		}
-
-		m := bySource[sc.source]
-		if m == nil {
-			m = make(map[sharePartKey][]shareAckBatch)
-			bySource[sc.source] = m
+		// If the partition leader changed since these records were
+		// fetched, the new leader's share session doesn't know
+		// about these acquisitions. Drop the ack -- the old
+		// leader's acquisition lock will time out and the records
+		// will be redelivered. This matches the Java client's
+		// isLeaderKnownToHaveChanged check.
+		if pr.source != nil && pr.source != sc.source {
+			continue
 		}
-		key := sharePartKey{sc.topicID, pr.partition}
-		m[key] = append(m[key], shareAckBatch{
+
+		// Route directly to the source. Merging of contiguous
+		// same-type batches happens at drain time.
+		sc.source.addShareAcks(sc.topicID, pr.partition, []shareAckBatch{{
 			firstOffset: pr.offset,
 			lastOffset:  pr.offset,
 			ackType:     ackType,
-		})
-	}
-
-	// Merge contiguous same-type batches and route to sources.
-	for src, partBatches := range bySource {
-		for key, batches := range partBatches {
-			batches = mergeAckBatches(batches)
-			src.addShareAcks(key.topicID, key.partition, batches)
-		}
+		}})
 	}
 }
 
@@ -708,7 +715,7 @@ func (s *shareConsumer) sendSourceAck(ctx context.Context, src *source, acks map
 	src.cursorsMu.Unlock()
 
 	topicIdx := make(map[[16]byte]int)
-	hasRenew := s.buildAckRequests(acks, func(tid [16]byte, partition int32, batches []shareAckBatch) {
+	for tid, parts := range acks {
 		idx, ok := topicIdx[tid]
 		if !ok {
 			idx = len(req.Topics)
@@ -717,18 +724,20 @@ func (s *shareConsumer) sendSourceAck(ctx context.Context, src *source, acks map
 			t.TopicID = tid
 			req.Topics = append(req.Topics, t)
 		}
-		p := kmsg.NewShareAcknowledgeRequestTopicPartition()
-		p.Partition = partition
-		for _, batch := range batches {
-			ab := kmsg.NewShareAcknowledgeRequestTopicPartitionAcknowledgementBatche()
-			ab.FirstOffset = batch.firstOffset
-			ab.LastOffset = batch.lastOffset
-			ab.AcknowledgeTypes = []int8{batch.ackType}
-			p.AcknowledgementBatches = append(p.AcknowledgementBatches, ab)
+		for partition, batches := range parts {
+			p := kmsg.NewShareAcknowledgeRequestTopicPartition()
+			p.Partition = partition
+			for _, batch := range batches {
+				ab := kmsg.NewShareAcknowledgeRequestTopicPartitionAcknowledgementBatche()
+				ab.FirstOffset = batch.firstOffset
+				ab.LastOffset = batch.lastOffset
+				ab.AcknowledgeTypes = []int8{batch.ackType}
+				p.AcknowledgementBatches = append(p.AcknowledgementBatches, ab)
+			}
+			req.Topics[idx].Partitions = append(req.Topics[idx].Partitions, p)
 		}
-		req.Topics[idx].Partitions = append(req.Topics[idx].Partitions, p)
-	})
-	req.IsRenewAck = hasRenew
+	}
+	req.IsRenewAck = hasRenewAck(acks)
 
 	kresp, err := s.cl.retryableBrokerFn(func() (*broker, error) {
 		return s.cl.brokerOrErr(ctx, src.nodeID, errUnknownBroker)
@@ -740,6 +749,20 @@ func (s *shareConsumer) sendSourceAck(ctx context.Context, src *source, acks map
 	var errs []error
 	resp := kresp.(*kmsg.ShareAcknowledgeResponse)
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		if isAckRetryable(err) {
+			// Re-queue all acks for piggybacked retry on the
+			// next ShareFetch.
+			for tid, parts := range acks {
+				for p, batches := range parts {
+					src.addShareAcks(tid, p, batches)
+				}
+			}
+			s.cfg.logger.Log(LogLevelInfo, "re-queued all acks due to retryable top-level error",
+				"broker", src.nodeID,
+				"err", err,
+			)
+			return nil
+		}
 		errs = append(errs, err)
 	}
 
@@ -751,6 +774,17 @@ func (s *shareConsumer) sendSourceAck(ctx context.Context, src *source, acks map
 				continue
 			}
 			err := kerr.ErrorForCode(rp.ErrorCode)
+			if isAckRetryable(err) {
+				if batches, ok := acks[rt.TopicID][rp.Partition]; ok {
+					src.addShareAcks(rt.TopicID, rp.Partition, batches)
+				}
+				s.cfg.logger.Log(LogLevelInfo, "re-queued retryable share ack error",
+					"topic", topicName,
+					"partition", rp.Partition,
+					"err", err,
+				)
+				continue
+			}
 			s.cfg.logger.Log(LogLevelWarn, "share acknowledge partition error",
 				"topic", topicName,
 				"partition", rp.Partition,
@@ -815,9 +849,10 @@ func (s *shareConsumer) leave(ctx context.Context) {
 			"member_id", memberID,
 		)
 
-		// Send standalone ShareAcknowledge for any pending acks, then
-		// close the share session (epoch -1) on each source.
-		s.sendPendingAcknowledgements(ctx)
+		// Close share sessions. Pending acks are piggybacked on the
+		// close request (epoch -1) so the broker processes them in
+		// one round trip rather than needing a separate
+		// ShareAcknowledge followed by a close.
 		s.closeShareSessions(ctx)
 
 		req := kmsg.NewPtrShareGroupHeartbeatRequest()
@@ -858,6 +893,25 @@ func (s *shareConsumer) finalizeForLeave() {
 	s.finalizePreviousPoll()
 }
 
+// clearSourceShareState clears stale share state (pending acks, forgotten
+// partitions, session epochs) from all sources. Called when the member is
+// fenced or unknown -- the broker invalidated our state, so pending acks
+// and sessions are stale and should not be sent.
+func (s *shareConsumer) clearSourceShareState() {
+	s.cl.sinksAndSourcesMu.Lock()
+	defer s.cl.sinksAndSourcesMu.Unlock()
+	for _, sns := range s.cl.sinksAndSources {
+		if sns.source == nil {
+			continue
+		}
+		sns.source.cursorsMu.Lock()
+		sns.source.sharePendingAcks = nil
+		sns.source.shareForgotten = nil
+		sns.source.shareSessionEpoch = 0
+		sns.source.cursorsMu.Unlock()
+	}
+}
+
 // collectAllSources returns all sources known to the client.
 func (s *shareConsumer) collectAllSources() map[*source]struct{} {
 	s.cl.sinksAndSourcesMu.Lock()
@@ -871,32 +925,69 @@ func (s *shareConsumer) collectAllSources() map[*source]struct{} {
 	return sources
 }
 
-// buildAckRequests converts pending ack batches (topicID -> partition ->
-// batches) into kmsg request-level topic/partition structures. The fn callback
-// receives (topicID, partition, ackBatches) and should append to the caller's
-// request. Returns true if any batch has AckRenew type.
-func (s *shareConsumer) buildAckRequests(
-	acks map[[16]byte]map[int32][]shareAckBatch,
-	fn func(tid [16]byte, partition int32, batches []shareAckBatch),
-) bool {
-	hasRenew := false
-	for tid, parts := range acks {
-		for partition, batches := range parts {
-			fn(tid, partition, batches)
+// hasRenewAck returns true if any batch in the ack map has AckRenew type,
+// which requires setting IsRenewAck on the request.
+func hasRenewAck(acks map[[16]byte]map[int32][]shareAckBatch) bool {
+	for _, parts := range acks {
+		for _, batches := range parts {
 			for _, b := range batches {
 				if b.ackType == int8(AckRenew) {
-					hasRenew = true
+					return true
 				}
 			}
 		}
 	}
-	return hasRenew
+	return false
+}
+
+// isAckRetryable returns true if a ShareAcknowledge / piggybacked ack error
+// should be retried by re-queuing the acks. Leader changes and topic
+// deletions release acquisition locks on the broker, so retrying the ack
+// is pointless -- the records will be redelivered by the new leader or
+// archived. Other retryable errors (timeouts, broker unavailable) should
+// be retried.
+func isAckRetryable(err error) bool {
+	switch {
+	case errors.Is(err, kerr.NotLeaderForPartition),
+		errors.Is(err, kerr.FencedLeaderEpoch),
+		errors.Is(err, kerr.UnknownTopicOrPartition),
+		errors.Is(err, kerr.UnknownTopicID):
+		return false
+	}
+	return kerr.IsRetriable(err)
+}
+
+// requeueAcksForPartition extracts piggybacked ack batches for a specific
+// topic+partition from a ShareFetch request and re-queues them on the source
+// for retry on the next request.
+func requeueAcksForPartition(src *source, req *kmsg.ShareFetchRequest, topicID [16]byte, partition int32) {
+	for i := range req.Topics {
+		if req.Topics[i].TopicID != topicID {
+			continue
+		}
+		for j := range req.Topics[i].Partitions {
+			rp := &req.Topics[i].Partitions[j]
+			if rp.Partition != partition || len(rp.AcknowledgementBatches) == 0 {
+				continue
+			}
+			var batches []shareAckBatch
+			for _, ab := range rp.AcknowledgementBatches {
+				for _, at := range ab.AcknowledgeTypes {
+					batches = append(batches, shareAckBatch{
+						firstOffset: ab.FirstOffset,
+						lastOffset:  ab.LastOffset,
+						ackType:     at,
+					})
+				}
+			}
+			src.addShareAcks(topicID, partition, batches)
+			return
+		}
+	}
 }
 
 // collectShareSources returns the set of sources that have share cursors
-// or pending forgotten state. Sources from sourcesWithForgotten are
-// lazily cleaned up once their forgotten/pending-ack state is drained.
-// Must be called under c.mu.
+// or pending forgotten/ack state. Must be called under c.mu.
 func (s *shareConsumer) collectShareSources() map[*source]struct{} {
 	sources := make(map[*source]struct{})
 	for _, parts := range s.usingShareCursors {
@@ -904,24 +995,44 @@ func (s *shareConsumer) collectShareSources() map[*source]struct{} {
 			sources[sc.source] = struct{}{}
 		}
 	}
-	// Include sources that still need to send ForgottenTopicsData
-	// or flush pending acks. Once buildShareFetchRequest drains the
-	// state, the next call here cleans up the tracking entry.
+	// Include sources that had cursors removed and may still need
+	// to send ForgottenTopicsData or flush pending acks.
 	for src := range s.sourcesWithForgotten {
-		if _, already := sources[src]; already {
+		sources[src] = struct{}{}
+	}
+	return sources
+}
+
+// cleanupForgottenSources removes entries from sourcesWithForgotten for
+// sources that have active cursors (they'll be visited anyway) or have
+// no remaining forgotten/ack state. Must be called under c.mu.
+func (s *shareConsumer) cleanupForgottenSources() {
+	for src := range s.sourcesWithForgotten {
+		// If the source has active cursors, it will be visited
+		// during polling regardless -- stop tracking it here.
+		hasCursors := false
+		for _, parts := range s.usingShareCursors {
+			for _, sc := range parts {
+				if sc.source == src {
+					hasCursors = true
+					break
+				}
+			}
+			if hasCursors {
+				break
+			}
+		}
+		if hasCursors {
 			delete(s.sourcesWithForgotten, src)
 			continue
 		}
 		src.cursorsMu.Lock()
-		needsVisit := len(src.shareForgotten) > 0 || len(src.sharePendingAcks) > 0
+		drained := len(src.shareForgotten) == 0 && len(src.sharePendingAcks) == 0
 		src.cursorsMu.Unlock()
-		if needsVisit {
-			sources[src] = struct{}{}
-		} else {
+		if drained {
 			delete(s.sourcesWithForgotten, src)
 		}
 	}
-	return sources
 }
 
 // pollShareFetches sends ShareFetch requests to all sources with share
@@ -1038,34 +1149,10 @@ func (s *shareConsumer) pollShareFetches(ctx context.Context, maxPollRecords int
 	// fetch round-trips.
 	fetches = append(fetches, fakeFetches...)
 
-	// Track ALL records from this poll for auto-ACCEPT on the next
-	// poll. We must do this before any maxPollRecords trimming so
-	// that records beyond the limit are still tracked and will be
-	// auto-ACCEPTed -- the broker already considers them acquired.
-	s.c.mu.Lock()
-	for i := range fetches {
-		for j := range fetches[i].Topics {
-			t := &fetches[i].Topics[j]
-			for k := range t.Partitions {
-				p := &t.Partitions[k]
-				for _, r := range p.Records {
-					if st := shareAckFromCtx(r); st != nil {
-						s.lastPolled = append(s.lastPolled, sharePolledRecord{
-							state:     st,
-							topic:     t.Topic,
-							partition: p.Partition,
-							offset:    r.Offset,
-						})
-					}
-				}
-			}
-		}
-	}
-	s.c.mu.Unlock()
-
-	// If maxPollRecords is set, trim fetches to the limit. Records
-	// beyond the limit are still tracked in lastPolled above and
-	// will be auto-ACCEPTed on the next poll.
+	// If maxPollRecords is set, trim fetches to the limit first. Any
+	// records beyond the limit are immediately released back to the
+	// broker -- the user never sees them, so auto-accepting would
+	// silently skip processing.
 	if maxPollRecords > 0 {
 		remaining := maxPollRecords
 		for i := range fetches {
@@ -1076,6 +1163,9 @@ func (s *shareConsumer) pollShareFetches(ctx context.Context, maxPollRecords int
 					if remaining >= len(p.Records) {
 						remaining -= len(p.Records)
 					} else {
+						for _, r := range p.Records[remaining:] {
+							r.Ack(AckRelease)
+						}
 						p.Records = p.Records[:remaining]
 						remaining = 0
 					}
@@ -1084,79 +1174,137 @@ func (s *shareConsumer) pollShareFetches(ctx context.Context, maxPollRecords int
 		}
 	}
 
+	// Track records returned to the user for auto-ACCEPT on the
+	// next poll. Records beyond maxPollRecords were already
+	// released above and are not tracked.
+	s.c.mu.Lock()
+	for i := range fetches {
+		for j := range fetches[i].Topics {
+			t := &fetches[i].Topics[j]
+			for k := range t.Partitions {
+				p := &t.Partitions[k]
+				for _, r := range p.Records {
+					if st := shareAckFromCtx(r); st != nil {
+						s.lastPolled = append(s.lastPolled, sharePolledRecord{
+							state:     st,
+							source:    st.source,
+							topic:     t.Topic,
+							partition: p.Partition,
+							offset:    r.Offset,
+						})
+					}
+				}
+			}
+		}
+	}
+	// The fetch round just sent requests which drained forgotten
+	// state from sources -- clean up tracking entries for sources
+	// that no longer need visiting.
+	s.cleanupForgottenSources()
+	s.c.mu.Unlock()
+
 	return fetches
 }
 
 // doShareFetch sends a single ShareFetch request to one source and
-// returns the decoded Fetch. On session errors, it retries once with a
-// reset epoch.
+// returns the decoded Fetch. On session errors (e.g. SHARE_SESSION_NOT_FOUND),
+// the epoch is reset and the request is retried once.
 func (s *shareConsumer) doShareFetch(ctx context.Context, src *source) Fetch {
-	return s.doShareFetchInner(ctx, src, true)
-}
-
-func (s *shareConsumer) doShareFetchInner(ctx context.Context, src *source, canRetry bool) Fetch {
-	req := s.buildShareFetchRequest(src)
-	if req == nil {
-		return Fetch{}
-	}
-
-	br, err := s.cl.brokerOrErr(ctx, src.nodeID, errUnknownBroker)
-	if err != nil {
-		restoreShareForgotten(src, req)
-		return Fetch{}
-	}
-
-	// Use the same br.do + select pattern as regular fetch (source.go)
-	// so that context cancellation immediately unblocks us rather than
-	// relying on readConn's ctx.Done propagation alone.
-	var kresp kmsg.Response
-	requested := make(chan struct{})
-	br.do(ctx, req, func(k kmsg.Response, e error) {
-		kresp, err = k, e
-		close(requested)
-	})
-
-	select {
-	case <-requested:
-		if isContextErr(err) && ctx.Err() != nil {
-			restoreShareForgotten(src, req)
+	for attempt := range 2 {
+		req := s.buildShareFetchRequest(src)
+		if req == nil {
 			return Fetch{}
 		}
-	case <-ctx.Done():
-		restoreShareForgotten(src, req)
-		return Fetch{}
-	}
 
-	if err != nil {
-		src.consecutiveFailures++
-		restoreShareForgotten(src, req)
-		after := time.NewTimer(s.cfg.retryBackoff(src.consecutiveFailures))
-		select {
-		case <-after.C:
-		case <-ctx.Done():
+		br, err := s.cl.brokerOrErr(ctx, src.nodeID, errUnknownBroker)
+		if err != nil {
+			src.restoreShareForgotten(req)
+			src.restoreSharePendingAcks(req)
+			return Fetch{}
 		}
-		after.Stop()
-		return Fetch{}
+
+		// Use the same br.do + select pattern as regular fetch
+		// (source.go) so that context cancellation immediately
+		// unblocks us rather than relying on readConn's ctx.Done
+		// propagation alone.
+		var kresp kmsg.Response
+		requested := make(chan struct{})
+		br.do(ctx, req, func(k kmsg.Response, e error) {
+			kresp, err = k, e
+			close(requested)
+		})
+
+		select {
+		case <-requested:
+			if isContextErr(err) && ctx.Err() != nil {
+				// The request may have been processed by the
+				// broker before the context was cancelled,
+				// advancing the broker's session epoch. Reset
+				// to 0 so the next request starts a fresh
+				// session rather than hitting
+				// InvalidShareSessionEpoch.
+				src.cursorsMu.Lock()
+				src.shareSessionEpoch = 0
+				src.cursorsMu.Unlock()
+				src.restoreShareForgotten(req)
+				src.restoreSharePendingAcks(req)
+				return Fetch{}
+			}
+		case <-ctx.Done():
+			// The in-flight request may still be processed by
+			// the broker, advancing its session epoch. Reset
+			// ours so the next request starts a new session.
+			src.cursorsMu.Lock()
+			src.shareSessionEpoch = 0
+			src.cursorsMu.Unlock()
+			src.restoreShareForgotten(req)
+			src.restoreSharePendingAcks(req)
+			return Fetch{}
+		}
+
+		if err != nil {
+			src.consecutiveFailures++
+			// The broker may have processed the request before
+			// the error occurred, advancing its session epoch.
+			// Reset ours so the next request starts a fresh
+			// session.
+			src.cursorsMu.Lock()
+			src.shareSessionEpoch = 0
+			src.cursorsMu.Unlock()
+			src.restoreShareForgotten(req)
+			src.restoreSharePendingAcks(req)
+			after := time.NewTimer(s.cfg.retryBackoff(src.consecutiveFailures))
+			select {
+			case <-after.C:
+			case <-ctx.Done():
+			}
+			after.Stop()
+			return Fetch{}
+		}
+		src.consecutiveFailures = 0
+
+		resp := kresp.(*kmsg.ShareFetchResponse)
+
+		s.cfg.logger.Log(LogLevelDebug, "share fetch response",
+			"broker", src.nodeID,
+			"error_code", resp.ErrorCode,
+			"num_topics", len(resp.Topics),
+		)
+
+		fetch, retry := s.handleShareFetchResponse(src, req, resp)
+		if !retry {
+			return fetch
+		}
+		// Session error -- epoch was reset by
+		// handleShareFetchResponse. Restore forgotten and ack
+		// data from this request (the broker rejected it without
+		// processing) and retry once to re-establish the session.
+		if attempt == 0 {
+			src.restoreShareForgotten(req)
+			src.restoreSharePendingAcks(req)
+		}
 	}
-	src.consecutiveFailures = 0
-
-	resp := kresp.(*kmsg.ShareFetchResponse)
-
-	s.cfg.logger.Log(LogLevelDebug, "share fetch response",
-		"broker", src.nodeID,
-		"error_code", resp.ErrorCode,
-		"num_topics", len(resp.Topics),
-	)
-
-	fetch, retry := s.handleShareFetchResponse(src, resp)
-	if retry && canRetry {
-		// Session error (e.g. SHARE_SESSION_NOT_FOUND) -- epoch was
-		// reset by handleShareFetchResponse. Retry once with the new
-		// epoch to re-establish the session.
-		return s.doShareFetchInner(ctx, src, false)
-	}
-
-	return fetch
+	return Fetch{}
 }
 
 // restoreShareForgotten puts ForgottenTopicsData from a failed ShareFetch
@@ -1165,17 +1313,64 @@ func (s *shareConsumer) doShareFetchInner(ctx context.Context, src *source, canR
 // if the request fails before reaching the broker, the forgotten state
 // would be permanently lost, causing the client to never send
 // ForgottenTopicsData and potentially leaving stale share sessions.
-func restoreShareForgotten(src *source, req *kmsg.ShareFetchRequest) {
+func (s *source) restoreShareForgotten(req *kmsg.ShareFetchRequest) {
 	if len(req.ForgottenTopicsData) == 0 {
 		return
 	}
-	src.cursorsMu.Lock()
-	defer src.cursorsMu.Unlock()
-	if src.shareForgotten == nil {
-		src.shareForgotten = make(map[[16]byte][]int32)
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	if s.shareForgotten == nil {
+		s.shareForgotten = make(map[[16]byte][]int32)
 	}
 	for _, f := range req.ForgottenTopicsData {
-		src.shareForgotten[f.TopicID] = append(src.shareForgotten[f.TopicID], f.Partitions...)
+		s.shareForgotten[f.TopicID] = append(s.shareForgotten[f.TopicID], f.Partitions...)
+	}
+}
+
+// restoreSharePendingAcks reconstructs piggybacked acks from a failed
+// ShareFetch request and puts them back on the source so the next request
+// retries them. Without this, acks are silently lost when a ShareFetch
+// fails after buildShareFetchRequest drained them from the source.
+func (s *source) restoreSharePendingAcks(req *kmsg.ShareFetchRequest) {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	for i := range req.Topics {
+		rt := &req.Topics[i]
+		for j := range rt.Partitions {
+			rp := &rt.Partitions[j]
+			if len(rp.AcknowledgementBatches) == 0 {
+				continue
+			}
+			var batches []shareAckBatch
+			for _, ab := range rp.AcknowledgementBatches {
+				for _, at := range ab.AcknowledgeTypes {
+					batches = append(batches, shareAckBatch{
+						firstOffset: ab.FirstOffset,
+						lastOffset:  ab.LastOffset,
+						ackType:     at,
+					})
+				}
+			}
+			s.restoreSharePendingAcksLocked(map[[16]byte]map[int32][]shareAckBatch{
+				rt.TopicID: {rp.Partition: batches},
+			})
+		}
+	}
+}
+
+// restoreSharePendingAcksLocked merges pending acks back onto the source.
+// Must be called with cursorsMu held.
+func (s *source) restoreSharePendingAcksLocked(acks map[[16]byte]map[int32][]shareAckBatch) {
+	for tid, parts := range acks {
+		if s.sharePendingAcks == nil {
+			s.sharePendingAcks = make(map[[16]byte]map[int32][]shareAckBatch)
+		}
+		if s.sharePendingAcks[tid] == nil {
+			s.sharePendingAcks[tid] = make(map[int32][]shareAckBatch)
+		}
+		for p, batches := range parts {
+			s.sharePendingAcks[tid][p] = append(s.sharePendingAcks[tid][p], batches...)
+		}
 	}
 }
 
@@ -1225,12 +1420,13 @@ func (s *shareConsumer) buildShareFetchRequest(src *source) *kmsg.ShareFetchRequ
 	// fetch sessions where the broker handles delta tracking, share
 	// sessions require topics to be present for the broker to return
 	// data from them.
-	topicIdx := make(map[[16]byte]int) // topicID -> index in req.Topics
+	topicIdx := make(map[[16]byte]int)    // topicID -> index in req.Topics
+	partIdx := make(map[topicPartIdx]int) // (topicID, partition) -> index in topic's Partitions
 	for _, sc := range cursors {
-		idx, ok := topicIdx[sc.topicID]
+		tidx, ok := topicIdx[sc.topicID]
 		if !ok {
-			idx = len(req.Topics)
-			topicIdx[sc.topicID] = idx
+			tidx = len(req.Topics)
+			topicIdx[sc.topicID] = tidx
 			t := kmsg.NewShareFetchRequestTopic()
 			t.TopicID = sc.topicID
 			req.Topics = append(req.Topics, t)
@@ -1238,20 +1434,45 @@ func (s *shareConsumer) buildShareFetchRequest(src *source) *kmsg.ShareFetchRequ
 		p := kmsg.NewShareFetchRequestTopicPartition()
 		p.Partition = sc.partition
 		p.PartitionMaxBytes = int32(s.cfg.maxBytes)
-		req.Topics[idx].Partitions = append(req.Topics[idx].Partitions, p)
+		partIdx[topicPartIdx{sc.topicID, sc.partition}] = len(req.Topics[tidx].Partitions)
+		req.Topics[tidx].Partitions = append(req.Topics[tidx].Partitions, p)
 	}
 
-	// Attach piggybacked acks.
+	// Attach piggybacked acks. The broker rejects acks on the initial
+	// epoch (epoch 0 creates a new session), so hold them for the next
+	// request. This matches the Java client's maybeAddAcknowledgements
+	// check for isNewSession.
 	if len(pendingAcks) > 0 {
-		s.attachAcksToShareFetch(req, pendingAcks, topicIdx)
+		if sessionEpoch == 0 {
+			src.cursorsMu.Lock()
+			src.restoreSharePendingAcksLocked(pendingAcks)
+			src.cursorsMu.Unlock()
+		} else {
+			s.attachAcksToShareFetch(req, pendingAcks, topicIdx, partIdx)
+		}
 	}
 
-	// Attach forgotten topics.
-	for tid, parts := range forgotten {
-		f := kmsg.NewShareFetchRequestForgottenTopicsData()
-		f.TopicID = tid
-		f.Partitions = parts
-		req.ForgottenTopicsData = append(req.ForgottenTopicsData, f)
+	// Attach forgotten topics. Only meaningful on incremental requests
+	// (epoch > 0) -- on epoch 0 the broker creates a fresh session with
+	// no prior state to forget.
+	if sessionEpoch > 0 {
+		for tid, parts := range forgotten {
+			f := kmsg.NewShareFetchRequestForgottenTopicsData()
+			f.TopicID = tid
+			f.Partitions = parts
+			req.ForgottenTopicsData = append(req.ForgottenTopicsData, f)
+		}
+	}
+
+	// KIP-1222: when IsRenewAck is set, all fetch params must be zero
+	// because the broker skips fetching entirely. The broker validates
+	// maxBytes, minBytes, maxRecords, and maxWaitMs are all 0.
+	if req.IsRenewAck {
+		req.MaxWaitMillis = 0
+		req.MinBytes = 0
+		req.MaxBytes = 0
+		req.MaxRecords = 0
+		req.BatchSize = 0
 	}
 
 	s.cfg.logger.Log(LogLevelDebug, "built share fetch request",
@@ -1265,57 +1486,60 @@ func (s *shareConsumer) buildShareFetchRequest(src *source) *kmsg.ShareFetchRequ
 }
 
 // attachAcksToShareFetch piggybacks pending ack batches onto a ShareFetch
-// request. Acks are added to existing topic/partition entries or new
-// ack-only entries are created.
+// request. Acks are added to existing topic/partition entries (via the
+// partition index) or new ack-only entries are created.
 func (s *shareConsumer) attachAcksToShareFetch(
 	req *kmsg.ShareFetchRequest,
 	pendingAcks map[[16]byte]map[int32][]shareAckBatch,
 	topicIdx map[[16]byte]int,
+	pIdx map[topicPartIdx]int,
 ) {
-	hasRenew := s.buildAckRequests(pendingAcks, func(tid [16]byte, partition int32, batches []shareAckBatch) {
-		idx, ok := topicIdx[tid]
+	for tid, parts := range pendingAcks {
+		tidx, ok := topicIdx[tid]
 		if !ok {
-			idx = len(req.Topics)
-			topicIdx[tid] = idx
+			tidx = len(req.Topics)
+			topicIdx[tid] = tidx
 			t := kmsg.NewShareFetchRequestTopic()
 			t.TopicID = tid
 			req.Topics = append(req.Topics, t)
 		}
 
-		partIdx := -1
-		for i, p := range req.Topics[idx].Partitions {
-			if p.Partition == partition {
-				partIdx = i
-				break
+		for partition, batches := range parts {
+			key := topicPartIdx{tid, partition}
+			pi, ok := pIdx[key]
+			if !ok {
+				pi = len(req.Topics[tidx].Partitions)
+				pIdx[key] = pi
+				p := kmsg.NewShareFetchRequestTopicPartition()
+				p.Partition = partition
+				p.PartitionMaxBytes = 0
+				req.Topics[tidx].Partitions = append(req.Topics[tidx].Partitions, p)
+			}
+
+			for _, batch := range batches {
+				ab := kmsg.NewShareFetchRequestTopicPartitionAcknowledgementBatche()
+				ab.FirstOffset = batch.firstOffset
+				ab.LastOffset = batch.lastOffset
+				ab.AcknowledgeTypes = []int8{batch.ackType}
+				req.Topics[tidx].Partitions[pi].AcknowledgementBatches = append(
+					req.Topics[tidx].Partitions[pi].AcknowledgementBatches, ab,
+				)
 			}
 		}
-		if partIdx < 0 {
-			partIdx = len(req.Topics[idx].Partitions)
-			p := kmsg.NewShareFetchRequestTopicPartition()
-			p.Partition = partition
-			p.PartitionMaxBytes = 0
-			req.Topics[idx].Partitions = append(req.Topics[idx].Partitions, p)
-		}
-
-		for _, batch := range batches {
-			ab := kmsg.NewShareFetchRequestTopicPartitionAcknowledgementBatche()
-			ab.FirstOffset = batch.firstOffset
-			ab.LastOffset = batch.lastOffset
-			ab.AcknowledgeTypes = []int8{batch.ackType}
-			req.Topics[idx].Partitions[partIdx].AcknowledgementBatches = append(
-				req.Topics[idx].Partitions[partIdx].AcknowledgementBatches, ab,
-			)
-		}
-	})
-	req.IsRenewAck = hasRenew
+	}
+	req.IsRenewAck = hasRenewAck(pendingAcks)
 }
 
 // handleShareFetchResponse processes a ShareFetch response, updating session
 // epoch and building a Fetch. Returns the Fetch and whether the caller should
 // retry (on session errors). Each acquired record has a shareAckState
 // injected into its Context for ack tracking.
+//
+// The req parameter is used to re-queue piggybacked acks when the broker
+// returns a retryable AcknowledgeErrorCode for a partition.
 func (s *shareConsumer) handleShareFetchResponse(
 	src *source,
+	req *kmsg.ShareFetchRequest,
 	resp *kmsg.ShareFetchResponse,
 ) (Fetch, bool) {
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
@@ -1332,28 +1556,23 @@ func (s *shareConsumer) handleShareFetchResponse(
 			src.cursorsMu.Unlock()
 			return Fetch{}, true
 
-		case errors.Is(err, kerr.UnknownMemberID),
-			errors.Is(err, kerr.FencedMemberEpoch):
-			// The member was fenced or removed. The heartbeat
-			// loop is already recovering by assigning a new
-			// member ID, so this is just an in-flight response
-			// on the old member. Reset the session epoch (the
-			// old session is dead) and return an empty fetch
-			// without surfacing an error to the application.
-			s.cfg.logger.Log(LogLevelInfo, "share fetch member error, resetting epoch",
+		default:
+			// Non-session error. The Java client increments the
+			// epoch (the broker may or may not have advanced
+			// its epoch before returning the error). Match the
+			// reference implementation: increment and return the
+			// error without retrying the session.
+			s.cfg.logger.Log(LogLevelInfo, "share fetch top-level error, incrementing epoch",
 				"broker", src.nodeID,
 				"err", err,
 			)
 			src.cursorsMu.Lock()
-			src.shareSessionEpoch = 0
+			if src.shareSessionEpoch == math.MaxInt32 {
+				src.shareSessionEpoch = 1
+			} else {
+				src.shareSessionEpoch++
+			}
 			src.cursorsMu.Unlock()
-			return Fetch{}, false
-
-		default:
-			s.cfg.logger.Log(LogLevelError, "share fetch top-level error",
-				"broker", src.nodeID,
-				"err", err,
-			)
 			return Fetch{Topics: []FetchTopic{{
 				Partitions: []FetchPartition{{Partition: -1, Err: err}},
 			}}}, false
@@ -1372,6 +1591,20 @@ func (s *shareConsumer) handleShareFetchResponse(
 	}
 	src.cursorsMu.Unlock()
 
+	acqLockTimeout := time.Duration(resp.AcquisitionLockTimeoutMillis) * time.Millisecond
+
+	// Track piggybacked ack partitions from the request. If the broker
+	// omits a partition from the response entirely, we re-queue the acks
+	// so they are retried on the next request rather than silently lost.
+	piggybackedAcks := make(map[topicPartIdx]struct{})
+	for i := range req.Topics {
+		for j := range req.Topics[i].Partitions {
+			if len(req.Topics[i].Partitions[j].AcknowledgementBatches) > 0 {
+				piggybackedAcks[topicPartIdx{req.Topics[i].TopicID, req.Topics[i].Partitions[j].Partition}] = struct{}{}
+			}
+		}
+	}
+
 	id2t := s.cl.id2tMap()
 	var fetch Fetch
 	topicIdx := make(map[string]int)
@@ -1385,12 +1618,20 @@ func (s *shareConsumer) handleShareFetchResponse(
 
 		for j := range rt.Partitions {
 			rp := &rt.Partitions[j]
+			delete(piggybackedAcks, topicPartIdx{rt.TopicID, rp.Partition})
 
 			if rp.AcknowledgeErrorCode != 0 {
+				ackErr := kerr.ErrorForCode(rp.AcknowledgeErrorCode)
+				requeued := false
+				if isAckRetryable(ackErr) {
+					requeueAcksForPartition(src, req, rt.TopicID, rp.Partition)
+					requeued = true
+				}
 				s.cfg.logger.Log(LogLevelWarn, "share fetch acknowledge error",
 					"topic", topicName,
 					"partition", rp.Partition,
-					"err", kerr.ErrorForCode(rp.AcknowledgeErrorCode),
+					"err", ackErr,
+					"requeued", requeued,
 				)
 			}
 
@@ -1412,42 +1653,65 @@ func (s *shareConsumer) handleShareFetchResponse(
 				continue
 			}
 
-			// Decode records using ProcessFetchPartition with a
-			// synthetic FetchResponseTopicPartition.
+			// Reuse ProcessFetchPartition to decode record
+			// batches. We build a synthetic
+			// FetchResponseTopicPartition because ShareFetch
+			// uses the same wire format for records. The
+			// sentinel -1 values signal "not applicable" for
+			// fields that only exist in regular fetch responses
+			// (HWM, LSO, LogStartOffset). IsolationLevel and
+			// Offset are zero because share groups have no
+			// concept of read-committed and we want all decoded
+			// records (filtering by AcquiredRecords below).
 			fakePart := kmsg.NewFetchResponseTopicPartition()
 			fakePart.Partition = rp.Partition
-			fakePart.ErrorCode = 0
 			fakePart.RecordBatches = rp.Records
 			fakePart.HighWatermark = -1
 			fakePart.LastStableOffset = -1
 			fakePart.LogStartOffset = -1
 
-			opts := ProcessFetchPartitionOpts{
+			fp, _ := ProcessFetchPartition(ProcessFetchPartitionOpts{
 				KeepControlRecords:   s.cfg.keepControl,
 				DisableCRCValidation: s.cfg.disableFetchCRCValidation,
-				Offset:               0,
 				Topic:                topicName,
 				Partition:            rp.Partition,
 				Pools:                s.cfg.pools,
-			}
-			fp, _ := ProcessFetchPartition(opts, &fakePart, s.cfg.decompressor, nil)
+			}, &fakePart, s.cfg.decompressor, nil)
 
 			// Filter to only records within AcquiredRecords ranges
 			// and inject shareAckState into each. Both fp.Records
 			// and AcquiredRecords are sorted by offset, so we use a
 			// two-pointer scan for O(n+m).
+			//
+			// Gap handling: if compaction removed records from the
+			// middle of an acquired range, those offsets have no
+			// physical record but are still "acquired" by the
+			// broker. We immediately queue GAP acks (type 0) for
+			// gap offsets so the broker releases them. Without
+			// this, gap offsets remain permanently acquired.
 			var (
 				acquired []*Record
+				gapAcks  []shareAckBatch
 				ri       int
 			)
 			for _, ar := range rp.AcquiredRecords {
+				nextExpected := ar.FirstOffset
 				for ri < len(fp.Records) && fp.Records[ri].Offset < ar.FirstOffset {
 					ri++
 				}
 				for ri < len(fp.Records) && fp.Records[ri].Offset <= ar.LastOffset {
 					r := fp.Records[ri]
+					if r.Offset > nextExpected {
+						gapAcks = append(gapAcks, shareAckBatch{
+							firstOffset: nextExpected,
+							lastOffset:  r.Offset - 1,
+							ackType:     ackGap,
+						})
+					}
 					ackState := &shareAckState{
-						deliveryCount: int32(ar.DeliveryCount),
+						deliveryCount:          int32(ar.DeliveryCount),
+						acquisitionLockTimeout: acqLockTimeout,
+						source:                 src,
 					}
 					ctx := r.Context
 					if ctx == nil {
@@ -1455,8 +1719,19 @@ func (s *shareConsumer) handleShareFetchResponse(
 					}
 					r.Context = context.WithValue(ctx, ctxShareAck, ackState)
 					acquired = append(acquired, r)
+					nextExpected = r.Offset + 1
 					ri++
 				}
+				if nextExpected <= ar.LastOffset {
+					gapAcks = append(gapAcks, shareAckBatch{
+						firstOffset: nextExpected,
+						lastOffset:  ar.LastOffset,
+						ackType:     ackGap,
+					})
+				}
+			}
+			if len(gapAcks) > 0 {
+				src.addShareAcks(rt.TopicID, rp.Partition, gapAcks)
 			}
 
 			if len(acquired) == 0 && fp.Err == nil {
@@ -1474,33 +1749,38 @@ func (s *shareConsumer) handleShareFetchResponse(
 		}
 	}
 
+	// Re-queue piggybacked acks for partitions the broker omitted from
+	// the response. This can happen if the partition was removed from the
+	// share session between request and response.
+	for key := range piggybackedAcks {
+		requeueAcksForPartition(src, req, key.topicID, key.partition)
+		s.cfg.logger.Log(LogLevelWarn, "re-queued piggybacked acks for partition missing from share fetch response",
+			"broker", src.nodeID,
+			"partition", key.partition,
+		)
+	}
+
 	return fetch, false
 }
 
-// sendPendingAcknowledgements sends standalone ShareAcknowledge requests
-// for all pending acks across all sources. Used on the close/leave path
-// where share cursors may already be torn down, so we iterate every
-// source in the client rather than just those with active cursors.
-func (s *shareConsumer) sendPendingAcknowledgements(ctx context.Context) {
-	if err := s.sendAcksFromSources(ctx, s.collectAllSources()); err != nil {
-		s.cfg.logger.Log(LogLevelWarn, "ShareAcknowledge on leave failed", "err", err)
-	}
-}
-
 // closeShareSessions sends ShareFetch with ShareSessionEpoch=-1 to each
-// source that has an active share session, telling the broker to close the
-// session. Without this, the broker keeps the session alive and the group
-// may remain NON_EMPTY after the leave heartbeat.
+// source that has an active share session or pending acks, telling the
+// broker to close the session. Pending acks are piggybacked on the close
+// request so the broker processes them in one round trip. Without the
+// close, the broker keeps the session alive and the group may remain
+// NON_EMPTY after the leave heartbeat.
 func (s *shareConsumer) closeShareSessions(ctx context.Context) {
 	memberID, _ := s.memberGen.load()
 
 	for src := range s.collectAllSources() {
+		acks := src.drainShareAcks()
+
 		src.cursorsMu.Lock()
 		epoch := src.shareSessionEpoch
 		hasSession := epoch > 0 || len(src.shareCursors) > 0
 		src.cursorsMu.Unlock()
 
-		if !hasSession {
+		if !hasSession && len(acks) == 0 {
 			continue
 		}
 
@@ -1508,6 +1788,12 @@ func (s *shareConsumer) closeShareSessions(ctx context.Context) {
 		req.GroupID = &s.cfg.shareGroup
 		req.MemberID = &memberID
 		req.ShareSessionEpoch = -1 // close session
+
+		if len(acks) > 0 {
+			topicIdx := make(map[[16]byte]int)
+			partIdx := make(map[topicPartIdx]int)
+			s.attachAcksToShareFetch(req, acks, topicIdx, partIdx)
+		}
 
 		br, err := s.cl.brokerOrErr(ctx, src.nodeID, errUnknownBroker)
 		if err != nil {
@@ -1527,5 +1813,8 @@ func (s *shareConsumer) closeShareSessions(ctx context.Context) {
 				"broker", src.nodeID, "err", kerr.ErrorForCode(resp.ErrorCode),
 			)
 		}
+		src.cursorsMu.Lock()
+		src.shareSessionEpoch = 0
+		src.cursorsMu.Unlock()
 	}
 }

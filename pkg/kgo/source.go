@@ -704,6 +704,11 @@ func (s *source) drainShareAcks() map[[16]byte]map[int32][]shareAckBatch {
 	defer s.cursorsMu.Unlock()
 	acks := s.sharePendingAcks
 	s.sharePendingAcks = nil
+	for _, parts := range acks {
+		for p, batches := range parts {
+			parts[p] = mergeAckBatches(batches)
+		}
+	}
 	return acks
 }
 
