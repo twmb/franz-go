@@ -758,7 +758,14 @@ func (s *shareConsumer) leave(ctx context.Context) {
 // finalizeForLeave defaults any pending (unacked) records to RELEASE, then
 // calls finalizePreviousPoll to finalize all records and route them to
 // sources. Records the user explicitly acknowledged keep their status.
+//
+// This grabs c.mu because finalizePreviousPoll accesses lastPolled and
+// usingShareCursors. Without the lock, a concurrent PollFetches that is
+// mid-flight (released c.mu for network I/O) could race writing lastPolled
+// while we read it here.
 func (s *shareConsumer) finalizeForLeave() {
+	s.c.mu.Lock()
+	defer s.c.mu.Unlock()
 	for i := range s.lastPolled {
 		pr := &s.lastPolled[i]
 		st := pr.state
@@ -928,20 +935,42 @@ func (s *shareConsumer) pollShareFetches(ctx context.Context) Fetches {
 }
 
 // doShareFetch sends a single ShareFetch request to one source and
-// returns the decoded Fetch. On session errors, it retries with a
+// returns the decoded Fetch. On session errors, it retries once with a
 // reset epoch.
 func (s *shareConsumer) doShareFetch(ctx context.Context, src *source) Fetch {
+	return s.doShareFetchInner(ctx, src, true)
+}
+
+func (s *shareConsumer) doShareFetchInner(ctx context.Context, src *source, canRetry bool) Fetch {
 	req := s.buildShareFetchRequest(src)
 	if req == nil {
 		return Fetch{}
 	}
 
-	br, err := s.cl.brokerOrErr(nil, src.nodeID, errUnknownBroker)
+	br, err := s.cl.brokerOrErr(ctx, src.nodeID, errUnknownBroker)
 	if err != nil {
 		return Fetch{}
 	}
 
-	kresp, err := br.waitResp(ctx, req)
+	// Use the same br.do + select pattern as regular fetch (source.go)
+	// so that context cancellation immediately unblocks us rather than
+	// relying on readConn's ctx.Done propagation alone.
+	var kresp kmsg.Response
+	requested := make(chan struct{})
+	br.do(ctx, req, func(k kmsg.Response, e error) {
+		kresp, err = k, e
+		close(requested)
+	})
+
+	select {
+	case <-requested:
+		if isContextErr(err) && ctx.Err() != nil {
+			return Fetch{}
+		}
+	case <-ctx.Done():
+		return Fetch{}
+	}
+
 	if err != nil {
 		src.consecutiveFailures++
 		return Fetch{}
@@ -957,11 +986,11 @@ func (s *shareConsumer) doShareFetch(ctx context.Context, src *source) Fetch {
 	)
 
 	fetch, retry := s.handleShareFetchResponse(src, resp)
-	if retry {
+	if retry && canRetry {
 		// Session error (e.g. SHARE_SESSION_NOT_FOUND) -- epoch was
 		// reset by handleShareFetchResponse. Retry once with the new
 		// epoch to re-establish the session.
-		return s.doShareFetch(ctx, src)
+		return s.doShareFetchInner(ctx, src, false)
 	}
 
 	return fetch

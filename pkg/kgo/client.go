@@ -1706,25 +1706,26 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 	// to fall into the handleCoordinatorReq logic.
 	switch t := req.(type) {
 	case *kmsg.ListOffsetsRequest, // key 2
-		*kmsg.OffsetFetchRequest,             // key 9
-		*kmsg.FindCoordinatorRequest,         // key 10
-		*kmsg.DescribeGroupsRequest,          // key 15
-		*kmsg.ListGroupsRequest,              // key 16
-		*kmsg.DeleteRecordsRequest,           // key 21
-		*kmsg.OffsetForLeaderEpochRequest,    // key 23
-		*kmsg.AddPartitionsToTxnRequest,      // key 24
-		*kmsg.WriteTxnMarkersRequest,         // key 27
-		*kmsg.DescribeConfigsRequest,         // key 32
-		*kmsg.AlterConfigsRequest,            // key 33
-		*kmsg.AlterReplicaLogDirsRequest,     // key 34
-		*kmsg.DescribeLogDirsRequest,         // key 35
-		*kmsg.DeleteGroupsRequest,            // key 42
-		*kmsg.IncrementalAlterConfigsRequest, // key 44
-		*kmsg.DescribeProducersRequest,       // key 61
-		*kmsg.DescribeTransactionsRequest,    // key 65
-		*kmsg.ListTransactionsRequest,        // key 66
-		*kmsg.ConsumerGroupDescribeRequest,   // key 69
-		*kmsg.ShareGroupDescribeRequest:      // key 77
+		*kmsg.OffsetFetchRequest,               // key 9
+		*kmsg.FindCoordinatorRequest,           // key 10
+		*kmsg.DescribeGroupsRequest,            // key 15
+		*kmsg.ListGroupsRequest,                // key 16
+		*kmsg.DeleteRecordsRequest,             // key 21
+		*kmsg.OffsetForLeaderEpochRequest,      // key 23
+		*kmsg.AddPartitionsToTxnRequest,        // key 24
+		*kmsg.WriteTxnMarkersRequest,           // key 27
+		*kmsg.DescribeConfigsRequest,           // key 32
+		*kmsg.AlterConfigsRequest,              // key 33
+		*kmsg.AlterReplicaLogDirsRequest,       // key 34
+		*kmsg.DescribeLogDirsRequest,           // key 35
+		*kmsg.DeleteGroupsRequest,              // key 42
+		*kmsg.IncrementalAlterConfigsRequest,   // key 44
+		*kmsg.DescribeProducersRequest,         // key 61
+		*kmsg.DescribeTransactionsRequest,      // key 65
+		*kmsg.ListTransactionsRequest,          // key 66
+		*kmsg.ConsumerGroupDescribeRequest,     // key 69
+		*kmsg.ShareGroupDescribeRequest,        // key 77
+		*kmsg.DescribeShareGroupOffsetsRequest: // key 90
 		return cl.handleShardedReq(ctx, req)
 
 	case *kmsg.MetadataRequest:
@@ -2225,7 +2226,6 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 	case *kmsg.OffsetDeleteRequest:
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 
-	// ConsumerGroupHeartbeat cannot be retried at all
 	case *kmsg.ConsumerGroupHeartbeatRequest:
 		br, err := cl.loadCoordinator(ctx, coordinatorTypeGroup, t.Group)
 		var resp kmsg.Response
@@ -2234,7 +2234,9 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 		}
 		return shard(br, req, resp, err)
 
-	// ShareGroupHeartbeat cannot be retried at all
+	// ConsumerGroupHeartbeat and ShareGroupHeartbeat cannot be
+	// retried because the member epoch in the response is critical
+	// for the next heartbeat -- retrying could cause epoch mismatch.
 	case *kmsg.ShareGroupHeartbeatRequest:
 		br, err := cl.loadCoordinator(ctx, coordinatorTypeGroup, t.GroupID)
 		var resp kmsg.Response
@@ -2242,6 +2244,18 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 			resp, err = br.waitResp(ctx, req)
 		}
 		return shard(br, req, resp, err)
+	case *kmsg.StreamsGroupHeartbeatRequest:
+		br, err := cl.loadCoordinator(ctx, coordinatorTypeGroup, t.Group)
+		var resp kmsg.Response
+		if err == nil {
+			resp, err = br.waitResp(ctx, req)
+		}
+		return shard(br, req, resp, err)
+
+	case *kmsg.AlterShareGroupOffsetsRequest:
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.GroupID, req)
+	case *kmsg.DeleteShareGroupOffsetsRequest:
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.GroupID, req)
 	}
 }
 
@@ -2546,6 +2560,8 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		sharder = &consumerGroupDescribeSharder{cl}
 	case *kmsg.ShareGroupDescribeRequest:
 		sharder = &shareGroupDescribeSharder{cl}
+	case *kmsg.DescribeShareGroupOffsetsRequest:
+		sharder = &describeShareGroupOffsetsSharder{cl}
 	}
 
 	// If a request fails, we re-shard it (in case it needs to be split
@@ -5212,6 +5228,93 @@ func (*shareGroupDescribeSharder) merge(sresps []ResponseShard) (kmsg.Response, 
 	merged := kmsg.NewPtrShareGroupDescribeResponse()
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.ShareGroupDescribeResponse)
+		merged.Version = resp.Version
+		merged.ThrottleMillis = resp.ThrottleMillis
+		merged.Groups = append(merged.Groups, resp.Groups...)
+	})
+}
+
+// handles sharding DescribeShareGroupOffsetsRequest
+type describeShareGroupOffsetsSharder struct{ *Client }
+
+func (cl *describeShareGroupOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
+	req := kreq.(*kmsg.DescribeShareGroupOffsetsRequest)
+	groupIDs := make([]string, len(req.Groups))
+	for i, g := range req.Groups {
+		groupIDs[i] = g.GroupID
+	}
+	coordinators := cl.loadCoordinators(ctx, coordinatorTypeGroup, groupIDs...)
+	type unkerr struct {
+		err     error
+		groupID string
+	}
+	var (
+		brokerReqs = make(map[int32]*kmsg.DescribeShareGroupOffsetsRequest)
+		kerrs      = make(map[*kerr.Error][]kmsg.DescribeShareGroupOffsetsRequestGroup)
+		unkerrs    []unkerr
+	)
+	newReq := func(groups ...kmsg.DescribeShareGroupOffsetsRequestGroup) *kmsg.DescribeShareGroupOffsetsRequest {
+		r := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+		r.Groups = groups
+		return r
+	}
+	for _, g := range req.Groups {
+		berr := coordinators[g.GroupID]
+		var ke *kerr.Error
+		switch {
+		case berr.err == nil:
+			brokerReq := brokerReqs[berr.b.meta.NodeID]
+			if brokerReq == nil {
+				brokerReq = newReq()
+				brokerReqs[berr.b.meta.NodeID] = brokerReq
+			}
+			brokerReq.Groups = append(brokerReq.Groups, g)
+		case errors.As(berr.err, &ke):
+			kerrs[ke] = append(kerrs[ke], g)
+		default:
+			unkerrs = append(unkerrs, unkerr{berr.err, g.GroupID})
+		}
+	}
+	var issues []issueShard
+	for id, req := range brokerReqs {
+		issues = append(issues, issueShard{
+			req:    req,
+			broker: id,
+		})
+	}
+	for _, unkerr := range unkerrs {
+		g := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+		g.GroupID = unkerr.groupID
+		issues = append(issues, issueShard{
+			req: newReq(g),
+			err: unkerr.err,
+		})
+	}
+	for kerr, groups := range kerrs {
+		issues = append(issues, issueShard{
+			req: newReq(groups...),
+			err: kerr,
+		})
+	}
+	return issues, true, nil
+}
+
+func (cl *describeShareGroupOffsetsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+	resp := kresp.(*kmsg.DescribeShareGroupOffsetsResponse)
+	var retErr error
+	for i := range resp.Groups {
+		group := &resp.Groups[i]
+		err := kerr.ErrorForCode(group.ErrorCode)
+		cl.maybeDeleteStaleCoordinator(group.GroupID, coordinatorTypeGroup, err)
+		onRespShardErr(&retErr, err)
+	}
+	return retErr
+}
+
+func (*describeShareGroupOffsetsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+	merged := kmsg.NewPtrDescribeShareGroupOffsetsResponse()
+	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
+		resp := kresp.(*kmsg.DescribeShareGroupOffsetsResponse)
 		merged.Version = resp.Version
 		merged.ThrottleMillis = resp.ThrottleMillis
 		merged.Groups = append(merged.Groups, resp.Groups...)
