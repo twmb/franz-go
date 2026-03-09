@@ -5,7 +5,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")" && pwd)"
 failed=0
 
-modules=(
+all_modules=(
 	.
 	pkg/kadm
 	pkg/kfake
@@ -13,6 +13,13 @@ modules=(
 	pkg/sr
 	pkg/sasl/kerberos
 )
+
+if [ "${1:-}" = "-p" ] && [ -n "${2:-}" ]; then
+	modules=("$2")
+	shift 2
+else
+	modules=("${all_modules[@]}")
+fi
 
 for mod in "${modules[@]}"; do
 	echo "==> linting $mod"
