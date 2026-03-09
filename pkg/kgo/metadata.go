@@ -90,15 +90,6 @@ func (cl *Client) id2tMap() map[[16]byte]string {
 	return m
 }
 
-func (cl *Client) t2idMap() map[string][16]byte {
-	id2t := cl.id2tMap()
-	t2id := make(map[string][16]byte, len(id2t))
-	for id, name := range id2t {
-		t2id[name] = id
-	}
-	return t2id
-}
-
 // waitmeta returns immediately if metadata was updated within the last second,
 // otherwise this waits for up to wait for a metadata update to complete.
 func (cl *Client) waitmeta(ctx context.Context, wait time.Duration, why string) {

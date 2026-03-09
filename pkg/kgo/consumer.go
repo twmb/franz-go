@@ -376,6 +376,30 @@ func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err er
 	}}})
 	c.sourcesReadyMu.Unlock()
 	c.sourcesReadyCond.Broadcast()
+	// Share consumers block in pollShareFetches on cursorsChanged, not
+	// sourcesReadyCond. Wake them so injected errors (e.g., fatal
+	// heartbeat failures) are surfaced even with no share cursors.
+	if c.s != nil {
+		c.s.cursorsChanged.Broadcast()
+	}
+}
+
+// hasFakeReady reports whether any injected error fetches are pending.
+// Called from pollShareFetches under c.mu; the lock ordering c.mu ->
+// sourcesReadyMu is safe because nothing holds sourcesReadyMu then c.mu.
+func (c *consumer) hasFakeReady() bool {
+	c.sourcesReadyMu.Lock()
+	defer c.sourcesReadyMu.Unlock()
+	return len(c.fakeReadyForDraining) > 0
+}
+
+// drainFakeReady returns and clears all pending injected error fetches.
+func (c *consumer) drainFakeReady() []Fetch {
+	c.sourcesReadyMu.Lock()
+	fake := c.fakeReadyForDraining
+	c.fakeReadyForDraining = nil
+	c.sourcesReadyMu.Unlock()
+	return fake
 }
 
 // NewErrFetch returns a fake fetch containing a single empty topic with a
@@ -462,7 +486,7 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	// avoids starting the broker's ack timer while records sit in an
 	// internal buffer.
 	if c.s != nil {
-		return c.s.pollShareFetches(ctx)
+		return c.s.pollShareFetches(ctx, maxPollRecords)
 	}
 
 	var fetches Fetches

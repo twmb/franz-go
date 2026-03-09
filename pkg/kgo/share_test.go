@@ -109,7 +109,7 @@ func TestShareGroupETL(t *testing.T) {
 		selectiveRelease                 // release every Kth, accept the rest
 		pureRelease                      // release everything, never accept
 		rejectLowKeys                    // reject keys < rejectBelow, accept the rest
-		mixedMark                    // r.Ack(AckRelease) for some, then cl.MarkAcks(AckAccept) for rest
+		mixedMark                        // r.Ack(AckRelease) for some, then cl.MarkAcks(AckAccept) for rest
 	)
 
 	// shareLevel tracks per-level correctness state.
@@ -131,6 +131,8 @@ func TestShareGroupETL(t *testing.T) {
 	// produces each accepted record to the correct output topic.
 	// maxPolls limits how many non-empty poll rounds the consumer
 	// processes before returning (-1 = unlimited, 0 = bail immediately).
+	// pollRecords, if > 0, uses PollRecords(ctx, n) instead of
+	// PollFetches to exercise the maxPollRecords path.
 	runConsumer := func(
 		ctx context.Context,
 		t *testing.T,
@@ -140,6 +142,7 @@ func TestShareGroupETL(t *testing.T) {
 		produceTopics topicPair,
 		strat strategy,
 		maxPolls int,
+		pollRecords int,
 		lvl *shareLevel,
 	) {
 		opts := []Opt{
@@ -168,7 +171,12 @@ func TestShareGroupETL(t *testing.T) {
 		npolls := 0
 		for {
 			pollCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			fetches := cl.PollFetches(pollCtx)
+			var fetches Fetches
+			if pollRecords > 0 {
+				fetches = cl.PollRecords(pollCtx, pollRecords)
+			} else {
+				fetches = cl.PollFetches(pollCtx)
+			}
 			cancel()
 
 			for _, fetchErr := range fetches.Errors() {
@@ -271,7 +279,6 @@ func TestShareGroupETL(t *testing.T) {
 				lvl.mu.Unlock()
 			}
 
-
 			if (strat == bulkAccept || strat == mixedMark) && gotRecords {
 				cl.MarkAcks(AckAccept)
 				needCommit = true
@@ -324,7 +331,7 @@ func TestShareGroupETL(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runConsumer(l1rejectCtx, t, "l1-c0-reject", group1, l1in, l1out, rejectLowKeys, -1, lvl1)
+		runConsumer(l1rejectCtx, t, "l1-c0-reject", group1, l1in, l1out, rejectLowKeys, -1, 10, lvl1)
 	}()
 	// Wait until the reject consumer has actually rejected enough low
 	// keys. We need to poll long enough that the broker delivers
@@ -350,7 +357,7 @@ func TestShareGroupETL(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runConsumer(l1c1ctx, t, "l1-c1-release", group1, l1in, l1out, selectiveRelease, -1, lvl1)
+		runConsumer(l1c1ctx, t, "l1-c1-release", group1, l1in, l1out, selectiveRelease, -1, 0, lvl1)
 	}()
 
 	for lvl1.consumed.Load() < int64(totalRecords/5) && ctx.Err() == nil {
@@ -363,37 +370,37 @@ func TestShareGroupETL(t *testing.T) {
 	wg.Add(7)
 	go func() {
 		defer wg.Done()
-		runConsumer(l1c2ctx, t, "l1-c2-auto", group1, l1in, l1out, autoAccept, -1, lvl1)
+		runConsumer(l1c2ctx, t, "l1-c2-auto", group1, l1in, l1out, autoAccept, -1, 25, lvl1)
 	}()
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, t, "l1-c3-explicit", group1, l1in, l1out, explicitAccept, -1, lvl1)
+		runConsumer(ctx, t, "l1-c3-explicit", group1, l1in, l1out, explicitAccept, -1, 0, lvl1)
 	}()
 
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, t, "l1-c3b-mixed", group1, l1in, l1out, mixedMark, -1, lvl1)
+		runConsumer(ctx, t, "l1-c3b-mixed", group1, l1in, l1out, mixedMark, -1, 15, lvl1)
 	}()
 	l1c1cancel() // kill the releaser, triggering rebalance
 
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, t, "l1-c4-release", group1, l1in, l1out, selectiveRelease, -1, lvl1)
+		runConsumer(ctx, t, "l1-c4-release", group1, l1in, l1out, selectiveRelease, -1, 0, lvl1)
 	}()
 	// Pure-release consumer: releases everything, stressing redelivery.
 	// Runs briefly then dies, returning records to the pool.
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, t, "l1-c5-purerel", group1, l1in, l1out, pureRelease, 3, lvl1)
+		runConsumer(ctx, t, "l1-c5-purerel", group1, l1in, l1out, pureRelease, 3, 5, lvl1)
 	}()
 	// Short-lived consumers: bail immediately or after a few polls.
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, t, "l1-c6-bail0", group1, l1in, l1out, autoAccept, 0, lvl1)
+		runConsumer(ctx, t, "l1-c6-bail0", group1, l1in, l1out, autoAccept, 0, 0, lvl1)
 	}()
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, t, "l1-c7-bail2", group1, l1in, l1out, explicitAccept, 2, lvl1)
+		runConsumer(ctx, t, "l1-c7-bail2", group1, l1in, l1out, explicitAccept, 2, 3, lvl1)
 	}()
 
 	// Phase 3: more rebalancing.
@@ -406,7 +413,7 @@ func TestShareGroupETL(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, t, "l1-c8-explicit", group1, l1in, l1out, explicitAccept, -1, lvl1)
+		runConsumer(ctx, t, "l1-c8-explicit", group1, l1in, l1out, explicitAccept, -1, 0, lvl1)
 	}()
 
 	/////////////
@@ -423,20 +430,20 @@ func TestShareGroupETL(t *testing.T) {
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
-		runConsumer(l2c1ctx, t, "l2-c1-auto", group2, l2in, l2out, autoAccept, -1, lvl2)
+		runConsumer(l2c1ctx, t, "l2-c1-auto", group2, l2in, l2out, autoAccept, -1, 20, lvl2)
 	}()
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, t, "l2-c2-explicit", group2, l2in, l2out, explicitAccept, -1, lvl2)
+		runConsumer(ctx, t, "l2-c2-explicit", group2, l2in, l2out, explicitAccept, -1, 0, lvl2)
 	}()
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, t, "l2-c3-bulk", group2, l2in, l2out, bulkAccept, -1, lvl2)
+		runConsumer(ctx, t, "l2-c3-bulk", group2, l2in, l2out, bulkAccept, -1, 30, lvl2)
 	}()
 	// Short-lived consumer at level 2 too.
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, t, "l2-c4-bail1", group2, l2in, l2out, autoAccept, 1, lvl2)
+		runConsumer(ctx, t, "l2-c4-bail1", group2, l2in, l2out, autoAccept, 1, 0, lvl2)
 	}()
 
 	for lvl2.consumed.Load() < int64(totalRecords/3) && ctx.Err() == nil {
@@ -448,7 +455,7 @@ func TestShareGroupETL(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, t, "l2-c5-auto", group2, l2in, l2out, autoAccept, -1, lvl2)
+		runConsumer(ctx, t, "l2-c5-auto", group2, l2in, l2out, autoAccept, -1, 0, lvl2)
 	}()
 
 	//////////////////////
@@ -512,6 +519,18 @@ func TestShareGroupETL(t *testing.T) {
 	if len(allKeys1) != l1ExpUnique {
 		t.Errorf("level 1: got %d unique keys != exp %d (%d total - %d purely rejected)",
 			len(allKeys1), l1ExpUnique, totalRecords, purelyRejected)
+	}
+
+	// Verify completeness: every non-rejected key should be present.
+	sort.Ints(allKeys1)
+	for i := range totalRecords {
+		if _, rej := lvl1.rejected[i]; rej && lvl1.accepted[i] == 0 {
+			continue // purely rejected, expected absent
+		}
+		j := sort.SearchInts(allKeys1, i)
+		if j >= len(allKeys1) || allKeys1[j] != i {
+			t.Errorf("level 1: key %d missing", i)
+		}
 	}
 
 	var dups1 int

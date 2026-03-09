@@ -384,6 +384,12 @@ func (cfg *cfg) validate() error {
 		if len(cfg.partitions) != 0 {
 			return errors.New("invalid direct-partition consuming option when consuming as a share group")
 		}
+		if cfg.autocommitGreedy || cfg.autocommitMarks || cfg.commitCallback != nil {
+			return errors.New("autocommit options are not applicable to share groups")
+		}
+		if cfg.onLost != nil || cfg.onRevoked != nil || cfg.onAssigned != nil {
+			return errors.New("partition lifecycle callbacks are not supported with share groups")
+		}
 	}
 
 	if cfg.regex {
@@ -1696,7 +1702,7 @@ func ShareGroup(group string) GroupOpt {
 
 // ShareMaxRecords sets the MaxRecords and BatchSize fields in ShareFetch
 // requests (KIP-1206, v1+). This controls how many records the broker aims
-// to return per share fetch. If 0 (default), the broker uses its own default.
+// to return per share fetch. If 0 (default), the client sends 500.
 //
 // This option only applies when using ShareGroup.
 func ShareMaxRecords(n int32) GroupOpt {

@@ -47,9 +47,9 @@ type source struct {
 
 	shareCursors []*shareCursor
 
-	shareSessionEpoch int32                                // 0=new, incremented on success, -1=close
-	sharePendingAcks  map[string]map[int32][]shareAckBatch // topic -> partition -> ack batches to piggyback
-	shareForgotten    map[[16]byte][]int32                 // topicID -> partitions to forget
+	shareSessionEpoch int32                                  // 0=new, incremented on success, -1=close
+	sharePendingAcks  map[[16]byte]map[int32][]shareAckBatch // topicID -> partition -> ack batches to piggyback
+	shareForgotten    map[[16]byte][]int32                   // topicID -> partitions to forget
 }
 
 func (cl *Client) newSource(nodeID int32) *source {
@@ -685,21 +685,21 @@ func (s *source) takeBufferedFn(polled bool, offsetFn func(usedOffsets)) Fetch {
 	return r.fetch
 }
 
-func (s *source) addShareAcks(topic string, partition int32, batches []shareAckBatch) {
+func (s *source) addShareAcks(topicID [16]byte, partition int32, batches []shareAckBatch) {
 	s.cursorsMu.Lock()
 	if s.sharePendingAcks == nil {
-		s.sharePendingAcks = make(map[string]map[int32][]shareAckBatch)
+		s.sharePendingAcks = make(map[[16]byte]map[int32][]shareAckBatch)
 	}
-	parts := s.sharePendingAcks[topic]
+	parts := s.sharePendingAcks[topicID]
 	if parts == nil {
 		parts = make(map[int32][]shareAckBatch)
-		s.sharePendingAcks[topic] = parts
+		s.sharePendingAcks[topicID] = parts
 	}
 	parts[partition] = append(parts[partition], batches...)
 	s.cursorsMu.Unlock()
 }
 
-func (s *source) drainShareAcks() map[string]map[int32][]shareAckBatch {
+func (s *source) drainShareAcks() map[[16]byte]map[int32][]shareAckBatch {
 	s.cursorsMu.Lock()
 	defer s.cursorsMu.Unlock()
 	acks := s.sharePendingAcks
