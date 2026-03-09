@@ -887,7 +887,6 @@ func TestOffsetCommitAfterLeave848(t *testing.T) {
 				}
 			}
 
-			// Verify committed offsets.
 			adm := kadm.NewClient(raw)
 			fetched, err := adm.FetchOffsets(ctx, group)
 			if err != nil {

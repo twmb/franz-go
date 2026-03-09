@@ -108,7 +108,7 @@ func (d *DescribedGroup) AssignedPartitions() TopicsSet {
 // JoinTopics returns the set of topics that all members are interested in
 // consuming.
 //
-// This function is only relevant for groups of time "consumer".
+// This function is only relevant for groups of type "consumer".
 func (d DescribedGroup) JoinTopics() []string {
 	s := make(map[string]struct{})
 	for _, m := range d.Members {
@@ -169,7 +169,7 @@ func (ds DescribedGroups) AssignedPartitions() TopicsSet {
 // JoinTopics returns the set of topics that all members are interested in
 // consuming. This is the all-group analogue to DescribedGroup.JoinTopics.
 //
-// This function is only relevant for groups of time "consumer".
+// This function is only relevant for groups of type "consumer".
 func (ds DescribedGroups) JoinTopics() []string {
 	s := make(map[string]struct{})
 	for _, g := range ds {
@@ -653,7 +653,7 @@ func (cl *Client) LeaveGroup(ctx context.Context, b *LeaveGroupBuilder) (LeaveGr
 			Group:      b.group,
 			MemberID:   m.MemberID,
 			InstanceID: *m.InstanceID,
-			Err:        kerr.ErrorForCode(resp.ErrorCode),
+			Err:        kerr.ErrorForCode(m.ErrorCode),
 		}
 	}
 	return resps, err
@@ -817,18 +817,37 @@ func (os OffsetResponses) Ok() bool {
 // partitions manually, but want still use Kafka to checkpoint what you have
 // consumed, you can manually issue an offset commit request with this method.
 //
+// Topic names are resolved to topic IDs before committing to support
+// brokers that require topic IDs in the request (v10+).
+//
 // This does not return on authorization failures, instead, authorization
 // failures are included in the responses.
 func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (OffsetResponses, error) {
 	// Resolve topic names to IDs via metadata for v10+ support.
 	t2id := cl.resolveTopicIDs(ctx, os)
 
+	rs := make(OffsetResponses)
+
 	req := kmsg.NewPtrOffsetCommitRequest()
 	req.Group = group
 	for t, ps := range os {
+		id, ok := t2id[t]
+		if !ok {
+			// Cannot resolve topic name to ID -- inject error
+			// for all partitions and skip in the request.
+			rt := make(map[int32]OffsetResponse)
+			rs[t] = rt
+			for p, o := range ps {
+				rt[p] = OffsetResponse{
+					Offset: o,
+					Err:    kerr.UnknownTopicOrPartition,
+				}
+			}
+			continue
+		}
 		rt := kmsg.NewOffsetCommitRequestTopic()
 		rt.Topic = t
-		rt.TopicID = t2id[t]
+		rt.TopicID = [16]byte(id)
 		for p, o := range ps {
 			rp := kmsg.NewOffsetCommitRequestTopicPartition()
 			rp.Partition = p
@@ -842,22 +861,26 @@ func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (
 		req.Topics = append(req.Topics, rt)
 	}
 
+	if len(req.Topics) == 0 {
+		return rs, nil
+	}
+
 	resp, err := req.RequestWith(ctx, cl.cl)
 	if err != nil {
 		return nil, err
 	}
 
 	// Build reverse map for v10 responses where Topic is empty.
+	// Only includes topics we successfully resolved above.
 	id2name := make(map[TopicID]string, len(t2id))
 	for name, id := range t2id {
 		id2name[id] = name
 	}
 
-	rs := make(OffsetResponses)
 	for _, t := range resp.Topics {
 		topic := t.Topic
 		if topic == "" {
-			topic = id2name[t.TopicID]
+			topic = id2name[TopicID(t.TopicID)]
 		}
 		rt := make(map[int32]OffsetResponse)
 		rs[topic] = rt
@@ -932,70 +955,18 @@ func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetRespons
 		return nil, err
 	}
 
-	// v8+: the sharder populates resp.Groups (with TopicID for v10+) and
-	// copies back to resp.Topics. Use Groups when available to preserve
-	// TopicIDs.
-	if len(resp.Groups) > 0 {
-		g := resp.Groups[0]
-		if err := maybeAuthErr(g.ErrorCode); err != nil {
-			return nil, err
-		}
-		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
-			return nil, err
-		}
+	// The sharder fills in both Topic and TopicID on response group
+	// topics, so we can use them directly without further resolution.
 
-		// If any topic name is empty (v10 response where kgo's id2t
-		// missed), resolve via metadata.
-		needsResolve := false
-		for _, t := range g.Topics {
-			if t.Topic == "" {
-				needsResolve = true
-				break
-			}
-		}
-		var id2name map[TopicID]string
-		if needsResolve {
-			id2name = cl.resolveTopicNames(ctx)
-		}
-
-		rs := make(OffsetResponses)
-		for _, t := range g.Topics {
-			topic := t.Topic
-			if topic == "" && id2name != nil {
-				topic = id2name[TopicID(t.TopicID)]
-			}
-			rt := make(map[int32]OffsetResponse)
-			rs[topic] = rt
-			for _, p := range t.Partitions {
-				if err := maybeAuthErr(p.ErrorCode); err != nil {
-					return nil, err
-				}
-				var meta string
-				if p.Metadata != nil {
-					meta = *p.Metadata
-				}
-				rt[p.Partition] = OffsetResponse{
-					Offset: Offset{
-						Topic:       topic,
-						TopicID:     TopicID(t.TopicID),
-						Partition:   p.Partition,
-						At:          p.Offset,
-						LeaderEpoch: p.LeaderEpoch,
-						Metadata:    meta,
-					},
-					Err: kerr.ErrorForCode(p.ErrorCode),
-				}
-			}
-		}
-		return rs, nil
-	}
-
-	// v0-v7 fallback: resp.Topics only, no TopicID.
-	rs := make(OffsetResponses)
-	for _, t := range resp.Topics {
-		rt := make(map[int32]OffsetResponse)
-		rs[t.Topic] = rt
-		for _, p := range t.Partitions {
+	// buildPartitions converts response partitions into an
+	// OffsetResponse map.
+	buildPartitions := func(
+		topic string,
+		topicID TopicID,
+		partitions []kmsg.OffsetFetchResponseGroupTopicPartition,
+	) (map[int32]OffsetResponse, error) {
+		rt := make(map[int32]OffsetResponse, len(partitions))
+		for _, p := range partitions {
 			if err := maybeAuthErr(p.ErrorCode); err != nil {
 				return nil, err
 			}
@@ -1005,7 +976,8 @@ func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetRespons
 			}
 			rt[p.Partition] = OffsetResponse{
 				Offset: Offset{
-					Topic:       t.Topic,
+					Topic:       topic,
+					TopicID:     topicID,
 					Partition:   p.Partition,
 					At:          p.Offset,
 					LeaderEpoch: p.LeaderEpoch,
@@ -1014,6 +986,49 @@ func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetRespons
 				Err: kerr.ErrorForCode(p.ErrorCode),
 			}
 		}
+		return rt, nil
+	}
+
+	// v8+: use Groups which preserves TopicIDs.
+	if len(resp.Groups) > 0 {
+		g := resp.Groups[0]
+		if err := maybeAuthErr(g.ErrorCode); err != nil {
+			return nil, err
+		}
+		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+			return nil, err
+		}
+
+		rs := make(OffsetResponses)
+		for _, t := range g.Topics {
+			rt, err := buildPartitions(t.Topic, TopicID(t.TopicID), t.Partitions)
+			if err != nil {
+				return nil, err
+			}
+			rs[t.Topic] = rt
+		}
+		return rs, nil
+	}
+
+	// v0-v7 fallback: resp.Topics only. Convert to group format
+	// for the shared buildPartitions helper.
+	rs := make(OffsetResponses)
+	for _, t := range resp.Topics {
+		gp := make([]kmsg.OffsetFetchResponseGroupTopicPartition, len(t.Partitions))
+		for i, p := range t.Partitions {
+			gp[i] = kmsg.OffsetFetchResponseGroupTopicPartition{
+				Partition:   p.Partition,
+				Offset:      p.Offset,
+				LeaderEpoch: p.LeaderEpoch,
+				Metadata:    p.Metadata,
+				ErrorCode:   p.ErrorCode,
+			}
+		}
+		rt, err := buildPartitions(t.Topic, TopicID{}, gp)
+		if err != nil {
+			return nil, err
+		}
+		rs[t.Topic] = rt
 	}
 	return rs, nil
 }
@@ -1223,28 +1238,9 @@ func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchO
 		}
 	}
 
+	// The sharder fills in both Topic and TopicID on response group
+	// topics, so we use them directly without further resolution.
 	shards := cl.cl.RequestSharded(ctx, req)
-
-	// Detect if any shard returned v10 responses with empty topic names.
-	// If so, resolve all topic IDs via one metadata call.
-	var id2name map[TopicID]string
-	needsResolve := false
-	for _, shard := range shards {
-		if shard.Err != nil {
-			continue
-		}
-		resp := shard.Resp.(*kmsg.OffsetFetchResponse)
-		for _, g := range resp.Groups {
-			for _, t := range g.Topics {
-				if t.Topic == "" {
-					needsResolve = true
-				}
-			}
-		}
-	}
-	if needsResolve {
-		id2name = cl.resolveTopicNames(ctx)
-	}
 
 	for _, shard := range shards {
 		req := shard.Req.(*kmsg.OffsetFetchRequest)
@@ -1268,14 +1264,10 @@ func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchO
 				Fetched: rs,
 				Err:     kerr.ErrorForCode(g.ErrorCode),
 			}
-			fetched[g.Group] = fg // group coordinator owns all of a group, no need to check existence
+			fetched[g.Group] = fg
 			for _, t := range g.Topics {
-				topic := t.Topic
-				if topic == "" && id2name != nil {
-					topic = id2name[TopicID(t.TopicID)]
-				}
 				rt := make(map[int32]OffsetResponse)
-				rs[topic] = rt
+				rs[t.Topic] = rt
 				for _, p := range t.Partitions {
 					var meta string
 					if p.Metadata != nil {
@@ -1283,7 +1275,7 @@ func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchO
 					}
 					rt[p.Partition] = OffsetResponse{
 						Offset: Offset{
-							Topic:       topic,
+							Topic:       t.Topic,
 							TopicID:     TopicID(t.TopicID),
 							Partition:   p.Partition,
 							At:          p.Offset,
@@ -1446,8 +1438,8 @@ func (l GroupLag) Lookup(t string, p int32) (GroupMemberLag, bool) {
 func (l GroupLag) Sorted() []GroupMemberLag {
 	var all []GroupMemberLag
 	for _, ps := range l {
-		for _, l := range ps {
-			all = append(all, l)
+		for p := range ps {
+			all = append(all, ps[p])
 		}
 	}
 	sort.Slice(all, func(i, j int) bool {
@@ -1466,7 +1458,7 @@ func (l GroupLag) Sorted() []GroupMemberLag {
 // IsEmpty returns if the group is empty.
 func (l GroupLag) IsEmpty() bool {
 	for _, ps := range l {
-		for _, m := range ps {
+		for _, m := range ps { //nolint:gocritic // rangeValCopy: intentional single-iteration return
 			return m.IsEmpty()
 		}
 	}
@@ -1489,9 +1481,9 @@ func (l GroupLag) TotalByTopic() GroupTopicsLag {
 		mt := TopicLag{
 			Topic: t,
 		}
-		for _, l := range ps {
-			if l.Lag > 0 {
-				mt.Lag += l.Lag
+		for p := range ps {
+			if ps[p].Lag > 0 {
+				mt.Lag += ps[p].Lag
 			}
 		}
 		m[t] = mt
@@ -1672,7 +1664,7 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 	for _, r := range fetched {
 		switch {
 		case errors.As(r.Err, &ae):
-			return nil, err
+			return nil, r.Err
 		case r.Err != nil:
 			l := lags[r.Group]
 			l.FetchErr = r.Err
@@ -2202,7 +2194,7 @@ func (ds DescribedConsumerGroups) Names() []string {
 }
 
 // DescribeConsumerGroups describes either all consumer groups specified, or
-// all consumer groups in th ecluster if none are specified. This is the "next
+// all consumer groups in the cluster if none are specified. This is the "next
 // generation" equivalent of DescribeGroups and is specifically for consumer
 // groups using the new consumer group protocol.
 //
@@ -2297,8 +2289,11 @@ func (cl *Client) DescribeConsumerGroups(ctx context.Context, groups ...string) 
 	var seDesc *ShardErrors
 	switch {
 	case err == nil:
-		return described, nil
+		return described, seList.into()
 	case errors.As(err, &seDesc):
+		if seList != nil {
+			seDesc.Errs = append(seList.Errs, seDesc.Errs...)
+		}
 		return described, seDesc.into()
 	default:
 		return nil, err
@@ -2511,8 +2506,11 @@ func (cl *Client) DescribeShareGroups(ctx context.Context, groups ...string) (De
 	var seDesc *ShardErrors
 	switch {
 	case err == nil:
-		return described, nil
+		return described, seList.into()
 	case errors.As(err, &seDesc):
+		if seList != nil {
+			seDesc.Errs = append(seList.Errs, seDesc.Errs...)
+		}
 		return described, seDesc.into()
 	default:
 		return nil, err
@@ -2595,28 +2593,46 @@ func (cl *Client) CommitOffsetsByID(ctx context.Context, group string, os Offset
 		return nil, err
 	}
 
+	// Lazily built reverse map for v0-v9 responses that have Topic
+	// but no TopicID.
+	var name2id map[string]TopicID
+
 	rs := make(OffsetResponsesByID)
 	for _, t := range resp.Topics {
 		id := TopicID(t.TopicID)
+		topic := t.Topic
 		if id == (TopicID{}) {
 			// v0-v9 response: look up ID from name.
-			for rid, name := range id2name {
-				if name == t.Topic {
-					id = rid
-					break
+			if name2id == nil {
+				name2id = make(map[string]TopicID, len(id2name))
+				for rid, name := range id2name {
+					name2id[name] = rid
 				}
 			}
+			id = name2id[topic]
+		}
+		if topic == "" {
+			topic = id2name[id]
 		}
 		rt := make(map[int32]OffsetResponse)
 		rs[id] = rt
 		for _, p := range t.Partitions {
-			var o Offset
-			if ops, ok := os[id]; ok {
-				o = ops[p.Partition]
+			o, ok := Offset{}, false
+			if ops := os[id]; ops != nil {
+				o, ok = ops[p.Partition]
 			}
-			rt[p.Partition] = OffsetResponse{
-				Offset: o,
-				Err:    kerr.ErrorForCode(p.ErrorCode),
+			o.Topic = topic
+			o.TopicID = id
+			if !ok {
+				rt[p.Partition] = OffsetResponse{
+					Offset: o,
+					Err:    fmt.Errorf("unexpected partition %d in response: %w", p.Partition, kerr.ErrorForCode(p.ErrorCode)),
+				}
+			} else {
+				rt[p.Partition] = OffsetResponse{
+					Offset: o,
+					Err:    kerr.ErrorForCode(p.ErrorCode),
+				}
 			}
 		}
 	}
@@ -2659,82 +2675,18 @@ func (cl *Client) FetchOffsetsByID(ctx context.Context, group string) (OffsetRes
 		return nil, err
 	}
 
-	// v8+: use resp.Groups which has TopicID.
-	if len(resp.Groups) > 0 {
-		g := resp.Groups[0]
-		if err := maybeAuthErr(g.ErrorCode); err != nil {
-			return nil, err
-		}
-		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
-			return nil, err
-		}
+	// The sharder fills in both Topic and TopicID on response group
+	// topics, so we use them directly without further resolution.
 
-		// If TopicIDs are missing (pre-v10 broker), resolve from names.
-		needsIDResolve := false
-		for _, t := range g.Topics {
-			if t.TopicID == [16]byte{} && t.Topic != "" {
-				needsIDResolve = true
-				break
-			}
-		}
-		var name2id map[string]TopicID
-		if needsIDResolve {
-			os := make(Offsets)
-			for _, t := range g.Topics {
-				for _, p := range t.Partitions {
-					os.AddOffset(t.Topic, p.Partition, p.Offset, p.LeaderEpoch)
-				}
-			}
-			name2id = cl.resolveTopicIDs(ctx, os)
-		}
-
-		rs := make(OffsetResponsesByID)
-		for _, t := range g.Topics {
-			id := TopicID(t.TopicID)
-			if id == (TopicID{}) && name2id != nil {
-				id = name2id[t.Topic]
-			}
-			rt := make(map[int32]OffsetResponse)
-			rs[id] = rt
-			for _, p := range t.Partitions {
-				if err := maybeAuthErr(p.ErrorCode); err != nil {
-					return nil, err
-				}
-				var meta string
-				if p.Metadata != nil {
-					meta = *p.Metadata
-				}
-				rt[p.Partition] = OffsetResponse{
-					Offset: Offset{
-						Topic:       t.Topic,
-						TopicID:     id,
-						Partition:   p.Partition,
-						At:          p.Offset,
-						LeaderEpoch: p.LeaderEpoch,
-						Metadata:    meta,
-					},
-					Err: kerr.ErrorForCode(p.ErrorCode),
-				}
-			}
-		}
-		return rs, nil
-	}
-
-	// v0-v7 fallback: resolve all names to IDs via metadata.
-	os := make(Offsets)
-	for _, t := range resp.Topics {
-		for _, p := range t.Partitions {
-			os.AddOffset(t.Topic, p.Partition, p.Offset, p.LeaderEpoch)
-		}
-	}
-	name2id := cl.resolveTopicIDs(ctx, os)
-
-	rs := make(OffsetResponsesByID)
-	for _, t := range resp.Topics {
-		id := name2id[t.Topic]
-		rt := make(map[int32]OffsetResponse)
-		rs[id] = rt
-		for _, p := range t.Partitions {
+	// buildPartitions converts response partitions into an
+	// OffsetResponse map keyed by partition.
+	buildPartitions := func(
+		topic string,
+		topicID TopicID,
+		partitions []kmsg.OffsetFetchResponseGroupTopicPartition,
+	) (map[int32]OffsetResponse, error) {
+		rt := make(map[int32]OffsetResponse, len(partitions))
+		for _, p := range partitions {
 			if err := maybeAuthErr(p.ErrorCode); err != nil {
 				return nil, err
 			}
@@ -2744,8 +2696,8 @@ func (cl *Client) FetchOffsetsByID(ctx context.Context, group string) (OffsetRes
 			}
 			rt[p.Partition] = OffsetResponse{
 				Offset: Offset{
-					Topic:       t.Topic,
-					TopicID:     id,
+					Topic:       topic,
+					TopicID:     topicID,
 					Partition:   p.Partition,
 					At:          p.Offset,
 					LeaderEpoch: p.LeaderEpoch,
@@ -2754,6 +2706,430 @@ func (cl *Client) FetchOffsetsByID(ctx context.Context, group string) (OffsetRes
 				Err: kerr.ErrorForCode(p.ErrorCode),
 			}
 		}
+		return rt, nil
+	}
+
+	// v8+: use Groups which preserves TopicIDs.
+	if len(resp.Groups) > 0 {
+		g := resp.Groups[0]
+		if err := maybeAuthErr(g.ErrorCode); err != nil {
+			return nil, err
+		}
+		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+			return nil, err
+		}
+
+		rs := make(OffsetResponsesByID)
+		for _, t := range g.Topics {
+			id := TopicID(t.TopicID)
+			rt, err := buildPartitions(t.Topic, id, t.Partitions)
+			if err != nil {
+				return nil, err
+			}
+			rs[id] = rt
+		}
+		return rs, nil
+	}
+
+	// v0-v7 fallback: resp.Topics only. Convert to group format
+	// for the shared buildPartitions helper.
+	rs := make(OffsetResponsesByID)
+	for _, t := range resp.Topics {
+		gp := make([]kmsg.OffsetFetchResponseGroupTopicPartition, len(t.Partitions))
+		for i, p := range t.Partitions {
+			gp[i] = kmsg.OffsetFetchResponseGroupTopicPartition{
+				Partition:   p.Partition,
+				Offset:      p.Offset,
+				LeaderEpoch: p.LeaderEpoch,
+				Metadata:    p.Metadata,
+				ErrorCode:   p.ErrorCode,
+			}
+		}
+		// v0-v7 has no TopicID; use zero value.
+		rt, err := buildPartitions(t.Topic, TopicID{}, gp)
+		if err != nil {
+			return nil, err
+		}
+		rs[TopicID{}] = rt
 	}
 	return rs, nil
+}
+
+///////////////////
+// SHARE OFFSETS //
+///////////////////
+
+// ShareOffset describes a single partition's share group offset.
+type ShareOffset struct {
+	Topic       string  // Topic is the topic name.
+	TopicID     TopicID // TopicID is the unique topic ID.
+	Partition   int32   // Partition is the partition index.
+	StartOffset int64   // StartOffset is the share-partition start offset.
+	LeaderEpoch int32   // LeaderEpoch is the leader epoch of the partition.
+	Lag         int64   // Lag is the share-partition lag, or -1 if not available.
+	Err         error   // Err is non-nil if this partition had an error.
+}
+
+// ShareOffsets contains per-topic, per-partition share group offset results.
+type ShareOffsets map[string]map[int32]ShareOffset
+
+// Lookup returns the share offset at t and p and whether it exists.
+func (os ShareOffsets) Lookup(t string, p int32) (ShareOffset, bool) {
+	if len(os) == 0 {
+		return ShareOffset{}, false
+	}
+	ps := os[t]
+	if len(ps) == 0 {
+		return ShareOffset{}, false
+	}
+	o, exists := ps[p]
+	return o, exists
+}
+
+// Each calls fn for every share offset.
+func (os ShareOffsets) Each(fn func(ShareOffset)) {
+	for _, ps := range os {
+		for _, o := range ps {
+			fn(o)
+		}
+	}
+}
+
+// EachError calls fn for every share offset that has a non-nil error.
+func (os ShareOffsets) EachError(fn func(ShareOffset)) {
+	for _, ps := range os {
+		for _, o := range ps {
+			if o.Err != nil {
+				fn(o)
+			}
+		}
+	}
+}
+
+// Sorted returns all share offsets sorted by topic then partition.
+func (os ShareOffsets) Sorted() []ShareOffset {
+	var s []ShareOffset
+	for _, ps := range os {
+		for _, o := range ps {
+			s = append(s, o)
+		}
+	}
+	sort.Slice(s, func(i, j int) bool {
+		if s[i].Topic < s[j].Topic {
+			return true
+		}
+		if s[i].Topic > s[j].Topic {
+			return false
+		}
+		return s[i].Partition < s[j].Partition
+	})
+	return s
+}
+
+// Error returns the first error encountered, if any.
+func (os ShareOffsets) Error() error {
+	for _, ps := range os {
+		for _, o := range ps {
+			if o.Err != nil {
+				return o.Err
+			}
+		}
+	}
+	return nil
+}
+
+// DescribedShareGroupOffsets contains the result of describing offsets for a
+// single share group.
+type DescribedShareGroupOffsets struct {
+	Group   string       // Group is the group identifier.
+	Offsets ShareOffsets // Offsets are the per-topic, per-partition offset results.
+	Err     error        // Err is non-nil if the group had a group-level error.
+}
+
+// DescribedShareGroupsOffsets contains the results of describing offsets for
+// multiple share groups.
+type DescribedShareGroupsOffsets map[string]DescribedShareGroupOffsets
+
+// Sorted returns all described share group offsets sorted by group name.
+func (ds DescribedShareGroupsOffsets) Sorted() []DescribedShareGroupOffsets {
+	s := make([]DescribedShareGroupOffsets, 0, len(ds))
+	for _, d := range ds {
+		s = append(s, d)
+	}
+	sort.Slice(s, func(i, j int) bool { return s[i].Group < s[j].Group })
+	return s
+}
+
+// Each calls fn for every group result.
+func (ds DescribedShareGroupsOffsets) Each(fn func(DescribedShareGroupOffsets)) {
+	for _, d := range ds {
+		fn(d)
+	}
+}
+
+// EachError calls fn for every group that has a non-nil group-level error.
+func (ds DescribedShareGroupsOffsets) EachError(fn func(DescribedShareGroupOffsets)) {
+	for _, d := range ds {
+		if d.Err != nil {
+			fn(d)
+		}
+	}
+}
+
+// Error returns the first group-level error encountered, if any.
+func (ds DescribedShareGroupsOffsets) Error() error {
+	for _, d := range ds {
+		if d.Err != nil {
+			return d.Err
+		}
+	}
+	return nil
+}
+
+// Ok returns true if there are no group-level errors.
+func (ds DescribedShareGroupsOffsets) Ok() bool {
+	return ds.Error() == nil
+}
+
+// GroupIDs returns a sorted list of all group IDs.
+func (ds DescribedShareGroupsOffsets) GroupIDs() []string {
+	all := make([]string, 0, len(ds))
+	for g := range ds {
+		all = append(all, g)
+	}
+	sort.Strings(all)
+	return all
+}
+
+// DescribeShareGroupOffsets describes the share-partition start offsets for the
+// given share groups, or all share groups in the cluster if none are specified
+// (KIP-932).
+//
+// This may return *ShardErrors or *AuthError.
+//
+// If no groups are specified and this method first lists groups, and list
+// groups returns a *ShardErrors, this function describes all successfully
+// listed groups and appends the list shard errors to any describe shard
+// errors.
+//
+// If only one group is described, there will be at most one request issued,
+// and there is no need to deeply inspect the error.
+func (cl *Client) DescribeShareGroupOffsets(ctx context.Context, groups ...string) (DescribedShareGroupsOffsets, error) {
+	var seList *ShardErrors
+	if len(groups) == 0 {
+		listed, err := cl.ListGroupsByType(ctx, []string{"share"})
+		switch {
+		case err == nil:
+		case errors.As(err, &seList):
+		default:
+			return nil, err
+		}
+		groups = listed.Groups()
+		if len(groups) == 0 {
+			return nil, err
+		}
+	}
+
+	req := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+	for _, g := range groups {
+		rg := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+		rg.GroupID = g
+		req.Groups = append(req.Groups, rg)
+	}
+
+	shards := cl.cl.RequestSharded(ctx, req)
+	described := make(DescribedShareGroupsOffsets)
+	err := shardErrEach(req, shards, func(kr kmsg.Response) error {
+		resp := kr.(*kmsg.DescribeShareGroupOffsetsResponse)
+		for _, rg := range resp.Groups {
+			if err := maybeAuthErr(rg.ErrorCode); err != nil {
+				return err
+			}
+			d := DescribedShareGroupOffsets{
+				Group:   rg.GroupID,
+				Offsets: make(ShareOffsets),
+				Err:     kerr.ErrorForCode(rg.ErrorCode),
+			}
+			for _, rt := range rg.Topics {
+				ps := make(map[int32]ShareOffset)
+				d.Offsets[rt.Topic] = ps
+				for _, rp := range rt.Partitions {
+					ps[rp.Partition] = ShareOffset{
+						Topic:       rt.Topic,
+						TopicID:     TopicID(rt.TopicID),
+						Partition:   rp.Partition,
+						StartOffset: rp.StartOffset,
+						LeaderEpoch: rp.LeaderEpoch,
+						Lag:         rp.Lag,
+						Err:         kerr.ErrorForCode(rp.ErrorCode),
+					}
+				}
+			}
+			described[rg.GroupID] = d
+		}
+		return nil
+	})
+
+	var seDesc *ShardErrors
+	switch {
+	case err == nil:
+		return described, seList.into()
+	case errors.As(err, &seDesc):
+		if seList != nil {
+			seDesc.Errs = append(seList.Errs, seDesc.Errs...)
+		}
+		return described, seDesc.into()
+	default:
+		return nil, err
+	}
+}
+
+// AlterShareGroupOffsetsResponses contains the per-topic, per-partition
+// results from altering share group offsets. If altering a partition was
+// successful, the error will be nil.
+type AlterShareGroupOffsetsResponses map[string]map[int32]error
+
+// Lookup returns the error at t and p and whether it exists.
+func (rs AlterShareGroupOffsetsResponses) Lookup(t string, p int32) (error, bool) { //nolint:revive // error comes first, it is what it is
+	if len(rs) == 0 {
+		return nil, false
+	}
+	ps := rs[t]
+	if len(ps) == 0 {
+		return nil, false
+	}
+	r, exists := ps[p]
+	return r, exists
+}
+
+// EachError calls fn for every partition that has a non-nil error.
+func (rs AlterShareGroupOffsetsResponses) EachError(fn func(string, int32, error)) {
+	for t, ps := range rs {
+		for p, err := range ps {
+			if err != nil {
+				fn(t, p, err)
+			}
+		}
+	}
+}
+
+// Error returns the first error encountered, if any.
+func (rs AlterShareGroupOffsetsResponses) Error() error {
+	for _, ps := range rs {
+		for _, err := range ps {
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// AlterShareGroupOffsets alters the start offsets for the given share group
+// (KIP-932). The group must be empty (not actively being consumed). The At
+// field in each Offset is used as the new StartOffset.
+//
+// This returns an *AuthError if the user is not authorized to alter offsets in
+// the group at all. This does not return on per-topic authorization failures,
+// instead, per-topic authorization failures are included in the responses.
+func (cl *Client) AlterShareGroupOffsets(ctx context.Context, group string, offsets Offsets) (AlterShareGroupOffsetsResponses, error) {
+	if len(offsets) == 0 {
+		return nil, nil
+	}
+
+	req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
+	req.GroupID = group
+	for t, ps := range offsets {
+		rt := kmsg.NewAlterShareGroupOffsetsRequestTopic()
+		rt.Topic = t
+		for p, o := range ps {
+			rp := kmsg.NewAlterShareGroupOffsetsRequestTopicPartition()
+			rp.Partition = p
+			rp.StartOffset = o.At
+			rt.Partitions = append(rt.Partitions, rp)
+		}
+		req.Topics = append(req.Topics, rt)
+	}
+
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+	if err := maybeAuthErr(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+
+	r := make(AlterShareGroupOffsetsResponses)
+	for _, t := range resp.Topics {
+		rt := make(map[int32]error)
+		r[t.Topic] = rt
+		for _, p := range t.Partitions {
+			rt[p.Partition] = kerr.ErrorForCode(p.ErrorCode)
+		}
+	}
+	return r, nil
+}
+
+// DeleteShareGroupOffsetsResponses contains the per-topic results from
+// deleting share group offsets. If deleting offsets for a topic was successful,
+// the error will be nil.
+type DeleteShareGroupOffsetsResponses map[string]error
+
+// EachError calls fn for every topic that has a non-nil error.
+func (rs DeleteShareGroupOffsetsResponses) EachError(fn func(string, error)) {
+	for t, err := range rs {
+		if err != nil {
+			fn(t, err)
+		}
+	}
+}
+
+// Error returns the first error encountered, if any.
+func (rs DeleteShareGroupOffsetsResponses) Error() error {
+	for _, err := range rs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteShareGroupOffsets deletes share group offsets for the given topics
+// (KIP-932). The group must be empty (not actively being consumed).
+//
+// This returns an *AuthError if the user is not authorized to delete offsets in
+// the group at all. This does not return on per-topic authorization failures,
+// instead, per-topic authorization failures are included in the responses.
+func (cl *Client) DeleteShareGroupOffsets(ctx context.Context, group string, topics ...string) (DeleteShareGroupOffsetsResponses, error) {
+	if len(topics) == 0 {
+		return nil, nil
+	}
+
+	req := kmsg.NewPtrDeleteShareGroupOffsetsRequest()
+	req.GroupID = group
+	for _, t := range topics {
+		rt := kmsg.NewDeleteShareGroupOffsetsRequestTopic()
+		rt.Topic = t
+		req.Topics = append(req.Topics, rt)
+	}
+
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+	if err := maybeAuthErr(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+
+	r := make(DeleteShareGroupOffsetsResponses)
+	for _, t := range resp.Topics {
+		r[t.Topic] = kerr.ErrorForCode(t.ErrorCode)
+	}
+	return r, nil
 }

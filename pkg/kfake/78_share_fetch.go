@@ -411,8 +411,14 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 
 	// Ensure all piggybacked ack partitions appear in the response.
 	// The client uses partition presence to confirm ack processing.
-	if len(ackTs) > 0 {
-		ensureAckedParts(resp, ackTs, addTopic)
+	// On watcher re-invocation, ackTs is nil (acks were already
+	// processed), so use the watcher's saved ack topics instead.
+	ensureAcks := ackTs
+	if len(ensureAcks) == 0 && w != nil {
+		ensureAcks = w.ackTs
+	}
+	if len(ensureAcks) > 0 {
+		ensureAckedParts(resp, ensureAcks, addTopic)
 	}
 
 	// If no records acquired and this is the initial invocation, consider
@@ -431,6 +437,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			wsf := &watchShareFetch{
 				creq:    creq,
 				session: session,
+				ackTs:   ackTs,
 			}
 			wsf.cb = func() {
 				select {
