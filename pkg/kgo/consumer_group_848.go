@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"slices"
@@ -73,6 +74,10 @@ func (g *groupConsumer) manage848() {
 	// We pin to v1+.
 	g.memberGen.store(newStringUUID(), 0) // 0 joins the group
 
+	// consecutiveErrors tracks failures in the outer loop: failed
+	// initialJoin attempts and manageFailWait invocations. Used for
+	// backoff scaling. Reset when the inner heartbeat loop is entered
+	// (meaning initialJoin succeeded).
 	var consecutiveErrors int
 outer:
 	for {
@@ -122,7 +127,7 @@ outer:
 		//
 		// We can't rely on the client's default retry logic because
 		// ConsumerGroupHeartbeat cannot be retried by default.
-		if err != nil && (g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err) || isRetryableBrokerErr(err) || errors.Is(err, kerr.UnreleasedInstanceID)) {
+		if err != nil && (g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err) || isRetryableBrokerErr(err) || isAnyDialErr(err) || errors.Is(err, kerr.UnreleasedInstanceID)) {
 			consecutiveErrors++
 			g.cfg.logger.Log(LogLevelInfo, "consumer group initial heartbeat hit retryable error, backing off and retrying",
 				"group", g.cfg.group,
@@ -141,6 +146,13 @@ outer:
 			continue
 		}
 
+		// consecutiveTransientRestarts tracks how many times the
+		// inner heartbeat session has silently restarted due to
+		// transient errors (EOF, connection refused, etc.) without
+		// any successful heartbeat in between. Every cfg.retries
+		// consecutive restarts, we inject a fake fetch error so the
+		// user knows the broker is unreachable. Reset on success.
+		var consecutiveTransientRestarts int
 		for err == nil {
 			consecutiveErrors = 0
 			var nowAssigned map[string][]int32
@@ -215,14 +227,24 @@ outer:
 			case errors.Is(err, kerr.RebalanceInProgress):
 				err = nil
 
-			// Retryable broker errors (connection closed, EOF) and
-			// coordinator errors (NOT_COORDINATOR, etc.) are
-			// retried in the heartbeat loop up to cfg.retries.
-			// If the cap is hit, the error propagates here. We
-			// treat it as a transient failure and restart the
-			// session to give the data path a fresh start.
+			// Retryable broker errors (connection closed, EOF),
+			// dial errors (connection refused — the broker may be
+			// restarting), and coordinator errors
+			// (NOT_COORDINATOR, etc.) are retried in the
+			// heartbeat loop up to cfg.retries. If the cap is
+			// hit, the error propagates here. We silently restart
+			// the session and keep retrying. Every cfg.retries
+			// consecutive restarts, we inject a fake fetch error
+			// so the user knows the broker is unreachable.
 			case isRetryableBrokerErr(err),
+				isAnyDialErr(err),
 				g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err):
+				consecutiveTransientRestarts++
+				if int64(consecutiveTransientRestarts) >= g.cfg.retries && int64(consecutiveTransientRestarts)%g.cfg.retries == 0 {
+					g.c.addFakeReadyForDraining("", 0, &ErrGroupSession{
+						Err: fmt.Errorf("consumer group %s heartbeat has been failing for %d consecutive attempts, still retrying: %w", g.cfg.group, consecutiveTransientRestarts, err),
+					}, "consumer group heartbeat persistently failing")
+				}
 				err = nil
 
 			case errors.Is(err, kerr.UnknownMemberID):
@@ -257,6 +279,9 @@ outer:
 				continue outer
 			}
 
+			if err == nil {
+				consecutiveTransientRestarts = 0
+			}
 			if nowAssigned != nil {
 				member, gen := g.memberGen.load()
 				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat detected an updated assignment; exited heartbeat loop to assign & reentering",
