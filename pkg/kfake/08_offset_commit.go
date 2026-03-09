@@ -25,18 +25,42 @@ func (c *Cluster) handleOffsetCommit(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	// v10: resolve TopicIDs to topic names before dispatching to the
-	// group goroutine. We run in Cluster.run() so c.data is safe.
+	// v10: resolve TopicIDs to topic names. Topics with unknown IDs
+	// get per-partition UNKNOWN_TOPIC_ID errors; valid topics are
+	// passed through to the group goroutine.
 	if req.Version >= 10 {
+		var errTopics []kmsg.OffsetCommitResponseTopic
+		valid := req.Topics[:0]
 		for i := range req.Topics {
 			t := &req.Topics[i]
 			name, ok := c.data.id2t[t.TopicID]
 			if !ok {
-				resp := req.ResponseKind().(*kmsg.OffsetCommitResponse)
-				fillOffsetCommit(req, resp, kerr.UnknownTopicID.Code)
-				return resp, nil
+				st := kmsg.NewOffsetCommitResponseTopic()
+				st.TopicID = t.TopicID
+				for _, p := range t.Partitions {
+					sp := kmsg.NewOffsetCommitResponseTopicPartition()
+					sp.Partition = p.Partition
+					sp.ErrorCode = kerr.UnknownTopicID.Code
+					st.Partitions = append(st.Partitions, sp)
+				}
+				errTopics = append(errTopics, st)
+				continue
 			}
 			t.Topic = name
+			valid = append(valid, *t)
+		}
+		req.Topics = valid
+
+		if len(errTopics) > 0 && len(req.Topics) == 0 {
+			// All topics had unknown IDs; return errors directly.
+			resp := req.ResponseKind().(*kmsg.OffsetCommitResponse)
+			resp.Topics = errTopics
+			return resp, nil
+		}
+		if len(errTopics) > 0 {
+			// Stash error responses so the group handler can
+			// merge them into the final response.
+			creq.offsetCommitErrTopics = errTopics
 		}
 	}
 

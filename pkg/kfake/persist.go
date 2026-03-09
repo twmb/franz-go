@@ -863,12 +863,13 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 
 // saveGroupsLog writes a compacted groups.log from live group state.
 // Called only at shutdown, where run() is blocked in the admin function
-// and no new persistGroupEntry calls can occur.
+// and no new requests can be dispatched to group reqCh channels.
 func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 	var allEntries []groupLogEntry
 	for _, g := range c.groups.gs {
 		var entries []groupLogEntry
 		g.waitControl(func() {
+			g.drainReqCh()
 			entries = c.collectGroupEntries(g)
 		})
 		allEntries = append(allEntries, entries...)
@@ -2005,6 +2006,15 @@ type (
 		ShutdownAt     time.Time                       `json:"shutdownAt"`
 		ClassicGroups  map[string]sessionClassicGroup  `json:"classicGroups,omitempty"`
 		ConsumerGroups map[string]sessionConsumerGroup `json:"consumerGroups,omitempty"`
+		ShareGroups    map[string]sessionShareGroup    `json:"shareGroups,omitempty"`
+		GroupConfigs   map[string]map[string]*string   `json:"groupConfigs,omitempty"`
+		InProgressTxns []sessionInProgressTxn          `json:"inProgressTxns,omitempty"`
+	}
+
+	sessionInProgressTxn struct {
+		PID                int64                      `json:"pid"`
+		TxStart            time.Time                  `json:"txStart"`
+		TxPartFirstOffsets map[string]map[int32]int64 `json:"txPartFirstOffsets"`
 	}
 
 	sessionClassicGroup struct {
@@ -2013,14 +2023,15 @@ type (
 	}
 
 	sessionClassicMember struct {
-		ID                 string   `json:"id"`
-		InstanceID         *string  `json:"instance,omitempty"`
-		ClientID           string   `json:"clientID"`
-		ClientHost         string   `json:"clientHost"`
-		Protocols          []string `json:"protocols"`
-		Assignment         []byte   `json:"assignment,omitempty"`
-		SessionTimeoutMs   int32    `json:"sessionTimeoutMs"`
-		RebalanceTimeoutMs int32    `json:"rebalanceTimeoutMs"`
+		ID                 string    `json:"id"`
+		InstanceID         *string   `json:"instance,omitempty"`
+		ClientID           string    `json:"clientID"`
+		ClientHost         string    `json:"clientHost"`
+		Protocols          []string  `json:"protocols"`
+		Assignment         []byte    `json:"assignment,omitempty"`
+		SessionTimeoutMs   int32     `json:"sessionTimeoutMs"`
+		RebalanceTimeoutMs int32     `json:"rebalanceTimeoutMs"`
+		LastHeartbeat      time.Time `json:"lastHeartbeat,omitzero"`
 	}
 
 	sessionConsumerGroup struct {
@@ -2045,6 +2056,25 @@ type (
 		Rack                 *string                  `json:"rack,omitempty"`
 		Assignor             string                   `json:"assignor"`
 		RebalanceTimeoutMs   int32                    `json:"rebalanceTimeoutMs"`
+		LastHeartbeat        time.Time                `json:"lastHeartbeat,omitzero"`
+	}
+
+	// Share group state: partition SPSO and per-record acquisition state.
+	// Members are NOT persisted -- they reconnect after restart. Only the
+	// partition tracking state matters for continuity.
+	sessionShareGroup struct {
+		GroupEpoch int32                                      `json:"groupEpoch"`
+		Partitions map[string]map[int32]sessionSharePartition `json:"partitions"` // topic -> partition -> state
+	}
+
+	sessionSharePartition struct {
+		SPSO    int64                        `json:"spso"`
+		Records map[int64]sessionShareRecord `json:"records,omitempty"`
+	}
+
+	sessionShareRecord struct {
+		State         int8  `json:"s"`
+		DeliveryCount int32 `json:"dc"`
 	}
 )
 
@@ -2052,6 +2082,7 @@ func (c *Cluster) saveSessionState() error {
 	ss := sessionState{ShutdownAt: time.Now()}
 	for _, g := range c.groups.gs {
 		g.waitControl(func() {
+			g.drainReqCh()
 			c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: group=%s state=%s members=%d consumerMembers=%d",
 				g.name, g.state, len(g.members), len(g.consumerMembers))
 			switch {
@@ -2066,6 +2097,7 @@ func (c *Cluster) saveSessionState() error {
 						Assignment:         m.assignment,
 						SessionTimeoutMs:   m.join.SessionTimeoutMillis,
 						RebalanceTimeoutMs: m.join.RebalanceTimeoutMillis,
+						LastHeartbeat:      m.last,
 					}
 					for _, p := range m.join.Protocols {
 						sm.Protocols = append(sm.Protocols, p.Name)
@@ -2099,6 +2131,7 @@ func (c *Cluster) saveSessionState() error {
 						Rack:                 m.rackID,
 						Assignor:             m.serverAssignor,
 						RebalanceTimeoutMs:   m.rebalanceTimeoutMs,
+						LastHeartbeat:        m.last,
 					}
 					sg.Members = append(sg.Members, sm)
 				}
@@ -2109,11 +2142,79 @@ func (c *Cluster) saveSessionState() error {
 			}
 		})
 	}
-	if len(ss.ClassicGroups) == 0 && len(ss.ConsumerGroups) == 0 {
+	// Save share group partition state (SPSO + per-record tracking).
+	// Members are not persisted -- they reconnect after restart.
+	for name, sg := range c.shareGroups.gs {
+		if !sg.waitControl(func() {
+			// No drainReqCh here: share group heartbeats are the
+			// only request type dispatched to sg.reqCh, and members
+			// are not persisted (they reconnect after restart).
+			// Contrast with group.drainReqCh which must flush
+			// OffsetCommit requests before snapshotting.
+			ssg := sessionShareGroup{
+				GroupEpoch: sg.groupEpoch,
+				Partitions: make(map[string]map[int32]sessionSharePartition),
+			}
+			sg.mu.Lock()
+			sg.partitions.each(func(topic string, partition int32, sp *sharePartition) {
+				if _, ok := ssg.Partitions[topic]; !ok {
+					ssg.Partitions[topic] = make(map[int32]sessionSharePartition)
+				}
+				ssp := sessionSharePartition{
+					SPSO: sp.spso,
+				}
+				if len(sp.records) > 0 {
+					ssp.Records = make(map[int64]sessionShareRecord, len(sp.records))
+					for offset, sr := range sp.records {
+						ssp.Records[offset] = sessionShareRecord{
+							State:         int8(sr.state),
+							DeliveryCount: sr.deliveryCount,
+						}
+					}
+				}
+				ssg.Partitions[topic][partition] = ssp
+			})
+			sg.mu.Unlock()
+			if len(ssg.Partitions) > 0 {
+				if ss.ShareGroups == nil {
+					ss.ShareGroups = make(map[string]sessionShareGroup)
+				}
+				ss.ShareGroups[name] = ssg
+			}
+		}) {
+			c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: share group %s manage loop exited, skipping", name)
+		}
+	}
+
+	if len(c.groupConfigs) > 0 {
+		ss.GroupConfigs = c.groupConfigs
+	}
+
+	// Save in-progress transaction state so records survive restart.
+	for pidinf := range c.pids.txs {
+		if !pidinf.inTx {
+			continue
+		}
+		st := sessionInProgressTxn{
+			PID:                pidinf.id,
+			TxStart:            pidinf.txStart,
+			TxPartFirstOffsets: make(map[string]map[int32]int64),
+		}
+		pidinf.txPartFirstOffsets.each(func(t string, p int32, off *int64) {
+			if _, ok := st.TxPartFirstOffsets[t]; !ok {
+				st.TxPartFirstOffsets[t] = make(map[int32]int64)
+			}
+			st.TxPartFirstOffsets[t][p] = *off
+		})
+		ss.InProgressTxns = append(ss.InProgressTxns, st)
+	}
+
+	if len(ss.ClassicGroups) == 0 && len(ss.ConsumerGroups) == 0 && len(ss.ShareGroups) == 0 && len(ss.GroupConfigs) == 0 && len(ss.InProgressTxns) == 0 {
 		c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: nothing to save")
 		return nil
 	}
-	c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: saving classic=%d consumer=%d", len(ss.ClassicGroups), len(ss.ConsumerGroups))
+	c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: saving classic=%d consumer=%d share=%d groupConfigs=%d inProgressTxns=%d",
+		len(ss.ClassicGroups), len(ss.ConsumerGroups), len(ss.ShareGroups), len(ss.GroupConfigs), len(ss.InProgressTxns))
 	return writeJSONFile(c.fs, filepath.Join(c.cfg.dataDir, "session_state.json"), ss)
 }
 
@@ -2134,8 +2235,8 @@ func (c *Cluster) loadSessionState() error {
 		return nil
 	}
 
-	c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: classic=%d consumer=%d shutdownAt=%v elapsed=%v",
-		len(ss.ClassicGroups), len(ss.ConsumerGroups), ss.ShutdownAt, time.Since(ss.ShutdownAt))
+	c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: classic=%d consumer=%d inProgressTxns=%d shutdownAt=%v elapsed=%v",
+		len(ss.ClassicGroups), len(ss.ConsumerGroups), len(ss.InProgressTxns), ss.ShutdownAt, time.Since(ss.ShutdownAt))
 
 	for name, sg := range ss.ClassicGroups {
 		g, ok := c.groups.gs[name]
@@ -2161,6 +2262,143 @@ func (c *Cluster) loadSessionState() error {
 			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored consumer group=%s members=%d state=%s",
 				name, len(g.consumerMembers), g.state)
 		})
+	}
+
+	// Restore share group partition state. The share group manage
+	// goroutine is created on demand (getOrCreate), so we create it
+	// here to restore state into.
+	for name, ssg := range ss.ShareGroups {
+		sg := c.shareGroups.getOrCreate(name)
+		sg.waitControl(func() {
+			sg.groupEpoch = ssg.GroupEpoch
+			sg.mu.Lock()
+			for topic, parts := range ssg.Partitions {
+				for partition, ssp := range parts {
+					sp := sg.partitions.mkp(topic, partition, func() *sharePartition {
+						return &sharePartition{
+							spso:    ssp.SPSO,
+							records: make(map[int64]shareRecord),
+						}
+					})
+					sp.spso = ssp.SPSO
+					sp.scanOffset = ssp.SPSO
+					for offset, ssr := range ssp.Records {
+						state := shareRecordState(ssr.State)
+						// On restart, acquired records become available
+						// since the member that held them is gone.
+						if state == shareRecordAcquired {
+							if ssr.DeliveryCount >= c.shareMaxDeliveryAttempts() {
+								state = shareRecordArchived
+							} else {
+								state = shareRecordAvailable
+							}
+						}
+						sp.records[offset] = shareRecord{
+							state:         state,
+							deliveryCount: ssr.DeliveryCount,
+						}
+						// Track acquireEnd as one past the highest restored offset.
+						if offset+1 > sp.acquireEnd {
+							sp.acquireEnd = offset + 1
+						}
+					}
+					sp.advanceSPSO()
+				}
+			}
+			sg.mu.Unlock()
+			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored share group=%s epoch=%d",
+				name, sg.groupEpoch)
+		})
+	}
+
+	if len(ss.GroupConfigs) > 0 {
+		c.groupConfigs = ss.GroupConfigs
+		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored %d group configs", len(ss.GroupConfigs))
+	}
+
+	// Restore in-progress transaction state: reconstruct txParts,
+	// txPartFirstOffsets, and pd.uncommittedPIDs from the saved
+	// per-partition first offsets. This lets endTx properly commit
+	// or abort records that were produced before the restart.
+	for _, st := range ss.InProgressTxns {
+		pidinf, ok := c.pids.ids[st.PID]
+		if !ok {
+			continue
+		}
+
+		// Auto-abort if the transaction has exceeded its timeout,
+		// similar to session timeout expiry for group members.
+		txTimeout := time.Duration(pidinf.txTimeout) * time.Millisecond
+		if !st.TxStart.IsZero() && time.Since(st.TxStart) > txTimeout {
+			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: auto-aborting expired txn pid=%d epoch=%d (started %v ago, timeout %v)",
+				pidinf.id, pidinf.epoch, time.Since(st.TxStart), txTimeout)
+			// Reconstruct just enough state for endTx to abort.
+			pidinf.inTx = true
+			c.pids.txs[pidinf] = struct{}{}
+			for topic, parts := range st.TxPartFirstOffsets {
+				for part, firstOff := range parts {
+					pd, ok := c.data.tps.getp(topic, part)
+					if !ok || pd == nil {
+						continue
+					}
+					ps := pidinf.txParts.mkt(topic)
+					ps[part] = pd
+					ptr := pidinf.txPartFirstOffsets.mkp(topic, part, func() *int64 {
+						v := int64(-1)
+						return &v
+					})
+					*ptr = firstOff
+					if pd.uncommittedPIDs == nil {
+						pd.uncommittedPIDs = make(map[int64]int64)
+					}
+					existing, exists := pd.uncommittedPIDs[pidinf.id]
+					if !exists || firstOff < existing {
+						pd.uncommittedPIDs[pidinf.id] = firstOff
+					}
+					pd.recalculateLSO()
+				}
+			}
+			pidinf.endTx(false)
+			continue
+		}
+
+		pidinf.inTx = true
+		pidinf.txStart = st.TxStart
+		if pidinf.txStart.IsZero() {
+			pidinf.txStart = time.Now()
+		}
+		c.pids.txs[pidinf] = struct{}{}
+		for topic, parts := range st.TxPartFirstOffsets {
+			for part, firstOff := range parts {
+				pd, ok := c.data.tps.getp(topic, part)
+				if !ok || pd == nil {
+					continue
+				}
+				// Reconstruct txParts
+				ps := pidinf.txParts.mkt(topic)
+				ps[part] = pd
+				// Reconstruct txPartFirstOffsets
+				ptr := pidinf.txPartFirstOffsets.mkp(topic, part, func() *int64 {
+					v := int64(-1)
+					return &v
+				})
+				*ptr = firstOff
+				// Reconstruct pd.uncommittedPIDs
+				if pd.uncommittedPIDs == nil {
+					pd.uncommittedPIDs = make(map[int64]int64)
+				}
+				existing, exists := pd.uncommittedPIDs[pidinf.id]
+				if !exists || firstOff < existing {
+					pd.uncommittedPIDs[pidinf.id] = firstOff
+				}
+				pd.recalculateLSO()
+			}
+		}
+		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored in-progress txn pid=%d epoch=%d parts=%d (started %v ago)",
+			pidinf.id, pidinf.epoch, len(st.TxPartFirstOffsets), time.Since(pidinf.txStart))
+	}
+	if len(ss.InProgressTxns) > 0 {
+		c.pids.updateTimer()
 	}
 
 	return nil

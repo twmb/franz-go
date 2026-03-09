@@ -1632,8 +1632,9 @@ func TestKIP447RequireStable(t *testing.T) {
 	rg.Topics = append(rg.Topics, rgt)
 	fetchReq.Groups = append(fetchReq.Groups, rg)
 
-	// Test 1: OffsetFetch with RequireStable=true should return UNSTABLE_OFFSET_COMMIT.
-	// Use Broker.Request to bypass the sharder, which retries retriable errors.
+	// Test 1: OffsetFetch with RequireStable=true should return UNSTABLE_OFFSET_COMMIT
+	// per-partition (not per-group -- Kafka sets it on each partition).
+	// Use Broker.Request to bypass the sharder, which retries retryable errors.
 	kresp, err := rawClient.Broker(0).Request(ctx, &fetchReq)
 	if err != nil {
 		t.Fatalf("OffsetFetch RequireStable=true failed: %v", err)
@@ -1642,8 +1643,11 @@ func TestKIP447RequireStable(t *testing.T) {
 	if len(fetchResp.Groups) == 0 {
 		t.Fatal("no groups in RequireStable=true response")
 	}
-	if fetchResp.Groups[0].ErrorCode != kerr.UnstableOffsetCommit.Code {
-		t.Errorf("Test 1: expected UNSTABLE_OFFSET_COMMIT (88), got error code %d", fetchResp.Groups[0].ErrorCode)
+	if len(fetchResp.Groups[0].Topics) == 0 || len(fetchResp.Groups[0].Topics[0].Partitions) == 0 {
+		t.Fatal("no partitions in RequireStable=true response")
+	}
+	if ec := fetchResp.Groups[0].Topics[0].Partitions[0].ErrorCode; ec != kerr.UnstableOffsetCommit.Code {
+		t.Errorf("Test 1: expected per-partition UNSTABLE_OFFSET_COMMIT (88), got error code %d", ec)
 	}
 
 	// Test 2: OffsetFetch with RequireStable=false should succeed (even with pending txn)
@@ -1657,7 +1661,13 @@ func TestKIP447RequireStable(t *testing.T) {
 		t.Fatal("no groups in RequireStable=false response")
 	}
 	if fetchResp.Groups[0].ErrorCode != 0 {
-		t.Errorf("Test 2: expected no error, got error code %d", fetchResp.Groups[0].ErrorCode)
+		t.Errorf("Test 2: expected no group error, got error code %d", fetchResp.Groups[0].ErrorCode)
+	}
+	if len(fetchResp.Groups[0].Topics) == 0 || len(fetchResp.Groups[0].Topics[0].Partitions) == 0 {
+		t.Fatal("no partitions in RequireStable=false response")
+	}
+	if ec := fetchResp.Groups[0].Topics[0].Partitions[0].ErrorCode; ec != 0 {
+		t.Errorf("Test 2: expected no partition error, got error code %d", ec)
 	}
 
 	// Commit the transaction.

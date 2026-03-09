@@ -104,6 +104,23 @@ func (c *Cluster) handleApiVersions(kreq kmsg.Request) (kmsg.Response, error) {
 		ff.MaxVersionLevel = 1
 		resp.FinalizedFeatures = append(resp.FinalizedFeatures, ff)
 	}
+	_, hasShare := apiVersionsKeys[76] // ShareGroupHeartbeat
+	if hasShare && c.cfg.maxVersions != nil {
+		_, hasShare = c.cfg.maxVersions.LookupMaxKeyVersion(76)
+	}
+	if hasShare {
+		sf := kmsg.NewApiVersionsResponseSupportedFeature()
+		sf.Name = "share.version"
+		sf.MinVersion = 0
+		sf.MaxVersion = 1
+		resp.SupportedFeatures = append(resp.SupportedFeatures, sf)
+
+		ff := kmsg.NewApiVersionsResponseFinalizedFeature()
+		ff.Name = "share.version"
+		ff.MinVersionLevel = 0
+		ff.MaxVersionLevel = 1
+		resp.FinalizedFeatures = append(resp.FinalizedFeatures, ff)
+	}
 	if len(resp.FinalizedFeatures) > 0 {
 		resp.FinalizedFeaturesEpoch = 1
 	}
