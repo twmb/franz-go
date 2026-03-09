@@ -1,5 +1,5 @@
 // AlterShareGroupOffsetsRequest is a request to alter share group offsets.
-AlterShareGroupOffsetsRequest => key 91, max version 0, flexible v0+
+AlterShareGroupOffsetsRequest => key 91, max version 0, flexible v0+, group coordinator
   // GroupID is the group identifier.
   GroupID: string
   // Topics are the topics to alter offsets for.
