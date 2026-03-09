@@ -729,6 +729,8 @@ var validBrokerConfigs = map[string]string{
 	"offset.retention.ms":                       "",
 	"offsets.retention.check.interval.ms":       "",
 	"sasl.enabled.mechanisms":                   "",
+	"share.record.lock.duration.ms":             "",
+	"share.max.delivery.attempts":               "",
 	"state.log.compact.bytes":                   "",
 	"super.users":                               "",
 }
@@ -786,6 +788,8 @@ var configDefaults = map[string]string{
 	"message.max.bytes":                         strconv.Itoa(defMaxMessageBytes),
 	"offsets.retention.minutes":                 "10080",
 	"offsets.retention.check.interval.ms":       "600000",
+	"share.record.lock.duration.ms":             "30000",
+	"share.max.delivery.attempts":               "5",
 }
 
 // configTypes maps config names to their data types for DescribeConfigs v3+.
@@ -822,6 +826,8 @@ var configTypes = map[string]kmsg.ConfigType{
 	"segment.bytes":                             kmsg.ConfigTypeInt,
 	"segment.ms":                                kmsg.ConfigTypeLong,
 	"sasl.enabled.mechanisms":                   kmsg.ConfigTypeList,
+	"share.record.lock.duration.ms":             kmsg.ConfigTypeLong,
+	"share.max.delivery.attempts":               kmsg.ConfigTypeInt,
 	"state.log.compact.bytes":                   kmsg.ConfigTypeLong,
 	"super.users":                               kmsg.ConfigTypeList,
 	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
@@ -905,6 +911,22 @@ func (c *Cluster) offsetsRetentionMs() int64 {
 
 func (c *Cluster) offsetsRetentionCheckIntervalMs() int64 {
 	return int64(c.brokerConfigInt("offsets.retention.check.interval.ms", 600000))
+}
+
+func (c *Cluster) shareSessionTimeoutMs() int32 {
+	return c.brokerConfigInt("group.share.session.timeout.ms", 45000)
+}
+
+func (c *Cluster) shareAcqLockSweepIntervalMs() int32 {
+	return c.brokerConfigInt("share.record.lock.sweep.interval.ms", 5000)
+}
+
+func (c *Cluster) shareRecordLockDurationMs() int32 {
+	return c.brokerConfigInt("share.record.lock.duration.ms", 30000)
+}
+
+func (c *Cluster) shareMaxDeliveryAttempts() int32 {
+	return c.brokerConfigInt("share.max.delivery.attempts", 5)
 }
 
 // maxMessageBytes returns the max.message.bytes for a topic, falling back to

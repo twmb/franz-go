@@ -48,6 +48,9 @@ type (
 		telem              map[[16]byte]int32
 		telemNextID        int32
 		fetchSessions      fetchSessions
+		groupConfigs       map[string]map[string]*string // group -> config key -> config value
+		shareGroups        shareGroups
+		shareSessions      shareSessions
 		compactTicker      *time.Ticker
 		offsetExpireTicker *time.Ticker
 
@@ -180,6 +183,8 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 	c.data.c = c
 	c.groups.c = c
+	c.shareGroups.c = c
+	c.shareSessions.sessions = make(map[shareSessionKey]*shareSession)
 	c.pids.c = c
 	c.pids.ids = make(map[int64]*pidinfo)
 	c.pids.byTxid = make(map[string]*pidinfo)
@@ -608,6 +613,20 @@ outer:
 			kresp, err = c.handleConsumerGroupHeartbeat(creq)
 		case kmsg.ConsumerGroupDescribe:
 			kresp, err = c.handleConsumerGroupDescribe(creq)
+		case kmsg.ShareGroupHeartbeat:
+			kresp, err = c.handleShareGroupHeartbeat(creq)
+		case kmsg.ShareGroupDescribe:
+			kresp, err = c.handleShareGroupDescribe(creq)
+		case kmsg.ShareFetch:
+			kresp, err = c.handleShareFetch(creq)
+		case kmsg.ShareAcknowledge:
+			kresp, err = c.handleShareAcknowledge(creq)
+		case kmsg.DescribeShareGroupOffsets:
+			kresp, err = c.handleDescribeShareGroupOffsets(creq)
+		case kmsg.AlterShareGroupOffsets:
+			kresp, err = c.handleAlterShareGroupOffsets(creq)
+		case kmsg.DeleteShareGroupOffsets:
+			kresp, err = c.handleDeleteShareGroupOffsets(creq)
 		default:
 			err = fmt.Errorf("unhandled key %v", k)
 		}

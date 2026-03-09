@@ -2005,6 +2005,7 @@ type (
 		ShutdownAt     time.Time                       `json:"shutdownAt"`
 		ClassicGroups  map[string]sessionClassicGroup  `json:"classicGroups,omitempty"`
 		ConsumerGroups map[string]sessionConsumerGroup `json:"consumerGroups,omitempty"`
+		ShareGroups    map[string]sessionShareGroup    `json:"shareGroups,omitempty"`
 	}
 
 	sessionClassicGroup struct {
@@ -2045,6 +2046,24 @@ type (
 		Rack                 *string                  `json:"rack,omitempty"`
 		Assignor             string                   `json:"assignor"`
 		RebalanceTimeoutMs   int32                    `json:"rebalanceTimeoutMs"`
+	}
+
+	// Share group state: partition SPSO and per-record acquisition state.
+	// Members are NOT persisted -- they reconnect after restart. Only the
+	// partition tracking state matters for continuity.
+	sessionShareGroup struct {
+		GroupEpoch int32                                       `json:"groupEpoch"`
+		Partitions map[string]map[int32]sessionSharePartition `json:"partitions"` // topic -> partition -> state
+	}
+
+	sessionSharePartition struct {
+		SPSO    int64                       `json:"spso"`
+		Records map[int64]sessionShareRecord `json:"records,omitempty"`
+	}
+
+	sessionShareRecord struct {
+		State         int8  `json:"s"`
+		DeliveryCount int32 `json:"dc"`
 	}
 )
 
@@ -2109,11 +2128,49 @@ func (c *Cluster) saveSessionState() error {
 			}
 		})
 	}
-	if len(ss.ClassicGroups) == 0 && len(ss.ConsumerGroups) == 0 {
+	// Save share group partition state (SPSO + per-record tracking).
+	// Members are not persisted -- they reconnect after restart.
+	for name, sg := range c.shareGroups.gs {
+		sg.waitControl(func() {
+			ssg := sessionShareGroup{
+				GroupEpoch: sg.groupEpoch,
+				Partitions: make(map[string]map[int32]sessionSharePartition),
+			}
+			sg.mu.Lock()
+			sg.partitions.each(func(topic string, partition int32, sp *sharePartition) {
+				if _, ok := ssg.Partitions[topic]; !ok {
+					ssg.Partitions[topic] = make(map[int32]sessionSharePartition)
+				}
+				ssp := sessionSharePartition{
+					SPSO: sp.spso,
+				}
+				if len(sp.records) > 0 {
+					ssp.Records = make(map[int64]sessionShareRecord, len(sp.records))
+					for offset, sr := range sp.records {
+						ssp.Records[offset] = sessionShareRecord{
+							State:         int8(sr.state),
+							DeliveryCount: sr.deliveryCount,
+						}
+					}
+				}
+				ssg.Partitions[topic][partition] = ssp
+			})
+			sg.mu.Unlock()
+			if len(ssg.Partitions) > 0 {
+				if ss.ShareGroups == nil {
+					ss.ShareGroups = make(map[string]sessionShareGroup)
+				}
+				ss.ShareGroups[name] = ssg
+			}
+		})
+	}
+
+	if len(ss.ClassicGroups) == 0 && len(ss.ConsumerGroups) == 0 && len(ss.ShareGroups) == 0 {
 		c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: nothing to save")
 		return nil
 	}
-	c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: saving classic=%d consumer=%d", len(ss.ClassicGroups), len(ss.ConsumerGroups))
+	c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: saving classic=%d consumer=%d share=%d",
+		len(ss.ClassicGroups), len(ss.ConsumerGroups), len(ss.ShareGroups))
 	return writeJSONFile(c.fs, filepath.Join(c.cfg.dataDir, "session_state.json"), ss)
 }
 
@@ -2160,6 +2217,48 @@ func (c *Cluster) loadSessionState() error {
 			g.restoreConsumerMembers(ss.ShutdownAt, sg)
 			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored consumer group=%s members=%d state=%s",
 				name, len(g.consumerMembers), g.state)
+		})
+	}
+
+	// Restore share group partition state. The share group manage
+	// goroutine is created on demand (getOrCreate), so we create it
+	// here to restore state into.
+	for name, ssg := range ss.ShareGroups {
+		sg := c.shareGroups.getOrCreate(name)
+		sg.waitControl(func() {
+			sg.groupEpoch = ssg.GroupEpoch
+			sg.mu.Lock()
+			for topic, parts := range ssg.Partitions {
+				for partition, ssp := range parts {
+					sp := sg.partitions.mkp(topic, partition, func() *sharePartition {
+						return &sharePartition{
+							spso:    ssp.SPSO,
+							records: make(map[int64]*shareRecord),
+						}
+					})
+					sp.spso = ssp.SPSO
+					for offset, ssr := range ssp.Records {
+						state := shareRecordState(ssr.State)
+						// On restart, acquired records become available
+						// since the member that held them is gone.
+						if state == shareRecordAcquired {
+							if ssr.DeliveryCount >= c.shareMaxDeliveryAttempts() {
+								state = shareRecordArchived
+							} else {
+								state = shareRecordAvailable
+							}
+						}
+						sp.records[offset] = &shareRecord{
+							state:         state,
+							deliveryCount: ssr.DeliveryCount,
+						}
+					}
+					sp.advanceSPSO()
+				}
+			}
+			sg.mu.Unlock()
+			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored share group=%s epoch=%d",
+				name, sg.groupEpoch)
 		})
 	}
 

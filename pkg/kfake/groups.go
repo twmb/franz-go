@@ -196,13 +196,14 @@ func (c *Cluster) snapshotTopicMeta() topicMetaSnap {
 	return snap
 }
 
-// notifyTopicChange recomputes target assignments for all 848 consumer
-// groups after a topic is created, deleted, or has partitions added. We
-// capture a fresh metadata snapshot here (in the cluster run loop where
-// c.data is safe to read) and pass it to the manage goroutine so that
-// the recomputation always sees the latest topics. This avoids a race
-// where the manage goroutine could recompute using a stale snapshot
-// from a heartbeat that was enqueued before the topic change.
+// notifyTopicChange recomputes target assignments for all consumer and
+// share groups after a topic is created, deleted, or has partitions
+// added. We capture a fresh metadata snapshot here (in the cluster run
+// loop where c.data is safe to read) and pass it to the manage
+// goroutine so that the recomputation always sees the latest topics.
+// This avoids a race where the manage goroutine could recompute using
+// a stale snapshot from a heartbeat that was enqueued before the topic
+// change.
 //
 // The generation bump matches Kafka's behavior where topic changes bump
 // the group epoch. This ensures heartbeat responses keep re-sending the
@@ -231,6 +232,19 @@ func (c *Cluster) notifyTopicChange() {
 		}:
 		case <-g.quitCh:
 		case <-g.c.die:
+		}
+	}
+	for _, sg := range c.shareGroups.gs {
+		select {
+		case sg.controlCh <- func() {
+			if len(sg.members) > 0 {
+				sg.groupEpoch++
+				sg.lastTopicMeta = snap
+				sg.recomputeAssignments()
+			}
+		}:
+		case <-sg.quitCh:
+		case <-sg.c.die:
 		}
 	}
 }
@@ -838,21 +852,17 @@ func (g *group) waitControl(fn func()) bool {
 		}
 	}
 sent:
+	// Once sent, the manage goroutine will run fn synchronously.
+	// We must not select on quitCh here: fn itself may call
+	// quitOnce (e.g. deleting an empty group), closing quitCh
+	// before close(wait) executes. If the scheduler preempts
+	// between the two closes, a quitCh select case would see
+	// quitCh ready but wait not yet closed and incorrectly
+	// return false.
 	for {
 		select {
 		case <-wait:
 			return true
-		case <-g.quitCh:
-			// The function we sent may have called
-			// quitOnce (e.g. deleting an empty group),
-			// closing quitCh. Check if wait is also done
-			// before returning false.
-			select {
-			case <-wait:
-				return true
-			default:
-				return false
-			}
 		case <-g.c.die:
 			return false
 		case admin := <-g.c.adminCh:

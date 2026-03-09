@@ -152,6 +152,29 @@ outer:
 			}
 			c.persistTopicsState()
 
+		case kmsg.ConfigResourceTypeGroupConfig:
+			doner(rr.ResourceName, rr.ResourceType, 0)
+			if req.ValidateOnly {
+				continue
+			}
+			if c.groupConfigs == nil {
+				c.groupConfigs = make(map[string]map[string]*string)
+			}
+			gc := c.groupConfigs[rr.ResourceName]
+			if gc == nil {
+				gc = make(map[string]*string)
+				c.groupConfigs[rr.ResourceName] = gc
+			}
+			for i := range rr.Configs {
+				rc := &rr.Configs[i]
+				switch rc.Op {
+				case kmsg.IncrementalAlterConfigOpSet:
+					gc[rc.Name] = rc.Value
+				case kmsg.IncrementalAlterConfigOpDelete:
+					delete(gc, rc.Name)
+				}
+			}
+
 		default:
 			doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
 		}

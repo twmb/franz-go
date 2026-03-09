@@ -30,7 +30,7 @@ type (
 		cid       string
 		corr      int32
 		seq       uint32
-		topicMeta topicMetaSnap // snapshot for KIP-848 consumer group assignment
+		topicMeta topicMetaSnap // snapshot for group assignment (consumer/share)
 	}
 
 	clientResp struct {

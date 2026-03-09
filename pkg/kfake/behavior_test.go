@@ -4303,3 +4303,608 @@ func TestOffsetCommitUnknownTopicID(t *testing.T) {
 		}
 	}
 }
+
+// waitShareGroupEmpty polls ShareGroupDescribe until the given share group
+// has 0 members (i.e., state "Empty"). This is needed after cl.Close()
+// because the leave heartbeat may not have been processed yet.
+func waitShareGroupEmpty(t *testing.T, cl *kgo.Client, group string, timeout time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		req := kmsg.NewPtrShareGroupDescribeRequest()
+		req.GroupIDs = []string{group}
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatalf("waitShareGroupEmpty: describe: %v", err)
+		}
+		if len(resp.Groups) == 1 && len(resp.Groups[0].Members) == 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+		if ctx.Err() != nil {
+			t.Fatalf("waitShareGroupEmpty: timeout waiting for group %q to become empty", group)
+		}
+	}
+}
+
+// TestShareGroupDescribe verifies that ShareGroupDescribe returns correct
+// group state, epoch, and member information for an active share group.
+func TestShareGroupDescribe(t *testing.T) {
+	t.Parallel()
+	topic := "sg-describe"
+	group := "sg-describe-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 10)
+
+	// Create share consumer and poll until we receive records,
+	// which confirms the member joined and has an assignment.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		fs := cl.PollFetches(ctx)
+		if len(fs.Records()) > 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("timeout waiting for records")
+		}
+	}
+
+	// Describe the share group.
+	req := kmsg.NewPtrShareGroupDescribeRequest()
+	req.GroupIDs = []string{group}
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	if len(resp.Groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(resp.Groups))
+	}
+	g := resp.Groups[0]
+	if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+		t.Fatalf("describe error: %v", err)
+	}
+	if g.GroupState != "Stable" {
+		t.Errorf("expected state Stable, got %q", g.GroupState)
+	}
+	if g.GroupEpoch <= 0 {
+		t.Errorf("expected epoch > 0, got %d", g.GroupEpoch)
+	}
+	if len(g.Members) != 1 {
+		t.Fatalf("expected 1 member, got %d", len(g.Members))
+	}
+	m := g.Members[0]
+	if m.MemberID == "" {
+		t.Error("member ID empty")
+	}
+	if !slices.Contains(m.SubscribedTopicNames, topic) {
+		t.Errorf("topic %q not in subscribed %v", topic, m.SubscribedTopicNames)
+	}
+	if len(m.Assignment.TopicPartitions) == 0 {
+		t.Error("no assignment")
+	}
+}
+
+// TestShareGroupDescribeEmpty verifies describe on a group with no active
+// members returns "Empty" state, and on a nonexistent group returns
+// GROUP_ID_NOT_FOUND.
+func TestShareGroupDescribeEmpty(t *testing.T) {
+	t.Parallel()
+	topic := "sg-describe-empty"
+	group := "sg-describe-empty-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 5)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Join, consume, leave -- creates the group then empties it.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		fs := cl.PollFetches(ctx)
+		if len(fs.Records()) > 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("timeout")
+		}
+	}
+	cl.Close()
+	waitShareGroupEmpty(t, admin, group, 5*time.Second)
+
+	// Now the group exists but is empty.
+	req := kmsg.NewPtrShareGroupDescribeRequest()
+	req.GroupIDs = []string{group, "nonexistent-sg"}
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	if len(resp.Groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(resp.Groups))
+	}
+
+	// Look up groups by GroupID rather than relying on response order.
+	groupsByID := make(map[string]kmsg.ShareGroupDescribeResponseGroup)
+	for _, g := range resp.Groups {
+		groupsByID[g.GroupID] = g
+	}
+
+	// Existing empty group.
+	g0 := groupsByID[group]
+	if err := kerr.ErrorForCode(g0.ErrorCode); err != nil {
+		t.Fatalf("empty group error: %v", err)
+	}
+	if g0.GroupState != "Empty" {
+		t.Errorf("expected Empty, got %q", g0.GroupState)
+	}
+	if len(g0.Members) != 0 {
+		t.Errorf("expected 0 members, got %d", len(g0.Members))
+	}
+
+	// Nonexistent group.
+	g1 := groupsByID["nonexistent-sg"]
+	if g1.ErrorCode != kerr.GroupIDNotFound.Code {
+		t.Errorf("expected GROUP_ID_NOT_FOUND for nonexistent group, got %d", g1.ErrorCode)
+	}
+}
+
+// TestDescribeShareGroupOffsets verifies that DescribeShareGroupOffsets
+// returns the correct SPSO and lag after consuming and acking records.
+func TestDescribeShareGroupOffsets(t *testing.T) {
+	t.Parallel()
+	topic := "sg-desc-offsets"
+	group := "sg-desc-offsets-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 20)
+
+	// Consume all 20 records, accept them.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var got int
+	for got < 20 {
+		fs := cl.PollFetches(ctx)
+		for _, r := range fs.Records() {
+			r.Ack(kgo.AckAccept)
+			got++
+		}
+		commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cl.CommitAcks(commitCtx)
+		commitCancel()
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if got < 20 {
+		t.Fatalf("got %d/20 records", got)
+	}
+	cl.Close()
+
+	// Describe share group offsets.
+	req := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+	rg := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+	rg.GroupID = group
+	rt := kmsg.NewDescribeShareGroupOffsetsRequestGroupTopic()
+	rt.Topic = topic
+	rt.Partitions = []int32{0}
+	rg.Topics = append(rg.Topics, rt)
+	req.Groups = append(req.Groups, rg)
+
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("describe offsets: %v", err)
+	}
+	if len(resp.Groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(resp.Groups))
+	}
+	g := resp.Groups[0]
+	if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+		t.Fatalf("describe offsets error: %v", err)
+	}
+	if len(g.Topics) != 1 || len(g.Topics[0].Partitions) != 1 {
+		t.Fatal("unexpected response structure")
+	}
+	p := g.Topics[0].Partitions[0]
+	if p.Partition != 0 {
+		t.Errorf("expected partition 0, got %d", p.Partition)
+	}
+	// After accepting all 20 records, SPSO should be 20.
+	if p.StartOffset != 20 {
+		t.Errorf("expected StartOffset 20, got %d", p.StartOffset)
+	}
+	// Lag = HWM - SPSO = 20 - 20 = 0.
+	if p.Lag != 0 {
+		t.Errorf("expected Lag 0, got %d", p.Lag)
+	}
+}
+
+// TestDescribeShareGroupOffsetsNotFound verifies that describing offsets
+// for a nonexistent group returns GROUP_ID_NOT_FOUND.
+func TestDescribeShareGroupOffsetsNotFound(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t)
+	cl := newPlainClient(t, c)
+
+	req := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+	rg := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+	rg.GroupID = "nonexistent-share-group"
+	rt := kmsg.NewDescribeShareGroupOffsetsRequestGroupTopic()
+	rt.Topic = "t"
+	rt.Partitions = []int32{0}
+	rg.Topics = append(rg.Topics, rt)
+	req.Groups = append(req.Groups, rg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("describe offsets: %v", err)
+	}
+	if resp.Groups[0].ErrorCode != kerr.GroupIDNotFound.Code {
+		t.Errorf("expected GROUP_ID_NOT_FOUND, got %d", resp.Groups[0].ErrorCode)
+	}
+}
+
+// TestAlterShareGroupOffsets verifies that altering the SPSO in an empty
+// share group causes subsequent consumers to start from the new offset.
+func TestAlterShareGroupOffsets(t *testing.T) {
+	t.Parallel()
+	topic := "sg-alter-offsets"
+	group := "sg-alter-offsets-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 20)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Consume all 20, accept all, close.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for got < 20 {
+		fs := cl.PollFetches(ctx)
+		for _, r := range fs.Records() {
+			r.Ack(kgo.AckAccept)
+			got++
+		}
+		commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cl.CommitAcks(commitCtx)
+		commitCancel()
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if got < 20 {
+		t.Fatalf("got %d/20 records", got)
+	}
+	cl.Close()
+	waitShareGroupEmpty(t, admin, group, 5*time.Second)
+
+	// Alter SPSO to 10 -- next consumer should get records 10-19.
+	req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
+	req.GroupID = group
+	rt := kmsg.NewAlterShareGroupOffsetsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewAlterShareGroupOffsetsRequestTopicPartition()
+	rp.Partition = 0
+	rp.StartOffset = 10
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("alter offsets: %v", err)
+	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		t.Fatalf("alter error: %v", err)
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatal("unexpected response structure")
+	}
+	if pp := resp.Topics[0].Partitions[0]; pp.ErrorCode != 0 {
+		t.Fatalf("partition error: %v", kerr.ErrorForCode(pp.ErrorCode))
+	}
+
+	// New consumer should get records starting from offset 10.
+	cl2, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl2.Close()
+
+	var got2 int
+	var minOffset int64 = -1
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	for got2 < 10 {
+		fs := cl2.PollFetches(ctx2)
+		for _, r := range fs.Records() {
+			if minOffset == -1 || r.Offset < minOffset {
+				minOffset = r.Offset
+			}
+			r.Ack(kgo.AckAccept)
+			got2++
+		}
+		if ctx2.Err() != nil {
+			break
+		}
+	}
+	if got2 < 10 {
+		t.Fatalf("expected 10 records after alter, got %d", got2)
+	}
+	if minOffset != 10 {
+		t.Errorf("expected min offset 10, got %d", minOffset)
+	}
+}
+
+// TestAlterShareGroupOffsetsNonEmpty verifies that altering offsets on a
+// share group with active members returns NON_EMPTY_GROUP.
+func TestAlterShareGroupOffsetsNonEmpty(t *testing.T) {
+	t.Parallel()
+	topic := "sg-alter-nonempty"
+	group := "sg-alter-nonempty-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 5)
+
+	// Create active share consumer.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		fs := cl.PollFetches(ctx)
+		if len(fs.Records()) > 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("timeout")
+		}
+	}
+
+	// Try to alter while consumer is active.
+	req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
+	req.GroupID = group
+	rt := kmsg.NewAlterShareGroupOffsetsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewAlterShareGroupOffsetsRequestTopicPartition()
+	rp.Partition = 0
+	rp.StartOffset = 0
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("alter offsets: %v", err)
+	}
+	if resp.ErrorCode != kerr.NonEmptyGroup.Code {
+		t.Errorf("expected NON_EMPTY_GROUP (%d), got %d", kerr.NonEmptyGroup.Code, resp.ErrorCode)
+	}
+}
+
+// TestDeleteShareGroupOffsets verifies that deleting share group offsets
+// removes partition state, so a new consumer re-initializes from
+// share.auto.offset.reset.
+func TestDeleteShareGroupOffsets(t *testing.T) {
+	t.Parallel()
+	topic := "sg-delete-offsets"
+	group := "sg-delete-offsets-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 20)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Consume all, accept, close.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for got < 20 {
+		fs := cl.PollFetches(ctx)
+		for _, r := range fs.Records() {
+			r.Ack(kgo.AckAccept)
+			got++
+		}
+		commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cl.CommitAcks(commitCtx)
+		commitCancel()
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if got < 20 {
+		t.Fatalf("got %d/20", got)
+	}
+	cl.Close()
+	waitShareGroupEmpty(t, admin, group, 5*time.Second)
+
+	// Delete share group offsets for the topic.
+	dreq := kmsg.NewPtrDeleteShareGroupOffsetsRequest()
+	dreq.GroupID = group
+	dt := kmsg.NewDeleteShareGroupOffsetsRequestTopic()
+	dt.Topic = topic
+	dreq.Topics = append(dreq.Topics, dt)
+
+	dresp, err := dreq.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("delete offsets: %v", err)
+	}
+	if err := kerr.ErrorForCode(dresp.ErrorCode); err != nil {
+		t.Fatalf("delete error: %v", err)
+	}
+
+	// Verify offsets are gone.
+	dsreq := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+	rg := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+	rg.GroupID = group
+	rt := kmsg.NewDescribeShareGroupOffsetsRequestGroupTopic()
+	rt.Topic = topic
+	rt.Partitions = []int32{0}
+	rg.Topics = append(rg.Topics, rt)
+	dsreq.Groups = append(dsreq.Groups, rg)
+
+	dsresp, err := dsreq.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("describe offsets: %v", err)
+	}
+	p := dsresp.Groups[0].Topics[0].Partitions[0]
+	if p.StartOffset != -1 {
+		t.Errorf("expected StartOffset -1 after delete, got %d", p.StartOffset)
+	}
+
+	// New consumer should get all 20 records (share.auto.offset.reset=earliest).
+	cl2, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl2.Close()
+
+	var got2 int
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	for got2 < 20 {
+		fs := cl2.PollFetches(ctx2)
+		for _, r := range fs.Records() {
+			r.Ack(kgo.AckAccept)
+			got2++
+		}
+		if ctx2.Err() != nil {
+			break
+		}
+	}
+	if got2 < 20 {
+		t.Fatalf("expected 20 records after delete+re-consume, got %d", got2)
+	}
+}
+
+// TestDeleteShareGroupOffsetsNonEmpty verifies that deleting offsets on a
+// share group with active members returns NON_EMPTY_GROUP.
+func TestDeleteShareGroupOffsetsNonEmpty(t *testing.T) {
+	t.Parallel()
+	topic := "sg-delete-nonempty"
+	group := "sg-delete-nonempty-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 5)
+
+	// Create active share consumer.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		fs := cl.PollFetches(ctx)
+		if len(fs.Records()) > 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("timeout")
+		}
+	}
+
+	// Try to delete while consumer is active.
+	req := kmsg.NewPtrDeleteShareGroupOffsetsRequest()
+	req.GroupID = group
+	dt := kmsg.NewDeleteShareGroupOffsetsRequestTopic()
+	dt.Topic = topic
+	req.Topics = append(req.Topics, dt)
+
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("delete offsets: %v", err)
+	}
+	if resp.ErrorCode != kerr.NonEmptyGroup.Code {
+		t.Errorf("expected NON_EMPTY_GROUP (%d), got %d", kerr.NonEmptyGroup.Code, resp.ErrorCode)
+	}
+}
