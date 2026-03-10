@@ -888,11 +888,24 @@ func (s *shareConsumer) sendSourceAck(ctx context.Context, src *source, acks map
 			errors.Is(err, kerr.InvalidShareSessionEpoch),
 			errors.Is(err, kerr.ShareSessionLimitReached):
 			// Session errors: the broker did NOT advance the
-			// epoch. Reset to 0 so the next ShareFetch creates
-			// a fresh session.
+			// epoch and did NOT process the acks. Reset to 0
+			// so the next ShareFetch creates a fresh session,
+			// and re-queue the acks to piggyback on it. This
+			// matches the Java client which treats these as
+			// RetriableException.
 			src.cursorsMu.Lock()
 			src.shareSessionEpoch = 0
 			src.cursorsMu.Unlock()
+			for tid, parts := range acks {
+				for p, batches := range parts {
+					src.addShareAcks(tid, p, batches)
+				}
+			}
+			s.cfg.logger.Log(LogLevelInfo, "re-queued all acks due to share session error",
+				"broker", src.nodeID,
+				"err", err,
+			)
+			return nil
 		default:
 			// Non-session errors: the broker may have advanced
 			// the epoch before returning the error. Match the
