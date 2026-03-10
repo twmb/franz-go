@@ -478,6 +478,15 @@ func (cl *Client) MarkAcks(status AckStatus, records ...*Record) {
 //
 // Records that are not explicitly acknowledged before the next PollFetches /
 // PollRecords call are automatically accepted.
+// CommitAcks sends pending share group acknowledgements to each broker.
+// Records that were explicitly acknowledged via [Record.Ack] are sent with the
+// specified status; records that have not been explicitly acknowledged are
+// skipped (they will be auto-accepted on the next PollFetches call).
+//
+// This must not be called concurrently with PollFetches or PollRecords. Both
+// share per-broker session epochs, and concurrent calls risk
+// INVALID_SHARE_SESSION_EPOCH errors that force session resets. The intended
+// usage is sequential: poll, process, ack, commit, repeat.
 func (cl *Client) CommitAcks(ctx context.Context) error {
 	s := cl.consumer.s
 	if s == nil {

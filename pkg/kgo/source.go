@@ -48,6 +48,7 @@ type source struct {
 	shareCursors []*shareCursor
 
 	shareSessionEpoch int32                                  // 0=new, incremented on success, -1=close
+	shareSessionParts map[topicPartIdx]struct{}              // partitions the broker knows about in this share session
 	sharePendingAcks  map[[16]byte]map[int32][]shareAckBatch // topicID -> partition -> ack batches to piggyback
 	shareForgotten    map[[16]byte][]int32                   // topicID -> partitions to forget
 }
@@ -118,6 +119,10 @@ func (s *source) removeShareCursor(rm *shareCursor) {
 	}
 
 	s.shareCursors = s.shareCursors[:len(s.shareCursors)-1]
+
+	// Remove from session tracking -- the broker will forget this
+	// partition when it receives the ForgottenTopicsData below.
+	delete(s.shareSessionParts, topicPartIdx{rm.topicID, rm.partition})
 
 	// Track removed partition so the next ShareFetch tells the broker
 	// to forget it from the share session.

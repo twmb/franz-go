@@ -460,6 +460,12 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 // accidentally commit to partitions that you no longer own. You can prevent
 // this by using BlockRebalanceOnPoll, but this comes with different tradeoffs.
 // See the documentation on BlockRebalanceOnPoll for more information.
+//
+// For share group consumers, PollFetches / PollRecords and CommitAcks must not
+// be called concurrently. Both operate on per-broker share session epochs;
+// concurrent calls can cause the broker to reject one request with
+// INVALID_SHARE_SESSION_EPOCH, forcing a session reset. The intended pattern
+// is sequential: poll, process, ack, commit, repeat.
 func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	if maxPollRecords == 0 {
 		maxPollRecords = -1
