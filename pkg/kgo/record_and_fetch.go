@@ -198,17 +198,22 @@ func (r *Record) DeliveryCount() int32 {
 	return st.deliveryCount
 }
 
-// AcquisitionLockTimeout returns the broker's acquisition lock timeout for this
-// share group record. This is how long the broker holds the acquisition lock
-// before releasing the record for redelivery. Use this to schedule AckRenew
-// calls before the lock expires. Returns 0 if the record is not from a share
-// group or the broker did not include the timeout.
-func (r *Record) AcquisitionLockTimeout() time.Duration {
+// AcquisitionLockDeadline returns the estimated time at which the broker's
+// acquisition lock for this share group record expires. After this deadline
+// the broker may release the record for redelivery to another consumer.
+//
+// The deadline is computed as the time the response was decoded plus the
+// broker's lock duration, so it does not account for network latency between
+// the broker and this client. Callers that intend to renew before expiry
+// should do so well in advance of the deadline.
+//
+// Returns the zero time if the record is not from a share group.
+func (r *Record) AcquisitionLockDeadline() time.Time {
 	st := shareAckFromCtx(r)
 	if st == nil {
-		return 0
+		return time.Time{}
 	}
-	return st.acquisitionLockTimeout
+	return st.acquisitionLockDeadline
 }
 
 // Ack sets the acknowledgement status for this share group record. The status

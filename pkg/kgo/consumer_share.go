@@ -45,11 +45,11 @@ const ackGap int8 = 0
 // context.WithValue. It tracks the ack status (pending, user-set, or
 // finalized) and the delivery count from the broker.
 type shareAckState struct {
-	mu                     sync.Mutex
-	status                 uint8 // 0=pending, low 7 bits=AckStatus, high bit=ackFinalized
-	deliveryCount          int32
-	acquisitionLockTimeout time.Duration
-	source                 *source // the source that fetched this record
+	mu                      sync.Mutex
+	status                  uint8 // 0=pending, low 7 bits=AckStatus, high bit=ackFinalized
+	deliveryCount           int32
+	acquisitionLockDeadline time.Time
+	source                  *source // the source that fetched this record
 }
 
 var ctxShareAck = new(string) // pointer key for context.WithValue
@@ -78,6 +78,23 @@ type shareAckBatch struct {
 type topicPartIdx struct {
 	topicID   [16]byte
 	partition int32
+}
+
+// shareMove collects a partition whose leader changed, detected via
+// CurrentLeader in a ShareFetch response. Applied after all parallel
+// fetches complete to move the share cursor to the new leader.
+type shareMove struct {
+	topicID     [16]byte
+	partition   int32
+	leaderID    int32
+	leaderEpoch int32
+}
+
+// shareFetchResult bundles the output of a single ShareFetch round-trip.
+type shareFetchResult struct {
+	fetch   Fetch
+	moves   []shareMove
+	brokers []BrokerMetadata // from resp.NodeEndpoints, for ensuring move targets
 }
 
 // ShareAckPartitionError is returned within the error from CommitAcks when
@@ -145,6 +162,11 @@ type shareConsumer struct {
 	// rounds drain the state. Protected by c.mu.
 	sourcesWithForgotten map[*source]struct{}
 
+	// pollSourceOffset rotates which sources are selected when
+	// maxConcurrentFetches < len(sources), ensuring fair coverage
+	// across poll calls. Protected by c.mu.
+	pollSourceOffset int
+
 	// cursorsChanged is signaled by assignSharePartitions (under c.mu)
 	// when share cursors are added or removed. pollShareFetches waits
 	// on this when no sources are available, avoiding a busy-wait loop.
@@ -153,6 +175,12 @@ type shareConsumer struct {
 	// lastPolled tracks records from the previous poll for auto-ACCEPT.
 	// Protected by consumer.mu (grabbed during PollFetches/PollRecords).
 	lastPolled []sharePolledRecord
+
+	// bufferedFetches holds records from a previous ShareFetch that
+	// were not returned to the user due to maxPollRecords. On the next
+	// poll, records are served from this buffer before issuing new
+	// ShareFetch requests. Protected by consumer.mu.
+	bufferedFetches Fetches
 }
 
 func (c *consumer) initShare() {
@@ -266,6 +294,112 @@ func (s *shareConsumer) refreshShareCursorSources() {
 	if moved {
 		s.cursorsChanged.Broadcast()
 	}
+}
+
+// applyShareMoves proactively moves share cursors to new leaders detected
+// via CurrentLeader in ShareFetch responses, avoiding the delay of a full
+// metadata refresh. Follows the same broker/source setup pattern as
+// kip951move in topics_and_partitions.go.
+func (s *shareConsumer) applyShareMoves(moves []shareMove, brokers []BrokerMetadata) {
+	// Ensure brokers exist for move targets. Same pattern as
+	// kip951move.ensureBrokers: add/replace individual brokers
+	// without removing unrelated ones.
+	if len(brokers) > 0 {
+		s.cl.brokersMu.Lock()
+		if !s.cl.stopBrokers {
+			var changed bool
+			for _, b := range brokers {
+				nb := kmsg.MetadataResponseBroker{
+					NodeID: b.NodeID,
+					Host:   b.Host,
+					Port:   b.Port,
+					Rack:   b.Rack,
+				}
+				var found bool
+				for i, existing := range s.cl.brokers {
+					if existing.meta.NodeID != b.NodeID {
+						continue
+					}
+					found = true
+					if !existing.meta.equals(nb) {
+						existing.stopForever()
+						s.cl.brokers[i] = s.cl.newBroker(b.NodeID, b.Host, b.Port, b.Rack)
+						changed = true
+					}
+					break
+				}
+				if !found {
+					s.cl.brokers = append(s.cl.brokers, s.cl.newBroker(b.NodeID, b.Host, b.Port, b.Rack))
+					changed = true
+				}
+			}
+			if changed {
+				sort.Slice(s.cl.brokers, func(i, j int) bool {
+					return s.cl.brokers[i].meta.NodeID < s.cl.brokers[j].meta.NodeID
+				})
+				s.cl.reinitAnyBrokerOrd()
+			}
+		}
+		s.cl.brokersMu.Unlock()
+	}
+
+	// Ensure sinks and sources exist for move targets.
+	targets := make(map[int32]struct{})
+	for _, m := range moves {
+		targets[m.leaderID] = struct{}{}
+	}
+	s.cl.sinksAndSourcesMu.Lock()
+	for leader := range targets {
+		if _, exists := s.cl.sinksAndSources[leader]; !exists {
+			s.cl.sinksAndSources[leader] = sinkAndSource{
+				sink:   s.cl.newSink(leader),
+				source: s.cl.newSource(leader),
+			}
+		}
+	}
+	s.cl.sinksAndSourcesMu.Unlock()
+
+	// Move cursors under c.mu.
+	id2t := s.cl.id2tMap()
+	s.c.mu.Lock()
+	var moved bool
+	for _, m := range moves {
+		topicName := id2t[m.topicID]
+		if topicName == "" {
+			continue
+		}
+		parts := s.usingShareCursors[topicName]
+		if parts == nil {
+			continue
+		}
+		sc := parts[m.partition]
+		if sc == nil || sc.source.nodeID == m.leaderID {
+			continue
+		}
+
+		s.cl.sinksAndSourcesMu.Lock()
+		sns := s.cl.sinksAndSources[m.leaderID]
+		s.cl.sinksAndSourcesMu.Unlock()
+		if sns.source == nil {
+			continue
+		}
+
+		s.cfg.logger.Log(LogLevelInfo, "share cursor move via CurrentLeader",
+			"topic", topicName,
+			"partition", m.partition,
+			"old_leader", sc.source.nodeID,
+			"new_leader", m.leaderID,
+		)
+		s.sourcesWithForgotten[sc.source] = struct{}{}
+		sc.source.removeShareCursor(sc)
+		sc.source = sns.source
+		sns.source.addShareCursor(sc)
+		moved = true
+	}
+	if moved {
+		s.cursorsChanged.Broadcast()
+	}
+	s.c.mu.Unlock()
 }
 
 func (s *shareConsumer) manageShareGroup() {
@@ -671,13 +805,13 @@ func (s *shareConsumer) commitAcks(ctx context.Context) error {
 // sendAcksFromSources drains pending acks from the given sources and sends
 // ShareAcknowledge requests to each broker in parallel. Returns errors
 // including per-partition errors from the broker via errors.Join.
-func (s *shareConsumer) sendAcksFromSources(ctx context.Context, sources map[*source]struct{}) error {
+func (s *shareConsumer) sendAcksFromSources(ctx context.Context, sources []*source) error {
 	type sourceAcks struct {
 		src  *source
 		acks map[[16]byte]map[int32][]shareAckBatch
 	}
 	var pending []sourceAcks
-	for src := range sources {
+	for _, src := range sources {
 		acks := src.drainShareAcks()
 		if len(acks) > 0 {
 			pending = append(pending, sourceAcks{src, acks})
@@ -749,9 +883,29 @@ func (s *shareConsumer) sendSourceAck(ctx context.Context, src *source, acks map
 	var errs []error
 	resp := kresp.(*kmsg.ShareAcknowledgeResponse)
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		switch {
+		case errors.Is(err, kerr.ShareSessionNotFound),
+			errors.Is(err, kerr.InvalidShareSessionEpoch),
+			errors.Is(err, kerr.ShareSessionLimitReached):
+			// Session errors: the broker did NOT advance the
+			// epoch. Reset to 0 so the next ShareFetch creates
+			// a fresh session.
+			src.cursorsMu.Lock()
+			src.shareSessionEpoch = 0
+			src.cursorsMu.Unlock()
+		default:
+			// Non-session errors: the broker may have advanced
+			// the epoch before returning the error. Match the
+			// Java client's defensive increment.
+			src.cursorsMu.Lock()
+			if src.shareSessionEpoch == math.MaxInt32 {
+				src.shareSessionEpoch = 1
+			} else {
+				src.shareSessionEpoch++
+			}
+			src.cursorsMu.Unlock()
+		}
 		if isAckRetryable(err) {
-			// Re-queue all acks for piggybacked retry on the
-			// next ShareFetch.
 			for tid, parts := range acks {
 				for p, batches := range parts {
 					src.addShareAcks(tid, p, batches)
@@ -764,6 +918,15 @@ func (s *shareConsumer) sendSourceAck(ctx context.Context, src *source, acks map
 			return nil
 		}
 		errs = append(errs, err)
+	} else {
+		// Success: the broker incremented the session epoch.
+		src.cursorsMu.Lock()
+		if src.shareSessionEpoch == math.MaxInt32 {
+			src.shareSessionEpoch = 1
+		} else {
+			src.shareSessionEpoch++
+		}
+		src.cursorsMu.Unlock()
 	}
 
 	id2t := s.cl.id2tMap()
@@ -880,6 +1043,15 @@ func (s *shareConsumer) leave(ctx context.Context) {
 func (s *shareConsumer) finalizeForLeave() {
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
+
+	// Release any buffered records that were never returned to the
+	// user. Track them in lastPolled so finalizePreviousPoll routes
+	// the releases to sources.
+	if len(s.bufferedFetches) > 0 {
+		s.trackPolledRecords(s.bufferedFetches)
+		s.bufferedFetches = nil
+	}
+
 	for i := range s.lastPolled {
 		pr := &s.lastPolled[i]
 		st := pr.state
@@ -986,20 +1158,28 @@ func requeueAcksForPartition(src *source, req *kmsg.ShareFetchRequest, topicID [
 	}
 }
 
-// collectShareSources returns the set of sources that have share cursors
-// or pending forgotten/ack state. Must be called under c.mu.
-func (s *shareConsumer) collectShareSources() map[*source]struct{} {
-	sources := make(map[*source]struct{})
+// collectShareSources returns the deduplicated sources that have share
+// cursors or pending forgotten/ack state, sorted by node ID for stable
+// rotation. Must be called under c.mu.
+func (s *shareConsumer) collectShareSources() []*source {
+	seen := make(map[*source]struct{})
 	for _, parts := range s.usingShareCursors {
 		for _, sc := range parts {
-			sources[sc.source] = struct{}{}
+			seen[sc.source] = struct{}{}
 		}
 	}
 	// Include sources that had cursors removed and may still need
 	// to send ForgottenTopicsData or flush pending acks.
 	for src := range s.sourcesWithForgotten {
-		sources[src] = struct{}{}
+		seen[src] = struct{}{}
 	}
+	sources := make([]*source, 0, len(seen))
+	for src := range seen {
+		sources = append(sources, src)
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		return sources[i].nodeID < sources[j].nodeID
+	})
 	return sources
 }
 
@@ -1035,6 +1215,83 @@ func (s *shareConsumer) cleanupForgottenSources() {
 	}
 }
 
+// trackPolledRecords adds records from the given fetches to lastPolled so
+// that finalizePreviousPoll can auto-ACCEPT or route explicit acks.
+//
+// Must be called under consumer.mu.
+func (s *shareConsumer) trackPolledRecords(fetches Fetches) {
+	for i := range fetches {
+		for j := range fetches[i].Topics {
+			t := &fetches[i].Topics[j]
+			for k := range t.Partitions {
+				p := &t.Partitions[k]
+				for _, r := range p.Records {
+					if st := shareAckFromCtx(r); st != nil {
+						s.lastPolled = append(s.lastPolled, sharePolledRecord{
+							state:     st,
+							source:    st.source,
+							topic:     t.Topic,
+							partition: p.Partition,
+							offset:    r.Offset,
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+// bufferExcess splits fetches so that at most maxPollRecords are returned
+// and excess records are stored in s.bufferedFetches for the next poll.
+// Returns the trimmed fetches to return to the user.
+//
+// Must be called under consumer.mu.
+func (s *shareConsumer) bufferExcess(fetches Fetches, maxPollRecords int) Fetches {
+	remaining := maxPollRecords
+	for i := range fetches {
+		for j := range fetches[i].Topics {
+			t := &fetches[i].Topics[j]
+			for k := range t.Partitions {
+				p := &t.Partitions[k]
+				if remaining >= len(p.Records) {
+					remaining -= len(p.Records)
+					continue
+				}
+				// This partition has excess records. Buffer
+				// the tail and trim the returned slice.
+				if len(p.Records[remaining:]) > 0 {
+					buf := Fetch{Topics: []FetchTopic{{
+						Topic: t.Topic,
+						Partitions: []FetchPartition{{
+							Partition: p.Partition,
+							Records:   p.Records[remaining:],
+						}},
+					}}}
+					s.bufferedFetches = append(s.bufferedFetches, buf)
+				}
+				p.Records = p.Records[:remaining]
+				remaining = 0
+			}
+		}
+	}
+	return fetches
+}
+
+// takeBuffered returns up to maxPollRecords from the buffered fetches,
+// moving excess back into the buffer. The returned records are tracked
+// in lastPolled. If maxPollRecords <= 0, all buffered records are returned.
+//
+// Must be called under consumer.mu.
+func (s *shareConsumer) takeBuffered(maxPollRecords int) Fetches {
+	fetches := s.bufferedFetches
+	s.bufferedFetches = nil
+	if maxPollRecords > 0 {
+		fetches = s.bufferExcess(fetches, maxPollRecords)
+	}
+	s.trackPolledRecords(fetches)
+	return fetches
+}
+
 // pollShareFetches sends ShareFetch requests to all sources with share
 // cursors in parallel and returns the merged results. This is the pull
 // model: fetches happen synchronously within PollFetches so records are
@@ -1051,11 +1308,16 @@ func (s *shareConsumer) pollShareFetches(ctx context.Context, maxPollRecords int
 	}
 
 	// Nil context means "return immediately with whatever is
-	// available." Share consumers have no buffered fetches, so we
-	// just finalize the previous poll and drain any injected errors.
+	// available." Return buffered records if we have them,
+	// otherwise drain any injected errors.
 	if ctx == nil {
 		s.c.mu.Lock()
 		s.finalizePreviousPoll()
+		if len(s.bufferedFetches) > 0 {
+			fetches := s.takeBuffered(maxPollRecords)
+			s.c.mu.Unlock()
+			return fetches
+		}
 		s.c.mu.Unlock()
 		if fake := s.c.drainFakeReady(); len(fake) > 0 {
 			return Fetches(fake)
@@ -1063,11 +1325,20 @@ func (s *shareConsumer) pollShareFetches(ctx context.Context, maxPollRecords int
 		return nil
 	}
 
+	// Finalize the previous poll, then check the buffer. If we have
+	// buffered records from a prior fetch, return from those without
+	// issuing new ShareFetch requests.
+	s.c.mu.Lock()
+	s.finalizePreviousPoll()
+	if len(s.bufferedFetches) > 0 {
+		fetches := s.takeBuffered(maxPollRecords)
+		s.c.mu.Unlock()
+		return fetches
+	}
+
 	// Collect unique sources that have share cursors. If none exist
 	// yet, block until the heartbeat loop assigns partitions, an
 	// injected error arrives, or the context is cancelled.
-	s.c.mu.Lock()
-	s.finalizePreviousPoll()
 	sources := s.collectShareSources()
 	if len(sources) == 0 {
 		// Spin up a goroutine that broadcasts on ctx cancellation
@@ -1109,94 +1380,64 @@ func (s *shareConsumer) pollShareFetches(ctx context.Context, maxPollRecords int
 		return NewErrFetch(ctx.Err())
 	}
 
-	// Determine how many fetch rounds to issue. Each round sends one
-	// ShareFetch per source in parallel. For share consumers, the
-	// default (maxConcurrentFetches == 0) means one round rather than
-	// unbounded -- share fetches are synchronous in the poll loop, so
-	// unbounded rounds would block the caller for too long.
-	nSources := len(sources)
-	rounds := 1
-	if n := s.cfg.maxConcurrentFetches; n > nSources {
-		rounds = (n + nSources - 1) / nSources
+	// Fetch from up to maxConcurrentFetches sources in parallel.
+	// This option gates memory: with many brokers, you may not
+	// want all in-flight at once. Extra capacity beyond the
+	// number of sources is a no-op. We rotate which sources are
+	// selected across poll calls so that all brokers get fair
+	// coverage when maxConcurrentFetches < len(sources).
+	nTotal := len(sources)
+	nFetch := nTotal
+	if n := s.cfg.maxConcurrentFetches; n > 0 && n < nFetch {
+		nFetch = n
 	}
 
 	var fetches Fetches
-	for range rounds {
-		results := make(chan Fetch, nSources)
-		for src := range sources {
-			go func() {
-				results <- s.doShareFetch(ctx, src)
-			}()
+	var allMoves []shareMove
+	var allBrokers []BrokerMetadata
+	results := make(chan shareFetchResult, nFetch)
+	s.c.mu.Lock()
+	offset := s.pollSourceOffset
+	s.pollSourceOffset = (offset + nFetch) % nTotal
+	s.c.mu.Unlock()
+	for i := range nFetch {
+		src := sources[(offset+i)%nTotal]
+		go func() {
+			results <- s.doShareFetch(ctx, src)
+		}()
+	}
+	for range nFetch {
+		r := <-results
+		allMoves = append(allMoves, r.moves...)
+		allBrokers = append(allBrokers, r.brokers...)
+		if r.fetch.hasErrorsOrRecords() {
+			fetches = append(fetches, r.fetch)
 		}
+	}
 
-		gotRecords := false
-		for range nSources {
-			f := <-results
-			if f.hasErrorsOrRecords() {
-				fetches = append(fetches, f)
-				gotRecords = true
-			}
-		}
-
-		// Stop issuing rounds once we have some data or the context
-		// is cancelled, rather than always exhausting all rounds.
-		if gotRecords || ctx.Err() != nil {
-			break
-		}
+	// Move share cursors to new leaders detected via CurrentLeader
+	// in ShareFetch responses. This avoids waiting for the periodic
+	// metadata refresh to discover the leader change.
+	if len(allMoves) > 0 {
+		s.applyShareMoves(allMoves, allBrokers)
 	}
 
 	// Append any injected error fetches that arrived during the share
 	// fetch round-trips.
 	fetches = append(fetches, fakeFetches...)
 
-	// If maxPollRecords is set, trim fetches to the limit first. Any
-	// records beyond the limit are immediately released back to the
-	// broker -- the user never sees them, so auto-accepting would
-	// silently skip processing.
+	// If maxPollRecords is set, buffer excess records for the next
+	// poll instead of releasing them. This avoids re-fetching records
+	// the broker already acquired for us.
+	s.c.mu.Lock()
 	if maxPollRecords > 0 {
-		remaining := maxPollRecords
-		for i := range fetches {
-			for j := range fetches[i].Topics {
-				t := &fetches[i].Topics[j]
-				for k := range t.Partitions {
-					p := &t.Partitions[k]
-					if remaining >= len(p.Records) {
-						remaining -= len(p.Records)
-					} else {
-						for _, r := range p.Records[remaining:] {
-							r.Ack(AckRelease)
-						}
-						p.Records = p.Records[:remaining]
-						remaining = 0
-					}
-				}
-			}
-		}
+		fetches = s.bufferExcess(fetches, maxPollRecords)
 	}
 
-	// Track records returned to the user for auto-ACCEPT on the
-	// next poll. Records beyond maxPollRecords were already
-	// released above and are not tracked.
-	s.c.mu.Lock()
-	for i := range fetches {
-		for j := range fetches[i].Topics {
-			t := &fetches[i].Topics[j]
-			for k := range t.Partitions {
-				p := &t.Partitions[k]
-				for _, r := range p.Records {
-					if st := shareAckFromCtx(r); st != nil {
-						s.lastPolled = append(s.lastPolled, sharePolledRecord{
-							state:     st,
-							source:    st.source,
-							topic:     t.Topic,
-							partition: p.Partition,
-							offset:    r.Offset,
-						})
-					}
-				}
-			}
-		}
-	}
+	// Track only the records we're returning to the user. Buffered
+	// records stay untouched until a future poll returns them.
+	s.trackPolledRecords(fetches)
+
 	// The fetch round just sent requests which drained forgotten
 	// state from sources -- clean up tracking entries for sources
 	// that no longer need visiting.
@@ -1209,18 +1450,18 @@ func (s *shareConsumer) pollShareFetches(ctx context.Context, maxPollRecords int
 // doShareFetch sends a single ShareFetch request to one source and
 // returns the decoded Fetch. On session errors (e.g. SHARE_SESSION_NOT_FOUND),
 // the epoch is reset and the request is retried once.
-func (s *shareConsumer) doShareFetch(ctx context.Context, src *source) Fetch {
+func (s *shareConsumer) doShareFetch(ctx context.Context, src *source) shareFetchResult {
 	for attempt := range 2 {
 		req := s.buildShareFetchRequest(src)
 		if req == nil {
-			return Fetch{}
+			return shareFetchResult{}
 		}
 
 		br, err := s.cl.brokerOrErr(ctx, src.nodeID, errUnknownBroker)
 		if err != nil {
 			src.restoreShareForgotten(req)
 			src.restoreSharePendingAcks(req)
-			return Fetch{}
+			return shareFetchResult{}
 		}
 
 		// Use the same br.do + select pattern as regular fetch
@@ -1248,7 +1489,7 @@ func (s *shareConsumer) doShareFetch(ctx context.Context, src *source) Fetch {
 				src.cursorsMu.Unlock()
 				src.restoreShareForgotten(req)
 				src.restoreSharePendingAcks(req)
-				return Fetch{}
+				return shareFetchResult{}
 			}
 		case <-ctx.Done():
 			// The in-flight request may still be processed by
@@ -1259,7 +1500,7 @@ func (s *shareConsumer) doShareFetch(ctx context.Context, src *source) Fetch {
 			src.cursorsMu.Unlock()
 			src.restoreShareForgotten(req)
 			src.restoreSharePendingAcks(req)
-			return Fetch{}
+			return shareFetchResult{}
 		}
 
 		if err != nil {
@@ -1279,7 +1520,7 @@ func (s *shareConsumer) doShareFetch(ctx context.Context, src *source) Fetch {
 			case <-ctx.Done():
 			}
 			after.Stop()
-			return Fetch{}
+			return shareFetchResult{}
 		}
 		src.consecutiveFailures = 0
 
@@ -1291,9 +1532,20 @@ func (s *shareConsumer) doShareFetch(ctx context.Context, src *source) Fetch {
 			"num_topics", len(resp.Topics),
 		)
 
-		fetch, retry := s.handleShareFetchResponse(src, req, resp)
+		fetch, retry, moves := s.handleShareFetchResponse(src, req, resp)
 		if !retry {
-			return fetch
+			var brokers []BrokerMetadata
+			if len(moves) > 0 {
+				for _, ne := range resp.NodeEndpoints {
+					brokers = append(brokers, BrokerMetadata{
+						NodeID: ne.NodeID,
+						Host:   ne.Host,
+						Port:   ne.Port,
+						Rack:   ne.Rack,
+					})
+				}
+			}
+			return shareFetchResult{fetch, moves, brokers}
 		}
 		// Session error -- epoch was reset by
 		// handleShareFetchResponse. Restore forgotten and ack
@@ -1304,7 +1556,7 @@ func (s *shareConsumer) doShareFetch(ctx context.Context, src *source) Fetch {
 			src.restoreSharePendingAcks(req)
 		}
 	}
-	return Fetch{}
+	return shareFetchResult{}
 }
 
 // restoreShareForgotten puts ForgottenTopicsData from a failed ShareFetch
@@ -1541,7 +1793,7 @@ func (s *shareConsumer) handleShareFetchResponse(
 	src *source,
 	req *kmsg.ShareFetchRequest,
 	resp *kmsg.ShareFetchResponse,
-) (Fetch, bool) {
+) (Fetch, bool, []shareMove) {
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		switch {
 		case errors.Is(err, kerr.ShareSessionNotFound),
@@ -1554,7 +1806,7 @@ func (s *shareConsumer) handleShareFetchResponse(
 			src.cursorsMu.Lock()
 			src.shareSessionEpoch = 0
 			src.cursorsMu.Unlock()
-			return Fetch{}, true
+			return Fetch{}, true, nil
 
 		default:
 			// Non-session error. The Java client increments the
@@ -1575,7 +1827,7 @@ func (s *shareConsumer) handleShareFetchResponse(
 			src.cursorsMu.Unlock()
 			return Fetch{Topics: []FetchTopic{{
 				Partitions: []FetchPartition{{Partition: -1, Err: err}},
-			}}}, false
+			}}}, false, nil
 		}
 	}
 
@@ -1591,7 +1843,7 @@ func (s *shareConsumer) handleShareFetchResponse(
 	}
 	src.cursorsMu.Unlock()
 
-	acqLockTimeout := time.Duration(resp.AcquisitionLockTimeoutMillis) * time.Millisecond
+	acqLockDeadline := time.Now().Add(time.Duration(resp.AcquisitionLockTimeoutMillis) * time.Millisecond)
 
 	// Track piggybacked ack partitions from the request. If the broker
 	// omits a partition from the response entirely, we re-queue the acks
@@ -1607,6 +1859,7 @@ func (s *shareConsumer) handleShareFetchResponse(
 
 	id2t := s.cl.id2tMap()
 	var fetch Fetch
+	var moves []shareMove
 	topicIdx := make(map[string]int)
 
 	for i := range resp.Topics {
@@ -1636,6 +1889,23 @@ func (s *shareConsumer) handleShareFetchResponse(
 			}
 
 			if rp.ErrorCode != 0 {
+				// If the broker tells us the new leader, collect
+				// a move instead of surfacing the error. The
+				// piggybacked acks are for acquisitions from the
+				// old leader and are invalid on the new leader,
+				// so we drop them rather than re-queuing.
+				if errors.Is(kerr.ErrorForCode(rp.ErrorCode), kerr.NotLeaderForPartition) &&
+					rp.CurrentLeader.LeaderID >= 0 &&
+					rp.CurrentLeader.LeaderEpoch >= 0 {
+					moves = append(moves, shareMove{
+						topicID:     rt.TopicID,
+						partition:   rp.Partition,
+						leaderID:    rp.CurrentLeader.LeaderID,
+						leaderEpoch: rp.CurrentLeader.LeaderEpoch,
+					})
+					delete(piggybackedAcks, topicPartIdx{rt.TopicID, rp.Partition})
+					continue
+				}
 				idx, ok := topicIdx[topicName]
 				if !ok {
 					idx = len(fetch.Topics)
@@ -1709,9 +1979,9 @@ func (s *shareConsumer) handleShareFetchResponse(
 						})
 					}
 					ackState := &shareAckState{
-						deliveryCount:          int32(ar.DeliveryCount),
-						acquisitionLockTimeout: acqLockTimeout,
-						source:                 src,
+						deliveryCount:           int32(ar.DeliveryCount),
+						acquisitionLockDeadline: acqLockDeadline,
+						source:                  src,
 					}
 					ctx := r.Context
 					if ctx == nil {
@@ -1760,7 +2030,7 @@ func (s *shareConsumer) handleShareFetchResponse(
 		)
 	}
 
-	return fetch, false
+	return fetch, false, moves
 }
 
 // closeShareSessions sends ShareFetch with ShareSessionEpoch=-1 to each

@@ -390,6 +390,11 @@ func (cfg *cfg) validate() error {
 		if cfg.onLost != nil || cfg.onRevoked != nil || cfg.onAssigned != nil {
 			return errors.New("partition lifecycle callbacks are not supported with share groups")
 		}
+		// Share consumers use a pull model: one round of parallel
+		// fetches to all sources. Default to 1 if not explicitly set.
+		if cfg.maxConcurrentFetches == 0 {
+			cfg.maxConcurrentFetches = 1
+		}
 	}
 
 	if cfg.regex {
