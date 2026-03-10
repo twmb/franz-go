@@ -3432,7 +3432,13 @@ func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGro
 	g.state = groupStable
 	g.leader = sg.Leader
 	for _, sm := range sg.Members {
-		remaining := time.Duration(sm.SessionTimeoutMs)*time.Millisecond - time.Since(shutdownAt)
+		// Use per-member last heartbeat time if available,
+		// falling back to shutdownAt for old session files.
+		lastHB := sm.LastHeartbeat
+		if lastHB.IsZero() {
+			lastHB = shutdownAt
+		}
+		remaining := time.Duration(sm.SessionTimeoutMs)*time.Millisecond - time.Since(lastHB)
 		if remaining <= 0 {
 			continue
 		}
@@ -3459,6 +3465,9 @@ func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGro
 			g.removeMember(m)
 			g.rebalance()
 		})
+		// Preserve the real last heartbeat time so that across
+		// repeated restarts, dead members accumulate elapsed time.
+		m.last = lastHB
 	}
 	if len(g.members) == 0 {
 		g.state = groupEmpty
@@ -3486,15 +3495,24 @@ func (g *group) atSessionTimeoutIn(m *groupMember, d time.Duration, fn func()) {
 // session state. If all sessions have expired, no members are restored.
 func (g *group) restoreConsumerMembers(shutdownAt time.Time, sg sessionConsumerGroup) {
 	sessionTimeout := time.Duration(g.c.consumerSessionTimeoutMs()) * time.Millisecond
-	remaining := sessionTimeout - time.Since(shutdownAt)
-	if remaining <= 0 {
-		return
-	}
 
 	g.partitionEpochs = sg.PartitionEpochs
 	g.targetAssignmentEpoch = sg.TargetAssignmentEpoch
 
 	for _, sm := range sg.Members {
+		// Use per-member last heartbeat time if available,
+		// falling back to shutdownAt for old session files.
+		lastHB := sm.LastHeartbeat
+		if lastHB.IsZero() {
+			lastHB = shutdownAt
+		}
+		remaining := sessionTimeout - time.Since(lastHB)
+		if remaining <= 0 {
+			g.c.cfg.logger.Logf(LogLevelDebug, "restoreConsumerMembers: group=%s member=%s expired (lastHB=%v ago)",
+				g.logName(), sm.ID, time.Since(lastHB))
+			continue
+		}
+
 		m := &consumerMember{
 			memberID:                    sm.ID,
 			instanceID:                  sm.InstanceID,
@@ -3517,6 +3535,10 @@ func (g *group) restoreConsumerMembers(shutdownAt time.Time, sg sessionConsumerG
 		}
 		g.consumerMembers[m.memberID] = m
 		g.atConsumerSessionTimeoutIn(m, remaining)
+		// Preserve the real last heartbeat time so that across
+		// repeated restarts, dead members accumulate elapsed time
+		// instead of resetting to "just now" each restore.
+		m.last = lastHB
 	}
 	if len(g.consumerMembers) == 0 {
 		return

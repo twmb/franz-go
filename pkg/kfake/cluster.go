@@ -137,6 +137,9 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	if len(cfg.ports) > 0 {
 		cfg.nbrokers = len(cfg.ports)
 	}
+	if cfg.injectFS != nil && cfg.dataDir == "" {
+		cfg.dataDir = "/kfake"
+	}
 
 	c := &Cluster{
 		cfg: cfg,
@@ -163,7 +166,10 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 
 		die: make(chan struct{}),
 	}
-	if cfg.dataDir != "" {
+	if cfg.injectFS != nil {
+		c.fs = cfg.injectFS
+		c.storageDir = cfg.dataDir
+	} else if cfg.dataDir != "" {
 		c.fs = osFS{}
 		c.storageDir = cfg.dataDir
 	} else {
@@ -333,11 +339,6 @@ func (c *Cluster) Close() {
 		// race with run() handling a request.
 		done := make(chan struct{})
 		c.adminCh <- func() {
-			for pidinf := range c.pids.txs {
-				if pidinf.inTx {
-					pidinf.endTx(false)
-				}
-			}
 			if err := c.saveToDisk(); err != nil {
 				c.cfg.logger.Logf(LogLevelError, "persist to disk: %v", err)
 			}

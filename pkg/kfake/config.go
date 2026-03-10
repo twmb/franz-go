@@ -52,6 +52,11 @@ type cfg struct {
 
 	dataDir    string
 	syncWrites bool
+
+	// injectFS, if non-nil, overrides the filesystem used for
+	// persistence. This allows tests to share a memFS across
+	// cluster restarts without touching the real disk.
+	injectFS fs
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
@@ -234,6 +239,12 @@ func DataDir(dir string) Opt {
 // produce is durable immediately at the cost of throughput.
 func SyncWrites() Opt {
 	return opt{func(c *cfg) { c.syncWrites = true }}
+}
+
+// withFS injects a custom filesystem implementation, allowing tests to
+// share a memFS across cluster restarts without touching the real disk.
+func withFS(f fs) Opt {
+	return opt{func(cfg *cfg) { cfg.injectFS = f }}
 }
 
 // User adds a SASL user with optional ACLs. Unlike Superuser, this user is

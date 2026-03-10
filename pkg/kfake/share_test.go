@@ -1,4 +1,4 @@
-package kfake_test
+package kfake
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -39,45 +38,14 @@ func setShareAutoOffsetReset(t *testing.T, cl *kgo.Client, group string) {
 func TestShareGroupBasic(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.SeedTopics(1, "share-basic"))
+	c := newCluster(t, SeedTopics(1, "share-basic"))
 	group := "share-test-basic"
 
-	// Admin client for producing and config.
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-basic"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-
-	setShareAutoOffsetReset(t, admin, group)
-
-	// Produce 50 records.
 	const total = 50
-	for i := range total {
-		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := admin.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	produceShareN(t, c, "share-basic", group, total)
 
 	// Share group consumer.
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-basic"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
+	cl := newShareConsumer(t, c, "share-basic", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -106,17 +74,10 @@ func TestShareGroupBasic(t *testing.T) {
 func TestShareGroupAckAndRedelivery(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.SeedTopics(1, "share-ack"))
+	c := newCluster(t, SeedTopics(1, "share-ack"))
 	group := "share-test-ack"
 
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-ack"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic("share-ack"))
 
 	setShareAutoOffsetReset(t, admin, group)
 
@@ -139,15 +100,7 @@ func TestShareGroupAckAndRedelivery(t *testing.T) {
 	}
 
 	// Consumer 1: poll all records, release half, accept half.
-	cl1, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-ack"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cl1 := newShareConsumer(t, c, "share-ack", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -185,16 +138,7 @@ func TestShareGroupAckAndRedelivery(t *testing.T) {
 	t.Logf("consumer 1: got %d, released %d", got1, released)
 
 	// Consumer 2: should see released records redelivered.
-	cl2, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-ack"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl2.Close()
+	cl2 := newShareConsumer(t, c, "share-ack", group)
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel2()
@@ -226,48 +170,14 @@ func TestShareGroupAckAndRedelivery(t *testing.T) {
 func TestShareGroupReject(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.SeedTopics(1, "share-reject"))
+	c := newCluster(t, SeedTopics(1, "share-reject"))
 	group := "share-test-reject"
 
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-reject"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-
-	setShareAutoOffsetReset(t, admin, group)
-
-	// Produce 20 records.
 	const total = 20
-	for i := range total {
-		r := &kgo.Record{
-			Topic: "share-reject",
-			Key:   []byte(strconv.Itoa(i)),
-			Value: []byte("v"),
-		}
-		admin.Produce(context.Background(), r, func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := admin.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	produceShareN(t, c, "share-reject", group, total)
 
 	// Consumer 1: reject all records.
-	cl1, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-reject"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cl1 := newShareConsumer(t, c, "share-reject", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -280,7 +190,9 @@ func TestShareGroupReject(t *testing.T) {
 			rejected++
 		}
 		commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		cl1.CommitAcks(commitCtx)
+		if err := cl1.CommitAcks(commitCtx); err != nil {
+			t.Fatal(err)
+		}
 		commitCancel()
 		if ctx.Err() != nil {
 			break
@@ -290,31 +202,8 @@ func TestShareGroupReject(t *testing.T) {
 	t.Logf("consumer 1: rejected %d records", rejected)
 
 	// Consumer 2: should see no records since all were rejected.
-	cl2, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-reject"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl2.Close()
-
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel2()
-
-	var got2 int
-	for ctx2.Err() == nil {
-		fetches := cl2.PollFetches(ctx2)
-		got2 += len(fetches.Records())
-	}
-
-	if got2 > 0 {
-		t.Errorf("consumer 2: got %d records, expected 0 (all should be archived)", got2)
-	} else {
-		t.Log("consumer 2: correctly received 0 records")
-	}
+	cl2 := newShareConsumer(t, c, "share-reject", group)
+	verifyZeroRecords(t, cl2, 500*time.Millisecond)
 }
 
 // TestShareGroupMaxDeliveryCount verifies that records are archived after
@@ -325,47 +214,19 @@ func TestShareGroupMaxDeliveryCount(t *testing.T) {
 
 	// Set max delivery attempts to 2 so records are archived after 2 releases.
 	c := newCluster(t,
-		kfake.SeedTopics(1, "share-maxdlv"),
-		kfake.BrokerConfigs(map[string]string{
+		SeedTopics(1, "share-maxdlv"),
+		BrokerConfigs(map[string]string{
 			"share.max.delivery.attempts": "2",
 		}),
 	)
 	group := "share-test-maxdlv"
 
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-maxdlv"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-
-	setShareAutoOffsetReset(t, admin, group)
-
 	const total = 5
-	for i := range total {
-		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := admin.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	produceShareN(t, c, "share-maxdlv", group, total)
 
 	// Consumer 1: fetch all 5 records, release all of them.
 	// This is delivery attempt 1.
-	cl1, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-maxdlv"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cl1 := newShareConsumer(t, c, "share-maxdlv", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -388,20 +249,14 @@ func TestShareGroupMaxDeliveryCount(t *testing.T) {
 		t.Fatalf("consumer 1: expected %d records, got %d", total, got1)
 	}
 	cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	cl1.CommitAcks(cCtx)
+	if err := cl1.CommitAcks(cCtx); err != nil {
+		t.Fatal(err)
+	}
 	cCancel()
 	cl1.Close()
 
 	// Consumer 2: fetch records again (delivery attempt 2), release again.
-	cl2, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-maxdlv"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cl2 := newShareConsumer(t, c, "share-maxdlv", group)
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel2()
@@ -424,33 +279,15 @@ func TestShareGroupMaxDeliveryCount(t *testing.T) {
 		t.Fatalf("consumer 2: expected %d records, got %d", total, got2)
 	}
 	cCtx, cCancel = context.WithTimeout(context.Background(), 5*time.Second)
-	cl2.CommitAcks(cCtx)
+	if err := cl2.CommitAcks(cCtx); err != nil {
+		t.Fatal(err)
+	}
 	cCancel()
 	cl2.Close()
 
 	// Consumer 3: should see no records since all were archived (max delivery reached).
-	cl3, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-maxdlv"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl3.Close()
-
-	ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel3()
-
-	var got3 int
-	for ctx3.Err() == nil {
-		fetches := cl3.PollFetches(ctx3)
-		got3 += len(fetches.Records())
-	}
-	if got3 > 0 {
-		t.Errorf("consumer 3: expected 0 records after max delivery, got %d", got3)
-	}
+	cl3 := newShareConsumer(t, c, "share-maxdlv", group)
+	verifyZeroRecords(t, cl3, 500*time.Millisecond)
 }
 
 // TestShareGroupAutoAckOnPoll verifies that records not explicitly acked
@@ -458,43 +295,15 @@ func TestShareGroupMaxDeliveryCount(t *testing.T) {
 func TestShareGroupAutoAckOnPoll(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.SeedTopics(1, "share-autoack"))
+	c := newCluster(t, SeedTopics(1, "share-autoack"))
 	group := "share-test-autoack"
 
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-autoack"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-
-	setShareAutoOffsetReset(t, admin, group)
-
 	const total = 10
-	for i := range total {
-		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := admin.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	produceShareN(t, c, "share-autoack", group, total)
 
 	// Consumer 1: poll all records but do NOT ack them. The next poll
 	// (which will return nothing new) should auto-accept them.
-	cl1, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-autoack"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cl1 := newShareConsumer(t, c, "share-autoack", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -530,28 +339,8 @@ func TestShareGroupAutoAckOnPoll(t *testing.T) {
 	cl1.Close()
 
 	// Consumer 2: should see no records since all were auto-accepted.
-	cl2, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-autoack"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl2.Close()
-
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel2()
-
-	var got2 int
-	for ctx2.Err() == nil {
-		fetches := cl2.PollFetches(ctx2)
-		got2 += len(fetches.Records())
-	}
-	if got2 > 0 {
-		t.Errorf("consumer 2: expected 0 records after auto-accept, got %d", got2)
-	}
+	cl2 := newShareConsumer(t, c, "share-autoack", group)
+	verifyZeroRecords(t, cl2, 500*time.Millisecond)
 }
 
 // TestShareGroupAcquisitionLockExpiry verifies that records whose acquisition
@@ -563,98 +352,25 @@ func TestShareGroupAcquisitionLockExpiry(t *testing.T) {
 	// Short lock duration and sweep interval so the test runs quickly.
 	// Single broker so raw ShareFetch goes to the partition leader.
 	c := newCluster(t,
-		kfake.NumBrokers(1),
-		kfake.SeedTopics(1, "share-lockexp"),
-		kfake.BrokerConfigs(map[string]string{
+		NumBrokers(1),
+		SeedTopics(1, "share-lockexp"),
+		BrokerConfigs(map[string]string{
 			"share.record.lock.duration.ms":       "100",
 			"share.record.lock.sweep.interval.ms": "100",
 		}),
 	)
 	group := "share-test-lockexp"
 
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-lockexp"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-
-	setShareAutoOffsetReset(t, admin, group)
-
 	const total = 5
-	for i := range total {
-		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := admin.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	produceShareN(t, c, "share-lockexp", group, total)
 
 	// Member 1: join and acquire via raw ShareFetch, then do NOT ack
 	// and do NOT leave. The acquisition lock should expire and the
 	// sweep timer should release the records.
-	cl1, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl1.Close()
+	cl1 := newPlainClient(t, c)
+	memberID1, topicID := joinShareGroupRaw(t, cl1, group, "share-lockexp")
 
-	hbReq := kmsg.NewPtrShareGroupHeartbeatRequest()
-	hbReq.GroupID = group
-	hbReq.MemberID = "test-member-1"
-	hbReq.MemberEpoch = 0
-	hbReq.SubscribedTopicNames = []string{"share-lockexp"}
-	hbResp, err := hbReq.RequestWith(context.Background(), cl1)
-	if err != nil {
-		t.Fatalf("heartbeat join: %v", err)
-	}
-	if hbResp.ErrorCode != 0 {
-		t.Fatalf("heartbeat join error: %v", kerr.ErrorForCode(hbResp.ErrorCode))
-	}
-	memberID1 := *hbResp.MemberID
-
-	metaReq := kmsg.NewPtrMetadataRequest()
-	mt := kmsg.NewMetadataRequestTopic()
-	mt.Topic = kmsg.StringPtr("share-lockexp")
-	metaReq.Topics = append(metaReq.Topics, mt)
-	metaResp, err := metaReq.RequestWith(context.Background(), cl1)
-	if err != nil {
-		t.Fatalf("metadata: %v", err)
-	}
-	topicID := metaResp.Topics[0].TopicID
-
-	sfReq := kmsg.NewPtrShareFetchRequest()
-	sfReq.GroupID = &group
-	sfReq.MemberID = &memberID1
-	sfReq.ShareSessionEpoch = 0
-	sfReq.MaxRecords = 100
-	st := kmsg.NewShareFetchRequestTopic()
-	st.TopicID = topicID
-	sp := kmsg.NewShareFetchRequestTopicPartition()
-	sp.Partition = 0
-	st.Partitions = append(st.Partitions, sp)
-	sfReq.Topics = append(sfReq.Topics, st)
-	sfResp, err := sfReq.RequestWith(context.Background(), cl1)
-	if err != nil {
-		t.Fatalf("share fetch: %v", err)
-	}
-	if sfResp.ErrorCode != 0 {
-		t.Fatalf("share fetch error: %v", kerr.ErrorForCode(sfResp.ErrorCode))
-	}
-
-	var acquired int
-	for _, rt := range sfResp.Topics {
-		for _, rp := range rt.Partitions {
-			for _, ar := range rp.AcquiredRecords {
-				acquired += int(ar.LastOffset - ar.FirstOffset + 1)
-			}
-		}
-	}
+	_, acquired := rawShareFetch(t, cl1, group, memberID1, topicID, 0)
 	if acquired < total {
 		t.Fatalf("expected to acquire %d records, got %d", total, acquired)
 	}
@@ -664,16 +380,7 @@ func TestShareGroupAcquisitionLockExpiry(t *testing.T) {
 
 	// Member 2 (via kgo share consumer): should see the records that were
 	// released by the expired acquisition lock sweep.
-	cl2, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-lockexp"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl2.Close()
+	cl2 := newShareConsumer(t, c, "share-lockexp", group)
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel2()
@@ -707,42 +414,15 @@ func TestShareGroupAcquisitionLockExpiry(t *testing.T) {
 func TestShareGroupSessionEpoch(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, "share-epoch"))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "share-epoch"))
 	group := "share-test-epoch"
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.RetryTimeout(0),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
+	cl := newPlainClient(t, c, kgo.RetryTimeout(0))
 
 	setShareAutoOffsetReset(t, cl, group)
 
 	// Join the share group.
-	hbReq := kmsg.NewPtrShareGroupHeartbeatRequest()
-	hbReq.GroupID = group
-	hbReq.MemberID = "test-member-1"
-	hbReq.MemberEpoch = 0
-	hbReq.SubscribedTopicNames = []string{"share-epoch"}
-	hbResp, err := hbReq.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("heartbeat join: %v", err)
-	}
-	memberID := *hbResp.MemberID
-
-	// Get topic ID.
-	metaReq := kmsg.NewPtrMetadataRequest()
-	mt := kmsg.NewMetadataRequestTopic()
-	mt.Topic = kmsg.StringPtr("share-epoch")
-	metaReq.Topics = append(metaReq.Topics, mt)
-	metaResp, err := metaReq.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("metadata: %v", err)
-	}
-	topicID := metaResp.Topics[0].TopicID
+	memberID, topicID := joinShareGroupRaw(t, cl, group, "share-epoch")
 
 	mkFetch := func(epoch int32) *kmsg.ShareFetchRequest {
 		req := kmsg.NewPtrShareFetchRequest()
@@ -824,89 +504,23 @@ func TestShareGroupSessionTimeout(t *testing.T) {
 	// Short session timeout so the test doesn't take long.
 	// Single broker so raw ShareFetch goes to the partition leader.
 	c := newCluster(t,
-		kfake.NumBrokers(1),
-		kfake.SeedTopics(1, "share-sessexp"),
-		kfake.BrokerConfigs(map[string]string{
+		NumBrokers(1),
+		SeedTopics(1, "share-sessexp"),
+		BrokerConfigs(map[string]string{
 			"group.share.session.timeout.ms": "500",
 		}),
 	)
 	group := "share-test-sessexp"
 
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-sessexp"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-
-	setShareAutoOffsetReset(t, admin, group)
-
 	const total = 5
-	for i := range total {
-		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := admin.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	produceShareN(t, c, "share-sessexp", group, total)
 
 	// Member 1: join, fetch records, then stop heartbeating.
-	cl1, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl1.Close()
-
-	hbReq := kmsg.NewPtrShareGroupHeartbeatRequest()
-	hbReq.GroupID = group
-	hbReq.MemberID = "test-member-1"
-	hbReq.MemberEpoch = 0
-	hbReq.SubscribedTopicNames = []string{"share-sessexp"}
-	hbResp, err := hbReq.RequestWith(context.Background(), cl1)
-	if err != nil {
-		t.Fatalf("heartbeat join: %v", err)
-	}
-	memberID1 := *hbResp.MemberID
+	cl1 := newPlainClient(t, c)
+	memberID1, topicID := joinShareGroupRaw(t, cl1, group, "share-sessexp")
 
 	// Fetch via raw ShareFetch to acquire without auto-acking.
-	metaReq := kmsg.NewPtrMetadataRequest()
-	mt := kmsg.NewMetadataRequestTopic()
-	mt.Topic = kmsg.StringPtr("share-sessexp")
-	metaReq.Topics = append(metaReq.Topics, mt)
-	metaResp, err := metaReq.RequestWith(context.Background(), cl1)
-	if err != nil {
-		t.Fatalf("metadata: %v", err)
-	}
-	topicID := metaResp.Topics[0].TopicID
-
-	sfReq := kmsg.NewPtrShareFetchRequest()
-	sfReq.GroupID = &group
-	sfReq.MemberID = &memberID1
-	sfReq.ShareSessionEpoch = 0
-	sfReq.MaxRecords = 100
-	st := kmsg.NewShareFetchRequestTopic()
-	st.TopicID = topicID
-	sp := kmsg.NewShareFetchRequestTopicPartition()
-	sp.Partition = 0
-	st.Partitions = append(st.Partitions, sp)
-	sfReq.Topics = append(sfReq.Topics, st)
-	sfResp, err := sfReq.RequestWith(context.Background(), cl1)
-	if err != nil {
-		t.Fatalf("share fetch: %v", err)
-	}
-	var acquired int
-	for _, rt := range sfResp.Topics {
-		for _, rp := range rt.Partitions {
-			for _, ar := range rp.AcquiredRecords {
-				acquired += int(ar.LastOffset - ar.FirstOffset + 1)
-			}
-		}
-	}
+	_, acquired := rawShareFetch(t, cl1, group, memberID1, topicID, 0)
 	if acquired < total {
 		t.Fatalf("expected to acquire %d, got %d", total, acquired)
 	}
@@ -919,7 +533,7 @@ func TestShareGroupSessionTimeout(t *testing.T) {
 	hbReq2 := kmsg.NewPtrShareGroupHeartbeatRequest()
 	hbReq2.GroupID = group
 	hbReq2.MemberID = memberID1
-	hbReq2.MemberEpoch = hbResp.MemberEpoch
+	hbReq2.MemberEpoch = 1
 	hbResp2, err := hbReq2.RequestWith(context.Background(), cl1)
 	if err != nil {
 		t.Fatalf("heartbeat after timeout: %v", err)
@@ -929,16 +543,7 @@ func TestShareGroupSessionTimeout(t *testing.T) {
 	}
 
 	// Consumer 2: should pick up released records (fencing releases them).
-	cl2, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-sessexp"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl2.Close()
+	cl2 := newShareConsumer(t, c, "share-sessexp", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -964,70 +569,20 @@ func TestShareGroupSessionTimeout(t *testing.T) {
 func TestShareGroupStandaloneAcknowledge(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, "share-standalone-ack"))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "share-standalone-ack"))
 	group := "share-test-standalone-ack"
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-standalone-ack"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
-
-	setShareAutoOffsetReset(t, cl, group)
-
 	const total = 10
-	for i := range total {
-		cl.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := cl.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	produceShareN(t, c, "share-standalone-ack", group, total)
 
 	// Join share group.
-	hbReq := kmsg.NewPtrShareGroupHeartbeatRequest()
-	hbReq.GroupID = group
-	hbReq.MemberID = "test-member-1"
-	hbReq.MemberEpoch = 0
-	hbReq.SubscribedTopicNames = []string{"share-standalone-ack"}
-	hbResp, err := hbReq.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("heartbeat join: %v", err)
-	}
-	memberID := *hbResp.MemberID
-
-	// Get topic ID.
-	metaReq := kmsg.NewPtrMetadataRequest()
-	mt := kmsg.NewMetadataRequestTopic()
-	mt.Topic = kmsg.StringPtr("share-standalone-ack")
-	metaReq.Topics = append(metaReq.Topics, mt)
-	metaResp, err := metaReq.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("metadata: %v", err)
-	}
-	topicID := metaResp.Topics[0].TopicID
+	cl := newPlainClient(t, c)
+	memberID, topicID := joinShareGroupRaw(t, cl, group, "share-standalone-ack")
 
 	// ShareFetch to acquire records.
-	sfReq := kmsg.NewPtrShareFetchRequest()
-	sfReq.GroupID = &group
-	sfReq.MemberID = &memberID
-	sfReq.ShareSessionEpoch = 0
-	sfReq.MaxRecords = 100
-	st := kmsg.NewShareFetchRequestTopic()
-	st.TopicID = topicID
-	sp := kmsg.NewShareFetchRequestTopicPartition()
-	sp.Partition = 0
-	st.Partitions = append(st.Partitions, sp)
-	sfReq.Topics = append(sfReq.Topics, st)
-	sfResp, err := sfReq.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("share fetch: %v", err)
+	_, acquired := rawShareFetch(t, cl, group, memberID, topicID, 0)
+	if acquired != total {
+		t.Fatalf("expected %d acquired records, got %d", total, acquired)
 	}
 
 	// Build standalone ShareAcknowledge: accept first half, release second half.
@@ -1071,17 +626,7 @@ func TestShareGroupStandaloneAcknowledge(t *testing.T) {
 	hbReq2.RequestWith(context.Background(), cl)
 
 	// Verify: second consumer should see only the released half (5 records).
-	_ = sfResp // suppress unused
-	cl2, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-standalone-ack"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl2.Close()
+	cl2 := newShareConsumer(t, c, "share-standalone-ack", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1106,32 +651,14 @@ func TestShareGroupStandaloneAcknowledge(t *testing.T) {
 
 	// After accepting the released half, a third consumer should see nothing.
 	cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	cl2.CommitAcks(cCtx)
+	if err := cl2.CommitAcks(cCtx); err != nil {
+		t.Fatal(err)
+	}
 	cCancel()
 	cl2.Close()
 
-	cl3, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-standalone-ack"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl3.Close()
-
-	ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel3()
-
-	var got3 int
-	for ctx3.Err() == nil {
-		fetches := cl3.PollFetches(ctx3)
-		got3 += len(fetches.Records())
-	}
-	if got3 > 0 {
-		t.Errorf("expected 0 records after all accepted, got %d", got3)
-	}
+	cl3 := newShareConsumer(t, c, "share-standalone-ack", group)
+	verifyZeroRecords(t, cl3, 500*time.Millisecond)
 }
 
 // TestShareGroupMultiPartition verifies share group behavior across multiple
@@ -1140,18 +667,13 @@ func TestShareGroupMultiPartition(t *testing.T) {
 	t.Parallel()
 
 	const nPartitions = 5
-	c := newCluster(t, kfake.NumBrokers(3), kfake.SeedTopics(nPartitions, "share-multipart"))
+	c := newCluster(t, NumBrokers(3), SeedTopics(nPartitions, "share-multipart"))
 	group := "share-test-multipart"
 
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	admin := newPlainClient(t, c,
 		kgo.DefaultProduceTopic("share-multipart"),
 		kgo.RecordPartitioner(kgo.RoundRobinPartitioner()),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
 
 	setShareAutoOffsetReset(t, admin, group)
 
@@ -1169,16 +691,7 @@ func TestShareGroupMultiPartition(t *testing.T) {
 	}
 
 	// Consume all records from the share group.
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-multipart"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
+	cl := newShareConsumer(t, c, "share-multipart", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1211,43 +724,15 @@ func TestShareGroupMultiPartition(t *testing.T) {
 func TestShareGroupCloseReleasesRecords(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.SeedTopics(1, "share-closerel"))
+	c := newCluster(t, SeedTopics(1, "share-closerel"))
 	group := "share-test-closerel"
 
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-closerel"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-
-	setShareAutoOffsetReset(t, admin, group)
-
 	const total = 10
-	for i := range total {
-		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := admin.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	produceShareN(t, c, "share-closerel", group, total)
 
 	// Consumer 1: poll records then close WITHOUT acking or committing.
 	// Close should release them (not reject).
-	cl1, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-closerel"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cl1 := newShareConsumer(t, c, "share-closerel", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1267,16 +752,7 @@ func TestShareGroupCloseReleasesRecords(t *testing.T) {
 	cl1.Close() // should release, not reject
 
 	// Consumer 2: should see all records redelivered.
-	cl2, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-closerel"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl2.Close()
+	cl2 := newShareConsumer(t, c, "share-closerel", group)
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel2()
@@ -1305,101 +781,31 @@ func TestShareGroupRenewAck(t *testing.T) {
 
 	// Short lock duration so we can verify renew extends it.
 	c := newCluster(t,
-		kfake.NumBrokers(1),
-		kfake.SeedTopics(1, "share-renew"),
-		kfake.BrokerConfigs(map[string]string{
-			"share.record.lock.duration.ms":       "500",
-			"share.record.lock.sweep.interval.ms": "100",
+		NumBrokers(1),
+		SeedTopics(1, "share-renew"),
+		BrokerConfigs(map[string]string{
+			"share.record.lock.duration.ms":       "150",
+			"share.record.lock.sweep.interval.ms": "50",
 		}),
 	)
 	group := "share-test-renew"
 
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-renew"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-
-	setShareAutoOffsetReset(t, admin, group)
-
 	const total = 10
-	for i := range total {
-		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := admin.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	produceShareN(t, c, "share-renew", group, total)
 
-	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
+	cl := newPlainClient(t, c)
 
 	// Join share group.
-	hbReq := kmsg.NewPtrShareGroupHeartbeatRequest()
-	hbReq.GroupID = group
-	hbReq.MemberID = "test-member-1"
-	hbReq.MemberEpoch = 0
-	hbReq.SubscribedTopicNames = []string{"share-renew"}
-	hbResp, err := hbReq.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("heartbeat join: %v", err)
-	}
-	memberID := *hbResp.MemberID
-
-	// Get topic ID.
-	metaReq := kmsg.NewPtrMetadataRequest()
-	mt := kmsg.NewMetadataRequestTopic()
-	mt.Topic = kmsg.StringPtr("share-renew")
-	metaReq.Topics = append(metaReq.Topics, mt)
-	metaResp, err := metaReq.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("metadata: %v", err)
-	}
-	topicID := metaResp.Topics[0].TopicID
+	memberID, topicID := joinShareGroupRaw(t, cl, group, "share-renew")
 
 	// ShareFetch epoch 0: acquire all records. Session epoch -> 1.
-	sfReq := kmsg.NewPtrShareFetchRequest()
-	sfReq.GroupID = &group
-	sfReq.MemberID = &memberID
-	sfReq.ShareSessionEpoch = 0
-	sfReq.MaxRecords = 100
-	fetchTopic := kmsg.NewShareFetchRequestTopic()
-	fetchTopic.TopicID = topicID
-	fetchPart := kmsg.NewShareFetchRequestTopicPartition()
-	fetchPart.Partition = 0
-	fetchTopic.Partitions = append(fetchTopic.Partitions, fetchPart)
-	sfReq.Topics = append(sfReq.Topics, fetchTopic)
-	sfResp, err := sfReq.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("share fetch: %v", err)
-	}
-	if sfResp.ErrorCode != 0 {
-		t.Fatalf("share fetch error: %v", kerr.ErrorForCode(sfResp.ErrorCode))
-	}
-
-	var acquired int
-	for _, rt := range sfResp.Topics {
-		for _, rp := range rt.Partitions {
-			for _, ar := range rp.AcquiredRecords {
-				acquired += int(ar.LastOffset - ar.FirstOffset + 1)
-			}
-		}
-	}
+	_, acquired := rawShareFetch(t, cl, group, memberID, topicID, 0)
 	if acquired < total {
 		t.Fatalf("expected to acquire %d records, got %d", total, acquired)
 	}
 
-	// Wait 300ms -- 60% of the 500ms lock duration.
-	time.Sleep(300 * time.Millisecond)
+	// Wait 90ms -- 60% of the 150ms lock duration.
+	time.Sleep(90 * time.Millisecond)
 
 	// Send mixed acks via isRenewAck ShareFetch: Renew offsets 0-4,
 	// Accept offsets 5-9. This verifies that mixed ack types work in
@@ -1447,10 +853,10 @@ func TestShareGroupRenewAck(t *testing.T) {
 		}
 	}
 
-	// Wait 300ms more. Total elapsed since acquire: ~600ms.
-	// Without renew, locks on 0-4 would have expired at ~500ms.
-	// With renew at ~300ms, their new expiry is ~300+500 = ~800ms.
-	time.Sleep(300 * time.Millisecond)
+	// Wait 90ms more. Total elapsed since acquire: ~180ms.
+	// Without renew, locks on 0-4 would have expired at ~150ms.
+	// With renew at ~90ms, their new expiry is ~90+150 = ~240ms.
+	time.Sleep(90 * time.Millisecond)
 
 	// Accept the renewed offsets 0-4 via piggybacked ack. If renew
 	// failed to extend the lock, the sweep would have released these
@@ -1492,28 +898,8 @@ func TestShareGroupRenewAck(t *testing.T) {
 	// were accepted -- 5-9 in the mixed ack, 0-4 after the renewed
 	// lock held through the original expiry. If renew had failed, the
 	// sweep would have released 0-4 and they'd be redelivered here.
-	cl2, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-renew"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl2.Close()
-
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel2()
-
-	var got2 int
-	for ctx2.Err() == nil {
-		fetches := cl2.PollFetches(ctx2)
-		got2 += len(fetches.Records())
-	}
-	if got2 > 0 {
-		t.Errorf("expected 0 records after renew+accept, got %d (renew likely failed to extend lock)", got2)
-	}
+	cl2 := newShareConsumer(t, c, "share-renew", group)
+	verifyZeroRecords(t, cl2, 500*time.Millisecond)
 }
 
 // TestShareGroupConcurrentFetchAndAck verifies that multiple consumers can
@@ -1522,31 +908,11 @@ func TestShareGroupRenewAck(t *testing.T) {
 func TestShareGroupConcurrentFetchAndAck(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.SeedTopics(1, "share-concurrent"))
+	c := newCluster(t, SeedTopics(1, "share-concurrent"))
 	group := "share-test-concurrent"
 
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-concurrent"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-
-	setShareAutoOffsetReset(t, admin, group)
-
 	const total = 100
-	for i := range total {
-		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := admin.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	produceShareN(t, c, "share-concurrent", group, total)
 
 	// Run 5 concurrent consumers, each accepting records.
 	// Track total accepted across all consumers.
@@ -1579,7 +945,9 @@ func TestShareGroupConcurrentFetchAndAck(t *testing.T) {
 			}
 			totalAccepted.Add(int64(len(records)))
 			cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			cl.CommitAcks(cCtx)
+			if err := cl.CommitAcks(cCtx); err != nil {
+				t.Errorf("commit acks: %v", err)
+			}
 			cCancel()
 
 			if totalAccepted.Load() >= total {
@@ -1613,43 +981,13 @@ func TestShareGroupConcurrentFetchAndAck(t *testing.T) {
 func TestShareGroupPollRecordsBuffering(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.SeedTopics(1, "share-pollbuf"))
+	c := newCluster(t, SeedTopics(1, "share-pollbuf"))
 	group := "share-test-pollbuf"
 
-	admin, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.DefaultProduceTopic("share-pollbuf"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-
-	setShareAutoOffsetReset(t, admin, group)
-
-	// Produce 50 records.
 	const total = 50
-	for i := range total {
-		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := admin.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	produceShareN(t, c, "share-pollbuf", group, total)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics("share-pollbuf"),
-		kgo.ShareGroup(group),
-		kgo.FetchMaxWait(200*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
+	cl := newShareConsumer(t, c, "share-pollbuf", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

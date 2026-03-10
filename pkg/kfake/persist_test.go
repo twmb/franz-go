@@ -1,7 +1,6 @@
-package kfake_test
+package kfake
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
@@ -28,18 +26,16 @@ func TestPersistProduceCloseReopen(t *testing.T) {
 	dir := t.TempDir()
 
 	// Phase 1: create cluster, produce records, close
-	var addrs []string
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, "test-topic"),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			SeedTopics(1, "test-topic"),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		addrs = c.ListenAddrs()
-		cl, err := kgo.NewClient(kgo.SeedBrokers(addrs...))
+		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -49,8 +45,8 @@ func TestPersistProduceCloseReopen(t *testing.T) {
 		for i := range 10 {
 			r := &kgo.Record{
 				Topic: "test-topic",
-				Key:   []byte(fmt.Sprintf("key-%d", i)),
-				Value: []byte(fmt.Sprintf("value-%d", i)),
+				Key:   fmt.Appendf(nil, "key-%d", i),
+				Value: fmt.Appendf(nil, "value-%d", i),
 			}
 			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 				t.Fatal(err)
@@ -60,40 +56,29 @@ func TestPersistProduceCloseReopen(t *testing.T) {
 		c.Close()
 	}
 
+	// Verify snapshot was written during clean shutdown
+	snapPath := filepath.Join(dir, "partitions", "test-topic-0", "snapshot.json")
+	if _, err := os.Stat(snapPath); err != nil {
+		t.Fatalf("expected snapshot.json after clean shutdown: %v", err)
+	}
+
 	// Phase 2: reopen, consume and verify
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer c.Close()
 
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.ConsumeTopics("test-topic"),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		var records []*kgo.Record
-		for len(records) < 10 {
-			fetches := cl.PollFetches(ctx)
-			if errs := fetches.Errors(); len(errs) > 0 {
-				t.Fatal(errs)
-			}
-			fetches.EachRecord(func(r *kgo.Record) {
-				records = append(records, r)
-			})
-		}
+		records := collectRecords(t, cl, 10, 5*time.Second)
 		if len(records) != 10 {
 			t.Fatalf("expected 10 records, got %d", len(records))
 		}
@@ -114,11 +99,11 @@ func TestPersistSyncWritesCrashRecovery(t *testing.T) {
 
 	// Phase 1: create cluster with SyncWrites, produce, then simulate crash (don't Close)
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, "sync-topic"),
+		c, err := NewCluster(
+			DataDir(dir),
+			SyncWrites(),
+			NumBrokers(1),
+			SeedTopics(1, "sync-topic"),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -133,8 +118,8 @@ func TestPersistSyncWritesCrashRecovery(t *testing.T) {
 		for i := range 5 {
 			r := &kgo.Record{
 				Topic: "sync-topic",
-				Key:   []byte(fmt.Sprintf("k%d", i)),
-				Value: []byte(fmt.Sprintf("v%d", i)),
+				Key:   fmt.Appendf(nil, "k%d", i),
+				Value: fmt.Appendf(nil, "v%d", i),
 			}
 			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 				t.Fatal(err)
@@ -147,38 +132,21 @@ func TestPersistSyncWritesCrashRecovery(t *testing.T) {
 
 	// Phase 2: reopen without Close having been called, verify data recovered
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer c.Close()
 
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.ConsumeTopics("sync-topic"),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		var records []*kgo.Record
-		for len(records) < 5 {
-			fetches := cl.PollFetches(ctx)
-			if errs := fetches.Errors(); len(errs) > 0 {
-				t.Fatal(errs)
-			}
-			fetches.EachRecord(func(r *kgo.Record) {
-				records = append(records, r)
-			})
-		}
+		records := collectRecords(t, cl, 5, 5*time.Second)
 		if len(records) != 5 {
 			t.Fatalf("expected 5 records, got %d", len(records))
 		}
@@ -194,29 +162,20 @@ func TestPersistGroupCommitsRestart(t *testing.T) {
 
 	// Phase 1: produce, consume with group, commit offsets, close
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// Produce records
-		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		produceN(t, c, topic, 10)
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		for i := range 10 {
-			r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
-			if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		prodCl.Close()
 
 		// Consume 5 records and commit
 		consCl, err := kgo.NewClient(
@@ -243,9 +202,9 @@ func TestPersistGroupCommitsRestart(t *testing.T) {
 
 	// Phase 2: reopen, consume from group - should resume from offset 5
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -279,10 +238,10 @@ func TestPersistPIDEpochRestart(t *testing.T) {
 	var origPID int64
 	var origEpoch int16
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, "pid-topic"),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			SeedTopics(1, "pid-topic"),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -329,9 +288,9 @@ func TestPersistPIDEpochRestart(t *testing.T) {
 
 	// Phase 2: reopen, verify PID is recoverable
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -339,14 +298,9 @@ func TestPersistPIDEpochRestart(t *testing.T) {
 		defer c.Close()
 
 		// Init a new client with same txn ID - should get same PID with bumped epoch
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.TransactionalID("test-txn"),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -387,12 +341,12 @@ func TestPersistACLsRestart(t *testing.T) {
 
 	// Phase 1: create with ACLs, close
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.EnableSASL(),
-			kfake.Superuser("PLAIN", "admin", "admin"),
-			kfake.EnableACLs(),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			EnableSASL(),
+			Superuser("PLAIN", "admin", "admin"),
+			EnableACLs(),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -423,12 +377,12 @@ func TestPersistACLsRestart(t *testing.T) {
 
 	// Phase 2: reopen, verify ACLs persisted
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.EnableSASL(),
-			kfake.Superuser("PLAIN", "admin", "admin"),
-			kfake.EnableACLs(),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			EnableSASL(),
+			Superuser("PLAIN", "admin", "admin"),
+			EnableACLs(),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -461,10 +415,10 @@ func TestPersistBrokerConfigsRestart(t *testing.T) {
 
 	// Phase 1: set broker configs, close
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.BrokerConfigs(map[string]string{
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			BrokerConfigs(map[string]string{
 				"log.retention.ms": "86400000",
 			}),
 		)
@@ -476,9 +430,9 @@ func TestPersistBrokerConfigsRestart(t *testing.T) {
 
 	// Phase 2: reopen, verify config persisted
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -515,10 +469,10 @@ func TestPersistTopicConfigsRestart(t *testing.T) {
 
 	// Phase 1: create topic, set topic configs via AlterConfigs, close.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -546,9 +500,9 @@ func TestPersistTopicConfigsRestart(t *testing.T) {
 
 	// Phase 2: reopen, verify topic configs persisted.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -590,29 +544,16 @@ func TestPersistCRCCorruption(t *testing.T) {
 
 	// Phase 1: create cluster with SyncWrites, produce, close properly
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, "crc-topic"),
+		c, err := NewCluster(
+			DataDir(dir),
+			SyncWrites(),
+			NumBrokers(1),
+			SeedTopics(1, "crc-topic"),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		for i := range 5 {
-			r := &kgo.Record{Topic: "crc-topic", Value: []byte(fmt.Sprintf("v%d", i))}
-			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		cl.Close()
+		produceN(t, c, "crc-topic", 5)
 		c.Close()
 	}
 
@@ -637,16 +578,18 @@ func TestPersistCRCCorruption(t *testing.T) {
 				// Corrupt the last few bytes
 				data[len(data)-3] ^= 0xFF
 				data[len(data)-5] ^= 0xFF
-				os.WriteFile(path, data, 0o644)
+				if err := os.WriteFile(path, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 	}
 
 	// Phase 2: reopen with full replay - should truncate corrupt entry
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -662,35 +605,12 @@ func TestPersistCRCCorruption(t *testing.T) {
 			t.Fatalf("expected HWM < 5 after corruption truncation, got %d", pi.HighWatermark)
 		}
 
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.ConsumeTopics("crc-topic"),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-
-		var records []*kgo.Record
-		for {
-			fetches := cl.PollFetches(ctx)
-			if ctx.Err() != nil {
-				break
-			}
-			fetches.EachRecord(func(r *kgo.Record) {
-				records = append(records, r)
-			})
-			if len(records) > 0 {
-				break // got some records, corruption only affected the tail
-			}
-		}
-		if len(records) == 0 {
-			t.Fatal("expected at least 1 recovered record after corruption, got 0")
-		}
+		records := collectRecords(t, cl, 1, 3*time.Second)
 		if len(records) >= 5 {
 			t.Fatalf("expected fewer than 5 records after corruption, got %d", len(records))
 		}
@@ -703,11 +623,11 @@ func TestPersistSegmentRollover(t *testing.T) {
 
 	// Use a very small segment size to force rollover
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, "seg-topic"),
-			kfake.BrokerConfigs(map[string]string{
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			SeedTopics(1, "seg-topic"),
+			BrokerConfigs(map[string]string{
 				"log.segment.bytes": "100", // tiny segment size
 			}),
 		)
@@ -722,7 +642,7 @@ func TestPersistSegmentRollover(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		for i := range 20 {
-			r := &kgo.Record{Topic: "seg-topic", Value: []byte(fmt.Sprintf("value-%d-padding-data", i))}
+			r := &kgo.Record{Topic: "seg-topic", Value: fmt.Appendf(nil, "value-%d-padding-data", i)}
 			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 				t.Fatal(err)
 			}
@@ -748,179 +668,24 @@ func TestPersistSegmentRollover(t *testing.T) {
 	}
 	// Reopen and verify all records
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer c.Close()
 
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.ConsumeTopics("seg-topic"),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		var records []*kgo.Record
-		for len(records) < 20 {
-			fetches := cl.PollFetches(ctx)
-			if ctx.Err() != nil {
-				break
-			}
-			fetches.EachRecord(func(r *kgo.Record) {
-				records = append(records, r)
-			})
-		}
+		records := collectRecords(t, cl, 20, 5*time.Second)
 		if len(records) != 20 {
 			t.Fatalf("expected 20 records after segment rollover restart, got %d", len(records))
 		}
-	}
-}
-
-func TestPersistSnapshotFastStartup(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	// Phase 1: produce records, close cleanly (creates snapshot)
-	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, "snap-topic"),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		for i := range 10 {
-			r := &kgo.Record{Topic: "snap-topic", Value: []byte(fmt.Sprintf("v%d", i))}
-			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		cl.Close()
-		c.Close()
-	}
-
-	// Verify snapshot.json exists
-	snapPath := filepath.Join(dir, "partitions", "snap-topic-0", "snapshot.json")
-	if _, err := os.Stat(snapPath); err != nil {
-		t.Fatalf("expected snapshot.json to exist: %v", err)
-	}
-
-	// Phase 2: reopen, verify snapshot-based load works
-	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer c.Close()
-
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
-			kgo.ConsumeTopics("snap-topic"),
-			kgo.FetchMaxWait(250*time.Millisecond),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		var records []*kgo.Record
-		for len(records) < 10 {
-			fetches := cl.PollFetches(ctx)
-			if ctx.Err() != nil {
-				break
-			}
-			fetches.EachRecord(func(r *kgo.Record) {
-				records = append(records, r)
-			})
-		}
-		if len(records) != 10 {
-			t.Fatalf("expected 10 records from snapshot-based load, got %d", len(records))
-		}
-	}
-}
-
-func TestPersistEntryFraming(t *testing.T) {
-	t.Parallel()
-
-	// Test the entry framing round-trip directly
-	testData := []byte("hello world entry data")
-
-	// Create a temp file and write an entry
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.log")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Write using the same framing as the internal writeEntry
-	// Format: [4 bytes length][4 bytes CRC32][2 bytes version][N bytes data]
-	length := uint32(2 + len(testData))
-	var hdr [10]byte
-	binary.LittleEndian.PutUint32(hdr[0:4], length)
-	binary.LittleEndian.PutUint16(hdr[8:10], 1) // version 1
-	// CRC covers version + data
-	var vbuf [2]byte
-	binary.LittleEndian.PutUint16(vbuf[:], 1)
-	crcVal := uint32(0)
-	// Use CRC32 IEEE
-	tab := crcTable()
-	crcVal = crc32Update(tab, crcVal, vbuf[:])
-	crcVal = crc32Update(tab, crcVal, testData)
-	binary.LittleEndian.PutUint32(hdr[4:8], crcVal)
-
-	f.Write(hdr[:])
-	f.Write(testData)
-	f.Close()
-
-	// Read back and verify
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify the entry can be decoded
-	if len(raw) != 10+len(testData) {
-		t.Fatalf("expected %d bytes, got %d", 10+len(testData), len(raw))
-	}
-
-	storedLen := binary.LittleEndian.Uint32(raw[0:4])
-	if storedLen != uint32(2+len(testData)) {
-		t.Fatalf("expected length %d, got %d", 2+len(testData), storedLen)
-	}
-
-	storedVer := binary.LittleEndian.Uint16(raw[8:10])
-	if storedVer != 1 {
-		t.Fatalf("expected version 1, got %d", storedVer)
-	}
-
-	recoveredData := raw[10:]
-	if !bytes.Equal(recoveredData, testData) {
-		t.Fatalf("data mismatch: %q vs %q", recoveredData, testData)
 	}
 }
 
@@ -928,18 +693,12 @@ func TestPersistNoDataDir(t *testing.T) {
 	t.Parallel()
 
 	// Without DataDir, persistence should be a no-op
-	c, err := kfake.NewCluster(
-		kfake.NumBrokers(1),
-		kfake.SeedTopics(1, "no-persist"),
+	c := newCluster(t,
+		NumBrokers(1),
+		SeedTopics(1, "no-persist"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	cl := newPlainClient(t, c)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -947,8 +706,6 @@ func TestPersistNoDataDir(t *testing.T) {
 	if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 		t.Fatal(err)
 	}
-	cl.Close()
-	c.Close() // Should not create any files
 }
 
 func TestPersistMultipleTopics(t *testing.T) {
@@ -959,10 +716,10 @@ func TestPersistMultipleTopics(t *testing.T) {
 
 	// Phase 1: create multiple topics with data
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(2, topics...),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			SeedTopics(2, topics...),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -976,7 +733,7 @@ func TestPersistMultipleTopics(t *testing.T) {
 		defer cancel()
 		for _, topic := range topics {
 			for i := range 3 {
-				r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("%s-v%d", topic, i))}
+				r := &kgo.Record{Topic: topic, Value: fmt.Appendf(nil, "%s-v%d", topic, i)}
 				if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 					t.Fatal(err)
 				}
@@ -988,9 +745,9 @@ func TestPersistMultipleTopics(t *testing.T) {
 
 	// Phase 2: reopen and verify all topics
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1023,29 +780,20 @@ func TestPersistSyncWritesGroupCommitCrash(t *testing.T) {
 
 	// Phase 1: produce, consume with group, commit, then crash (no Close)
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			SyncWrites(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		produceN(t, c, topic, 10)
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		for i := range 10 {
-			r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
-			if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		prodCl.Close()
 
 		consCl, err := kgo.NewClient(
 			kgo.SeedBrokers(c.ListenAddrs()...),
@@ -1071,9 +819,9 @@ func TestPersistSyncWritesGroupCommitCrash(t *testing.T) {
 
 	// Phase 2: reopen, verify committed offsets survived the crash
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1106,29 +854,20 @@ func TestPersistSyncWritesOffsetDeleteCrash(t *testing.T) {
 
 	// Phase 1: produce, commit offsets, then delete them, then crash
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			SyncWrites(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		produceN(t, c, topic, 5)
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		for i := range 5 {
-			r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
-			if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		prodCl.Close()
 
 		consCl, err := kgo.NewClient(
 			kgo.SeedBrokers(c.ListenAddrs()...),
@@ -1170,9 +909,9 @@ func TestPersistSyncWritesOffsetDeleteCrash(t *testing.T) {
 	// The group may not exist at all (GROUP_ID_NOT_FOUND) since
 	// the only commit was deleted - that's also a valid outcome.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1206,30 +945,21 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 
 	// Phase 1: produce, then use transactional offset commit, crash
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			SyncWrites(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// Produce some records
-		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		produceN(t, c, topic, 10)
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		for i := range 10 {
-			r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
-			if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		prodCl.Close()
 
 		// Use all raw kmsg requests for the transactional flow so we
 		// control the ProducerID/Epoch explicitly.
@@ -1313,9 +1043,9 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 
 	// Phase 2: reopen, verify transactional offset commit survived
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1350,11 +1080,11 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 	// Phase 1: create group, trigger multiple rebalance cycles, crash
 	var lastGeneration int32
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			SyncWrites(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1401,9 +1131,9 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 
 	// Phase 2: reopen, raw JoinGroup to verify generation continues.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1414,7 +1144,6 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 		defer cancel()
 
 		cl := newPlainClient(t, c)
-		defer cl.Close()
 
 		recoveredGen := rawJoinGeneration(ctx, t, cl, group, topic)
 		// After recovery, the next join should produce generation > lastGeneration.
@@ -1503,11 +1232,11 @@ func TestPersistStaticMemberDeleteCrash(t *testing.T) {
 
 	// Phase 1: join with static member, explicitly leave, crash
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			SyncWrites(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1604,9 +1333,9 @@ func TestPersistStaticMemberDeleteCrash(t *testing.T) {
 	// FENCED_INSTANCE_ID. Using the instanceID here (not a dynamic join)
 	// ensures we actually exercise that code path.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1617,7 +1346,6 @@ func TestPersistStaticMemberDeleteCrash(t *testing.T) {
 		defer cancel()
 
 		cl := newPlainClient(t, c)
-		defer cl.Close()
 
 		gen := rawJoinGeneration(ctx, t, cl, group, topic, instanceID)
 		if gen <= 0 {
@@ -1629,139 +1357,113 @@ func TestPersistStaticMemberDeleteCrash(t *testing.T) {
 // TestPersistFullReplayAbortedTxns verifies that abortedTxns are correctly
 // reconstructed during full replay (when snapshot is missing). A read_committed
 // consumer should not see records from an aborted transaction.
-func TestPersistFullReplayAbortedTxns(t *testing.T) {
+func TestPersistAbortedTxnsRestart(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	for _, tc := range []struct {
+		name           string
+		deleteSnapshot bool
+	}{
+		{"full-replay", true},
+		{"snapshot", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			topic := "abort-" + tc.name
 
-	const topic = "abort-replay-topic"
-
-	// Phase 1: produce committed + aborted transactional records, clean shutdown.
-	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
-			kgo.TransactionalID("txn-abort-test"),
-			kgo.TransactionTimeout(30*time.Second),
-			kgo.RecordPartitioner(kgo.ManualPartitioner()),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Transaction 1: produce 3 records and COMMIT.
-		if err := cl.BeginTransaction(); err != nil {
-			t.Fatal(err)
-		}
-		for i := range 3 {
-			r := &kgo.Record{Topic: topic, Partition: 0, Value: []byte(fmt.Sprintf("committed-%d", i))}
-			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
+			// Phase 1: produce committed + aborted transactional records, clean shutdown.
+			{
+				c, err := NewCluster(DataDir(dir), SyncWrites(), NumBrokers(1), SeedTopics(1, topic))
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				cl, err := kgo.NewClient(
+					kgo.SeedBrokers(c.ListenAddrs()...),
+					kgo.TransactionalID("txn-"+tc.name),
+					kgo.TransactionTimeout(30*time.Second),
+					kgo.RecordPartitioner(kgo.ManualPartitioner()),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := cl.BeginTransaction(); err != nil {
+					t.Fatal(err)
+				}
+				for i := range 3 {
+					r := &kgo.Record{Topic: topic, Partition: 0, Value: fmt.Appendf(nil, "committed-%d", i)}
+					if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+					t.Fatal(err)
+				}
+				if err := cl.BeginTransaction(); err != nil {
+					t.Fatal(err)
+				}
+				for i := range 2 {
+					r := &kgo.Record{Topic: topic, Partition: 0, Value: fmt.Appendf(nil, "aborted-%d", i)}
+					if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+					t.Fatal(err)
+				}
+				cl.Close()
+				c.Close()
 			}
-		}
-		if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
-			t.Fatal(err)
-		}
 
-		// Transaction 2: produce 2 records and ABORT.
-		if err := cl.BeginTransaction(); err != nil {
-			t.Fatal(err)
-		}
-		for i := range 2 {
-			r := &kgo.Record{Topic: topic, Partition: 0, Value: []byte(fmt.Sprintf("aborted-%d", i))}
-			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
+			snapPath := filepath.Join(dir, "partitions", topic+"-0", "snapshot.json")
+			if tc.deleteSnapshot {
+				if err := os.Remove(snapPath); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := os.Stat(snapPath); err != nil {
+					t.Fatalf("expected snapshot.json to exist: %v", err)
+				}
 			}
-		}
-		if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
-			t.Fatal(err)
-		}
 
-		cl.Close()
-		c.Close() // clean shutdown - writes snapshot
-	}
-
-	// Delete the partition snapshot to force full replay on next open.
-	snapPath := filepath.Join(dir, "partitions", "abort-replay-topic-0", "snapshot.json")
-	if err := os.Remove(snapPath); err != nil {
-		t.Fatal(err)
-	}
-
-	// Phase 2: reopen (full replay), verify read_committed filters aborted records.
-	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer c.Close()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		// read_committed consumer
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
-			kgo.FetchIsolationLevel(kgo.ReadCommitted()),
-			kgo.FetchMaxWait(250*time.Millisecond),
-			kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
-				topic: {0: kgo.NewOffset().AtStart()},
-			}),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
-
-		// Collect all records.
-		var records []*kgo.Record
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			fetches := cl.PollFetches(ctx)
-			fetches.EachRecord(func(r *kgo.Record) {
-				records = append(records, r)
-			})
-			if len(records) >= 3 {
-				break
+			// Phase 2: reopen and verify read_committed filters aborted records.
+			{
+				c, err := NewCluster(DataDir(dir), NumBrokers(1))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				cl := newPlainClient(t, c,
+					kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+					kgo.FetchMaxWait(250*time.Millisecond),
+					kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+						topic: {0: kgo.NewOffset().AtStart()},
+					}),
+				)
+				records := collectRecords(t, cl, 3, 3*time.Second)
+				if len(records) != 3 {
+					var vals []string
+					for _, r := range records {
+						vals = append(vals, string(r.Value))
+					}
+					t.Fatalf("expected 3 committed records, got %d: %v", len(records), vals)
+				}
+				for _, r := range records {
+					v := string(r.Value)
+					if len(v) >= 8 && v[:8] == "aborted-" {
+						t.Fatalf("read_committed consumer received aborted record: %s", v)
+					}
+				}
+				pi := c.PartitionInfo(topic, 0)
+				if pi == nil {
+					t.Fatal("partition info not found")
+				}
+				if pi.HighWatermark <= 3 {
+					t.Fatalf("expected HWM > 3 (aborted batches should exist), got %d", pi.HighWatermark)
+				}
 			}
-		}
-
-		// Should see exactly 3 committed records, no aborted records.
-		if len(records) != 3 {
-			var vals []string
-			for _, r := range records {
-				vals = append(vals, string(r.Value))
-			}
-			t.Fatalf("expected 3 committed records, got %d: %v", len(records), vals)
-		}
-		for _, r := range records {
-			v := string(r.Value)
-			if len(v) >= 8 && v[:8] == "aborted-" {
-				t.Fatalf("read_committed consumer received aborted record: %s", v)
-			}
-		}
-
-		// Verify HWM > 3 (aborted batches + control batches exist on disk).
-		pi := c.PartitionInfo(topic, 0)
-		if pi == nil {
-			t.Fatal("partition info not found")
-		}
-		if pi.HighWatermark <= 3 {
-			t.Fatalf("expected HWM > 3 (aborted batches should exist), got %d", pi.HighWatermark)
-		}
+		})
 	}
 }
 
@@ -1777,11 +1479,11 @@ func TestPersistSaveGroupsLogCloseBeforeTruncate(t *testing.T) {
 
 	// Phase 1: create multiple groups with live offset commits, close cleanly.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			SyncWrites(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1791,17 +1493,7 @@ func TestPersistSaveGroupsLogCloseBeforeTruncate(t *testing.T) {
 		defer cancel()
 
 		// Produce records
-		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i := range 20 {
-			r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
-			if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		prodCl.Close()
+		produceN(t, c, topic, 20)
 
 		// Create 5 groups, each commits offsets. This exercises the
 		// live groupsLogFile (SyncWrites appends commit entries), then
@@ -1832,9 +1524,9 @@ func TestPersistSaveGroupsLogCloseBeforeTruncate(t *testing.T) {
 
 	// Phase 2: reopen, verify all 3 groups' offsets survived.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1916,11 +1608,11 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 	// Phase 1: produce committed records (txn1), then start a second
 	// transaction and produce records but DON'T commit - simulate crash.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			SyncWrites(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1944,7 +1636,7 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i := range 3 {
-			r := &kgo.Record{Topic: topic, Partition: 0, Value: []byte(fmt.Sprintf("committed-%d", i))}
+			r := &kgo.Record{Topic: topic, Partition: 0, Value: fmt.Appendf(nil, "committed-%d", i)}
 			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 				t.Fatal(err)
 			}
@@ -1958,7 +1650,7 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i := range 2 {
-			r := &kgo.Record{Topic: topic, Partition: 0, Value: []byte(fmt.Sprintf("inflight-%d", i))}
+			r := &kgo.Record{Topic: topic, Partition: 0, Value: fmt.Appendf(nil, "inflight-%d", i)}
 			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 				t.Fatal(err)
 			}
@@ -1974,9 +1666,9 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 
 	// Phase 2: reopen (full replay), verify in-flight txn is implicitly aborted.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1996,7 +1688,6 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 		defer cancel()
 
 		plainCl := newPlainClient(t, c)
-		defer plainCl.Close()
 
 		// Verify PID epoch was bumped by checking InitProducerID.
 		// Pre-crash the epoch was 1 (init=0, EndTxn bumped to 1 via
@@ -2020,30 +1711,15 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 		}
 
 		// read_committed consumer should see only the 3 committed records.
-		committedCl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		committedCl := newPlainClient(t, c,
 			kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 			kgo.FetchMaxWait(250*time.Millisecond),
 			kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
 				topic: {0: kgo.NewOffset().AtStart()},
 			}),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer committedCl.Close()
 
-		var committed []*kgo.Record
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			fetches := committedCl.PollFetches(ctx)
-			fetches.EachRecord(func(r *kgo.Record) {
-				committed = append(committed, r)
-			})
-			if len(committed) >= 3 {
-				break
-			}
-		}
+		committed := collectRecords(t, committedCl, 3, 3*time.Second)
 		if len(committed) != 3 {
 			var vals []string
 			for _, r := range committed {
@@ -2061,30 +1737,15 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 		// read_uncommitted consumer should see all records (committed
 		// + implicitly aborted). This verifies the abort logic didn't
 		// delete batches - it only marked them as aborted.
-		uncommittedCl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		uncommittedCl := newPlainClient(t, c,
 			kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
 			kgo.FetchMaxWait(250*time.Millisecond),
 			kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
 				topic: {0: kgo.NewOffset().AtStart()},
 			}),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer uncommittedCl.Close()
 
-		var all []*kgo.Record
-		deadline = time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			fetches := uncommittedCl.PollFetches(ctx)
-			fetches.EachRecord(func(r *kgo.Record) {
-				all = append(all, r)
-			})
-			if len(all) >= 5 {
-				break
-			}
-		}
+		all := collectRecords(t, uncommittedCl, 5, 3*time.Second)
 		// 3 committed + 2 in-flight = 5 data records. Control batches
 		// (commit + implicit abort) are not returned to consumers.
 		if len(all) < 5 {
@@ -2093,6 +1754,564 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 				vals = append(vals, string(r.Value))
 			}
 			t.Fatalf("read_uncommitted: expected >= 5 records, got %d: %v", len(all), vals)
+		}
+	}
+}
+
+// TestPersistCleanRestartInProgressTxn verifies that in-progress transactions
+// survive a clean shutdown and restart. Records produced in the in-progress
+// transaction should remain invisible to read_committed consumers until the
+// transaction is committed after restart.
+func TestPersistCleanRestartInProgressTxn(t *testing.T) {
+	t.Parallel()
+	mfs := newTestMemFS()
+
+	const topic = "clean-restart-txn"
+
+	var savedPID int64
+	var savedEpoch int16
+
+	// Phase 1: produce committed records, then produce in-progress
+	// records and do a CLEAN shutdown (c.Close()).
+	{
+		c, err := NewCluster(
+			mfs.opt(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		cl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.TransactionalID("txn-clean-restart"),
+			kgo.TransactionTimeout(30*time.Second),
+			kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Transaction 1: produce 3 records and COMMIT.
+		if err := cl.BeginTransaction(); err != nil {
+			t.Fatal(err)
+		}
+		for i := range 3 {
+			r := &kgo.Record{Topic: topic, Partition: 0, Value: fmt.Appendf(nil, "committed-%d", i)}
+			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+			t.Fatal(err)
+		}
+
+		// Transaction 2: produce 2 records but DON'T commit.
+		if err := cl.BeginTransaction(); err != nil {
+			t.Fatal(err)
+		}
+		for i := range 2 {
+			r := &kgo.Record{Topic: topic, Partition: 0, Value: fmt.Appendf(nil, "inflight-%d", i)}
+			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// Save PID/epoch for manual EndTxn after restart.
+		initReq := kmsg.NewInitProducerIDRequest()
+		txnID := "txn-clean-restart"
+		initReq.TransactionalID = &txnID
+		initReq.TransactionTimeoutMillis = 30000
+		initReq.ProducerID = -1
+		initReq.ProducerEpoch = -1
+		plainCl := newPlainClient(t, c)
+		initResp, err := initReq.RequestWith(ctx, plainCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		savedPID = initResp.ProducerID
+		savedEpoch = initResp.ProducerEpoch
+		plainCl.Close()
+
+		cl.Close()
+		c.Close()
+	}
+
+	// Phase 2: reopen with same memFS, verify in-progress txn is preserved.
+	{
+		c, err := NewCluster(
+			mfs.opt(),
+			NumBrokers(1),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		// LSO should be behind HWM (in-progress transaction).
+		pi := c.PartitionInfo(topic, 0)
+		if pi == nil {
+			t.Fatal("partition info not found")
+		}
+		if pi.LastStableOffset >= pi.HighWatermark {
+			t.Fatalf("LSO should be behind HWM for in-progress txn: LSO=%d HWM=%d",
+				pi.LastStableOffset, pi.HighWatermark)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// read_committed should see only the 3 committed records.
+		committedCl := newPlainClient(t, c,
+			kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+			kgo.FetchMaxWait(250*time.Millisecond),
+			kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+				topic: {0: kgo.NewOffset().AtStart()},
+			}),
+		)
+
+		committed := collectRecords(t, committedCl, 3, 3*time.Second)
+		if len(committed) != 3 {
+			t.Fatalf("read_committed before EndTxn: expected 3 records, got %d", len(committed))
+		}
+
+		// Commit the in-progress transaction using a raw EndTxn
+		// with the saved PID/epoch.
+		plainCl := newPlainClient(t, c)
+
+		endReq := kmsg.NewEndTxnRequest()
+		endReq.TransactionalID = "txn-clean-restart"
+		endReq.ProducerID = savedPID
+		endReq.ProducerEpoch = savedEpoch
+		endReq.Commit = true
+		endResp, err := endReq.RequestWith(ctx, plainCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if endResp.ErrorCode != 0 {
+			t.Fatalf("EndTxn error code %d (%s)", endResp.ErrorCode, kerr.ErrorForCode(endResp.ErrorCode))
+		}
+		plainCl.Close()
+
+		// After commit, LSO should equal HWM.
+		pi = c.PartitionInfo(topic, 0)
+		if pi.LastStableOffset != pi.HighWatermark {
+			t.Fatalf("after EndTxn commit: LSO=%d HWM=%d (should be equal)",
+				pi.LastStableOffset, pi.HighWatermark)
+		}
+
+		// read_committed should now see all 5 records.
+		committedCl2 := newPlainClient(t, c,
+			kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+			kgo.FetchMaxWait(250*time.Millisecond),
+			kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+				topic: {0: kgo.NewOffset().AtStart()},
+			}),
+		)
+
+		all := collectRecords(t, committedCl2, 5, 3*time.Second)
+		if len(all) != 5 {
+			var vals []string
+			for _, r := range all {
+				vals = append(vals, string(r.Value))
+			}
+			t.Fatalf("read_committed after EndTxn: expected 5 records, got %d: %v", len(all), vals)
+		}
+	}
+}
+
+// TestPersistTxnAutoAbortExpiredOnRestart verifies that an in-progress
+// transaction whose timeout has elapsed is auto-aborted on restart rather
+// than being restored.
+func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
+	t.Parallel()
+	mfs := newTestMemFS()
+
+	const topic = "txn-auto-abort"
+
+	// Phase 1: produce in a transaction, close without committing.
+	{
+		c, err := NewCluster(
+			mfs.opt(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		cl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.TransactionalID("txn-expire"),
+			// Short timeout so it's expired by the time we restart.
+			kgo.TransactionTimeout(200*time.Millisecond),
+			kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cl.BeginTransaction(); err != nil {
+			t.Fatal(err)
+		}
+		for i := range 3 {
+			r := &kgo.Record{Topic: topic, Partition: 0, Value: fmt.Appendf(nil, "expire-%d", i)}
+			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		cl.Close()
+		c.Close()
+	}
+
+	// Sleep to guarantee the 200ms timeout has elapsed.
+	time.Sleep(300 * time.Millisecond)
+
+	// Phase 2: reopen — the expired txn should be auto-aborted.
+	{
+		c, err := NewCluster(
+			mfs.opt(),
+			NumBrokers(1),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		// LSO should equal HWM — the txn was aborted, not restored.
+		pi := c.PartitionInfo(topic, 0)
+		if pi == nil {
+			t.Fatal("partition info not found")
+		}
+		if pi.LastStableOffset != pi.HighWatermark {
+			t.Fatalf("expired txn should be auto-aborted: LSO=%d HWM=%d (should be equal)",
+				pi.LastStableOffset, pi.HighWatermark)
+		}
+
+		// read_committed should see 0 records (all aborted).
+		cl := newPlainClient(t, c,
+			kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+			kgo.FetchMaxWait(200*time.Millisecond),
+			kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+				topic: {0: kgo.NewOffset().AtStart()},
+			}),
+		)
+
+		var count int
+		verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer verifyCancel()
+		for verifyCtx.Err() == nil {
+			fetches := cl.PollFetches(verifyCtx)
+			fetches.EachRecord(func(_ *kgo.Record) { count++ })
+		}
+		if count != 0 {
+			t.Fatalf("expected 0 committed records after auto-abort, got %d", count)
+		}
+	}
+}
+
+// TestPersistGroupPhantomMemberExpiry verifies that group members whose
+// sessions have expired across repeated restarts are correctly evicted.
+// This is the core fix for the phantom member bug: without persisting
+// LastHeartbeat, each restart would reset the member's timeout to "just
+// now", preventing eviction indefinitely.
+//
+// The three-phase design is critical. A single close→sleep→restart would
+// pass even without the fix because enough wall time elapses. Phase 2's
+// intermediate restart advances shutdownAt: without the fix, phase 3
+// falls back to shutdownAt (recent), thinks the member is alive, and
+// the test correctly fails. With the fix, phase 3 uses the real
+// LastHeartbeat from phase 1 (old), and the member is properly expired.
+func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
+	t.Parallel()
+	mfs := newTestMemFS()
+
+	const topic = "phantom-topic"
+	const group = "phantom-group"
+
+	// Phase 1: create a consumer group, then close the server FIRST so
+	// the client's LeaveGroup fails — simulating a restart.
+	{
+		c, err := NewCluster(
+			mfs.opt(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
+			GroupMinSessionTimeout(500*time.Millisecond),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Produce a record so the consumer has something to fetch.
+		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := prodCl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("v")}).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+		prodCl.Close()
+
+		consCl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.ConsumeTopics(topic),
+			kgo.ConsumerGroup(group),
+			kgo.HeartbeatInterval(50*time.Millisecond),
+			kgo.SessionTimeout(1*time.Second),
+			kgo.FetchMaxWait(50*time.Millisecond),
+			kgo.RetryTimeout(50*time.Millisecond),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Wait for group to stabilize.
+		for {
+			fetches := consCl.PollFetches(ctx)
+			if fetches.NumRecords() > 0 {
+				break
+			}
+		}
+
+		// Close server first — client's LeaveGroup will fail,
+		// leaving a phantom member in the saved session state.
+		c.Close()
+		consCl.Close()
+	}
+
+	// Sleep 500ms before phase 2. This widens the gap between
+	// phase 1's real LastHeartbeat and phase 2's shutdownAt. Without
+	// this, the gap is only ~4ms (memFS is fast), leaving no room
+	// to distinguish the two in phase 3.
+	time.Sleep(500 * time.Millisecond)
+
+	// Phase 2: restart, verify phantom is alive (500ms < 1s), close.
+	// This advances shutdownAt to ~500ms after the real LastHeartbeat.
+	{
+		c, err := NewCluster(
+			mfs.opt(),
+			NumBrokers(1),
+			GroupMinSessionTimeout(500*time.Millisecond),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		adm := kadm.NewClient(newPlainClient(t, c))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		described, err := adm.DescribeGroups(ctx, group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dg := described[group]
+		if dg.Err != nil {
+			t.Fatalf("describe group: %v", dg.Err)
+		}
+		if dg.State != "Stable" {
+			t.Fatalf("phase 2: expected Stable, got %s", dg.State)
+		}
+		if len(dg.Members) != 1 {
+			t.Fatalf("phase 2: expected 1 phantom member, got %d", len(dg.Members))
+		}
+		c.Close()
+	}
+
+	// Sleep 600ms. Total from real LastHeartbeat: ~1100ms (> 1s timeout).
+	// Total from phase 2's shutdownAt: ~600ms (< 1s timeout).
+	// Without the fix (fallback to shutdownAt), the member appears
+	// alive at restore. With the fix, it's correctly expired.
+	time.Sleep(600 * time.Millisecond)
+
+	// Phase 3: restart again. With the fix, LastHeartbeat is from
+	// phase 1 (~1.1s ago) → expired. Without the fix, fallback to
+	// shutdownAt from phase 2 (~600ms ago) → alive (bug).
+	{
+		c, err := NewCluster(
+			mfs.opt(),
+			NumBrokers(1),
+			GroupMinSessionTimeout(500*time.Millisecond),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		adm := kadm.NewClient(newPlainClient(t, c))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		described, err := adm.DescribeGroups(ctx, group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dg := described[group]
+		if dg.Err != nil {
+			t.Fatalf("describe group: %v", dg.Err)
+		}
+		if dg.State != "Empty" {
+			t.Fatalf("phase 3: expected Empty (phantom expired), got %s", dg.State)
+		}
+		if len(dg.Members) != 0 {
+			t.Fatalf("phase 3: expected 0 members (phantom expired), got %d", len(dg.Members))
+		}
+	}
+}
+
+// TestPersistGroupPhantomMemberExpiry848 is the KIP-848 counterpart to
+// TestPersistGroupPhantomMemberExpiry. It verifies that 848 consumer
+// group members whose sessions have expired across repeated restarts
+// are correctly evicted via persisted LastHeartbeat.
+//
+// Same three-phase design: phase 2's intermediate restart advances
+// shutdownAt so that phase 3 can distinguish persisted LastHeartbeat
+// (old, from phase 1) from the shutdownAt fallback (recent, from
+// phase 2).
+func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
+	t.Parallel()
+	mfs := newTestMemFS()
+
+	const topic = "phantom-848-topic"
+	const group = "phantom-848-group"
+
+	//nolint:revive,staticcheck
+	ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
+
+	brokerCfgs := BrokerConfigs(map[string]string{
+		"group.consumer.session.timeout.ms":    "1000",
+		"group.consumer.heartbeat.interval.ms": "100",
+	})
+
+	// describe848 uses ConsumerGroupDescribe (key 69) which reports
+	// 848 consumer members, unlike DescribeGroups (key 15) which
+	// only reports classic members.
+	describe848 := func(t *testing.T, c *Cluster) (string, int) {
+		t.Helper()
+		cl := newPlainClient(t, c)
+		req := kmsg.NewPtrConsumerGroupDescribeRequest()
+		req.Groups = []string{group}
+		resp, err := req.RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Groups) != 1 {
+			t.Fatalf("expected 1 group in response, got %d", len(resp.Groups))
+		}
+		g := resp.Groups[0]
+		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+			// GroupIDNotFound means group doesn't exist (= Empty).
+			if err == kerr.GroupIDNotFound {
+				return "Empty", 0
+			}
+			t.Fatalf("describe group: %v", err)
+		}
+		return g.State, len(g.Members)
+	}
+
+	// Phase 1: create an 848 consumer group, then close the server
+	// FIRST so the client's leave heartbeat fails.
+	{
+		c, err := NewCluster(
+			mfs.opt(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
+			brokerCfgs,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithTimeout(ctx848, 5*time.Second)
+		defer cancel()
+
+		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := prodCl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("v")}).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+		prodCl.Close()
+
+		consCl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.WithContext(ctx848),
+			kgo.ConsumeTopics(topic),
+			kgo.ConsumerGroup(group),
+			kgo.FetchMaxWait(50*time.Millisecond),
+			kgo.RetryTimeout(50*time.Millisecond),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for {
+			fetches := consCl.PollFetches(ctx)
+			if fetches.NumRecords() > 0 {
+				break
+			}
+		}
+
+		c.Close()
+		consCl.Close()
+	}
+
+	// Sleep 500ms to widen the gap between phase 1's real
+	// LastHeartbeat and phase 2's shutdownAt.
+	time.Sleep(500 * time.Millisecond)
+
+	// Phase 2: restart, verify phantom is alive (500ms < 1s), close.
+	{
+		c, err := NewCluster(
+			mfs.opt(),
+			NumBrokers(1),
+			brokerCfgs,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		state, members := describe848(t, c)
+		if state != "Stable" {
+			t.Fatalf("phase 2: expected Stable, got %s", state)
+		}
+		if members != 1 {
+			t.Fatalf("phase 2: expected 1 phantom member, got %d", members)
+		}
+		c.Close()
+	}
+
+	// Sleep 600ms. Total from real LastHeartbeat: ~1100ms (> 1s).
+	// Total from phase 2's shutdownAt: ~600ms (< 1s).
+	time.Sleep(600 * time.Millisecond)
+
+	// Phase 3: restart. With the fix, LastHeartbeat from phase 1
+	// (~1.1s ago) → expired. Without the fix, fallback to shutdownAt
+	// from phase 2 (~600ms ago) → alive (bug).
+	{
+		c, err := NewCluster(
+			mfs.opt(),
+			NumBrokers(1),
+			brokerCfgs,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		state, members := describe848(t, c)
+		if state != "Empty" {
+			t.Fatalf("phase 3: expected Empty (phantom expired), got %s", state)
+		}
+		if members != 0 {
+			t.Fatalf("phase 3: expected 0 members (phantom expired), got %d", members)
 		}
 	}
 }
@@ -2109,11 +2328,11 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 	// Phase 1: produce records, clean shutdown (creates snapshot).
 	var savedNbytes int64
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			SyncWrites(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -2130,7 +2349,7 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 		for i := range 50 {
 			r := &kgo.Record{
 				Topic: topic,
-				Value: []byte(fmt.Sprintf("value-%04d-padding-to-increase-record-size", i)),
+				Value: fmt.Appendf(nil, "value-%04d-padding-to-increase-record-size", i),
 			}
 			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 				t.Fatal(err)
@@ -2151,9 +2370,9 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 
 	// Phase 2: reopen from snapshot, verify exact nbytes match.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -2223,28 +2442,16 @@ func TestPersistSnapshotTruncatedSegment(t *testing.T) {
 
 	// Phase 1: produce records, close cleanly (writes snapshot + segments).
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.SyncWrites(),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			SyncWrites(),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		for i := range 10 {
-			r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
-			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		cl.Close()
+		produceN(t, c, topic, 10)
 
 		pi := c.PartitionInfo(topic, 0)
 		if pi == nil || pi.HighWatermark != 10 {
@@ -2273,16 +2480,18 @@ func TestPersistSnapshotTruncatedSegment(t *testing.T) {
 		// Truncate to half the file size.
 		half := len(data) / 2
 		if half > 0 {
-			os.WriteFile(path, data[:half], 0o644)
+			if err := os.WriteFile(path, data[:half], 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 
 	// Phase 2: reopen with snapshot + truncated segment.
 	// HWM should be clamped to match the actual loaded batches.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -2301,34 +2510,12 @@ func TestPersistSnapshotTruncatedSegment(t *testing.T) {
 		}
 
 		// Verify consumers can read up to the clamped HWM without errors.
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.ConsumeTopics(topic),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		var records []*kgo.Record
-		for {
-			fetches := cl.PollFetches(ctx)
-			if ctx.Err() != nil {
-				break
-			}
-			fetches.EachRecord(func(r *kgo.Record) {
-				records = append(records, r)
-			})
-			if len(records) > 0 {
-				break
-			}
-		}
-		if len(records) == 0 {
-			t.Fatal("expected at least 1 record after truncated segment load")
-		}
+		collectRecords(t, cl, 1, 3*time.Second)
 	}
 }
 
@@ -2339,9 +2526,9 @@ func TestPersistQuotasRestart(t *testing.T) {
 
 	// Phase 1: set quotas, close.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -2375,9 +2562,9 @@ func TestPersistQuotasRestart(t *testing.T) {
 
 	// Phase 2: reopen, verify quotas persisted.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -2418,142 +2605,6 @@ func TestPersistQuotasRestart(t *testing.T) {
 	}
 }
 
-// TestPersistSnapshotAbortedTxns verifies that abortedTxns metadata
-// survives a clean shutdown via the snapshot path. This is the DEFAULT
-// startup path (unlike TestPersistFullReplayAbortedTxns which tests
-// full replay). A read_committed consumer should not see aborted records.
-func TestPersistSnapshotAbortedTxns(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	const topic = "abort-snap-topic"
-
-	// Phase 1: produce committed + aborted transactional records, clean shutdown.
-	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
-			kgo.TransactionalID("txn-snap-abort"),
-			kgo.TransactionTimeout(30*time.Second),
-			kgo.RecordPartitioner(kgo.ManualPartitioner()),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Transaction 1: produce 3 records and COMMIT.
-		if err := cl.BeginTransaction(); err != nil {
-			t.Fatal(err)
-		}
-		for i := range 3 {
-			r := &kgo.Record{Topic: topic, Partition: 0, Value: []byte(fmt.Sprintf("committed-%d", i))}
-			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
-			t.Fatal(err)
-		}
-
-		// Transaction 2: produce 2 records and ABORT.
-		if err := cl.BeginTransaction(); err != nil {
-			t.Fatal(err)
-		}
-		for i := range 2 {
-			r := &kgo.Record{Topic: topic, Partition: 0, Value: []byte(fmt.Sprintf("aborted-%d", i))}
-			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
-			t.Fatal(err)
-		}
-
-		cl.Close()
-		c.Close() // clean shutdown - writes snapshot with abortedTxns
-	}
-
-	// Verify snapshot exists (this test uses the snapshot path).
-	snapPath := filepath.Join(dir, "partitions", "abort-snap-topic-0", "snapshot.json")
-	if _, err := os.Stat(snapPath); err != nil {
-		t.Fatalf("expected snapshot.json to exist: %v", err)
-	}
-
-	// Phase 2: reopen via snapshot, verify read_committed filters aborted records.
-	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer c.Close()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
-			kgo.FetchIsolationLevel(kgo.ReadCommitted()),
-			kgo.FetchMaxWait(250*time.Millisecond),
-			kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
-				topic: {0: kgo.NewOffset().AtStart()},
-			}),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
-
-		var records []*kgo.Record
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			fetches := cl.PollFetches(ctx)
-			fetches.EachRecord(func(r *kgo.Record) {
-				records = append(records, r)
-			})
-			if len(records) >= 3 {
-				break
-			}
-		}
-
-		if len(records) != 3 {
-			var vals []string
-			for _, r := range records {
-				vals = append(vals, string(r.Value))
-			}
-			t.Fatalf("expected 3 committed records, got %d: %v", len(records), vals)
-		}
-		for _, r := range records {
-			v := string(r.Value)
-			if len(v) >= 8 && v[:8] == "aborted-" {
-				t.Fatalf("read_committed consumer received aborted record: %s", v)
-			}
-		}
-
-		// Verify HWM > 3 (aborted batches + control batches exist on disk).
-		pi := c.PartitionInfo(topic, 0)
-		if pi == nil {
-			t.Fatal("partition info not found")
-		}
-		if pi.HighWatermark <= 3 {
-			t.Fatalf("expected HWM > 3 (aborted batches should exist), got %d", pi.HighWatermark)
-		}
-	}
-}
-
 // TestPersistTopicDeletionRestart verifies that deleting a topic removes
 // its data from the snapshot and cleans up partition directories on disk,
 // so the topic does not reappear after restart.
@@ -2568,10 +2619,10 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 
 	// Phase 1: create two topics, produce data, delete one, close.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, keepTopic, deleteTopic),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			SeedTopics(1, keepTopic, deleteTopic),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -2585,7 +2636,7 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 		// Produce to both topics.
 		for _, topic := range []string{keepTopic, deleteTopic} {
 			for i := range 5 {
-				r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
+				r := &kgo.Record{Topic: topic, Value: fmt.Appendf(nil, "v%d", i)}
 				if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 					t.Fatal(err)
 				}
@@ -2614,9 +2665,9 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 
 	// Phase 2: reopen and verify.
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -2639,27 +2690,12 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 		}
 
 		// Verify the kept topic still has data.
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.ConsumeTopics(keepTopic),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
 
-		var records []*kgo.Record
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			fetches := cl.PollFetches(ctx)
-			fetches.EachRecord(func(r *kgo.Record) {
-				records = append(records, r)
-			})
-			if len(records) >= 5 {
-				break
-			}
-		}
+		records := collectRecords(t, cl, 5, 3*time.Second)
 		if len(records) != 5 {
 			t.Fatalf("expected 5 records in kept topic, got %d", len(records))
 		}
@@ -2675,29 +2711,20 @@ func TestPersistSessionStateClassicGroup(t *testing.T) {
 
 	// Phase 1: produce, create a classic consumer group with one member, close
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// Produce records
-		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		produceN(t, c, topic, 10)
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		for i := range 10 {
-			r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
-			if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		prodCl.Close()
 
 		// Create consumer group, consume some records, commit
 		consCl, err := kgo.NewClient(
@@ -2734,9 +2761,9 @@ func TestPersistSessionStateClassicGroup(t *testing.T) {
 
 	// Phase 2: reopen - session state should be loaded and file deleted
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -2772,131 +2799,6 @@ func TestPersistSessionStateClassicGroup(t *testing.T) {
 	}
 }
 
-func TestPersistSessionStateExpired(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	const topic = "session-expire-topic"
-	const group = "session-expire-group"
-
-	// Phase 1: produce, create classic consumer group, close cluster first
-	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		for i := range 5 {
-			r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
-			if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		prodCl.Close()
-
-		consCl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
-			kgo.ConsumeTopics(topic),
-			kgo.ConsumerGroup(group),
-			kgo.HeartbeatInterval(100*time.Millisecond),
-			kgo.FetchMaxWait(250*time.Millisecond),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var consumed int
-		for consumed < 3 {
-			fetches := consCl.PollFetches(ctx)
-			fetches.EachRecord(func(_ *kgo.Record) { consumed++ })
-		}
-		if err := consCl.CommitUncommittedOffsets(ctx); err != nil {
-			t.Fatal(err)
-		}
-		c.Close()
-		consCl.Close()
-	}
-
-	// Manually edit the session state file to make the shutdown time old
-	// enough that all sessions have expired.
-	ssPath := filepath.Join(dir, "session_state.json")
-	data, err := os.ReadFile(ssPath)
-	if err != nil {
-		t.Fatalf("reading session_state.json: %v", err)
-	}
-	var ss map[string]json.RawMessage
-	if err := json.Unmarshal(data, &ss); err != nil {
-		t.Fatalf("parsing session_state.json: %v", err)
-	}
-	// Set shutdownAt to 1 hour ago to guarantee expiry
-	oldTime, _ := json.Marshal(time.Now().Add(-1 * time.Hour))
-	ss["shutdownAt"] = oldTime
-	newData, _ := json.Marshal(ss)
-	if err := os.WriteFile(ssPath, newData, 0o644); err != nil {
-		t.Fatalf("writing modified session_state.json: %v", err)
-	}
-
-	// Phase 2: reopen - sessions expired, members should NOT be restored
-	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer c.Close()
-
-		// session_state.json should still be deleted
-		if _, err := os.Stat(ssPath); !os.IsNotExist(err) {
-			t.Fatal("session_state.json should be deleted even when sessions are expired")
-		}
-
-		// Group should exist (from groups.log) but be Empty (no members)
-		adm := kadm.NewClient(newPlainClient(t, c))
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		described, err := adm.DescribeGroups(ctx, group)
-		if err != nil {
-			t.Fatalf("describe groups: %v", err)
-		}
-		dg, ok := described[group]
-		if !ok {
-			t.Fatal("group not found in describe response")
-		}
-		if dg.Err != nil {
-			t.Fatalf("describe group error: %v", dg.Err)
-		}
-		if dg.State != "Empty" {
-			t.Fatalf("expected Empty state (expired sessions), got %s", dg.State)
-		}
-		if len(dg.Members) != 0 {
-			t.Fatalf("expected no members (expired sessions), got %d", len(dg.Members))
-		}
-	}
-}
-
-func TestPersistSessionStateNoDataDir(t *testing.T) {
-	t.Parallel()
-
-	// Without DataDir, session state should not be saved
-	c, err := kfake.NewCluster(kfake.NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Just close - this should not panic or error
-	c.Close()
-}
-
 // TestPersistSeqWindowDedup verifies that sequence window deduplication
 // works correctly across a clean restart. A produce retry after restart
 // should return the original offset, not write a duplicate batch.
@@ -2906,7 +2808,7 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 	const topic = "dedup-topic"
 
 	buildProduce := func(pid int64, epoch int16, seq int32) *kmsg.ProduceRequest {
-		rec := kmsg.Record{Key: []byte(fmt.Sprintf("k-%d", seq)), Value: []byte(fmt.Sprintf("v-%d", seq))}
+		rec := kmsg.Record{Key: fmt.Appendf(nil, "k-%d", seq), Value: fmt.Appendf(nil, "v-%d", seq)}
 		rec.Length = int32(len(rec.AppendTo(nil)) - 1)
 		now := time.Now().UnixMilli()
 		batch := kmsg.RecordBatch{
@@ -2946,10 +2848,10 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 
 	// Phase 1: init PID, produce 3 batches, close cleanly
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
-			kfake.SeedTopics(1, topic),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
+			SeedTopics(1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -2995,9 +2897,9 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 
 	// Phase 2: reopen, retry the last produce - should be a dup
 	{
-		c, err := kfake.NewCluster(
-			kfake.DataDir(dir),
-			kfake.NumBrokers(1),
+		c, err := NewCluster(
+			DataDir(dir),
+			NumBrokers(1),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -3009,7 +2911,6 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 		v := kversion.Stable()
 		v.SetMaxKeyVersion(0, 11)
 		cl := newPlainClient(t, c, kgo.MaxVersions(v))
-		defer cl.Close()
 
 		// Retry the last produce (seq=2) - should be deduplicated
 		resp, err := buildProduce(pid, epoch, 2).RequestWith(ctx, cl)
@@ -3038,29 +2939,14 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 		}
 
 		// Verify record count: should have exactly 4 records (3 original + 1 new, no dups)
-		consumer, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		consumer := newPlainClient(t, c,
 			kgo.FetchMaxWait(250*time.Millisecond),
 			kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
 				topic: {0: kgo.NewOffset().AtStart()},
 			}),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer consumer.Close()
 
-		var records []*kgo.Record
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			fetches := consumer.PollFetches(ctx)
-			fetches.EachRecord(func(r *kgo.Record) {
-				records = append(records, r)
-			})
-			if len(records) >= 4 {
-				break
-			}
-		}
+		records := collectRecords(t, consumer, 4, 3*time.Second)
 		if len(records) != 4 {
 			var offsets []int64
 			for _, r := range records {
@@ -3086,10 +2972,10 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 
 	// Phase 1: create cluster, join group, commit offsets, close.
 	{
-		c, err := kfake.NewCluster(
-			kfake.NumBrokers(1),
-			kfake.DataDir(dir),
-			kfake.SeedTopics(-1, topic),
+		c, err := NewCluster(
+			NumBrokers(1),
+			DataDir(dir),
+			SeedTopics(-1, topic),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -3121,23 +3007,17 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 	// was closed). Send a raw OffsetCommit with a stale generation - this
 	// should fail with IllegalGeneration but NOT kill the group.
 	{
-		c, err := kfake.NewCluster(
-			kfake.NumBrokers(1),
-			kfake.DataDir(dir),
-			kfake.Ports(0),
+		c, err := NewCluster(
+			NumBrokers(1),
+			DataDir(dir),
+			Ports(0),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer c.Close()
 
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
+		cl := newPlainClient(t, c)
 
 		// Send a raw OffsetCommit with generation=1 to an empty group.
 		// This exercises the code path that previously triggered
@@ -3195,11 +3075,11 @@ func TestPersistLogCompaction(t *testing.T) {
 	const group = "compact-group"
 
 	// Use a low threshold so compaction triggers quickly.
-	c, err := kfake.NewCluster(
-		kfake.DataDir(dir),
-		kfake.NumBrokers(1),
-		kfake.SeedTopics(1, topic),
-		kfake.BrokerConfigs(map[string]string{
+	c, err := NewCluster(
+		DataDir(dir),
+		NumBrokers(1),
+		SeedTopics(1, topic),
+		BrokerConfigs(map[string]string{
 			"state.log.compact.bytes": "1024",
 		}),
 	)
@@ -3221,17 +3101,7 @@ func TestPersistLogCompaction(t *testing.T) {
 	// Produce records
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range 50 {
-		r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
-		if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	prodCl.Close()
+	produceN(t, c, topic, 50)
 
 	// Consume and commit in a loop to grow groups.log past threshold.
 	var totalConsumed int
@@ -3280,10 +3150,10 @@ func TestPersistLogCompaction(t *testing.T) {
 	c.Close()
 
 	// Reopen and verify state survives restart after compaction.
-	c2, err := kfake.NewCluster(
-		kfake.DataDir(dir),
-		kfake.NumBrokers(1),
-		kfake.BrokerConfigs(map[string]string{
+	c2, err := NewCluster(
+		DataDir(dir),
+		NumBrokers(1),
+		BrokerConfigs(map[string]string{
 			"state.log.compact.bytes": "1024",
 		}),
 	)
@@ -3316,11 +3186,11 @@ func TestPersistLogCompactionCrashGroups(t *testing.T) {
 
 	const topic = "crash-topic"
 
-	c, err := kfake.NewCluster(
-		kfake.DataDir(dir),
-		kfake.NumBrokers(1),
-		kfake.SeedTopics(1, topic),
-		kfake.BrokerConfigs(map[string]string{
+	c, err := NewCluster(
+		DataDir(dir),
+		NumBrokers(1),
+		SeedTopics(1, topic),
+		BrokerConfigs(map[string]string{
 			"state.log.compact.bytes": "128", // very aggressive
 		}),
 	)
@@ -3332,17 +3202,7 @@ func TestPersistLogCompactionCrashGroups(t *testing.T) {
 	defer cancel()
 
 	// Produce records
-	prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range 20 {
-		r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("v%d", i))}
-		if err := prodCl.ProduceSync(ctx, r).FirstErr(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	prodCl.Close()
+	produceN(t, c, topic, 20)
 
 	// Run 3 groups concurrently doing rapid commits to trigger compaction
 	// while groups are actively writing to groups.log.
@@ -3410,9 +3270,9 @@ func TestPersistLogCompactionCrashGroups(t *testing.T) {
 	c.Close()
 
 	// Open from crash snapshot (no Close was called on original - simulates crash).
-	c2, err := kfake.NewCluster(
-		kfake.DataDir(crashDir),
-		kfake.NumBrokers(1),
+	c2, err := NewCluster(
+		DataDir(crashDir),
+		NumBrokers(1),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -3448,11 +3308,11 @@ func TestPersistLogCompactionCrashPIDs(t *testing.T) {
 
 	const topic = "txn-crash-topic"
 
-	c, err := kfake.NewCluster(
-		kfake.DataDir(dir),
-		kfake.NumBrokers(1),
-		kfake.SeedTopics(1, topic),
-		kfake.BrokerConfigs(map[string]string{
+	c, err := NewCluster(
+		DataDir(dir),
+		NumBrokers(1),
+		SeedTopics(1, topic),
+		BrokerConfigs(map[string]string{
 			"state.log.compact.bytes": "128", // very aggressive
 		}),
 	)
@@ -3479,7 +3339,7 @@ func TestPersistLogCompactionCrashPIDs(t *testing.T) {
 			cl.Close()
 			t.Fatal(err)
 		}
-		r := &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("txn-v%d", i))}
+		r := &kgo.Record{Topic: topic, Value: fmt.Appendf(nil, "txn-v%d", i)}
 		if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 			cl.Close()
 			t.Fatal(err)
@@ -3504,9 +3364,9 @@ func TestPersistLogCompactionCrashPIDs(t *testing.T) {
 	c.Close()
 
 	// Open from crash snapshot
-	c2, err := kfake.NewCluster(
-		kfake.DataDir(crashDir),
-		kfake.NumBrokers(1),
+	c2, err := NewCluster(
+		DataDir(crashDir),
+		NumBrokers(1),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -3591,9 +3451,249 @@ func copyDir(t *testing.T, src, dst string) {
 	}
 }
 
-// Helper functions for CRC computation in tests
-func crcTable() *crc32.Table { return crc32.IEEETable }
+// TestPersistShareGroupSPSO verifies that acknowledged records are not
+// redelivered after a clean restart. The SPSO should advance past them.
+func TestPersistShareGroupSPSO(t *testing.T) {
+	t.Parallel()
+	tmem := newTestMemFS()
 
-func crc32Update(tab *crc32.Table, crc uint32, data []byte) uint32 {
-	return crc32.Update(crc, tab, data)
+	const topic = "share-persist-spso"
+	const group = "share-persist-spso-grp"
+	const total = 10
+
+	// Phase 1: produce, consume all records via share group, ack, close.
+	{
+		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		produceShareN(t, c, topic, group, total)
+
+		cl := newShareConsumer(t, c, topic, group)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		var got int
+		for got < total {
+			fetches := cl.PollFetches(ctx)
+			for _, r := range fetches.Records() {
+				got++
+				r.Ack(kgo.AckAccept)
+			}
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		if got < total {
+			t.Fatalf("phase 1: expected %d, got %d", total, got)
+		}
+		cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := cl.CommitAcks(cCtx); err != nil {
+			t.Fatal(err)
+		}
+		cCancel()
+		cl.Close()
+		c.Close()
+	}
+
+	// Phase 2: reopen, verify no records are redelivered.
+	{
+		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		cl := newShareConsumer(t, c, topic, group)
+		verifyZeroRecords(t, cl, 500*time.Millisecond)
+	}
 }
+
+// TestPersistShareGroupAcquiredReleasedOnRestart verifies that records that
+// were acquired but not acked become available again after restart.
+func TestPersistShareGroupAcquiredReleasedOnRestart(t *testing.T) {
+	t.Parallel()
+	tmem := newTestMemFS()
+
+	const topic = "share-persist-acq"
+	const group = "share-persist-acq-grp"
+	const total = 5
+
+	// Phase 1: produce, acquire records via raw ShareFetch (no ack), close.
+	{
+		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		produceShareN(t, c, topic, group, total)
+
+		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+		_, acquired := rawShareFetch(t, cl, group, memberID, topicID, 0)
+		if acquired < total {
+			t.Fatalf("phase 1: expected %d acquired, got %d", total, acquired)
+		}
+		// Do NOT ack. Close cluster — acquired records should be saved.
+		cl.Close()
+		c.Close()
+	}
+
+	// Phase 2: reopen, verify the records are available for redelivery.
+	{
+		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		cl := newShareConsumer(t, c, topic, group)
+		records := collectRecords(t, cl, total, 10*time.Second)
+		if len(records) < total {
+			t.Fatalf("phase 2: expected %d redelivered, got %d", total, len(records))
+		}
+	}
+}
+
+// TestPersistShareGroupConfigRestart verifies that share group configs
+// (share.auto.offset.reset) survive a clean restart.
+func TestPersistShareGroupConfigRestart(t *testing.T) {
+	t.Parallel()
+	tmem := newTestMemFS()
+
+	const topic = "share-persist-cfg"
+	const group = "share-persist-cfg-grp"
+
+	// Phase 1: set share.auto.offset.reset=earliest, produce records, close.
+	{
+		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		setShareAutoOffsetReset(t, cl, group)
+		produceN(t, c, topic, 10)
+		cl.Close()
+		c.Close()
+	}
+
+	// Phase 2: reopen, join share group. If the config survived, the SPSO
+	// should start at 0 (earliest) and we should see the 10 records.
+	{
+		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		cl := newShareConsumer(t, c, topic, group)
+		records := collectRecords(t, cl, 10, 10*time.Second)
+		if len(records) < 10 {
+			t.Fatalf("phase 2: expected 10 records (earliest), got %d", len(records))
+		}
+	}
+}
+
+// TestPersistShareGroupArchivedNotRedelivered verifies that records archived
+// via max delivery count remain archived after restart and are not redelivered.
+func TestPersistShareGroupArchivedNotRedelivered(t *testing.T) {
+	t.Parallel()
+	tmem := newTestMemFS()
+
+	const topic = "share-persist-arch"
+	const group = "share-persist-arch-grp"
+	const total = 5
+
+	// Phase 1: produce records, release them twice (max delivery = 2),
+	// causing archival, then close.
+	{
+		c, err := NewCluster(tmem.opt(), NumBrokers(1),
+			SeedTopics(1, topic),
+			BrokerConfigs(map[string]string{
+				"share.max.delivery.attempts": "2",
+			}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		produceShareN(t, c, topic, group, total)
+
+		// Delivery 1: fetch and release.
+		cl1 := newShareConsumer(t, c, topic, group)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		var got int
+		for got < total {
+			fetches := cl1.PollFetches(ctx)
+			for _, r := range fetches.Records() {
+				got++
+				r.Ack(kgo.AckRelease)
+			}
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		cancel()
+		if got < total {
+			t.Fatalf("delivery 1: expected %d, got %d", total, got)
+		}
+		cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := cl1.CommitAcks(cCtx); err != nil {
+			t.Fatal(err)
+		}
+		cCancel()
+		cl1.Close()
+
+		// Delivery 2: fetch and release again — triggers archival.
+		cl2 := newShareConsumer(t, c, topic, group)
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+		got = 0
+		for got < total {
+			fetches := cl2.PollFetches(ctx2)
+			for _, r := range fetches.Records() {
+				got++
+				r.Ack(kgo.AckRelease)
+			}
+			if ctx2.Err() != nil {
+				break
+			}
+		}
+		cancel2()
+		if got < total {
+			t.Fatalf("delivery 2: expected %d, got %d", total, got)
+		}
+		cCtx, cCancel = context.WithTimeout(context.Background(), 5*time.Second)
+		if err := cl2.CommitAcks(cCtx); err != nil {
+			t.Fatal(err)
+		}
+		cCancel()
+		cl2.Close()
+
+		c.Close()
+	}
+
+	// Phase 2: reopen with same max delivery config, verify no records.
+	{
+		c, err := NewCluster(tmem.opt(), NumBrokers(1),
+			SeedTopics(1, topic),
+			BrokerConfigs(map[string]string{
+				"share.max.delivery.attempts": "2",
+			}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		cl := newShareConsumer(t, c, topic, group)
+		verifyZeroRecords(t, cl, 500*time.Millisecond)
+	}
+}
+

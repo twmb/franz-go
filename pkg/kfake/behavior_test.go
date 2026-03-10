@@ -156,6 +156,29 @@ func totalAssignedPartitions(dg kadm.DescribedConsumerGroup) int {
 	return n
 }
 
+func setShareAutoOffsetReset(t *testing.T, cl *kgo.Client, group string) {
+	t.Helper()
+	req := kmsg.NewPtrIncrementalAlterConfigsRequest()
+	res := kmsg.NewIncrementalAlterConfigsRequestResource()
+	res.ResourceType = kmsg.ConfigResourceTypeGroupConfig
+	res.ResourceName = group
+	cfg := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+	cfg.Name = "share.auto.offset.reset"
+	cfg.Op = 0
+	cfg.Value = kmsg.StringPtr("earliest")
+	res.Configs = append(res.Configs, cfg)
+	req.Resources = append(req.Resources, res)
+	resp, err := req.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("IncrementalAlterConfigs: %v", err)
+	}
+	for _, r := range resp.Resources {
+		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
+			t.Fatalf("IncrementalAlterConfigs resource error: %v", err)
+		}
+	}
+}
+
 // Test848RegexSubscription verifies that server-side regex subscription
 // matches the correct topics and excludes non-matching topics.
 func Test848RegexSubscription(t *testing.T) {
