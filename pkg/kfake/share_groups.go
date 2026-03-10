@@ -134,10 +134,11 @@ type shareSession struct {
 // when pushBatch adds records, the watcher fires via do(). The
 // cleanup and re-invocation happen in the cluster run() loop.
 type watchShareFetch struct {
-	creq *clientReq
-	in   []*partData
-	cb   func()
-	t    *time.Timer
+	creq    *clientReq
+	session *shareSession // session at registration time; stale if overwritten
+	in      []*partData
+	cb      func()
+	t       *time.Timer
 
 	once    sync.Once
 	cleaned bool
@@ -661,8 +662,11 @@ func (sp *sharePartition) acquireRecords(memberID string, hwm int64, maxRecords 
 //
 // Types: 0=Gap (skip), 1=Accept, 2=Release, 3=Reject, 4=Renew.
 // Offsets below SPSO are silently skipped (already finalized).
-// Records not acquired by memberID are silently skipped.
-func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTypes []int8) {
+//
+// Returns 0 on success. Returns INVALID_RECORD_STATE if an offset is not
+// in the ACQUIRED state or is not owned by memberID (matching Kafka's
+// SharePartition.acknowledge behavior).
+func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTypes []int8) int16 {
 	perOffset := len(ackTypes) > 1
 	uniformType := int8(1) // default: accept
 	if len(ackTypes) == 1 {
@@ -673,11 +677,14 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 			continue // already finalized
 		}
 		sr := sp.records[offset]
-		if sr == nil || sr.state != shareRecordAcquired {
-			continue
+		if sr == nil {
+			return kerr.InvalidRecordState.Code
+		}
+		if sr.state != shareRecordAcquired {
+			return kerr.InvalidRecordState.Code
 		}
 		if sr.acquiredBy != memberID {
-			continue
+			return kerr.InvalidRecordState.Code
 		}
 		ackType := uniformType
 		if perOffset {
@@ -687,7 +694,10 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 			}
 		}
 		switch ackType {
-		case 0, 1: // Gap (0) and Accept (1) both finalize the offset
+		case 0: // Gap: archive (Kafka maps gap to ARCHIVED)
+			sr.state = shareRecordArchived
+			sr.acquiredBy = ""
+		case 1: // Accept
 			sr.state = shareRecordAcknowledged
 			sr.acquiredBy = ""
 		case 2: // Release
@@ -703,6 +713,7 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 			sr.acquireTime = time.Now()
 		}
 	}
+	return 0
 }
 
 // advanceSPSO advances the SPSO past contiguous acknowledged/archived records,

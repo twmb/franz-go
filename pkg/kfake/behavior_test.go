@@ -5142,3 +5142,98 @@ func TestShareGroupAckRequeue(t *testing.T) {
 		t.Errorf("consumer 2: expected 0 records after re-queued acks, got %d", got2)
 	}
 }
+
+// TestShareGroupCurrentLeaderMove verifies that when a partition leader
+// changes, the share consumer uses the CurrentLeader field from the
+// ShareFetch response to proactively move the cursor to the new leader
+// without waiting for a metadata refresh.
+func TestShareGroupCurrentLeaderMove(t *testing.T) {
+	t.Parallel()
+	topic := "share-leader-move"
+	c := newCluster(t,
+		kfake.NumBrokers(2),
+		kfake.SeedTopics(1, topic),
+	)
+	defer c.Close()
+
+	origLeader := c.LeaderFor(topic, 0)
+
+	cl, _ := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(topic),
+	)
+	defer cl.Close()
+
+	scl, _ := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup("share-move-test"),
+	)
+	defer scl.Close()
+
+	// Empty poll to trigger the heartbeat and establish the group.
+	// SPSO defaults to "latest", so records must be produced after.
+	emptyCtx, emptyCancel := context.WithTimeout(context.Background(), time.Second)
+	scl.PollFetches(emptyCtx)
+	emptyCancel()
+
+	// Produce records after the share group is established.
+	for i := range 5 {
+		r := &kgo.Record{Value: []byte(strconv.Itoa(i))}
+		if err := cl.ProduceSync(context.Background(), r).FirstErr(); err != nil {
+			t.Fatalf("produce: %v", err)
+		}
+	}
+
+	// Poll and ack all records before the move.
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel1()
+	for ctx1.Err() == nil {
+		fetches := scl.PollFetches(ctx1)
+		recs := fetches.Records()
+		if len(recs) == 0 {
+			continue
+		}
+		for _, r := range recs {
+			r.Ack(kgo.AckAccept)
+		}
+		if err := scl.CommitAcks(ctx1); err != nil {
+			t.Fatalf("commit acks: %v", err)
+		}
+		break
+	}
+	if ctx1.Err() != nil {
+		t.Fatal("timed out waiting for records before move")
+	}
+
+	// Move partition to the other broker.
+	var newLeader int32
+	if origLeader == 0 {
+		newLeader = 1
+	}
+	if err := c.MoveTopicPartition(topic, 0, newLeader); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	// Produce 5 more records to the new leader.
+	for i := range 5 {
+		r := &kgo.Record{Value: []byte(strconv.Itoa(i + 5))}
+		if err := cl.ProduceSync(context.Background(), r).FirstErr(); err != nil {
+			t.Fatalf("produce after move: %v", err)
+		}
+	}
+
+	// Poll again. The share consumer should detect the leader change
+	// via CurrentLeader in the NOT_LEADER_FOR_PARTITION response and
+	// move the cursor to the new leader, receiving the new records.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	var got2 int
+	for got2 < 5 && ctx2.Err() == nil {
+		fetches := scl.PollFetches(ctx2)
+		got2 += len(fetches.Records())
+	}
+	if got2 != 5 {
+		t.Fatalf("expected 5 records after leader move, got %d", got2)
+	}
+}

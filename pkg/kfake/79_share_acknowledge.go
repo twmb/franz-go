@@ -137,14 +137,19 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 			}
 
 			shp := sg.getSharePartition(topicName, rp.Partition, pd)
+			var ackErr int16
 			for _, batch := range rp.AcknowledgementBatches {
-				shp.processAcks(memberID, batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes)
+				if ec := shp.processAcks(memberID, batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes); ec != 0 {
+					ackErr = ec
+					break
+				}
 			}
 			shp.advanceSPSO()
 
 			idx := getOrAddShareAckTopic(resp, topicIdx, rt.TopicID)
 			sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
 			sp.Partition = rp.Partition
+			sp.ErrorCode = ackErr
 			resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
 
 			// Wake any pending ShareFetch watchers on this partition.
@@ -153,7 +158,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 	}
 	sg.mu.Unlock()
 
-	// Advance session epoch (for non-close requests).
+	// Advance session epoch (for non-close requests), same as ShareFetch.
 	if req.ShareSessionEpoch != -1 {
 		session := c.shareSessions[sessionKey]
 		if session != nil {

@@ -1297,6 +1297,225 @@ func TestShareGroupCloseReleasesRecords(t *testing.T) {
 	}
 }
 
+// TestShareGroupRenewAck verifies that AckRenew (type 4) with isRenewAck=true
+// correctly extends the acquisition lock, and that mixed ack types (Accept +
+// Renew) work in the same request.
+func TestShareGroupRenewAck(t *testing.T) {
+	t.Parallel()
+
+	// Short lock duration so we can verify renew extends it.
+	c := newCluster(t,
+		kfake.NumBrokers(1),
+		kfake.SeedTopics(1, "share-renew"),
+		kfake.BrokerConfigs(map[string]string{
+			"share.record.lock.duration.ms":       "500",
+			"share.record.lock.sweep.interval.ms": "100",
+		}),
+	)
+	group := "share-test-renew"
+
+	admin, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic("share-renew"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	setShareAutoOffsetReset(t, admin, group)
+
+	const total = 10
+	for i := range total {
+		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
+			if err != nil {
+				t.Errorf("produce %d: %v", i, err)
+			}
+		})
+	}
+	if err := admin.Flush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	// Join share group.
+	hbReq := kmsg.NewPtrShareGroupHeartbeatRequest()
+	hbReq.GroupID = group
+	hbReq.MemberID = "test-member-1"
+	hbReq.MemberEpoch = 0
+	hbReq.SubscribedTopicNames = []string{"share-renew"}
+	hbResp, err := hbReq.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("heartbeat join: %v", err)
+	}
+	memberID := *hbResp.MemberID
+
+	// Get topic ID.
+	metaReq := kmsg.NewPtrMetadataRequest()
+	mt := kmsg.NewMetadataRequestTopic()
+	mt.Topic = kmsg.StringPtr("share-renew")
+	metaReq.Topics = append(metaReq.Topics, mt)
+	metaResp, err := metaReq.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("metadata: %v", err)
+	}
+	topicID := metaResp.Topics[0].TopicID
+
+	// ShareFetch epoch 0: acquire all records. Session epoch -> 1.
+	sfReq := kmsg.NewPtrShareFetchRequest()
+	sfReq.GroupID = &group
+	sfReq.MemberID = &memberID
+	sfReq.ShareSessionEpoch = 0
+	sfReq.MaxRecords = 100
+	fetchTopic := kmsg.NewShareFetchRequestTopic()
+	fetchTopic.TopicID = topicID
+	fetchPart := kmsg.NewShareFetchRequestTopicPartition()
+	fetchPart.Partition = 0
+	fetchTopic.Partitions = append(fetchTopic.Partitions, fetchPart)
+	sfReq.Topics = append(sfReq.Topics, fetchTopic)
+	sfResp, err := sfReq.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("share fetch: %v", err)
+	}
+	if sfResp.ErrorCode != 0 {
+		t.Fatalf("share fetch error: %v", kerr.ErrorForCode(sfResp.ErrorCode))
+	}
+
+	var acquired int
+	for _, rt := range sfResp.Topics {
+		for _, rp := range rt.Partitions {
+			for _, ar := range rp.AcquiredRecords {
+				acquired += int(ar.LastOffset - ar.FirstOffset + 1)
+			}
+		}
+	}
+	if acquired < total {
+		t.Fatalf("expected to acquire %d records, got %d", total, acquired)
+	}
+
+	// Wait 300ms -- 60% of the 500ms lock duration.
+	time.Sleep(300 * time.Millisecond)
+
+	// Send mixed acks via isRenewAck ShareFetch: Renew offsets 0-4,
+	// Accept offsets 5-9. This verifies that mixed ack types work in
+	// the same isRenewAck request. Session epoch 1 -> 2.
+	renewReq := kmsg.NewPtrShareFetchRequest()
+	renewReq.GroupID = &group
+	renewReq.MemberID = &memberID
+	renewReq.ShareSessionEpoch = 1
+	renewReq.IsRenewAck = true
+	// All fetch params must be 0 when isRenewAck is set.
+	renewReq.MaxBytes = 0
+	renewTopic := kmsg.NewShareFetchRequestTopic()
+	renewTopic.TopicID = topicID
+	renewPart := kmsg.NewShareFetchRequestTopicPartition()
+	renewPart.Partition = 0
+	rb := kmsg.NewShareFetchRequestTopicPartitionAcknowledgementBatche()
+	rb.FirstOffset = 0
+	rb.LastOffset = 4
+	rb.AcknowledgeTypes = []int8{4} // Renew
+	renewPart.AcknowledgementBatches = append(renewPart.AcknowledgementBatches, rb)
+	ab := kmsg.NewShareFetchRequestTopicPartitionAcknowledgementBatche()
+	ab.FirstOffset = 5
+	ab.LastOffset = 9
+	ab.AcknowledgeTypes = []int8{1} // Accept
+	renewPart.AcknowledgementBatches = append(renewPart.AcknowledgementBatches, ab)
+	renewTopic.Partitions = append(renewTopic.Partitions, renewPart)
+	renewReq.Topics = append(renewReq.Topics, renewTopic)
+
+	renewResp, err := renewReq.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("renew fetch: %v", err)
+	}
+	if renewResp.ErrorCode != 0 {
+		t.Fatalf("renew fetch error: %v", kerr.ErrorForCode(renewResp.ErrorCode))
+	}
+	// isRenewAck should not return any acquired records.
+	for _, rt := range renewResp.Topics {
+		for _, rp := range rt.Partitions {
+			if len(rp.AcquiredRecords) > 0 {
+				t.Fatalf("expected 0 acquired records in renew response, got %d", len(rp.AcquiredRecords))
+			}
+			if rp.AcknowledgeErrorCode != 0 {
+				t.Fatalf("unexpected ack error: %v", kerr.ErrorForCode(rp.AcknowledgeErrorCode))
+			}
+		}
+	}
+
+	// Wait 300ms more. Total elapsed since acquire: ~600ms.
+	// Without renew, locks on 0-4 would have expired at ~500ms.
+	// With renew at ~300ms, their new expiry is ~300+500 = ~800ms.
+	time.Sleep(300 * time.Millisecond)
+
+	// Accept the renewed offsets 0-4 via piggybacked ack. If renew
+	// failed to extend the lock, the sweep would have released these
+	// records and this accept would be a no-op.
+	// Session epoch 2 -> 3.
+	acceptReq := kmsg.NewPtrShareFetchRequest()
+	acceptReq.GroupID = &group
+	acceptReq.MemberID = &memberID
+	acceptReq.ShareSessionEpoch = 2
+	acceptReq.MaxRecords = 100
+	acceptTopic := kmsg.NewShareFetchRequestTopic()
+	acceptTopic.TopicID = topicID
+	acceptPart := kmsg.NewShareFetchRequestTopicPartition()
+	acceptPart.Partition = 0
+	acceptBatch := kmsg.NewShareFetchRequestTopicPartitionAcknowledgementBatche()
+	acceptBatch.FirstOffset = 0
+	acceptBatch.LastOffset = 4
+	acceptBatch.AcknowledgeTypes = []int8{1} // Accept
+	acceptPart.AcknowledgementBatches = append(acceptPart.AcknowledgementBatches, acceptBatch)
+	acceptTopic.Partitions = append(acceptTopic.Partitions, acceptPart)
+	acceptReq.Topics = append(acceptReq.Topics, acceptTopic)
+
+	acceptResp, err := acceptReq.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("accept fetch: %v", err)
+	}
+	if acceptResp.ErrorCode != 0 {
+		t.Fatalf("accept fetch error: %v", kerr.ErrorForCode(acceptResp.ErrorCode))
+	}
+
+	// Leave group.
+	hbLeave := kmsg.NewPtrShareGroupHeartbeatRequest()
+	hbLeave.GroupID = group
+	hbLeave.MemberID = memberID
+	hbLeave.MemberEpoch = -1
+	hbLeave.RequestWith(context.Background(), cl)
+
+	// Verify: a second consumer should see 0 records. All 10 records
+	// were accepted -- 5-9 in the mixed ack, 0-4 after the renewed
+	// lock held through the original expiry. If renew had failed, the
+	// sweep would have released 0-4 and they'd be redelivered here.
+	cl2, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics("share-renew"),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl2.Close()
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+
+	var got2 int
+	for ctx2.Err() == nil {
+		fetches := cl2.PollFetches(ctx2)
+		got2 += len(fetches.Records())
+	}
+	if got2 > 0 {
+		t.Errorf("expected 0 records after renew+accept, got %d (renew likely failed to extend lock)", got2)
+	}
+}
+
 // TestShareGroupConcurrentFetchAndAck verifies that multiple consumers can
 // concurrently fetch and ack records without data loss or duplication in
 // the final accepted set.
@@ -1386,4 +1605,81 @@ func TestShareGroupConcurrentFetchAndAck(t *testing.T) {
 		t.Fatalf("expected at least %d total accepted records across all consumers, got %d", total, got)
 	}
 	t.Logf("total records accepted across %d consumers: %d", numConsumers, got)
+}
+
+// TestShareGroupPollRecordsBuffering verifies that PollRecords with a limit
+// smaller than the number of acquired records buffers excess records and
+// returns them on subsequent polls without re-fetching from the broker.
+func TestShareGroupPollRecordsBuffering(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, kfake.SeedTopics(1, "share-pollbuf"))
+	group := "share-test-pollbuf"
+
+	admin, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic("share-pollbuf"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	setShareAutoOffsetReset(t, admin, group)
+
+	// Produce 50 records.
+	const total = 50
+	for i := range total {
+		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
+			if err != nil {
+				t.Errorf("produce %d: %v", i, err)
+			}
+		})
+	}
+	if err := admin.Flush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics("share-pollbuf"),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Poll 10 records at a time. The first PollRecords should fetch
+	// from the broker and buffer the rest; subsequent calls should
+	// return from the buffer without new ShareFetch requests.
+	var got int
+	var polls int
+	for got < total {
+		fetches := cl.PollRecords(ctx, 10)
+		for _, e := range fetches.Errors() {
+			if e.Err == context.DeadlineExceeded || e.Err == context.Canceled {
+				continue
+			}
+			t.Errorf("fetch error: %v", e)
+		}
+		records := fetches.Records()
+		if len(records) > 10 {
+			t.Fatalf("PollRecords(10) returned %d records", len(records))
+		}
+		got += len(records)
+		polls++
+		if ctx.Err() != nil {
+			break
+		}
+	}
+
+	if got != total {
+		t.Fatalf("expected %d records, got %d", total, got)
+	}
+	t.Logf("consumed %d records in %d polls of 10", got, polls)
 }

@@ -73,9 +73,10 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	var session *shareSession
 	if w != nil {
 		// Watcher re-invocation: session was already validated.
+		// If the session was overwritten by a new epoch-0 request,
+		// this watcher is stale -- discard silently.
 		session = c.shareSessions[sessionKey]
-		if session == nil {
-			resp.ErrorCode = kerr.ShareSessionNotFound.Code
+		if session == nil || session != w.session {
 			return resp, nil
 		}
 	} else {
@@ -156,6 +157,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	var totalRecords int32
 	var fetchParts []fetchPart
 	var acquiredParts []acquiredPart
+	var includeBrokers bool
 
 	// Lock the share group's partition state for ack processing and
 	// record acquisition. Batch I/O happens after unlocking.
@@ -206,6 +208,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 				sp.CurrentLeader.LeaderID = pd.leader.node
 				sp.CurrentLeader.LeaderEpoch = pd.epoch
 				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
+				includeBrokers = true
 				continue
 			}
 
@@ -288,7 +291,8 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		remaining := time.Until(deadline)
 		if remaining > 0 && len(fetchParts) > 0 {
 			wsf := &watchShareFetch{
-				creq: creq,
+				creq:    creq,
+				session: session,
 			}
 			wsf.cb = func() {
 				select {
@@ -302,6 +306,16 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			}
 			wsf.t = time.AfterFunc(remaining, wsf.cb)
 			return nil, nil
+		}
+	}
+
+	if includeBrokers {
+		for _, b := range c.bs {
+			ne := kmsg.NewShareFetchResponseNodeEndpoint()
+			ne.NodeID = b.node
+			ne.Host, ne.Port = b.hostport()
+			ne.Rack = &brokerRack
+			resp.NodeEndpoints = append(resp.NodeEndpoints, ne)
 		}
 	}
 
@@ -375,8 +389,20 @@ func (c *Cluster) processShareFetchAcksLocked(sg *shareGroup, req *kmsg.ShareFet
 				continue
 			}
 			shp := sg.getSharePartition(topicName, rp.Partition, pd)
+			var ackErr int16
 			for _, batch := range rp.AcknowledgementBatches {
-				shp.processAcks(memberID, batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes)
+				if ec := shp.processAcks(memberID, batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes); ec != 0 {
+					ackErr = ec
+					break
+				}
+			}
+			if ackErr != 0 {
+				idx := getOrAddShareFetchTopic(resp, topicIdx, rt.TopicID)
+				sp := kmsg.NewShareFetchResponseTopicPartition()
+				sp.Partition = rp.Partition
+				sp.AcknowledgeErrorCode = ackErr
+				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
+				continue
 			}
 			shp.advanceSPSO()
 			fireShareWatchers(pd)
