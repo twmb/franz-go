@@ -5260,3 +5260,156 @@ func TestShareGroupCurrentLeaderMove(t *testing.T) {
 		t.Fatalf("expected 5 records after leader move, got %d", got2)
 	}
 }
+
+// TestShareGroupFencedLeaderEpochMove verifies that FENCED_LEADER_EPOCH
+// with a CurrentLeader hint in a ShareFetch partition response triggers
+// the same proactive cursor move as NOT_LEADER_FOR_PARTITION. A producer
+// goroutine runs concurrently with the consumer so -race can catch data
+// races in the move + ack + heartbeat paths.
+func TestShareGroupFencedLeaderEpochMove(t *testing.T) {
+	t.Parallel()
+	topic := "share-fenced-epoch"
+	c := newCluster(t,
+		kfake.NumBrokers(2),
+		kfake.SeedTopics(1, topic),
+	)
+	defer c.Close()
+
+	origLeader := c.LeaderFor(topic, 0)
+	newLeader := int32(1)
+	if origLeader == 1 {
+		newLeader = 0
+	}
+
+	// Producer.
+	pcl, _ := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(topic),
+	)
+	defer pcl.Close()
+
+	// Share consumer.
+	scl, _ := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup("share-fenced-epoch-test"),
+	)
+	defer scl.Close()
+
+	// Empty poll to establish the group (SPSO defaults to "latest").
+	emptyCtx, emptyCancel := context.WithTimeout(context.Background(), time.Second)
+	scl.PollFetches(emptyCtx)
+	emptyCancel()
+
+	// Produce initial records and consume them to establish a session.
+	for i := range 5 {
+		r := &kgo.Record{Value: []byte(strconv.Itoa(i))}
+		if err := pcl.ProduceSync(context.Background(), r).FirstErr(); err != nil {
+			t.Fatalf("produce: %v", err)
+		}
+	}
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel1()
+	for ctx1.Err() == nil {
+		fetches := scl.PollFetches(ctx1)
+		recs := fetches.Records()
+		if len(recs) == 0 {
+			continue
+		}
+		for _, r := range recs {
+			r.Ack(kgo.AckAccept)
+		}
+		if err := scl.CommitAcks(ctx1); err != nil {
+			t.Fatalf("commit acks: %v", err)
+		}
+		break
+	}
+	if ctx1.Err() != nil {
+		t.Fatal("timed out consuming initial records")
+	}
+
+	// Move the partition to the other broker so the original broker
+	// will return partition errors on the next ShareFetch.
+	if err := c.MoveTopicPartition(topic, 0, newLeader); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	// Intercept the first ShareFetch to the OLD leader after the move
+	// and replace its partition error with FENCED_LEADER_EPOCH +
+	// CurrentLeader. Without the fix, the client wouldn't recognize
+	// this error as a leader hint and would surface it instead of
+	// moving.
+	ti := c.TopicInfo(topic)
+	var injected atomic.Bool
+	c.ControlKey(78, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.ShareFetchRequest)
+		for _, rt := range req.Topics {
+			if rt.TopicID != ti.TopicID {
+				continue
+			}
+			for _, rp := range rt.Partitions {
+				if rp.Partition != 0 {
+					continue
+				}
+				if !injected.CompareAndSwap(false, true) {
+					return nil, nil, false
+				}
+				resp := req.ResponseKind().(*kmsg.ShareFetchResponse)
+				st := kmsg.NewShareFetchResponseTopic()
+				st.TopicID = ti.TopicID
+				sp := kmsg.NewShareFetchResponseTopicPartition()
+				sp.Partition = 0
+				sp.ErrorCode = kerr.FencedLeaderEpoch.Code
+				sp.CurrentLeader.LeaderID = newLeader
+				sp.CurrentLeader.LeaderEpoch = 1
+				st.Partitions = append(st.Partitions, sp)
+				resp.Topics = append(resp.Topics, st)
+				return resp, nil, true
+			}
+		}
+		return nil, nil, false
+	})
+
+	// Start a concurrent producer that feeds records while the
+	// consumer is dealing with the fenced leader epoch and cursor
+	// move. This exercises the move + heartbeat + ack paths under
+	// -race (internal goroutines: per-source fetch workers, heartbeat
+	// loop, metadata updater).
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	var produceDone sync.WaitGroup
+	produceDone.Add(1)
+	go func() {
+		defer produceDone.Done()
+		for i := range 20 {
+			r := &kgo.Record{Value: []byte(strconv.Itoa(i + 100))}
+			if err := pcl.ProduceSync(ctx2, r).FirstErr(); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Single consumer goroutine: poll, ack, commit in a loop until
+	// we've consumed enough records from the new leader.
+	var got int
+	for got < 20 && ctx2.Err() == nil {
+		fetches := scl.PollFetches(ctx2)
+		recs := fetches.Records()
+		if len(recs) == 0 {
+			continue
+		}
+		for _, r := range recs {
+			r.Ack(kgo.AckAccept)
+		}
+		got += len(recs)
+		_ = scl.CommitAcks(ctx2)
+	}
+	produceDone.Wait()
+
+	if got < 20 {
+		t.Fatalf("expected at least 20 records after fenced leader epoch move, got %d", got)
+	}
+	if !injected.Load() {
+		t.Fatal("FENCED_LEADER_EPOCH was never injected")
+	}
+}

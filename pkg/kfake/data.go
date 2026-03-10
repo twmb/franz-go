@@ -739,6 +739,8 @@ var validBrokerConfigs = map[string]string{
 	"share.max.delivery.attempts":               "",
 	"share.record.lock.duration.ms":             "",
 	"share.record.lock.sweep.interval.ms":       "",
+	"group.share.partition.max.record.locks":    "",
+	"group.share.max.share.sessions":            "",
 	"state.log.compact.bytes":                   "",
 	"super.users":                               "",
 }
@@ -801,6 +803,8 @@ var configDefaults = map[string]string{
 	"share.max.delivery.attempts":               "5",
 	"share.record.lock.duration.ms":             "30000",
 	"share.record.lock.sweep.interval.ms":       "5000",
+	"group.share.partition.max.record.locks":    "2000",
+	"group.share.max.share.sessions":            "2000",
 }
 
 // configTypes maps config names to their data types for DescribeConfigs v3+.
@@ -842,6 +846,8 @@ var configTypes = map[string]kmsg.ConfigType{
 	"share.max.delivery.attempts":               kmsg.ConfigTypeInt,
 	"share.record.lock.duration.ms":             kmsg.ConfigTypeLong,
 	"share.record.lock.sweep.interval.ms":       kmsg.ConfigTypeLong,
+	"group.share.partition.max.record.locks":    kmsg.ConfigTypeInt,
+	"group.share.max.share.sessions":            kmsg.ConfigTypeInt,
 	"state.log.compact.bytes":                   kmsg.ConfigTypeLong,
 	"super.users":                               kmsg.ConfigTypeList,
 	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
@@ -945,6 +951,14 @@ func (c *Cluster) shareRecordLockDurationMs() int32 {
 
 func (c *Cluster) shareMaxDeliveryAttempts() int32 {
 	return c.brokerConfigInt("share.max.delivery.attempts", 5)
+}
+
+func (c *Cluster) shareMaxRecordLocks() int32 {
+	return c.brokerConfigInt("group.share.partition.max.record.locks", 2000)
+}
+
+func (c *Cluster) shareMaxShareSessions() int32 {
+	return c.brokerConfigInt("group.share.max.share.sessions", 2000)
 }
 
 // maxMessageBytes returns the max.message.bytes for a topic, falling back to

@@ -57,8 +57,16 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		broker:   creq.cc.b.node,
 	}
 
-	if req.ShareSessionEpoch == -1 {
-		// Close session -- still process the acks below.
+	closingSession := req.ShareSessionEpoch == -1
+	if closingSession {
+		// Validate session exists (matching Kafka's
+		// SharePartitionManager behavior).
+		if c.shareSessions[sessionKey] == nil {
+			resp.ErrorCode = kerr.ShareSessionNotFound.Code
+			return resp, nil
+		}
+		// Close session -- still process the acks below, then
+		// release remaining acquired records.
 		defer delete(c.shareSessions, sessionKey)
 	} else if req.ShareSessionEpoch == 0 {
 		// Epoch 0 is for opening a new session via ShareFetch, not
@@ -78,6 +86,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 	}
 
 	supportsRenew := req.Version >= 2
+	maxDelivery := c.shareMaxDeliveryAttempts()
 	id2t := c.data.id2t
 	topicIdx := make(map[uuid]int)
 
@@ -139,7 +148,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 			shp := sg.getSharePartition(topicName, rp.Partition, pd)
 			var ackErr int16
 			for _, batch := range rp.AcknowledgementBatches {
-				if ec := shp.processAcks(memberID, batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes); ec != 0 {
+				if ec := shp.processAcks(memberID, batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes, maxDelivery); ec != 0 {
 					ackErr = ec
 					break
 				}
@@ -156,10 +165,21 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 			fireShareWatchers(pd)
 		}
 	}
+
+	// On session close, release remaining acquired records (matching
+	// Kafka's releaseSession behavior).
+	var released bool
+	if closingSession {
+		released = sg.releaseRecordsForMemberLocked(memberID, maxDelivery)
+	}
 	sg.mu.Unlock()
 
+	if released {
+		sg.fireAllShareWatchers(c)
+	}
+
 	// Advance session epoch (for non-close requests), same as ShareFetch.
-	if req.ShareSessionEpoch != -1 {
+	if !closingSession {
 		session := c.shareSessions[sessionKey]
 		if session != nil {
 			if session.epoch == math.MaxInt32 {

@@ -60,8 +60,8 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	}
 
 	id2t := c.data.id2t
-	t2id := c.data.t2id
 	supportsRenew := req.Version >= 2
+	maxDelivery := c.shareMaxDeliveryAttempts()
 
 	// Handle session management (skip on watcher re-invocation).
 	sessionKey := shareSessionKey{
@@ -69,6 +69,12 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		memberID: memberID,
 		broker:   creq.cc.b.node,
 	}
+
+	type tpKey struct {
+		tid uuid
+		p   int32
+	}
+	var addedParts map[tpKey]struct{} // partitions newly added to session (for response filtering)
 
 	var session *shareSession
 	if w != nil {
@@ -81,39 +87,121 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 	} else {
 		if req.ShareSessionEpoch == -1 {
-			// Close session. Process piggybacked acks before closing.
+			// Close session. Validate it exists first (matching
+			// Kafka's SharePartitionManager behavior).
+			session := c.shareSessions[sessionKey]
+			if session == nil {
+				resp.ErrorCode = kerr.ShareSessionNotFound.Code
+				return resp, nil
+			}
+			// Process piggybacked acks, then release remaining
+			// acquired records (matching Kafka's releaseSession).
 			sg.mu.Lock()
-			c.processShareFetchAcksLocked(sg, req, memberID, id2t, supportsRenew, resp)
+			c.processShareFetchAcksLocked(sg, req, memberID, id2t, supportsRenew, maxDelivery, resp)
+			released := sg.releaseRecordsForMemberLocked(memberID, maxDelivery)
 			sg.mu.Unlock()
+			if released {
+				sg.fireAllShareWatchers(c)
+			}
 			delete(c.shareSessions, sessionKey)
 			return resp, nil
 		}
 
 		session = c.shareSessions[sessionKey]
 		if req.ShareSessionEpoch == 0 {
+			// Reject piggybacked acks BEFORE creating session
+			// (matching Kafka: checks before maybeCreateSession).
+			for i := range req.Topics {
+				for j := range req.Topics[i].Partitions {
+					if len(req.Topics[i].Partitions[j].AcknowledgementBatches) > 0 {
+						resp.ErrorCode = kerr.InvalidRequest.Code
+						return resp, nil
+					}
+				}
+			}
+			// Check session capacity (matching Kafka's
+			// ShareSessionCache.maybeCreateSession).
+			if int32(len(c.shareSessions)) >= c.shareMaxShareSessions() {
+				resp.ErrorCode = kerr.ShareSessionLimitReached.Code
+				return resp, nil
+			}
 			// New session -- start at epoch 0; the increment at the
 			// bottom of this handler advances it to 1 for the next
-			// request.
-			session = &shareSession{epoch: 0}
+			// request. Populate session partitions from request Topics.
+			session = &shareSession{
+				epoch:      0,
+				partitions: make(map[uuid]map[int32]struct{}),
+				cc:         creq.cc,
+			}
+			for i := range req.Topics {
+				rt := &req.Topics[i]
+				ps := session.partitions[rt.TopicID]
+				if ps == nil {
+					ps = make(map[int32]struct{})
+					session.partitions[rt.TopicID] = ps
+				}
+				for j := range rt.Partitions {
+					ps[rt.Partitions[j].Partition] = struct{}{}
+				}
+			}
 			c.shareSessions[sessionKey] = session
+			// Watch the connection for disconnect cleanup
+			// (matching Kafka's ConnectionDisconnectListener).
+			if _, watched := c.shareConnWatch[creq.cc]; !watched {
+				c.shareConnWatch[creq.cc] = struct{}{}
+				cc := creq.cc
+				go func() {
+					select {
+					case <-cc.done:
+						select {
+						case c.shareDisconnCh <- cc:
+						case <-c.die:
+						}
+					case <-c.die:
+					}
+				}()
+			}
 		} else if session == nil {
 			resp.ErrorCode = kerr.ShareSessionNotFound.Code
 			return resp, nil
 		} else if req.ShareSessionEpoch != session.epoch {
 			resp.ErrorCode = kerr.InvalidShareSessionEpoch.Code
 			return resp, nil
-		}
-	}
-
-	// Reject piggybacked acks on new sessions (epoch 0). Real Kafka
-	// returns INVALID_REQUEST if acknowledge data is present in the
-	// initial request.
-	if w == nil && req.ShareSessionEpoch == 0 {
-		for i := range req.Topics {
-			for j := range req.Topics[i].Partitions {
-				if len(req.Topics[i].Partitions[j].AcknowledgementBatches) > 0 {
-					resp.ErrorCode = kerr.InvalidRequest.Code
-					return resp, nil
+		} else {
+			// Incremental session (epoch > 0): merge request
+			// Topics into session (ADD), remove ForgottenTopicsData.
+			// Track newly-added partitions for response filtering:
+			// added partitions appear in the response even with no
+			// data (matching Kafka's requiresUpdateInResponse).
+			for i := range req.Topics {
+				rt := &req.Topics[i]
+				ps := session.partitions[rt.TopicID]
+				if ps == nil {
+					ps = make(map[int32]struct{})
+					session.partitions[rt.TopicID] = ps
+				}
+				for j := range rt.Partitions {
+					p := rt.Partitions[j].Partition
+					if _, exists := ps[p]; !exists {
+						if addedParts == nil {
+							addedParts = make(map[tpKey]struct{})
+						}
+						addedParts[tpKey{rt.TopicID, p}] = struct{}{}
+					}
+					ps[p] = struct{}{}
+				}
+			}
+			for i := range req.ForgottenTopicsData {
+				ft := &req.ForgottenTopicsData[i]
+				ps := session.partitions[ft.TopicID]
+				if ps == nil {
+					continue
+				}
+				for _, p := range ft.Partitions {
+					delete(ps, p)
+				}
+				if len(ps) == 0 {
+					delete(session.partitions, ft.TopicID)
 				}
 			}
 		}
@@ -125,7 +213,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	if req.Version >= 2 && req.IsRenewAck {
 		sg.mu.Lock()
 		if w == nil {
-			c.processShareFetchAcksLocked(sg, req, memberID, id2t, supportsRenew, resp)
+			c.processShareFetchAcksLocked(sg, req, memberID, id2t, supportsRenew, maxDelivery, resp)
 		}
 		sg.mu.Unlock()
 		if session.epoch == math.MaxInt32 {
@@ -141,7 +229,15 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		maxRecords = 500
 	}
 
-	type fetchPart struct {
+	// BATCH_OPTIMIZED mode (ShareAcquireMode=0, KIP-1206): when
+	// BatchSize is set, use it as the per-partition acquire limit.
+	perPartLimit := maxRecords
+	if req.ShareAcquireMode == 0 && req.BatchSize > 0 {
+		perPartLimit = req.BatchSize
+	}
+
+	type fetchTarget struct {
+		topicID   uuid
 		topic     string
 		partition int32
 		pd        *partData
@@ -155,9 +251,10 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 
 	topicIdx := make(map[uuid]int)
 	var totalRecords int32
-	var fetchParts []fetchPart
+	var targets []fetchTarget
 	var acquiredParts []acquiredPart
 	var includeBrokers bool
+	maxRecordLocks := c.shareMaxRecordLocks()
 
 	// Lock the share group's partition state for ack processing and
 	// record acquisition. Batch I/O happens after unlocking.
@@ -165,45 +262,55 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 
 	// Process piggybacked acks first (only on initial invocation).
 	if w == nil {
-		c.processShareFetchAcksLocked(sg, req, memberID, id2t, supportsRenew, resp)
+		c.processShareFetchAcksLocked(sg, req, memberID, id2t, supportsRenew, maxDelivery, resp)
 	}
 
-	for i := range req.Topics {
-		rt := &req.Topics[i]
-		topicName := id2t[rt.TopicID]
+	// Phase 1: Build target list from session partitions. The session
+	// holds the full set of partitions to fetch from (populated on
+	// epoch 0, updated incrementally on epoch > 0).
+	for topicID, parts := range session.partitions {
+		topicName := id2t[topicID]
 		if topicName == "" {
+			// Topic ID no longer resolves (deleted mid-session).
+			// Return UNKNOWN_TOPIC_ID for all partitions (matching
+			// Kafka's ShareSessionContext response filtering).
+			idx := getOrAddShareFetchTopic(resp, topicIdx, topicID)
+			for p := range parts {
+				sp := kmsg.NewShareFetchResponseTopicPartition()
+				sp.Partition = p
+				sp.ErrorCode = kerr.UnknownTopicID.Code
+				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
+			}
 			continue
 		}
 
 		// ACL: per-topic READ check.
 		if !c.allowedACL(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
-			idx := getOrAddShareFetchTopic(resp, topicIdx, rt.TopicID)
-			for j := range rt.Partitions {
+			idx := getOrAddShareFetchTopic(resp, topicIdx, topicID)
+			for p := range parts {
 				sp := kmsg.NewShareFetchResponseTopicPartition()
-				sp.Partition = rt.Partitions[j].Partition
+				sp.Partition = p
 				sp.ErrorCode = kerr.TopicAuthorizationFailed.Code
 				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
 			}
 			continue
 		}
 
-		for j := range rt.Partitions {
-			rp := &rt.Partitions[j]
-
+		for p := range parts {
 			// Only fetch from partitions on this broker.
-			pd, ok := c.data.tps.getp(topicName, rp.Partition)
+			pd, ok := c.data.tps.getp(topicName, p)
 			if !ok {
-				idx := getOrAddShareFetchTopic(resp, topicIdx, rt.TopicID)
+				idx := getOrAddShareFetchTopic(resp, topicIdx, topicID)
 				sp := kmsg.NewShareFetchResponseTopicPartition()
-				sp.Partition = rp.Partition
+				sp.Partition = p
 				sp.ErrorCode = kerr.UnknownTopicOrPartition.Code
 				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
 				continue
 			}
 			if pd.leader.node != creq.cc.b.node {
-				idx := getOrAddShareFetchTopic(resp, topicIdx, rt.TopicID)
+				idx := getOrAddShareFetchTopic(resp, topicIdx, topicID)
 				sp := kmsg.NewShareFetchResponseTopicPartition()
-				sp.Partition = rp.Partition
+				sp.Partition = p
 				sp.ErrorCode = kerr.NotLeaderForPartition.Code
 				sp.CurrentLeader.LeaderID = pd.leader.node
 				sp.CurrentLeader.LeaderEpoch = pd.epoch
@@ -212,30 +319,48 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 				continue
 			}
 
-			shp := sg.getSharePartition(topicName, rp.Partition, pd)
-
-			remaining := maxRecords - totalRecords
-			if remaining <= 0 {
-				continue
-			}
-			acquiredRanges := shp.acquireRecords(memberID, pd.highWatermark, remaining, c.shareMaxDeliveryAttempts())
-			if len(acquiredRanges) == 0 {
-				fetchParts = append(fetchParts, fetchPart{topicName, rp.Partition, pd})
-				continue
-			}
-
-			for _, ar := range acquiredRanges {
-				totalRecords += int32(ar.LastOffset - ar.FirstOffset + 1)
-			}
-
-			acquiredParts = append(acquiredParts, acquiredPart{
-				topicID:   t2id[topicName],
-				pd:        pd,
-				partition: rp.Partition,
-				ranges:    acquiredRanges,
-			})
-			fetchParts = append(fetchParts, fetchPart{topicName, rp.Partition, pd})
+			targets = append(targets, fetchTarget{topicID, topicName, p, pd})
 		}
+	}
+
+	// Phase 2: Rotate targets for fairness (matching Kafka's
+	// PartitionRotateStrategy.ROUND_ROBIN using session epoch).
+	if len(targets) > 1 && session.epoch > 0 {
+		rotateAt := int(session.epoch) % len(targets)
+		if rotateAt > 0 {
+			rotated := make([]fetchTarget, len(targets))
+			copy(rotated, targets[rotateAt:])
+			copy(rotated[len(targets)-rotateAt:], targets[:rotateAt])
+			targets = rotated
+		}
+	}
+
+	// Phase 3: Acquire records from rotated targets.
+	for _, tgt := range targets {
+		remaining := maxRecords - totalRecords
+		if remaining <= 0 {
+			continue
+		}
+		if remaining > perPartLimit {
+			remaining = perPartLimit
+		}
+
+		shp := sg.getSharePartition(tgt.topic, tgt.partition, tgt.pd)
+		acquiredRanges := shp.acquireRecords(memberID, tgt.pd, tgt.pd.highWatermark, remaining, maxDelivery, maxRecordLocks)
+		if len(acquiredRanges) == 0 {
+			continue
+		}
+
+		for _, ar := range acquiredRanges {
+			totalRecords += int32(ar.LastOffset - ar.FirstOffset + 1)
+		}
+
+		acquiredParts = append(acquiredParts, acquiredPart{
+			topicID:   tgt.topicID,
+			pd:        tgt.pd,
+			partition: tgt.partition,
+			ranges:    acquiredRanges,
+		})
 	}
 
 	sg.mu.Unlock()
@@ -283,13 +408,34 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
 	}
 
+	// Response filtering: for incremental sessions, newly-added
+	// partitions appear in the response even with no data (matching
+	// Kafka's CachedSharePartition.requiresUpdateInResponse).
+	if len(addedParts) > 0 {
+		responded := make(map[tpKey]struct{})
+		for _, t := range resp.Topics {
+			for _, p := range t.Partitions {
+				responded[tpKey{t.TopicID, p.Partition}] = struct{}{}
+			}
+		}
+		for key := range addedParts {
+			if _, ok := responded[key]; ok {
+				continue
+			}
+			idx := getOrAddShareFetchTopic(resp, topicIdx, key.tid)
+			sp := kmsg.NewShareFetchResponseTopicPartition()
+			sp.Partition = key.p
+			resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
+		}
+	}
+
 	// If no records acquired and this is the initial invocation, consider
 	// waiting for new data (MinBytes/MaxWait long-poll).
 	if totalRecords == 0 && w == nil {
 		wait := time.Duration(req.MaxWaitMillis) * time.Millisecond
 		deadline := creq.at.Add(wait)
 		remaining := time.Until(deadline)
-		if remaining > 0 && len(fetchParts) > 0 {
+		if remaining > 0 && len(targets) > 0 {
 			wsf := &watchShareFetch{
 				creq:    creq,
 				session: session,
@@ -300,9 +446,9 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 				case <-c.die:
 				}
 			}
-			for _, fp := range fetchParts {
-				fp.pd.shareWatch[wsf] = struct{}{}
-				wsf.in = append(wsf.in, fp.pd)
+			for _, tgt := range targets {
+				tgt.pd.shareWatch[wsf] = struct{}{}
+				wsf.in = append(wsf.in, tgt.pd)
 			}
 			wsf.t = time.AfterFunc(remaining, wsf.cb)
 			return nil, nil
@@ -348,7 +494,7 @@ func getOrAddShareFetchTopic(resp *kmsg.ShareFetchResponse, idx map[uuid]int, ti
 // partitions so that other waiting consumers see released records.
 //
 // Must be called with sg.mu held.
-func (c *Cluster) processShareFetchAcksLocked(sg *shareGroup, req *kmsg.ShareFetchRequest, memberID string, id2t map[uuid]string, supportsRenew bool, resp *kmsg.ShareFetchResponse) {
+func (c *Cluster) processShareFetchAcksLocked(sg *shareGroup, req *kmsg.ShareFetchRequest, memberID string, id2t map[uuid]string, supportsRenew bool, maxDelivery int32, resp *kmsg.ShareFetchResponse) {
 	topicIdx := make(map[uuid]int)
 	for i := range req.Topics {
 		rt := &req.Topics[i]
@@ -391,7 +537,7 @@ func (c *Cluster) processShareFetchAcksLocked(sg *shareGroup, req *kmsg.ShareFet
 			shp := sg.getSharePartition(topicName, rp.Partition, pd)
 			var ackErr int16
 			for _, batch := range rp.AcknowledgementBatches {
-				if ec := shp.processAcks(memberID, batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes); ec != 0 {
+				if ec := shp.processAcks(memberID, batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes, maxDelivery); ec != 0 {
 					ackErr = ec
 					break
 				}
@@ -417,7 +563,7 @@ func validateOneAckBatch(first, last int64, ackTypes []int8, prevEnd *int64, max
 	if first > last {
 		return kerr.InvalidRequest.Code
 	}
-	if first <= *prevEnd {
+	if first < *prevEnd {
 		return kerr.InvalidRequest.Code
 	}
 	if len(ackTypes) == 0 {

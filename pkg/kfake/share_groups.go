@@ -125,8 +125,15 @@ type shareSessionKey struct {
 	broker   int32
 }
 
+// shareSession tracks a share fetch session's epoch and the set of
+// partitions currently in the session. On epoch 0 (new session), the
+// request's Topics become the session's partitions. On epoch > 0
+// (incremental), the request's Topics are ADDED to the session and
+// ForgottenTopicsData are REMOVED (matching Kafka's ShareSession.update).
 type shareSession struct {
-	epoch int32
+	epoch      int32
+	partitions map[uuid]map[int32]struct{} // topicID -> partition set
+	cc         *clientConn                 // owning connection, for disconnect cleanup
 }
 
 // watchShareFetch suspends a ShareFetch request until new records are
@@ -317,14 +324,20 @@ func (g *shareGroup) handleHeartbeat(creq *clientReq) kmsg.Response {
 func (g *shareGroup) handleJoin(creq *clientReq, req *kmsg.ShareGroupHeartbeatRequest, resp *kmsg.ShareGroupHeartbeatResponse) *kmsg.ShareGroupHeartbeatResponse {
 	memberID := req.MemberID
 
-	// If existing member, treat as rejoin.
+	// If existing member, treat as rejoin. Only bump groupEpoch if
+	// subscriptions actually changed (matching Kafka's behavior where
+	// groupEpoch only bumps on metadata/subscription changes).
 	if m := g.members[memberID]; m != nil {
-		m.subscribedTopics = slices.Clone(req.SubscribedTopicNames)
-		slices.Sort(m.subscribedTopics)
+		newSubs := slices.Clone(req.SubscribedTopicNames)
+		slices.Sort(newSubs)
+		subsChanged := !slices.Equal(m.subscribedTopics, newSubs)
+		m.subscribedTopics = newSubs
 		m.last = time.Now()
 		g.resetSessionTimeout(m)
-		g.groupEpoch++
-		g.recomputeAssignments()
+		if subsChanged {
+			g.groupEpoch++
+			g.recomputeAssignments()
+		}
 		g.reconcileMember(m)
 		resp.MemberID = &memberID
 		resp.MemberEpoch = m.memberEpoch
@@ -543,14 +556,23 @@ func (g *shareGroup) maybeQuit() {
 // If a record has hit max delivery count, it is archived instead.
 func (g *shareGroup) releaseRecordsForMember(memberID string) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.releaseRecordsForMemberLocked(memberID, g.c.shareMaxDeliveryAttempts())
+	g.mu.Unlock()
+}
+
+// releaseRecordsForMemberLocked is the inner loop of releaseRecordsForMember.
+// Returns true if any records were released to AVAILABLE (callers may need
+// to fire share watchers). Must be called with g.mu held.
+func (g *shareGroup) releaseRecordsForMemberLocked(memberID string, maxDelivery int32) bool {
+	released := false
 	g.partitions.each(func(_ string, _ int32, sp *sharePartition) {
 		for offset, sr := range sp.records {
 			if sr.state == shareRecordAcquired && sr.acquiredBy == memberID {
-				if sr.deliveryCount >= g.c.shareMaxDeliveryAttempts() {
+				if sr.deliveryCount >= maxDelivery {
 					sr.state = shareRecordArchived
 				} else {
 					sr.state = shareRecordAvailable
+					released = true
 					if offset < sp.scanOffset {
 						sp.scanOffset = offset
 					}
@@ -560,6 +582,7 @@ func (g *shareGroup) releaseRecordsForMember(memberID string) {
 		}
 		sp.advanceSPSO()
 	})
+	return released
 }
 
 // getSharePartition returns the share partition state, initializing it if needed.
@@ -588,7 +611,12 @@ func (g *shareGroup) getSharePartition(topic string, partition int32, pd *partDa
 // given member, up to maxRecords. Records that have hit maxDeliveryCount are
 // archived instead of acquired. Returns the list of acquired offset ranges
 // with delivery counts.
-func (sp *sharePartition) acquireRecords(memberID string, hwm int64, maxRecords int32, maxDeliveryCount int32) []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord {
+//
+// pd is used for compaction-aware gap detection: offsets that fall between
+// batches (compacted away) are skipped rather than tracked as phantom records.
+// maxRecordLocks limits the total tracked records per partition (matching
+// Kafka's group.share.partition.max.record.locks).
+func (sp *sharePartition) acquireRecords(memberID string, pd *partData, hwm int64, maxRecords int32, maxDeliveryCount int32, maxRecordLocks int32) []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord {
 	var acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord
 	var count int32
 
@@ -596,8 +624,54 @@ func (sp *sharePartition) acquireRecords(memberID string, hwm int64, maxRecords 
 		sp.scanOffset = sp.spso
 	}
 
+	// Check in-flight limit before starting.
+	if maxRecordLocks > 0 && int32(len(sp.records)) >= maxRecordLocks {
+		return nil
+	}
+
+	// Find starting batch position for gap detection.
+	curSeg, curMeta, hasBatch, atEnd := pd.searchOffset(sp.scanOffset)
+	if atEnd {
+		hasBatch = false
+	}
+
+	lastScanned := sp.scanOffset
+
 	// Walk offsets from scanOffset to HWM looking for available records.
 	for offset := sp.scanOffset; offset < hwm && count < maxRecords; offset++ {
+		lastScanned = offset + 1
+
+		// In-flight limit per iteration.
+		if maxRecordLocks > 0 && int32(len(sp.records)) >= maxRecordLocks {
+			break
+		}
+
+		// Gap detection: skip offsets between batches (compacted away).
+		if hasBatch {
+			curBatch := &pd.segments[curSeg].index[curMeta]
+			if offset > curBatch.firstOffset+int64(curBatch.lastOffsetDelta) {
+				// Past current batch, advance to next.
+				curMeta++
+				for curMeta >= len(pd.segments[curSeg].index) {
+					curSeg++
+					curMeta = 0
+					if curSeg >= len(pd.segments) {
+						hasBatch = false
+						break
+					}
+				}
+				if hasBatch {
+					curBatch = &pd.segments[curSeg].index[curMeta]
+				}
+			}
+			if hasBatch && offset < curBatch.firstOffset {
+				// Offset is in a gap between batches. Jump past it.
+				lastScanned = curBatch.firstOffset
+				offset = curBatch.firstOffset - 1 // -1 because for loop increments
+				continue
+			}
+		}
+
 		sr := sp.records[offset]
 		if sr == nil {
 			// No state yet -- new record, available.
@@ -641,10 +715,11 @@ func (sp *sharePartition) acquireRecords(memberID string, hwm int64, maxRecords 
 		acquired = append(acquired, ar)
 	}
 
-	// Advance scanOffset past what we just scanned so subsequent
-	// acquire calls skip already-acquired/archived offsets.
-	if len(acquired) > 0 {
-		sp.scanOffset = acquired[len(acquired)-1].LastOffset + 1
+	// Always advance scanOffset to reflect how far we scanned,
+	// even when nothing was acquired. This lets advanceSPSO
+	// detect compacted gaps (nil entries below scanOffset).
+	if lastScanned > sp.scanOffset {
+		sp.scanOffset = lastScanned
 	}
 
 	// After acquiring, advance SPSO in case we archived some records
@@ -663,10 +738,15 @@ func (sp *sharePartition) acquireRecords(memberID string, hwm int64, maxRecords 
 // Types: 0=Gap (skip), 1=Accept, 2=Release, 3=Reject, 4=Renew.
 // Offsets below SPSO are silently skipped (already finalized).
 //
+// maxDeliveryCount is checked on RELEASE: if the record has already been
+// delivered maxDeliveryCount times, it is archived instead of released
+// (matching Kafka's InFlightState.tryUpdateState check on AVAILABLE
+// transition).
+//
 // Returns 0 on success. Returns INVALID_RECORD_STATE if an offset is not
 // in the ACQUIRED state or is not owned by memberID (matching Kafka's
 // SharePartition.acknowledge behavior).
-func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTypes []int8) int16 {
+func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTypes []int8, maxDeliveryCount int32) int16 {
 	perOffset := len(ackTypes) > 1
 	uniformType := int8(1) // default: accept
 	if len(ackTypes) == 1 {
@@ -701,11 +781,18 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 			sr.state = shareRecordAcknowledged
 			sr.acquiredBy = ""
 		case 2: // Release
-			sr.state = shareRecordAvailable
-			sr.acquiredBy = ""
-			if offset < sp.scanOffset {
-				sp.scanOffset = offset
+			// Like Kafka's InFlightState.tryUpdateState: if
+			// deliveryCount >= maxDeliveryCount, redirect to
+			// ARCHIVED instead of AVAILABLE.
+			if sr.deliveryCount >= maxDeliveryCount {
+				sr.state = shareRecordArchived
+			} else {
+				sr.state = shareRecordAvailable
+				if offset < sp.scanOffset {
+					sp.scanOffset = offset
+				}
 			}
+			sr.acquiredBy = ""
 		case 3: // Reject
 			sr.state = shareRecordArchived
 			sr.acquiredBy = ""
@@ -716,12 +803,20 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 	return 0
 }
 
-// advanceSPSO advances the SPSO past contiguous acknowledged/archived records,
-// cleaning up their state entries.
+// advanceSPSO advances the SPSO past contiguous acknowledged/archived
+// records, cleaning up their state entries. Also skips compacted gaps:
+// if records[spso] is nil but we've already scanned past that offset
+// (spso < scanOffset), the nil means the offset was compacted away.
 func (sp *sharePartition) advanceSPSO() {
 	for {
 		sr := sp.records[sp.spso]
 		if sr == nil {
+			// If we've scanned past this offset and there's no
+			// record, it's a compacted gap — skip it.
+			if sp.spso < sp.scanOffset {
+				sp.spso++
+				continue
+			}
 			break
 		}
 		if sr.state != shareRecordAcknowledged && sr.state != shareRecordArchived {
@@ -729,6 +824,31 @@ func (sp *sharePartition) advanceSPSO() {
 		}
 		delete(sp.records, sp.spso)
 		sp.spso++
+	}
+}
+
+// cleanupShareSessionsForConn removes all share sessions owned by the given
+// connection and releases their acquired records. This matches Kafka's
+// ConnectionDisconnectListener behavior: when a TCP connection drops, all
+// sessions on that connection are removed and acquired records are released.
+// Must only be called from run().
+func (c *Cluster) cleanupShareSessionsForConn(cc *clientConn) {
+	maxDelivery := c.shareMaxDeliveryAttempts()
+	for key, session := range c.shareSessions {
+		if session.cc != cc {
+			continue
+		}
+		delete(c.shareSessions, key)
+		sg := c.shareGroups.gs[key.group]
+		if sg == nil {
+			continue
+		}
+		sg.mu.Lock()
+		released := sg.releaseRecordsForMemberLocked(key.memberID, maxDelivery)
+		sg.mu.Unlock()
+		if released {
+			sg.fireAllShareWatchers(c)
+		}
 	}
 }
 

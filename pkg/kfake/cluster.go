@@ -51,6 +51,8 @@ type (
 		groupConfigs       map[string]map[string]*string // group -> config key -> config value
 		shareGroups        shareGroups
 		shareSessions      map[shareSessionKey]*shareSession
+		shareConnWatch     map[*clientConn]struct{}
+		shareDisconnCh     chan *clientConn
 		watchShareFetchCh  chan *watchShareFetch
 		compactTicker      *time.Ticker
 		offsetExpireTicker *time.Ticker
@@ -193,6 +195,8 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	c.shareGroups.c = c
 	c.shareGroups.sweepCh = make(chan *shareGroup, 16)
 	c.shareSessions = make(map[shareSessionKey]*shareSession)
+	c.shareConnWatch = make(map[*clientConn]struct{})
+	c.shareDisconnCh = make(chan *clientConn, 16)
 	c.watchShareFetchCh = make(chan *watchShareFetch, 16)
 	c.pids.c = c
 	c.pids.ids = make(map[int64]*pidinfo)
@@ -431,6 +435,11 @@ outer:
 
 		case sg := <-c.shareGroups.sweepCh:
 			sg.fireAllShareWatchers(c)
+			continue
+
+		case cc := <-c.shareDisconnCh:
+			delete(c.shareConnWatch, cc)
+			c.cleanupShareSessionsForConn(cc)
 			continue
 
 		case admin := <-c.adminCh:
