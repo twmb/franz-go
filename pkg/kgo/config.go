@@ -182,6 +182,7 @@ type cfg struct {
 	shareGroup            string          // share group we are in
 	shareMaxRecords       int32           // MaxRecords and BatchSize for ShareFetch (KIP-1206)
 	shareStrictMaxRecords bool            // if true, ShareAcquireMode=1 (record-limit) per KIP-1206
+	shareAckCallback      func(*Client, []ShareAckResult)
 	instanceID            *string         // optional group instance ID
 	balancers             []GroupBalancer // balancers we can use
 	protocol              string          // "consumer" by default, expected to never be overridden
@@ -1723,6 +1724,23 @@ func ShareMaxRecords(n int32) GroupOpt {
 // This option only applies when using ShareGroup.
 func ShareStrictMaxRecords() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.shareStrictMaxRecords = true }}
+}
+
+// ShareAcknowledgeCallback sets a callback that is invoked when the broker
+// acknowledges share group records. The callback fires for both piggybacked
+// acknowledgements on ShareFetch responses and for standalone
+// ShareAcknowledge responses.
+//
+// Piggybacked ack errors are otherwise invisible to the user: retryable
+// errors are retried automatically and non-retryable errors are silently
+// dropped. This callback lets the user observe all ack outcomes.
+//
+// The callback is called once per broker response with all per-partition
+// results from that response. Results with a nil Err indicate success.
+//
+// This option only applies when using [ShareGroup].
+func ShareAcknowledgeCallback(fn func(*Client, []ShareAckResult)) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.shareAckCallback = fn }}
 }
 
 // Balancers sets the group balancers to use for dividing topic partitions

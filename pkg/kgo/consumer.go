@@ -768,7 +768,7 @@ func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bo
 // that metadata does not load the tps we are changing. Basically, we ensure
 // everything w.r.t. consuming is at a stand still.
 func (c *consumer) purgeTopics(topics []string) {
-	if c.g == nil && c.d == nil {
+	if c.g == nil && c.d == nil && c.s == nil {
 		return
 	}
 
@@ -794,7 +794,9 @@ func (c *consumer) purgeTopics(topics []string) {
 	// this cannot run concurrent with findNewAssignments. Thus, we first
 	// purge tps, then clear using, and once the lock releases, findNewAssignments
 	// will use the now-purged tps and will not add back to using.
-	if c.g != nil {
+	if c.s != nil {
+		c.s.purgeTopics(topics)
+	} else if c.g != nil {
 		c.g.mu.Lock() // required when updating using
 		defer c.g.mu.Unlock()
 		c.assignPartitions(purgeAssignments, assignPurgeMatching, c.g.tps, fmt.Sprintf("purge of %v requested", topics))
@@ -824,7 +826,7 @@ func (c *consumer) purgeTopics(topics []string) {
 // entire topic is purged.
 func (cl *Client) AddConsumeTopics(topics ...string) {
 	c := &cl.consumer
-	if len(topics) == 0 || c.g == nil && c.d == nil || cl.cfg.regex {
+	if len(topics) == 0 || c.g == nil && c.d == nil && c.s == nil || cl.cfg.regex {
 		return
 	}
 
@@ -833,7 +835,9 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.g != nil {
+	if c.s != nil {
+		c.s.tps.storeTopics(topics)
+	} else if c.g != nil {
 		c.g.tps.storeTopics(topics)
 	} else {
 		c.d.tps.storeTopics(topics)
@@ -847,12 +851,14 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 // GetConsumeTopics retrieves a list of current topics being consumed.
 func (cl *Client) GetConsumeTopics() []string {
 	c := &cl.consumer
-	if c.g == nil && c.d == nil {
+	if c.g == nil && c.d == nil && c.s == nil {
 		return nil
 	}
 	var m map[string]*topicPartitions
 	var ok bool
-	if c.g != nil {
+	if c.s != nil {
+		m, ok = c.s.tps.v.Load().(topicsPartitionsData)
+	} else if c.g != nil {
 		m, ok = c.g.tps.v.Load().(topicsPartitionsData)
 	} else {
 		m, ok = c.d.tps.v.Load().(topicsPartitionsData)
