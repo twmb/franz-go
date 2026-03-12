@@ -506,6 +506,14 @@ func (s *shareConsumer) manageShareGroup() {
 			})
 		}
 
+		// Reset sent-field tracking on any error so we re-send
+		// SubscribedTopicNames and RackID on the next heartbeat.
+		// If the coordinator changed, the new coordinator may
+		// not have our state yet. Matches the Java client's
+		// resetHeartbeatState on every error/failure.
+		s.lastSentSubscribedTopics = nil
+		s.sentRack = false
+
 		consecutiveErrors++
 		backoff := s.cfg.retryBackoff(consecutiveErrors)
 		s.cfg.logger.Log(LogLevelError, "share group manage loop errored",
@@ -573,13 +581,13 @@ func (s *shareConsumer) sendHeartbeat() (time.Duration, error) {
 }
 
 func (s *shareConsumer) handleResp(resp *kmsg.ShareGroupHeartbeatResponse) map[string][]int32 {
-	if resp.MemberID != nil {
-		s.memberGen.store(*resp.MemberID, resp.MemberEpoch)
-		s.cfg.logger.Log(LogLevelDebug, "storing share member and epoch", "group", s.cfg.shareGroup, "member", *resp.MemberID, "epoch", resp.MemberEpoch)
-	} else {
-		s.memberGen.storeGeneration(resp.MemberEpoch)
-		s.cfg.logger.Log(LogLevelDebug, "storing share epoch", "group", s.cfg.shareGroup, "epoch", resp.MemberEpoch)
-	}
+	// The member ID is client-generated and immutable for the
+	// member's lifetime (Java declares it final). The broker
+	// echoes it back but we must not overwrite ours -- doing so
+	// would create a dependency on the broker's response that
+	// the protocol does not intend.
+	s.memberGen.storeGeneration(resp.MemberEpoch)
+	s.cfg.logger.Log(LogLevelDebug, "storing share epoch", "group", s.cfg.shareGroup, "epoch", resp.MemberEpoch)
 
 	if resp.Assignment == nil {
 		if len(s.unresolvedAssigned) == 0 {
@@ -989,16 +997,14 @@ func (s *shareConsumer) sendSourceAck(ctx context.Context, src *source, acks map
 	src.cursorsMu.Unlock()
 
 	// Cannot send ShareAcknowledge on a new session (epoch 0) --
-	// there is no session to acknowledge against. Restore the
-	// acks so they are piggybacked on the next ShareFetch after
-	// the session is established.
+	// there is no session to acknowledge against. Epoch 0 is only
+	// reachable after a session reset (at initial startup, no acks
+	// exist because no records have been fetched). Drop the acks
+	// rather than holding them: the old session's acquisitions
+	// are released, so these acks are stale. The Java client
+	// fails them with INVALID_SHARE_SESSION_EPOCH.
 	if req.ShareSessionEpoch == 0 {
-		for tid, parts := range acks {
-			for p, batches := range parts {
-				src.addShareAcks(tid, p, batches)
-			}
-		}
-		s.cfg.logger.Log(LogLevelDebug, "share acknowledge skipped, session epoch is 0",
+		s.cfg.logger.Log(LogLevelInfo, "dropping stale acks, share session epoch is 0",
 			"broker", src.nodeID,
 		)
 		return nil
@@ -1013,17 +1019,14 @@ func (s *shareConsumer) sendSourceAck(ctx context.Context, src *source, acks map
 	if err != nil {
 		// The broker may have processed the request before the
 		// error, advancing its session epoch. Reset ours so the
-		// next request starts a fresh session. Re-queue the acks
-		// so they are not silently lost.
+		// next request starts a fresh session. Drop the acks --
+		// the session is gone and the old acquisitions are
+		// released. Re-queuing stale acks causes
+		// INVALID_RECORD_STATE on the next session.
 		src.cursorsMu.Lock()
 		src.shareSessionEpoch = 0
 		src.shareSessionParts = nil
 		src.cursorsMu.Unlock()
-		for tid, parts := range acks {
-			for p, batches := range parts {
-				src.addShareAcks(tid, p, batches)
-			}
-		}
 		return err
 	}
 
@@ -1032,24 +1035,34 @@ func (s *shareConsumer) sendSourceAck(ctx context.Context, src *source, acks map
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		switch {
 		case errors.Is(err, kerr.ShareSessionNotFound),
-			errors.Is(err, kerr.InvalidShareSessionEpoch),
-			errors.Is(err, kerr.ShareSessionLimitReached):
-			// Session errors: the broker did NOT advance the
-			// epoch and did NOT process the acks. Reset to 0
-			// so the next ShareFetch creates a fresh session,
-			// and re-queue the acks to piggyback on it. This
-			// matches the Java client which treats these as
-			// RetriableException.
+			errors.Is(err, kerr.InvalidShareSessionEpoch):
+			// Session destroyed: the broker released all
+			// acquisitions. Drop the acks -- they refer to
+			// acquisitions that no longer exist. Reset to 0 so
+			// the next ShareFetch creates a fresh session.
 			src.cursorsMu.Lock()
 			src.shareSessionEpoch = 0
 			src.shareSessionParts = nil
 			src.cursorsMu.Unlock()
+			s.cfg.logger.Log(LogLevelInfo, "dropped acks due to share session error",
+				"broker", src.nodeID,
+				"err", err,
+			)
+			return nil
+
+		case errors.Is(err, kerr.ShareSessionLimitReached):
+			// The broker has too many sessions but ours may
+			// still be valid. It did NOT process the acks.
+			// Unlike NOT_FOUND / INVALID_EPOCH, do NOT reset
+			// the session -- the Java client only resets on
+			// NOT_FOUND and INVALID_EPOCH for ShareAcknowledge.
+			// Re-queue the acks for the next attempt.
 			for tid, parts := range acks {
 				for p, batches := range parts {
 					src.addShareAcks(tid, p, batches)
 				}
 			}
-			s.cfg.logger.Log(LogLevelInfo, "re-queued all acks due to share session error",
+			s.cfg.logger.Log(LogLevelInfo, "re-queued all acks due to share session limit",
 				"broker", src.nodeID,
 				"err", err,
 			)
@@ -1742,8 +1755,15 @@ func (s *shareConsumer) doShareFetch(ctx context.Context, src *source, maintenan
 			src.shareSessionEpoch = 0
 			src.shareSessionParts = nil
 			src.cursorsMu.Unlock()
+			// The session is destroyed -- do not restore acks
+			// from the request. The old acquisitions are released
+			// and the acks are stale. Re-queuing stale acks
+			// causes an infinite INVALID_RECORD_STATE retry loop
+			// when they're sent on the next session.
+			//
+			// Forgotten data is also irrelevant: the new session
+			// (epoch 0) has no prior state to forget.
 			src.restoreShareForgotten(req)
-			src.restoreSharePendingAcks(req)
 			return shareFetchResult{}
 		}
 
@@ -1752,13 +1772,14 @@ func (s *shareConsumer) doShareFetch(ctx context.Context, src *source, maintenan
 			// The broker may have processed the request before
 			// the error occurred, advancing its session epoch.
 			// Reset ours so the next request starts a fresh
-			// session.
+			// session. Drop piggybacked acks -- the session is
+			// gone, so old acquisitions are released and the
+			// acks are stale.
 			src.cursorsMu.Lock()
 			src.shareSessionEpoch = 0
 			src.shareSessionParts = nil
 			src.cursorsMu.Unlock()
 			src.restoreShareForgotten(req)
-			src.restoreSharePendingAcks(req)
 			after := time.NewTimer(s.cfg.retryBackoff(src.consecutiveFailures))
 			select {
 			case <-after.C:
@@ -1793,17 +1814,17 @@ func (s *shareConsumer) doShareFetch(ctx context.Context, src *source, maintenan
 			return shareFetchResult{fetch, moves, brokers}
 		}
 		// Session error -- epoch was reset by
-		// handleShareFetchResponse. Restore forgotten and ack
-		// data from this request (the broker rejected it without
-		// processing) and retry once to re-establish the session.
+		// handleShareFetchResponse. Restore forgotten data but
+		// drop piggybacked acks. The broker destroyed the session,
+		// releasing all acquisitions. The acks refer to acquisitions
+		// that no longer exist -- re-queuing them causes
+		// INVALID_RECORD_STATE when sent on the new session.
 		//
-		// On the second attempt (attempt==1), no restore is needed:
-		// buildShareFetchRequest on epoch 0 holds acks on the
-		// source (not on the request) and does not attach forgotten
-		// data, so there is nothing to restore.
+		// Forgotten data is restored so that the session-error
+		// partitions can be forgotten on the new session if needed,
+		// though on epoch 0 it will be skipped (no prior state).
 		if attempt == 0 {
 			src.restoreShareForgotten(req)
-			src.restoreSharePendingAcks(req)
 		}
 	}
 	return shareFetchResult{}
@@ -1893,6 +1914,15 @@ func (s *shareConsumer) buildShareFetchRequest(src *source, maintenanceOnly bool
 		src.cursorsMu.Unlock()
 		return nil
 	}
+	// Merge pending acks before snapshotting. Same merge that
+	// drainShareAcks applies for ShareAcknowledge -- without it
+	// piggybacked acks ship many single-offset batches instead
+	// of merged contiguous ranges.
+	for _, parts := range src.sharePendingAcks {
+		for p, batches := range parts {
+			parts[p] = mergeAckBatches(batches)
+		}
+	}
 	var (
 		pendingAcks  = src.sharePendingAcks
 		forgotten    = src.shareForgotten
@@ -1955,14 +1985,16 @@ func (s *shareConsumer) buildShareFetchRequest(src *source, maintenanceOnly bool
 	}
 
 	// Attach piggybacked acks. The broker rejects acks on the initial
-	// epoch (epoch 0 creates a new session), so hold them for the next
-	// request. This matches the Java client's maybeAddAcknowledgements
-	// check for isNewSession.
+	// epoch (epoch 0 creates a new session), so they cannot be sent.
+	// Epoch 0 is only reachable after a session reset (at initial
+	// startup no acks exist because no records have been fetched),
+	// so any pending acks are stale -- drop them. The Java client
+	// fails them with INVALID_SHARE_SESSION_EPOCH.
 	if len(pendingAcks) > 0 {
 		if sessionEpoch == 0 {
-			src.cursorsMu.Lock()
-			src.restoreSharePendingAcksLocked(pendingAcks)
-			src.cursorsMu.Unlock()
+			s.cfg.logger.Log(LogLevelInfo, "dropping stale piggybacked acks, share session epoch is 0",
+				"broker", src.nodeID,
+			)
 		} else {
 			s.attachAcksToShareFetch(req, pendingAcks, topicIdx, partIdx)
 		}
