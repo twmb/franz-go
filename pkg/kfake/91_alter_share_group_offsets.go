@@ -111,6 +111,7 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 						return &sharePartition{
 							spso:       rp.StartOffset,
 							scanOffset: rp.StartOffset,
+							endOffset:  rp.StartOffset,
 							records:    make(map[int64]*shareRecord),
 						}
 					})

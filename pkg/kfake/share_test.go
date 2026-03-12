@@ -718,38 +718,42 @@ func TestShareGroupMultiPartition(t *testing.T) {
 	t.Logf("records by partition: %v", partitionsSeen)
 }
 
-// TestShareGroupCloseReleasesRecords verifies that closing a share consumer
-// without explicit acks releases records (not rejects them), making them
-// available for redelivery.
+// TestShareGroupCloseReleasesRecords verifies that closing a share session
+// (ShareFetch epoch -1) without acking releases acquired records for
+// redelivery. Uses raw protocol for consumer 1 to bypass the kgo client's
+// auto-accept-on-close behavior and test pure server-side release.
 func TestShareGroupCloseReleasesRecords(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, SeedTopics(1, "share-closerel"))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "share-closerel"))
 	group := "share-test-closerel"
 
 	const total = 10
 	produceShareN(t, c, "share-closerel", group, total)
 
-	// Consumer 1: poll records then close WITHOUT acking or committing.
-	// Close should release them (not reject).
-	cl1 := newShareConsumer(t, c, "share-closerel", group)
+	// Consumer 1 (raw): join, acquire records, then close session
+	// WITHOUT acking. The server should release them.
+	cl1 := newPlainClient(t, c)
+	memberID, topicID := joinShareGroupRaw(t, cl1, group, "share-closerel")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// ShareFetch epoch 0: acquire all records. Session epoch -> 1.
+	_, acquired := rawShareFetch(t, cl1, group, memberID, topicID, 0)
+	if acquired < total {
+		t.Fatalf("consumer 1: expected to acquire %d, got %d", total, acquired)
+	}
 
-	var got1 int
-	for got1 < total {
-		fetches := cl1.PollFetches(ctx)
-		got1 += len(fetches.Records())
-		// Intentionally NOT acking.
-		if ctx.Err() != nil {
-			break
-		}
+	// Close session (epoch -1) without sending any acks.
+	closeReq := kmsg.NewPtrShareFetchRequest()
+	closeReq.GroupID = &group
+	closeReq.MemberID = &memberID
+	closeReq.ShareSessionEpoch = -1
+	closeTopic := kmsg.NewShareFetchRequestTopic()
+	closeTopic.TopicID = topicID
+	closeReq.Topics = append(closeReq.Topics, closeTopic)
+	_, err := closeReq.RequestWith(context.Background(), cl1)
+	if err != nil {
+		t.Fatalf("session close: %v", err)
 	}
-	if got1 < total {
-		t.Fatalf("consumer 1: expected %d, got %d", total, got1)
-	}
-	cl1.Close() // should release, not reject
 
 	// Consumer 2: should see all records redelivered.
 	cl2 := newShareConsumer(t, c, "share-closerel", group)

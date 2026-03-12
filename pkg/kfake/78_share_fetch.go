@@ -121,7 +121,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 				}
 			}
 			delete(c.shareSessions, sessionKey)
-			resp.AcquisitionLockTimeoutMillis = 0
 			return resp, nil
 		}
 
@@ -776,7 +775,7 @@ func validateOneAckBatch(first, last int64, ackTypes []int8, prevEnd *int64, max
 	if first > last {
 		return kerr.InvalidRequest.Code
 	}
-	if first <= *prevEnd {
+	if first < *prevEnd {
 		return kerr.InvalidRequest.Code
 	}
 	if len(ackTypes) == 0 {

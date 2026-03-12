@@ -2274,6 +2274,7 @@ func (c *Cluster) loadSessionState() error {
 						}
 					})
 					sp.spso = ssp.SPSO
+					sp.scanOffset = ssp.SPSO
 					for offset, ssr := range ssp.Records {
 						state := shareRecordState(ssr.State)
 						// On restart, acquired records become available
@@ -2288,6 +2289,10 @@ func (c *Cluster) loadSessionState() error {
 						sp.records[offset] = &shareRecord{
 							state:         state,
 							deliveryCount: ssr.DeliveryCount,
+						}
+						// Track endOffset as one past the highest restored offset.
+						if offset+1 > sp.endOffset {
+							sp.endOffset = offset + 1
 						}
 					}
 					sp.advanceSPSO()
