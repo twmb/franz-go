@@ -391,9 +391,10 @@ func (cfg *cfg) validate() error {
 		if cfg.onLost != nil || cfg.onRevoked != nil || cfg.onAssigned != nil {
 			return errors.New("partition lifecycle callbacks are not supported with share groups")
 		}
-		// Share consumers use a pull model: one round of parallel
-		// fetches to all sources. Default to 1 if not explicitly set.
-		if cfg.maxConcurrentFetches == 0 {
+		// In record-limit mode (ShareStrictMaxRecords), restrict to
+		// a single broker per poll round to respect the record limit
+		// across the cluster, matching the Java client's behavior.
+		if cfg.shareStrictMaxRecords && cfg.maxConcurrentFetches == 0 {
 			cfg.maxConcurrentFetches = 1
 		}
 	}
@@ -1720,6 +1721,11 @@ func ShareMaxRecords(n int32) GroupOpt {
 // (ShareAcquireMode=0), which may return more records than MaxRecords to
 // preserve batch boundaries. When strict mode is enabled, the broker respects
 // the record limit exactly.
+//
+// When this option is set, [MaxConcurrentFetches] defaults to 1 so that only
+// one broker acquires records per poll round, ensuring the global record limit
+// is respected. Overriding MaxConcurrentFetches in record-limit mode is not
+// recommended.
 //
 // This option only applies when using ShareGroup.
 func ShareStrictMaxRecords() GroupOpt {

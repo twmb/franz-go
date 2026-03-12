@@ -37,6 +37,13 @@ const (
 // for sending. After this bit is set, Acknowledge() is a no-op.
 const ackFinalized = 0x80
 
+// ackRenewSent is set on shareAckState.status after a RENEW ack has been
+// routed to the source for sending. Unlike other ack types, RENEW does not
+// finalize the record -- the user must re-ack it with ACCEPT/REJECT/RELEASE
+// after the acquisition lock is extended. Record.Ack checks ackFinalized
+// (0x80), so ackRenewSent (0x40) allows re-acking.
+const ackRenewSent = 0x40
+
 // ackGap is the wire type for gap offsets (compacted records within an
 // acquired range that have no physical record). The broker uses this to
 // release the acquisition without treating the offset as processed or
@@ -48,7 +55,7 @@ const ackGap int8 = 0
 // finalized) and the delivery count from the broker.
 type shareAckState struct {
 	mu                      sync.Mutex
-	status                  uint8 // 0=pending, low 7 bits=AckStatus, high bit=ackFinalized
+	status                  uint8 // 0=pending, 1-4=AckStatus, 0x40=ackRenewSent, 0x80=ackFinalized
 	deliveryCount           int32
 	acquisitionLockDeadline time.Time
 	source                  *source // the source that fetched this record
@@ -460,6 +467,7 @@ func (s *shareConsumer) manageShareGroup() {
 			s.reconcileAssignment(nil)
 			s.clearSourceShareState()
 			s.unresolvedAssigned = nil
+			clear(s.sourcesWithForgotten)
 			consecutiveErrors = 0
 			continue
 
@@ -479,6 +487,7 @@ func (s *shareConsumer) manageShareGroup() {
 			s.reconcileAssignment(nil)
 			s.clearSourceShareState()
 			s.unresolvedAssigned = nil
+			clear(s.sourcesWithForgotten)
 			consecutiveErrors = 0
 			continue
 
@@ -573,7 +582,38 @@ func (s *shareConsumer) handleResp(resp *kmsg.ShareGroupHeartbeatResponse) map[s
 	}
 
 	if resp.Assignment == nil {
-		return nil
+		if len(s.unresolvedAssigned) == 0 {
+			return nil
+		}
+		// No new assignment from the server, but we have topic
+		// IDs from a previous assignment that could not be mapped
+		// to names. Metadata may have arrived since then -- try
+		// to resolve them now.
+		id2t := s.cl.id2tMap()
+		var newlyResolved map[string][]int32
+		for id, ps := range s.unresolvedAssigned {
+			if name := id2t[[16]byte(id)]; name != "" {
+				if newlyResolved == nil {
+					newlyResolved = make(map[string][]int32)
+				}
+				slices.Sort(ps)
+				newlyResolved[name] = ps
+				delete(s.unresolvedAssigned, id)
+			}
+		}
+		if len(newlyResolved) == 0 {
+			return nil
+		}
+		// Merge newly-resolved topics into the current assignment.
+		current := s.nowAssigned.read()
+		merged := make(map[string][]int32, len(current)+len(newlyResolved))
+		for t, ps := range current {
+			merged[t] = ps
+		}
+		for t, ps := range newlyResolved {
+			merged[t] = ps
+		}
+		return merged
 	}
 
 	id2t := s.cl.id2tMap()
@@ -604,6 +644,13 @@ func (s *shareConsumer) handleResp(resp *kmsg.ShareGroupHeartbeatResponse) map[s
 	}
 	if len(s.unresolvedAssigned) > 0 {
 		s.cl.triggerUpdateMetadataNow("share group heartbeat has unresolved topic IDs in assignment")
+	}
+
+	// Don't revoke everything when the server assigned topics we
+	// can't resolve yet. Wait for metadata resolution instead of
+	// treating the assignment as empty.
+	if len(newAssigned) == 0 && len(s.unresolvedAssigned) > 0 {
+		return nil
 	}
 
 	current := s.nowAssigned.read()
@@ -730,16 +777,31 @@ func (s *shareConsumer) routeAcksToSources(autoAcceptPending bool) {
 			st.mu.Unlock()
 			continue
 		}
+		// ackRenewSent: a RENEW was already routed, awaiting the
+		// user's final ack (ACCEPT/REJECT/RELEASE). Skip until
+		// the user calls Record.Ack with a terminal status.
+		if st.status == ackRenewSent {
+			st.mu.Unlock()
+			continue
+		}
+		var ackType int8
 		if st.status == 0 {
 			if !autoAcceptPending {
 				st.mu.Unlock()
 				continue
 			}
 			st.status = uint8(AckAccept) | ackFinalized
+			ackType = int8(AckAccept)
+		} else if st.status == uint8(AckRenew) {
+			// Route the RENEW ack but don't finalize -- the
+			// record must be re-acked with a terminal status
+			// (ACCEPT/REJECT/RELEASE) after the lock is extended.
+			ackType = int8(AckRenew)
+			st.status = ackRenewSent
 		} else {
 			st.status |= ackFinalized
+			ackType = int8(st.status &^ ackFinalized)
 		}
-		ackType := int8(st.status &^ ackFinalized)
 		st.mu.Unlock()
 
 		// Look up the current source for this partition. If the
@@ -775,7 +837,9 @@ func (s *shareConsumer) routeAcksToSources(autoAcceptPending bool) {
 
 // finalizePreviousPoll auto-ACCEPTs any records from the previous poll that
 // were not explicitly acknowledged, then routes all finalized acks to their
-// respective source's pending ack queues.
+// respective source's pending ack queues. Records in ackRenewSent state
+// (RENEW was sent, awaiting re-ack) are kept in lastPolled so the user can
+// still call Record.Ack with a terminal status.
 //
 // Called under consumer.mu from PollFetches/PollRecords.
 func (s *shareConsumer) finalizePreviousPoll() {
@@ -783,7 +847,19 @@ func (s *shareConsumer) finalizePreviousPoll() {
 		return
 	}
 	s.routeAcksToSources(true)
-	s.lastPolled = s.lastPolled[:0]
+	// Keep records awaiting re-ack after RENEW; clear the rest.
+	n := 0
+	for i := range s.lastPolled {
+		st := s.lastPolled[i].state
+		st.mu.Lock()
+		keep := st.status == ackRenewSent
+		st.mu.Unlock()
+		if keep {
+			s.lastPolled[n] = s.lastPolled[i]
+			n++
+		}
+	}
+	s.lastPolled = s.lastPolled[:n]
 }
 
 // markAcks sets the ack status on records that are still pending (status==0
@@ -1148,9 +1224,15 @@ func (s *shareConsumer) leave(ctx context.Context) {
 	}()
 }
 
-// finalizeForLeave defaults any pending (unacked) records to RELEASE, then
-// calls finalizePreviousPoll to finalize all records and route them to
-// sources. Records the user explicitly acknowledged keep their status.
+// finalizeForLeave auto-accepts records the user saw (in lastPolled)
+// and releases buffered records the user never saw, then routes all
+// acks to sources. Records the user explicitly acknowledged keep their
+// status.
+//
+// Auto-accepting user-seen records matches the next-poll auto-accept
+// contract: the consumer received them, so they should be accepted.
+// Releasing buffered records is correct because the user never had a
+// chance to process them.
 //
 // This grabs c.mu because finalizePreviousPoll accesses lastPolled and
 // usingShareCursors. Without the lock, a concurrent PollFetches that is
@@ -1160,25 +1242,29 @@ func (s *shareConsumer) finalizeForLeave() {
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
 
-	// Release any buffered records that were never returned to the
-	// user. Track them in lastPolled so finalizePreviousPoll routes
-	// the releases to sources.
+	// Phase 1: Auto-accept records that were returned to the user
+	// but not explicitly acked. This matches the next-poll auto-accept
+	// behavior -- the consumer received them, so they should be accepted.
+	s.finalizePreviousPoll()
+
+	// Phase 2: Release any buffered records that were never returned
+	// to the user. These were acquired by the server but never
+	// delivered to the application via PollFetches/PollRecords.
 	if len(s.bufferedFetches) > 0 {
 		s.trackPolledRecords(s.bufferedFetches)
 		s.bufferedFetches = nil
-	}
-
-	for i := range s.lastPolled {
-		pr := &s.lastPolled[i]
-		st := pr.state
-		st.mu.Lock()
-		if st.status == 0 {
-			st.status = uint8(AckRelease)
+		for i := range s.lastPolled {
+			pr := &s.lastPolled[i]
+			st := pr.state
+			st.mu.Lock()
+			if st.status == 0 {
+				st.status = uint8(AckRelease)
+			}
+			st.mu.Unlock()
 		}
-		st.mu.Unlock()
+		s.routeAcksToSources(false)
+		s.lastPolled = s.lastPolled[:0]
 	}
-	// finalizePreviousPoll sets ackFinalized and routes to sources.
-	s.finalizePreviousPoll()
 }
 
 // purgeTopics removes the given topics from the share consumer's
@@ -1650,25 +1736,8 @@ func (s *shareConsumer) doShareFetch(ctx context.Context, src *source, maintenan
 
 		select {
 		case <-requested:
-			if isContextErr(err) && ctx.Err() != nil {
-				// The request may have been processed by the
-				// broker before the context was cancelled,
-				// advancing the broker's session epoch. Reset
-				// to 0 so the next request starts a fresh
-				// session rather than hitting
-				// InvalidShareSessionEpoch.
-				src.cursorsMu.Lock()
-				src.shareSessionEpoch = 0
-				src.shareSessionParts = nil
-				src.cursorsMu.Unlock()
-				src.restoreShareForgotten(req)
-				src.restoreSharePendingAcks(req)
-				return shareFetchResult{}
-			}
 		case <-ctx.Done():
-			// The in-flight request may still be processed by
-			// the broker, advancing its session epoch. Reset
-			// ours so the next request starts a new session.
+			go func() { <-requested }()
 			src.cursorsMu.Lock()
 			src.shareSessionEpoch = 0
 			src.shareSessionParts = nil
@@ -2067,9 +2136,20 @@ func (s *shareConsumer) handleShareFetchResponse(
 	if src.shareSessionParts == nil {
 		src.shareSessionParts = make(map[topicPartIdx]struct{})
 	}
+	// Only add cursor-backed partitions to session tracking.
+	// Ack-only partitions (attached via attachAcksToShareFetch) are
+	// transient and should not be tracked -- they have no cursor and
+	// would accumulate as stale entries in shareSessionParts.
+	cursorSet := make(map[topicPartIdx]struct{}, len(src.shareCursors))
+	for _, sc := range src.shareCursors {
+		cursorSet[topicPartIdx{sc.topicID, sc.partition}] = struct{}{}
+	}
 	for i := range req.Topics {
 		for j := range req.Topics[i].Partitions {
-			src.shareSessionParts[topicPartIdx{req.Topics[i].TopicID, req.Topics[i].Partitions[j].Partition}] = struct{}{}
+			key := topicPartIdx{req.Topics[i].TopicID, req.Topics[i].Partitions[j].Partition}
+			if _, hasCursor := cursorSet[key]; hasCursor {
+				src.shareSessionParts[key] = struct{}{}
+			}
 		}
 	}
 	for _, f := range req.ForgottenTopicsData {
@@ -2294,6 +2374,11 @@ func (s *shareConsumer) handleShareFetchResponse(
 func (s *shareConsumer) closeShareSessions(ctx context.Context) {
 	memberID, _ := s.memberGen.load()
 
+	type closeReq struct {
+		src *source
+		req *kmsg.ShareAcknowledgeRequest
+	}
+	var reqs []closeReq
 	for src := range s.collectAllSources() {
 		acks := src.drainShareAcks()
 
@@ -2315,28 +2400,39 @@ func (s *shareConsumer) closeShareSessions(ctx context.Context) {
 			req.Topics = buildShareAckTopics(acks)
 			req.IsRenewAck = hasRenewAck(acks)
 		}
-
-		br, err := s.cl.brokerOrErr(ctx, src.nodeID, errUnknownBroker)
-		if err != nil {
-			continue
-		}
-
-		kresp, err := br.waitResp(ctx, req)
-		if err != nil {
-			s.cfg.logger.Log(LogLevelDebug, "failed to close share session",
-				"broker", src.nodeID, "err", err,
-			)
-			continue
-		}
-		resp := kresp.(*kmsg.ShareAcknowledgeResponse)
-		if resp.ErrorCode != 0 {
-			s.cfg.logger.Log(LogLevelDebug, "share session close returned error",
-				"broker", src.nodeID, "err", kerr.ErrorForCode(resp.ErrorCode),
-			)
-		}
-		src.cursorsMu.Lock()
-		src.shareSessionEpoch = 0
-		src.shareSessionParts = nil
-		src.cursorsMu.Unlock()
+		reqs = append(reqs, closeReq{src, req})
 	}
+	if len(reqs) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(reqs))
+	for _, cr := range reqs {
+		go func() {
+			defer wg.Done()
+			br, err := s.cl.brokerOrErr(ctx, cr.src.nodeID, errUnknownBroker)
+			if err != nil {
+				return
+			}
+			kresp, err := br.waitResp(ctx, cr.req)
+			if err != nil {
+				s.cfg.logger.Log(LogLevelDebug, "failed to close share session",
+					"broker", cr.src.nodeID, "err", err,
+				)
+				return
+			}
+			resp := kresp.(*kmsg.ShareAcknowledgeResponse)
+			if resp.ErrorCode != 0 {
+				s.cfg.logger.Log(LogLevelDebug, "share session close returned error",
+					"broker", cr.src.nodeID, "err", kerr.ErrorForCode(resp.ErrorCode),
+				)
+			}
+			cr.src.cursorsMu.Lock()
+			cr.src.shareSessionEpoch = 0
+			cr.src.shareSessionParts = nil
+			cr.src.cursorsMu.Unlock()
+		}()
+	}
+	wg.Wait()
 }
