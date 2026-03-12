@@ -299,6 +299,19 @@ func (gs *groups) handleJoin(creq *clientReq) {
 		gs.gs = make(map[string]*group)
 	}
 	req := creq.kreq.(*kmsg.JoinGroupRequest)
+
+	// Group type exclusivity: if this group ID is already a share
+	// group, reject the classic consumer join (matching Kafka's
+	// GroupCoordinatorService which prevents mixing group types).
+	if _, isShare := gs.c.shareGroups.gs[req.Group]; isShare {
+		resp := req.ResponseKind().(*kmsg.JoinGroupResponse)
+		resp.ErrorCode = kerr.GroupIDNotFound.Code
+		resp.MemberID = ""
+		resp.Generation = -1
+		creq.cc.respCh <- clientResp{kresp: resp, corr: creq.corr, seq: creq.seq}
+		return
+	}
+
 start:
 	g := gs.gs[req.Group]
 	if g == nil {
@@ -1744,6 +1757,16 @@ func (gs *groups) handleConsumerGroupHeartbeat(creq *clientReq) {
 		gs.gs = make(map[string]*group)
 	}
 	req := creq.kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
+
+	// Group type exclusivity: if this group ID is already a share
+	// group, reject the consumer group heartbeat.
+	if _, isShare := gs.c.shareGroups.gs[req.Group]; isShare {
+		resp := req.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
+		resp.ErrorCode = kerr.GroupIDNotFound.Code
+		creq.cc.respCh <- clientResp{kresp: resp, corr: creq.corr, seq: creq.seq}
+		return
+	}
+
 start:
 	g := gs.gs[req.Group]
 	if g == nil {

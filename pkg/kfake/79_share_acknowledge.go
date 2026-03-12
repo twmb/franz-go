@@ -95,6 +95,15 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		rt := &req.Topics[i]
 		topicName := id2t[rt.TopicID]
 		if topicName == "" {
+			// Return UNKNOWN_TOPIC_ID for deleted topics
+			// (matching Java's getAcknowledgeBatchesFromShareAcknowledgeRequest).
+			idx := getOrAddShareAckTopic(resp, topicIdx, rt.TopicID)
+			for j := range rt.Partitions {
+				sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
+				sp.Partition = rt.Partitions[j].Partition
+				sp.ErrorCode = kerr.UnknownTopicID.Code
+				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
+			}
 			continue
 		}
 
@@ -146,19 +155,30 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 			}
 
 			shp := sg.getSharePartition(topicName, rp.Partition, pd)
-			var ackErr int16
+			// Atomic validate-then-apply (matching Kafka's
+			// rollbackOrProcessStateUpdates).
 			for _, batch := range rp.AcknowledgementBatches {
-				if ec := shp.processAcks(memberID, batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes, maxDelivery); ec != 0 {
-					ackErr = ec
+				if ec := shp.validateAcks(memberID, batch.FirstOffset, batch.LastOffset); ec != 0 {
+					errCode = ec
 					break
 				}
+			}
+			if errCode != 0 {
+				idx := getOrAddShareAckTopic(resp, topicIdx, rt.TopicID)
+				sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
+				sp.Partition = rp.Partition
+				sp.ErrorCode = errCode
+				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
+				continue
+			}
+			for _, batch := range rp.AcknowledgementBatches {
+				shp.processAcks(memberID, batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes, maxDelivery)
 			}
 			shp.advanceSPSO()
 
 			idx := getOrAddShareAckTopic(resp, topicIdx, rt.TopicID)
 			sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
 			sp.Partition = rp.Partition
-			sp.ErrorCode = ackErr
 			resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
 
 			// Wake any pending ShareFetch watchers on this partition.

@@ -189,7 +189,7 @@ if [ -n "$CUSTOM_TIMEOUT" ]; then
 elif [ -n "$RACE" ]; then
     TIMEOUT="300s"
 else
-    TIMEOUT="600s"
+    TIMEOUT="180s"
 fi
 
 # Build common server args once.

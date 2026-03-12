@@ -20,6 +20,13 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 		return nil, err
 	}
 
+	// Coordinator check: DeleteShareGroupOffsets is routed to the
+	// share coordinator (matching Java's GroupCoordinatorService).
+	if c.coordinator(req.GroupID).node != creq.cc.b.node {
+		resp.ErrorCode = kerr.NotCoordinator.Code
+		return resp, nil
+	}
+
 	// ACL: require GROUP DELETE.
 	if !c.allowedACL(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete) {
 		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
@@ -32,10 +39,23 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 		return resp, nil
 	}
 
-	// Pre-lookup topic IDs while in run() where c.data is safe.
-	t2id := make(map[string]uuid, len(req.Topics))
+	// Pre-lookup topic IDs and ACL results while in run() where
+	// c.data is safe.
+	type deleteTopicInfo struct {
+		id      uuid
+		exists  bool
+		aclDeny bool
+	}
+	topicInfo := make(map[string]deleteTopicInfo, len(req.Topics))
 	for _, rt := range req.Topics {
-		t2id[rt.Topic] = c.data.t2id[rt.Topic]
+		info := deleteTopicInfo{id: c.data.t2id[rt.Topic]}
+		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
+			info.aclDeny = true
+		}
+		if _, ok := c.data.tps[rt.Topic]; ok {
+			info.exists = true
+		}
+		topicInfo[rt.Topic] = info
 	}
 
 	if !sg.waitControl(func() {
@@ -49,7 +69,20 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 			rt := &req.Topics[i]
 			rst := kmsg.NewDeleteShareGroupOffsetsResponseTopic()
 			rst.Topic = rt.Topic
-			rst.TopicID = t2id[rt.Topic]
+			info := topicInfo[rt.Topic]
+			rst.TopicID = info.id
+
+			if info.aclDeny {
+				rst.ErrorCode = kerr.TopicAuthorizationFailed.Code
+				resp.Topics = append(resp.Topics, rst)
+				continue
+			}
+			if !info.exists {
+				rst.ErrorCode = kerr.UnknownTopicOrPartition.Code
+				resp.Topics = append(resp.Topics, rst)
+				continue
+			}
+
 			delete(sg.partitions, rt.Topic)
 			resp.Topics = append(resp.Topics, rst)
 		}

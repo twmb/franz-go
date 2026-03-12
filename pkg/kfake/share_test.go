@@ -216,7 +216,7 @@ func TestShareGroupMaxDeliveryCount(t *testing.T) {
 	c := newCluster(t,
 		SeedTopics(1, "share-maxdlv"),
 		BrokerConfigs(map[string]string{
-			"share.max.delivery.attempts": "2",
+			"group.share.delivery.count.limit": "2",
 		}),
 	)
 	group := "share-test-maxdlv"
@@ -355,7 +355,7 @@ func TestShareGroupAcquisitionLockExpiry(t *testing.T) {
 		NumBrokers(1),
 		SeedTopics(1, "share-lockexp"),
 		BrokerConfigs(map[string]string{
-			"share.record.lock.duration.ms":       "100",
+			"group.share.record.lock.duration.ms":       "100",
 			"share.record.lock.sweep.interval.ms": "100",
 		}),
 	)
@@ -784,7 +784,7 @@ func TestShareGroupRenewAck(t *testing.T) {
 		NumBrokers(1),
 		SeedTopics(1, "share-renew"),
 		BrokerConfigs(map[string]string{
-			"share.record.lock.duration.ms":       "150",
+			"group.share.record.lock.duration.ms":       "150",
 			"share.record.lock.sweep.interval.ms": "50",
 		}),
 	)

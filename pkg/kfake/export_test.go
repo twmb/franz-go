@@ -162,6 +162,7 @@ func rawShareFetch(t *testing.T, cl *kgo.Client, group, memberID string, topicID
 	sfReq.GroupID = &group
 	sfReq.MemberID = &memberID
 	sfReq.ShareSessionEpoch = epoch
+	sfReq.MaxRecords = 500
 	sfTopic := kmsg.NewShareFetchRequestTopic()
 	sfTopic.TopicID = topicID
 	sfPart := kmsg.NewShareFetchRequestTopicPartition()

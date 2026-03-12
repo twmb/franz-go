@@ -2,8 +2,8 @@ package kfake
 
 import (
 	"slices"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -35,22 +35,6 @@ type shareGroup struct {
 	groupEpoch    int32
 	members       map[string]*shareMember
 	lastTopicMeta topicMetaSnap // cached snapshot from run(), for recomputation on member removal/fencing
-
-	// memberIDs is an atomically published snapshot of member keys.
-	//
-	// Why atomic: members is owned by the manage() goroutine, but
-	// ShareFetch/ShareAcknowledge run in the cluster's run() goroutine
-	// and need to validate that a memberID is known before acquiring
-	// records. We can't use sg.mu (which protects partitions, not
-	// members), and waitControl would block run() on every fetch.
-	//
-	// Safety: manage() creates a new immutable map on each membership
-	// change and stores the pointer atomically. run() loads the pointer
-	// and reads the map -- no concurrent writes to the same map
-	// instance. The check is best-effort: a member could be fenced
-	// between the check and record acquisition, but the per-record
-	// acquiredBy field provides the actual safety guarantee.
-	memberIDs atomic.Pointer[map[string]struct{}]
 
 	// Per-(topic,partition) record acquisition state.
 	// Accessed from both the run() goroutine (ShareFetch/ShareAcknowledge)
@@ -108,8 +92,9 @@ type shareRecord struct {
 // may grow large if a consumer acquires many records without acking --
 // acceptable for a test broker.
 type sharePartition struct {
-	spso    int64 // Share-Partition Start Offset: first unfinalized offset
-	records map[int64]*shareRecord
+	spso      int64 // Share-Partition Start Offset: first unfinalized offset
+	endOffset int64 // one past highest tracked offset, for in-flight count
+	records   map[int64]*shareRecord
 
 	// scanOffset tracks the next offset to scan for available records.
 	// Advances past acquired/archived records to avoid re-scanning them.
@@ -132,8 +117,20 @@ type shareSessionKey struct {
 // ForgottenTopicsData are REMOVED (matching Kafka's ShareSession.update).
 type shareSession struct {
 	epoch      int32
-	partitions map[uuid]map[int32]struct{} // topicID -> partition set
-	cc         *clientConn                 // owning connection, for disconnect cleanup
+	partitions map[uuid]map[int32]*cachedSharePart // topicID -> partition -> cached state
+	cc         *clientConn                         // owning connection, for disconnect cleanup
+}
+
+// cachedSharePart tracks per-partition session state for incremental
+// response filtering (matching Java's CachedSharePartition).
+type cachedSharePart struct {
+	// requiresUpdate is true when the partition must appear in the next
+	// incremental response even if it has no data. Set on:
+	//   - partition first added to session
+	//   - response included an error (so the "error cleared" transition
+	//     is sent on the next response)
+	// Cleared after the partition appears in a response without errors.
+	requiresUpdate bool
 }
 
 // watchShareFetch suspends a ShareFetch request until new records are
@@ -167,6 +164,36 @@ func (w *watchShareFetch) cleanup() {
 
 func (sgs *shareGroups) handleHeartbeat(creq *clientReq) {
 	req := creq.kreq.(*kmsg.ShareGroupHeartbeatRequest)
+
+	// Group type exclusivity: if this group ID is already a consumer
+	// group, reject the share group heartbeat (matching Kafka's
+	// GroupCoordinatorService which prevents mixing group types).
+	if _, isConsumer := sgs.c.groups.gs[req.GroupID]; isConsumer {
+		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
+		resp.ErrorCode = kerr.GroupIDNotFound.Code
+		select {
+		case creq.cc.respCh <- clientResp{kresp: resp, corr: creq.corr, seq: creq.seq}:
+		case <-creq.cc.done:
+		case <-sgs.c.die:
+		}
+		return
+	}
+
+	// For non-join heartbeats (epoch != 0), the group must exist.
+	// Java returns GROUP_ID_NOT_FOUND for heartbeats to unknown groups.
+	if req.MemberEpoch != 0 {
+		if sgs.gs == nil || sgs.gs[req.GroupID] == nil {
+			resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
+			resp.ErrorCode = kerr.GroupIDNotFound.Code
+			select {
+			case creq.cc.respCh <- clientResp{kresp: resp, corr: creq.corr, seq: creq.seq}:
+			case <-creq.cc.done:
+			case <-sgs.c.die:
+			}
+			return
+		}
+	}
+
 	// Snapshot topic metadata while in run() where c.data is safe to
 	// read. manage() will use this snapshot for assignment computation,
 	// avoiding a concurrent map read on c.data.tps.
@@ -317,7 +344,7 @@ func (g *shareGroup) handleHeartbeat(creq *clientReq) kmsg.Response {
 	case -1:
 		return g.handleLeave(req, resp)
 	default:
-		return g.handleRegularHeartbeat(req, resp)
+		return g.handleRegularHeartbeat(creq, req, resp)
 	}
 }
 
@@ -345,6 +372,13 @@ func (g *shareGroup) handleJoin(creq *clientReq, req *kmsg.ShareGroupHeartbeatRe
 		return resp
 	}
 
+	// Check share group max size (matching Kafka's
+	// throwIfShareGroupIsFull, default 200).
+	if int32(len(g.members)) >= g.c.shareMaxGroupSize() {
+		resp.ErrorCode = kerr.GroupMaxSizeReached.Code
+		return resp
+	}
+
 	m := &shareMember{
 		memberID:   memberID,
 		clientID:   creq.cid,
@@ -363,7 +397,6 @@ func (g *shareGroup) handleJoin(creq *clientReq, req *kmsg.ShareGroupHeartbeatRe
 	g.recomputeAssignments()
 	g.reconcileMember(m)
 	g.resetSessionTimeout(m)
-	g.publishMemberIDs()
 
 	resp.MemberID = &memberID
 	resp.MemberEpoch = m.memberEpoch
@@ -385,7 +418,6 @@ func (g *shareGroup) handleLeave(req *kmsg.ShareGroupHeartbeatRequest, resp *kms
 	if len(g.members) > 0 {
 		g.recomputeAssignments()
 	}
-	g.publishMemberIDs()
 
 	// Release any records acquired by this member.
 	g.releaseRecordsForMember(req.MemberID)
@@ -397,7 +429,7 @@ func (g *shareGroup) handleLeave(req *kmsg.ShareGroupHeartbeatRequest, resp *kms
 	return resp
 }
 
-func (g *shareGroup) handleRegularHeartbeat(req *kmsg.ShareGroupHeartbeatRequest, resp *kmsg.ShareGroupHeartbeatResponse) *kmsg.ShareGroupHeartbeatResponse {
+func (g *shareGroup) handleRegularHeartbeat(creq *clientReq, req *kmsg.ShareGroupHeartbeatRequest, resp *kmsg.ShareGroupHeartbeatResponse) *kmsg.ShareGroupHeartbeatResponse {
 	m := g.members[req.MemberID]
 	if m == nil {
 		resp.ErrorCode = kerr.UnknownMemberID.Code
@@ -413,6 +445,11 @@ func (g *shareGroup) handleRegularHeartbeat(req *kmsg.ShareGroupHeartbeatRequest
 	}
 
 	m.last = time.Now()
+	m.clientID = creq.cid
+	m.clientHost = creq.cc.conn.RemoteAddr().String()
+	if req.RackID != nil {
+		m.rackID = req.RackID
+	}
 	g.resetSessionTimeout(m)
 
 	// Check if subscription changed.
@@ -435,39 +472,259 @@ func (g *shareGroup) handleRegularHeartbeat(req *kmsg.ShareGroupHeartbeatRequest
 	resp.MemberID = &req.MemberID
 	resp.MemberEpoch = m.memberEpoch
 
-	// Always send assignment so the client stays in sync.
-	resp.Assignment = g.makeAssignment(m)
+	// Only send assignment when it may have changed (matching Java's
+	// ShareGroupAssignmentBuilder which only sets the assignment when
+	// subscriptions changed or the member epoch was bumped).
+	// kgo handles nil Assignment gracefully (skips reconciliation).
+	if req.SubscribedTopicNames != nil || m.memberEpoch != m.previousMemberEpoch {
+		resp.Assignment = g.makeAssignment(m)
+	}
 	return resp
 }
 
-// recomputeAssignments computes target assignments for all members.
-// In share groups, all members that subscribe to a topic get all partitions
-// of that topic -- there is no exclusive partitioning.
+// recomputeAssignments implements Kafka's SimpleAssignor for share groups
+// with stickiness: existing valid assignments are preserved and only the
+// minimum changes are made to achieve balance (matching Java's
+// SimpleHomogeneousAssignmentBuilder / SimpleHeterogeneousAssignmentBuilder).
+//
+// Algorithm (per topic):
+//  1. Retain assignments for subscribed topics, revoke unsubscribed
+//  2. Revoke from overfilled members (too many partitions)
+//  3. Revoke overshared partitions (too many members per partition)
+//  4. Assign remaining capacity to underfilled members
 //
 // Like Kafka's ShareGroupAssignmentBuilder, this updates the assignment but
 // does NOT bump member epochs. Each member's epoch is only bumped when it
 // heartbeats and receives the updated assignment (via reconcileMember).
 //
-// Must only be called from the manage() goroutine. Uses lastTopicMeta
-// (set from creq.topicMeta or notifyTopicChange) to avoid reading c.data
-// from manage(), which would race with run() mutating the maps.
+// Must only be called from the manage() goroutine.
 func (g *shareGroup) recomputeAssignments() {
 	snap := g.lastTopicMeta
-	for _, m := range g.members {
+
+	memberIDs := make([]string, 0, len(g.members))
+	for id := range g.members {
+		memberIDs = append(memberIDs, id)
+	}
+	slices.Sort(memberIDs)
+
+	// Build topic→subscribers index.
+	topicSubs := make(map[string][]string)
+	for _, id := range memberIDs {
+		for _, topic := range g.members[id].subscribedTopics {
+			topicSubs[topic] = append(topicSubs[topic], id)
+		}
+	}
+
+	// Reverse lookup: topicID → topicName.
+	topicForID := make(map[uuid]string)
+	for topic, si := range snap {
+		topicForID[si.id] = topic
+	}
+
+	// Build subscribed set per member.
+	subscribedSet := make(map[string]map[string]struct{})
+	for _, id := range memberIDs {
+		s := make(map[string]struct{})
+		for _, t := range g.members[id].subscribedTopics {
+			s[t] = struct{}{}
+		}
+		subscribedSet[id] = s
+	}
+
+	type partKey struct {
+		topic string
+		part  int32
+	}
+
+	// Phase 1: Retain valid assignments, revoke invalid ones.
+	partMembers := make(map[partKey]map[string]struct{})
+
+	for _, id := range memberIDs {
+		m := g.members[id]
 		newAssign := make(map[uuid][]int32)
-		for _, topic := range m.subscribedTopics {
-			si, ok := snap[topic]
-			if !ok {
-				continue
+		for tid, parts := range m.assignment {
+			topic := topicForID[tid]
+			if topic == "" {
+				continue // topic deleted
 			}
-			parts := make([]int32, si.partitions)
-			for i := range parts {
-				parts[i] = int32(i)
+			si := snap[topic]
+			if _, ok := subscribedSet[id][topic]; !ok {
+				continue // unsubscribed
 			}
-			newAssign[si.id] = parts
+			var kept []int32
+			for _, p := range parts {
+				if p >= si.partitions {
+					continue // partition removed
+				}
+				pk := partKey{topic, p}
+				if partMembers[pk] == nil {
+					partMembers[pk] = make(map[string]struct{})
+				}
+				partMembers[pk][id] = struct{}{}
+				kept = append(kept, p)
+			}
+			if len(kept) > 0 {
+				newAssign[tid] = kept
+			}
 		}
 		m.assignment = newAssign
 	}
+
+	// Phase 2: Per-topic rebalancing.
+	for topic, subs := range topicSubs {
+		si, ok := snap[topic]
+		if !ok || si.partitions == 0 {
+			continue
+		}
+		nSubs := len(subs)
+		nParts := int(si.partitions)
+		desiredSharing := (nSubs + nParts - 1) / nParts
+		totalSlots := desiredSharing * nParts
+
+		// Compute per-member desired count for this topic (matching
+		// Java's cumulative ceiling formula for fair distribution).
+		desiredCount := make(map[string]int, nSubs)
+		cum := 0
+		for i, id := range subs {
+			target := ((i+1)*totalSlots + nSubs - 1) / nSubs
+			desiredCount[id] = target - cum
+			cum = target
+		}
+
+		// Current count per member for this topic.
+		memberTopicCount := make(map[string]int, nSubs)
+		for _, id := range subs {
+			memberTopicCount[id] = len(g.members[id].assignment[si.id])
+		}
+
+		// Phase 2a: Revoke from overfilled members.
+		for _, id := range subs {
+			m := g.members[id]
+			parts := m.assignment[si.id]
+			desired := desiredCount[id]
+			if len(parts) <= desired {
+				continue
+			}
+			removed := parts[desired:]
+			if desired > 0 {
+				m.assignment[si.id] = parts[:desired]
+			} else {
+				delete(m.assignment, si.id)
+			}
+			for _, p := range removed {
+				pk := partKey{topic, p}
+				delete(partMembers[pk], id)
+			}
+			memberTopicCount[id] = desired
+		}
+
+		// Phase 2b: Revoke overshared partitions. Prefer removing
+		// from the most-overfilled members for better balance.
+		for p := int32(0); p < si.partitions; p++ {
+			pk := partKey{topic, p}
+			members := partMembers[pk]
+			excess := len(members) - desiredSharing
+			if excess <= 0 {
+				continue
+			}
+			// Collect and sort: most overfilled first, then by ID for determinism.
+			type candidate struct {
+				id    string
+				extra int // current - desired
+			}
+			var cands []candidate
+			for id := range members {
+				cands = append(cands, candidate{id, memberTopicCount[id] - desiredCount[id]})
+			}
+			slices.SortFunc(cands, func(a, b candidate) int {
+				if a.extra != b.extra {
+					return b.extra - a.extra // descending by overfill
+				}
+				return strings.Compare(a.id, b.id)
+			})
+			for _, c := range cands {
+				if excess <= 0 {
+					break
+				}
+				delete(members, c.id)
+				m := g.members[c.id]
+				m.assignment[si.id] = removePartition(m.assignment[si.id], p)
+				if len(m.assignment[si.id]) == 0 {
+					delete(m.assignment, si.id)
+				}
+				memberTopicCount[c.id]--
+				excess--
+			}
+		}
+
+		// Phase 2c: Assign remaining capacity to underfilled members.
+		// Build a list of members needing more partitions.
+		type unfilled struct {
+			id      string
+			desired int
+		}
+		var uf []unfilled
+		for _, id := range subs {
+			if memberTopicCount[id] < desiredCount[id] {
+				uf = append(uf, unfilled{id, desiredCount[id]})
+			}
+		}
+		if len(uf) == 0 {
+			continue
+		}
+
+		uidx := 0
+		for p := int32(0); p < si.partitions && len(uf) > 0; p++ {
+			pk := partKey{topic, p}
+			members := partMembers[pk]
+			if members == nil {
+				members = make(map[string]struct{})
+				partMembers[pk] = members
+			}
+			for len(members) < desiredSharing && len(uf) > 0 {
+				start := uidx
+				found := false
+				for {
+					u := &uf[uidx%len(uf)]
+					next := (uidx + 1) % len(uf)
+					if _, already := members[u.id]; !already {
+						members[u.id] = struct{}{}
+						m := g.members[u.id]
+						m.assignment[si.id] = append(m.assignment[si.id], p)
+						memberTopicCount[u.id]++
+						if memberTopicCount[u.id] >= u.desired {
+							i := uidx % len(uf)
+							uf = slices.Delete(uf, i, i+1)
+							if len(uf) > 0 {
+								uidx = i % len(uf)
+							}
+						} else {
+							uidx = next
+						}
+						found = true
+						break
+					}
+					uidx = next
+					if uidx == start {
+						break // all candidates already assigned
+					}
+				}
+				if !found {
+					break
+				}
+			}
+		}
+	}
+}
+
+// removePartition removes partition p from the slice, preserving order.
+func removePartition(parts []int32, p int32) []int32 {
+	for i, v := range parts {
+		if v == p {
+			return slices.Delete(parts, i, i+1)
+		}
+	}
+	return parts
 }
 
 // reconcileMember bumps the member's epoch to the current group epoch if
@@ -478,16 +735,6 @@ func (g *shareGroup) reconcileMember(m *shareMember) {
 		m.previousMemberEpoch = m.memberEpoch
 		m.memberEpoch = g.groupEpoch
 	}
-}
-
-// publishMemberIDs atomically publishes the current member ID set so
-// that run() can validate ShareFetch memberIDs without blocking.
-func (g *shareGroup) publishMemberIDs() {
-	snap := make(map[string]struct{}, len(g.members))
-	for id := range g.members {
-		snap[id] = struct{}{}
-	}
-	g.memberIDs.Store(&snap)
 }
 
 func (g *shareGroup) makeAssignment(m *shareMember) *kmsg.ShareGroupHeartbeatResponseAssignment {
@@ -526,7 +773,7 @@ func (g *shareGroup) fenceMember(memberID string) {
 		m.t.Stop()
 	}
 	delete(g.members, memberID)
-	g.publishMemberIDs()
+
 	g.releaseRecordsForMember(memberID)
 	if len(g.members) > 0 {
 		g.groupEpoch++
@@ -553,11 +800,19 @@ func (g *shareGroup) maybeQuit() {
 }
 
 // releaseRecordsForMember releases all records acquired by the given member.
-// If a record has hit max delivery count, it is archived instead.
+// If a record has hit max delivery count, it is archived instead. If any
+// records were released to AVAILABLE, notifies run() via sweepCh so it can
+// fire share watchers for waiting consumers.
 func (g *shareGroup) releaseRecordsForMember(memberID string) {
 	g.mu.Lock()
-	g.releaseRecordsForMemberLocked(memberID, g.c.shareMaxDeliveryAttempts())
+	released := g.releaseRecordsForMemberLocked(memberID, g.c.shareMaxDeliveryAttempts())
 	g.mu.Unlock()
+	if released {
+		select {
+		case g.c.shareGroups.sweepCh <- g:
+		default:
+		}
+	}
 }
 
 // releaseRecordsForMemberLocked is the inner loop of releaseRecordsForMember.
@@ -600,11 +855,21 @@ func (g *shareGroup) getSharePartition(topic string, partition int32, pd *partDa
 	}
 	sp = g.partitions.mkp(topic, partition, func() *sharePartition {
 		return &sharePartition{
-			spso:    spso,
-			records: make(map[int64]*shareRecord),
+			spso:       spso,
+			scanOffset: spso,
+			records:    make(map[int64]*shareRecord),
 		}
 	})
 	return sp
+}
+
+// acquireOpts bundles per-request parameters for acquireRecords that are
+// constant across all partitions in a single ShareFetch request.
+type acquireOpts struct {
+	memberID         string
+	maxDeliveryCount int32
+	maxRecordLocks   int32
+	readCommitted    bool
 }
 
 // acquireRecords acquires available records from [scanOffset, hwm) for the
@@ -614,19 +879,38 @@ func (g *shareGroup) getSharePartition(topic string, partition int32, pd *partDa
 //
 // pd is used for compaction-aware gap detection: offsets that fall between
 // batches (compacted away) are skipped rather than tracked as phantom records.
-// maxRecordLocks limits the total tracked records per partition (matching
-// Kafka's group.share.partition.max.record.locks).
-func (sp *sharePartition) acquireRecords(memberID string, pd *partData, hwm int64, maxRecords int32, maxDeliveryCount int32, maxRecordLocks int32) []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord {
-	var acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord
+//
+// When readCommitted is true, offsets belonging to aborted transactions are
+// archived immediately (matching Java's SharePartition.acquire filtering).
+func (sp *sharePartition) acquireRecords(pd *partData, hwm int64, maxRecords int32, opts *acquireOpts) (acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, blocked bool) {
 	var count int32
 
 	if sp.scanOffset < sp.spso {
 		sp.scanOffset = sp.spso
 	}
 
-	// Check in-flight limit before starting.
-	if maxRecordLocks > 0 && int32(len(sp.records)) >= maxRecordLocks {
-		return nil
+	// In-flight limit (matching Kafka's lastOffsetAndMaxRecordsToAcquire).
+	// The in-flight window is [spso, endOffset). When at capacity, records
+	// within the existing window can still be re-acquired (e.g., released
+	// records near SPSO) because they don't extend the window. Only
+	// acquisition of records BEYOND endOffset is blocked. Kafka handles
+	// this with: if maxRecordsToAcquire <= 0 && fetchOffset <= endOffset,
+	// recalculate as min(maxFetch, endOffset - fetchOffset + 1).
+	acquireLimit := hwm // default: scan up to HWM
+	if opts.maxRecordLocks > 0 && sp.endOffset > sp.spso {
+		windowSize := int32(sp.endOffset - sp.spso)
+		if windowSize >= opts.maxRecordLocks {
+			// At capacity: only allow re-acquisition within the
+			// existing window (up to endOffset), not beyond.
+			if sp.scanOffset < sp.endOffset {
+				acquireLimit = sp.endOffset
+			} else {
+				return nil, true
+			}
+		}
+	}
+	if acquireLimit > hwm {
+		acquireLimit = hwm
 	}
 
 	// Find starting batch position for gap detection.
@@ -638,13 +922,17 @@ func (sp *sharePartition) acquireRecords(memberID string, pd *partData, hwm int6
 	lastScanned := sp.scanOffset
 
 	// Walk offsets from scanOffset to HWM looking for available records.
-	for offset := sp.scanOffset; offset < hwm && count < maxRecords; offset++ {
-		lastScanned = offset + 1
-
-		// In-flight limit per iteration.
-		if maxRecordLocks > 0 && int32(len(sp.records)) >= maxRecordLocks {
+	for offset := sp.scanOffset; offset < acquireLimit && count < maxRecords; offset++ {
+		// In-flight limit per iteration: stop if extending beyond endOffset
+		// while at capacity (records within the window are always ok).
+		// This check MUST come before advancing lastScanned, otherwise
+		// scanOffset jumps past this offset without creating a record
+		// for it. Later, advanceSPSO would skip the nil entry as a
+		// "compacted gap", silently losing the record.
+		if opts.maxRecordLocks > 0 && offset >= sp.endOffset && sp.endOffset > sp.spso && int32(sp.endOffset-sp.spso) >= opts.maxRecordLocks {
 			break
 		}
+		lastScanned = offset + 1
 
 		// Gap detection: skip offsets between batches (compacted away).
 		if hasBatch {
@@ -672,6 +960,26 @@ func (sp *sharePartition) acquireRecords(memberID string, pd *partData, hwm int6
 			}
 		}
 
+		// READ_COMMITTED: check if this offset belongs to an aborted
+		// transaction. If so, archive it immediately (matching Java's
+		// SharePartition.maybeFilterAbortedTransactionalAcquiredRecords).
+		// We piggyback on the batch cursor to get the producerID.
+		if opts.readCommitted && hasBatch {
+			curBatch := &pd.segments[curSeg].index[curMeta]
+			if offset >= curBatch.firstOffset && offset <= curBatch.firstOffset+int64(curBatch.lastOffsetDelta) {
+				if curBatch.inTx && pd.isOffsetAborted(curBatch.firstOffset, curBatch.producerID) {
+					sr := sp.records[offset]
+					if sr == nil {
+						sr = &shareRecord{}
+						sp.records[offset] = sr
+					}
+					sr.state = shareRecordArchived
+					sr.acquiredBy = ""
+					continue
+				}
+			}
+		}
+
 		sr := sp.records[offset]
 		if sr == nil {
 			// No state yet -- new record, available.
@@ -687,7 +995,7 @@ func (sp *sharePartition) acquireRecords(memberID string, pd *partData, hwm int6
 
 		// If this record has been delivered too many times, archive it
 		// rather than delivering again.
-		if sr.deliveryCount >= maxDeliveryCount {
+		if sr.deliveryCount >= opts.maxDeliveryCount {
 			sr.state = shareRecordArchived
 			sr.acquiredBy = ""
 			continue
@@ -695,10 +1003,13 @@ func (sp *sharePartition) acquireRecords(memberID string, pd *partData, hwm int6
 
 		// Acquire.
 		sr.state = shareRecordAcquired
-		sr.acquiredBy = memberID
+		sr.acquiredBy = opts.memberID
 		sr.deliveryCount++
 		sr.acquireTime = time.Now()
 		count++
+		if offset+1 > sp.endOffset {
+			sp.endOffset = offset + 1
+		}
 
 		// Try to extend the last AcquiredRecord range.
 		if n := len(acquired); n > 0 {
@@ -726,7 +1037,45 @@ func (sp *sharePartition) acquireRecords(memberID string, pd *partData, hwm int6
 	// at the front.
 	sp.advanceSPSO()
 
-	return acquired
+	return acquired, false
+}
+
+// validateAcks checks that all offsets in [first, last] are valid for acking
+// by memberID without applying any state changes. Returns 0 if valid, error
+// code otherwise. Used for atomic validate-then-apply across multiple batches
+// (matching Kafka's rollbackOrProcessStateUpdates pattern: validate all, then
+// apply all, rollback everything on any error).
+//
+// Error code distinction matches Java's SharePartition.acknowledge:
+//   - INVALID_REQUEST: batch extends beyond tracked/cached records
+//   - INVALID_RECORD_STATE: record exists but wrong state or wrong owner
+func (sp *sharePartition) validateAcks(memberID string, first, last int64) int16 {
+	// Check if the batch extends beyond tracked records (matching Java's
+	// "The first/last offset in request is past acquired records" check).
+	if sp.endOffset > sp.spso {
+		if first >= sp.endOffset || last >= sp.endOffset {
+			return kerr.InvalidRequest.Code
+		}
+	} else if last >= sp.spso {
+		return kerr.InvalidRequest.Code
+	}
+
+	for offset := first; offset <= last; offset++ {
+		if offset < sp.spso {
+			continue
+		}
+		sr := sp.records[offset]
+		if sr == nil {
+			return kerr.InvalidRecordState.Code
+		}
+		if sr.state != shareRecordAcquired {
+			return kerr.InvalidRecordState.Code
+		}
+		if sr.acquiredBy != memberID {
+			return kerr.InvalidRecordState.Code
+		}
+	}
+	return 0
 }
 
 // processAcks applies ack types to the offset range [first, last].
@@ -743,10 +1092,11 @@ func (sp *sharePartition) acquireRecords(memberID string, pd *partData, hwm int6
 // (matching Kafka's InFlightState.tryUpdateState check on AVAILABLE
 // transition).
 //
-// Returns 0 on success. Returns INVALID_RECORD_STATE if an offset is not
-// in the ACQUIRED state or is not owned by memberID (matching Kafka's
-// SharePartition.acknowledge behavior).
-func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTypes []int8, maxDeliveryCount int32) int16 {
+// Must be called only after validateAcks succeeds for all batches in the
+// request. processAcks assumes records are in valid state (ACQUIRED by
+// memberID) and skips any that aren't (defensive, shouldn't happen after
+// validation).
+func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTypes []int8, maxDeliveryCount int32) {
 	perOffset := len(ackTypes) > 1
 	uniformType := int8(1) // default: accept
 	if len(ackTypes) == 1 {
@@ -758,13 +1108,13 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 		}
 		sr := sp.records[offset]
 		if sr == nil {
-			return kerr.InvalidRecordState.Code
+			continue // compacted or never tracked
 		}
 		if sr.state != shareRecordAcquired {
-			return kerr.InvalidRecordState.Code
+			continue // already released/archived/acknowledged
 		}
 		if sr.acquiredBy != memberID {
-			return kerr.InvalidRecordState.Code
+			continue // acquired by someone else (e.g., after sweep)
 		}
 		ackType := uniformType
 		if perOffset {
@@ -800,7 +1150,6 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 			sr.acquireTime = time.Now()
 		}
 	}
-	return 0
 }
 
 // advanceSPSO advances the SPSO past contiguous acknowledged/archived

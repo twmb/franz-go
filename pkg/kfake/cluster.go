@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -535,6 +536,7 @@ outer:
 		}
 
 		kreq = creq.kreq
+		c.debugLogReq(creq, wsf)
 		switch k := kmsg.Key(kreq.Key()); k {
 		case kmsg.Produce:
 			kresp, err = c.handleProduce(creq)
@@ -656,6 +658,9 @@ outer:
 			err = fmt.Errorf("unhandled key %v", k)
 		}
 		c.pids.updateTimer()
+		if kk := kmsg.Key(kreq.Key()); kk == kmsg.ShareGroupHeartbeat {
+			fmt.Fprintf(os.Stderr, "RESP key=%v kresp=%v err=%v\n", kk, kresp != nil, err)
+		}
 
 	afterControl:
 		if c.needsGroupsCompact.Load() {
@@ -678,6 +683,13 @@ outer:
 		case <-c.die:
 			return
 		}
+	}
+}
+
+func (c *Cluster) debugLogReq(creq *clientReq, wsf *watchShareFetch) {
+	k := kmsg.Key(creq.kreq.Key())
+	if k == kmsg.ShareFetch || k == kmsg.ShareGroupHeartbeat || k == kmsg.ShareAcknowledge || k == kmsg.FindCoordinator || k == kmsg.Produce {
+		fmt.Fprintf(os.Stderr, "REQ key=%v node=%d wsf=%v\n", k, creq.cc.b.node, wsf != nil)
 	}
 }
 

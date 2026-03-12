@@ -3617,7 +3617,7 @@ func TestPersistShareGroupArchivedNotRedelivered(t *testing.T) {
 		c, err := NewCluster(tmem.opt(), NumBrokers(1),
 			SeedTopics(1, topic),
 			BrokerConfigs(map[string]string{
-				"share.max.delivery.attempts": "2",
+				"group.share.delivery.count.limit": "2",
 			}),
 		)
 		if err != nil {
@@ -3684,7 +3684,7 @@ func TestPersistShareGroupArchivedNotRedelivered(t *testing.T) {
 		c, err := NewCluster(tmem.opt(), NumBrokers(1),
 			SeedTopics(1, topic),
 			BrokerConfigs(map[string]string{
-				"share.max.delivery.attempts": "2",
+				"group.share.delivery.count.limit": "2",
 			}),
 		)
 		if err != nil {

@@ -4603,8 +4603,10 @@ func TestDescribeShareGroupOffsetsNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("describe offsets: %v", err)
 	}
-	if resp.Groups[0].ErrorCode != kerr.GroupIDNotFound.Code {
-		t.Errorf("expected GROUP_ID_NOT_FOUND, got %d", resp.Groups[0].ErrorCode)
+	// Java returns no group-level error for nonexistent groups --
+	// the response simply has no partition data (absence, not error).
+	if resp.Groups[0].ErrorCode != 0 {
+		t.Errorf("expected no group-level error, got %d", resp.Groups[0].ErrorCode)
 	}
 }
 

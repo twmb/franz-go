@@ -26,6 +26,14 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 		rsg := kmsg.NewDescribeShareGroupOffsetsResponseGroup()
 		rsg.GroupID = rg.GroupID
 
+		// Coordinator check: DescribeShareGroupOffsets is routed to
+		// the share coordinator (matching Java's GroupCoordinatorService).
+		if c.coordinator(rg.GroupID).node != creq.cc.b.node {
+			rsg.ErrorCode = kerr.NotCoordinator.Code
+			resp.Groups = append(resp.Groups, rsg)
+			continue
+		}
+
 		// ACL: require GROUP DESCRIBE.
 		if !c.allowedACL(creq, rg.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
 			rsg.ErrorCode = kerr.GroupAuthorizationFailed.Code
@@ -34,38 +42,70 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 		}
 
 		sg := c.shareGroups.gs[rg.GroupID]
-		if sg == nil {
-			rsg.ErrorCode = kerr.GroupIDNotFound.Code
-		} else {
+		if sg != nil {
 			sg.mu.Lock()
 		}
-		for j := range rg.Topics {
-			rt := &rg.Topics[j]
+
+		// Build the list of topics to describe. If Topics is nil,
+		// describe all topics the group has state for (matching
+		// Kafka's DescribeShareGroupOffsetsHandler).
+		type topicPartReq struct {
+			topic      string
+			partitions []int32
+		}
+		var topicReqs []topicPartReq
+		if rg.Topics == nil && sg != nil {
+			for topic, parts := range sg.partitions {
+				var ps []int32
+				for p := range parts {
+					ps = append(ps, p)
+				}
+				topicReqs = append(topicReqs, topicPartReq{topic, ps})
+			}
+		} else {
+			for j := range rg.Topics {
+				topicReqs = append(topicReqs, topicPartReq{
+					topic:      rg.Topics[j].Topic,
+					partitions: rg.Topics[j].Partitions,
+				})
+			}
+		}
+
+		isDescribeAll := rg.Topics == nil
+		for _, tr := range topicReqs {
 			rst := kmsg.NewDescribeShareGroupOffsetsResponseGroupTopic()
-			rst.Topic = rt.Topic
-			rst.TopicID = c.data.t2id[rt.Topic]
+			rst.Topic = tr.topic
+			rst.TopicID = c.data.t2id[tr.topic]
 
 			// ACL: per-topic DESCRIBE check.
-			if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
-				for _, partition := range rt.Partitions {
+			if !c.allowedACL(creq, tr.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+				if isDescribeAll {
+					// Describe-all: silently filter unauthorized topics
+					// (matching Java's partitionSeqByAuthorized).
+					continue
+				}
+				for _, partition := range tr.partitions {
 					rsp := kmsg.NewDescribeShareGroupOffsetsResponseGroupTopicPartition()
 					rsp.Partition = partition
 					rsp.ErrorCode = kerr.TopicAuthorizationFailed.Code
 					rsp.StartOffset = -1
+					rsp.Lag = -1
 					rst.Partitions = append(rst.Partitions, rsp)
 				}
 				rsg.Topics = append(rsg.Topics, rst)
 				continue
 			}
 
-			for _, partition := range rt.Partitions {
+			for _, partition := range tr.partitions {
 				rsp := kmsg.NewDescribeShareGroupOffsetsResponseGroupTopicPartition()
 				rsp.Partition = partition
 
-				pd, ok := c.data.tps.getp(rt.Topic, partition)
+				pd, ok := c.data.tps.getp(tr.topic, partition)
 				if !ok {
-					rsp.ErrorCode = kerr.UnknownTopicOrPartition.Code
+					// Java treats missing topics as absence of data
+					// (no error), not an error condition.
 					rsp.StartOffset = -1
+					rsp.Lag = -1
 					rst.Partitions = append(rst.Partitions, rsp)
 					continue
 				}
@@ -74,12 +114,24 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 				if sg == nil {
 					// Group doesn't exist -- no share state.
 					rsp.StartOffset = -1
-				} else if sp, ok := sg.partitions.getp(rt.Topic, partition); !ok {
+					rsp.Lag = -1
+				} else if sp, ok := sg.partitions.getp(tr.topic, partition); !ok {
 					// No share state yet -- SPSO not initialized.
 					rsp.StartOffset = -1
+					rsp.Lag = -1
 				} else {
 					rsp.StartOffset = sp.spso
-					lag := pd.highWatermark - sp.spso
+					// Lag = HWM - SPSO - deliveryComplete, where
+					// deliveryComplete counts records between SPSO
+					// and HWM that are already acknowledged/archived.
+					deliveryComplete := int64(0)
+					for off, sr := range sp.records {
+						if off >= sp.spso && off < pd.highWatermark &&
+							(sr.state == shareRecordAcknowledged || sr.state == shareRecordArchived) {
+							deliveryComplete++
+						}
+					}
+					lag := pd.highWatermark - sp.spso - deliveryComplete
 					if lag < 0 {
 						lag = 0
 					}

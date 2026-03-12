@@ -203,9 +203,9 @@ type ACL struct {
 //   - group.consumer.session.timeout.ms - session timeout for KIP-848
 //     consumer groups (default 45000)
 //   - group.share.session.timeout.ms - session timeout for share groups (default 45000)
-//   - share.record.lock.duration.ms - acquisition lock duration for share groups (default 30000)
+//   - group.share.record.lock.duration.ms - acquisition lock duration for share groups (default 30000)
 //   - share.record.lock.sweep.interval.ms - sweep interval for expired locks (default 5000)
-//   - share.max.delivery.attempts - max deliveries before archival (default 5)
+//   - group.share.delivery.count.limit - max deliveries before archival (default 5)
 //   - message.max.bytes - max produce batch size (default 1048588)
 //   - transaction.max.timeout.ms - max transaction timeout (default 900000)
 //   - max.incremental.fetch.session.cache.slots - max fetch sessions per broker (default 1000)

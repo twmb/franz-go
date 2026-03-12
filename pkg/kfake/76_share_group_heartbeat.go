@@ -1,6 +1,8 @@
 package kfake
 
 import (
+	"strings"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -13,6 +15,14 @@ func (c *Cluster) handleShareGroupHeartbeat(creq *clientReq) (kmsg.Response, err
 	req := creq.kreq.(*kmsg.ShareGroupHeartbeatRequest)
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
+	}
+
+	// Validate groupID: empty or whitespace-only is rejected with
+	// INVALID_REQUEST (matching Java's throwIfEmptyString).
+	if strings.TrimSpace(req.GroupID) == "" {
+		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
+		resp.ErrorCode = kerr.InvalidRequest.Code
+		return resp, nil
 	}
 
 	if kerr := c.validateGroup(creq, req.GroupID); kerr != nil {
@@ -42,11 +52,29 @@ func (c *Cluster) handleShareGroupHeartbeat(creq *clientReq) (kmsg.Response, err
 		return resp, nil
 	}
 
+	// Validate rackID: if present, must not be empty or whitespace-only
+	// (matching Java's throwIfEmptyString which trims).
+	if req.RackID != nil && strings.TrimSpace(*req.RackID) == "" {
+		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
+		resp.ErrorCode = kerr.InvalidRequest.Code
+		return resp, nil
+	}
+
 	// Epoch 0 (join) requires subscribedTopicNames.
 	if req.MemberEpoch == 0 && len(req.SubscribedTopicNames) == 0 {
 		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
 		resp.ErrorCode = kerr.InvalidRequest.Code
 		return resp, nil
+	}
+
+	// ACL: require TOPIC DESCRIBE on all subscribed topics (matching
+	// Java's KafkaApis handleShareGroupHeartbeatRequest).
+	for _, topic := range req.SubscribedTopicNames {
+		if !c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+			resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
+			resp.ErrorCode = kerr.TopicAuthorizationFailed.Code
+			return resp, nil
+		}
 	}
 
 	// Hijack to the share group's manage goroutine.

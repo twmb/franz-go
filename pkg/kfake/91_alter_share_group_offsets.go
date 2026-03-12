@@ -20,32 +20,44 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 		return nil, err
 	}
 
+	// Coordinator check: AlterShareGroupOffsets is routed to the
+	// share coordinator (matching Java's GroupCoordinatorService).
+	if c.coordinator(req.GroupID).node != creq.cc.b.node {
+		resp.ErrorCode = kerr.NotCoordinator.Code
+		return resp, nil
+	}
+
 	// ACL: require GROUP READ (Kafka uses READ, not ALTER).
 	if !c.allowedACL(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
 		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
 		return resp, nil
 	}
 
-	sg := c.shareGroups.gs[req.GroupID]
-	if sg == nil {
-		resp.ErrorCode = kerr.GroupIDNotFound.Code
-		return resp, nil
-	}
+	// Auto-create the share group if it doesn't exist (matching Java's
+	// getOrMaybeCreateShareGroup(groupId, true) in GroupMetadataManager).
+	sg := c.shareGroups.getOrCreate(req.GroupID)
 
-	// Pre-lookup topic IDs and valid partitions while in run()
-	// where c.data is safe to read. The waitControl closure runs
-	// in manage(); c.data could be mutated by admin callbacks that
-	// waitControl drains while blocked.
+	// Pre-lookup topic IDs, valid partitions, and ACL results while
+	// in run() where c.data is safe to read. The waitControl closure
+	// runs in manage(); c.data could be mutated by admin callbacks
+	// that waitControl drains while blocked.
 	type alterTopicInfo struct {
-		id    uuid
-		valid map[int32]struct{}
+		id      uuid
+		valid   map[int32]struct{}
+		aclDeny bool
 	}
 	topicInfo := make(map[string]alterTopicInfo, len(req.Topics))
 	for _, rt := range req.Topics {
 		info := alterTopicInfo{id: c.data.t2id[rt.Topic], valid: make(map[int32]struct{})}
-		for _, rp := range rt.Partitions {
-			if _, ok := c.data.tps.getp(rt.Topic, rp.Partition); ok {
-				info.valid[rp.Partition] = struct{}{}
+		// ACL: per-topic READ check (matching Kafka's
+		// AlterShareGroupOffsetsHandler authorization).
+		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
+			info.aclDeny = true
+		} else {
+			for _, rp := range rt.Partitions {
+				if _, ok := c.data.tps.getp(rt.Topic, rp.Partition); ok {
+					info.valid[rp.Partition] = struct{}{}
+				}
 			}
 		}
 		topicInfo[rt.Topic] = info
@@ -62,24 +74,37 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 			rt := &req.Topics[i]
 			rst := kmsg.NewAlterShareGroupOffsetsResponseTopic()
 			rst.Topic = rt.Topic
-			rst.TopicID = topicInfo[rt.Topic].id
+			info := topicInfo[rt.Topic]
+			rst.TopicID = info.id
+
+			if info.aclDeny {
+				for j := range rt.Partitions {
+					rsp := kmsg.NewAlterShareGroupOffsetsResponseTopicPartition()
+					rsp.Partition = rt.Partitions[j].Partition
+					rsp.ErrorCode = kerr.TopicAuthorizationFailed.Code
+					rst.Partitions = append(rst.Partitions, rsp)
+				}
+				resp.Topics = append(resp.Topics, rst)
+				continue
+			}
 
 			for j := range rt.Partitions {
 				rp := &rt.Partitions[j]
 				rsp := kmsg.NewAlterShareGroupOffsetsResponseTopicPartition()
 				rsp.Partition = rp.Partition
 
-				if _, ok := topicInfo[rt.Topic].valid[rp.Partition]; !ok {
+				if _, ok := info.valid[rp.Partition]; !ok {
 					rsp.ErrorCode = kerr.UnknownTopicOrPartition.Code
 					rst.Partitions = append(rst.Partitions, rsp)
 					continue
 				}
 
-				// Reset SPSO, scan cursor, and all record state.
+				// Reset SPSO, scan cursor, end offset, and all record state.
 				sp, ok := sg.partitions.getp(rt.Topic, rp.Partition)
 				if ok {
 					sp.spso = rp.StartOffset
 					sp.scanOffset = rp.StartOffset
+					sp.endOffset = rp.StartOffset
 					sp.records = make(map[int64]*shareRecord)
 				} else {
 					sg.partitions.mkp(rt.Topic, rp.Partition, func() *sharePartition {

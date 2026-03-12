@@ -21,6 +21,14 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 		rg := kmsg.NewShareGroupDescribeResponseGroup()
 		rg.GroupID = groupID
 
+		// Coordinator check: ShareGroupDescribe is routed to the
+		// group coordinator (matching Java's GroupCoordinatorService).
+		if c.coordinator(groupID).node != creq.cc.b.node {
+			rg.ErrorCode = kerr.NotCoordinator.Code
+			resp.Groups = append(resp.Groups, rg)
+			continue
+		}
+
 		// ACL: require GROUP DESCRIBE.
 		if !c.allowedACL(creq, groupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
 			rg.ErrorCode = kerr.GroupAuthorizationFailed.Code
@@ -52,6 +60,31 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 			}
 			rg.GroupEpoch = sg.groupEpoch
 			rg.AssignmentEpoch = sg.groupEpoch
+			rg.Assignor = "simple"
+
+			// Collect all assigned topic names across members.
+			allTopics := make(map[string]struct{})
+			for _, m := range sg.members {
+				for tid := range m.assignment {
+					if name := id2t[tid]; name != "" {
+						allTopics[name] = struct{}{}
+					}
+				}
+			}
+
+			// Java does an all-or-nothing check: if the user
+			// cannot DESCRIBE any assigned topic, the entire
+			// group is replaced with a redacted response
+			// containing only the error (no state/epoch/assignor
+			// metadata leaked).
+			for topic := range allTopics {
+				if !c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+					rg = kmsg.NewShareGroupDescribeResponseGroup()
+					rg.GroupID = groupID
+					rg.ErrorCode = kerr.TopicAuthorizationFailed.Code
+					return
+				}
+			}
 
 			for _, m := range sg.members {
 				sm := kmsg.NewShareGroupDescribeResponseGroupMember()
@@ -64,15 +97,9 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 
 				a := kmsg.NewShareGroupDescribeResponseGroupMemberAssignment()
 				for tid, parts := range m.assignment {
-					topicName := id2t[tid]
-					// Filter topics the client is not authorized
-					// to DESCRIBE.
-					if !c.allowedACL(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
-						continue
-					}
 					tp := kmsg.NewShareGroupDescribeResponseGroupMemberAssignmentTopicPartition()
 					tp.TopicID = tid
-					tp.Topic = topicName
+					tp.Topic = id2t[tid]
 					tp.Partitions = parts
 					a.TopicPartitions = append(a.TopicPartitions, tp)
 				}
@@ -83,6 +110,10 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 			// Group's manage goroutine quit -- treat as dead.
 			rg.GroupState = "Dead"
 			rg.ErrorCode = kerr.GroupIDNotFound.Code
+		}
+
+		if req.IncludeAuthorizedOperations {
+			rg.AuthorizedOperations = c.groupAuthorizedOps(creq, groupID)
 		}
 
 		resp.Groups = append(resp.Groups, rg)

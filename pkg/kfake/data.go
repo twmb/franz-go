@@ -736,11 +736,12 @@ var validBrokerConfigs = map[string]string{
 	"sasl.enabled.mechanisms":                   "",
 	"group.share.heartbeat.interval.ms":         "",
 	"group.share.session.timeout.ms":            "",
-	"share.max.delivery.attempts":               "",
-	"share.record.lock.duration.ms":             "",
+	"group.share.delivery.count.limit":               "",
+	"group.share.record.lock.duration.ms":             "",
 	"share.record.lock.sweep.interval.ms":       "",
 	"group.share.partition.max.record.locks":    "",
 	"group.share.max.share.sessions":            "",
+	"group.share.max.size":                      "",
 	"state.log.compact.bytes":                   "",
 	"super.users":                               "",
 }
@@ -800,11 +801,12 @@ var configDefaults = map[string]string{
 	"offsets.retention.check.interval.ms":       "600000",
 	"group.share.heartbeat.interval.ms":         strconv.Itoa(defHeartbeatInterval),
 	"group.share.session.timeout.ms":            "45000",
-	"share.max.delivery.attempts":               "5",
-	"share.record.lock.duration.ms":             "30000",
+	"group.share.delivery.count.limit":               "5",
+	"group.share.record.lock.duration.ms":             "30000",
 	"share.record.lock.sweep.interval.ms":       "5000",
 	"group.share.partition.max.record.locks":    "2000",
 	"group.share.max.share.sessions":            "2000",
+	"group.share.max.size":                      "200",
 }
 
 // configTypes maps config names to their data types for DescribeConfigs v3+.
@@ -843,11 +845,12 @@ var configTypes = map[string]kmsg.ConfigType{
 	"sasl.enabled.mechanisms":                   kmsg.ConfigTypeList,
 	"group.share.heartbeat.interval.ms":         kmsg.ConfigTypeInt,
 	"group.share.session.timeout.ms":            kmsg.ConfigTypeInt,
-	"share.max.delivery.attempts":               kmsg.ConfigTypeInt,
-	"share.record.lock.duration.ms":             kmsg.ConfigTypeLong,
+	"group.share.delivery.count.limit":               kmsg.ConfigTypeInt,
+	"group.share.record.lock.duration.ms":             kmsg.ConfigTypeInt,
 	"share.record.lock.sweep.interval.ms":       kmsg.ConfigTypeLong,
 	"group.share.partition.max.record.locks":    kmsg.ConfigTypeInt,
 	"group.share.max.share.sessions":            kmsg.ConfigTypeInt,
+	"group.share.max.size":                      kmsg.ConfigTypeInt,
 	"state.log.compact.bytes":                   kmsg.ConfigTypeLong,
 	"super.users":                               kmsg.ConfigTypeList,
 	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
@@ -946,11 +949,11 @@ func (c *Cluster) shareAcqLockSweepIntervalMs() int32 {
 }
 
 func (c *Cluster) shareRecordLockDurationMs() int32 {
-	return c.brokerConfigInt("share.record.lock.duration.ms", 30000)
+	return c.brokerConfigInt("group.share.record.lock.duration.ms", 30000)
 }
 
 func (c *Cluster) shareMaxDeliveryAttempts() int32 {
-	return c.brokerConfigInt("share.max.delivery.attempts", 5)
+	return c.brokerConfigInt("group.share.delivery.count.limit", 5)
 }
 
 func (c *Cluster) shareMaxRecordLocks() int32 {
@@ -959,6 +962,10 @@ func (c *Cluster) shareMaxRecordLocks() int32 {
 
 func (c *Cluster) shareMaxShareSessions() int32 {
 	return c.brokerConfigInt("group.share.max.share.sessions", 2000)
+}
+
+func (c *Cluster) shareMaxGroupSize() int32 {
+	return c.brokerConfigInt("group.share.max.size", 200)
 }
 
 // maxMessageBytes returns the max.message.bytes for a topic, falling back to
@@ -1071,21 +1078,26 @@ func (d *data) isCompactTopic(t string) bool {
 	return false
 }
 
-// isBatchAborted returns true if the batch belongs to an aborted transaction.
-// A batch is produced atomically within a transaction, so all its records
-// share the same fate. abortedTxns is sorted by lastOffset, so we binary
-// search to skip entries that end before this batch.
-func (pd *partData) isBatchAborted(batch *partBatch) bool {
+// isOffsetAborted returns true if the given offset (identified by its batch's
+// firstOffset and producerID) belongs to an aborted transaction.
+// abortedTxns is sorted by lastOffset, so we binary search to skip entries
+// that end before this batch.
+func (pd *partData) isOffsetAborted(firstOffset, producerID int64) bool {
 	j := sort.Search(len(pd.abortedTxns), func(i int) bool {
-		return pd.abortedTxns[i].lastOffset >= batch.FirstOffset
+		return pd.abortedTxns[i].lastOffset >= firstOffset
 	})
 	for ; j < len(pd.abortedTxns); j++ {
 		a := pd.abortedTxns[j]
-		if a.producerID == batch.ProducerID && batch.FirstOffset >= a.firstOffset {
+		if a.producerID == producerID && firstOffset >= a.firstOffset {
 			return true
 		}
 	}
 	return false
+}
+
+// isBatchAborted returns true if the batch belongs to an aborted transaction.
+func (pd *partData) isBatchAborted(batch *partBatch) bool {
+	return pd.isOffsetAborted(batch.FirstOffset, batch.ProducerID)
 }
 
 // compact removes superseded records from a compactable partition.
