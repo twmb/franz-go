@@ -614,11 +614,11 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 			}
 		}
 
-		// KIP-447: If RequireStable is set, check for pending transactional offsets
-		if req.RequireStable && gs.c.pids.hasUnstableOffsets(rg.Group) {
-			sg.ErrorCode = kerr.UnstableOffsetCommit.Code
-			continue
-		}
+		// KIP-447: check for pending transactional offsets before
+		// entering waitControl (pids must be accessed from run()).
+		// Real Kafka returns UNSTABLE_OFFSET_COMMIT per-partition,
+		// not per-group.
+		unstable := req.RequireStable && gs.c.pids.hasUnstableOffsets(rg.Group)
 		g, ok := gs.gs[rg.Group]
 		if !ok {
 			sg.ErrorCode = kerr.GroupIDNotFound.Code
@@ -652,9 +652,15 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 					for p, c := range ps {
 						sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
 						sp.Partition = p
-						sp.Offset = c.offset
-						sp.LeaderEpoch = c.leaderEpoch
-						sp.Metadata = c.metadata
+						if unstable {
+							sp.ErrorCode = kerr.UnstableOffsetCommit.Code
+							sp.Offset = -1
+							sp.LeaderEpoch = -1
+						} else {
+							sp.Offset = c.offset
+							sp.LeaderEpoch = c.leaderEpoch
+							sp.Metadata = c.metadata
+						}
 						st.Partitions = append(st.Partitions, sp)
 					}
 					sg.Topics = append(sg.Topics, st)
@@ -667,14 +673,20 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 					for _, p := range t.Partitions {
 						sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
 						sp.Partition = p
-						c, ok := g.commits.getp(t.Topic, p)
-						if !ok {
+						if unstable {
+							sp.ErrorCode = kerr.UnstableOffsetCommit.Code
 							sp.Offset = -1
 							sp.LeaderEpoch = -1
 						} else {
-							sp.Offset = c.offset
-							sp.LeaderEpoch = c.leaderEpoch
-							sp.Metadata = c.metadata
+							c, ok := g.commits.getp(t.Topic, p)
+							if !ok {
+								sp.Offset = -1
+								sp.LeaderEpoch = -1
+							} else {
+								sp.Offset = c.offset
+								sp.LeaderEpoch = c.leaderEpoch
+								sp.Metadata = c.metadata
+							}
 						}
 						st.Partitions = append(st.Partitions, sp)
 					}
