@@ -471,13 +471,6 @@ func (cl *Client) MarkAcks(status AckStatus, records ...*Record) {
 	s.markAcks(status, records)
 }
 
-// CommitAcks sends all pending share group acknowledgements to the broker.
-// Records are marked for acknowledgement by calling Record.Ack or
-// Client.MarkAcks; this method sends those marks to the broker via
-// ShareAcknowledge requests.
-//
-// Records that are not explicitly acknowledged before the next PollFetches /
-// PollRecords call are automatically accepted.
 // CommitAcks sends pending share group acknowledgements to each broker.
 // Records that were explicitly acknowledged via [Record.Ack] are sent with the
 // specified status; records that have not been explicitly acknowledged are

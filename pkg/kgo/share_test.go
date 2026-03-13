@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -179,8 +180,16 @@ func TestShareGroupETL(t *testing.T) {
 			}
 			cancel()
 
+			// ErrFirstReadEOF can occur during broker restarts: the
+			// client reconnects and sends ApiVersions, but the old
+			// server closes the connection before responding. This is
+			// transient and the client will reconnect successfully.
+			var firstReadEOF *ErrFirstReadEOF
 			for _, fetchErr := range fetches.Errors() {
 				if fetchErr.Err == context.DeadlineExceeded || fetchErr.Err == context.Canceled {
+					continue
+				}
+				if errors.As(fetchErr.Err, &firstReadEOF) {
 					continue
 				}
 				t.Errorf("%s: fetch error: %v", name, fetchErr)
@@ -704,7 +713,11 @@ func TestShareGroupAckOnClose(t *testing.T) {
 	var got int
 	for got < totalRecords {
 		fetches := cl1.PollFetches(ctx)
+		var firstReadEOF *ErrFirstReadEOF
 		for _, e := range fetches.Errors() {
+			if errors.As(e.Err, &firstReadEOF) {
+				continue
+			}
 			t.Errorf("fetch error: %v", e)
 		}
 		records := fetches.Records()
@@ -857,7 +870,7 @@ func TestShareAckFromCtx(t *testing.T) {
 
 	// Record with share ack state.
 	ackState := &shareAckState{deliveryCount: 3}
-	r.Context = context.WithValue(context.Background(), ctxShareAck, ackState)
+	r.Context = context.WithValue(context.Background(), shareAckKey, ackState)
 	st := shareAckFromCtx(r)
 	if st == nil {
 		t.Fatal("expected non-nil for share record")

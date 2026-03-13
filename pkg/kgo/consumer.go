@@ -376,11 +376,11 @@ func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err er
 	}}})
 	c.sourcesReadyMu.Unlock()
 	c.sourcesReadyCond.Broadcast()
-	// Share consumers block in pollShareFetches on cursorsChanged, not
+	// Share consumers block in pollShareFetches on assignChanged, not
 	// sourcesReadyCond. Wake them so injected errors (e.g., fatal
 	// heartbeat failures) are surfaced even with no share cursors.
 	if c.s != nil {
-		c.s.cursorsChanged.Broadcast()
+		c.s.assignChanged.Broadcast()
 	}
 }
 

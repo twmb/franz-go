@@ -178,10 +178,10 @@ type cfg struct {
 	// CONSUMER GROUP SECTION //
 	////////////////////////////
 
-	group                 string          // group we are in
-	shareGroup            string          // share group we are in
-	shareMaxRecords       int32           // MaxRecords and BatchSize for ShareFetch (KIP-1206)
-	shareStrictMaxRecords bool            // if true, ShareAcquireMode=1 (record-limit) per KIP-1206
+	group                 string // group we are in
+	shareGroup            string // share group we are in
+	shareMaxRecords       int32  // MaxRecords and BatchSize for ShareFetch (KIP-1206)
+	shareStrictMaxRecords bool   // if true, ShareAcquireMode=1 (record-limit) per KIP-1206
 	shareAckCallback      func(*Client, []ShareAckResult)
 	instanceID            *string         // optional group instance ID
 	balancers             []GroupBalancer // balancers we can use

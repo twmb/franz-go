@@ -33,6 +33,12 @@ type source struct {
 	// Tracks how many _failed_ fetch requests we have in a row (unable to
 	// receive a response). Any response, even responses with an ErrorCode
 	// set, are successful. This field is used for backoff purposes.
+	//
+	// Not atomic: safe because each access path guarantees one goroutine
+	// per source. Regular fetch: serialized by fetchState (workLoop).
+	// Share fetch: pollShareFetches fans out exactly one goroutine per
+	// source per poll round, and PollFetches must not be called
+	// concurrently (documented contract + consumer.mu serialization).
 	consecutiveFailures int
 
 	fetchState workLoop
@@ -47,10 +53,13 @@ type source struct {
 
 	shareCursors []*shareCursor
 
-	shareSessionEpoch int32                                  // 0=new, incremented on success, -1=close
-	shareSessionParts map[topicPartIdx]struct{}              // partitions the broker knows about in this share session
-	sharePendingAcks  map[[16]byte]map[int32][]shareAckBatch // topicID -> partition -> ack batches to piggyback
-	shareForgotten    map[[16]byte][]int32                   // topicID -> partitions to forget
+	// shareSessionEpoch, shareSessionParts, sharePendingAcks,
+	// shareForgotten, and shareHasRenew are all protected by cursorsMu.
+	shareSessionEpoch int32                     // 0=new, incremented on success, -1=close
+	shareSessionParts map[topicPartIdx]struct{} // partitions the broker knows about in this share session
+	sharePendingAcks  sharePendingAcks          // topicID -> partition -> ack batches to piggyback
+	shareForgotten    map[[16]byte][]int32      // topicID -> partitions to forget
+	shareHasRenew     bool                      // true if any pending ack has AckRenew type
 }
 
 func (cl *Client) newSource(nodeID int32) *source {
@@ -693,28 +702,117 @@ func (s *source) takeBufferedFn(polled bool, offsetFn func(usedOffsets)) Fetch {
 func (s *source) addShareAcks(topicID [16]byte, partition int32, batches []shareAckBatch) {
 	s.cursorsMu.Lock()
 	if s.sharePendingAcks == nil {
-		s.sharePendingAcks = make(map[[16]byte]map[int32][]shareAckBatch)
+		s.sharePendingAcks = make(sharePendingAcks)
 	}
-	parts := s.sharePendingAcks[topicID]
-	if parts == nil {
-		parts = make(map[int32][]shareAckBatch)
-		s.sharePendingAcks[topicID] = parts
+	s.sharePendingAcks.add(topicID, partition, batches)
+	if !s.shareHasRenew {
+		for _, b := range batches {
+			if b.ackType == int8(AckRenew) {
+				s.shareHasRenew = true
+				break
+			}
+		}
 	}
-	parts[partition] = append(parts[partition], batches...)
 	s.cursorsMu.Unlock()
 }
 
-func (s *source) drainShareAcks() map[[16]byte]map[int32][]shareAckBatch {
+// requeueShareAcks puts all ack batches back on this source for retry,
+// acquiring the lock once for the entire batch rather than per-partition.
+func (s *source) requeueShareAcks(acks sharePendingAcks, hasRenew bool) {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	if s.sharePendingAcks == nil {
+		s.sharePendingAcks = make(sharePendingAcks)
+	}
+	s.sharePendingAcks.merge(acks)
+	s.shareHasRenew = s.shareHasRenew || hasRenew
+}
+
+func (s *source) drainShareAcks() (sharePendingAcks, bool) {
 	s.cursorsMu.Lock()
 	defer s.cursorsMu.Unlock()
 	acks := s.sharePendingAcks
+	hasRenew := s.shareHasRenew
 	s.sharePendingAcks = nil
+	s.shareHasRenew = false
 	for _, parts := range acks {
 		for p, batches := range parts {
 			parts[p] = mergeAckBatches(batches)
 		}
 	}
-	return acks
+	return acks, hasRenew
+}
+
+func (s *source) bumpShareSessionEpoch() {
+	s.cursorsMu.Lock()
+	s.shareSessionEpoch = max(s.shareSessionEpoch+1, 1)
+	s.cursorsMu.Unlock()
+}
+
+func (s *source) resetShareSession() {
+	s.cursorsMu.Lock()
+	s.shareSessionEpoch = 0
+	s.shareSessionParts = nil
+	s.cursorsMu.Unlock()
+}
+
+func (s *source) clearShareState() {
+	s.cursorsMu.Lock()
+	s.sharePendingAcks = nil
+	s.shareForgotten = nil
+	s.shareSessionEpoch = 0
+	s.shareSessionParts = nil
+	s.shareHasRenew = false
+	s.cursorsMu.Unlock()
+}
+
+// updateShareSessionParts bumps the session epoch and updates which
+// partitions are tracked in the session. Combines the epoch increment
+// with partition tracking under a single lock acquisition.
+func (s *source) updateShareSessionParts(req *kmsg.ShareFetchRequest) {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	s.shareSessionEpoch = max(s.shareSessionEpoch+1, 1)
+	if s.shareSessionParts == nil {
+		s.shareSessionParts = make(map[topicPartIdx]struct{})
+	}
+	cursorSet := make(map[topicPartIdx]struct{}, len(s.shareCursors))
+	for _, sc := range s.shareCursors {
+		cursorSet[topicPartIdx{sc.topicID, sc.partition}] = struct{}{}
+	}
+	for i := range req.Topics {
+		for j := range req.Topics[i].Partitions {
+			key := topicPartIdx{req.Topics[i].TopicID, req.Topics[i].Partitions[j].Partition}
+			if _, hasCursor := cursorSet[key]; hasCursor {
+				s.shareSessionParts[key] = struct{}{}
+			}
+		}
+	}
+	for _, f := range req.ForgottenTopicsData {
+		for _, p := range f.Partitions {
+			delete(s.shareSessionParts, topicPartIdx{f.TopicID, p})
+		}
+	}
+}
+
+// restoreShareForgotten puts ForgottenTopicsData from a failed ShareFetch
+// request back onto the source so it will be included in the next request.
+// buildShareFetchRequest drains shareForgotten when building the request;
+// if the request fails before reaching the broker, the forgotten state
+// would be permanently lost, causing the client to never send
+// ForgottenTopicsData and potentially leaving stale share sessions.
+func (s *source) restoreShareForgotten(req *kmsg.ShareFetchRequest) {
+	if len(req.ForgottenTopicsData) == 0 {
+		return
+	}
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	if s.shareForgotten == nil {
+		s.shareForgotten = make(map[[16]byte][]int32)
+	}
+	for _, f := range req.ForgottenTopicsData {
+		s.shareForgotten[f.TopicID] = append(s.shareForgotten[f.TopicID], f.Partitions...)
+	}
 }
 
 // createReq actually creates a fetch request.

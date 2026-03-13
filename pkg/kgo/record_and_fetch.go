@@ -232,8 +232,8 @@ func (r *Record) Ack(status AckStatus) {
 		return
 	}
 	st.mu.Lock()
-	if st.status&ackFinalized == 0 {
-		st.status = uint8(status)
+	if !st.finalized {
+		st.status = status
 	}
 	st.mu.Unlock()
 }

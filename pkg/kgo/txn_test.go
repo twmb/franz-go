@@ -205,8 +205,19 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			continue
 		}
 
+		// ErrFirstReadEOF can occur during broker restarts: the
+		// client reconnects and sends ApiVersions, but the old
+		// server closes the connection before responding. This is
+		// transient and the client will reconnect successfully.
+		var firstReadEOF *ErrFirstReadEOF
 		if fetchErrs := fetches.Errors(); len(fetchErrs) > 0 {
-			c.sendErr(fmt.Errorf("poll got unexpected errs: %v", fetchErrs))
+			for _, fetchErr := range fetchErrs {
+				if errors.As(fetchErr.Err, &firstReadEOF) {
+					continue
+				}
+				c.sendErr(fmt.Errorf("poll got unexpected errs: %v", fetchErrs))
+				break
+			}
 		}
 
 		if err := txnSess.Begin(); err != nil {
