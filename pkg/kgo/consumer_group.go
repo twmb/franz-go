@@ -1747,6 +1747,17 @@ start:
 			}
 			goto start
 		}
+		if errors.Is(err, kerr.UnstableOffsetCommit) {
+			g.cfg.logger.Log(LogLevelInfo, "fetch offsets returned unstable offset commit at group level, waiting 1s and retrying",
+				"group", g.cfg.group,
+			)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+				goto start
+			}
+		}
 		g.cfg.logger.Log(LogLevelError, "fetch offsets failed with group-level error", "group", g.cfg.group, "err", err)
 		return err
 	}
