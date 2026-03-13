@@ -43,6 +43,17 @@ type (
 
 func (creq *clientReq) empty() bool { return creq == nil || creq.cc == nil || creq.kreq == nil }
 
+// reply sends a response back to the client, respecting connection close
+// and cluster shutdown. Used by manage goroutines (groups, share groups)
+// that handle requests asynchronously.
+func (creq *clientReq) reply(kresp kmsg.Response) {
+	select {
+	case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, seq: creq.seq}:
+	case <-creq.cc.done:
+	case <-creq.cc.c.die:
+	}
+}
+
 func (cc *clientConn) read() {
 	defer close(cc.done)
 	defer cc.conn.Close()

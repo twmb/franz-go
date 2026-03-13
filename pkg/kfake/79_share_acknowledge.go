@@ -1,19 +1,29 @@
 package kfake
 
 import (
-	"math"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // ShareAcknowledge: v0-2 (KIP-932, KIP-1222)
+//
+// Behavior:
+// * Acknowledges records previously acquired via ShareFetch
+// * Shares the same session as ShareFetch (epoch incremented on success)
+// * On session close (epoch -1), remaining acquired records are released
+// * Ack types: 0=Gap, 1=Accept, 2=Release, 3=Reject, 4=Renew (v2+)
+//
+// Version notes:
+// * v0: Initial share acknowledge (KIP-932)
+// * v2: IsRenewAck and type 4 (Renew) for lock renewal (KIP-1222)
 
 func init() { regKey(79, 0, 2) }
 
 func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error) {
-	req := creq.kreq.(*kmsg.ShareAcknowledgeRequest)
-	resp := req.ResponseKind().(*kmsg.ShareAcknowledgeResponse)
+	var (
+		req  = creq.kreq.(*kmsg.ShareAcknowledgeRequest)
+		resp = req.ResponseKind().(*kmsg.ShareAcknowledgeResponse)
+	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
@@ -21,11 +31,10 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 
 	resp.AcquisitionLockTimeoutMillis = c.shareRecordLockDurationMs()
 
-	groupID := ""
+	var groupID, memberID string
 	if req.GroupID != nil {
 		groupID = *req.GroupID
 	}
-	memberID := ""
 	if req.MemberID != nil {
 		memberID = *req.MemberID
 	}
@@ -48,9 +57,10 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		return resp, nil
 	}
 
-	// Session epoch validation. ShareAcknowledge uses the same share
-	// session as ShareFetch: the client tracks a single epoch that
-	// increments on each successful ShareFetch or ShareAcknowledge.
+	// Session epoch validation. ShareAcknowledge shares the same session
+	// as ShareFetch: the client tracks a single epoch that increments on
+	// each successful ShareFetch or ShareAcknowledge.
+	sgs := &c.shareGroups
 	sessionKey := shareSessionKey{
 		group:    groupID,
 		memberID: memberID,
@@ -59,22 +69,18 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 
 	closingSession := req.ShareSessionEpoch == -1
 	if closingSession {
-		// Validate session exists (matching Kafka's
-		// SharePartitionManager behavior).
-		if c.shareSessions[sessionKey] == nil {
+		if sgs.sessions[sessionKey] == nil {
 			resp.ErrorCode = kerr.ShareSessionNotFound.Code
 			return resp, nil
 		}
-		// Close session -- still process the acks below, then
-		// release remaining acquired records.
-		defer delete(c.shareSessions, sessionKey)
+		defer delete(sgs.sessions, sessionKey)
 	} else if req.ShareSessionEpoch == 0 {
-		// Epoch 0 is for opening a new session via ShareFetch, not
+		// Epoch 0 opens a new session via ShareFetch, not
 		// ShareAcknowledge.
 		resp.ErrorCode = kerr.InvalidShareSessionEpoch.Code
 		return resp, nil
 	} else {
-		session := c.shareSessions[sessionKey]
+		session := sgs.sessions[sessionKey]
 		if session == nil {
 			resp.ErrorCode = kerr.ShareSessionNotFound.Code
 			return resp, nil
@@ -85,106 +91,33 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		}
 	}
 
-	supportsRenew := req.Version >= 2
-	maxDelivery := c.shareMaxDeliveryAttempts()
-	id2t := c.data.id2t
+	// Response-building closure (matching produce handler style).
 	topicIdx := make(map[uuid]int)
+	donep := func(tid uuid, p int32, ec int16) {
+		i, ok := topicIdx[tid]
+		if !ok {
+			i = len(resp.Topics)
+			topicIdx[tid] = i
+			t := kmsg.NewShareAcknowledgeResponseTopic()
+			t.TopicID = tid
+			resp.Topics = append(resp.Topics, t)
+		}
+		sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
+		sp.Partition = p
+		sp.ErrorCode = ec
+		resp.Topics[i].Partitions = append(resp.Topics[i].Partitions, sp)
+	}
+
+	maxAckType := int8(3)
+	if req.Version >= 2 && req.IsRenewAck {
+		maxAckType = 4
+	}
+
+	ackTs := ackTopicsFromAcknowledge(req.Topics)
+	maxDelivery := c.shareMaxDeliveryAttempts()
 
 	sg.mu.Lock()
-	for i := range req.Topics {
-		rt := &req.Topics[i]
-		topicName := id2t[rt.TopicID]
-		if topicName == "" {
-			// Return UNKNOWN_TOPIC_ID for deleted topics
-			// (matching Java's getAcknowledgeBatchesFromShareAcknowledgeRequest).
-			idx := getOrAddShareAckTopic(resp, topicIdx, rt.TopicID)
-			for j := range rt.Partitions {
-				sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
-				sp.Partition = rt.Partitions[j].Partition
-				sp.ErrorCode = kerr.UnknownTopicID.Code
-				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
-			}
-			continue
-		}
-
-		// ACL: per-topic READ check.
-		if !c.allowedACL(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
-			idx := getOrAddShareAckTopic(resp, topicIdx, rt.TopicID)
-			for j := range rt.Partitions {
-				sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
-				sp.Partition = rt.Partitions[j].Partition
-				sp.ErrorCode = kerr.TopicAuthorizationFailed.Code
-				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
-			}
-			continue
-		}
-
-		for j := range rt.Partitions {
-			rp := &rt.Partitions[j]
-
-			// Validate ack batches for this partition.
-			errCode := int16(0)
-			prevEnd := int64(-1)
-			maxType := int8(3)
-			if supportsRenew {
-				maxType = 4
-			}
-			for _, batch := range rp.AcknowledgementBatches {
-				if ec := validateOneAckBatch(batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes, &prevEnd, maxType, req.IsRenewAck); ec != 0 {
-					errCode = ec
-					break
-				}
-			}
-			if errCode != 0 {
-				idx := getOrAddShareAckTopic(resp, topicIdx, rt.TopicID)
-				sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
-				sp.Partition = rp.Partition
-				sp.ErrorCode = errCode
-				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
-				continue
-			}
-
-			pd, ok := c.data.tps.getp(topicName, rp.Partition)
-			if !ok {
-				idx := getOrAddShareAckTopic(resp, topicIdx, rt.TopicID)
-				sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
-				sp.Partition = rp.Partition
-				sp.ErrorCode = kerr.UnknownTopicOrPartition.Code
-				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
-				continue
-			}
-
-			shp := sg.getSharePartition(topicName, rp.Partition, pd)
-			// Atomic validate-then-apply (matching Kafka's
-			// rollbackOrProcessStateUpdates).
-			for _, batch := range rp.AcknowledgementBatches {
-				if ec := shp.validateAcks(memberID, batch.FirstOffset, batch.LastOffset); ec != 0 {
-					errCode = ec
-					break
-				}
-			}
-			if errCode != 0 {
-				idx := getOrAddShareAckTopic(resp, topicIdx, rt.TopicID)
-				sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
-				sp.Partition = rp.Partition
-				sp.ErrorCode = errCode
-				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
-				continue
-			}
-			for _, batch := range rp.AcknowledgementBatches {
-				shp.processAcks(memberID, batch.FirstOffset, batch.LastOffset, batch.AcknowledgeTypes, maxDelivery)
-			}
-			shp.advanceSPSO()
-
-			idx := getOrAddShareAckTopic(resp, topicIdx, rt.TopicID)
-			sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
-			sp.Partition = rp.Partition
-			resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
-
-			// Wake any pending ShareFetch watchers on this partition.
-			fireShareWatchers(pd)
-		}
-	}
+	toFire, _ := c.processShareAcks(creq, sg, memberID, ackTs, maxAckType, donep)
 
 	// On session close, release remaining acquired records (matching
 	// Kafka's releaseSession behavior).
@@ -194,33 +127,20 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 	}
 	sg.mu.Unlock()
 
+	// Fire watchers outside the lock for ack-released records.
+	for _, pd := range toFire {
+		fireShareWatchers(pd)
+	}
 	if released {
-		sg.fireAllShareWatchers(c)
+		sg.fireAllShareWatchers()
 	}
 
-	// Advance session epoch (for non-close requests), same as ShareFetch.
+	// Advance session epoch (for non-close requests).
 	if !closingSession {
-		session := c.shareSessions[sessionKey]
-		if session != nil {
-			if session.epoch == math.MaxInt32 {
-				session.epoch = 1
-			} else {
-				session.epoch++
-			}
+		if session := sgs.sessions[sessionKey]; session != nil {
+			session.epoch = max(1, session.epoch+1)
 		}
 	}
 
 	return resp, nil
-}
-
-func getOrAddShareAckTopic(resp *kmsg.ShareAcknowledgeResponse, idx map[uuid]int, tid uuid) int {
-	i, ok := idx[tid]
-	if !ok {
-		i = len(resp.Topics)
-		idx[tid] = i
-		t := kmsg.NewShareAcknowledgeResponseTopic()
-		t.TopicID = tid
-		resp.Topics = append(resp.Topics, t)
-	}
-	return i
 }

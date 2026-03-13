@@ -7,8 +7,12 @@ import (
 
 // AlterShareGroupOffsets: v0 (KIP-932)
 //
-// Resets the SPSO for partitions in an empty share group. Clears all
-// in-flight record state and delivery counts for altered partitions.
+// Behavior:
+// * Resets the SPSO for partitions in an empty share group
+// * Clears all in-flight record state and delivery counts
+// * Auto-creates the share group if it doesn't exist (matching Java's
+//   getOrMaybeCreateShareGroup(groupId, true))
+// * Rejects requests when the group has active members (NON_EMPTY_GROUP)
 
 func init() { regKey(91, 0, 0) }
 
@@ -104,14 +108,14 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 				if ok {
 					sp.spso = rp.StartOffset
 					sp.scanOffset = rp.StartOffset
-					sp.endOffset = rp.StartOffset
+					sp.acquireEnd = rp.StartOffset
 					sp.records = make(map[int64]*shareRecord)
 				} else {
 					sg.partitions.mkp(rt.Topic, rp.Partition, func() *sharePartition {
 						return &sharePartition{
 							spso:       rp.StartOffset,
 							scanOffset: rp.StartOffset,
-							endOffset:  rp.StartOffset,
+							acquireEnd:  rp.StartOffset,
 							records:    make(map[int64]*shareRecord),
 						}
 					})

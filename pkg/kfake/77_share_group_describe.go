@@ -6,6 +6,17 @@ import (
 )
 
 // ShareGroupDescribe: v0-1 (KIP-932)
+//
+// Behavior:
+// * Describes share group state, members, and assignments
+// * Routed to the group coordinator
+// * Topic DESCRIBE ACL is all-or-nothing: if any assigned topic fails,
+//   the entire group response is redacted (matching Java's behavior)
+// * Uses waitControl to safely read manage goroutine state
+//
+// Version notes:
+// * v0: Initial share group describe (KIP-932)
+// * v1: No protocol changes
 
 func init() { regKey(77, 0, 1) }
 

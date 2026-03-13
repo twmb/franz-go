@@ -26,6 +26,11 @@ type shareGroups struct {
 	// sweep timer releases records. run() receives from this and fires
 	// share watchers (pd.shareWatch is only safe from run()).
 	sweepCh chan *shareGroup
+
+	sessions    map[shareSessionKey]*shareSession
+	connWatch   map[*clientConn]struct{}
+	disconnCh   chan *clientConn
+	watchFetchCh chan *watchShareFetch
 }
 
 type shareGroup struct {
@@ -85,6 +90,23 @@ type shareRecord struct {
 	acquireTime   time.Time
 }
 
+// release sets the record to available (if under max delivery) or archived.
+// Clears acquiredBy. Returns true if the record became available. Resets
+// sp.scanOffset if the offset is below the current scan position.
+func (sr *shareRecord) release(maxDelivery int32, sp *sharePartition, offset int64) bool {
+	if sr.deliveryCount >= maxDelivery {
+		sr.state = shareRecordArchived
+		sr.acquiredBy = ""
+		return false
+	}
+	sr.state = shareRecordAvailable
+	sr.acquiredBy = ""
+	if offset < sp.scanOffset {
+		sp.scanOffset = offset
+	}
+	return true
+}
+
 // sharePartition tracks the SPSO and per-record state for one (group, topic, partition).
 //
 // records is a sparse map from offset to state. Entries are created on
@@ -93,7 +115,7 @@ type shareRecord struct {
 // acceptable for a test broker.
 type sharePartition struct {
 	spso      int64 // Share-Partition Start Offset: first unfinalized offset
-	endOffset int64 // one past highest tracked offset, for in-flight count
+	acquireEnd int64 // one past highest tracked offset, for in-flight window
 	records   map[int64]*shareRecord
 
 	// scanOffset tracks the next offset to scan for available records.
@@ -135,8 +157,8 @@ type cachedSharePart struct {
 
 // watchShareFetch suspends a ShareFetch request until new records are
 // available or MaxWait expires. Registered on partData.shareWatch;
-// when pushBatch adds records, the watcher fires via do(). The
-// cleanup and re-invocation happen in the cluster run() loop.
+// when pushBatch adds records, the watcher fires. The cleanup and
+// re-invocation happen in the cluster run() loop.
 type watchShareFetch struct {
 	creq    *clientReq
 	session *shareSession // session at registration time; stale if overwritten
@@ -148,7 +170,7 @@ type watchShareFetch struct {
 	cleaned bool
 }
 
-func (w *watchShareFetch) do() {
+func (w *watchShareFetch) fire() {
 	w.once.Do(func() {
 		go w.cb()
 	})
@@ -171,11 +193,7 @@ func (sgs *shareGroups) handleHeartbeat(creq *clientReq) {
 	if _, isConsumer := sgs.c.groups.gs[req.GroupID]; isConsumer {
 		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
-		select {
-		case creq.cc.respCh <- clientResp{kresp: resp, corr: creq.corr, seq: creq.seq}:
-		case <-creq.cc.done:
-		case <-sgs.c.die:
-		}
+		creq.reply(resp)
 		return
 	}
 
@@ -185,11 +203,7 @@ func (sgs *shareGroups) handleHeartbeat(creq *clientReq) {
 		if sgs.gs == nil || sgs.gs[req.GroupID] == nil {
 			resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
 			resp.ErrorCode = kerr.GroupIDNotFound.Code
-			select {
-			case creq.cc.respCh <- clientResp{kresp: resp, corr: creq.corr, seq: creq.seq}:
-			case <-creq.cc.done:
-			case <-sgs.c.die:
-			}
+			creq.reply(resp)
 			return
 		}
 	}
@@ -234,6 +248,145 @@ func (sgs *shareGroups) getOrCreate(name string) *shareGroup {
 	return g
 }
 
+// createSession creates a new share session (epoch 0). Returns the session,
+// the share group, and an error code. On success the session is stored and
+// a disconnect watcher is registered. Must only be called from run().
+func (sgs *shareGroups) createSession(
+	key shareSessionKey,
+	req *kmsg.ShareFetchRequest,
+	cc *clientConn,
+) (*shareSession, *shareGroup, int16) {
+	sg := sgs.getOrCreate(key.group)
+
+	// Reject piggybacked acks before creating session
+	// (matching Kafka: checks before maybeCreateSession).
+	for i := range req.Topics {
+		for j := range req.Topics[i].Partitions {
+			if len(req.Topics[i].Partitions[j].AcknowledgementBatches) > 0 {
+				return nil, nil, kerr.InvalidRequest.Code
+			}
+		}
+	}
+
+	// Remove old session before capacity check so re-creating
+	// doesn't hit the limit (matching Kafka's cache.remove(key)
+	// before maybeCreateSession).
+	delete(sgs.sessions, key)
+	if int32(len(sgs.sessions)) >= sgs.c.shareMaxShareSessions() {
+		return nil, nil, kerr.ShareSessionLimitReached.Code
+	}
+
+	session := &shareSession{
+		epoch:      0,
+		partitions: make(map[uuid]map[int32]*cachedSharePart),
+		cc:         cc,
+	}
+	for i := range req.Topics {
+		rt := &req.Topics[i]
+		ps := session.partitions[rt.TopicID]
+		if ps == nil {
+			ps = make(map[int32]*cachedSharePart)
+			session.partitions[rt.TopicID] = ps
+		}
+		for j := range rt.Partitions {
+			ps[rt.Partitions[j].Partition] = &cachedSharePart{requiresUpdate: true}
+		}
+	}
+	sgs.sessions[key] = session
+
+	// Watch the connection for disconnect cleanup
+	// (matching Kafka's ConnectionDisconnectListener).
+	if _, watched := sgs.connWatch[cc]; !watched {
+		sgs.connWatch[cc] = struct{}{}
+		go func() {
+			select {
+			case <-cc.done:
+				select {
+				case sgs.disconnCh <- cc:
+				case <-sgs.c.die:
+				}
+			case <-sgs.c.die:
+			}
+		}()
+	}
+
+	return session, sg, 0
+}
+
+// updateSession validates and applies an incremental session update (epoch > 0).
+// Returns the session and an error code. Must only be called from run().
+func (sgs *shareGroups) updateSession(
+	key shareSessionKey,
+	epoch int32,
+	topics []kmsg.ShareFetchRequestTopic,
+	forgotten []kmsg.ShareFetchRequestForgottenTopicsData,
+) (*shareSession, int16) {
+	session := sgs.sessions[key]
+	if session == nil {
+		return nil, kerr.ShareSessionNotFound.Code
+	}
+	if epoch != session.epoch {
+		return nil, kerr.InvalidShareSessionEpoch.Code
+	}
+
+	// Incremental: merge request Topics (ADD), remove
+	// ForgottenTopicsData. New partitions get requiresUpdate=true
+	// so they appear in the response even with no data (matching
+	// Kafka's CachedSharePartition.requiresUpdateInResponse).
+	for i := range topics {
+		rt := &topics[i]
+		ps := session.partitions[rt.TopicID]
+		if ps == nil {
+			ps = make(map[int32]*cachedSharePart)
+			session.partitions[rt.TopicID] = ps
+		}
+		for j := range rt.Partitions {
+			p := rt.Partitions[j].Partition
+			if ps[p] == nil {
+				ps[p] = &cachedSharePart{requiresUpdate: true}
+			}
+		}
+	}
+	for i := range forgotten {
+		ft := &forgotten[i]
+		ps := session.partitions[ft.TopicID]
+		if ps == nil {
+			continue
+		}
+		for _, p := range ft.Partitions {
+			delete(ps, p)
+		}
+		if len(ps) == 0 {
+			delete(session.partitions, ft.TopicID)
+		}
+	}
+
+	return session, 0
+}
+
+// drainReqCh processes any pending requests in reqCh. Called from a
+// waitControl closure during shutdown. Must run in the manage goroutine.
+func (g *shareGroup) drainReqCh() {
+	for {
+		select {
+		case creq := <-g.reqCh:
+			var kresp kmsg.Response
+			switch creq.kreq.(type) {
+			case *kmsg.ShareGroupHeartbeatRequest:
+				g.lastTopicMeta = creq.topicMeta
+				kresp = g.handleHeartbeat(creq)
+			default:
+				g.c.cfg.logger.Logf(LogLevelDebug, "share group %s drainReqCh: unknown request type %T", g.name, creq.kreq)
+			}
+			if kresp != nil {
+				creq.reply(kresp)
+			}
+		default:
+			return
+		}
+	}
+}
+
 func (g *shareGroup) manage() {
 	sweepInterval := time.Duration(g.c.shareAcqLockSweepIntervalMs()) * time.Millisecond
 	acqLockTicker := time.NewTicker(sweepInterval)
@@ -259,7 +412,7 @@ func (g *shareGroup) manage() {
 				kresp = g.handleHeartbeat(creq)
 			}
 			if kresp != nil {
-				g.reply(creq, kresp)
+				creq.reply(kresp)
 			}
 		case fn := <-g.controlCh:
 			fn()
@@ -272,7 +425,7 @@ func (g *shareGroup) manage() {
 // sweepExpiredAcquisitions releases records whose acquisition lock has
 // expired. If a record has been delivered maxDeliveryCount times, it is
 // archived instead of released. After releasing records, notifies run()
-// via sweepNotifyCh so it can fire share watchers (pd.shareWatch is only
+// via sweepCh so it can fire share watchers (pd.shareWatch is only
 // safe to access from run()).
 func (g *shareGroup) sweepExpiredAcquisitions() {
 	g.mu.Lock()
@@ -288,16 +441,9 @@ func (g *shareGroup) sweepExpiredAcquisitions() {
 			if now.Sub(sr.acquireTime) < lockDuration {
 				continue
 			}
-			if sr.deliveryCount >= maxDelivery {
-				sr.state = shareRecordArchived
-			} else {
-				sr.state = shareRecordAvailable
+			if sr.release(maxDelivery, sp, offset) {
 				released = true
-				if offset < sp.scanOffset {
-					sp.scanOffset = offset
-				}
 			}
-			sr.acquiredBy = ""
 		}
 		sp.advanceSPSO()
 	})
@@ -315,22 +461,6 @@ func (g *shareGroup) sweepExpiredAcquisitions() {
 // need safe access to share group state.
 func (g *shareGroup) waitControl(fn func()) bool {
 	return waitManageControl(g.controlCh, g.quitCh, g.c, fn)
-}
-
-// quitOnce shuts down the manage goroutine. Called when the group is
-// truly empty (no members and no partition state).
-func (g *shareGroup) quitOnce() {
-	g.quit.Do(func() {
-		close(g.quitCh)
-	})
-}
-
-func (g *shareGroup) reply(creq *clientReq, kresp kmsg.Response) {
-	select {
-	case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, seq: creq.seq}:
-	case <-creq.cc.done:
-	case <-g.c.die:
-	}
 }
 
 func (g *shareGroup) handleHeartbeat(creq *clientReq) kmsg.Response {
@@ -648,7 +778,7 @@ func (g *shareGroup) recomputeAssignments() {
 				}
 				delete(members, c.id)
 				m := g.members[c.id]
-				m.assignment[si.id] = removePartition(m.assignment[si.id], p)
+				m.assignment[si.id] = slices.DeleteFunc(m.assignment[si.id], func(v int32) bool { return v == p })
 				if len(m.assignment[si.id]) == 0 {
 					delete(m.assignment, si.id)
 				}
@@ -715,16 +845,13 @@ func (g *shareGroup) recomputeAssignments() {
 			}
 		}
 	}
-}
 
-// removePartition removes partition p from the slice, preserving order.
-func removePartition(parts []int32, p int32) []int32 {
-	for i, v := range parts {
-		if v == p {
-			return slices.Delete(parts, i, i+1)
+	// Sort partition lists for deterministic output.
+	for _, m := range g.members {
+		for tid := range m.assignment {
+			slices.Sort(m.assignment[tid])
 		}
 	}
-	return parts
 }
 
 // reconcileMember bumps the member's epoch to the current group epoch if
@@ -784,9 +911,9 @@ func (g *shareGroup) fenceMember(memberID string) {
 
 // maybeQuit shuts down the manage goroutine if the group is truly empty:
 // no members and no partition state. Only called from manage(), which
-// owns g.members. Holds mu while checking partitions AND calling quitOnce
+// owns g.members. Holds mu while checking partitions AND closing quitCh
 // to prevent run() from creating partition state (via getSharePartition)
-// between the check and the quit.
+// between the check and the close.
 func (g *shareGroup) maybeQuit() {
 	if len(g.members) > 0 {
 		return
@@ -794,7 +921,7 @@ func (g *shareGroup) maybeQuit() {
 	g.mu.Lock()
 	empty := len(g.partitions) == 0
 	if empty {
-		g.quitOnce()
+		g.quit.Do(func() { close(g.quitCh) })
 	}
 	g.mu.Unlock()
 }
@@ -823,16 +950,9 @@ func (g *shareGroup) releaseRecordsForMemberLocked(memberID string, maxDelivery 
 	g.partitions.each(func(_ string, _ int32, sp *sharePartition) {
 		for offset, sr := range sp.records {
 			if sr.state == shareRecordAcquired && sr.acquiredBy == memberID {
-				if sr.deliveryCount >= maxDelivery {
-					sr.state = shareRecordArchived
-				} else {
-					sr.state = shareRecordAvailable
+				if sr.release(maxDelivery, sp, offset) {
 					released = true
-					if offset < sp.scanOffset {
-						sp.scanOffset = offset
-					}
 				}
-				sr.acquiredBy = ""
 			}
 		}
 		sp.advanceSPSO()
@@ -863,6 +983,158 @@ func (g *shareGroup) getSharePartition(topic string, partition int32, pd *partDa
 	return sp
 }
 
+// ackBatch is a common representation of an acknowledgement batch,
+// abstracting over the different kmsg request types (ShareFetch vs
+// ShareAcknowledge have identical fields but different Go types).
+type ackBatch struct {
+	first, last int64
+	ackTypes    []int8
+}
+
+// ackTopic groups ack batches by topic, abstracting over ShareFetch and
+// ShareAcknowledge request types.
+type ackTopic struct {
+	topicID    uuid
+	partitions []ackPartition
+}
+
+type ackPartition struct {
+	partition int32
+	batches   []ackBatch
+}
+
+// ackTopicsFromFetch extracts piggybacked ack topics from a ShareFetch
+// request, including only partitions with acknowledgement batches.
+func ackTopicsFromFetch(topics []kmsg.ShareFetchRequestTopic) []ackTopic {
+	var out []ackTopic
+	for i := range topics {
+		rt := &topics[i]
+		at := ackTopic{topicID: rt.TopicID}
+		for j := range rt.Partitions {
+			rp := &rt.Partitions[j]
+			if len(rp.AcknowledgementBatches) == 0 {
+				continue
+			}
+			ap := ackPartition{partition: rp.Partition}
+			for _, b := range rp.AcknowledgementBatches {
+				ap.batches = append(ap.batches, ackBatch{b.FirstOffset, b.LastOffset, b.AcknowledgeTypes})
+			}
+			at.partitions = append(at.partitions, ap)
+		}
+		if len(at.partitions) > 0 {
+			out = append(out, at)
+		}
+	}
+	return out
+}
+
+// ackTopicsFromAcknowledge extracts ack topics from a ShareAcknowledge request.
+func ackTopicsFromAcknowledge(topics []kmsg.ShareAcknowledgeRequestTopic) []ackTopic {
+	var out []ackTopic
+	for i := range topics {
+		rt := &topics[i]
+		at := ackTopic{topicID: rt.TopicID}
+		for j := range rt.Partitions {
+			rp := &rt.Partitions[j]
+			ap := ackPartition{partition: rp.Partition}
+			for _, b := range rp.AcknowledgementBatches {
+				ap.batches = append(ap.batches, ackBatch{b.FirstOffset, b.LastOffset, b.AcknowledgeTypes})
+			}
+			at.partitions = append(at.partitions, ap)
+		}
+		if len(at.partitions) > 0 {
+			out = append(out, at)
+		}
+	}
+	return out
+}
+
+// validateOneAckBatch validates a single acknowledgement batch per Kafka's
+// validateAcknowledgementBatches (KafkaApis.scala:4059-4104). prevEnd tracks
+// the previous batch's last offset (pass -1 initially). Updated on success.
+func validateOneAckBatch(first, last int64, ackTypes []int8, prevEnd *int64, maxAckType int8) int16 {
+	if first > last {
+		return kerr.InvalidRequest.Code
+	}
+	if first < *prevEnd {
+		return kerr.InvalidRequest.Code
+	}
+	if len(ackTypes) == 0 {
+		return kerr.InvalidRequest.Code
+	}
+	if len(ackTypes) > 1 && int64(len(ackTypes)) != last-first+1 {
+		return kerr.InvalidRequest.Code
+	}
+	for _, at := range ackTypes {
+		if at < 0 || at > maxAckType {
+			return kerr.InvalidRequest.Code
+		}
+	}
+	*prevEnd = last
+	return 0
+}
+
+// processShareAcks validates and applies acknowledgement batches, calling
+// onPartition for each acked partition with its result error code (0 on
+// success). Returns partitions with successful acks (for watcher firing)
+// and whether any ack batches were present.
+//
+// Must be called with sg.mu held.
+func (c *Cluster) processShareAcks(
+	creq *clientReq,
+	sg *shareGroup,
+	memberID string,
+	topics []ackTopic,
+	maxAckType int8,
+	onPartition func(tid uuid, p int32, ec int16),
+) (toFire []*partData, hadAcks bool) {
+	maxDelivery := c.shareMaxDeliveryAttempts()
+	id2t := c.data.id2t
+	for _, at := range topics {
+		topicName := id2t[at.topicID]
+		if topicName == "" {
+			for _, ap := range at.partitions {
+				onPartition(at.topicID, ap.partition, kerr.UnknownTopicID.Code)
+			}
+			continue
+		}
+		if !c.allowedACL(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
+			for _, ap := range at.partitions {
+				onPartition(at.topicID, ap.partition, kerr.TopicAuthorizationFailed.Code)
+			}
+			continue
+		}
+		for _, ap := range at.partitions {
+			hadAcks = true
+			errCode := int16(0)
+			prevEnd := int64(-1)
+			for _, batch := range ap.batches {
+				if ec := validateOneAckBatch(batch.first, batch.last, batch.ackTypes, &prevEnd, maxAckType); ec != 0 {
+					errCode = ec
+					break
+				}
+			}
+			if errCode != 0 {
+				onPartition(at.topicID, ap.partition, errCode)
+				continue
+			}
+			pd, ok := c.data.tps.getp(topicName, ap.partition)
+			if !ok {
+				onPartition(at.topicID, ap.partition, kerr.UnknownTopicOrPartition.Code)
+				continue
+			}
+			shp := sg.getSharePartition(topicName, ap.partition, pd)
+			if ec := shp.validateAndProcessAcks(memberID, ap.batches, maxDelivery); ec != 0 {
+				onPartition(at.topicID, ap.partition, ec)
+				continue
+			}
+			onPartition(at.topicID, ap.partition, 0)
+			toFire = append(toFire, pd)
+		}
+	}
+	return
+}
+
 // acquireOpts bundles per-request parameters for acquireRecords that are
 // constant across all partitions in a single ShareFetch request.
 type acquireOpts struct {
@@ -890,20 +1162,20 @@ func (sp *sharePartition) acquireRecords(pd *partData, hwm int64, maxRecords int
 	}
 
 	// In-flight limit (matching Kafka's lastOffsetAndMaxRecordsToAcquire).
-	// The in-flight window is [spso, endOffset). When at capacity, records
+	// The in-flight window is [spso, acquireEnd). When at capacity, records
 	// within the existing window can still be re-acquired (e.g., released
 	// records near SPSO) because they don't extend the window. Only
-	// acquisition of records BEYOND endOffset is blocked. Kafka handles
+	// acquisition of records BEYOND acquireEnd is blocked. Kafka handles
 	// this with: if maxRecordsToAcquire <= 0 && fetchOffset <= endOffset,
 	// recalculate as min(maxFetch, endOffset - fetchOffset + 1).
 	acquireLimit := hwm // default: scan up to HWM
-	if opts.maxRecordLocks > 0 && sp.endOffset > sp.spso {
-		windowSize := int32(sp.endOffset - sp.spso)
+	if opts.maxRecordLocks > 0 && sp.acquireEnd > sp.spso {
+		windowSize := int32(sp.acquireEnd - sp.spso)
 		if windowSize >= opts.maxRecordLocks {
 			// At capacity: only allow re-acquisition within the
-			// existing window (up to endOffset), not beyond.
-			if sp.scanOffset < sp.endOffset {
-				acquireLimit = sp.endOffset
+			// existing window (up to acquireEnd), not beyond.
+			if sp.scanOffset < sp.acquireEnd {
+				acquireLimit = sp.acquireEnd
 			} else {
 				return nil, true
 			}
@@ -923,13 +1195,13 @@ func (sp *sharePartition) acquireRecords(pd *partData, hwm int64, maxRecords int
 
 	// Walk offsets from scanOffset to HWM looking for available records.
 	for offset := sp.scanOffset; offset < acquireLimit && count < maxRecords; offset++ {
-		// In-flight limit per iteration: stop if extending beyond endOffset
+		// In-flight limit per iteration: stop if extending beyond acquireEnd
 		// while at capacity (records within the window are always ok).
 		// This check MUST come before advancing lastScanned, otherwise
 		// scanOffset jumps past this offset without creating a record
 		// for it. Later, advanceSPSO would skip the nil entry as a
 		// "compacted gap", silently losing the record.
-		if opts.maxRecordLocks > 0 && offset >= sp.endOffset && sp.endOffset > sp.spso && int32(sp.endOffset-sp.spso) >= opts.maxRecordLocks {
+		if opts.maxRecordLocks > 0 && offset >= sp.acquireEnd && sp.acquireEnd > sp.spso && int32(sp.acquireEnd-sp.spso) >= opts.maxRecordLocks {
 			break
 		}
 		lastScanned = offset + 1
@@ -1007,8 +1279,8 @@ func (sp *sharePartition) acquireRecords(pd *partData, hwm int64, maxRecords int
 		sr.deliveryCount++
 		sr.acquireTime = time.Now()
 		count++
-		if offset+1 > sp.endOffset {
-			sp.endOffset = offset + 1
+		if offset+1 > sp.acquireEnd {
+			sp.acquireEnd = offset + 1
 		}
 
 		// Try to extend the last AcquiredRecord range.
@@ -1052,8 +1324,8 @@ func (sp *sharePartition) acquireRecords(pd *partData, hwm int64, maxRecords int
 func (sp *sharePartition) validateAcks(memberID string, first, last int64) int16 {
 	// Check if the batch extends beyond tracked records (matching Java's
 	// "The first/last offset in request is past acquired records" check).
-	if sp.endOffset > sp.spso {
-		if first >= sp.endOffset || last >= sp.endOffset {
+	if sp.acquireEnd > sp.spso {
+		if first >= sp.acquireEnd || last >= sp.acquireEnd {
 			return kerr.InvalidRequest.Code
 		}
 	} else if last >= sp.spso {
@@ -1131,18 +1403,7 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 			sr.state = shareRecordAcknowledged
 			sr.acquiredBy = ""
 		case 2: // Release
-			// Like Kafka's InFlightState.tryUpdateState: if
-			// deliveryCount >= maxDeliveryCount, redirect to
-			// ARCHIVED instead of AVAILABLE.
-			if sr.deliveryCount >= maxDeliveryCount {
-				sr.state = shareRecordArchived
-			} else {
-				sr.state = shareRecordAvailable
-				if offset < sp.scanOffset {
-					sp.scanOffset = offset
-				}
-			}
-			sr.acquiredBy = ""
+			sr.release(maxDeliveryCount, sp, offset)
 		case 3: // Reject
 			sr.state = shareRecordArchived
 			sr.acquiredBy = ""
@@ -1150,6 +1411,23 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 			sr.acquireTime = time.Now()
 		}
 	}
+}
+
+// validateAndProcessAcks atomically validates then applies ack batches
+// for one partition. Returns 0 on success, error code on failure.
+// Implements the validate-all-then-apply-all pattern matching Kafka's
+// rollbackOrProcessStateUpdates. Must be called with sg.mu held.
+func (sp *sharePartition) validateAndProcessAcks(memberID string, batches []ackBatch, maxDelivery int32) int16 {
+	for i := range batches {
+		if ec := sp.validateAcks(memberID, batches[i].first, batches[i].last); ec != 0 {
+			return ec
+		}
+	}
+	for i := range batches {
+		sp.processAcks(memberID, batches[i].first, batches[i].last, batches[i].ackTypes, maxDelivery)
+	}
+	sp.advanceSPSO()
+	return 0
 }
 
 // advanceSPSO advances the SPSO past contiguous acknowledged/archived
@@ -1176,19 +1454,19 @@ func (sp *sharePartition) advanceSPSO() {
 	}
 }
 
-// cleanupShareSessionsForConn removes all share sessions owned by the given
+// cleanupSessionsForConn removes all share sessions owned by the given
 // connection and releases their acquired records. This matches Kafka's
 // ConnectionDisconnectListener behavior: when a TCP connection drops, all
 // sessions on that connection are removed and acquired records are released.
 // Must only be called from run().
-func (c *Cluster) cleanupShareSessionsForConn(cc *clientConn) {
-	maxDelivery := c.shareMaxDeliveryAttempts()
-	for key, session := range c.shareSessions {
+func (sgs *shareGroups) cleanupSessionsForConn(cc *clientConn) {
+	maxDelivery := sgs.c.shareMaxDeliveryAttempts()
+	for key, session := range sgs.sessions {
 		if session.cc != cc {
 			continue
 		}
-		delete(c.shareSessions, key)
-		sg := c.shareGroups.gs[key.group]
+		delete(sgs.sessions, key)
+		sg := sgs.gs[key.group]
 		if sg == nil {
 			continue
 		}
@@ -1196,7 +1474,7 @@ func (c *Cluster) cleanupShareSessionsForConn(cc *clientConn) {
 		released := sg.releaseRecordsForMemberLocked(key.memberID, maxDelivery)
 		sg.mu.Unlock()
 		if released {
-			sg.fireAllShareWatchers(c)
+			sg.fireAllShareWatchers()
 		}
 	}
 }
@@ -1206,28 +1484,25 @@ func (c *Cluster) cleanupShareSessionsForConn(cc *clientConn) {
 // Must only be called from run().
 func fireShareWatchers(pd *partData) {
 	for w := range pd.shareWatch {
-		w.do()
+		w.fire()
 	}
 }
 
 // fireAllShareWatchers wakes share watchers on all partitions tracked by
 // this share group. Called from run() when the manage goroutine's sweep
-// timer releases records.
-func (sg *shareGroup) fireAllShareWatchers(c *Cluster) {
+// timer releases records. Must only be called from run().
+func (sg *shareGroup) fireAllShareWatchers() {
 	sg.mu.Lock()
-	topics := make([]string, 0, len(sg.partitions))
 	partsByTopic := make(map[string][]int32, len(sg.partitions))
 	for topic, ps := range sg.partitions {
-		topics = append(topics, topic)
 		for p := range ps {
 			partsByTopic[topic] = append(partsByTopic[topic], p)
 		}
 	}
 	sg.mu.Unlock()
-	for _, topic := range topics {
-		for _, p := range partsByTopic[topic] {
-			pd, ok := c.data.tps.getp(topic, p)
-			if ok {
+	for topic, parts := range partsByTopic {
+		for _, p := range parts {
+			if pd, ok := sg.c.data.tps.getp(topic, p); ok {
 				fireShareWatchers(pd)
 			}
 		}

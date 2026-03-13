@@ -8,6 +8,17 @@ import (
 )
 
 // ShareGroupHeartbeat: v0-1 (KIP-932)
+//
+// Behavior:
+// * epoch 0: Join group (create member, compute initial assignment)
+// * epoch -1: Leave group (release records, rebalance remaining members)
+// * epoch >0: Regular heartbeat (subscription changes, assignment delivery)
+// * Validates memberID format (non-empty, <=36 chars, client-generated UUID)
+// * Dispatched to the share group's manage goroutine for serialized access
+//
+// Version notes:
+// * v0: Initial share group heartbeat (KIP-932)
+// * v1: No protocol changes, version bump only
 
 func init() { regKey(76, 0, 1) }
 
@@ -17,63 +28,36 @@ func (c *Cluster) handleShareGroupHeartbeat(creq *clientReq) (kmsg.Response, err
 		return nil, err
 	}
 
-	// Validate groupID: empty or whitespace-only is rejected with
-	// INVALID_REQUEST (matching Java's throwIfEmptyString).
+	errResp := func(code int16) (kmsg.Response, error) {
+		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
+		resp.ErrorCode = code
+		return resp, nil
+	}
+
 	if strings.TrimSpace(req.GroupID) == "" {
-		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.InvalidRequest.Code
-		return resp, nil
+		return errResp(kerr.InvalidRequest.Code)
 	}
-
 	if kerr := c.validateGroup(creq, req.GroupID); kerr != nil {
-		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.Code
-		return resp, nil
+		return errResp(kerr.Code)
 	}
-
-	// ACL: require GROUP READ on the share group.
 	if !c.allowedACL(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
-		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
-		return resp, nil
+		return errResp(kerr.GroupAuthorizationFailed.Code)
 	}
-
-	// Validate memberID format: non-empty, <=36 chars.
 	if req.MemberID == "" || len(req.MemberID) > 36 {
-		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.InvalidRequest.Code
-		return resp, nil
+		return errResp(kerr.InvalidRequest.Code)
 	}
-
-	// Validate memberEpoch range: must be >= -1.
 	if req.MemberEpoch < -1 {
-		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.InvalidRequest.Code
-		return resp, nil
+		return errResp(kerr.InvalidRequest.Code)
 	}
-
-	// Validate rackID: if present, must not be empty or whitespace-only
-	// (matching Java's throwIfEmptyString which trims).
 	if req.RackID != nil && strings.TrimSpace(*req.RackID) == "" {
-		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.InvalidRequest.Code
-		return resp, nil
+		return errResp(kerr.InvalidRequest.Code)
 	}
-
-	// Epoch 0 (join) requires subscribedTopicNames.
 	if req.MemberEpoch == 0 && len(req.SubscribedTopicNames) == 0 {
-		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.InvalidRequest.Code
-		return resp, nil
+		return errResp(kerr.InvalidRequest.Code)
 	}
-
-	// ACL: require TOPIC DESCRIBE on all subscribed topics (matching
-	// Java's KafkaApis handleShareGroupHeartbeatRequest).
 	for _, topic := range req.SubscribedTopicNames {
 		if !c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
-			resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
-			resp.ErrorCode = kerr.TopicAuthorizationFailed.Code
-			return resp, nil
+			return errResp(kerr.TopicAuthorizationFailed.Code)
 		}
 	}
 

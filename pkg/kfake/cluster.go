@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
-	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -50,11 +49,7 @@ type (
 		telemNextID        int32
 		fetchSessions      fetchSessions
 		groupConfigs       map[string]map[string]*string // group -> config key -> config value
-		shareGroups        shareGroups
-		shareSessions      map[shareSessionKey]*shareSession
-		shareConnWatch     map[*clientConn]struct{}
-		shareDisconnCh     chan *clientConn
-		watchShareFetchCh  chan *watchShareFetch
+		shareGroups shareGroups
 		compactTicker      *time.Ticker
 		offsetExpireTicker *time.Ticker
 
@@ -195,10 +190,10 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	c.groups.c = c
 	c.shareGroups.c = c
 	c.shareGroups.sweepCh = make(chan *shareGroup, 16)
-	c.shareSessions = make(map[shareSessionKey]*shareSession)
-	c.shareConnWatch = make(map[*clientConn]struct{})
-	c.shareDisconnCh = make(chan *clientConn, 16)
-	c.watchShareFetchCh = make(chan *watchShareFetch, 16)
+	c.shareGroups.sessions = make(map[shareSessionKey]*shareSession)
+	c.shareGroups.connWatch = make(map[*clientConn]struct{})
+	c.shareGroups.disconnCh = make(chan *clientConn, 16)
+	c.shareGroups.watchFetchCh = make(chan *watchShareFetch, 16)
 	c.pids.c = c
 	c.pids.ids = make(map[int64]*pidinfo)
 	c.pids.byTxid = make(map[string]*pidinfo)
@@ -344,6 +339,7 @@ func (c *Cluster) Close() {
 		// race with run() handling a request.
 		done := make(chan struct{})
 		c.adminCh <- func() {
+			c.drainReqChForShutdown()
 			if err := c.saveToDisk(); err != nil {
 				c.cfg.logger.Logf(LogLevelError, "persist to disk: %v", err)
 			}
@@ -363,6 +359,25 @@ func (c *Cluster) Close() {
 	}
 
 	close(c.die)
+}
+
+// drainReqChForShutdown processes any pending OffsetCommit requests in
+// c.reqCh, dispatching them to the appropriate group goroutines. This
+// is called at the start of the shutdown admin function, before
+// saveToDisk. Without this, Go's select in run() may pick adminCh over
+// reqCh, causing committed offsets to be lost across restarts.
+func (c *Cluster) drainReqChForShutdown() {
+	for {
+		select {
+		case creq := <-c.reqCh:
+			switch creq.kreq.(type) {
+			case *kmsg.OffsetCommitRequest:
+				c.groups.handleOffsetCommit(creq)
+			}
+		default:
+			return
+		}
+	}
 }
 
 func newListener(port int, tc *tls.Config, fn func(network, address string) (net.Listener, error)) (net.Listener, error) {
@@ -435,12 +450,12 @@ outer:
 			continue
 
 		case sg := <-c.shareGroups.sweepCh:
-			sg.fireAllShareWatchers(c)
+			sg.fireAllShareWatchers()
 			continue
 
-		case cc := <-c.shareDisconnCh:
-			delete(c.shareConnWatch, cc)
-			c.cleanupShareSessionsForConn(cc)
+		case cc := <-c.shareGroups.disconnCh:
+			delete(c.shareGroups.connWatch, cc)
+			c.shareGroups.cleanupSessionsForConn(cc)
 			continue
 
 		case admin := <-c.adminCh:
@@ -515,7 +530,7 @@ outer:
 			w.cleanup()
 			creq = w.creq
 
-		case wsf = <-c.watchShareFetchCh:
+		case wsf = <-c.shareGroups.watchFetchCh:
 			if wsf.cleaned {
 				continue
 			}
@@ -536,7 +551,6 @@ outer:
 		}
 
 		kreq = creq.kreq
-		c.debugLogReq(creq, wsf)
 		switch k := kmsg.Key(kreq.Key()); k {
 		case kmsg.Produce:
 			kresp, err = c.handleProduce(creq)
@@ -658,9 +672,6 @@ outer:
 			err = fmt.Errorf("unhandled key %v", k)
 		}
 		c.pids.updateTimer()
-		if kk := kmsg.Key(kreq.Key()); kk == kmsg.ShareGroupHeartbeat {
-			fmt.Fprintf(os.Stderr, "RESP key=%v kresp=%v err=%v\n", kk, kresp != nil, err)
-		}
 
 	afterControl:
 		if c.needsGroupsCompact.Load() {
@@ -686,12 +697,7 @@ outer:
 	}
 }
 
-func (c *Cluster) debugLogReq(creq *clientReq, wsf *watchShareFetch) {
-	k := kmsg.Key(creq.kreq.Key())
-	if k == kmsg.ShareFetch || k == kmsg.ShareGroupHeartbeat || k == kmsg.ShareAcknowledge || k == kmsg.FindCoordinator || k == kmsg.Produce {
-		fmt.Fprintf(os.Stderr, "REQ key=%v node=%d wsf=%v\n", k, creq.cc.b.node, wsf != nil)
-	}
-}
+
 
 // Control is a function to call on any client request the cluster handles.
 // See [Cluster.ControlKey] for more details.

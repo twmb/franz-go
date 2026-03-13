@@ -7,9 +7,16 @@ import (
 
 // DescribeShareGroupOffsets: v0-1 (KIP-932, KIP-1226)
 //
-// Returns the Share-Partition Start Offset (SPSO) and lag for each
-// requested partition. Lag (v1+) is the difference between the high
-// watermark and the SPSO.
+// Behavior:
+// * Returns the Share-Partition Start Offset (SPSO) and lag per partition
+// * Lag = HWM - SPSO - deliveryComplete (records already acknowledged/archived)
+// * When Topics is nil, describes all topics the group has state for
+// * Describe-all silently filters unauthorized topics (matching Java's
+//   partitionSeqByAuthorized)
+//
+// Version notes:
+// * v0: Initial describe share group offsets (KIP-932)
+// * v1: Lag field added (KIP-1226)
 
 func init() { regKey(90, 0, 1) }
 

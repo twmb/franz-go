@@ -7,8 +7,11 @@ import (
 
 // DeleteShareGroupOffsets: v0 (KIP-932)
 //
-// Removes all share partition state for the specified topics in an
-// empty share group.
+// Behavior:
+// * Removes all share partition state for specified topics
+// * Only works on empty groups (no active members)
+// * Shuts down the manage goroutine if the group becomes truly empty
+//   (no members and no partition state)
 
 func init() { regKey(92, 0, 0) }
 

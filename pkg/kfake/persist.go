@@ -863,12 +863,13 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 
 // saveGroupsLog writes a compacted groups.log from live group state.
 // Called only at shutdown, where run() is blocked in the admin function
-// and no new persistGroupEntry calls can occur.
+// and no new requests can be dispatched to group reqCh channels.
 func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 	var allEntries []groupLogEntry
 	for _, g := range c.groups.gs {
 		var entries []groupLogEntry
 		g.waitControl(func() {
+			g.drainReqCh()
 			entries = c.collectGroupEntries(g)
 		})
 		allEntries = append(allEntries, entries...)
@@ -2081,6 +2082,7 @@ func (c *Cluster) saveSessionState() error {
 	ss := sessionState{ShutdownAt: time.Now()}
 	for _, g := range c.groups.gs {
 		g.waitControl(func() {
+			g.drainReqCh()
 			c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: group=%s state=%s members=%d consumerMembers=%d",
 				g.name, g.state, len(g.members), len(g.consumerMembers))
 			switch {
@@ -2144,6 +2146,7 @@ func (c *Cluster) saveSessionState() error {
 	// Members are not persisted -- they reconnect after restart.
 	for name, sg := range c.shareGroups.gs {
 		if !sg.waitControl(func() {
+			sg.drainReqCh()
 			ssg := sessionShareGroup{
 				GroupEpoch: sg.groupEpoch,
 				Partitions: make(map[string]map[int32]sessionSharePartition),
@@ -2290,9 +2293,9 @@ func (c *Cluster) loadSessionState() error {
 							state:         state,
 							deliveryCount: ssr.DeliveryCount,
 						}
-						// Track endOffset as one past the highest restored offset.
-						if offset+1 > sp.endOffset {
-							sp.endOffset = offset + 1
+						// Track acquireEnd as one past the highest restored offset.
+						if offset+1 > sp.acquireEnd {
+							sp.acquireEnd = offset + 1
 						}
 					}
 					sp.advanceSPSO()

@@ -289,7 +289,7 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 		w.push(pd, nbytes, inTx)
 	}
 	for w := range pd.shareWatch {
-		w.do()
+		w.fire()
 	}
 	return firstOffset
 }
