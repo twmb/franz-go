@@ -117,12 +117,13 @@ type cfg struct {
 	// PRODUCER SECTION //
 	//////////////////////
 
-	txnID              *string
-	txnTimeout         time.Duration
-	acks               Acks
-	disableIdempotency bool
-	maxProduceInflight int                // if idempotency is disabled, we allow a configurable max inflight
-	compression        []CompressionCodec // order of preference
+	txnID                              *string
+	txnTimeout                         time.Duration
+	acks                               Acks
+	disableIdempotency                 bool
+	allowIdempotentProduceCancellation bool
+	maxProduceInflight                 int                // if idempotency is disabled, we allow a configurable max inflight
+	compression                        []CompressionCodec // order of preference
 
 	defaultProduceTopic       string
 	defaultProduceTopicAlways bool
@@ -217,6 +218,9 @@ func (cfg *cfg) validate() error {
 		cfg.maxPartBytes = cfg.maxBytes
 	}
 
+	if cfg.allowIdempotentProduceCancellation && cfg.txnID != nil {
+		return errors.New("cannot allow idempotent produce cancellation and use transactional IDs")
+	}
 	if cfg.disableIdempotency {
 		if cfg.txnID != nil {
 			return errors.New("cannot both disable idempotent writes and use transactional IDs")
@@ -1046,9 +1050,33 @@ func RequiredAcks(acks Acks) ProducerOpt {
 // IDEMPOTENT_WRITE permission on CLUSTER (pre Kafka 3.0), and not all clients
 // can have that permission.
 //
+// If the goal is to allow cancellation of in-flight records while keeping
+// idempotent deduplication, see [AllowIdempotentProduceCancellation] instead.
+//
 // This option is incompatible with specifying a transactional id.
 func DisableIdempotentWrite() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.disableIdempotency = true }}
+}
+
+// AllowIdempotentProduceCancellation allows records to be cancelled even
+// when idempotent production is enabled and the records are in-flight
+// (outcome unknown). By default, the client prevents cancellation of
+// in-flight idempotent records to avoid accidental duplicates: if the
+// broker actually did process the produce request but the client
+// cancelled it due to a network timeout, the client would not know the
+// record was written. Enabling this option allows context cancellation,
+// RecordDeliveryTimeout, and RecordRetries to fail in-flight records,
+// accepting the risk that a cancelled record may have actually been
+// produced.
+//
+// This option is useful when time-bounded delivery is more important
+// than guaranteed delivery. Note that while this effectively works as
+// an "at most once" semantic, in rare broker conditions idempotency
+// could be lost and a duplicate may still occur.
+//
+// This option is incompatible with specifying a transactional id.
+func AllowIdempotentProduceCancellation() ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.allowIdempotentProduceCancellation = true }}
 }
 
 // MaxProduceRequestsInflightPerBroker changes the number of allowed produce
