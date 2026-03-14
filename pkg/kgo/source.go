@@ -51,15 +51,17 @@ type source struct {
 	cursors      []*cursor // contains all partitions being consumed on this source
 	cursorsStart int       // incremented every fetch req to ensure all partitions are fetched
 
-	shareCursors []*shareCursor
+	shareCursors      []*shareCursor
+	shareCursorsStart int // rotated each fetch to ensure fair partition coverage
 
 	// shareSessionEpoch, shareSessionParts, sharePendingAcks,
-	// shareForgotten, and shareHasRenew are all protected by cursorsMu.
+	// shareForgotten, and shareHasRenew are protected by cursorsMu.
 	shareSessionEpoch int32                     // 0=new, incremented on success, -1=close
 	shareSessionParts map[topicPartIdx]struct{} // partitions the broker knows about in this share session
 	sharePendingAcks  sharePendingAcks          // topicID -> partition -> ack batches to piggyback
 	shareForgotten    map[[16]byte][]int32      // topicID -> partitions to forget
 	shareHasRenew     bool                      // true if any pending ack has AckRenew type
+	shareSessionGen   atomic.Uint64             // bumped on session reset; read atomically from routeAcksToSources
 }
 
 func (cl *Client) newSource(nodeID int32) *source {
@@ -128,6 +130,9 @@ func (s *source) removeShareCursor(rm *shareCursor) {
 	}
 
 	s.shareCursors = s.shareCursors[:len(s.shareCursors)-1]
+	if s.shareCursorsStart == len(s.shareCursors) {
+		s.shareCursorsStart = 0
+	}
 
 	// Remove from session tracking -- the broker will forget this
 	// partition when it receives the ForgottenTopicsData below.
@@ -699,20 +704,13 @@ func (s *source) takeBufferedFn(polled bool, offsetFn func(usedOffsets)) Fetch {
 	return r.fetch
 }
 
-func (s *source) addShareAcks(topicID [16]byte, partition int32, batches []shareAckBatch) {
+func (s *source) addShareAcks(topicID [16]byte, partition int32, batches []shareAckBatch, hasRenew bool) {
 	s.cursorsMu.Lock()
 	if s.sharePendingAcks == nil {
 		s.sharePendingAcks = make(sharePendingAcks)
 	}
 	s.sharePendingAcks.add(topicID, partition, batches)
-	if !s.shareHasRenew {
-		for _, b := range batches {
-			if b.ackType == int8(AckRenew) {
-				s.shareHasRenew = true
-				break
-			}
-		}
-	}
+	s.shareHasRenew = s.shareHasRenew || hasRenew
 	s.cursorsMu.Unlock()
 }
 
@@ -753,6 +751,16 @@ func (s *source) resetShareSession() {
 	s.cursorsMu.Lock()
 	s.shareSessionEpoch = 0
 	s.shareSessionParts = nil
+	// When the session is destroyed, all acquisitions are released.
+	// Pending acks refer to those stale acquisitions and must be
+	// dropped — sending them on a new session causes
+	// INVALID_RECORD_STATE because the records are no longer
+	// acquired by this member.
+	s.sharePendingAcks = nil
+	s.shareHasRenew = false
+	// Bump the generation so that routeAcksToSources skips acks
+	// from records acquired in the old session.
+	s.shareSessionGen.Add(1)
 	s.cursorsMu.Unlock()
 }
 
@@ -763,6 +771,7 @@ func (s *source) clearShareState() {
 	s.shareSessionEpoch = 0
 	s.shareSessionParts = nil
 	s.shareHasRenew = false
+	s.shareCursorsStart = 0
 	s.cursorsMu.Unlock()
 }
 

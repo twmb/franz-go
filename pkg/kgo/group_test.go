@@ -238,9 +238,19 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 				c.sendErr(fmt.Errorf("poll got err %s but also unexpectedly received %d records", err, fetches.NumRecords()))
 				return
 			}
+			// ErrFirstReadEOF can occur during broker restarts: the
+			// client reconnects and sends ApiVersions, but the old
+			// server closes the connection before responding. This is
+			// transient and the client will reconnect successfully.
+			var firstReadEOF *ErrFirstReadEOF
 			if fetchErrs := fetches.Errors(); len(fetchErrs) > 0 {
-				c.sendErr(fmt.Errorf("poll got unexpected errs: %v", fetchErrs))
-				return
+				for _, fetchErr := range fetchErrs {
+					if errors.As(fetchErr.Err, &firstReadEOF) {
+						continue
+					}
+					c.sendErr(fmt.Errorf("poll got unexpected errs: %v", fetchErrs))
+					return
+				}
 			}
 
 			if etlsBeforeQuit >= 0 && netls >= etlsBeforeQuit {

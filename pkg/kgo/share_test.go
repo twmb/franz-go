@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -780,6 +781,10 @@ func TestShareGroupAckOnClose(t *testing.T) {
 func TestMergeAckBatches(t *testing.T) {
 	t.Parallel()
 
+	ab := func(first, last int64, types ...int8) shareAckBatch {
+		return shareAckBatch{first, last, types}
+	}
+
 	tests := []struct {
 		name   string
 		in     []shareAckBatch
@@ -792,48 +797,55 @@ func TestMergeAckBatches(t *testing.T) {
 		},
 		{
 			name:   "single",
-			in:     []shareAckBatch{{0, 0, 1}},
-			expect: []shareAckBatch{{0, 0, 1}},
+			in:     []shareAckBatch{ab(0, 0, 1)},
+			expect: []shareAckBatch{ab(0, 0, 1)},
 		},
 		{
 			name: "contiguous same type merges",
 			in: []shareAckBatch{
-				{0, 0, 1}, {1, 1, 1}, {2, 2, 1},
+				ab(0, 0, 1), ab(1, 1, 1), ab(2, 2, 1),
 			},
-			expect: []shareAckBatch{{0, 2, 1}},
+			expect: []shareAckBatch{ab(0, 2, 1)},
 		},
 		{
-			name: "different types stay separate",
+			name: "different types merge into per-offset array",
 			in: []shareAckBatch{
-				{0, 0, 1}, {1, 1, 2}, {2, 2, 1},
+				ab(0, 0, 1), ab(1, 1, 2), ab(2, 2, 1),
 			},
-			expect: []shareAckBatch{
-				{0, 0, 1}, {1, 1, 2}, {2, 2, 1},
-			},
+			expect: []shareAckBatch{ab(0, 2, 1, 2, 1)},
 		},
 		{
 			name: "non-contiguous same type stays separate",
 			in: []shareAckBatch{
-				{0, 0, 1}, {5, 5, 1},
+				ab(0, 0, 1), ab(5, 5, 1),
 			},
 			expect: []shareAckBatch{
-				{0, 0, 1}, {5, 5, 1},
+				ab(0, 0, 1), ab(5, 5, 1),
 			},
 		},
 		{
 			name: "unsorted input gets sorted and merged",
 			in: []shareAckBatch{
-				{3, 3, 1}, {1, 1, 1}, {2, 2, 1}, {0, 0, 1},
+				ab(3, 3, 1), ab(1, 1, 1), ab(2, 2, 1), ab(0, 0, 1),
 			},
-			expect: []shareAckBatch{{0, 3, 1}},
+			expect: []shareAckBatch{ab(0, 3, 1)},
 		},
 		{
 			name: "mixed merge and split",
 			in: []shareAckBatch{
-				{0, 2, 1}, {3, 5, 2}, {6, 8, 2},
+				ab(0, 2, 1), ab(3, 5, 2), ab(6, 8, 2),
 			},
 			expect: []shareAckBatch{
-				{0, 2, 1}, {3, 8, 2},
+				ab(0, 8, 1, 1, 1, 2, 2, 2, 2, 2, 2),
+			},
+		},
+		{
+			name: "non-contiguous mixed types",
+			in: []shareAckBatch{
+				ab(0, 2, 1), ab(10, 11, 2),
+			},
+			expect: []shareAckBatch{
+				ab(0, 2, 1), ab(10, 11, 2),
 			},
 		},
 	}
@@ -845,8 +857,9 @@ func TestMergeAckBatches(t *testing.T) {
 				t.Fatalf("len: got %d, want %d\n  got:  %v\n  want: %v", len(got), len(tt.expect), got, tt.expect)
 			}
 			for i := range got {
-				if got[i] != tt.expect[i] {
-					t.Fatalf("batch[%d]: got %v, want %v", i, got[i], tt.expect[i])
+				g, e := got[i], tt.expect[i]
+				if g.firstOffset != e.firstOffset || g.lastOffset != e.lastOffset || !slices.Equal(g.ackTypes, e.ackTypes) {
+					t.Fatalf("batch[%d]: got %v, want %v", i, g, e)
 				}
 			}
 		})
