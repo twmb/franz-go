@@ -816,40 +816,59 @@ func (g *group) manage(detachNew func()) {
 		case <-g.c.die:
 			return
 		case creq := <-g.reqCh:
-			var kresp kmsg.Response
-			switch creq.kreq.(type) {
-			case *kmsg.JoinGroupRequest:
-				var ok bool
-				kresp, ok = g.handleJoin(creq)
-				firstJoin(ok)
-			case *kmsg.SyncGroupRequest:
-				kresp = g.handleSync(creq)
-			case *kmsg.HeartbeatRequest:
-				kresp = g.handleHeartbeat(creq)
-			case *kmsg.LeaveGroupRequest:
-				kresp = g.handleLeave(creq)
-			case *kmsg.OffsetCommitRequest:
-				if g.typ == "consumer" {
-					kresp = g.handleConsumerOffsetCommit(creq)
-					firstJoin(true)
-				} else {
-					var ok bool
-					kresp, ok = g.handleOffsetCommit(creq)
-					firstJoin(ok)
-				}
-			case *kmsg.OffsetDeleteRequest:
-				kresp = g.handleOffsetDelete(creq)
-			case *kmsg.ConsumerGroupHeartbeatRequest:
-				g.lastTopicMeta = creq.topicMeta
-				kresp = g.handleConsumerHeartbeat(creq)
-				firstJoin(true)
-			}
+			kresp, ok := g.dispatchReq(creq)
+			firstJoin(ok)
 			if kresp != nil {
 				g.reply(creq, kresp, nil)
 			}
 
 		case fn := <-g.controlCh:
 			fn()
+		}
+	}
+}
+
+// dispatchReq handles a single request from reqCh. Returns the response
+// and whether the request was valid (for firstJoin tracking). Used by
+// manage() and by drainReqCh during shutdown.
+func (g *group) dispatchReq(creq *clientReq) (kmsg.Response, bool) {
+	switch creq.kreq.(type) {
+	case *kmsg.JoinGroupRequest:
+		return g.handleJoin(creq)
+	case *kmsg.SyncGroupRequest:
+		return g.handleSync(creq), true
+	case *kmsg.HeartbeatRequest:
+		return g.handleHeartbeat(creq), true
+	case *kmsg.LeaveGroupRequest:
+		return g.handleLeave(creq), true
+	case *kmsg.OffsetCommitRequest:
+		if g.typ == "consumer" {
+			return g.handleConsumerOffsetCommit(creq), true
+		}
+		return g.handleOffsetCommit(creq)
+	case *kmsg.OffsetDeleteRequest:
+		return g.handleOffsetDelete(creq), true
+	case *kmsg.ConsumerGroupHeartbeatRequest:
+		g.lastTopicMeta = creq.topicMeta
+		return g.handleConsumerHeartbeat(creq), true
+	}
+	return nil, true
+}
+
+// drainReqCh processes any pending requests in reqCh. Called from a
+// waitControl closure during shutdown to ensure committed offsets from
+// in-flight OffsetCommit requests are captured before snapshotting.
+// Must run in the manage goroutine (via waitControl).
+func (g *group) drainReqCh() {
+	for {
+		select {
+		case creq := <-g.reqCh:
+			kresp, _ := g.dispatchReq(creq)
+			if kresp != nil {
+				g.reply(creq, kresp, nil)
+			}
+		default:
+			return
 		}
 	}
 }

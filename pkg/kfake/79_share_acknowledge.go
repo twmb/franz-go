@@ -67,28 +67,11 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		broker:   creq.cc.b.node,
 	}
 
-	closingSession := req.ShareSessionEpoch == -1
-	if closingSession {
-		if sgs.sessions[sessionKey] == nil {
-			resp.ErrorCode = kerr.ShareSessionNotFound.Code
-			return resp, nil
-		}
-		defer delete(sgs.sessions, sessionKey)
-	} else if req.ShareSessionEpoch == 0 {
-		// Epoch 0 opens a new session via ShareFetch, not
-		// ShareAcknowledge.
-		resp.ErrorCode = kerr.InvalidShareSessionEpoch.Code
-		return resp, nil
-	} else {
-		session := sgs.sessions[sessionKey]
-		if session == nil {
-			resp.ErrorCode = kerr.ShareSessionNotFound.Code
-			return resp, nil
-		}
-		if req.ShareSessionEpoch != session.epoch {
-			resp.ErrorCode = kerr.InvalidShareSessionEpoch.Code
-			return resp, nil
-		}
+	id2t := c.data.id2t
+	maxDelivery := c.shareMaxDeliveryAttempts()
+	maxAckType := int8(3)
+	if req.Version >= 2 && req.IsRenewAck {
+		maxAckType = 4
 	}
 
 	// Response-building closure (matching produce handler style).
@@ -108,39 +91,55 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		resp.Topics[i].Partitions = append(resp.Topics[i].Partitions, sp)
 	}
 
-	maxAckType := int8(3)
-	if req.Version >= 2 && req.IsRenewAck {
-		maxAckType = 4
+	// Session close: process acks, release remaining acquired records,
+	// delete session. A member may have multiple sessions (one per
+	// broker), so we only release records for this session's partitions.
+	if req.ShareSessionEpoch == -1 {
+		session := sgs.sessions[sessionKey]
+		if session == nil {
+			resp.ErrorCode = kerr.ShareSessionNotFound.Code
+			return resp, nil
+		}
+		ackTs := ackTopicsFromAcknowledge(req.Topics)
+		sg.mu.Lock()
+		toFire, _ := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, donep)
+		released := sg.releaseRecordsForSessionLocked(memberID, session, id2t, maxDelivery)
+		sg.mu.Unlock()
+		for _, pd := range toFire {
+			pd.fireShareWatchers()
+		}
+		if released {
+			sg.fireAllShareWatchers()
+		}
+		delete(sgs.sessions, sessionKey)
+		return resp, nil
+	}
+
+	// Epoch 0 opens a new session via ShareFetch, not ShareAcknowledge.
+	if req.ShareSessionEpoch == 0 {
+		resp.ErrorCode = kerr.InvalidShareSessionEpoch.Code
+		return resp, nil
+	}
+
+	session := sgs.sessions[sessionKey]
+	if session == nil {
+		resp.ErrorCode = kerr.ShareSessionNotFound.Code
+		return resp, nil
+	}
+	if req.ShareSessionEpoch != session.epoch {
+		resp.ErrorCode = kerr.InvalidShareSessionEpoch.Code
+		return resp, nil
 	}
 
 	ackTs := ackTopicsFromAcknowledge(req.Topics)
-	maxDelivery := c.shareMaxDeliveryAttempts()
-
 	sg.mu.Lock()
-	toFire, _ := c.processShareAcks(creq, sg, memberID, ackTs, maxAckType, donep)
-
-	// On session close, release remaining acquired records (matching
-	// Kafka's releaseSession behavior).
-	var released bool
-	if closingSession {
-		released = sg.releaseRecordsForMemberLocked(memberID, maxDelivery)
-	}
+	toFire, _ := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, donep)
 	sg.mu.Unlock()
 
-	// Fire watchers outside the lock for ack-released records.
 	for _, pd := range toFire {
-		fireShareWatchers(pd)
-	}
-	if released {
-		sg.fireAllShareWatchers()
+		pd.fireShareWatchers()
 	}
 
-	// Advance session epoch (for non-close requests).
-	if !closingSession {
-		if session := sgs.sessions[sessionKey]; session != nil {
-			session.epoch = max(1, session.epoch+1)
-		}
-	}
-
+	session.epoch = max(1, session.epoch+1)
 	return resp, nil
 }
