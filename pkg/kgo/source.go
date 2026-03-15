@@ -51,17 +51,17 @@ type source struct {
 	cursors      []*cursor // contains all partitions being consumed on this source
 	cursorsStart int       // incremented every fetch req to ensure all partitions are fetched
 
+	// Share group state (KIP-932). All fields below are protected
+	// by cursorsMu except shareSessionGen which is an atomic for
+	// lock-free reads in finalizeAndRouteAcks.
 	shareCursors      []*shareCursor
-	shareCursorsStart int // rotated each fetch to ensure fair partition coverage
-
-	// shareSessionEpoch, shareSessionParts, sharePendingAcks,
-	// shareForgotten, and shareHasRenew are protected by cursorsMu.
-	shareSessionEpoch int32                     // 0=new, incremented on success, -1=close
-	shareSessionParts map[topicPartIdx]struct{} // partitions the broker knows about in this share session
-	sharePendingAcks  sharePendingAcks          // topicID -> partition -> ack batches to piggyback
-	shareForgotten    map[[16]byte][]int32      // topicID -> partitions to forget
-	shareHasRenew     bool                      // true if any pending ack has AckRenew type
-	shareSessionGen   atomic.Uint64             // bumped on session reset; read atomically from routeAcksToSources
+	shareCursorsStart int                        // rotated each fetch to ensure fair partition coverage
+	shareSessionEpoch int32                      // 0=new, incremented on success, -1=close
+	shareSessionParts map[topicPartIdx]struct{}  // partitions the broker knows about in this share session
+	sharePendingAcks  sharePendingAcks           // topicID -> partition -> ack batches to piggyback
+	shareForgotten    map[[16]byte][]int32       // topicID -> partitions to forget
+	shareHasRenew     bool                       // true if any pending ack has AckRenew type
+	shareSessionGen   atomic.Uint64              // bumped on session reset
 }
 
 func (cl *Client) newSource(nodeID int32) *source {
@@ -728,16 +728,16 @@ func (s *source) requeueShareAcks(acks sharePendingAcks, hasRenew bool) {
 
 func (s *source) drainShareAcks() (sharePendingAcks, bool) {
 	s.cursorsMu.Lock()
-	defer s.cursorsMu.Unlock()
 	acks := s.sharePendingAcks
 	hasRenew := s.shareHasRenew
 	s.sharePendingAcks = nil
 	s.shareHasRenew = false
-	for _, parts := range acks {
-		for p, batches := range parts {
-			parts[p] = mergeAckBatches(batches)
-		}
-	}
+	s.cursorsMu.Unlock()
+
+	// Merge outside the lock -- sorting and allocating in
+	// mergeAckBatches does not need cursorsMu, and holding
+	// the lock blocks addShareAcks from concurrent polls.
+	acks.mergeAll()
 	return acks, hasRenew
 }
 
@@ -753,12 +753,12 @@ func (s *source) resetShareSession() {
 	s.shareSessionParts = nil
 	// When the session is destroyed, all acquisitions are released.
 	// Pending acks refer to those stale acquisitions and must be
-	// dropped — sending them on a new session causes
+	// dropped -- sending them on a new session causes
 	// INVALID_RECORD_STATE because the records are no longer
 	// acquired by this member.
 	s.sharePendingAcks = nil
 	s.shareHasRenew = false
-	// Bump the generation so that routeAcksToSources skips acks
+	// Bump the generation so that finalizeAndRouteAcks skips acks
 	// from records acquired in the old session.
 	s.shareSessionGen.Add(1)
 	s.cursorsMu.Unlock()
@@ -772,6 +772,13 @@ func (s *source) clearShareState() {
 	s.shareSessionParts = nil
 	s.shareHasRenew = false
 	s.shareCursorsStart = 0
+	// Bump the generation so that finalizeAndRouteAcks drops acks
+	// from records acquired before the clear. Without this, after
+	// a fence or unknown-member event, old records still in
+	// lastPolled can match new cursors on the same source (same
+	// leader broker) and route stale acks to the new session,
+	// causing INVALID_RECORD_STATE from the broker.
+	s.shareSessionGen.Add(1)
 	s.cursorsMu.Unlock()
 }
 
