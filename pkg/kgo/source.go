@@ -706,12 +706,12 @@ func (s *source) takeBufferedFn(polled bool, offsetFn func(usedOffsets)) Fetch {
 
 func (s *source) addShareAcks(topicID [16]byte, partition int32, batches []shareAckBatch, hasRenew bool) {
 	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
 	if s.sharePendingAcks == nil {
 		s.sharePendingAcks = make(sharePendingAcks)
 	}
 	s.sharePendingAcks.add(topicID, partition, batches)
 	s.shareHasRenew = s.shareHasRenew || hasRenew
-	s.cursorsMu.Unlock()
 }
 
 // requeueShareAcks puts all ack batches back on this source for retry,
@@ -743,12 +743,13 @@ func (s *source) drainShareAcks() (sharePendingAcks, bool) {
 
 func (s *source) bumpShareSessionEpoch() {
 	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
 	s.shareSessionEpoch = max(s.shareSessionEpoch+1, 1)
-	s.cursorsMu.Unlock()
 }
 
 func (s *source) resetShareSession() {
 	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
 	s.shareSessionEpoch = 0
 	s.shareSessionParts = nil
 	// When the session is destroyed, all acquisitions are released.
@@ -761,11 +762,11 @@ func (s *source) resetShareSession() {
 	// Bump the generation so that finalizeAndRouteAcks skips acks
 	// from records acquired in the old session.
 	s.shareSessionGen.Add(1)
-	s.cursorsMu.Unlock()
 }
 
 func (s *source) clearShareState() {
 	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
 	s.sharePendingAcks = nil
 	s.shareForgotten = nil
 	s.shareSessionEpoch = 0
@@ -779,7 +780,6 @@ func (s *source) clearShareState() {
 	// leader broker) and route stale acks to the new session,
 	// causing INVALID_RECORD_STATE from the broker.
 	s.shareSessionGen.Add(1)
-	s.cursorsMu.Unlock()
 }
 
 // updateShareSessionParts bumps the session epoch and updates which
@@ -1917,6 +1917,11 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 			&krecords[i],
 			record,
 		)
+		// All records in one ProcessFetchPartition call MUST share
+		// the same Context. Share group decoding (decodeSharePartition)
+		// wraps Records[0].Context in a single context.WithValue and
+		// assigns it to all acquired records, relying on the parent
+		// being uniform.
 		record.Context = poolsCtx   //nolint:fatcontext // not a nested context
 		krecords[i] = kmsg.Record{} // prevent the kmsg.Record from hanging onto anything
 		if kept := o.maybeKeepRecord(fp, record, abortBatch); kept {
