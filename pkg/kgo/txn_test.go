@@ -205,12 +205,23 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			continue
 		}
 
+		// ErrFirstReadEOF can occur during broker restarts: the
+		// client reconnects and sends ApiVersions, but the old
+		// server closes the connection before responding. This is
+		// transient and the client will reconnect successfully.
+		var firstReadEOF *ErrFirstReadEOF
 		if fetchErrs := fetches.Errors(); len(fetchErrs) > 0 {
-			c.errCh <- fmt.Errorf("poll got unexpected errs: %v", fetchErrs)
+			for _, fetchErr := range fetchErrs {
+				if errors.As(fetchErr.Err, &firstReadEOF) {
+					continue
+				}
+				c.sendErr(fmt.Errorf("poll got unexpected errs: %v", fetchErrs))
+				break
+			}
 		}
 
 		if err := txnSess.Begin(); err != nil {
-			c.errCh <- fmt.Errorf("BeginTransaction unexpected err: %v", err)
+			c.sendErr(fmt.Errorf("BeginTransaction unexpected err: %v", err))
 		}
 
 		// We save everything we consume in fetchRecs and only account
@@ -231,10 +242,10 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			}
 			keyNum, err := strconv.Atoi(string(r.Key))
 			if err != nil {
-				c.errCh <- err
+				c.sendErr(err)
 			}
 			if !bytes.Equal(r.Value, c.expBody) {
-				c.errCh <- fmt.Errorf("body not what was expected")
+				c.sendErr(fmt.Errorf("body not what was expected"))
 			}
 			fetchRecs[r.Partition] = append(fetchRecs[r.Partition], fetchRec{offset: r.Offset, num: keyNum})
 
@@ -247,7 +258,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 				},
 				func(_ *Record, err error) {
 					if err != nil && !errors.Is(err, ErrAborting) {
-						c.errCh <- fmt.Errorf("unexpected transactional produce err: %v", err)
+						c.sendErr(fmt.Errorf("unexpected transactional produce err: %v", err))
 					}
 				},
 			)
@@ -258,7 +269,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 
 		committed, err := txnSess.End(context.Background(), TransactionEndTry(wantCommit))
 		if err != nil {
-			c.errCh <- fmt.Errorf("flush unexpected err: %v", err)
+			c.sendErr(fmt.Errorf("flush unexpected err: %v", err))
 		} else if !committed {
 			if !wantCommit {
 				return
@@ -274,7 +285,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			for _, rec := range recs {
 				po := partOffset{part, rec.offset}
 				if _, exists := c.partOffsets[po]; exists {
-					c.errCh <- fmt.Errorf("saw double offset t %s p%do%d (txn #%d, txid %s)", c.consumeFrom, po.part, po.offset, ntxns, txid)
+					c.sendErr(fmt.Errorf("saw double offset t %s p%do%d (txn #%d, txid %s)", c.consumeFrom, po.part, po.offset, ntxns, txid))
 				}
 				c.partOffsets[po] = struct{}{}
 

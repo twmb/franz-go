@@ -4,7 +4,10 @@
 // removed in Apacke Kafka 4.1.
 //
 // Version 1 is the initial stable version (KIP-932).
-ShareAcknowledgeRequest => key 79, max version 1, flexible v0+
+//
+// Version 2, introduced in Kafka 4.2, adds IsRenewAck (KIP-1222) and
+// AcquisitionLockTimeoutMillis in the response.
+ShareAcknowledgeRequest => key 79, max version 2, flexible v0+
   // GroupID is the group identifier.
   GroupID: nullable-string
   // MemberID is the member ID.
@@ -12,6 +15,9 @@ ShareAcknowledgeRequest => key 79, max version 1, flexible v0+
   // ShareSessionEpoch is the current share session epoch: 0 to open a share
   // session; -1 to close it; otherwise increments for consecutive requests.
   ShareSessionEpoch: int32
+  // IsRenewAck indicates whether Renew type acknowledgements are present
+  // in AcknowledgementBatches.
+  IsRenewAck: bool // v2+
   // Topics are the topics containing records to acknowledge.
   Topics: [=>]
     // TopicID is the unique topic ID.
@@ -52,6 +58,9 @@ ShareAcknowledgeResponse =>
   // ErrorMessage is the top-level error message, or null if there was no
   // error.
   ErrorMessage: nullable-string
+  // AcquisitionLockTimeoutMillis is the time in milliseconds for which the
+  // acquired records are locked.
+  AcquisitionLockTimeoutMillis: int32 // v2+
   // Topics are the response topics.
   Topics: [=>]
     // TopicID is the unique topic ID.

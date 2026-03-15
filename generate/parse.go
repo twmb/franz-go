@@ -622,6 +622,8 @@ func Parse(file string, raw []byte) {
 				s.GroupCoordinator = true
 			case part == "txn coordinator":
 				s.TxnCoordinator = true
+			case part == "share coordinator":
+				s.ShareCoordinator = true
 			case strings.HasPrefix(part, "flexible v"):
 				vstr := strings.TrimSuffix(part[len("flexible v"):], "+")
 				flexible, err := strconv.Atoi(vstr)

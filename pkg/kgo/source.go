@@ -33,6 +33,12 @@ type source struct {
 	// Tracks how many _failed_ fetch requests we have in a row (unable to
 	// receive a response). Any response, even responses with an ErrorCode
 	// set, are successful. This field is used for backoff purposes.
+	//
+	// Not atomic: safe because each access path guarantees one goroutine
+	// per source. Regular fetch: serialized by fetchState (workLoop).
+	// Share fetch: pollShareFetches fans out exactly one goroutine per
+	// source per poll round, and PollFetches must not be called
+	// concurrently (documented contract + consumer.mu serialization).
 	consecutiveFailures int
 
 	fetchState workLoop
@@ -44,6 +50,18 @@ type source struct {
 	cursorsMu    sync.Mutex
 	cursors      []*cursor // contains all partitions being consumed on this source
 	cursorsStart int       // incremented every fetch req to ensure all partitions are fetched
+
+	// Share group state (KIP-932). All fields below are protected
+	// by cursorsMu except shareSessionGen which is an atomic for
+	// lock-free reads in finalizeAndRouteAcks.
+	shareCursors      []*shareCursor
+	shareCursorsStart int                        // rotated each fetch to ensure fair partition coverage
+	shareSessionEpoch int32                      // 0=new, incremented on success, -1=close
+	shareSessionParts map[topicPartIdx]struct{}  // partitions the broker knows about in this share session
+	sharePendingAcks  sharePendingAcks           // topicID -> partition -> ack batches to piggyback
+	shareForgotten    map[[16]byte][]int32       // topicID -> partitions to forget
+	shareHasRenew     bool                       // true if any pending ack has AckRenew type
+	shareSessionGen   atomic.Uint64              // bumped on session reset
 }
 
 func (cl *Client) newSource(nodeID int32) *source {
@@ -91,6 +109,41 @@ func (s *source) removeCursor(rm *cursor) {
 	if s.cursorsStart == len(s.cursors) {
 		s.cursorsStart = 0
 	}
+}
+
+func (s *source) addShareCursor(add *shareCursor) {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	add.cursorsIdx = len(s.shareCursors)
+	s.shareCursors = append(s.shareCursors, add)
+}
+
+func (s *source) removeShareCursor(rm *shareCursor) {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+
+	if rm.cursorsIdx != len(s.shareCursors)-1 {
+		s.shareCursors[rm.cursorsIdx], s.shareCursors[len(s.shareCursors)-1] = s.shareCursors[len(s.shareCursors)-1], nil
+		s.shareCursors[rm.cursorsIdx].cursorsIdx = rm.cursorsIdx
+	} else {
+		s.shareCursors[rm.cursorsIdx] = nil
+	}
+
+	s.shareCursors = s.shareCursors[:len(s.shareCursors)-1]
+	if s.shareCursorsStart == len(s.shareCursors) {
+		s.shareCursorsStart = 0
+	}
+
+	// Remove from session tracking -- the broker will forget this
+	// partition when it receives the ForgottenTopicsData below.
+	delete(s.shareSessionParts, topicPartIdx{rm.topicID, rm.partition})
+
+	// Track removed partition so the next ShareFetch tells the broker
+	// to forget it from the share session.
+	if s.shareForgotten == nil {
+		s.shareForgotten = make(map[[16]byte][]int32)
+	}
+	s.shareForgotten[rm.topicID] = append(s.shareForgotten[rm.topicID], rm.partition)
 }
 
 // cursor is where we are consuming from for an individual partition.
@@ -649,6 +702,133 @@ func (s *source) takeBufferedFn(polled bool, offsetFn func(usedOffsets)) Fetch {
 	s.hook(&r.fetch, false, polled) // unbuffered, potentially polled
 
 	return r.fetch
+}
+
+func (s *source) addShareAcks(topicID [16]byte, partition int32, batches []shareAckBatch, hasRenew bool) {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	if s.sharePendingAcks == nil {
+		s.sharePendingAcks = make(sharePendingAcks)
+	}
+	s.sharePendingAcks.add(topicID, partition, batches)
+	s.shareHasRenew = s.shareHasRenew || hasRenew
+}
+
+// requeueShareAcks puts all ack batches back on this source for retry,
+// acquiring the lock once for the entire batch rather than per-partition.
+func (s *source) requeueShareAcks(acks sharePendingAcks, hasRenew bool) {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	if s.sharePendingAcks == nil {
+		s.sharePendingAcks = make(sharePendingAcks)
+	}
+	s.sharePendingAcks.merge(acks)
+	s.shareHasRenew = s.shareHasRenew || hasRenew
+}
+
+func (s *source) drainShareAcks() (sharePendingAcks, bool) {
+	s.cursorsMu.Lock()
+	acks := s.sharePendingAcks
+	hasRenew := s.shareHasRenew
+	s.sharePendingAcks = nil
+	s.shareHasRenew = false
+	s.cursorsMu.Unlock()
+
+	// Merge outside the lock -- sorting and allocating in
+	// mergeAckBatches does not need cursorsMu, and holding
+	// the lock blocks addShareAcks from concurrent polls.
+	acks.mergeAll()
+	return acks, hasRenew
+}
+
+func (s *source) bumpShareSessionEpoch() {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	s.shareSessionEpoch = max(s.shareSessionEpoch+1, 1)
+}
+
+func (s *source) resetShareSession() {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	s.shareSessionEpoch = 0
+	s.shareSessionParts = nil
+	// When the session is destroyed, all acquisitions are released.
+	// Pending acks refer to those stale acquisitions and must be
+	// dropped -- sending them on a new session causes
+	// INVALID_RECORD_STATE because the records are no longer
+	// acquired by this member.
+	s.sharePendingAcks = nil
+	s.shareHasRenew = false
+	// Bump the generation so that finalizeAndRouteAcks skips acks
+	// from records acquired in the old session.
+	s.shareSessionGen.Add(1)
+}
+
+func (s *source) clearShareState() {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	s.sharePendingAcks = nil
+	s.shareForgotten = nil
+	s.shareSessionEpoch = 0
+	s.shareSessionParts = nil
+	s.shareHasRenew = false
+	s.shareCursorsStart = 0
+	// Bump the generation so that finalizeAndRouteAcks drops acks
+	// from records acquired before the clear. Without this, after
+	// a fence or unknown-member event, old records still in
+	// lastPolled can match new cursors on the same source (same
+	// leader broker) and route stale acks to the new session,
+	// causing INVALID_RECORD_STATE from the broker.
+	s.shareSessionGen.Add(1)
+}
+
+// updateShareSessionParts bumps the session epoch and updates which
+// partitions are tracked in the session. Combines the epoch increment
+// with partition tracking under a single lock acquisition.
+func (s *source) updateShareSessionParts(req *kmsg.ShareFetchRequest) {
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	s.shareSessionEpoch = max(s.shareSessionEpoch+1, 1)
+	if s.shareSessionParts == nil {
+		s.shareSessionParts = make(map[topicPartIdx]struct{})
+	}
+	cursorSet := make(map[topicPartIdx]struct{}, len(s.shareCursors))
+	for _, sc := range s.shareCursors {
+		cursorSet[topicPartIdx{sc.topicID, sc.partition}] = struct{}{}
+	}
+	for i := range req.Topics {
+		for j := range req.Topics[i].Partitions {
+			key := topicPartIdx{req.Topics[i].TopicID, req.Topics[i].Partitions[j].Partition}
+			if _, hasCursor := cursorSet[key]; hasCursor {
+				s.shareSessionParts[key] = struct{}{}
+			}
+		}
+	}
+	for _, f := range req.ForgottenTopicsData {
+		for _, p := range f.Partitions {
+			delete(s.shareSessionParts, topicPartIdx{f.TopicID, p})
+		}
+	}
+}
+
+// restoreShareForgotten puts ForgottenTopicsData from a failed ShareFetch
+// request back onto the source so it will be included in the next request.
+// buildShareFetchRequest drains shareForgotten when building the request;
+// if the request fails before reaching the broker, the forgotten state
+// would be permanently lost, causing the client to never send
+// ForgottenTopicsData and potentially leaving stale share sessions.
+func (s *source) restoreShareForgotten(req *kmsg.ShareFetchRequest) {
+	if len(req.ForgottenTopicsData) == 0 {
+		return
+	}
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	if s.shareForgotten == nil {
+		s.shareForgotten = make(map[[16]byte][]int32)
+	}
+	for _, f := range req.ForgottenTopicsData {
+		s.shareForgotten[f.TopicID] = append(s.shareForgotten[f.TopicID], f.Partitions...)
+	}
 }
 
 // createReq actually creates a fetch request.
@@ -1737,6 +1917,11 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 			&krecords[i],
 			record,
 		)
+		// All records in one ProcessFetchPartition call MUST share
+		// the same Context. Share group decoding (decodeSharePartition)
+		// wraps Records[0].Context in a single context.WithValue and
+		// assigns it to all acquired records, relying on the parent
+		// being uniform.
 		record.Context = poolsCtx   //nolint:fatcontext // not a nested context
 		krecords[i] = kmsg.Record{} // prevent the kmsg.Record from hanging onto anything
 		if kept := o.maybeKeepRecord(fp, record, abortBatch); kept {

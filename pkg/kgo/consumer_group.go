@@ -1092,7 +1092,7 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 		// If cfg.retries consecutive failures occur without any
 		// success, the error propagates to manage848 which
 		// rebuilds the session.
-		if is848 && (isRetryableBrokerErr(err) || g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err)) {
+		if is848 && (isRetryableBrokerErr(err) || isAnyDialErr(err) || g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err)) {
 			if int64(hbBrokerRetries) < g.cfg.retries {
 				hbBrokerRetries++
 				backoff := g.cfg.retryBackoff(hbBrokerRetries)
@@ -1667,9 +1667,12 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int
 	}()
 
 	// Our client maps the v0 to v7 format to v8+ when sharding this
-	// request, if we are only requesting one group, as well as maps the
-	// response back, so we do not need to worry about v8+ here.
+	// request, if we are only requesting one group. We iterate the v8+
+	// Groups format in the response rather than the v0-v7 resp.Topics
+	// because the sharder's onResp resolves TopicID -> Topic in the
+	// Groups format, and resp.Topics is a copy that may lose TopicID.
 	var staleRetries int
+	var unknownTopicIDRetries int
 start:
 	member, gen := g.memberGen.load()
 	req := kmsg.NewPtrOffsetFetchRequest()
@@ -1680,9 +1683,11 @@ start:
 		reqg.MemberID = &member
 		reqg.MemberEpoch = gen
 	}
+	groupTopics := g.tps.load()
 	for topic, partitions := range added {
 		reqTopic := kmsg.NewOffsetFetchRequestGroupTopic()
 		reqTopic.Topic = topic
+		reqTopic.TopicID = groupTopics.loadTopic(topic).id
 		reqTopic.Partitions = partitions
 		reqg.Topics = append(reqg.Topics, reqTopic)
 	}
@@ -1721,8 +1726,8 @@ start:
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		if errors.Is(err, kerr.StaleMemberEpoch) {
 			staleRetries++
-			if staleRetries > 5 {
-				g.cfg.logger.Log(LogLevelError, "fetch offsets failed: stale member epoch after 5 retries", "group", g.cfg.group)
+			if staleRetries > 3 {
+				g.cfg.logger.Log(LogLevelError, "fetch offsets failed: stale member epoch after 3 retries", "group", g.cfg.group)
 				return err
 			}
 			g.cfg.logger.Log(LogLevelInfo, "fetch offsets returned stale member epoch, forcing heartbeat and retrying",
@@ -1742,6 +1747,17 @@ start:
 			}
 			goto start
 		}
+		if errors.Is(err, kerr.UnstableOffsetCommit) {
+			g.cfg.logger.Log(LogLevelInfo, "fetch offsets returned unstable offset commit at group level, waiting 1s and retrying",
+				"group", g.cfg.group,
+			)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+				goto start
+			}
+		}
 		g.cfg.logger.Log(LogLevelError, "fetch offsets failed with group-level error", "group", g.cfg.group, "err", err)
 		return err
 	}
@@ -1751,20 +1767,51 @@ start:
 	// cannot use the returned leader epoch.
 	kip320 := g.cl.supportsOffsetForLeaderEpoch()
 
+	id2t := g.cl.id2tMap()
 	offsets := make(map[string]map[int32]Offset)
-	for _, rTopic := range resp.Topics {
+	for _, rTopic := range resp.Groups[0].Topics {
+		topic := rTopic.Topic
+		if topic == "" {
+			topic = id2t[rTopic.TopicID]
+			if topic == "" {
+				for _, reqTopic := range req.Groups[0].Topics {
+					if reqTopic.TopicID == rTopic.TopicID {
+						topic = reqTopic.Topic
+						break
+					}
+				}
+				if topic == "" {
+					g.cfg.logger.Log(LogLevelError, "fetch offsets has an empty topic even after a TopicID lookup, this is unexpected, skipping response partition", "topic_id", rTopic.TopicID)
+					continue
+				}
+				g.cfg.logger.Log(LogLevelError, "fetch offsets response had an empty topic name for a TopicID that was in the request, using the request's topic name", "topic", topic, "topic_id", rTopic.TopicID)
+			}
+		}
 		topicOffsets := make(map[int32]Offset)
-		offsets[rTopic.Topic] = topicOffsets
+		offsets[topic] = topicOffsets
 		for _, rPartition := range rTopic.Partitions {
 			if err = kerr.ErrorForCode(rPartition.ErrorCode); err != nil {
-				// KIP-447: Unstable offset commit means there is a
-				// pending transaction that should be committing soon.
-				// We sleep for 1s and retry fetching offsets.
-				if errors.Is(err, kerr.UnstableOffsetCommit) {
-					g.cfg.logger.Log(LogLevelInfo, "fetch offsets failed with UnstableOffsetCommit, waiting 1s and retrying",
+				// Some partition errors are retryable:
+				//
+				// - UnstableOffsetCommit (KIP-447): a pending
+				//   transaction should be committing soon.
+				//
+				// - UnknownTopicID: the broker has not yet
+				//   propagated the topic ID for a newly created
+				//   topic. We now send TopicIDs in OffsetFetch
+				//   v10+. We cap retries because the topic may
+				//   have been legitimately deleted.
+				retryable := errors.Is(err, kerr.UnstableOffsetCommit) ||
+					errors.Is(err, kerr.UnknownTopicID) && unknownTopicIDRetries < 3
+				if errors.Is(err, kerr.UnknownTopicID) {
+					unknownTopicIDRetries++
+				}
+				if retryable {
+					g.cfg.logger.Log(LogLevelInfo, "fetch offsets failed with retryable partition error, waiting 1s and retrying",
 						"group", g.cfg.group,
-						"topic", rTopic.Topic,
+						"topic", topic,
 						"partition", rPartition.Partition,
+						"err", err,
 					)
 					select {
 					case <-ctx.Done():
@@ -1774,7 +1821,7 @@ start:
 				}
 				g.cfg.logger.Log(LogLevelError, "fetch offsets failed",
 					"group", g.cfg.group,
-					"topic", rTopic.Topic,
+					"topic", topic,
 					"partition", rPartition.Partition,
 					"err", err,
 				)
@@ -1798,7 +1845,7 @@ start:
 	// topic or partition the broker returned that we did not ask for.
 	// A buggy broker returning extra partitions can cause a data race
 	// if those partitions are already being consumed (see #1271).
-	groupTopics := g.tps.load()
+	groupTopics = g.tps.load()
 	for fetchedTopic, topicOffsets := range offsets {
 		if !groupTopics.hasTopic(fetchedTopic) {
 			delete(offsets, fetchedTopic)
@@ -2147,6 +2194,20 @@ func (g *groupConsumer) updateCommitted(
 	if len(req.Topics) != len(resp.Topics) { // bad kafka
 		g.cfg.logger.Log(LogLevelError, fmt.Sprintf("broker replied to our OffsetCommitRequest incorrectly! Num topics in request: %d, in reply: %d, we cannot handle this!", len(req.Topics), len(resp.Topics)), "group", g.cfg.group)
 		return
+	}
+
+	// v10+: response uses TopicID instead of Topic. Resolve TopicIDs to
+	// names using the request (which has both) so sorting/matching works.
+	if resp.Version >= 10 {
+		id2t := make(map[[16]byte]string, len(req.Topics))
+		for _, t := range req.Topics {
+			id2t[t.TopicID] = t.Topic
+		}
+		for i := range resp.Topics {
+			if resp.Topics[i].Topic == "" {
+				resp.Topics[i].Topic = id2t[resp.Topics[i].TopicID]
+			}
+		}
 	}
 
 	sort.Slice(req.Topics, func(i, j int) bool {
@@ -3037,9 +3098,13 @@ func (g *groupConsumer) commit(
 		}
 		g.cfg.logger.Log(LogLevelDebug, "issuing commit", "group", g.cfg.group, "uncommitted", uncommitted)
 
+		groupTopics := g.tps.load()
 		for topic, partitions := range uncommitted {
 			reqTopic := kmsg.NewOffsetCommitRequestTopic()
 			reqTopic.Topic = topic
+			if td := groupTopics.loadTopic(topic); td != nil {
+				reqTopic.TopicID = td.id
+			}
 			for partition, eo := range partitions {
 				reqPartition := kmsg.NewOffsetCommitRequestTopicPartition()
 				reqPartition.Partition = partition

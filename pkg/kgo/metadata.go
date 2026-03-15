@@ -324,6 +324,8 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		groupExternal = c.g.loadExternal()
 	case c.d != nil:
 		tpsConsumer = c.d.tps
+	case c.s != nil:
+		tpsConsumer = c.s.tps
 	}
 
 	if !all {

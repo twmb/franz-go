@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"hash/crc32"
+	"maps"
 	"math/rand"
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -153,6 +155,29 @@ func totalAssignedPartitions(dg kadm.DescribedConsumerGroup) int {
 		}
 	}
 	return n
+}
+
+func setShareAutoOffsetReset(t *testing.T, cl *kgo.Client, group string) {
+	t.Helper()
+	req := kmsg.NewPtrIncrementalAlterConfigsRequest()
+	res := kmsg.NewIncrementalAlterConfigsRequestResource()
+	res.ResourceType = kmsg.ConfigResourceTypeGroupConfig
+	res.ResourceName = group
+	cfg := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+	cfg.Name = "share.auto.offset.reset"
+	cfg.Op = 0
+	cfg.Value = kmsg.StringPtr("earliest")
+	res.Configs = append(res.Configs, cfg)
+	req.Resources = append(req.Resources, res)
+	resp, err := req.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("IncrementalAlterConfigs: %v", err)
+	}
+	for _, r := range resp.Resources {
+		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
+			t.Fatalf("IncrementalAlterConfigs resource error: %v", err)
+		}
+	}
 }
 
 // Test848RegexSubscription verifies that server-side regex subscription
@@ -796,66 +821,108 @@ func TestOffsetCommitAfterLeaveClassic(t *testing.T) {
 // group after the member has left.
 func TestOffsetCommitAfterLeave848(t *testing.T) {
 	t.Parallel()
-	topic := "commit-after-leave-848"
-	group := "commit-after-leave-848-group"
+	for _, tc := range []struct {
+		name string
+		opts []kfake.Opt
+	}{
+		{"v10", nil},
+		{"v9", func() []kfake.Opt {
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(8, 9)
+			v.SetMaxKeyVersion(9, 9)
+			return []kfake.Opt{kfake.MaxVersions(v)}
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "commit-after-leave-848-" + tc.name
+			group := "commit-after-leave-848-group-" + tc.name
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	produceNStrings(t, producer, topic, 10)
+			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			c := newCluster(t, opts...)
+			producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			produceNStrings(t, producer, topic, 10)
 
-	// 848 consumer.
-	consumer := newClient848(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.DisableAutoCommit(),
-	)
-	consumeN(t, consumer, 10, 10*time.Second)
+			// 848 consumer.
+			consumer := newClient848(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.DisableAutoCommit(),
+			)
+			consumeN(t, consumer, 10, 10*time.Second)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-	// Close the consumer (triggers leave via heartbeat with epoch -1).
-	consumer.Close()
+			// Close the consumer (triggers leave via heartbeat with epoch -1).
+			consumer.Close()
 
-	// Admin-style commit with v9 OffsetCommit: empty memberID, generation -1.
-	commitReq := kmsg.NewOffsetCommitRequest()
-	commitReq.Version = 9
-	commitReq.Group = group
-	commitReq.Generation = -1
-	rt := kmsg.NewOffsetCommitRequestTopic()
-	rt.Topic = topic
-	rp := kmsg.NewOffsetCommitRequestTopicPartition()
-	rp.Partition = 0
-	rp.Offset = 10
-	rt.Partitions = append(rt.Partitions, rp)
-	commitReq.Topics = append(commitReq.Topics, rt)
+			// Admin-style commit: empty memberID, generation -1.
+			// Set both Topic and TopicID: v9 uses Topic, v10 uses TopicID.
+			ti := c.TopicInfo(topic)
+			raw := newClient848(t, c)
 
-	raw := newClient848(t, c)
-	commitResp, err := commitReq.RequestWith(ctx, raw)
-	if err != nil {
-		t.Fatalf("commit request failed: %v", err)
-	}
-	for _, t2 := range commitResp.Topics {
-		for _, p := range t2.Partitions {
-			if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-				t.Fatalf("commit partition %d error: %v", p.Partition, err)
+			commitReq := kmsg.NewOffsetCommitRequest()
+			commitReq.Group = group
+			commitReq.Generation = -1
+			rt := kmsg.NewOffsetCommitRequestTopic()
+			rt.Topic = topic
+			rt.TopicID = ti.TopicID
+			rp := kmsg.NewOffsetCommitRequestTopicPartition()
+			rp.Partition = 0
+			rp.Offset = 10
+			rt.Partitions = append(rt.Partitions, rp)
+			commitReq.Topics = append(commitReq.Topics, rt)
+
+			commitResp, err := commitReq.RequestWith(ctx, raw)
+			if err != nil {
+				t.Fatalf("commit request failed: %v", err)
 			}
-		}
-	}
+			for _, t2 := range commitResp.Topics {
+				for _, p := range t2.Partitions {
+					if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+						t.Fatalf("commit partition %d error: %v", p.Partition, err)
+					}
+				}
+			}
 
-	// Verify committed offsets.
-	adm := kadm.NewClient(raw)
-	fetched, err := adm.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok := fetched.Lookup(topic, 0)
-	if !ok {
-		t.Fatal("no committed offset found after commit-after-leave")
-	}
-	if o.At != 10 {
-		t.Errorf("expected committed offset 10, got %d", o.At)
+			// Verify committed offsets.
+			adm := kadm.NewClient(raw)
+			fetched, err := adm.FetchOffsets(ctx, group)
+			if err != nil {
+				t.Fatalf("fetch offsets failed: %v", err)
+			}
+			o, ok := fetched.Lookup(topic, 0)
+			if !ok {
+				t.Fatal("no committed offset found after commit-after-leave")
+			}
+			if o.At != 10 {
+				t.Errorf("expected committed offset 10, got %d", o.At)
+			}
+
+			// Also test kadm commit (auto-resolves TopicIDs from topic names via metadata).
+			offsets := kadm.Offsets{}
+			offsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: 8, LeaderEpoch: -1})
+			rs, err := adm.CommitOffsets(ctx, group, offsets)
+			if err != nil {
+				t.Fatalf("kadm commit failed: %v", err)
+			}
+			if err := rs.Error(); err != nil {
+				t.Fatalf("kadm commit response error: %v", err)
+			}
+			fetched, err = adm.FetchOffsets(ctx, group)
+			if err != nil {
+				t.Fatalf("kadm fetch after commit failed: %v", err)
+			}
+			o, ok = fetched.Lookup(topic, 0)
+			if !ok {
+				t.Fatal("no committed offset after kadm commit")
+			}
+			if o.At != 8 {
+				t.Errorf("expected committed offset 8 after kadm commit, got %d", o.At)
+			}
+		})
 	}
 }
 
@@ -906,14 +973,22 @@ func Test848PartitionHandoffNoDuplicates(t *testing.T) {
 	}
 
 	// Produce more and verify c1 consumes from all partitions.
+	// We poll until records from all 6 partitions are seen rather than
+	// consuming a fixed count: consumeN(60) can be satisfied entirely
+	// from c1's original 3 partitions (batch-1 leftovers + batch-2
+	// records) without ever touching the newly-assigned partitions.
 	produceNStrings(t, producer, topic, nRecords)
-	records := consumeN(t, c1, nRecords, 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	partitions := make(map[int32]bool)
-	for _, r := range records {
-		partitions[r.Partition] = true
-	}
-	if len(partitions) != nPartitions {
-		t.Errorf("expected records from all %d partitions, got %d", nPartitions, len(partitions))
+	for len(partitions) < nPartitions {
+		fs := c1.PollFetches(ctx)
+		if ctx.Err() != nil {
+			t.Fatalf("timeout: records from %d/%d partitions: %v", len(partitions), nPartitions, slices.Sorted(maps.Keys(partitions)))
+		}
+		fs.EachRecord(func(r *kgo.Record) {
+			partitions[r.Partition] = true
+		})
 	}
 }
 
@@ -3992,5 +4067,1360 @@ func TestOffsetExpirationActiveGroup(t *testing.T) {
 	}
 	if _, ok := listed[group]; ok {
 		t.Fatal("expected group to be auto-deleted")
+	}
+}
+
+// TestOffsetCommitTopicID verifies that kadm CommitOffsets/FetchOffsets works
+// end-to-end with a v10-capable broker (TopicID-based OffsetCommit/OffsetFetch).
+func TestOffsetCommitTopicID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		opts []kfake.Opt // additional cluster options
+	}{
+		{"v10", nil},
+		{"v9", func() []kfake.Opt {
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(8, 9) // OffsetCommit
+			v.SetMaxKeyVersion(9, 9) // OffsetFetch
+			return []kfake.Opt{kfake.MaxVersions(v)}
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "commit-topicid-" + tc.name
+			group := "commit-topicid-group-" + tc.name
+
+			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			c := newCluster(t, opts...)
+			raw := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			produceNStrings(t, raw, topic, 10)
+
+			adm := kadm.NewClient(raw)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Commit offsets via kadm (sets TopicID in v10, topic name in v9).
+			offsets := kadm.Offsets{}
+			offsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: 5, LeaderEpoch: -1})
+			rs, err := adm.CommitOffsets(ctx, group, offsets)
+			if err != nil {
+				t.Fatalf("commit offsets failed: %v", err)
+			}
+			if err := rs.Error(); err != nil {
+				t.Fatalf("commit offsets response error: %v", err)
+			}
+
+			// Fetch offsets and verify.
+			fetched, err := adm.FetchOffsets(ctx, group)
+			if err != nil {
+				t.Fatalf("fetch offsets failed: %v", err)
+			}
+			o, ok := fetched.Lookup(topic, 0)
+			if !ok {
+				t.Fatal("no committed offset found")
+			}
+			if o.At != 5 {
+				t.Errorf("expected committed offset 5, got %d", o.At)
+			}
+
+			// Update the offset and verify again.
+			offsets = kadm.Offsets{}
+			offsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: 10, LeaderEpoch: -1})
+			rs, err = adm.CommitOffsets(ctx, group, offsets)
+			if err != nil {
+				t.Fatalf("second commit failed: %v", err)
+			}
+			if err := rs.Error(); err != nil {
+				t.Fatalf("second commit response error: %v", err)
+			}
+
+			fetched, err = adm.FetchOffsets(ctx, group)
+			if err != nil {
+				t.Fatalf("second fetch offsets failed: %v", err)
+			}
+			o, ok = fetched.Lookup(topic, 0)
+			if !ok {
+				t.Fatal("no committed offset found after second commit")
+			}
+			if o.At != 10 {
+				t.Errorf("expected committed offset 10, got %d", o.At)
+			}
+		})
+	}
+}
+
+// Test848OffsetCommitTopicID verifies that a KIP-848 consumer group correctly
+// commits and fetches offsets with both v10 (TopicID) and v9 (topic name) brokers.
+func Test848OffsetCommitTopicID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		opts []kfake.Opt
+	}{
+		{"v10", nil},
+		{"v9", func() []kfake.Opt {
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(8, 9)
+			v.SetMaxKeyVersion(9, 9)
+			return []kfake.Opt{kfake.MaxVersions(v)}
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "commit-topicid-848-" + tc.name
+			group := "commit-topicid-848-group-" + tc.name
+
+			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			c := newCluster(t, opts...)
+			producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			produceNStrings(t, producer, topic, 10)
+
+			consumer := newClient848(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.DisableAutoCommit(),
+			)
+			records := consumeN(t, consumer, 10, 10*time.Second)
+			if len(records) != 10 {
+				t.Fatalf("expected 10 records, got %d", len(records))
+			}
+
+			// Commit the consumed offsets.
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := consumer.CommitUncommittedOffsets(ctx); err != nil {
+				t.Fatalf("commit err: %v", err)
+			}
+
+			// Verify via kadm.
+			consumer.Close()
+			adm := kadm.NewClient(newClient848(t, c))
+			fetched, err := adm.FetchOffsets(ctx, group)
+			if err != nil {
+				t.Fatalf("fetch offsets failed: %v", err)
+			}
+			o, ok := fetched.Lookup(topic, 0)
+			if !ok {
+				t.Fatal("no committed offset found after 848 commit")
+			}
+			if o.At != 10 {
+				t.Errorf("expected committed offset 10, got %d", o.At)
+			}
+		})
+	}
+}
+
+// TestOffsetCommitTopicIDByID tests the kadm CommitOffsetsByID / FetchOffsetsByID APIs
+// with both v10 (native TopicID) and v9 (fallback to name resolution) brokers.
+func TestOffsetCommitTopicIDByID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		opts []kfake.Opt
+	}{
+		{"v10", nil},
+		{"v9", func() []kfake.Opt {
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(8, 9)
+			v.SetMaxKeyVersion(9, 9)
+			return []kfake.Opt{kfake.MaxVersions(v)}
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "commit-byid-" + tc.name
+			group := "commit-byid-group-" + tc.name
+
+			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			c := newCluster(t, opts...)
+			raw := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			produceNStrings(t, raw, topic, 10)
+
+			adm := kadm.NewClient(raw)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Get the topic ID via metadata.
+			meta, err := adm.Metadata(ctx, topic)
+			if err != nil {
+				t.Fatalf("metadata failed: %v", err)
+			}
+			td, ok := meta.Topics[topic]
+			if !ok {
+				t.Fatalf("topic %q not in metadata", topic)
+			}
+			topicID := td.ID
+
+			// Commit by ID.
+			os := kadm.OffsetsByID{}
+			os.Add(kadm.Offset{TopicID: topicID, Partition: 0, At: 7, LeaderEpoch: -1})
+			rs, err := adm.CommitOffsetsByID(ctx, group, os)
+			if err != nil {
+				t.Fatalf("commit by ID failed: %v", err)
+			}
+			if err := rs.Error(); err != nil {
+				t.Fatalf("commit by ID response error: %v", err)
+			}
+
+			// Verify response is keyed by the correct topic ID.
+			ro, ok := rs.Lookup(topicID, 0)
+			if !ok {
+				t.Fatal("no response for committed topic ID")
+			}
+			if ro.Err != nil {
+				t.Fatalf("commit by ID partition error: %v", ro.Err)
+			}
+
+			// Fetch by ID and verify.
+			fetched, err := adm.FetchOffsetsByID(ctx, group)
+			if err != nil {
+				t.Fatalf("fetch by ID failed: %v", err)
+			}
+			fo, ok := fetched.Lookup(topicID, 0)
+			if !ok {
+				t.Fatal("no fetched offset for topic ID")
+			}
+			if fo.At != 7 {
+				t.Errorf("expected offset 7, got %d", fo.At)
+			}
+			if fo.TopicID != topicID {
+				t.Errorf("expected TopicID %v, got %v", topicID, fo.TopicID)
+			}
+		})
+	}
+}
+
+// TestOffsetCommitUnknownTopicID verifies that committing with an unknown
+// TopicID returns UNKNOWN_TOPIC_ID.
+func TestOffsetCommitUnknownTopicID(t *testing.T) {
+	t.Parallel()
+	topic := "commit-unknown-id"
+	group := "commit-unknown-id-group"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	raw := newClient848(t, c)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Build a v10 OffsetCommit with a fabricated (unknown) TopicID.
+	req := kmsg.NewOffsetCommitRequest()
+	req.Version = 10
+	req.Group = group
+	req.Generation = -1
+	rt := kmsg.NewOffsetCommitRequestTopic()
+	rt.TopicID = [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	rp := kmsg.NewOffsetCommitRequestTopicPartition()
+	rp.Partition = 0
+	rp.Offset = 5
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	resp, err := req.RequestWith(ctx, raw)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+
+	// The entire response should have UNKNOWN_TOPIC_ID errors.
+	if len(resp.Topics) != 1 {
+		t.Fatalf("expected 1 topic in response, got %d", len(resp.Topics))
+	}
+	for _, tp := range resp.Topics {
+		for _, pp := range tp.Partitions {
+			if pp.ErrorCode != kerr.UnknownTopicID.Code {
+				t.Errorf("expected UNKNOWN_TOPIC_ID (%d), got error code %d",
+					kerr.UnknownTopicID.Code, pp.ErrorCode)
+			}
+		}
+	}
+}
+
+// waitShareGroupEmpty polls ShareGroupDescribe until the given share group
+// has 0 members (i.e., state "Empty"). This is needed after cl.Close()
+// because the leave heartbeat may not have been processed yet.
+func waitShareGroupEmpty(t *testing.T, cl *kgo.Client, group string, timeout time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		req := kmsg.NewPtrShareGroupDescribeRequest()
+		req.GroupIDs = []string{group}
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatalf("waitShareGroupEmpty: describe: %v", err)
+		}
+		if len(resp.Groups) == 1 && len(resp.Groups[0].Members) == 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+		if ctx.Err() != nil {
+			t.Fatalf("waitShareGroupEmpty: timeout waiting for group %q to become empty", group)
+		}
+	}
+}
+
+// TestShareGroupDescribe verifies that ShareGroupDescribe returns correct
+// group state, epoch, and member information for an active share group.
+func TestShareGroupDescribe(t *testing.T) {
+	t.Parallel()
+	topic := "sg-describe"
+	group := "sg-describe-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 10)
+
+	// Create share consumer and poll until we receive records,
+	// which confirms the member joined and has an assignment.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		fs := cl.PollFetches(ctx)
+		if len(fs.Records()) > 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("timeout waiting for records")
+		}
+	}
+
+	// Describe the share group.
+	req := kmsg.NewPtrShareGroupDescribeRequest()
+	req.GroupIDs = []string{group}
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	if len(resp.Groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(resp.Groups))
+	}
+	g := resp.Groups[0]
+	if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+		t.Fatalf("describe error: %v", err)
+	}
+	if g.GroupState != "Stable" {
+		t.Errorf("expected state Stable, got %q", g.GroupState)
+	}
+	if g.GroupEpoch <= 0 {
+		t.Errorf("expected epoch > 0, got %d", g.GroupEpoch)
+	}
+	if len(g.Members) != 1 {
+		t.Fatalf("expected 1 member, got %d", len(g.Members))
+	}
+	m := g.Members[0]
+	if m.MemberID == "" {
+		t.Error("member ID empty")
+	}
+	if !slices.Contains(m.SubscribedTopicNames, topic) {
+		t.Errorf("topic %q not in subscribed %v", topic, m.SubscribedTopicNames)
+	}
+	if len(m.Assignment.TopicPartitions) == 0 {
+		t.Error("no assignment")
+	}
+}
+
+// TestShareGroupDescribeEmpty verifies describe on a group with no active
+// members returns "Empty" state, and on a nonexistent group returns
+// GROUP_ID_NOT_FOUND.
+func TestShareGroupDescribeEmpty(t *testing.T) {
+	t.Parallel()
+	topic := "sg-describe-empty"
+	group := "sg-describe-empty-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 5)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Join, consume, leave -- creates the group then empties it.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		fs := cl.PollFetches(ctx)
+		if len(fs.Records()) > 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("timeout")
+		}
+	}
+	cl.Close()
+	waitShareGroupEmpty(t, admin, group, 5*time.Second)
+
+	// Now the group exists but is empty.
+	req := kmsg.NewPtrShareGroupDescribeRequest()
+	req.GroupIDs = []string{group, "nonexistent-sg"}
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	if len(resp.Groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(resp.Groups))
+	}
+
+	// Look up groups by GroupID rather than relying on response order.
+	groupsByID := make(map[string]kmsg.ShareGroupDescribeResponseGroup)
+	for _, g := range resp.Groups {
+		groupsByID[g.GroupID] = g
+	}
+
+	// Existing empty group.
+	g0 := groupsByID[group]
+	if err := kerr.ErrorForCode(g0.ErrorCode); err != nil {
+		t.Fatalf("empty group error: %v", err)
+	}
+	if g0.GroupState != "Empty" {
+		t.Errorf("expected Empty, got %q", g0.GroupState)
+	}
+	if len(g0.Members) != 0 {
+		t.Errorf("expected 0 members, got %d", len(g0.Members))
+	}
+
+	// Nonexistent group.
+	g1 := groupsByID["nonexistent-sg"]
+	if g1.ErrorCode != kerr.GroupIDNotFound.Code {
+		t.Errorf("expected GROUP_ID_NOT_FOUND for nonexistent group, got %d", g1.ErrorCode)
+	}
+}
+
+// TestDescribeShareGroupOffsets verifies that DescribeShareGroupOffsets
+// returns the correct SPSO and lag after consuming and acking records.
+func TestDescribeShareGroupOffsets(t *testing.T) {
+	t.Parallel()
+	topic := "sg-desc-offsets"
+	group := "sg-desc-offsets-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 20)
+
+	// Consume all 20 records, accept them.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var got int
+	for got < 20 {
+		fs := cl.PollFetches(ctx)
+		for _, r := range fs.Records() {
+			r.Ack(kgo.AckAccept)
+			got++
+		}
+		commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cl.CommitAcks(commitCtx)
+		commitCancel()
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if got < 20 {
+		t.Fatalf("got %d/20 records", got)
+	}
+	cl.Close()
+
+	// Describe share group offsets.
+	req := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+	rg := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+	rg.GroupID = group
+	rt := kmsg.NewDescribeShareGroupOffsetsRequestGroupTopic()
+	rt.Topic = topic
+	rt.Partitions = []int32{0}
+	rg.Topics = append(rg.Topics, rt)
+	req.Groups = append(req.Groups, rg)
+
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("describe offsets: %v", err)
+	}
+	if len(resp.Groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(resp.Groups))
+	}
+	g := resp.Groups[0]
+	if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+		t.Fatalf("describe offsets error: %v", err)
+	}
+	if len(g.Topics) != 1 || len(g.Topics[0].Partitions) != 1 {
+		t.Fatal("unexpected response structure")
+	}
+	p := g.Topics[0].Partitions[0]
+	if p.Partition != 0 {
+		t.Errorf("expected partition 0, got %d", p.Partition)
+	}
+	// After accepting all 20 records, SPSO should be 20.
+	if p.StartOffset != 20 {
+		t.Errorf("expected StartOffset 20, got %d", p.StartOffset)
+	}
+	// Lag = HWM - SPSO = 20 - 20 = 0.
+	if p.Lag != 0 {
+		t.Errorf("expected Lag 0, got %d", p.Lag)
+	}
+}
+
+// TestDescribeShareGroupOffsetsNotFound verifies that describing offsets
+// for a nonexistent group returns GROUP_ID_NOT_FOUND.
+func TestDescribeShareGroupOffsetsNotFound(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t)
+	cl := newPlainClient(t, c)
+
+	req := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+	rg := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+	rg.GroupID = "nonexistent-share-group"
+	rt := kmsg.NewDescribeShareGroupOffsetsRequestGroupTopic()
+	rt.Topic = "t"
+	rt.Partitions = []int32{0}
+	rg.Topics = append(rg.Topics, rt)
+	req.Groups = append(req.Groups, rg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("describe offsets: %v", err)
+	}
+	// Java returns no group-level error for nonexistent groups --
+	// the response simply has no partition data (absence, not error).
+	if resp.Groups[0].ErrorCode != 0 {
+		t.Errorf("expected no group-level error, got %d", resp.Groups[0].ErrorCode)
+	}
+}
+
+// TestAlterShareGroupOffsets verifies that altering the SPSO in an empty
+// share group causes subsequent consumers to start from the new offset.
+func TestAlterShareGroupOffsets(t *testing.T) {
+	t.Parallel()
+	topic := "sg-alter-offsets"
+	group := "sg-alter-offsets-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 20)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Consume all 20, accept all, close.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for got < 20 {
+		fs := cl.PollFetches(ctx)
+		for _, r := range fs.Records() {
+			r.Ack(kgo.AckAccept)
+			got++
+		}
+		commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cl.CommitAcks(commitCtx)
+		commitCancel()
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if got < 20 {
+		t.Fatalf("got %d/20 records", got)
+	}
+	cl.Close()
+	waitShareGroupEmpty(t, admin, group, 5*time.Second)
+
+	// Alter SPSO to 10 -- next consumer should get records 10-19.
+	req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
+	req.GroupID = group
+	rt := kmsg.NewAlterShareGroupOffsetsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewAlterShareGroupOffsetsRequestTopicPartition()
+	rp.Partition = 0
+	rp.StartOffset = 10
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("alter offsets: %v", err)
+	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		t.Fatalf("alter error: %v", err)
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatal("unexpected response structure")
+	}
+	if pp := resp.Topics[0].Partitions[0]; pp.ErrorCode != 0 {
+		t.Fatalf("partition error: %v", kerr.ErrorForCode(pp.ErrorCode))
+	}
+
+	// New consumer should get records starting from offset 10.
+	cl2, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl2.Close()
+
+	var got2 int
+	var minOffset int64 = -1
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	for got2 < 10 {
+		fs := cl2.PollFetches(ctx2)
+		for _, r := range fs.Records() {
+			if minOffset == -1 || r.Offset < minOffset {
+				minOffset = r.Offset
+			}
+			r.Ack(kgo.AckAccept)
+			got2++
+		}
+		if ctx2.Err() != nil {
+			break
+		}
+	}
+	if got2 < 10 {
+		t.Fatalf("expected 10 records after alter, got %d", got2)
+	}
+	if minOffset != 10 {
+		t.Errorf("expected min offset 10, got %d", minOffset)
+	}
+}
+
+// TestAlterShareGroupOffsetsNonEmpty verifies that altering offsets on a
+// share group with active members returns NON_EMPTY_GROUP.
+func TestAlterShareGroupOffsetsNonEmpty(t *testing.T) {
+	t.Parallel()
+	topic := "sg-alter-nonempty"
+	group := "sg-alter-nonempty-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 5)
+
+	// Create active share consumer.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		fs := cl.PollFetches(ctx)
+		if len(fs.Records()) > 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("timeout")
+		}
+	}
+
+	// Try to alter while consumer is active.
+	req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
+	req.GroupID = group
+	rt := kmsg.NewAlterShareGroupOffsetsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewAlterShareGroupOffsetsRequestTopicPartition()
+	rp.Partition = 0
+	rp.StartOffset = 0
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("alter offsets: %v", err)
+	}
+	if resp.ErrorCode != kerr.NonEmptyGroup.Code {
+		t.Errorf("expected NON_EMPTY_GROUP (%d), got %d", kerr.NonEmptyGroup.Code, resp.ErrorCode)
+	}
+}
+
+// TestDeleteShareGroupOffsets verifies that deleting share group offsets
+// removes partition state, so a new consumer re-initializes from
+// share.auto.offset.reset.
+func TestDeleteShareGroupOffsets(t *testing.T) {
+	t.Parallel()
+	topic := "sg-delete-offsets"
+	group := "sg-delete-offsets-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 20)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Consume all, accept, close.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for got < 20 {
+		fs := cl.PollFetches(ctx)
+		for _, r := range fs.Records() {
+			r.Ack(kgo.AckAccept)
+			got++
+		}
+		commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cl.CommitAcks(commitCtx)
+		commitCancel()
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if got < 20 {
+		t.Fatalf("got %d/20", got)
+	}
+	cl.Close()
+	waitShareGroupEmpty(t, admin, group, 5*time.Second)
+
+	// Delete share group offsets for the topic.
+	dreq := kmsg.NewPtrDeleteShareGroupOffsetsRequest()
+	dreq.GroupID = group
+	dt := kmsg.NewDeleteShareGroupOffsetsRequestTopic()
+	dt.Topic = topic
+	dreq.Topics = append(dreq.Topics, dt)
+
+	dresp, err := dreq.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("delete offsets: %v", err)
+	}
+	if err := kerr.ErrorForCode(dresp.ErrorCode); err != nil {
+		t.Fatalf("delete error: %v", err)
+	}
+
+	// Verify offsets are gone.
+	dsreq := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+	rg := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+	rg.GroupID = group
+	rt := kmsg.NewDescribeShareGroupOffsetsRequestGroupTopic()
+	rt.Topic = topic
+	rt.Partitions = []int32{0}
+	rg.Topics = append(rg.Topics, rt)
+	dsreq.Groups = append(dsreq.Groups, rg)
+
+	dsresp, err := dsreq.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("describe offsets: %v", err)
+	}
+	p := dsresp.Groups[0].Topics[0].Partitions[0]
+	if p.StartOffset != -1 {
+		t.Errorf("expected StartOffset -1 after delete, got %d", p.StartOffset)
+	}
+
+	// New consumer should get all 20 records (share.auto.offset.reset=earliest).
+	cl2, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl2.Close()
+
+	var got2 int
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	for got2 < 20 {
+		fs := cl2.PollFetches(ctx2)
+		for _, r := range fs.Records() {
+			r.Ack(kgo.AckAccept)
+			got2++
+		}
+		if ctx2.Err() != nil {
+			break
+		}
+	}
+	if got2 < 20 {
+		t.Fatalf("expected 20 records after delete+re-consume, got %d", got2)
+	}
+}
+
+// TestDeleteShareGroupOffsetsNonEmpty verifies that deleting offsets on a
+// share group with active members returns NON_EMPTY_GROUP.
+func TestDeleteShareGroupOffsetsNonEmpty(t *testing.T) {
+	t.Parallel()
+	topic := "sg-delete-nonempty"
+	group := "sg-delete-nonempty-group"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 5)
+
+	// Create active share consumer.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		fs := cl.PollFetches(ctx)
+		if len(fs.Records()) > 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("timeout")
+		}
+	}
+
+	// Try to delete while consumer is active.
+	req := kmsg.NewPtrDeleteShareGroupOffsetsRequest()
+	req.GroupID = group
+	dt := kmsg.NewDeleteShareGroupOffsetsRequestTopic()
+	dt.Topic = topic
+	req.Topics = append(req.Topics, dt)
+
+	resp, err := req.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatalf("delete offsets: %v", err)
+	}
+	if resp.ErrorCode != kerr.NonEmptyGroup.Code {
+		t.Errorf("expected NON_EMPTY_GROUP (%d), got %d", kerr.NonEmptyGroup.Code, resp.ErrorCode)
+	}
+}
+
+// TestShareGroupForgottenTopics verifies that when a share group reassignment
+// removes all partitions from a source, the client still sends a ShareFetch
+// with ForgottenTopicsData to that source so the broker can clean up its
+// share session state.
+func TestShareGroupForgottenTopics(t *testing.T) {
+	t.Parallel()
+	topic := "share-forgotten"
+	group := "share-test-forgotten"
+
+	c := newCluster(t, kfake.SeedTopics(1, topic), kfake.BrokerConfigs(map[string]string{
+		"group.share.heartbeat.interval.ms": "100",
+	}))
+
+	admin, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(topic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	setShareAutoOffsetReset(t, admin, group)
+
+	// Produce records.
+	const total = 5
+	for i := range total {
+		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
+			if err != nil {
+				t.Errorf("produce: %v", err)
+			}
+		})
+	}
+	if err := admin.Flush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	// gotForgotten is closed when the ShareFetch observer sees
+	// ForgottenTopicsData in a request.
+	gotForgotten := make(chan struct{})
+	var forgottenOnce sync.Once
+	var shareFetchCount atomic.Int64
+
+	// Observe ShareFetch (key 78) for ForgottenTopicsData.
+	c.ControlKey(78, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.ShareFetchRequest)
+		n := shareFetchCount.Add(1)
+		t.Logf("ShareFetch #%d: epoch=%d topics=%d forgotten=%d", n, req.ShareSessionEpoch, len(req.Topics), len(req.ForgottenTopicsData))
+		if len(req.ForgottenTopicsData) > 0 {
+			forgottenOnce.Do(func() { close(gotForgotten) })
+		}
+		return nil, nil, false // pass through
+	})
+
+	// Share consumer with fast heartbeat.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	// Consume all records.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var got int
+	for got < total {
+		fetches := cl.PollFetches(ctx)
+		got += len(fetches.Records())
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if got != total {
+		t.Fatalf("expected %d records, got %d", total, got)
+	}
+
+	// Intercept the next heartbeat to return an empty assignment,
+	// which removes all share cursors. With the fix, the source
+	// is still visited on the next poll to send ForgottenTopicsData.
+	var heartbeatCount atomic.Int64
+	c.ControlKey(76, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		n := heartbeatCount.Add(1)
+		req := kreq.(*kmsg.ShareGroupHeartbeatRequest)
+		t.Logf("heartbeat #%d: member=%s epoch=%d", n, req.MemberID, req.MemberEpoch)
+		resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
+		resp.MemberID = &req.MemberID
+		resp.MemberEpoch = req.MemberEpoch
+		resp.HeartbeatIntervalMillis = 100
+		resp.Assignment = &kmsg.ShareGroupHeartbeatResponseAssignment{}
+		return resp, nil, true
+	})
+
+	// Poll until we observe ForgottenTopicsData in a ShareFetch.
+	deadline := time.After(10 * time.Second)
+	var pollCount int
+	for {
+		select {
+		case <-gotForgotten:
+			t.Logf("success after %d polls, %d ShareFetch reqs, %d heartbeats",
+				pollCount, shareFetchCount.Load(), heartbeatCount.Load())
+			return
+		case <-deadline:
+			t.Fatalf("timed out after %d polls, %d ShareFetch reqs, %d heartbeats",
+				pollCount, shareFetchCount.Load(), heartbeatCount.Load())
+		default:
+		}
+		pollCount++
+		pollCtx, pollCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		fetches := cl.PollFetches(pollCtx)
+		pollCancel()
+		var nrecs int
+		for _, e := range fetches.Errors() {
+			if e.Err != context.DeadlineExceeded {
+				t.Logf("poll %d: error: %v", pollCount, e.Err)
+			}
+		}
+		nrecs = len(fetches.Records())
+		if nrecs > 0 {
+			t.Logf("poll %d: got %d records (unexpected after consume phase)", pollCount, nrecs)
+		}
+	}
+}
+
+// TestShareGroupAckRequeue verifies that when ShareAcknowledge returns a
+// retryable per-partition error, the client re-queues the acks and delivers
+// them on the next ShareFetch (piggybacked). This tests fix for the gap
+// where piggybacked or standalone ack errors were silently dropped.
+func TestShareGroupAckRequeue(t *testing.T) {
+	t.Parallel()
+
+	topic, group := "share-ack-requeue", "share-test-ack-requeue"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	defer admin.Close()
+
+	setShareAutoOffsetReset(t, admin, group)
+	produceNStrings(t, admin, topic, 10)
+
+	cl1 := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	defer cl1.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Poll all records and mark them as accepted.
+	var got1 int
+	for got1 < 10 {
+		fetches := cl1.PollFetches(ctx)
+		for _, r := range fetches.Records() {
+			r.Ack(kgo.AckAccept)
+			got1++
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if got1 != 10 {
+		t.Fatalf("consumer 1: expected 10 records, got %d", got1)
+	}
+
+	// Intercept the first ShareAcknowledge to return a retryable error
+	// (REQUEST_TIMED_OUT) for each partition. The client should re-queue
+	// the acks rather than dropping them.
+	var intercepted atomic.Bool
+	c.ControlKey(int16(kmsg.ShareAcknowledge), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		if !intercepted.CompareAndSwap(false, true) {
+			return nil, nil, false
+		}
+		saReq := kreq.(*kmsg.ShareAcknowledgeRequest)
+		resp := saReq.ResponseKind().(*kmsg.ShareAcknowledgeResponse)
+		for _, rt := range saReq.Topics {
+			respTopic := kmsg.NewShareAcknowledgeResponseTopic()
+			respTopic.TopicID = rt.TopicID
+			for _, rp := range rt.Partitions {
+				respPart := kmsg.NewShareAcknowledgeResponseTopicPartition()
+				respPart.Partition = rp.Partition
+				respPart.ErrorCode = kerr.RequestTimedOut.Code
+				respTopic.Partitions = append(respTopic.Partitions, respPart)
+			}
+			resp.Topics = append(resp.Topics, respTopic)
+		}
+		return resp, nil, true
+	})
+
+	// CommitAcks sends standalone ShareAcknowledge. Our control intercepts
+	// it with a retryable error. The client re-queues the acks, and
+	// CommitAcks returns nil (no permanent errors).
+	if err := cl1.CommitAcks(ctx); err != nil {
+		t.Fatalf("CommitAcks should return nil for retryable ack errors: %v", err)
+	}
+	if !intercepted.Load() {
+		t.Fatal("ShareAcknowledge was not intercepted")
+	}
+
+	// Poll again: the re-queued acks are piggybacked on the ShareFetch
+	// request, which goes through normally (the control was one-shot).
+	pollCtx, pollCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	cl1.PollFetches(pollCtx)
+	pollCancel()
+
+	// Consumer 2: should see 0 records since all acks were re-queued and
+	// delivered via piggybacked ShareFetch.
+	cl2 := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(200*time.Millisecond),
+	)
+	defer cl2.Close()
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	var got2 int
+	for ctx2.Err() == nil {
+		fetches := cl2.PollFetches(ctx2)
+		got2 += len(fetches.Records())
+	}
+	if got2 > 0 {
+		t.Errorf("consumer 2: expected 0 records after re-queued acks, got %d", got2)
+	}
+}
+
+// TestShareGroupCurrentLeaderMove verifies that when a partition leader
+// changes, the share consumer uses the CurrentLeader field from the
+// ShareFetch response to proactively move the cursor to the new leader
+// without waiting for a metadata refresh.
+func TestShareGroupCurrentLeaderMove(t *testing.T) {
+	t.Parallel()
+	topic := "share-leader-move"
+	c := newCluster(t,
+		kfake.NumBrokers(2),
+		kfake.SeedTopics(1, topic),
+	)
+	defer c.Close()
+
+	origLeader := c.LeaderFor(topic, 0)
+
+	cl, _ := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(topic),
+	)
+	defer cl.Close()
+
+	scl, _ := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup("share-move-test"),
+	)
+	defer scl.Close()
+
+	// Empty poll to trigger the heartbeat and establish the group.
+	// SPSO defaults to "latest", so records must be produced after.
+	emptyCtx, emptyCancel := context.WithTimeout(context.Background(), time.Second)
+	scl.PollFetches(emptyCtx)
+	emptyCancel()
+
+	// Produce records after the share group is established.
+	for i := range 5 {
+		r := &kgo.Record{Value: []byte(strconv.Itoa(i))}
+		if err := cl.ProduceSync(context.Background(), r).FirstErr(); err != nil {
+			t.Fatalf("produce: %v", err)
+		}
+	}
+
+	// Poll and ack all records before the move.
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel1()
+	for ctx1.Err() == nil {
+		fetches := scl.PollFetches(ctx1)
+		recs := fetches.Records()
+		if len(recs) == 0 {
+			continue
+		}
+		for _, r := range recs {
+			r.Ack(kgo.AckAccept)
+		}
+		if err := scl.CommitAcks(ctx1); err != nil {
+			t.Fatalf("commit acks: %v", err)
+		}
+		break
+	}
+	if ctx1.Err() != nil {
+		t.Fatal("timed out waiting for records before move")
+	}
+
+	// Move partition to the other broker.
+	var newLeader int32
+	if origLeader == 0 {
+		newLeader = 1
+	}
+	if err := c.MoveTopicPartition(topic, 0, newLeader); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	// Produce 5 more records to the new leader.
+	for i := range 5 {
+		r := &kgo.Record{Value: []byte(strconv.Itoa(i + 5))}
+		if err := cl.ProduceSync(context.Background(), r).FirstErr(); err != nil {
+			t.Fatalf("produce after move: %v", err)
+		}
+	}
+
+	// Poll again. The share consumer should detect the leader change
+	// via CurrentLeader in the NOT_LEADER_FOR_PARTITION response and
+	// move the cursor to the new leader, receiving the new records.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	var got2 int
+	for got2 < 5 && ctx2.Err() == nil {
+		fetches := scl.PollFetches(ctx2)
+		got2 += len(fetches.Records())
+	}
+	if got2 != 5 {
+		t.Fatalf("expected 5 records after leader move, got %d", got2)
+	}
+}
+
+// TestShareGroupFencedLeaderEpochMove verifies that FENCED_LEADER_EPOCH
+// with a CurrentLeader hint in a ShareFetch partition response triggers
+// the same proactive cursor move as NOT_LEADER_FOR_PARTITION. A producer
+// goroutine runs concurrently with the consumer so -race can catch data
+// races in the move + ack + heartbeat paths.
+func TestShareGroupFencedLeaderEpochMove(t *testing.T) {
+	t.Parallel()
+	topic := "share-fenced-epoch"
+	c := newCluster(t,
+		kfake.NumBrokers(2),
+		kfake.SeedTopics(1, topic),
+	)
+	defer c.Close()
+
+	origLeader := c.LeaderFor(topic, 0)
+	newLeader := int32(1)
+	if origLeader == 1 {
+		newLeader = 0
+	}
+
+	// Producer.
+	pcl, _ := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(topic),
+	)
+	defer pcl.Close()
+
+	// Share consumer.
+	scl, _ := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup("share-fenced-epoch-test"),
+	)
+	defer scl.Close()
+
+	// Empty poll to establish the group (SPSO defaults to "latest").
+	emptyCtx, emptyCancel := context.WithTimeout(context.Background(), time.Second)
+	scl.PollFetches(emptyCtx)
+	emptyCancel()
+
+	// Produce initial records and consume them to establish a session.
+	for i := range 5 {
+		r := &kgo.Record{Value: []byte(strconv.Itoa(i))}
+		if err := pcl.ProduceSync(context.Background(), r).FirstErr(); err != nil {
+			t.Fatalf("produce: %v", err)
+		}
+	}
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel1()
+	for ctx1.Err() == nil {
+		fetches := scl.PollFetches(ctx1)
+		recs := fetches.Records()
+		if len(recs) == 0 {
+			continue
+		}
+		for _, r := range recs {
+			r.Ack(kgo.AckAccept)
+		}
+		if err := scl.CommitAcks(ctx1); err != nil {
+			t.Fatalf("commit acks: %v", err)
+		}
+		break
+	}
+	if ctx1.Err() != nil {
+		t.Fatal("timed out consuming initial records")
+	}
+
+	// Move the partition to the other broker so the original broker
+	// will return partition errors on the next ShareFetch.
+	if err := c.MoveTopicPartition(topic, 0, newLeader); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	// Intercept the first ShareFetch to the OLD leader after the move
+	// and replace its partition error with FENCED_LEADER_EPOCH +
+	// CurrentLeader. Without the fix, the client wouldn't recognize
+	// this error as a leader hint and would surface it instead of
+	// moving.
+	ti := c.TopicInfo(topic)
+	var injected atomic.Bool
+	c.ControlKey(78, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.ShareFetchRequest)
+		for _, rt := range req.Topics {
+			if rt.TopicID != ti.TopicID {
+				continue
+			}
+			for _, rp := range rt.Partitions {
+				if rp.Partition != 0 {
+					continue
+				}
+				if !injected.CompareAndSwap(false, true) {
+					return nil, nil, false
+				}
+				resp := req.ResponseKind().(*kmsg.ShareFetchResponse)
+				st := kmsg.NewShareFetchResponseTopic()
+				st.TopicID = ti.TopicID
+				sp := kmsg.NewShareFetchResponseTopicPartition()
+				sp.Partition = 0
+				sp.ErrorCode = kerr.FencedLeaderEpoch.Code
+				sp.CurrentLeader.LeaderID = newLeader
+				sp.CurrentLeader.LeaderEpoch = 1
+				st.Partitions = append(st.Partitions, sp)
+				resp.Topics = append(resp.Topics, st)
+				return resp, nil, true
+			}
+		}
+		return nil, nil, false
+	})
+
+	// Start a concurrent producer that feeds records while the
+	// consumer is dealing with the fenced leader epoch and cursor
+	// move. This exercises the move + heartbeat + ack paths under
+	// -race (internal goroutines: per-source fetch workers, heartbeat
+	// loop, metadata updater).
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	var produceDone sync.WaitGroup
+	produceDone.Add(1)
+	go func() {
+		defer produceDone.Done()
+		for i := range 20 {
+			r := &kgo.Record{Value: []byte(strconv.Itoa(i + 100))}
+			if err := pcl.ProduceSync(ctx2, r).FirstErr(); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Single consumer goroutine: poll, ack, commit in a loop until
+	// we've consumed enough records from the new leader.
+	var got int
+	for got < 20 && ctx2.Err() == nil {
+		fetches := scl.PollFetches(ctx2)
+		recs := fetches.Records()
+		if len(recs) == 0 {
+			continue
+		}
+		for _, r := range recs {
+			r.Ack(kgo.AckAccept)
+		}
+		got += len(recs)
+		_ = scl.CommitAcks(ctx2)
+	}
+	produceDone.Wait()
+
+	if got < 20 {
+		t.Fatalf("expected at least 20 records after fenced leader epoch move, got %d", got)
+	}
+	if !injected.Load() {
+		t.Fatal("FENCED_LEADER_EPOCH was never injected")
 	}
 }
