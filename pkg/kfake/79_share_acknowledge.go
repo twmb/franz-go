@@ -51,7 +51,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		return resp, nil
 	}
 
-	sg := c.shareGroups.gs[groupID]
+	sg := c.shareGroups.get(groupID)
 	if sg == nil {
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
 		return resp, nil
@@ -102,7 +102,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		}
 		ackTs := ackTopicsFromAcknowledge(req.Topics)
 		sg.mu.Lock()
-		toFire, _ := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, donep)
+		toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, donep)
 		released := sg.releaseRecordsForSessionLocked(memberID, session, id2t, maxDelivery)
 		sg.mu.Unlock()
 		for _, pd := range toFire {
@@ -133,13 +133,13 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 
 	ackTs := ackTopicsFromAcknowledge(req.Topics)
 	sg.mu.Lock()
-	toFire, _ := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, donep)
+	toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, donep)
 	sg.mu.Unlock()
 
 	for _, pd := range toFire {
 		pd.fireShareWatchers()
 	}
 
-	session.epoch = max(1, session.epoch+1)
+	session.bumpEpoch()
 	return resp, nil
 }

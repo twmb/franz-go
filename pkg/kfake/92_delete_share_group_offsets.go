@@ -36,7 +36,7 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 		return resp, nil
 	}
 
-	sg := c.shareGroups.gs[req.GroupID]
+	sg := c.shareGroups.get(req.GroupID)
 	if sg == nil {
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
 		return resp, nil

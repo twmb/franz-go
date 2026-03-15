@@ -37,8 +37,8 @@ func (c *Cluster) handleShareGroupHeartbeat(creq *clientReq) (kmsg.Response, err
 	if strings.TrimSpace(req.GroupID) == "" {
 		return errResp(kerr.InvalidRequest.Code)
 	}
-	if kerr := c.validateGroup(creq, req.GroupID); kerr != nil {
-		return errResp(kerr.Code)
+	if ke := c.validateGroup(creq, req.GroupID); ke != nil {
+		return errResp(ke.Code)
 	}
 	if !c.allowedACL(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
 		return errResp(kerr.GroupAuthorizationFailed.Code)

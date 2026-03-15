@@ -734,14 +734,14 @@ var validBrokerConfigs = map[string]string{
 	"offset.retention.ms":                       "",
 	"offsets.retention.check.interval.ms":       "",
 	"sasl.enabled.mechanisms":                   "",
-	"group.share.heartbeat.interval.ms":         "",
-	"group.share.session.timeout.ms":            "",
-	"group.share.delivery.count.limit":               "",
-	"group.share.record.lock.duration.ms":             "",
-	"share.record.lock.sweep.interval.ms":       "",
-	"group.share.partition.max.record.locks":    "",
-	"group.share.max.share.sessions":            "",
-	"group.share.max.size":                      "",
+	"group.share.heartbeat.interval.ms":      "",
+	"group.share.session.timeout.ms":         "",
+	"group.share.delivery.count.limit":       "",
+	"group.share.record.lock.duration.ms":    "",
+	"share.record.lock.sweep.interval.ms":    "",
+	"group.share.partition.max.record.locks": "",
+	"group.share.max.share.sessions":         "",
+	"group.share.max.size":                   "",
 	"state.log.compact.bytes":                   "",
 	"super.users":                               "",
 }
@@ -799,14 +799,14 @@ var configDefaults = map[string]string{
 	"message.max.bytes":                         strconv.Itoa(defMaxMessageBytes),
 	"offsets.retention.minutes":                 "10080",
 	"offsets.retention.check.interval.ms":       "600000",
-	"group.share.heartbeat.interval.ms":         strconv.Itoa(defHeartbeatInterval),
-	"group.share.session.timeout.ms":            "45000",
-	"group.share.delivery.count.limit":               "5",
-	"group.share.record.lock.duration.ms":             "30000",
-	"share.record.lock.sweep.interval.ms":       "5000",
-	"group.share.partition.max.record.locks":    "2000",
-	"group.share.max.share.sessions":            "2000",
-	"group.share.max.size":                      "200",
+	"group.share.heartbeat.interval.ms":      strconv.Itoa(defHeartbeatInterval),
+	"group.share.session.timeout.ms":         "45000",
+	"group.share.delivery.count.limit":       "5",
+	"group.share.record.lock.duration.ms":    "30000",
+	"share.record.lock.sweep.interval.ms":    "5000",
+	"group.share.partition.max.record.locks": "2000",
+	"group.share.max.share.sessions":         "2000",
+	"group.share.max.size":                   "200",
 }
 
 // configTypes maps config names to their data types for DescribeConfigs v3+.
@@ -843,14 +843,14 @@ var configTypes = map[string]kmsg.ConfigType{
 	"segment.bytes":                             kmsg.ConfigTypeInt,
 	"segment.ms":                                kmsg.ConfigTypeLong,
 	"sasl.enabled.mechanisms":                   kmsg.ConfigTypeList,
-	"group.share.heartbeat.interval.ms":         kmsg.ConfigTypeInt,
-	"group.share.session.timeout.ms":            kmsg.ConfigTypeInt,
-	"group.share.delivery.count.limit":               kmsg.ConfigTypeInt,
-	"group.share.record.lock.duration.ms":             kmsg.ConfigTypeInt,
-	"share.record.lock.sweep.interval.ms":       kmsg.ConfigTypeLong,
-	"group.share.partition.max.record.locks":    kmsg.ConfigTypeInt,
-	"group.share.max.share.sessions":            kmsg.ConfigTypeInt,
-	"group.share.max.size":                      kmsg.ConfigTypeInt,
+	"group.share.heartbeat.interval.ms":      kmsg.ConfigTypeInt,
+	"group.share.session.timeout.ms":         kmsg.ConfigTypeInt,
+	"group.share.delivery.count.limit":       kmsg.ConfigTypeInt,
+	"group.share.record.lock.duration.ms":    kmsg.ConfigTypeInt,
+	"share.record.lock.sweep.interval.ms":    kmsg.ConfigTypeLong,
+	"group.share.partition.max.record.locks": kmsg.ConfigTypeInt,
+	"group.share.max.share.sessions":         kmsg.ConfigTypeInt,
+	"group.share.max.size":                   kmsg.ConfigTypeInt,
 	"state.log.compact.bytes":                   kmsg.ConfigTypeLong,
 	"super.users":                               kmsg.ConfigTypeList,
 	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
@@ -944,7 +944,7 @@ func (c *Cluster) shareSessionTimeoutMs() int32 {
 	return c.brokerConfigInt("group.share.session.timeout.ms", 45000)
 }
 
-func (c *Cluster) shareAcqLockSweepIntervalMs() int32 {
+func (c *Cluster) shareLockSweepIntervalMs() int32 {
 	return c.brokerConfigInt("share.record.lock.sweep.interval.ms", 5000)
 }
 
@@ -960,12 +960,27 @@ func (c *Cluster) shareMaxRecordLocks() int32 {
 	return c.brokerConfigInt("group.share.partition.max.record.locks", 2000)
 }
 
-func (c *Cluster) shareMaxShareSessions() int32 {
+func (c *Cluster) shareMaxSessions() int32 {
 	return c.brokerConfigInt("group.share.max.share.sessions", 2000)
 }
 
 func (c *Cluster) shareMaxGroupSize() int32 {
 	return c.brokerConfigInt("group.share.max.size", 200)
+}
+
+// groupConfig returns a per-group config value, or "" if the group or key
+// is not configured. Must only be called from run() where c.groupConfigs
+// is safe to read.
+func (c *Cluster) groupConfig(group, key string) string {
+	gc := c.groupConfigs[group]
+	if gc == nil {
+		return ""
+	}
+	v := gc[key]
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 // maxMessageBytes returns the max.message.bytes for a topic, falling back to

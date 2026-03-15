@@ -80,7 +80,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 	}
 
-	sg := c.shareGroups.gs[groupID]
+	sg := c.shareGroups.get(groupID)
 	// id2t is safe to read directly: we're in run() and no admin
 	// callbacks can mutate c.data concurrently within this handler.
 	id2t := c.data.id2t
@@ -93,12 +93,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 
 	// Determine isolation level for this group (matching Kafka's
 	// share.isolation.level group config, default READ_UNCOMMITTED).
-	readCommitted := false
-	if gc := c.groupConfigs[groupID]; gc != nil {
-		if v := gc["share.isolation.level"]; v != nil && *v == "read_committed" {
-			readCommitted = true
-		}
-	}
+	readCommitted := c.groupConfig(groupID, "share.isolation.level") == "read_committed"
 
 	sessionKey := shareSessionKey{
 		group:    groupID,
@@ -119,22 +114,19 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 		return i
 	}
-	donep := func(tid uuid, p int32, errCode int16) {
+	donep := func(tid uuid, p int32, errCode int16) *kmsg.ShareFetchResponseTopicPartition {
 		idx := addTopic(tid)
 		sp := kmsg.NewShareFetchResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
 		resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
+		return &resp.Topics[idx].Partitions[len(resp.Topics[idx].Partitions)-1]
 	}
-	ackErrFn := func(tid uuid, p int32, ec int16) {
+	onAck := func(tid uuid, p int32, ec int16) {
 		if ec == 0 {
 			return // success — fetch phase handles the response entry
 		}
-		idx := addTopic(tid)
-		sp := kmsg.NewShareFetchResponseTopicPartition()
-		sp.Partition = p
-		sp.AcknowledgeErrorCode = ec
-		resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
+		donep(tid, p, 0).AcknowledgeErrorCode = ec
 	}
 
 	// Session management.
@@ -160,7 +152,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		if sg != nil {
 			ackTs := ackTopicsFromFetch(req.Topics)
 			sg.mu.Lock()
-			toFire, _ := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, ackErrFn)
+			toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck)
 			ensureAckedParts(resp, ackTs, addTopic)
 			released := sg.releaseRecordsForSessionLocked(memberID, session, id2t, maxDelivery)
 			sg.mu.Unlock()
@@ -189,8 +181,9 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 	}
 
-	// After session validation, sg must be non-nil: epoch 0 creates it
-	// above, and epoch > 0 / watcher paths require a prior epoch 0.
+	// Ensure sg is non-nil: epoch 0 creates it above, but epoch > 0
+	// and watcher paths only looked it up via get() which can return nil
+	// if the manage goroutine quit between session creation and now.
 	if sg == nil {
 		sg = c.shareGroups.getOrCreate(groupID)
 	}
@@ -202,14 +195,14 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		var toFire []*partData
 		if w == nil {
 			ackTs := ackTopicsFromFetch(req.Topics)
-			toFire, _ = sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, ackErrFn)
+			toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck)
 			ensureAckedParts(resp, ackTs, addTopic)
 		}
 		sg.mu.Unlock()
 		for _, pd := range toFire {
 			pd.fireShareWatchers()
 		}
-		session.epoch = max(1, session.epoch+1)
+		session.bumpEpoch()
 		return resp, nil
 	}
 
@@ -243,7 +236,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		targets        []fetchTarget
 		acquiredParts  []acquiredPart
 		includeBrokers bool
-		ackToFire      []*partData
+		toFire         []*partData
 		maxRecordLocks = c.shareMaxRecordLocks()
 	)
 
@@ -255,7 +248,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	var ackTs []ackTopic
 	if w == nil {
 		ackTs = ackTopicsFromFetch(req.Topics)
-		ackToFire, _ = sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, ackErrFn)
+		toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck)
 	}
 
 	// Build target list from session partitions.
@@ -280,13 +273,9 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 				continue
 			}
 			if pd.leader.node != creq.cc.b.node {
-				idx := addTopic(topicID)
-				sp := kmsg.NewShareFetchResponseTopicPartition()
-				sp.Partition = p
-				sp.ErrorCode = kerr.NotLeaderForPartition.Code
+				sp := donep(topicID, p, kerr.NotLeaderForPartition.Code)
 				sp.CurrentLeader.LeaderID = pd.leader.node
 				sp.CurrentLeader.LeaderEpoch = pd.epoch
-				resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
 				includeBrokers = true
 				continue
 			}
@@ -317,7 +306,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		if readCommitted {
 			hwm = tgt.pd.lastStableOffset
 		}
-		acquiredRanges, _ := shp.acquireRecords(
+		acquiredRanges := shp.acquireRecords(
 			tgt.pd,
 			hwm,
 			remaining,
@@ -346,7 +335,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	sg.mu.Unlock()
 
 	// Fire watchers outside the lock for ack-released records.
-	for _, pd := range ackToFire {
+	for _, pd := range toFire {
 		pd.fireShareWatchers()
 	}
 
@@ -359,38 +348,30 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		var rawBytes []byte
 		segIdx, metaIdx, ok, atEnd := ap.pd.searchOffset(firstAcq)
 		if ok && !atEnd {
+		readBatches:
 			for si := segIdx; si < len(ap.pd.segments); si++ {
 				seg := &ap.pd.segments[si]
 				start := 0
 				if si == segIdx {
 					start = metaIdx
 				}
-				done := false
 				for bi := start; bi < len(seg.index); bi++ {
 					m := &seg.index[bi]
 					if m.firstOffset > lastAcq {
-						done = true
-						break
+						break readBatches
 					}
 					raw, err := c.readBatchRaw(ap.pd, si, m)
 					if err != nil {
-						done = true
-						break
+						break readBatches
 					}
 					rawBytes = append(rawBytes, raw...)
-				}
-				if done {
-					break
 				}
 			}
 		}
 
-		idx := addTopic(ap.topicID)
-		sp := kmsg.NewShareFetchResponseTopicPartition()
-		sp.Partition = ap.partition
+		sp := donep(ap.topicID, ap.partition, 0)
 		sp.Records = rawBytes
 		sp.AcquiredRecords = ap.ranges
-		resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
 	}
 
 	// Incremental response filtering (matching Java's
@@ -418,10 +399,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			if _, ok := responded[tpKey{tid, p}]; ok {
 				continue
 			}
-			idx := addTopic(tid)
-			sp := kmsg.NewShareFetchResponseTopicPartition()
-			sp.Partition = p
-			resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
+			donep(tid, p, 0)
 			csp.requiresUpdate = false
 		}
 	}
@@ -474,7 +452,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 	}
 
-	session.epoch = max(1, session.epoch+1)
+	session.bumpEpoch()
 	return resp, nil
 }
 

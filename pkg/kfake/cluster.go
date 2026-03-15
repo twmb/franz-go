@@ -49,7 +49,7 @@ type (
 		telemNextID        int32
 		fetchSessions      fetchSessions
 		groupConfigs       map[string]map[string]*string // group -> config key -> config value
-		shareGroups shareGroups
+		shareGroups        shareGroups
 		compactTicker      *time.Ticker
 		offsetExpireTicker *time.Ticker
 

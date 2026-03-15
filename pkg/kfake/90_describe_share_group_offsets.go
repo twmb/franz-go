@@ -48,7 +48,7 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 			continue
 		}
 
-		sg := c.shareGroups.gs[rg.GroupID]
+		sg := c.shareGroups.get(rg.GroupID)
 		if sg != nil {
 			sg.mu.Lock()
 		}

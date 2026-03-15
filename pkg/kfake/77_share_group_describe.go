@@ -47,7 +47,7 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 			continue
 		}
 
-		sg := c.shareGroups.gs[groupID]
+		sg := c.shareGroups.get(groupID)
 		if sg == nil {
 			rg.ErrorCode = kerr.GroupIDNotFound.Code
 			resp.Groups = append(resp.Groups, rg)
