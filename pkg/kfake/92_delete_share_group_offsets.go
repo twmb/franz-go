@@ -16,8 +16,10 @@ import (
 func init() { regKey(92, 0, 0) }
 
 func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response, error) {
-	req := creq.kreq.(*kmsg.DeleteShareGroupOffsetsRequest)
-	resp := req.ResponseKind().(*kmsg.DeleteShareGroupOffsetsResponse)
+	var (
+		req  = creq.kreq.(*kmsg.DeleteShareGroupOffsetsRequest)
+		resp = req.ResponseKind().(*kmsg.DeleteShareGroupOffsetsResponse)
+	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err

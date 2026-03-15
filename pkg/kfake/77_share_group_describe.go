@@ -1,6 +1,8 @@
 package kfake
 
 import (
+	"maps"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -21,8 +23,10 @@ import (
 func init() { regKey(77, 0, 1) }
 
 func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, error) {
-	req := creq.kreq.(*kmsg.ShareGroupDescribeRequest)
-	resp := req.ResponseKind().(*kmsg.ShareGroupDescribeResponse)
+	var (
+		req  = creq.kreq.(*kmsg.ShareGroupDescribeRequest)
+		resp = req.ResponseKind().(*kmsg.ShareGroupDescribeResponse)
+	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
@@ -59,9 +63,7 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 		// adminCh drain could mutate c.data concurrently with
 		// the manage() closure.
 		id2t := make(map[uuid]string, len(c.data.id2t))
-		for k, v := range c.data.id2t {
-			id2t[k] = v
-		}
+		maps.Copy(id2t, c.data.id2t)
 
 		if !sg.waitControl(func() {
 			if len(sg.members) == 0 {

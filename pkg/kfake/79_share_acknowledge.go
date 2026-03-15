@@ -69,9 +69,9 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 
 	id2t := c.data.id2t
 	maxDelivery := c.shareMaxDeliveryAttempts()
-	maxAckType := int8(3)
+	maxAckType := shareAckReject
 	if req.Version >= 2 && req.IsRenewAck {
-		maxAckType = 4
+		maxAckType = shareAckRenew
 	}
 
 	// Response-building closure (matching produce handler style).
@@ -105,9 +105,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, donep)
 		released := sg.releaseRecordsForSessionLocked(memberID, session, id2t, maxDelivery)
 		sg.mu.Unlock()
-		for _, pd := range toFire {
-			pd.fireShareWatchers()
-		}
+		fireAll(toFire)
 		if released {
 			sg.fireAllShareWatchers()
 		}
@@ -135,10 +133,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 	sg.mu.Lock()
 	toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, donep)
 	sg.mu.Unlock()
-
-	for _, pd := range toFire {
-		pd.fireShareWatchers()
-	}
+	fireAll(toFire)
 
 	session.bumpEpoch()
 	return resp, nil

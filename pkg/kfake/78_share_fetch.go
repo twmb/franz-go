@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"slices"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -86,9 +87,9 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	id2t := c.data.id2t
 	maxDelivery := c.shareMaxDeliveryAttempts()
 
-	maxAckType := int8(3) // v0-v1: Gap, Accept, Release, Reject
+	maxAckType := shareAckReject
 	if req.Version >= 2 && req.IsRenewAck {
-		maxAckType = 4 // v2+ with IsRenewAck: also allow Renew
+		maxAckType = shareAckRenew
 	}
 
 	// Determine isolation level for this group (matching Kafka's
@@ -153,12 +154,10 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			ackTs := ackTopicsFromFetch(req.Topics)
 			sg.mu.Lock()
 			toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck)
-			ensureAckedParts(resp, ackTs, addTopic)
 			released := sg.releaseRecordsForSessionLocked(memberID, session, id2t, maxDelivery)
 			sg.mu.Unlock()
-			for _, pd := range toFire {
-				pd.fireShareWatchers()
-			}
+			ensureAckedParts(resp, ackTs, addTopic)
+			fireAll(toFire)
 			if released {
 				sg.fireAllShareWatchers()
 			}
@@ -191,17 +190,15 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	// KIP-1222: when isRenewAck is set, skip fetch entirely -- only
 	// process acks. Time spent fetching might exceed the renewed lock.
 	if req.Version >= 2 && req.IsRenewAck {
-		sg.mu.Lock()
 		var toFire []*partData
 		if w == nil {
 			ackTs := ackTopicsFromFetch(req.Topics)
+			sg.mu.Lock()
 			toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck)
+			sg.mu.Unlock()
 			ensureAckedParts(resp, ackTs, addTopic)
 		}
-		sg.mu.Unlock()
-		for _, pd := range toFire {
-			pd.fireShareWatchers()
-		}
+		fireAll(toFire)
 		session.bumpEpoch()
 		return resp, nil
 	}
@@ -240,14 +237,19 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		maxRecordLocks = c.shareMaxRecordLocks()
 	)
 
+	// Parse piggybacked acks before taking the lock (pure request
+	// transformation, no shared state).
+	var ackTs []ackTopic
+	if w == nil {
+		ackTs = ackTopicsFromFetch(req.Topics)
+	}
+
 	// Lock the share group's partition state for ack processing and
 	// record acquisition. Batch I/O happens after unlocking.
 	sg.mu.Lock()
 
 	// Process piggybacked acks first (only on initial invocation).
-	var ackTs []ackTopic
-	if w == nil {
-		ackTs = ackTopicsFromFetch(req.Topics)
+	if len(ackTs) > 0 {
 		toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck)
 	}
 
@@ -286,12 +288,8 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	// Rotate targets for fairness (matching Kafka's
 	// PartitionRotateStrategy.ROUND_ROBIN using session epoch).
 	if len(targets) > 1 && session.epoch > 0 {
-		rotateAt := int(session.epoch) % len(targets)
-		if rotateAt > 0 {
-			rotated := make([]fetchTarget, len(targets))
-			copy(rotated, targets[rotateAt:])
-			copy(rotated[len(targets)-rotateAt:], targets[:rotateAt])
-			targets = rotated
+		if rotateAt := int(session.epoch) % len(targets); rotateAt > 0 {
+			targets = slices.Concat(targets[rotateAt:], targets[:rotateAt])
 		}
 	}
 
@@ -335,9 +333,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	sg.mu.Unlock()
 
 	// Fire watchers outside the lock for ack-released records.
-	for _, pd := range toFire {
-		pd.fireShareWatchers()
-	}
+	fireAll(toFire)
 
 	// Read batch bytes outside the lock -- this may do disk I/O in
 	// persistence mode and we don't want to block the sweep timer.
@@ -375,32 +371,32 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	}
 
 	// Incremental response filtering (matching Java's
-	// CachedSharePartition.maybeUpdateResponseData).
-	responded := make(map[tpKey]bool) // value: true if had error
+	// CachedSharePartition.maybeUpdateResponseData). Update session
+	// requiresUpdate from response entries, then emit empty entries
+	// for session partitions that still need update but weren't in
+	// the response.
+	responded := make(map[tpKey]struct{})
 	for _, t := range resp.Topics {
+		ps := session.partitions[t.TopicID]
 		for _, p := range t.Partitions {
-			responded[tpKey{t.TopicID, p.Partition}] = p.ErrorCode != 0
-		}
-	}
-	for key, hadError := range responded {
-		ps := session.partitions[key.tid]
-		if ps == nil {
-			continue
-		}
-		if csp := ps[key.p]; csp != nil {
-			csp.requiresUpdate = hadError
+			responded[tpKey{t.TopicID, p.Partition}] = struct{}{}
+			if ps != nil {
+				if _, ok := ps[p.Partition]; ok {
+					ps[p.Partition] = p.ErrorCode != 0
+				}
+			}
 		}
 	}
 	for tid, parts := range session.partitions {
-		for p, csp := range parts {
-			if csp == nil || !csp.requiresUpdate {
+		for p, needsUpdate := range parts {
+			if !needsUpdate {
 				continue
 			}
 			if _, ok := responded[tpKey{tid, p}]; ok {
 				continue
 			}
 			donep(tid, p, 0)
-			csp.requiresUpdate = false
+			parts[p] = false
 		}
 	}
 
@@ -484,7 +480,19 @@ func ensureAckedParts(resp *kmsg.ShareFetchResponse, ackTs []ackTopic, addTopic 
 // most batchSize offsets. Matches Java's SharePartition.createBatches for
 // BATCH_OPTIMIZED mode (KIP-1206).
 func splitAcquiredRanges(ranges []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, batchSize int32) []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord {
-	var out []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord
+	// Fast path: if no range exceeds batchSize, return as-is.
+	needsSplit := false
+	for _, r := range ranges {
+		if int32(r.LastOffset-r.FirstOffset+1) > batchSize {
+			needsSplit = true
+			break
+		}
+	}
+	if !needsSplit {
+		return ranges
+	}
+
+	out := make([]kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, 0, len(ranges))
 	for _, r := range ranges {
 		count := int32(r.LastOffset - r.FirstOffset + 1)
 		if count <= batchSize {

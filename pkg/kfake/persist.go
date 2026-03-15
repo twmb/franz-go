@@ -2273,7 +2273,7 @@ func (c *Cluster) loadSessionState() error {
 					sp := sg.partitions.mkp(topic, partition, func() *sharePartition {
 						return &sharePartition{
 							spso:    ssp.SPSO,
-							records: make(map[int64]*shareRecord),
+							records: make(map[int64]shareRecord),
 						}
 					})
 					sp.spso = ssp.SPSO
@@ -2289,7 +2289,7 @@ func (c *Cluster) loadSessionState() error {
 								state = shareRecordAvailable
 							}
 						}
-						sp.records[offset] = &shareRecord{
+						sp.records[offset] = shareRecord{
 							state:         state,
 							deliveryCount: ssr.DeliveryCount,
 						}

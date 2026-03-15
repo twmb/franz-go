@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -93,7 +94,7 @@ type (
 	sharePartition struct {
 		spso       int64 // Share-Partition Start Offset: first unfinalized offset
 		acquireEnd int64 // one past highest tracked offset, for in-flight window
-		records    map[int64]*shareRecord
+		records    map[int64]shareRecord
 
 		// scanOffset tracks the next offset to scan for available records.
 		// Advances past acquired/archived records to avoid re-scanning them.
@@ -114,22 +115,15 @@ type (
 	// request's Topics become the session's partitions. On epoch > 0
 	// (incremental), the request's Topics are ADDED to the session and
 	// ForgottenTopicsData are REMOVED (matching Kafka's ShareSession.update).
+	//
+	// partitions maps topicID → partition → requiresUpdate. The bool is
+	// true when the partition must appear in the next incremental response
+	// even if it has no data (new partition, or previous response had an
+	// error). Matching Java's CachedSharePartition.requiresUpdateInResponse.
 	shareSession struct {
 		epoch      int32
-		partitions map[uuid]map[int32]*cachedSharePart // topicID -> partition -> cached state
-		cc         *clientConn                         // owning connection, for disconnect cleanup
-	}
-
-	// cachedSharePart tracks per-partition session state for incremental
-	// response filtering (matching Java's CachedSharePartition).
-	cachedSharePart struct {
-		// requiresUpdate is true when the partition must appear in the next
-		// incremental response even if it has no data. Set on:
-		//   - partition first added to session
-		//   - response included an error (so the "error cleared" transition
-		//     is sent on the next response)
-		// Cleared after the partition appears in a response without errors.
-		requiresUpdate bool
+		partitions map[uuid]map[int32]bool // topicID -> partition -> requiresUpdate
+		cc         *clientConn             // owning connection, for disconnect cleanup
 	}
 
 	// watchShareFetch suspends a ShareFetch request until new records are
@@ -161,23 +155,53 @@ const (
 	shareRecordArchived                             // rejected, pending SPSO advance
 )
 
+// Ack types for ShareFetch/ShareAcknowledge acknowledgement batches.
+// Matches Kafka's AcknowledgeType enum (KIP-932, KIP-1222).
+const (
+	shareAckGap     int8 = iota // skip (mapped to ARCHIVED)
+	shareAckAccept              // accepted
+	shareAckRelease             // release for redelivery
+	shareAckReject              // rejected (mapped to ARCHIVED)
+	shareAckRenew               // renew acquisition lock (v2+, KIP-1222)
+)
+
 const defShareMaxRecords = 500
 
 // release sets the record to available (if under max delivery) or archived.
-// Clears acquiredBy. Returns true if the record became available. Resets
-// sp.scanOffset if the offset is below the current scan position.
-func (sr *shareRecord) release(maxDelivery int32, sp *sharePartition, offset int64) bool {
+// Clears acquiredBy. Returns the modified record and true if the record
+// became available. Resets sp.scanOffset if the offset is below the current
+// scan position.
+func (sr shareRecord) release(maxDelivery int32, sp *sharePartition, offset int64) (shareRecord, bool) {
 	if sr.deliveryCount >= maxDelivery {
 		sr.state = shareRecordArchived
 		sr.acquiredBy = ""
-		return false
+		return sr, false
 	}
 	sr.state = shareRecordAvailable
 	sr.acquiredBy = ""
 	if offset < sp.scanOffset {
 		sp.scanOffset = offset
 	}
-	return true
+	return sr, true
+}
+
+// releaseAcquiredBy releases all records acquired by memberID on this
+// partition. Returns true if any records became available. Advances SPSO
+// after releasing.
+func (sp *sharePartition) releaseAcquiredBy(memberID string, maxDelivery int32) bool {
+	released := false
+	for offset, sr := range sp.records {
+		if sr.state == shareRecordAcquired && sr.acquiredBy == memberID {
+			var ok bool
+			sr, ok = sr.release(maxDelivery, sp, offset)
+			sp.records[offset] = sr
+			if ok {
+				released = true
+			}
+		}
+	}
+	sp.advanceSPSO()
+	return released
 }
 
 func (s *shareSession) bumpEpoch() {
@@ -307,18 +331,18 @@ func (sgs *shareGroups) createSession(
 
 	session := &shareSession{
 		epoch:      0,
-		partitions: make(map[uuid]map[int32]*cachedSharePart),
+		partitions: make(map[uuid]map[int32]bool),
 		cc:         cc,
 	}
 	for i := range req.Topics {
 		rt := &req.Topics[i]
 		ps := session.partitions[rt.TopicID]
 		if ps == nil {
-			ps = make(map[int32]*cachedSharePart)
+			ps = make(map[int32]bool)
 			session.partitions[rt.TopicID] = ps
 		}
 		for j := range rt.Partitions {
-			ps[rt.Partitions[j].Partition] = &cachedSharePart{requiresUpdate: true}
+			ps[rt.Partitions[j].Partition] = true
 		}
 	}
 	sgs.sessions[key] = session
@@ -366,13 +390,13 @@ func (sgs *shareGroups) updateSession(
 		rt := &topics[i]
 		ps := session.partitions[rt.TopicID]
 		if ps == nil {
-			ps = make(map[int32]*cachedSharePart)
+			ps = make(map[int32]bool)
 			session.partitions[rt.TopicID] = ps
 		}
 		for j := range rt.Partitions {
 			p := rt.Partitions[j].Partition
-			if ps[p] == nil {
-				ps[p] = &cachedSharePart{requiresUpdate: true}
+			if _, ok := ps[p]; !ok {
+				ps[p] = true
 			}
 		}
 	}
@@ -455,6 +479,7 @@ func (g *shareGroup) manage() {
 // safe to access from run()).
 func (g *shareGroup) sweepExpiredAcquisitions() {
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	now := time.Now()
 	lockDuration := time.Duration(g.c.shareRecordLockDurationMs()) * time.Millisecond
 	maxDelivery := g.c.shareMaxDeliveryAttempts()
@@ -467,13 +492,15 @@ func (g *shareGroup) sweepExpiredAcquisitions() {
 			if now.Sub(sr.acquireTime) < lockDuration {
 				continue
 			}
-			if sr.release(maxDelivery, sp, offset) {
+			var ok bool
+			sr, ok = sr.release(maxDelivery, sp, offset)
+			sp.records[offset] = sr
+			if ok {
 				released = true
 			}
 		}
 		sp.advanceSPSO()
 	})
-	g.mu.Unlock()
 	if released {
 		select {
 		case g.c.shareGroups.sweepCh <- g:
@@ -654,11 +681,7 @@ func (g *shareGroup) handleRegularHeartbeat(creq *clientReq, req *kmsg.ShareGrou
 func (g *shareGroup) recomputeAssignments() {
 	snap := g.lastTopicMeta
 
-	memberIDs := make([]string, 0, len(g.members))
-	for id := range g.members {
-		memberIDs = append(memberIDs, id)
-	}
-	slices.Sort(memberIDs)
+	memberIDs := slices.Sorted(maps.Keys(g.members))
 
 	// Build topic→subscribers index.
 	topicSubs := make(map[string][]string)
@@ -672,16 +695,6 @@ func (g *shareGroup) recomputeAssignments() {
 	topicForID := make(map[uuid]string)
 	for topic, si := range snap {
 		topicForID[si.id] = topic
-	}
-
-	// Build subscribed set per member.
-	subscribedSet := make(map[string]map[string]struct{})
-	for _, id := range memberIDs {
-		s := make(map[string]struct{})
-		for _, t := range g.members[id].subscribedTopics {
-			s[t] = struct{}{}
-		}
-		subscribedSet[id] = s
 	}
 
 	type partKey struct {
@@ -701,7 +714,7 @@ func (g *shareGroup) recomputeAssignments() {
 				continue // topic deleted
 			}
 			si := snap[topic]
-			if _, ok := subscribedSet[id][topic]; !ok {
+			if _, ok := slices.BinarySearch(m.subscribedTopics, topic); !ok {
 				continue // unsubscribed
 			}
 			var kept []int32
@@ -773,6 +786,11 @@ func (g *shareGroup) recomputeAssignments() {
 
 		// Phase 2b: Revoke overshared partitions. Prefer removing
 		// from the most-overfilled members for better balance.
+		type candidate struct {
+			id    string
+			extra int // current - desired
+		}
+		cands := make([]candidate, 0, nSubs)
 		for p := int32(0); p < si.partitions; p++ {
 			pk := partKey{topic, p}
 			members := partMembers[pk]
@@ -781,11 +799,7 @@ func (g *shareGroup) recomputeAssignments() {
 				continue
 			}
 			// Collect and sort: most overfilled first, then by ID for determinism.
-			type candidate struct {
-				id    string
-				extra int // current - desired
-			}
-			var cands []candidate
+			cands = cands[:0]
 			for id := range members {
 				cands = append(cands, candidate{id, memberTopicCount[id] - desiredCount[id]})
 			}
@@ -946,11 +960,10 @@ func (g *shareGroup) maybeQuit() {
 		return
 	}
 	g.mu.Lock()
-	empty := len(g.partitions) == 0
-	if empty {
+	defer g.mu.Unlock()
+	if len(g.partitions) == 0 {
 		g.quitOnce()
 	}
-	g.mu.Unlock()
 }
 
 // releaseRecordsForMember releases all records acquired by the given member.
@@ -959,8 +972,8 @@ func (g *shareGroup) maybeQuit() {
 // fire share watchers for waiting consumers.
 func (g *shareGroup) releaseRecordsForMember(memberID string) {
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	released := g.releaseRecordsForMemberLocked(memberID, g.c.shareMaxDeliveryAttempts())
-	g.mu.Unlock()
 	if released {
 		select {
 		case g.c.shareGroups.sweepCh <- g:
@@ -969,20 +982,15 @@ func (g *shareGroup) releaseRecordsForMember(memberID string) {
 	}
 }
 
-// releaseRecordsForMemberLocked is the inner loop of releaseRecordsForMember.
-// Returns true if any records were released to AVAILABLE (callers may need
-// to fire share watchers). Must be called with g.mu held.
+// releaseRecordsForMemberLocked releases all records acquired by memberID
+// across all partitions. Returns true if any records became available.
+// Must be called with g.mu held.
 func (g *shareGroup) releaseRecordsForMemberLocked(memberID string, maxDelivery int32) bool {
 	released := false
 	g.partitions.each(func(_ string, _ int32, sp *sharePartition) {
-		for offset, sr := range sp.records {
-			if sr.state == shareRecordAcquired && sr.acquiredBy == memberID {
-				if sr.release(maxDelivery, sp, offset) {
-					released = true
-				}
-			}
+		if sp.releaseAcquiredBy(memberID, maxDelivery) {
+			released = true
 		}
-		sp.advanceSPSO()
 	})
 	return released
 }
@@ -1003,14 +1011,9 @@ func (g *shareGroup) releaseRecordsForSessionLocked(memberID string, session *sh
 			if !ok {
 				continue
 			}
-			for offset, sr := range sp.records {
-				if sr.state == shareRecordAcquired && sr.acquiredBy == memberID {
-					if sr.release(maxDelivery, sp, offset) {
-						released = true
-					}
-				}
+			if sp.releaseAcquiredBy(memberID, maxDelivery) {
+				released = true
 			}
-			sp.advanceSPSO()
 		}
 	}
 	return released
@@ -1032,7 +1035,7 @@ func (g *shareGroup) getSharePartition(topic string, partition int32, pd *partDa
 			spso:       spso,
 			scanOffset: spso,
 			acquireEnd: spso,
-			records:    make(map[int64]*shareRecord),
+			records:    make(map[int64]shareRecord),
 		}
 	})
 	return sp
@@ -1212,6 +1215,7 @@ func (sp *sharePartition) acquireRecords(
 	readCommitted bool,
 ) []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord {
 	var (
+		now      = time.Now()
 		count    int32
 		acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord
 	)
@@ -1300,25 +1304,18 @@ func (sp *sharePartition) acquireRecords(
 			if offset >= curBatch.firstOffset && offset <= curBatch.firstOffset+int64(curBatch.lastOffsetDelta) {
 				if curBatch.inTx && pd.isOffsetAborted(curBatch.firstOffset, curBatch.producerID) {
 					sr := sp.records[offset]
-					if sr == nil {
-						sr = &shareRecord{}
-						sp.records[offset] = sr
-					}
 					sr.state = shareRecordArchived
 					sr.acquiredBy = ""
+					sp.records[offset] = sr
 					continue
 				}
 			}
 		}
 
-		sr := sp.records[offset]
-		if sr == nil {
+		sr, exists := sp.records[offset]
+		if !exists {
 			// No state yet -- new record, available.
-			sr = &shareRecord{
-				state:         shareRecordAvailable,
-				deliveryCount: 0,
-			}
-			sp.records[offset] = sr
+			sr = shareRecord{state: shareRecordAvailable}
 		}
 		if sr.state != shareRecordAvailable {
 			continue
@@ -1329,6 +1326,7 @@ func (sp *sharePartition) acquireRecords(
 		if sr.deliveryCount >= maxDeliveryCount {
 			sr.state = shareRecordArchived
 			sr.acquiredBy = ""
+			sp.records[offset] = sr
 			continue
 		}
 
@@ -1336,7 +1334,8 @@ func (sp *sharePartition) acquireRecords(
 		sr.state = shareRecordAcquired
 		sr.acquiredBy = memberID
 		sr.deliveryCount++
-		sr.acquireTime = time.Now()
+		sr.acquireTime = now
+		sp.records[offset] = sr
 		count++
 		if offset+1 > sp.acquireEnd {
 			sp.acquireEnd = offset + 1
@@ -1395,8 +1394,8 @@ func (sp *sharePartition) validateAcks(memberID string, first, last int64) int16
 		if offset < sp.spso {
 			continue
 		}
-		sr := sp.records[offset]
-		if sr == nil {
+		sr, ok := sp.records[offset]
+		if !ok {
 			return kerr.InvalidRecordState.Code
 		}
 		if sr.state != shareRecordAcquired {
@@ -1433,12 +1432,13 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 	if len(ackTypes) == 1 {
 		uniformType = ackTypes[0]
 	}
+	now := time.Now()
 	for offset := first; offset <= last; offset++ {
 		if offset < sp.spso {
 			continue // already finalized
 		}
-		sr := sp.records[offset]
-		if sr == nil {
+		sr, ok := sp.records[offset]
+		if !ok {
 			continue // compacted or never tracked
 		}
 		if sr.state != shareRecordAcquired {
@@ -1455,20 +1455,21 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 			}
 		}
 		switch ackType {
-		case 0: // Gap: archive (Kafka maps gap to ARCHIVED)
+		case shareAckGap:
 			sr.state = shareRecordArchived
 			sr.acquiredBy = ""
-		case 1: // Accept
+		case shareAckAccept:
 			sr.state = shareRecordAcknowledged
 			sr.acquiredBy = ""
-		case 2: // Release
-			sr.release(maxDeliveryCount, sp, offset)
-		case 3: // Reject
+		case shareAckRelease:
+			sr, _ = sr.release(maxDeliveryCount, sp, offset)
+		case shareAckReject:
 			sr.state = shareRecordArchived
 			sr.acquiredBy = ""
-		case 4: // Renew
-			sr.acquireTime = time.Now()
+		case shareAckRenew:
+			sr.acquireTime = now
 		}
+		sp.records[offset] = sr
 	}
 }
 
@@ -1495,8 +1496,8 @@ func (sp *sharePartition) validateAndProcessAcks(memberID string, batches []ackB
 // (spso < scanOffset), the nil means the offset was compacted away.
 func (sp *sharePartition) advanceSPSO() {
 	for {
-		sr := sp.records[sp.spso]
-		if sr == nil {
+		sr, ok := sp.records[sp.spso]
+		if !ok {
 			// If we've scanned past this offset and there's no
 			// record, it's a compacted gap — skip it.
 			if sp.spso < sp.scanOffset {
@@ -1539,6 +1540,14 @@ func (sgs *shareGroups) cleanupSessionsForConn(cc *clientConn) {
 	}
 }
 
+// fireAll wakes pending ShareFetch watchers on the given partitions.
+// Must only be called from run().
+func fireAll(pds []*partData) {
+	for _, pd := range pds {
+		pd.fireShareWatchers()
+	}
+}
+
 // fireShareWatchers wakes any pending ShareFetch watchers on this
 // partition. Called after acks that may have released records.
 // Must only be called from run().
@@ -1553,16 +1562,12 @@ func (pd *partData) fireShareWatchers() {
 // timer releases records. Must only be called from run().
 func (sg *shareGroup) fireAllShareWatchers() {
 	sg.mu.Lock()
-	var pds []*partData
+	defer sg.mu.Unlock()
 	for topic, ps := range sg.partitions {
 		for p := range ps {
 			if pd, ok := sg.c.data.tps.getp(topic, p); ok {
-				pds = append(pds, pd)
+				pd.fireShareWatchers()
 			}
 		}
-	}
-	sg.mu.Unlock()
-	for _, pd := range pds {
-		pd.fireShareWatchers()
 	}
 }

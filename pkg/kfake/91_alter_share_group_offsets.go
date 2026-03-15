@@ -17,8 +17,10 @@ import (
 func init() { regKey(91, 0, 0) }
 
 func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, error) {
-	req := creq.kreq.(*kmsg.AlterShareGroupOffsetsRequest)
-	resp := req.ResponseKind().(*kmsg.AlterShareGroupOffsetsResponse)
+	var (
+		req  = creq.kreq.(*kmsg.AlterShareGroupOffsetsRequest)
+		resp = req.ResponseKind().(*kmsg.AlterShareGroupOffsetsResponse)
+	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
 		return nil, err
@@ -52,12 +54,13 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 	}
 	topicInfo := make(map[string]alterTopicInfo, len(req.Topics))
 	for _, rt := range req.Topics {
-		info := alterTopicInfo{id: c.data.t2id[rt.Topic], valid: make(map[int32]struct{})}
+		info := alterTopicInfo{id: c.data.t2id[rt.Topic]}
 		// ACL: per-topic READ check (matching Kafka's
 		// AlterShareGroupOffsetsHandler authorization).
 		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
 			info.aclDeny = true
 		} else {
+			info.valid = make(map[int32]struct{})
 			for _, rp := range rt.Partitions {
 				if _, ok := c.data.tps.getp(rt.Topic, rp.Partition); ok {
 					info.valid[rp.Partition] = struct{}{}
@@ -74,6 +77,7 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 		}
 
 		sg.mu.Lock()
+		defer sg.mu.Unlock()
 		for i := range req.Topics {
 			rt := &req.Topics[i]
 			rst := kmsg.NewAlterShareGroupOffsetsResponseTopic()
@@ -104,21 +108,14 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 				}
 
 				// Reset SPSO, scan cursor, end offset, and all record state.
-				sp, ok := sg.partitions.getp(rt.Topic, rp.Partition)
-				if ok {
-					sp.spso = rp.StartOffset
-					sp.scanOffset = rp.StartOffset
-					sp.acquireEnd = rp.StartOffset
-					sp.records = make(map[int64]*shareRecord)
-				} else {
-					sg.partitions.mkp(rt.Topic, rp.Partition, func() *sharePartition {
-						return &sharePartition{
-							spso:       rp.StartOffset,
-							scanOffset: rp.StartOffset,
-							acquireEnd:  rp.StartOffset,
-							records:    make(map[int64]*shareRecord),
-						}
-					})
+				sp := sg.partitions.mkp(rt.Topic, rp.Partition, func() *sharePartition {
+					return new(sharePartition)
+				})
+				*sp = sharePartition{
+					spso:       rp.StartOffset,
+					scanOffset: rp.StartOffset,
+					acquireEnd: rp.StartOffset,
+					records:    make(map[int64]shareRecord),
 				}
 
 				rst.Partitions = append(rst.Partitions, rsp)
@@ -126,7 +123,6 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 
 			resp.Topics = append(resp.Topics, rst)
 		}
-		sg.mu.Unlock()
 	}) {
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
 	}

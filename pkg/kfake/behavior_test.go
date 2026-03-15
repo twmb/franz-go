@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"hash/crc32"
+	"maps"
 	"math/rand"
 	"slices"
 	"strconv"
@@ -972,14 +973,22 @@ func Test848PartitionHandoffNoDuplicates(t *testing.T) {
 	}
 
 	// Produce more and verify c1 consumes from all partitions.
+	// We poll until records from all 6 partitions are seen rather than
+	// consuming a fixed count: consumeN(60) can be satisfied entirely
+	// from c1's original 3 partitions (batch-1 leftovers + batch-2
+	// records) without ever touching the newly-assigned partitions.
 	produceNStrings(t, producer, topic, nRecords)
-	records := consumeN(t, c1, nRecords, 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	partitions := make(map[int32]bool)
-	for _, r := range records {
-		partitions[r.Partition] = true
-	}
-	if len(partitions) != nPartitions {
-		t.Errorf("expected records from all %d partitions, got %d", nPartitions, len(partitions))
+	for len(partitions) < nPartitions {
+		fs := c1.PollFetches(ctx)
+		if ctx.Err() != nil {
+			t.Fatalf("timeout: records from %d/%d partitions: %v", len(partitions), nPartitions, slices.Sorted(maps.Keys(partitions)))
+		}
+		fs.EachRecord(func(r *kgo.Record) {
+			partitions[r.Partition] = true
+		})
 	}
 }
 
