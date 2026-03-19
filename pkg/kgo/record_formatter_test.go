@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -29,6 +30,13 @@ func TestRecordFormatter(t *testing.T) {
 		LeaderEpoch:   -1,
 		Offset:        343,
 	}
+
+	// Give the record share group context so %D and %A produce values.
+	slab := &shareAckSlab{
+		states:   []shareAckState{{deliveryCount: 3, acquisitionLockDeadline: time.Unix(42, 0), source: new(source)}},
+		records0: r,
+	}
+	r.Context = context.WithValue(context.Background(), shareAckKey, slab)
 	p := &FetchPartition{
 		HighWatermark:    999,
 		LastStableOffset: 666,
@@ -120,6 +128,12 @@ func TestRecordFormatter(t *testing.T) {
 			layout: "%a{compression} %a{transactional-bit} %a{control-bit} %a{timestamp-type}",
 			expR:   "lz4 1 1 -1",
 		},
+
+		// %D and %A use the share group context set up on r.
+		{layout: "%D", expR: "3"},
+		{layout: "%D{hex8}", expR: "03"},
+		{layout: "%A", expR: "42000"},
+		{layout: "%A{strftime[%F]}", expR: "1970-01-01"},
 
 		//
 	} {
