@@ -4,28 +4,11 @@ package xsync
 
 import "sync"
 
-// In this file we reimplement sync.Mutex and sync.RWMutex and we rely exclusively on channels to implement the mutex.
-// The reason we do this is that synctest cannot track the state of mutexes, so it considers that a goroutine is not 'durably blocked' when it is waiting on a mutex.
-// The consequence of this is that it is impossible to test code that uses mutexes with synctest. For example, this test hangs forever with synctest
-//
-//	func TestA(t *testing.T) {
-//		synctest.Test(t, func(t *testing.T) {
-//			var l sync.Mutex
-//			for range 10 {
-//				go func() {
-//					l.Lock()
-//					defer l.Unlock()
-//					time.Sleep(1 * time.Second)
-//				}()
-//			}
-//		})
-//	}
-//
-// because time is never moved forward because the synctest runtime considers the goroutines are not durably blocked.
-// Our intent here is to use these mutexes in the code that we run with synctest.
+// Mutex is a channel-based mutex for use with synctest.
+// A goroutine blocked on a sync.Mutex is not "durably
+// blocked" from synctest's perspective, which prevents time
+// from advancing. Channel-based blocking is durably blocked.
 type Mutex struct {
-	// Internally this uses a mutex too, but it's OK since we never sleep while holding the mutex, we simply run
-	// the very very non-blocking operation of initializing the channel.
 	once sync.Once
 	ch   chan struct{}
 }
@@ -61,63 +44,70 @@ func (m *Mutex) Unlock() {
 	}
 }
 
+// RWMutex is a channel-based readers-writer mutex with
+// writer priority.
+//
+// The design uses a "gate token" pattern: a buffered-1
+// channel holds a single token. Readers take the token and
+// immediately return it (passing through the gate). Writers
+// take the token and hold it, which blocks all new readers
+// until the writer unlocks. This provides writer priority
+// naturally — the moment a writer calls Lock, new RLock
+// calls block on the gate.
+//
+// A separate writerSignal channel (buffered 1) is used by
+// the last active reader to wake a waiting writer. A stale
+// signal can accumulate if readers drain while no writer is
+// waiting; Lock drains any stale signal before checking the
+// reader count.
 type RWMutex struct {
 	once         sync.Once
-	w            Mutex
 	mu           Mutex
+	gate         chan struct{}
 	readerCount  int
-	writerWait   bool
-	readerSignal chan struct{}
 	writerSignal chan struct{}
 }
 
 func (rw *RWMutex) init() {
 	rw.once.Do(func() {
-		rw.readerSignal = make(chan struct{})
+		rw.gate = make(chan struct{}, 1)
+		rw.gate <- struct{}{}
 		rw.writerSignal = make(chan struct{}, 1)
 		rw.mu.init()
-		rw.w.init()
 	})
 }
 
 func (rw *RWMutex) RLock() {
 	rw.init()
-	for {
-		rw.mu.Lock()
-		if !rw.writerWait {
-			rw.readerCount++
-			rw.mu.Unlock()
-			return
-		}
-		sig := rw.readerSignal
-		rw.mu.Unlock()
-		<-sig
-	}
+	<-rw.gate
+	rw.mu.Lock()
+	rw.readerCount++
+	rw.mu.Unlock()
+	rw.gate <- struct{}{}
 }
 
 func (rw *RWMutex) TryRLock() bool {
 	rw.init()
-	if !rw.mu.TryLock() {
+	select {
+	case <-rw.gate:
+	default:
 		return false
 	}
-	if rw.writerWait {
-		rw.mu.Unlock()
-		return false
-	}
+	rw.mu.Lock()
 	rw.readerCount++
 	rw.mu.Unlock()
+	rw.gate <- struct{}{}
 	return true
 }
 
 func (rw *RWMutex) RUnlock() {
-	rw.init()
 	rw.mu.Lock()
 	rw.readerCount--
 	if rw.readerCount < 0 {
 		rw.mu.Unlock()
 		panic("sync: RUnlock of unlocked RWMutex")
 	}
-	if rw.readerCount == 0 && rw.writerWait {
+	if rw.readerCount == 0 {
 		select {
 		case rw.writerSignal <- struct{}{}:
 		default:
@@ -128,53 +118,50 @@ func (rw *RWMutex) RUnlock() {
 
 func (rw *RWMutex) Lock() {
 	rw.init()
-	rw.w.Lock()
+	<-rw.gate
+	select {
+	case <-rw.writerSignal:
+	default:
+	}
 	rw.mu.Lock()
-	rw.writerWait = true
-	for rw.readerCount > 0 {
+	if rw.readerCount > 0 {
 		rw.mu.Unlock()
 		<-rw.writerSignal
-		rw.mu.Lock()
+	} else {
+		rw.mu.Unlock()
 	}
-	rw.mu.Unlock()
 }
 
 func (rw *RWMutex) TryLock() bool {
 	rw.init()
-	if !rw.w.TryLock() {
+	select {
+	case <-rw.gate:
+	default:
 		return false
 	}
-	if !rw.mu.TryLock() {
-		rw.w.Unlock()
-		return false
+	select {
+	case <-rw.writerSignal:
+	default:
 	}
+	rw.mu.Lock()
 	if rw.readerCount > 0 {
 		rw.mu.Unlock()
-		rw.w.Unlock()
+		rw.gate <- struct{}{}
 		return false
 	}
-	rw.writerWait = true
 	rw.mu.Unlock()
 	return true
 }
 
 func (rw *RWMutex) Unlock() {
-	rw.init()
-	rw.mu.Lock()
-	if !rw.writerWait {
-		rw.mu.Unlock()
+	select {
+	case rw.gate <- struct{}{}:
+	default:
 		panic("sync: Unlock of unlocked RWMutex")
 	}
-	rw.writerWait = false
-	close(rw.readerSignal)
-	rw.readerSignal = make(chan struct{})
-	rw.mu.Unlock()
-	rw.w.Unlock()
 }
 
-func (rw *RWMutex) RLocker() sync.Locker {
-	return (*rlocker)(rw)
-}
+func (rw *RWMutex) RLocker() sync.Locker { return (*rlocker)(rw) }
 
 type rlocker RWMutex
 

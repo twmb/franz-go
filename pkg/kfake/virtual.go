@@ -13,7 +13,8 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-// delayedConn wraps a net.Conn and adds artificial delays to Read/Write operations
+// delayedConn wraps a net.Conn and adds artificial
+// delays to Read/Write operations.
 type delayedConn struct {
 	net.Conn
 	delay time.Duration
