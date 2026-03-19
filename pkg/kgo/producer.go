@@ -1121,6 +1121,7 @@ func (cl *Client) waitUnknownTopic(
 		tries        int
 		unknownTries int64
 		err          error
+		lastRetryErr error
 		after        <-chan time.Time
 	)
 
@@ -1146,7 +1147,11 @@ func (cl *Client) waitUnknownTopic(
 		case <-cl.ctx.Done():
 			err = ErrClientClosed
 		case <-after:
-			err = ErrRecordTimeout
+			if lastRetryErr != nil {
+				err = fmt.Errorf("%w, last err: %w", ErrRecordTimeout, lastRetryErr)
+			} else {
+				err = ErrRecordTimeout
+			}
 		case err = <-unknown.fatal:
 		case retryableErr, ok := <-unknown.wait:
 			if !ok {
@@ -1154,6 +1159,7 @@ func (cl *Client) waitUnknownTopic(
 				return // metadata was successful!
 			}
 			cl.cfg.logger.Log(LogLevelInfo, "new topic metadata wait failed, retrying wait", "topic", topic, "err", retryableErr)
+			lastRetryErr = retryableErr
 			tries++
 			if int64(tries) > cl.cfg.recordRetries {
 				err = fmt.Errorf("no partitions available after attempting to refresh metadata %d times, last err: %w", tries, retryableErr)
