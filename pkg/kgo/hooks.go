@@ -394,6 +394,20 @@ type HookFetchRecordUnbuffered interface {
 	OnFetchRecordUnbuffered(r *Record, polled bool)
 }
 
+// HookPollRecordsStart is called at the beginning of every PollFetches or
+// PollRecords call, before any records are drained from internal buffers and
+// before any HookFetchRecordUnbuffered hooks fire for the same poll.
+//
+// This hook is useful for instrumenting the poll boundary: for example, a
+// tracing integration that opens a span per record via HookFetchRecordUnbuffered
+// can implement this hook to finish the previous poll's spans before new ones
+// are created.
+type HookPollRecordsStart interface {
+	// OnPollRecordsStart is called at the start of every PollFetches or
+	// PollRecords call.
+	OnPollRecordsStart()
+}
+
 /////////////
 // HELPERS //
 /////////////
@@ -416,7 +430,8 @@ func implementsAnyHook(h Hook) bool {
 		HookProduceRecordPartitioned,
 		HookProduceRecordUnbuffered,
 		HookFetchRecordBuffered,
-		HookFetchRecordUnbuffered:
+		HookFetchRecordUnbuffered,
+		HookPollRecordsStart:
 		return true
 	}
 	return false
