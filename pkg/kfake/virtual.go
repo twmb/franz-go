@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/grpc/test/bufconn"
 )
 
 // delayedConn wraps a net.Conn and adds artificial
@@ -63,7 +62,6 @@ type VirtualListener struct {
 	connections chan net.Conn
 	closed      chan struct{}
 	closeOnce   sync.Once
-	listener    *bufconn.Listener
 }
 
 type VirtualDialer struct {
@@ -112,17 +110,14 @@ func (s *VirtualNetworkingStack) Listen(network, address string) (net.Listener, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var connection = bufconn.Listen(1 << 20)
-
 	if _, ok := s.listeners[port]; ok {
 		return nil, fmt.Errorf("port %d already in use", port)
 	}
 
 	listener := &VirtualListener{
-		listener:    connection,
 		port:        port,
 		stack:       s,
-		connections: make(chan net.Conn, 128),
+		connections: make(chan net.Conn),
 		closed:      make(chan struct{}),
 	}
 
@@ -211,17 +206,6 @@ func (l *VirtualListener) Close() error {
 	l.closeOnce.Do(func() {
 		close(l.closed)
 		l.stack.deregister(l)
-
-		go func() {
-			for {
-				select {
-				case conn := <-l.connections:
-					_ = conn.Close()
-				default:
-					return
-				}
-			}
-		}()
 	})
 	return nil
 }
