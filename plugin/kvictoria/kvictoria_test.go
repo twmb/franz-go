@@ -1,6 +1,11 @@
 package kvictoria
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/twmb/franz-go/pkg/kgo"
+)
 
 func TestMetricsBuildName(t *testing.T) {
 	testCases := []struct {
@@ -85,4 +90,45 @@ func TestMetricsBuildName(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBrokerNodeLabel(t *testing.T) {
+	meta := kgo.BrokerMetadata{NodeID: 1, Host: "localhost", Port: 9092}
+
+	t.Run("without_node_id", func(t *testing.T) {
+		m := &Metrics{
+			cfg:      newCfg("test", BrokerNodeLabel(false)),
+			clientID: "kgo",
+		}
+
+		labels := m.brokerLabels(meta)
+		if _, ok := labels["node_id"]; ok {
+			t.Error("expected no node_id label")
+		}
+		if labels["client_id"] != "kgo" {
+			t.Errorf("expected client_id=kgo, got %s", labels["client_id"])
+		}
+
+		name := m.buildName("read_errors_total", labels)
+		if strings.Contains(name, "node_id") {
+			t.Errorf("expected no node_id in metric name, got %s", name)
+		}
+	})
+
+	t.Run("with_node_id_default", func(t *testing.T) {
+		m := &Metrics{
+			cfg:      newCfg("test"),
+			clientID: "kgo",
+		}
+
+		labels := m.brokerLabels(meta)
+		if labels["node_id"] != "1" {
+			t.Errorf("expected node_id=1, got %s", labels["node_id"])
+		}
+
+		name := m.buildName("read_errors_total", labels)
+		if !strings.Contains(name, `node_id="1"`) {
+			t.Errorf("expected node_id in metric name, got %s", name)
+		}
+	})
 }
