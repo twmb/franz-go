@@ -21,6 +21,7 @@ type cfg struct {
 	histograms       map[Histogram][]float64
 	defBuckets       []float64
 	fetchProduceOpts fetchProduceOpts
+	brokerLabels     []string
 
 	handlerOpts  promhttp.HandlerOpts
 	goCollectors bool
@@ -38,6 +39,7 @@ func newCfg(namespace string, opts ...Opt) cfg {
 			uncompressedBytes: true,
 			labels:            []string{"node_id", "topic"},
 		},
+		brokerLabels: []string{"node_id"},
 	}
 
 	for _, opt := range opts {
@@ -196,7 +198,7 @@ func Histograms(hs ...Histogram) Opt {
 	return HistogramsFromOpts(hos...)
 }
 
-// A Detail is a label that can be set on fetch/produce metrics
+// A Detail is a label that can be set on fetch/produce metrics.
 type Detail uint8
 
 const (
@@ -250,4 +252,20 @@ func FetchAndProduceDetail(details ...Detail) Opt {
 			c.fetchProduceOpts.labels = labels
 		},
 	}
+}
+
+// BrokerNodeLabel controls whether the "node_id" label is included on
+// broker-level connection, read, write, and request metrics. By default
+// node_id is included. Passing false removes the label, aggregating
+// broker-level metrics across all brokers. This is useful for reducing
+// metrics cardinality in environments with many or frequently changing
+// broker IDs.
+func BrokerNodeLabel(include bool) Opt {
+	return opt{func(c *cfg) {
+		if include {
+			c.brokerLabels = []string{"node_id"}
+		} else {
+			c.brokerLabels = nil
+		}
+	}}
 }
