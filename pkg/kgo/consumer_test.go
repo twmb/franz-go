@@ -912,3 +912,67 @@ func TestGroupSimple(t *testing.T) {
 		})
 	}
 }
+
+type pollStartCountHook struct {
+	n atomic.Int64
+}
+
+func (h *pollStartCountHook) OnPollRecordsStart() { h.n.Add(1) }
+
+func TestHookPollRecordsStart(t *testing.T) {
+	t.Parallel()
+
+	const nRecords = 5
+
+	for _, tc := range []struct {
+		name string
+		poll func(*Client, context.Context) Fetches
+	}{
+		{"PollRecords", func(cl *Client, ctx context.Context) Fetches { return cl.PollRecords(ctx, nRecords) }},
+		{"PollFetches", func(cl *Client, ctx context.Context) Fetches { return cl.PollFetches(ctx) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			topic, cleanup := tmpTopicPartitions(t, 1)
+			defer cleanup()
+
+			hook := &pollStartCountHook{}
+			cl, _ := newTestClient(
+				DefaultProduceTopic(topic),
+				UnknownTopicRetries(-1),
+				ConsumePartitions(map[string]map[int32]Offset{
+					topic: {0: NewOffset().At(0)},
+				}),
+				WithHooks(hook),
+			)
+			defer cl.Close()
+
+			recs := make([]*Record, nRecords)
+			for i := range recs {
+				recs[i] = StringRecord(strconv.Itoa(i))
+			}
+			if err := cl.ProduceSync(context.Background(), recs...).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			var pollCalls int64
+			var got int
+			for got < nRecords {
+				if ctx.Err() != nil {
+					t.Fatal("timed out waiting for records")
+				}
+				pollCalls++
+				fs := tc.poll(cl, ctx)
+				got += len(fs.Records())
+			}
+
+			if n := hook.n.Load(); n != pollCalls {
+				t.Fatalf("expected OnPollRecordsStart called %d times (one per poll call), got %d", pollCalls, n)
+			}
+		})
+	}
+}
