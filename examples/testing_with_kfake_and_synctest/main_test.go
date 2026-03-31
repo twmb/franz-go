@@ -12,7 +12,7 @@ import (
 
 func TestProduceMultipleRecordsWithVirtualNetwork(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		stack := kfake.NewVirtualNetworkingStack(0)
+		stack := kfake.NewVirtualNetworkingStack()
 
 		cluster, err := kfake.NewCluster(
 			kfake.NumBrokers(1),
@@ -25,13 +25,11 @@ func TestProduceMultipleRecordsWithVirtualNetwork(t *testing.T) {
 		}
 		defer cluster.Close()
 
-		dialer := stack.Dialer(kfake.DialerOpts{})
-
 		client, err := kgo.NewClient(
 			kgo.SeedBrokers(cluster.ListenAddrs()...),
 			kgo.DefaultProduceTopic("multi-topic"),
 			kgo.ConsumeTopics("multi-topic"),
-			kgo.Dialer(dialer.DialContext),
+			kgo.Dialer(stack.DialContext),
 		)
 		if err != nil {
 			t.Fatalf("NewClient: %v", err)
@@ -62,7 +60,7 @@ func TestProduceMultipleRecordsWithVirtualNetwork(t *testing.T) {
 
 func TestTimeoutWithVirtualNetwork(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		stack := kfake.NewVirtualNetworkingStack(0)
+		stack := kfake.NewVirtualNetworkingStack()
 
 		cluster, err := kfake.NewCluster(
 			kfake.NumBrokers(1),
@@ -75,12 +73,10 @@ func TestTimeoutWithVirtualNetwork(t *testing.T) {
 		}
 		defer cluster.Close()
 
-		dialer := stack.Dialer(kfake.DialerOpts{})
-
 		consumer, err := kgo.NewClient(
 			kgo.SeedBrokers(cluster.ListenAddrs()...),
 			kgo.ConsumeTopics("timeout-topic"),
-			kgo.Dialer(dialer.DialContext),
+			kgo.Dialer(stack.DialContext),
 			kgo.FetchMaxWait(100*time.Millisecond),
 		)
 		if err != nil {
