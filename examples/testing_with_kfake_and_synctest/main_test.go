@@ -12,7 +12,7 @@ import (
 
 func TestProduceMultipleRecordsWithVirtualNetwork(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		stack := kfake.NewVirtualNetworkingStack()
+		stack := kfake.NewVirtualNetwork()
 
 		cluster, err := kfake.NewCluster(
 			kfake.NumBrokers(1),
@@ -60,7 +60,7 @@ func TestProduceMultipleRecordsWithVirtualNetwork(t *testing.T) {
 
 func TestTimeoutWithVirtualNetwork(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		stack := kfake.NewVirtualNetworkingStack()
+		stack := kfake.NewVirtualNetwork()
 
 		cluster, err := kfake.NewCluster(
 			kfake.NumBrokers(1),

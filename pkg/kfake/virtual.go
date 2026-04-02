@@ -9,39 +9,39 @@ import (
 	"sync"
 )
 
-// VirtualNetworkingStack represents an in-memory networking stack.
+// VirtualNetwork represents an in-memory networking stack.
 // You can listen to `localhost:port` and then you can dial to it.
 // When you Dial(), you will be given a pipe and the server will receive
 // the other end of the pipe.
-type VirtualNetworkingStack struct {
+type VirtualNetwork struct {
 	mu        sync.RWMutex
-	listeners map[int]*VirtualListener
+	listeners map[int]*virtualListener
 }
 
-func NewVirtualNetworkingStack() *VirtualNetworkingStack {
-	return &VirtualNetworkingStack{
-		listeners: make(map[int]*VirtualListener),
+func NewVirtualNetwork() *VirtualNetwork {
+	return &VirtualNetwork{
+		listeners: make(map[int]*virtualListener),
 	}
 }
 
-// VirtualListener implements net.Listener using channels
-type VirtualListener struct {
+// virtualListener implements net.Listener using channels
+type virtualListener struct {
 	port        int
-	stack       *VirtualNetworkingStack
+	stack       *VirtualNetwork
 	connections chan net.Conn
 	closed      chan struct{}
 	closeOnce   sync.Once
 }
 
-// FakeAddr implements net.Addr
-type FakeAddr struct {
+// fakeAddr implements net.Addr
+type fakeAddr struct {
 	port int
 }
 
-func (a *FakeAddr) Network() string { return "fake" }
-func (a *FakeAddr) String() string  { return fmt.Sprintf("localhost:%d", a.port) }
+func (a *fakeAddr) Network() string { return "fake" }
+func (a *fakeAddr) String() string  { return fmt.Sprintf("localhost:%d", a.port) }
 
-func (s *VirtualNetworkingStack) Listen(network, address string) (net.Listener, error) {
+func (s *VirtualNetwork) Listen(network, address string) (net.Listener, error) {
 	host, portS, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, fmt.Errorf("failed to split host and port: %w", err)
@@ -60,7 +60,7 @@ func (s *VirtualNetworkingStack) Listen(network, address string) (net.Listener, 
 		return nil, fmt.Errorf("port %d already in use", port)
 	}
 
-	listener := &VirtualListener{
+	listener := &virtualListener{
 		port:        port,
 		stack:       s,
 		connections: make(chan net.Conn),
@@ -71,7 +71,7 @@ func (s *VirtualNetworkingStack) Listen(network, address string) (net.Listener, 
 	return listener, nil
 }
 
-func (s *VirtualNetworkingStack) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (s *VirtualNetwork) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	host, portS, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, fmt.Errorf("failed to split host and port: %w", err)
@@ -113,13 +113,13 @@ func (s *VirtualNetworkingStack) DialContext(ctx context.Context, network, addre
 	}
 }
 
-func (s *VirtualNetworkingStack) deregister(l *VirtualListener) {
+func (s *VirtualNetwork) deregister(l *virtualListener) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.listeners, l.port)
 }
 
-func (l *VirtualListener) Accept() (net.Conn, error) {
+func (l *virtualListener) Accept() (net.Conn, error) {
 	select {
 	case conn := <-l.connections:
 		return conn, nil
@@ -128,7 +128,7 @@ func (l *VirtualListener) Accept() (net.Conn, error) {
 	}
 }
 
-func (l *VirtualListener) Close() error {
+func (l *virtualListener) Close() error {
 	l.closeOnce.Do(func() {
 		close(l.closed)
 		l.stack.deregister(l)
@@ -136,6 +136,6 @@ func (l *VirtualListener) Close() error {
 	return nil
 }
 
-func (l *VirtualListener) Addr() net.Addr {
-	return &FakeAddr{port: l.port}
+func (l *virtualListener) Addr() net.Addr {
+	return &fakeAddr{port: l.port}
 }
