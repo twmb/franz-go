@@ -24,9 +24,18 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 'stable'
+      - name: Find latest Kafka release tag
+        id: kafka-version
+        run: |
+          TAG=$(git ls-remote --tags https://github.com/apache/kafka.git \
+            | sed -n 's|.*refs/tags/\([0-9]*\.[0-9]*\.[0-9]*\)$|\1|p' \
+            | sort -V | tail -1)
+          echo "Using Kafka $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: apache/kafka
+          ref: ${{ steps.kafka-version.outputs.tag }}
           path: kafka
           sparse-checkout: clients/src/main/resources/common/message
       - run: cd generate && go test -run TestValidateDSLAgainstKafkaJSON -v

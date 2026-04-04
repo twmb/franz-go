@@ -100,6 +100,15 @@ type TxnCoordinatorRequest interface {
 	Request
 }
 
+// ShareCoordinatorRequest represents a request that must be issued to a
+// share coordinator.
+type ShareCoordinatorRequest interface {
+	// IsShareCoordinatorRequest is a method attached to requests that
+	// must be issued to share coordinators.
+	IsShareCoordinatorRequest()
+	Request
+}
+
 // Response represents a type that Kafka responds with.
 type Response interface {
 	// Key returns the protocol key for this message kind.

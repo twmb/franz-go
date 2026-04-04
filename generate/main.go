@@ -152,6 +152,7 @@ type (
 		Admin            bool
 		GroupCoordinator bool
 		TxnCoordinator   bool
+		ShareCoordinator bool
 		MaxVersion       int
 		FlexibleAt       int
 		ResponseKind     string // for requests
@@ -490,6 +491,8 @@ func main() {
 					s.WriteGroupCoordinatorFunc(l)
 				case s.TxnCoordinator:
 					s.WriteTxnCoordinatorFunc(l)
+				case s.ShareCoordinator:
+					s.WriteShareCoordinatorFunc(l)
 				}
 				s.WriteResponseKindFunc(l)
 				s.WriteRequestWithFunc(l)

@@ -1,0 +1,103 @@
+// StreamsAssignment contains streams group task assignments.
+StreamsAssignment => not top level, no encoding, flexible v0+
+  // ActiveTasks are active tasks for this client.
+  ActiveTasks: [TaskIDs]
+  // StandbyTasks are standby tasks for this client.
+  StandbyTasks: [TaskIDs]
+  // WarmupTasks are warm-up tasks for this client.
+  WarmupTasks: [TaskIDs]
+
+// StreamsGroupDescribeRequest describes one or more streams groups. This is
+// part of KIP-1071.
+StreamsGroupDescribeRequest => key 89, max version 0, flexible v0+
+  // Groups are the IDs of the groups to describe.
+  Groups: [string]
+  // IncludeAuthorizedOperations controls whether to include authorized
+  // operations.
+  IncludeAuthorizedOperations: bool
+
+// StreamsGroupDescribeResponse is returned from a StreamsGroupDescribeRequest.
+StreamsGroupDescribeResponse =>
+  ThrottleMillis
+  // Groups contains each described group.
+  Groups: [=>]
+    // ErrorCode is the describe error, or 0 if there was no error.
+    ErrorCode: int16
+    // ErrorMessage is the top-level error message, or null if there was no
+    // error.
+    ErrorMessage: nullable-string
+    // Group is the group ID.
+    Group: string
+    // State is the group state.
+    State: string
+    // Epoch is the group epoch.
+    Epoch: int32
+    // AssignmentEpoch is the assignment epoch.
+    AssignmentEpoch: int32
+    // Topology is the topology metadata currently initialized for the streams
+    // application. Null in case of a describe error.
+    Topology: nullable=>
+      // Epoch is the epoch of the currently initialized topology.
+      Epoch: int32
+      // Subtopologies are the subtopologies of the streams application. Null
+      // if the group is uninitialized, source topics are missing, or
+      // incorrectly partitioned.
+      Subtopologies: nullable[=>]
+        // SubtopologyID uniquely identifies the subtopology.
+        SubtopologyID: string
+        // SourceTopics are the topics the subtopology reads from.
+        SourceTopics: [string]
+        // RepartitionSinkTopics are the repartition topics the subtopology
+        // writes to.
+        RepartitionSinkTopics: [string]
+        // StateChangelogTopics are changelog topics associated with this
+        // subtopology.
+        StateChangelogTopics: [TopicInfo]
+        // RepartitionSourceTopics are source topics that are internally
+        // created repartition topics.
+        RepartitionSourceTopics: [TopicInfo]
+    // Members are the members of the group.
+    Members: [=>]
+      // MemberID is the member ID.
+      MemberID: string
+      // MemberEpoch is the member epoch.
+      MemberEpoch: int32
+      // InstanceID is the member instance ID for static membership.
+      InstanceID: nullable-string
+      // RackID is the rack ID.
+      RackID: nullable-string
+      // ClientID is the client ID.
+      ClientID: string
+      // ClientHost is the client host.
+      ClientHost: string
+      // TopologyEpoch is the epoch of the topology on the client.
+      TopologyEpoch: int32
+      // ProcessID is the identity of the streams instance that may have
+      // multiple clients.
+      ProcessID: string
+      // UserEndpoint is the user-defined endpoint for Interactive Queries.
+      // Null if not defined for this client.
+      UserEndpoint: nullable=>
+        // Host is the hostname.
+        Host: string
+        // Port is the port.
+        Port: uint16
+      // ClientTags are used for rack-aware assignment.
+      ClientTags: [=>]
+        // Key is the tag key.
+        Key: string
+        // Value is the tag value.
+        Value: string
+      // TaskOffsets are cumulative changelog offsets for tasks.
+      TaskOffsets: [TaskOffset]
+      // TaskEndOffsets are cumulative changelog end offsets for tasks.
+      TaskEndOffsets: [TaskOffset]
+      // Assignment is the current assignment.
+      Assignment: StreamsAssignment
+      // TargetAssignment is the target assignment.
+      TargetAssignment: StreamsAssignment
+      // IsClassic is true for classic members that have not been upgraded yet.
+      IsClassic: bool
+    // AuthorizedOperations is a 32-bit bitfield representing authorized
+    // operations for the group.
+    AuthorizedOperations: int32(-2147483648)

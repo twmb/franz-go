@@ -1,5 +1,5 @@
 // DeleteShareGroupOffsetsRequest is a request to delete share group offsets.
-DeleteShareGroupOffsetsRequest => key 92, max version 0, flexible v0+
+DeleteShareGroupOffsetsRequest => key 92, max version 0, flexible v0+, group coordinator
   // GroupID is the group identifier.
   GroupID: string
   // Topics are the topics to delete offsets for.

@@ -17,7 +17,10 @@
 // Version 10, introduced in Kafka 4.0, adds TimeoutMillis, allowing you to set
 // a timeout when the ListOffsets request triggers a lookup from remote storage.
 // See KIP-1075.
-ListOffsetsRequest => key 2, max version 10, flexible v6+
+//
+// Version 11, introduced in Kafka 4.2, supports -6 as a timestamp to return
+// the earliest pending upload offset. See KIP-1023.
+ListOffsetsRequest => key 2, max version 11, flexible v6+
   // ReplicaID is the broker ID to get offsets from. As a Kafka client, use -1.
   // The consumer replica ID (-1) causes requests to only succeed if issued
   // against the leader broker.
