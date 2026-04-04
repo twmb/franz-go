@@ -439,9 +439,7 @@ func validateMessage(t *testing.T, msg kafkaMessage, dsl *Struct) {
 		jsonMax--
 	}
 
-	// Error if the DSL claims a version higher than JSON knows.
-	// Log (don't fail) if the DSL is behind — this is expected when
-	// Kafka is ahead and we haven't caught up yet.
+	// Error if versions are mismatched in either direction.
 	if jsonMax >= 0 && dsl.MaxVersion > jsonMax {
 		t.Errorf("max version: DSL %d > JSON %d", dsl.MaxVersion, jsonMax)
 	} else if jsonMax >= 0 && dsl.MaxVersion < jsonMax {
@@ -450,7 +448,7 @@ func validateMessage(t *testing.T, msg kafkaMessage, dsl *Struct) {
 		if len(fields) > 0 {
 			detail += ", new fields: " + strings.Join(fields, ", ")
 		}
-		fmt.Fprintf(os.Stderr, "MISSING  %-45s %s\n", msg.Name, detail)
+		t.Errorf("max version: DSL %d < JSON %d (%s)", dsl.MaxVersion, jsonMax, detail)
 	}
 
 	// Validate flexible version.
