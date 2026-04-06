@@ -167,6 +167,12 @@ It is impossible for a struct definition to be circular.
 If a struct field is an anonymous array,
 the `[=>]` may be followed with a singular name hint.
 This is to aid generators that do want to de-anonymize the anonymous array.
+When no hint is given, the generator auto-singularizes the field name
+(e.g. `Batches` -> `Batch`). The `singularize` function in `parse.go` handles
+common English plural patterns but is not comprehensive. **After adding new
+definition files**, always audit the generated type names for incorrect
+singularization (e.g. `Batche`, `Statu`, `Subtopologie`). If a field name
+does not singularize correctly, add an explicit name hint: `[=>]CorrectName`.
 
 Nullable anonymous structs use `nullable=>`:
 
