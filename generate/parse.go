@@ -208,7 +208,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key, level int) (done bool) {
 				if rename := typ[2:]; rename != "" { // allow rename hint after `=>`; braces were stripped above
 					newS.Name = s.Name + rename
 				} else {
-					newS.Name = strings.TrimSuffix(newS.Name, "s") // make plural singular
+					newS.Name = singularize(newS.Name)
 				}
 			}
 			done = newS.BuildFrom(scanner, key, level+1)
@@ -638,6 +638,24 @@ func Parse(file string, raw []byte) {
 		}
 
 		save()
+	}
+}
+
+// singularize converts a plural field name to singular for struct type naming.
+func singularize(s string) string {
+	switch {
+	case strings.HasSuffix(s, "us"): // already singular (Status, Corpus, etc.)
+		return s
+	case strings.HasSuffix(s, "ches"),
+		strings.HasSuffix(s, "shes"),
+		strings.HasSuffix(s, "sses"),
+		strings.HasSuffix(s, "xes"),
+		strings.HasSuffix(s, "zes"):
+		return strings.TrimSuffix(s, "es")
+	case strings.HasSuffix(s, "ies"):
+		return strings.TrimSuffix(s, "ies") + "y"
+	default:
+		return strings.TrimSuffix(s, "s")
 	}
 }
 
