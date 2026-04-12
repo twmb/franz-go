@@ -58,8 +58,8 @@
 // Note that you MUST use a new [Metrics] instance per client: you'll get a panic if you don't.
 // This is necessary to avoid unexpected behaviour.
 //
-// The node_id label can be removed with the BrokerNodeLabel option to reduce
-// cardinality.
+// The labels on broker-level metrics can be configured with the BrokerLabels
+// option to reduce cardinality or add dimensions like host or rack.
 //
 // Note that seed brokers use broker IDs prefixed with "seed_", with the number
 // corresponding to which seed it is.
@@ -246,8 +246,14 @@ func (m *Metrics) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, partit
 
 func (m *Metrics) brokerLabels(meta kgo.BrokerMetadata) map[string]string {
 	labels := map[string]string{"client_id": m.clientID}
-	if m.cfg.brokerNodeLabel {
+	if m.cfg.brokerLabelSet[BrokerNodeID] {
 		labels["node_id"] = kgo.NodeName(meta.NodeID)
+	}
+	if m.cfg.brokerLabelSet[BrokerHost] {
+		labels["host"] = meta.Host
+	}
+	if m.cfg.brokerLabelSet[BrokerRack] && meta.Rack != nil {
+		labels["rack"] = *meta.Rack
 	}
 	return labels
 }

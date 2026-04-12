@@ -254,18 +254,38 @@ func FetchAndProduceDetail(details ...Detail) Opt {
 	}
 }
 
-// BrokerNodeLabel controls whether the "node_id" label is included on
-// broker-level connection, read, write, and request metrics. By default
-// node_id is included. Passing false removes the label, aggregating
-// broker-level metrics across all brokers. This is useful for reducing
-// metrics cardinality in environments with many or frequently changing
-// broker IDs.
-func BrokerNodeLabel(include bool) Opt {
+// A BrokerLabel is a label that can be set on broker-level metrics.
+type BrokerLabel uint8
+
+const (
+	BrokerNodeID BrokerLabel = iota // Include "node_id" label on broker metrics.
+	BrokerHost                      // Include "host" label on broker metrics.
+	BrokerRack                      // Include "rack" label on broker metrics.
+)
+
+// BrokerLabels configures which labels are included on broker-level
+// connection, read, write, and request metrics, overriding the default
+// of (BrokerNodeID). Calling with no arguments removes all broker-level
+// labels, aggregating metrics across all brokers. This is useful for
+// reducing metrics cardinality in environments with many or frequently
+// changing broker IDs.
+func BrokerLabels(labels ...BrokerLabel) Opt {
 	return opt{func(c *cfg) {
-		if include {
-			c.brokerLabels = []string{"node_id"}
-		} else {
-			c.brokerLabels = nil
+		seen := make(map[BrokerLabel]bool)
+		c.brokerLabels = nil
+		for _, l := range labels {
+			if seen[l] {
+				continue
+			}
+			seen[l] = true
+			switch l {
+			case BrokerNodeID:
+				c.brokerLabels = append(c.brokerLabels, "node_id")
+			case BrokerHost:
+				c.brokerLabels = append(c.brokerLabels, "host")
+			case BrokerRack:
+				c.brokerLabels = append(c.brokerLabels, "rack")
+			}
 		}
 	}}
 }

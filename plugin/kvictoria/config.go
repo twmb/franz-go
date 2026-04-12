@@ -3,13 +3,13 @@ package kvictoria
 type cfg struct {
 	namespace      string
 	subsystem      string
-	brokerNodeLabel bool
+	brokerLabelSet map[BrokerLabel]bool
 }
 
 func newCfg(namespace string, opts ...Opt) cfg {
 	cfg := cfg{
 		namespace:      namespace,
-		brokerNodeLabel: true,
+		brokerLabelSet: map[BrokerLabel]bool{BrokerNodeID: true},
 	}
 
 	for _, opt := range opts {
@@ -33,11 +33,26 @@ func Subsystem(ss string) Opt {
 	return opt{func(c *cfg) { c.subsystem = ss }}
 }
 
-// BrokerNodeLabel controls whether the "node_id" label is included on
-// broker-level and batch metrics. By default node_id is included. Passing
-// false removes the label, aggregating metrics across all brokers. This is
+// A BrokerLabel is a label that can be set on broker-level metrics.
+type BrokerLabel uint8
+
+const (
+	BrokerNodeID BrokerLabel = iota // Include "node_id" label on broker metrics.
+	BrokerHost                      // Include "host" label on broker metrics.
+	BrokerRack                      // Include "rack" label on broker metrics.
+)
+
+// BrokerLabels configures which labels are included on broker-level
+// connection, read, write, request, and batch metrics, overriding the
+// default of (BrokerNodeID). Calling with no arguments removes all
+// broker-level labels, aggregating metrics across all brokers. This is
 // useful for reducing metrics cardinality in environments with many or
 // frequently changing broker IDs.
-func BrokerNodeLabel(include bool) Opt {
-	return opt{func(c *cfg) { c.brokerNodeLabel = include }}
+func BrokerLabels(labels ...BrokerLabel) Opt {
+	return opt{func(c *cfg) {
+		c.brokerLabelSet = make(map[BrokerLabel]bool)
+		for _, l := range labels {
+			c.brokerLabelSet[l] = true
+		}
+	}}
 }

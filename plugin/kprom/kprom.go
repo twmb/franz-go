@@ -19,8 +19,9 @@
 // The above metrics can be expanded considerably with options in this package,
 // allowing timings, uncompressed and compressed bytes, and different labels.
 //
-// The node_id label on broker-level metrics can be removed with the
-// BrokerNodeLabel option to reduce cardinality.
+// The labels on broker-level metrics can be configured with the
+// BrokerLabels option to reduce cardinality or add dimensions like host
+// or rack.
 //
 // This can be used in a client like so:
 //
@@ -437,7 +438,7 @@ func (m *Metrics) OnClientClosed(*kgo.Client) {
 // gathering.
 // This method is meant to be called by the hook system and not by the user
 func (m *Metrics) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
-	labels := m.brokerLabelValues(kgo.NodeName(meta.NodeID))
+	labels := m.brokerLabelValues(meta)
 	if err != nil {
 		m.connConnectErrorsTotal.WithLabelValues(labels...).Inc()
 		return
@@ -449,7 +450,7 @@ func (m *Metrics) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ ne
 // gathering.
 // This method is meant to be called by the hook system and not by the user
 func (m *Metrics) OnBrokerDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
-	m.connDisconnectsTotal.WithLabelValues(m.brokerLabelValues(kgo.NodeName(meta.NodeID))...).Inc()
+	m.connDisconnectsTotal.WithLabelValues(m.brokerLabelValues(meta)...).Inc()
 }
 
 // OnBrokerThrottle implements the HookBrokerThrottle interface for metrics
@@ -457,7 +458,7 @@ func (m *Metrics) OnBrokerDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
 // This method is meant to be called by the hook system and not by the user
 func (m *Metrics) OnBrokerThrottle(meta kgo.BrokerMetadata, throttleInterval time.Duration, _ bool) {
 	if _, ok := m.cfg.histograms[RequestThrottled]; ok {
-		m.requestThrottledSeconds.WithLabelValues(m.brokerLabelValues(kgo.NodeName(meta.NodeID))...).Observe(throttleInterval.Seconds())
+		m.requestThrottledSeconds.WithLabelValues(m.brokerLabelValues(meta)...).Observe(throttleInterval.Seconds())
 	}
 }
 
@@ -510,7 +511,7 @@ func (m *Metrics) OnBrokerWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten i
 // OnBrokerE2E implements the HookBrokerE2E interface for metrics gathering
 // This method is meant to be called by the hook system and not by the user
 func (m *Metrics) OnBrokerE2E(meta kgo.BrokerMetadata, _ int16, e2e kgo.BrokerE2E) {
-	labels := m.brokerLabelValues(kgo.NodeName(meta.NodeID))
+	labels := m.brokerLabelValues(meta)
 	if e2e.WriteErr != nil {
 		m.writeErrorsTotal.WithLabelValues(labels...).Inc()
 		return
@@ -556,11 +557,24 @@ func (m *Metrics) Describe(ch chan<- *prometheus.Desc) {
 	}
 }
 
-func (m *Metrics) brokerLabelValues(nodeId string) []string {
-	if len(m.cfg.brokerLabels) > 0 {
-		return []string{nodeId}
+func (m *Metrics) brokerLabelValues(meta kgo.BrokerMetadata) []string {
+	if len(m.cfg.brokerLabels) == 0 {
+		return nil
 	}
-	return nil
+	values := make([]string, len(m.cfg.brokerLabels))
+	for i, l := range m.cfg.brokerLabels {
+		switch l {
+		case "node_id":
+			values[i] = kgo.NodeName(meta.NodeID)
+		case "host":
+			values[i] = meta.Host
+		case "rack":
+			if meta.Rack != nil {
+				values[i] = *meta.Rack
+			}
+		}
+	}
+	return values
 }
 
 func (m *Metrics) fetchProducerLabels(nodeId, topic string) prometheus.Labels {
