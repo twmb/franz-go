@@ -272,6 +272,18 @@ func (c *consumer) allowRebalance() {
 }
 
 func (c *consumer) waitAndAddRebalance() {
+	c.waitAndAddRebalanceMaybeSignal(true)
+}
+
+// waitAndAddRebalanceSilent is waitAndAddRebalance without the
+// OnPartitionsCallbackBlocked signal. Used by LeaveGroup: the gate guards
+// assignPartitions invalidation rather than a user callback, so signaling
+// "your callback is blocked" would be misleading.
+func (c *consumer) waitAndAddRebalanceSilent() {
+	c.waitAndAddRebalanceMaybeSignal(false)
+}
+
+func (c *consumer) waitAndAddRebalanceMaybeSignal(signal bool) {
 	if !c.cl.cfg.blockRebalanceOnPoll {
 		return
 	}
@@ -280,7 +292,7 @@ func (c *consumer) waitAndAddRebalance() {
 	defer c.pollWaitMu.Unlock()
 	c.pollWaitState += 1 << 32
 	for c.pollWaitState&math.MaxUint32 != 0 {
-		if !blockedCalled {
+		if signal && !blockedCalled {
 			if c.cl.cfg.onBlocked != nil {
 				go c.cl.cfg.onBlocked(c.cl.ctx, c.cl)
 			}

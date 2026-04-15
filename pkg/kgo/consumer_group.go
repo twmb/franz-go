@@ -263,7 +263,7 @@ func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 	}
 
 	go func() {
-		c.waitAndAddRebalance()
+		c.waitAndAddRebalanceSilent()
 		c.mu.Lock() // lock for assign
 		c.assignPartitions(nil, assignInvalidateAll, nil, "invalidating all assignments in LeaveGroup")
 		c.g.leave(ctx)
@@ -333,6 +333,15 @@ func (c *consumer) initGroup() {
 		g.cfg.autocommitDisable = true
 	}
 
+	// Capture whether the user actually registered onAssigned before the
+	// wrapper below replaces it with a non-nil entry-logger. assign() uses
+	// this to decide whether the BlockRebalanceOnPoll gate applies.
+	g.cfg.userHasOnAssign = g.cfg.onAssigned != nil
+
+	// INVARIANT: after this loop, on{Assigned,Revoked,Lost} are all non-nil.
+	// The wrapper unconditionally replaces each callback so we can log entry
+	// even when the user did not provide one. Downstream callers rely on this
+	// and skip nil-checks.
 	for _, logOn := range []struct {
 		name string
 		set  *func(context.Context, *Client, map[string][]int32)
@@ -391,7 +400,7 @@ func (g *groupConsumer) manageFailWait(consecutiveErrors int, err error) (ctxCan
 	// block around the onLost and assigning.
 	g.c.waitAndAddRebalance()
 
-	if errors.Is(err, context.Canceled) && g.cfg.onRevoked != nil {
+	if errors.Is(err, context.Canceled) {
 		// The cooperative consumer does not revoke everything
 		// while rebalancing, meaning if our context is
 		// canceled, we may have uncommitted data. Rather than
@@ -409,9 +418,7 @@ func (g *groupConsumer) manageFailWait(consecutiveErrors int, err error) (ctxCan
 	} else {
 		// Any other error is perceived as a fatal error,
 		// and we go into onLost as appropriate.
-		if g.cfg.onLost != nil {
-			g.cfg.onLost(g.cl.ctx, g.cl, g.nowAssigned.read())
-		}
+		g.cfg.onLost(g.cl.ctx, g.cl, g.nowAssigned.read())
 		g.cfg.hooks.each(func(h Hook) {
 			if h, ok := h.(HookGroupManageError); ok {
 				h.OnGroupManageError(err)
@@ -676,9 +683,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		} else {
 			g.cfg.logger.Log(LogLevelInfo, "cooperative consumer revoking prior assigned partitions because leaving group", "group", g.cfg.group, "revoking", g.nowAssigned.read())
 		}
-		if g.cfg.onRevoked != nil {
-			g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned.read())
-		}
+		g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned.read())
 		g.nowAssigned.store(nil)
 		g.lastAssigned = nil
 
@@ -755,9 +760,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		} else {
 			g.cfg.logger.Log(LogLevelInfo, "calling onRevoke at the end of a session", "group", g.cfg.group, "lost", lost, "stage", stage)
 		}
-		if g.cfg.onRevoked != nil {
-			g.cfg.onRevoked(g.cl.ctx, g.cl, lost)
-		}
+		g.cfg.onRevoked(g.cl.ctx, g.cl, lost)
 	}
 
 	if len(lost) == 0 { // if we lost nothing, do nothing
@@ -839,16 +842,25 @@ func (s *assignRevokeSession) assign(g *groupConsumer, newAssigned map[string][]
 	go func() {
 		defer close(s.assignDone)
 		<-s.prerevokeDone
-		if g.cfg.onAssigned != nil {
-			// We always call on assigned, even if nothing new is
-			// assigned. This allows consumers to know that
-			// assignment is done and do setup logic.
-			//
-			// If configured, we have to block polling.
+		// We always call onAssigned, even if nothing new is assigned.
+		// This allows consumers to know that assignment is done and do
+		// setup logic.
+		//
+		// The BlockRebalanceOnPoll gate exists to prevent a poll loop
+		// from committing offsets across a rebalance for partitions it
+		// no longer owns. Assign only adds partitions, so the user's
+		// in-flight commit cannot reference anything they don't still
+		// own. We therefore gate only when the user registered an
+		// OnPartitionsAssigned callback and needs it serialized with
+		// poll; the entry-log wrapper alone is fine to run concurrent
+		// with poll. If you ever add internal work here that races
+		// with poll (e.g., touching nowAssigned or commit state),
+		// remove this conditional.
+		if g.cfg.userHasOnAssign {
 			g.c.waitAndAddRebalance()
 			defer g.c.unaddRebalance()
-			g.cfg.onAssigned(g.cl.ctx, g.cl, newAssigned)
 		}
+		g.cfg.onAssigned(g.cl.ctx, g.cl, newAssigned)
 	}()
 	return s.assignDone
 }
