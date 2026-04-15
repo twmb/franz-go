@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"syscall"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 )
@@ -55,9 +56,26 @@ func isRetryableBrokerErr(err error) bool {
 	// implements Temporary, so if we test that first, it'll return false
 	// in many cases when we want to return true from os.SyscallError.
 	if se := (*os.SyscallError)(nil); errors.As(err, &se) {
-		// If a dial fails, potentially we could retry if the resolver
-		// had a temporary hiccup, but we will err on the side of this
-		// being a slightly less temporary error.
+		// Non-timeout dial errors are deliberately *not* retryable here.
+		// The carve-out forces every caller that wants dial-error retry
+		// behavior to opt in explicitly, because the right recovery
+		// strategy varies by call site:
+		//
+		//   - Single bad seed bootstrap: should fail fast so the user
+		//     finds out about the typo'd address.
+		//   - cl.broker() unpinned admin: should rotate to a different
+		//     broker via shouldRetryNext, which calls cl.broker()'s
+		//     built-in rotation.
+		//   - Cached controller/coordinator: should clear the cache and
+		//     re-resolve, then retry (handled by failDial).
+		//   - Broker pinned by ID (Broker.RetriableRequest): should retry
+		//     the same broker bounded by retryTimeout (also failDial).
+		//   - Sink (produce) and source (fetch): should refresh metadata
+		//     and remap to the new partition leader (handled at the
+		//     sink/source call sites).
+		//
+		// Returning true here would lump all of these into a generic
+		// retry loop and silently mask the call-site recovery behavior.
 		return !isDialNonTimeoutErr(err)
 	}
 	// EOF can be returned if a broker kills a connection unexpectedly, and
@@ -116,6 +134,32 @@ func isDialNonTimeoutErr(err error) bool {
 func isAnyDialErr(err error) bool {
 	var ne *net.OpError
 	return errors.As(err, &ne) && ne.Op == "dial"
+}
+
+// isPermanentDialErr reports whether a dial error is a hard configuration
+// problem that no amount of retrying will fix. We treat the following as
+// permanent:
+//
+//   - DNS NXDOMAIN: the host genuinely does not exist.
+//   - EACCES / EPERM: local socket permission denied.
+//
+// Everything else dial-shaped (ECONNREFUSED, EHOSTUNREACH, ENETUNREACH,
+// dial timeouts, ...) is considered transient. ECONNREFUSED in particular
+// is the canonical signal that a broker is mid-restart (the listener is
+// closed before the JVM exits, and not yet bound after it starts) and is
+// the most common dial error worth retrying.
+func isPermanentDialErr(err error) bool {
+	if !isAnyDialErr(err) {
+		return false
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return true
+	}
+	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+		return true
+	}
+	return false
 }
 
 func isContextErr(err error) bool {
