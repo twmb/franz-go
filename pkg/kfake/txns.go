@@ -85,6 +85,11 @@ type (
 		offsets [5]int64 // base offsets corresponding to each seq entry, for dup detection
 		at      uint8
 		epoch   int16 // last seen epoch; when epoch changes, seq 0 is accepted
+		// seen is false until the first batch is pushed. While false,
+		// any (epoch, firstSeq) is accepted - matching Apache Kafka's
+		// behavior of accepting the first batch for a PID/epoch with
+		// any sequence number when no producer state exists yet.
+		seen bool
 	}
 )
 
@@ -586,6 +591,25 @@ func (pids *pids) get(id int64, t string, p int32, pd *partData) (*pidinfo, *pid
 	return pidinf, pidinf.windows.mkpDefault(t, p)
 }
 
+// getOrCreateNonTx returns the pidinfo and window for a
+// non-transactional idempotent producer, implicitly creating the
+// pidinfo if it does not already exist. This matches Apache Kafka,
+// which accepts the first produce request for an unknown
+// (PID, epoch) and seeds the producer state on demand.
+func (pids *pids) getOrCreateNonTx(id int64, epoch int16, t string, p int32) (*pidinfo, *pidwindow) {
+	pidinf := pids.ids[id]
+	if pidinf == nil {
+		pidinf = &pidinfo{
+			pids:       pids,
+			id:         id,
+			epoch:      epoch,
+			lastActive: time.Now(),
+		}
+		pids.ids[id] = pidinf
+	}
+	return pidinf, pidinf.windows.mkpDefault(t, p)
+}
+
 func (pids *pids) randomID() int64 {
 	for {
 		id := int64(rand.Uint64()) & math.MaxInt64
@@ -783,18 +807,20 @@ func (s *pidwindow) pushAndValidate(epoch int16, firstSeq, numRecs int32, baseOf
 		return true, false, 0
 	}
 
-	// If epoch changed, client has reset sequences.
-	if epoch != s.epoch {
-		if firstSeq != 0 {
+	// Reset window state on either:
+	//   - first batch ever (!s.seen): accept any (epoch, firstSeq);
+	//     matches Apache Kafka, which accepts the first batch for
+	//     an unknown PID/epoch with any sequence number.
+	//   - epoch change: the client has restarted; firstSeq must be 0.
+	if !s.seen || epoch != s.epoch {
+		if s.seen && firstSeq != 0 {
 			return false, false, 0
 		}
+		next := (int64(firstSeq) + int64(numRecs)) % math.MaxInt32
+		s.seen = true
 		s.epoch = epoch
-		s.at = 0
-		s.seq = [5]int32{}
-		s.offsets = [5]int64{}
-		s.seq[0] = 0
-		s.seq[1] = numRecs
-		s.offsets[0] = baseOffset
+		s.seq = [5]int32{firstSeq, int32(next)}
+		s.offsets = [5]int64{baseOffset}
 		s.at = 1
 		return true, false, 0
 	}

@@ -1730,6 +1730,7 @@ func (c *Cluster) loadSeqWindows(fsys fs, dir string) error {
 			offsets: w.Offsets,
 			at:      w.At,
 			epoch:   w.Epoch,
+			seen:    true,
 		}
 		pidinf.windows.set(w.Topic, w.Part, pw)
 	}

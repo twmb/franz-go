@@ -196,30 +196,30 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				}
 				pidinf, window := c.pids.get(b.ProducerID, rt.Topic, rp.Partition, implicit)
 
-				// Reject non-transactional produce during an
-				// active transaction.
-				if pidinf != nil && pidinf.inTx && !txnal {
-					errCode = kerr.InvalidTxnState.Code
+				// For non-transactional idempotent produce with no
+				// existing producer state, implicitly create it.
+				// Apache Kafka and Redpanda accept the first batch
+				// for an unknown (PID, epoch) with any sequence
+				// number; this seeds producer state on demand.
+				// See twmb/franz-go#1281.
+				if !txnal && pidinf == nil && b.ProducerEpoch != -1 {
+					pidinf, window = c.pids.getOrCreateNonTx(b.ProducerID, b.ProducerEpoch, rt.Topic, rp.Partition)
 				}
 
-				if txnal && window == nil {
+				switch {
+				case pidinf != nil && pidinf.inTx && !txnal:
 					errCode = kerr.InvalidTxnState.Code
-				}
-
-				if errCode == 0 {
-					switch {
-					case window == nil && b.ProducerEpoch != -1:
-						errCode = kerr.InvalidTxnState.Code
-					case window != nil && b.ProducerEpoch < pidinf.epoch:
-						errCode = kerr.InvalidProducerEpoch.Code
-					case window != nil && b.ProducerEpoch > pidinf.epoch:
-						errCode = kerr.InvalidProducerEpoch.Code
-					default:
-						var seqOk bool
-						seqOk, dup, baseOffset = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords, pd.highWatermark)
-						if !seqOk {
-							errCode = kerr.OutOfOrderSequenceNumber.Code
-						}
+				case window == nil && b.ProducerEpoch != -1:
+					// Tx batch on an unregistered partition for
+					// pre-KIP-890 (v<12), or no pidinf at all.
+					errCode = kerr.InvalidTxnState.Code
+				case window != nil && b.ProducerEpoch != pidinf.epoch:
+					errCode = kerr.InvalidProducerEpoch.Code
+				default:
+					var seqOk bool
+					seqOk, dup, baseOffset = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords, pd.highWatermark)
+					if !seqOk {
+						errCode = kerr.OutOfOrderSequenceNumber.Code
 					}
 				}
 				if errCode == 0 && !dup {

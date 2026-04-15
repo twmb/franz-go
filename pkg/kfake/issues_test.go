@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"context"
+	"hash/crc32"
 	"net"
 	"strconv"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 func TestIssue885(t *testing.T) {
@@ -2620,6 +2622,87 @@ func TestDeleteRecordsThenProduce(t *testing.T) {
 		if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestIssue1281 verifies that kfake accepts an idempotent (non-tx)
+// produce request for an unknown PID/epoch with any sequence number,
+// matching Apache Kafka and Redpanda. Before the fix, kfake returned
+// INVALID_TXN_STATE when no producer state existed for the PID.
+func TestIssue1281(t *testing.T) {
+	t.Parallel()
+
+	c, err := NewCluster(NumBrokers(1), SeedTopics(1, "t"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.MaxVersions(kversion.V3_6_0()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	makeBatch := func(pid int64, epoch int16, firstSeq int32) []byte {
+		rec := kmsg.Record{Value: []byte("v")}
+		rec.Length = int32(len(rec.AppendTo(nil)) - 1)
+		batch := kmsg.RecordBatch{
+			Magic:         2,
+			ProducerID:    pid,
+			ProducerEpoch: epoch,
+			FirstSequence: firstSeq,
+			NumRecords:    1,
+			Records:       rec.AppendTo(nil),
+		}
+		raw := batch.AppendTo(nil)
+		batch.Length = int32(len(raw) - 12)
+		raw = batch.AppendTo(nil)
+		batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+		return batch.AppendTo(nil)
+	}
+
+	produce := func(pid int64, epoch int16, firstSeq int32) int16 {
+		t.Helper()
+		req := kmsg.NewProduceRequest()
+		req.Acks = -1
+		req.TimeoutMillis = 5000
+		req.Topics = []kmsg.ProduceRequestTopic{{
+			Topic: "t",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{
+				Partition: 0,
+				Records:   makeBatch(pid, epoch, firstSeq),
+			}},
+		}}
+		resp, err := req.RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatalf("produce: %v", err)
+		}
+		return resp.Topics[0].Partitions[0].ErrorCode
+	}
+
+	// Unknown PID with non-zero firstSeq and non-zero epoch must be
+	// accepted; this seeds producer state on demand.
+	if code := produce(1000, 2, 10); code != 0 {
+		t.Fatalf("expected first batch to be accepted, got %v", kerr.ErrorForCode(code))
+	}
+
+	// A subsequent batch on the seeded state must follow normal
+	// sequence rules: the next firstSeq is 11, and a different value
+	// is rejected as out-of-order.
+	if code := produce(1000, 2, 99); code != kerr.OutOfOrderSequenceNumber.Code {
+		t.Fatalf("expected OutOfOrderSequenceNumber for second batch, got %v", kerr.ErrorForCode(code))
+	}
+	if code := produce(1000, 2, 11); code != 0 {
+		t.Fatalf("expected in-order second batch to be accepted, got %v", kerr.ErrorForCode(code))
+	}
+
+	// A different unknown PID is also accepted with any firstSeq.
+	if code := produce(2000, 0, 42); code != 0 {
+		t.Fatalf("expected new PID batch to be accepted, got %v", kerr.ErrorForCode(code))
 	}
 }
 
