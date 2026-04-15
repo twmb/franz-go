@@ -2752,3 +2752,109 @@ func TestIssue1281(t *testing.T) {
 		t.Fatalf("expected success for correct seq, got: %v", kerr.ErrorForCode(errCode))
 	}
 }
+
+// TestIssue1296 verifies that ClientSoftwareName/Version is sent on every new
+// broker connection, not only the first. Without the fix, the per-broker
+// version cache let kgo skip ApiVersions on subsequent connections, so any
+// non-first connection (e.g. fetch/produce/group when a different typed
+// connection already opened to the same broker) registered as "unknown"
+// software on the broker side. This breaks KIP-714 client-metric matching.
+func TestIssue1296(t *testing.T) {
+	t.Parallel()
+
+	const (
+		topic       = "t1296"
+		softwareNm  = "issue1296-client"
+		softwareVer = "v9.9.9"
+	)
+
+	c, err := NewCluster(NumBrokers(1), SeedTopics(1, topic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	type seen struct {
+		name    string
+		version string
+	}
+	var (
+		mu   sync.Mutex
+		reqs []seen
+	)
+	c.ControlKey(int16(kmsg.ApiVersions), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.ApiVersionsRequest)
+		mu.Lock()
+		reqs = append(reqs, seen{req.ClientSoftwareName, req.ClientSoftwareVersion})
+		mu.Unlock()
+		return nil, nil, false // observe only; let the cluster respond normally
+	})
+
+	// Count broker connections so we can assert that ApiVersions was sent
+	// on every connection (not just the first to each broker).
+	connects := new(atomic.Int32)
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.SoftwareNameAndVersion(softwareNm, softwareVer),
+		kgo.ConsumerGroup("g1296"),
+		kgo.ConsumeTopics(topic),
+		kgo.DefaultProduceTopic(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithHooks(&connCountHook{connects}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	// Produce a record to force a produce connection to the (sole) broker.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Poll fetches to force a fetch connection to the same broker, and to
+	// drive group-coordinator traffic (FindCoordinator on cxnNormal,
+	// JoinGroup/SyncGroup/Heartbeat on cxnGroup).
+	pollCtx, pollCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer pollCancel()
+	for {
+		fs := cl.PollFetches(pollCtx)
+		if pollCtx.Err() != nil {
+			t.Fatal("timed out waiting for records")
+		}
+		if errs := fs.Errors(); len(errs) > 0 {
+			t.Fatalf("poll errors: %v", errs)
+		}
+		if fs.NumRecords() > 0 {
+			break
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Every connection setup sends ApiVersions, and each must carry our
+	// configured software name and version. Reusing the same broker via a
+	// different typed connection (cxnNormal/cxnProduce/cxnFetch/cxnGroup)
+	// must not skip the request -- otherwise the broker registers that
+	// connection as software=unknown and KIP-714 metric matching breaks.
+	gotConnects := int(connects.Load())
+	if len(reqs) != gotConnects {
+		t.Fatalf("ApiVersions sent %d times across %d broker connections; expected one per connection. Reqs: %+v",
+			len(reqs), gotConnects, reqs)
+	}
+	if len(reqs) < 2 {
+		t.Fatalf("expected at least 2 ApiVersions requests across multiple connections, got %d", len(reqs))
+	}
+	for i, r := range reqs {
+		if r.name != softwareNm || r.version != softwareVer {
+			t.Errorf("ApiVersions #%d: got SoftwareName=%q SoftwareVersion=%q; want %q/%q",
+				i, r.name, r.version, softwareNm, softwareVer)
+		}
+	}
+}

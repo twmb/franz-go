@@ -770,20 +770,25 @@ type brokerCxn struct {
 }
 
 func (cxn *brokerCxn) init(isProduceCxn bool, tries int) error {
-	hasVersions := cxn.b.loadVersions() != nil
-	if !hasVersions {
-		if cxn.b.cl.cfg.maxVersions == nil || cxn.b.cl.cfg.maxVersions.HasKey(18) {
-			if err := cxn.requestAPIVersions(tries); err != nil {
-				if !errors.Is(err, ErrClientClosed) && !isRetryableBrokerErr(err) {
-					cxn.cl.cfg.logger.Log(LogLevelError, "unable to request api versions", "broker", logID(cxn.b.meta.NodeID), "err", err)
-				}
-				return err
+	// We always send ApiVersions on every new connection, even if we have
+	// already cached the broker's versions from a previous connection.
+	// ApiVersions is how we advertise our ClientSoftwareName/Version to the
+	// broker for the lifetime of this connection (KIP-714 client metrics
+	// match on these). If we skip it on a reused-broker connection, that
+	// connection registers as "unknown" software on the broker side, and
+	// any broker-side metric subscriptions scoped to our software name
+	// silently miss it. See twmb/franz-go#1296.
+	if cxn.b.cl.cfg.maxVersions == nil || cxn.b.cl.cfg.maxVersions.HasKey(18) {
+		if err := cxn.requestAPIVersions(tries); err != nil {
+			if !errors.Is(err, ErrClientClosed) && !isRetryableBrokerErr(err) {
+				cxn.cl.cfg.logger.Log(LogLevelError, "unable to request api versions", "broker", logID(cxn.b.meta.NodeID), "err", err)
 			}
-		} else {
-			// We have a max versions, and it indicates no support
-			// for ApiVersions. We just store a default empty map.
-			cxn.b.storeVersions(newBrokerVersions(0))
+			return err
 		}
+	} else if cxn.b.loadVersions() == nil {
+		// We have a max versions, and it indicates no support for
+		// ApiVersions. We just store a default empty map (once).
+		cxn.b.storeVersions(newBrokerVersions(0))
 	}
 
 	if err := cxn.sasl(); err != nil {
