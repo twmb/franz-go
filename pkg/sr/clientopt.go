@@ -16,6 +16,17 @@ func (o clientOpt) apply(cl *Client) { o.fn(cl) }
 
 // HTTPClient sets the http client that the schema registry client uses,
 // overriding the default client that speaks plaintext with a timeout of 5s.
+//
+// This client performs no retries of its own beyond iterating through the
+// configured URLs once on transport errors; responses with non-2xx status
+// codes (including 429 and 5xx) are returned as-is. If you want retries,
+// backoff, or jitter, configure them on the *http.Client you pass here by
+// wrapping its Transport. For example, with
+// github.com/hashicorp/go-retryablehttp:
+//
+//	rc := retryablehttp.NewClient()
+//	rc.RetryMax = 5
+//	cl, err := sr.NewClient(sr.HTTPClient(rc.StandardClient()))
 func HTTPClient(httpcl *http.Client) ClientOpt {
 	return clientOpt{func(cl *Client) { cl.httpcl = httpcl }}
 }
