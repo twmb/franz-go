@@ -435,8 +435,8 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 // See the documentation on BlockRebalanceOnPoll for more information.
 func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	cl.cfg.hooks.each(func(h Hook) {
-		if hh, ok := h.(HookPollRecordsStart); ok {
-			hh.OnPollRecordsStart()
+		if hh, ok := h.(HookPollStart); ok {
+			hh.OnPollStart(ctx)
 		}
 	})
 

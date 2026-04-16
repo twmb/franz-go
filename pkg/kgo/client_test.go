@@ -209,12 +209,12 @@ type someHook struct {
 
 type pollStartHook struct{}
 
-func (*pollStartHook) OnPollRecordsStart() {}
+func (*pollStartHook) OnPollStart(_ context.Context) {}
 
-func TestHookPollRecordsStartRecognized(t *testing.T) {
+func TestHookPollStartRecognized(t *testing.T) {
 	h := &pollStartHook{}
 	if !implementsAnyHook(h) {
-		t.Fatal("HookPollRecordsStart implementor not recognized by implementsAnyHook")
+		t.Fatal("HookPollStart implementor not recognized by implementsAnyHook")
 	}
 	hooks, err := processHooks([]Hook{h})
 	if err != nil {

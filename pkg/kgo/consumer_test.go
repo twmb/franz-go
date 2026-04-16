@@ -917,9 +917,9 @@ type pollStartCountHook struct {
 	n atomic.Int64
 }
 
-func (h *pollStartCountHook) OnPollRecordsStart() { h.n.Add(1) }
+func (h *pollStartCountHook) OnPollStart(_ context.Context) { h.n.Add(1) }
 
-func TestHookPollRecordsStart(t *testing.T) {
+func TestHookPollStart(t *testing.T) {
 	t.Parallel()
 
 	const nRecords = 5
@@ -971,7 +971,7 @@ func TestHookPollRecordsStart(t *testing.T) {
 			}
 
 			if n := hook.n.Load(); n != pollCalls {
-				t.Fatalf("expected OnPollRecordsStart called %d times (one per poll call), got %d", pollCalls, n)
+				t.Fatalf("expected OnPollStart called %d times (one per poll call), got %d", pollCalls, n)
 			}
 		})
 	}
