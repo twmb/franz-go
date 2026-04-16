@@ -10,7 +10,7 @@ A complete Apache Kafka client written in Go
 
 [godev]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo
 
-Franz-go is an all-encompassing Apache Kafka client fully written Go. This library aims to provide **every Kafka feature** from
+Franz-go is an all-encompassing Apache Kafka client fully written in Go. This library aims to provide **every Kafka feature** from
 Apache Kafka v0.8.0 onward. It has support for transactions, regex topic consuming, the latest partitioning strategies,
 data loss detection, closest replica fetching, and more. If a client KIP exists, this library aims to support it.
 
@@ -23,17 +23,17 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - Idempotent & transactional producers
 - Simple (legacy) consumer
 - Group consumers with eager (roundrobin, range, sticky) and cooperative (cooperative-sticky) balancers
+- Share group (queue) consumers (KIP-932)
 - All compression types supported: gzip, snappy, lz4, zstd
 - SSL/TLS provided through custom dialer options
 - All SASL mechanisms supported (GSSAPI/Kerberos, PLAIN, SCRAM, and OAUTHBEARER)
 - Low-level admin functionality supported through a simple `Request` function
-- High-level admin package with many helper types to make cluster administration easy.
+- A [high-level admin package][KADMC] with many helper types to make cluster administration easy
 - Utilizes modern & idiomatic Go (support for contexts, variadic configuration options, ...)
 - Highly performant by avoiding channels and goroutines where not necessary
 - Written in pure Go (no wrapper lib for a C library or other bindings)
 - Ability to add detailed log messages or metrics using hooks
 - Plug-in metrics support for prometheus, zap, etc.
-- An [admin client][KADMC] with many helper functions for easy admin tasks
 - A [schema registry client][SRC] and convenience Serde type for encoding and decoding
 
 [KADMC]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kadm
@@ -83,8 +83,8 @@ As an example, your require section in go.mod may look like this:
 
 ```
 require (
-	github.com/twmb/franz-go v1.12.0
-	github.com/twmb/franz-go/pkg/kmsg v1.4.0
+	github.com/twmb/franz-go v1.20.7
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 )
 ```
 
@@ -219,7 +219,7 @@ MaxVersions option for the client if you do so.
 **Note** there exists plug-in packages that allow you to easily add prometheus
 metrics, go-metrics, zap logging, etc. to your client! See the [plugin](./plugin)
 directory for more information! These plugins are provided under dedicated
-modules, e.g. `github.com/twmb/franz-go/plugin/kprom@v1.0.0`.
+modules, e.g. `github.com/twmb/franz-go/plugin/kprom@v1.3.0`.
 
 The franz-go client takes a neutral approach to metrics by providing hooks
 that you can use to plug in your own metrics.
@@ -242,26 +242,12 @@ See [this example](./examples/hooks_and_logging/expansive_prometheus) for an exp
 integrating with prometheus! Alternatively, see [this example](./examples/hooks_and_logging/plugin_prometheus)
 for how to use the plug-in prometheus package!
 
-## Benchmarks
+## Performance
 
-This client is quite fast; it is the fastest and most cpu and memory efficient
-client in Go.
-
-For 100 byte messages,
-
-- This client is 4x faster at producing than confluent-kafka-go, and up to
-  10x-20x faster (at the expense of more memory usage) at consuming.
-
-- This client is 2.5x faster at producing than sarama, and 1.5x faster at
-  consuming.
-
-- This client is 2.4x faster at producing than segment's kafka-go, and anywhere
-  from 2x to 6x faster at consuming.
-
-To check benchmarks yourself, see the [bench](./examples/bench) example. This
-example lets you produce or consume to a cluster and see the byte / record
-rate. The [compare](./examples/bench/compare) subdirectory shows comparison
-code.
+This client is fast, and is consistently among the fastest and most cpu and
+memory efficient Kafka clients in Go. To measure yourself, see the
+[bench](./examples/bench) example; the [compare](./examples/bench/compare)
+subdirectory has code for comparing against other clients.
 
 ## Supported KIPs
 
@@ -348,6 +334,7 @@ generation.
 | [KIP-373](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=93324147) — Users can create delegation tokens for others | 3.3 | Supported |
 | [KIP-380](https://cwiki.apache.org/confluence/display/KAFKA/KIP-380%3A+Detect+outdated+control+requests+and+bounced+brokers+using+broker+generation) — Inter-broker protocol changes | 2.2 | Supported |
 | [KIP-389](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=89070828) — Group max size error | 2.2 | Supported |
+| [KIP-390](https://cwiki.apache.org/confluence/display/KAFKA/KIP-390%3A+Support+Compression+Level) — Configurable compression level | 2.1 | Supported (via `CompressionCodec.WithLevel`) |
 | [KIP-392](https://cwiki.apache.org/confluence/display/KAFKA/KIP-392%3A+Allow+consumers+to+fetch+from+closest+replica) — Closest replica fetching w/ rack | 2.2 | Supported |
 | [KIP-394](https://cwiki.apache.org/confluence/display/KAFKA/KIP-394%3A+Require+member.id+for+initial+join+group+request) — Require member.id for initial join request |  2.2 | Supported |
 | [KIP-396](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=97551484) — Commit offsets manually | 2.4 | Supported |
@@ -362,6 +349,7 @@ generation.
 | [KIP-467](https://cwiki.apache.org/confluence/display/KAFKA/KIP-467%3A+Augment+ProduceResponse+error+messaging+for+specific+culprit+records) — Per-record error codes when producing | 2.4 | Supported (and ignored) |
 | [KIP-480](https://cwiki.apache.org/confluence/display/KAFKA/KIP-480%3A+Sticky+Partitioner) — Sticky partition producing | 2.4 | Supported |
 | [KIP-482](https://cwiki.apache.org/confluence/display/KAFKA/KIP-482%3A+The+Kafka+Protocol+should+Support+Optional+Tagged+Fields) — Tagged fields (KAFKA-8885) | 2.4 | Supported |
+| [KIP-487](https://cwiki.apache.org/confluence/display/KAFKA/KIP-487%3A+Automatic+Topic+Creation+on+Producer) — Client-side auto topic creation control | ? | Supported (via `AllowAutoTopicCreation`) |
 | [KIP-496](https://cwiki.apache.org/confluence/display/KAFKA/KIP-496%3A+Administrative+API+to+delete+consumer+offsets) — OffsetDelete admin command | 2.4 | Supported |
 | [KIP-497](https://cwiki.apache.org/confluence/display/KAFKA/KIP-497%3A+Add+inter-broker+API+to+alter+ISR) — New AlterISR API | 2.7 | Supported |
 | [KIP-498](https://cwiki.apache.org/confluence/display/KAFKA/KIP-498%3A+Add+client-side+configuration+for+maximum+response+size+to+protect+against+OOM) — Max bound on reads | ? | Supported |
@@ -385,6 +373,7 @@ generation.
 | [KIP-590](https://cwiki.apache.org/confluence/display/KAFKA/KIP-590%3A+Redirect+Zookeeper+Mutation+Protocols+to+The+Controller) — Envelope (broker only) | 2.7 | Supported |
 | [KIP-595](https://cwiki.apache.org/confluence/display/KAFKA/KIP-595%3A+A+Raft+Protocol+for+the+Metadata+Quorum) — New APIs for raft protocol | 2.7 | Supported |
 | [KIP-599](https://cwiki.apache.org/confluence/display/KAFKA/KIP-599%3A+Throttle+Create+Topic%2C+Create+Partition+and+Delete+Topic+Operations) — Throttling on create/delete topic/partition | 2.7 | Supported |
+| [KIP-601](https://cwiki.apache.org/confluence/display/KAFKA/KIP-601%3A+Configurable+socket+connection+timeout) — Configurable socket connection timeout | 2.7 | Supported (via dialer) |
 | [KIP-602](https://cwiki.apache.org/confluence/display/KAFKA/KIP-602%3A+Change+default+value+for+client.dns.lookup) — Use all resolved addrs by default | 2.6 | Supported (via dialer) |
 | [KIP-651](https://cwiki.apache.org/confluence/display/KAFKA/KIP-651+-+Support+PEM+format+for+SSL+certificates+and+private+key) — Support PEM | 2.7 | Supported (via dialer) |
 | [KIP-654](https://cwiki.apache.org/confluence/display/KAFKA/KIP-654%3A+Aborted+transaction+with+non-flushed+data+should+throw+a+non-fatal+exception) — Aborted txns with unflushed data is not fatal | 2.7 | Supported (default behavior) |
@@ -409,6 +398,7 @@ generation.
 | [KIP-836](https://cwiki.apache.org/confluence/display/KAFKA/KIP-836%3A+Addition+of+Information+in+DescribeQuorumResponse+about+Voter+Lag) — `DescribeQuorum` voter lag info | 3.3 | Supported |
 | [KIP-841](https://cwiki.apache.org/confluence/display/KAFKA/KIP-841%3A+Fenced+replicas+should+not+be+allowed+to+join+the+ISR+in+KRaft) — `AlterPartition.TopicID` | 3.3 | Supported |
 | [KIP-848](https://cwiki.apache.org/confluence/display/KAFKA/KIP-848%3A+The+Next+Generation+of+the+Consumer+Rebalance+Protocol) — Next gen consumer rebalance protocol | 3.7 | Supported & hidden |
+| [KIP-851](https://cwiki.apache.org/confluence/display/KAFKA/KIP-851%3A+Add+requireStable+flag+into+ListConsumerGroupOffsetsOptions) — `RequireStable` on OffsetFetch | 3.3 | Supported (via `kadm.RequireStable`) |
 | [KIP-853](https://cwiki.apache.org/confluence/display/KAFKA/KIP-853%3A+KRaft+Controller+Membership+Changes) — Add replica directory ID for replica fetchers | 3.9 | Supported |
 | [KIP-858](https://cwiki.apache.org/confluence/display/KAFKA/KIP-858%3A+Handle+JBOD+broker+disk+failure+in+KRaft) — JBOD in KRaft (protocol) | 3.7 | Supported |
 | [KIP-860](https://cwiki.apache.org/confluence/display/KAFKA/KIP-860%3A+Add+client-provided+option+to+guard+against+replication+factor+change+during+partition+reassignments) - Client side AlterPartitionAssignments RF change guard | 4.1 | Supported (kadm v1.17+) |
@@ -418,6 +408,7 @@ generation.
 | [KIP-899](https://cwiki.apache.org/confluence/display/KAFKA/KIP-899%3A+Allow+clients+to+rebootstrap) — Allow clients to rebootstrap | ? | Supported (`UpdateSeedBrokers`) |
 | [KIP-903](https://cwiki.apache.org/confluence/display/KAFKA/KIP-903%3A+Replicas+with+stale+broker+epoch+should+not+be+allowed+to+join+the+ISR) — Stale broker epoch fencing | 3.5 | Supported (proto) |
 | [KIP-919](https://cwiki.apache.org/confluence/display/KAFKA/KIP-919%3A+Allow+AdminClient+to+Talk+Directly+with+the+KRaft+Controller+Quorum+and+add+Controller+Registration) — Admin client to KRaft, Controller registration | 3.7 | Supported |
+| [KIP-932](https://cwiki.apache.org/confluence/display/KAFKA/KIP-932%3A+Queues+for+Kafka) — Share groups (queues) | 4.1 | Supported (via `ShareGroup`) |
 | [KIP-951](https://cwiki.apache.org/confluence/display/KAFKA/KIP-951%3A+Leader+discovery+optimisations+for+the+client) — Leader discovery optimizations | 3.7 | Supported |
 | [KIP-966](https://cwiki.apache.org/confluence/display/KAFKA/KIP-966%3A+Eligible+Leader+Replicas) — Eligible leader replicas (protocol) | 3.7 | Supported |
 | [KIP-994](https://cwiki.apache.org/confluence/display/KAFKA/KIP-994%3A+Minor+Enhancements+to+ListTransactions+and+DescribeTransactions+APIs) — List/Describe transactions enhancements | 3.8 (partial) | Supported |
@@ -432,7 +423,6 @@ generation.
 | [KIP-1076](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1076%3A++Metrics+for+client+applications+KIP-714+extension) — User provided client metrics | 4.0 | Supported |
 | [KIP-1082](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1082%3A+Require+Client-Generated+IDs+over+the+ConsumerGroupHeartbeat+RPC) — ClientID in the next-gen rebalancer | 4.0 | Supported & hidden |
 | [KIP-1102](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1102%3A+Enable+clients+to+rebootstrap+based+on+timeout+or+error+code) — RebootstrapRequired | 4.0 | Supported |
-| [KIP-1106](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1106%3A+Add+duration+based+offset+reset+option+for+consumer+clients) - Reset offset by duration | 4.0 | Skipped, unneeded |
 | [KIP-1139](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1139%3A+Add+support+for+OAuth+jwt-bearer+grant+type) - Oauth JWT bearer grant| 4.0 | Supported |
 | [KIP-1142](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1142%3A+Allow+to+list+non-existent+group+which+has+dynamic+config) - ListConfigResources | 4.1 | Supported (kadm v1.17+) |
 | [KIP-1152](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1152%3A+Add+transactional+ID+pattern+filter+to+ListTransactions+API) - ListTransactions.TransactionalIDPattern | 4.1 | Supported (kadm v1.17+) |
@@ -440,14 +430,16 @@ generation.
 | [KIP-1186](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1186%3A+Update+AddRaftVoterRequest+RPC+to+support+auto-join) — AddRaftVoter AckWhenCommitted | 4.2 | Supported (proto) |
 | [KIP-1228](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1228%3A+Add+Transaction+Version+to+WriteTxnMarkersRequest) — WriteTxnMarkers TransactionVersion | 4.2 | Supported |
 
-Missing from above but included in librdkafka is:
+KIPs intentionally not implemented (with rationale):
 
-- [KIP-85](https://cwiki.apache.org/confluence/display/KAFKA/KIP-85%3A+Dynamic+JAAS+configuration+for+Kafka+clients), which does not seem relevant for franz-go
-- [KIP-92](https://cwiki.apache.org/confluence/display/KAFKA/KIP-92+-+Add+per+partition+lag+metrics+to+KafkaConsumer) for consumer lag metrics, which is better suited for an external system via the admin api
-- [KIP-223](https://cwiki.apache.org/confluence/display/KAFKA/KIP-223+-+Add+per-topic+min+lead+and+per-partition+lead+metrics+to+KafkaConsumer) for more metrics
-- [KIP-235](https://cwiki.apache.org/confluence/display/KAFKA/KIP-235%3A+Add+DNS+alias+support+for+secured+connection), which is confusing but may be implemented via a custom dialer and custom kerberos?
-- [KIP-359](https://cwiki.apache.org/confluence/display/KAFKA/KIP-359%3A+Verify+leader+epoch+in+produce+requests) to verify leader epoch when producing; this is easy to support but actually is not implemented in Kafka yet
-- [KIP-421](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=100829515) for dynamic values in configs; librdkafka mentions it does not support it, and neither does franz-go for the same reason (we do not use a config file)
-- [KIP-436](https://cwiki.apache.org/confluence/display/KAFKA/KIP-436%3A+Add+a+metric+indicating+start+time) is about yet another metric
-- [KIP-517](https://cwiki.apache.org/confluence/display/KAFKA/KIP-517%3A+Add+consumer+metrics+to+observe+user+poll+behavior), more metrics
+- [KIP-85](https://cwiki.apache.org/confluence/display/KAFKA/KIP-85%3A+Dynamic+JAAS+configuration+for+Kafka+clients), dynamic JAAS is a Java-specific auth framework; franz-go configures SASL mechanisms directly via the `SASL()` option
+- [KIP-92](https://cwiki.apache.org/confluence/display/KAFKA/KIP-92+-+Add+per+partition+lag+metrics+to+KafkaConsumer), per-partition consumer lag metrics; franz-go exposes per-batch information via hooks, and `kadm.Lag` handles lag monitoring via the admin API
+- [KIP-223](https://cwiki.apache.org/confluence/display/KAFKA/KIP-223+-+Add+per-topic+min+lead+and+per-partition+lead+metrics+to+KafkaConsumer), another JMX-style consumer metric; covered by hooks
+- [KIP-235](https://cwiki.apache.org/confluence/display/KAFKA/KIP-235%3A+Add+DNS+alias+support+for+secured+connection), DNS alias support for secured connections; users can wire this up via a custom dialer and a custom kerberos SASL mechanism if needed
+- [KIP-359](https://cwiki.apache.org/confluence/display/KAFKA/KIP-359%3A+Verify+leader+epoch+in+produce+requests), adds `CurrentLeaderEpoch` to `ProduceRequest` so brokers reject writes to stale leaders; accepted but never shipped broker-side in any Kafka release
+- [KIP-421](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=100829515), variable substitution in config files; N/A, franz-go has no config file (same reason librdkafka skips it)
+- [KIP-436](https://cwiki.apache.org/confluence/display/KAFKA/KIP-436%3A+Add+a+metric+indicating+start+time), start-time metric; covered by hooks
+- [KIP-517](https://cwiki.apache.org/confluence/display/KAFKA/KIP-517%3A+Add+consumer+metrics+to+observe+user+poll+behavior), more consumer poll-behavior metrics; covered by hooks
 - [KIP-881](https://cwiki.apache.org/confluence/display/KAFKA/KIP-881%3A+Rack-aware+Partition+Assignment+for+Kafka+Consumers), rack aware rebalancing: probably useful, but the implementation is not clear, and the motivation is confusing with follower fetching and whether to consider replicas while rebalancing
+- [KIP-896](https://cwiki.apache.org/confluence/display/KAFKA/KIP-896%3A+Remove+old+client+protocol+API+versions+in+Kafka+4.0), which removes old client protocol API versions in Kafka 4.0; not relevant to clients, as clients do not control broker-supported protocol versions
+- [KIP-1106](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1106%3A+Add+duration+based+offset+reset+option+for+consumer+clients), for a duration-based offset reset option; not relevant, franz-go already does exact offset recovery via `OffsetForLeaderEpoch` for data loss and via `AfterMilli(lastConsumedTime)` on `OffsetOutOfRange`, picking up precisely where the consumer left off rather than approximating with a duration
