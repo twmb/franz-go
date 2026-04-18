@@ -25,6 +25,12 @@ jobs:
         with:
           go-version: 'stable'
       - run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+      # kfake library code is constrained to the published franz-go dep (the
+      # test-kfake job verifies that with `go test` against the pinned
+      # version). kfake's *test* files legitimately exercise HEAD kgo APIs
+      # (Ack, ShareGroup, FlushAcks); golangci-lint typechecks tests too,
+      # so we need a workspace to resolve those.
+      - run: go work init . pkg/kadm pkg/kfake pkg/kmsg pkg/sr pkg/sasl/kerberos
       - run: ./lint.sh
 
   test-kfake:
@@ -117,7 +123,9 @@ jobs:
                 KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
                 KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
                 KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-                KAFKA_GROUP_COORDINATOR_REBALANCE_PROTOCOLS: classic,consumer
+                KAFKA_GROUP_COORDINATOR_REBALANCE_PROTOCOLS: classic,consumer,share
+                KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+                KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
                 KAFKA_SASL_ENABLED_MECHANISMS: SCRAM-SHA-256
                 KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/jaas.conf"
               volumes:
