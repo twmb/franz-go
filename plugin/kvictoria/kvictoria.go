@@ -252,8 +252,12 @@ func (m *Metrics) brokerLabels(meta kgo.BrokerMetadata) map[string]string {
 	if m.cfg.brokerLabelSet[BrokerHost] {
 		labels["host"] = meta.Host
 	}
-	if m.cfg.brokerLabelSet[BrokerRack] && meta.Rack != nil {
-		labels["rack"] = *meta.Rack
+	if m.cfg.brokerLabelSet[BrokerRack] {
+		rack := ""
+		if meta.Rack != nil {
+			rack = *meta.Rack
+		}
+		labels["rack"] = rack
 	}
 	return labels
 }
