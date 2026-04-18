@@ -14,7 +14,8 @@
 #   --pprof ADDR           Enable pprof on server (e.g., :6060)
 #   --data-dir DIR         Persistence directory for kfake server
 #   --restart SECS         Kill and restart server after SECS seconds (requires --data-dir)
-#   --timeout DURATION     Test timeout (default: 300s, 600s with --race)
+#   --timeout DURATION     Test timeout (default: 180s, 450s with --race)
+#   --keep-logs            Keep per-iteration logs (client_N.log, server_N.log)
 #   -k, --kill             Kill processes on ports 9092-9094 and exit
 #   --clean                Kill servers and remove /tmp/kfake_test_logs
 #   -h, --help             Show this help
@@ -30,6 +31,7 @@ PPROF_ADDR=""
 DATA_DIR=""
 CUSTOM_TIMEOUT=""
 RESTART_DELAY=""
+KEEP_LOGS=""
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 KFAKE_DIR="$SCRIPT_DIR"
@@ -87,6 +89,10 @@ while [[ $# -gt 0 ]]; do
             CUSTOM_TIMEOUT="$2"
             shift 2
             ;;
+        --keep-logs)
+            KEEP_LOGS=1
+            shift
+            ;;
         -k|--kill)
             echo "Killing processes on ports 9092, 9093, 9094..."
             for port in 9092 9093 9094; do
@@ -130,7 +136,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --pprof ADDR           Enable pprof on server (e.g., :6060)"
             echo "  --data-dir DIR         Persistence directory for kfake server"
             echo "  --restart SECS         Kill and restart server after SECS seconds"
-            echo "  --timeout DURATION     Test timeout (default: 300s, 600s with --race)"
+            echo "  --timeout DURATION     Test timeout (default: 180s, 450s with --race)"
+            echo "  --keep-logs            Keep per-iteration logs (client_N.log, server_N.log)"
             echo "  -k, --kill             Kill processes on ports 9092-9094 and exit"
             echo "  --clean                Kill servers and remove /tmp/kfake_test_logs"
             echo "  -h, --help             Show this help"
@@ -187,7 +194,7 @@ port_in_use() {
 if [ -n "$CUSTOM_TIMEOUT" ]; then
     TIMEOUT="$CUSTOM_TIMEOUT"
 elif [ -n "$RACE" ]; then
-    TIMEOUT="300s"
+    TIMEOUT="450s"
 else
     TIMEOUT="180s"
 fi
@@ -321,6 +328,7 @@ echo "  Pprof: ${PPROF_ADDR:-disabled}"
 echo "  Data dir: ${DATA_DIR:-disabled}"
 echo "  Restart: ${RESTART_DELAY:-disabled}${RESTART_DELAY:+s}"
 echo "  Timeout: $TIMEOUT"
+echo "  Keep logs: ${KEEP_LOGS:-disabled}"
 echo "  Logs: $LOG_DIR"
 echo ""
 
@@ -348,6 +356,11 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     fi
 
     if [ $TEST_EXIT -ne 0 ]; then
+        if [ -n "$KEEP_LOGS" ]; then
+            cp "$CLIENT_LOG_FILE" "$LOG_DIR/client_${i}.log"
+            cp "$SERVER_LOG" "$LOG_DIR/server_${i}.log"
+            echo "Saved logs: client_${i}.log, server_${i}.log"
+        fi
         echo "FAILED on run $i"
         echo "Client log: $CLIENT_LOG_FILE"
         echo "Server log: $SERVER_LOG"
@@ -360,6 +373,11 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         echo "Kill manually when done: kill $SERVER_PID"
         SERVER_PID=""  # Clear so EXIT trap doesn't kill it
         exit 1
+    fi
+
+    if [ -n "$KEEP_LOGS" ]; then
+        cp "$CLIENT_LOG_FILE" "$LOG_DIR/client_${i}.log"
+        cp "$SERVER_LOG" "$LOG_DIR/server_${i}.log"
     fi
 
     stop_server
