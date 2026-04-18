@@ -148,6 +148,10 @@ type cfg struct {
 	// CONSUMER SECTION //
 	//////////////////////
 
+	// maxWait holds the user-configured FetchMaxWait in milliseconds.
+	// math.MinInt32 is a sigil meaning "unset": validate replaces it with
+	// the default for the current mode (500ms for share groups, 5s
+	// otherwise).
 	maxWait        int32
 	minBytes       int32
 	maxBytes       lazyI32
@@ -178,10 +182,14 @@ type cfg struct {
 	// CONSUMER GROUP SECTION //
 	////////////////////////////
 
-	group      string          // group we are in
-	instanceID *string         // optional group instance ID
-	balancers  []GroupBalancer // balancers we can use
-	protocol   string          // "consumer" by default, expected to never be overridden
+	group                 string // group we are in
+	shareGroup            string // share group we are in
+	shareMaxRecords       int32  // MaxRecords and BatchSize for ShareFetch (KIP-1206)
+	shareMaxRecordsStrict bool   // if true, ShareAcquireMode=1 (record-limit) per KIP-1206
+	shareAckCallback      func(*Client, ShareAckResults)
+	instanceID            *string         // optional group instance ID
+	balancers             []GroupBalancer // balancers we can use
+	protocol              string          // "consumer" by default, expected to never be overridden
 
 	sessionTimeout    time.Duration
 	rebalanceTimeout  time.Duration
@@ -209,6 +217,14 @@ type cfg struct {
 func (cfg *cfg) validate() error {
 	if len(cfg.seedBrokers) == 0 {
 		return errors.New("config erroneously has no seed brokers")
+	}
+
+	if cfg.maxWait == math.MinInt32 {
+		if cfg.shareGroup != "" {
+			cfg.maxWait = 500
+		} else {
+			cfg.maxWait = 5000
+		}
 	}
 
 	// We clamp maxPartBytes to maxBytes because some fake Kafka endpoints
@@ -251,6 +267,7 @@ func (cfg *cfg) validate() error {
 		{name: "transactional id", sp: &cfg.txnID, allowed: 16382},
 
 		{name: "rack", s: cfg.rack, allowed: 512},
+		{name: "share group", s: cfg.shareGroup, allowed: 16382},
 	} {
 		s := limit.s
 		if limit.sp != nil && *limit.sp != nil {
@@ -295,8 +312,8 @@ func (cfg *cfg) validate() error {
 		{v: int64(cfg.maxBrokerWriteBytes), allowed: int64(cfg.maxRecordBatchBytes), badcmp: i64lt, fmt: "max broker write bytes %v is erroneously less than max record batch bytes %v"},
 		{v: int64(cfg.maxBrokerReadBytes), allowed: int64(cfg.maxBytes), badcmp: i64lt, fmt: "max broker read bytes %v is erroneously less than max fetch bytes %v"},
 
-		// 0 <= allowed concurrency
-		{name: "max concurrent fetches", v: int64(cfg.maxConcurrentFetches), allowed: 0, badcmp: i64lt},
+		// -1 <= allowed concurrency (-1 is unbounded)
+		{name: "max concurrent fetches", v: int64(cfg.maxConcurrentFetches), allowed: -1, badcmp: i64lt},
 
 		// 100ms <= request timeout overhead <= 15m
 		{name: "request timeout max overhead", v: int64(cfg.requestTimeoutOverhead), allowed: int64(15 * time.Minute), badcmp: i64gt, durs: true},
@@ -373,6 +390,31 @@ func (cfg *cfg) validate() error {
 		}
 	}
 
+	if len(cfg.shareGroup) > 0 {
+		if len(cfg.group) > 0 {
+			return errors.New("cannot use both ConsumerGroup and ShareGroup")
+		}
+		if len(cfg.partitions) != 0 {
+			return errors.New("invalid direct-partition consuming option when consuming as a share group")
+		}
+		if cfg.autocommitGreedy || cfg.autocommitMarks || cfg.autocommitDisable || cfg.commitCallback != nil {
+			return errors.New("autocommit options are not applicable to share groups")
+		}
+		if cfg.onLost != nil || cfg.onRevoked != nil || cfg.onAssigned != nil {
+			return errors.New("partition lifecycle callbacks are not supported with share groups")
+		}
+		if cfg.shareMaxRecords < -1 || cfg.shareMaxRecords == 0 {
+			return errors.New("ShareMaxRecords must be positive")
+		}
+		// In record-limit mode (ShareMaxRecordsStrict), restrict to
+		// a single broker per poll round to respect the record limit.
+		if cfg.shareMaxRecordsStrict && cfg.maxConcurrentFetches == -1 {
+			cfg.maxConcurrentFetches = 0
+		}
+	} else if cfg.shareMaxRecords != -1 || cfg.shareMaxRecordsStrict || cfg.shareAckCallback != nil {
+		return errors.New("ShareMaxRecords, ShareMaxRecordsStrict, and ShareAckCallback only apply when using ShareGroup")
+	}
+
 	if cfg.regex {
 		if len(cfg.partitions) != 0 {
 			return errors.New("invalid direct-partition consuming option when consuming as regex")
@@ -412,10 +454,10 @@ func (cfg *cfg) validate() error {
 	if cfg.autocommitGreedy && cfg.autocommitMarks {
 		return errors.New("cannot enable both greedy autocommitting and marked autocommitting")
 	}
-	if (cfg.autocommitGreedy || cfg.autocommitDisable || cfg.autocommitMarks || cfg.commitCallback != nil) && len(cfg.group) == 0 {
+	if (cfg.autocommitGreedy || cfg.autocommitDisable || cfg.autocommitMarks || cfg.commitCallback != nil) && len(cfg.group) == 0 && len(cfg.shareGroup) == 0 {
 		return errors.New("invalid autocommit options specified when a group was not specified")
 	}
-	if (cfg.onLost != nil || cfg.onRevoked != nil || cfg.onAssigned != nil) && len(cfg.group) == 0 {
+	if (cfg.onLost != nil || cfg.onRevoked != nil || cfg.onAssigned != nil) && len(cfg.group) == 0 && len(cfg.shareGroup) == 0 {
 		return errors.New("invalid group partition assigned/revoked/lost functions set when a group was not specified")
 	}
 
@@ -569,7 +611,7 @@ func defaultCfg() cfg {
 		// consumer //
 		//////////////
 
-		maxWait:        5000,
+		maxWait:        math.MinInt32, // sigil: resolved by validate based on shareGroup
 		minBytes:       1,
 		maxBytes:       50 << 20,
 		maxPartBytes:   1 << 20,
@@ -577,7 +619,7 @@ func defaultCfg() cfg {
 		resetOffset:    NewOffset().AtStart(),
 		isolationLevel: 0,
 
-		maxConcurrentFetches: 0, // unbounded default
+		maxConcurrentFetches: -1, // unbounded default
 
 		recheckPreferredReplicaInterval: 30 * time.Minute,
 
@@ -595,6 +637,8 @@ func defaultCfg() cfg {
 		heartbeatInterval: 3000 * time.Millisecond,
 
 		autocommitInterval: 5 * time.Second,
+
+		shareMaxRecords: -1, // sigil: not set, ShareFetch sends 500
 	}
 }
 
@@ -1302,9 +1346,13 @@ func TransactionTimeout(timeout time.Duration) ProducerOpt {
 
 // FetchMaxWait sets the maximum amount of time a broker will wait for a
 // fetch response to hit the minimum number of required bytes before returning,
-// overriding the default 5s.
+// overriding the default 5s (or 500ms when [ShareGroup] is set).
 //
 // This corresponds to the Java fetch.max.wait.ms setting.
+//
+// For share consumers, values above 500ms are not recommended: while a
+// ShareFetch is in flight, no acks can be sent to the broker, so a long
+// MaxWait stalls ack delivery for that entire window.
 func FetchMaxWait(wait time.Duration) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxWait = int32(wait.Milliseconds()) }}
 }
@@ -1370,8 +1418,9 @@ func FetchMaxPartitionBytes(b int32) ConsumerOpt {
 // broker that has new data. For high throughput topics, or if the allowed
 // concurrent fetches is large enough, this should not be a concern.
 //
-// A value of 0 implies the allowed concurrency is unbounded and will be
-// limited only by the number of brokers in the cluster.
+// Negative values imply unlimited concurrent fetches (bounded by the number of
+// brokers in the cluster). A value of 0 means that a single fetch is allowed
+// ONLY when you poll - there is no fetch buffering.
 func MaxConcurrentFetches(n int) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxConcurrentFetches = n }}
 }
@@ -1670,6 +1719,59 @@ func RecheckPreferredReplicaInterval(interval time.Duration) ConsumerOpt {
 // waiting for an autocommit).
 func ConsumerGroup(group string) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.group = group }}
+}
+
+// ShareGroup sets the share group for the client to join and consume in.
+// Share groups (KIP-932) provide queue-like semantics: the broker controls
+// record delivery and offset management.
+//
+// This is mutually exclusive with ConsumerGroup and ConsumePartitions.
+//
+// For existing topics to be consumable via a share group, the group-level
+// configuration share.auto.offset.reset must be set using
+// IncrementalAlterConfigs with resource type GROUP. Without this, share
+// groups default to "latest" and only records produced after the group
+// begins consuming are delivered.
+func ShareGroup(group string) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.shareGroup = group }}
+}
+
+// ShareMaxRecords sets the MaxRecords and BatchSize fields in ShareFetch
+// requests, overriding the default of 500.
+//
+// This option only applies when using [ShareGroup].
+func ShareMaxRecords(n int32) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.shareMaxRecords = n }}
+}
+
+// ShareMaxRecordsStrict opts into strict record-count limiting for share
+// fetch requests. By default, the broker may return more records than
+// [ShareMaxRecords] to avoid splitting record batches. With this option the
+// broker returns at most [ShareMaxRecords] records, splitting batches if
+// necessary.
+//
+// This option also disables pre-fetching: a share fetch request is issued
+// only at the time you call poll. You can override this with MaxConcurrentFetches,
+// but it is not recommended as this will opt into pre-fetching data.
+//
+// This option only applies when using [ShareGroup].
+func ShareMaxRecordsStrict() GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.shareMaxRecordsStrict = true }}
+}
+
+// ShareAckCallback sets a callback invoked with the results of share-group
+// acknowledgements. The broker reports per-partition outcomes for every
+// ack the client sends.
+//
+// Without a callback, ack errors are invisible: retryable errors are
+// retried internally and non-retryable errors are dropped. The callback
+// lets you observe all ack outcomes. The client has already handled
+// retries where possible, so errors surfaced here are mostly
+// informational.
+//
+// This option only applies when using [ShareGroup].
+func ShareAckCallback(fn func(*Client, ShareAckResults)) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.shareAckCallback = fn }}
 }
 
 // Balancers sets the group balancers to use for dividing topic partitions

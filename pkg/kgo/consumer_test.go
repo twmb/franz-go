@@ -402,27 +402,31 @@ func TestPauseIssue489(t *testing.T) {
 		{"records", func(ctx context.Context) Fetches { return cl.PollRecords(ctx, 1000) }},
 	} {
 		for range 10 {
-			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			// Phase 1 and phase 2 each get their own budget so phase 1
+			// cannot starve phase 2 under parallel-test contention.
+			phase1Ctx, phase1Cancel := context.WithTimeout(ctx, 10*time.Second)
 			var sawZero, sawOne, sawTwo bool
-			for (!sawZero || !sawOne || !sawTwo) && !closed(ctx.Done()) {
-				fs := pollfn.fn(ctx)
+			for (!sawZero || !sawOne || !sawTwo) && !closed(phase1Ctx.Done()) {
+				fs := pollfn.fn(phase1Ctx)
 				fs.EachRecord(func(r *Record) {
 					sawZero = sawZero || r.Partition == 0
 					sawOne = sawOne || r.Partition == 1
 					sawTwo = sawTwo || r.Partition == 2
 				})
 			}
+			phase1Cancel()
 			cl.PauseFetchPartitions(map[string][]int32{t1: {0}})
 			sawZero, sawOne, sawTwo = false, false, false
-			for i := 0; i < 10 && !closed(ctx.Done()); i++ {
-				fs := pollfn.fn(ctx)
+			phase2Ctx, phase2Cancel := context.WithTimeout(ctx, 10*time.Second)
+			for (!sawOne || !sawTwo) && !closed(phase2Ctx.Done()) {
+				fs := pollfn.fn(phase2Ctx)
 				fs.EachRecord(func(r *Record) {
 					sawZero = sawZero || r.Partition == 0
 					sawOne = sawOne || r.Partition == 1
 					sawTwo = sawTwo || r.Partition == 2
 				})
 			}
-			cancel()
+			phase2Cancel()
 			if sawZero {
 				t.Fatalf("%s: saw partition zero even though it was paused", pollfn.name)
 			}

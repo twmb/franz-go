@@ -138,8 +138,18 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 
 	netls := 0 // for if etlsBeforeQuit is non-negative
 
+	// Under chaos (see KGO_TEST_CHAOS), the dialer injects failures that
+	// stall heartbeats long enough to trip a 20s session timeout, which
+	// causes the broker to reassign partitions and forces a re-commit
+	// cycle that can starve the auto-commit loop. Bump to 60s so
+	// auto-commit has more chances to land between induced failures.
+	sessTimeout := 20 * time.Second
+	if testChaos {
+		sessTimeout = 60 * time.Second
+	}
 	opts := []Opt{
 		UnknownTopicRetries(-1), // see txn_test comment
+		SessionTimeout(sessTimeout),
 		WithLogger(testLogger()),
 		ConsumerGroup(c.group),
 		ConsumeTopics(c.consumeFrom),

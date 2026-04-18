@@ -555,7 +555,7 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 	case reqKey == 0:
 		pcxn = &b.cxnProduce
 		isProduceCxn = true
-	case reqKey == 1:
+	case reqKey == 1 || reqKey == 78: // Fetch or ShareFetch (both long-poll)
 		pcxn = &b.cxnFetch
 		isFetchCxn = true
 	case reqKey == 11 || reqKey == 14: // join || sync

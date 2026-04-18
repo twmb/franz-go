@@ -50,6 +50,10 @@ var (
 	// Must match should848() which calls supportsKIP848v1().
 	allow848 = false
 
+	// Share groups require ShareFetch v2 (key 78) and ShareAcknowledge v2
+	// (key 79), which are the stable versions introduced in Kafka 4.2.
+	allowShare = false
+
 	// KGO_TEST_TLS: DSL syntax is ({ca|cert|key}:path),{1,3}
 	testCert *tls.Config
 
@@ -221,6 +225,11 @@ func adm() *Client {
 				if v, ok := versions.LookupMaxKeyVersion(68); ok && v >= 1 { // 68 = ConsumerGroupHeartbeat v1 (KIP-848 stable)
 					allow848 = true
 				}
+				sf, sfOK := versions.LookupMaxKeyVersion(78) // 78 = ShareFetch
+				sa, saOK := versions.LookupMaxKeyVersion(79) // 79 = ShareAcknowledge
+				if sfOK && sf >= 2 && saOK && sa >= 2 {
+					allowShare = true
+				}
 				return
 			}
 			if time.Now().After(deadline) {
@@ -266,9 +275,13 @@ var testLogLevel = func() LogLevel {
 }()
 
 func testLogger() Logger {
+	return testLoggerAt(testLogLevel)
+}
+
+func testLoggerAt(level LogLevel) Logger {
 	num := loggerNum.Add(1)
 	pfx := strconv.Itoa(int(num))
-	return BasicLogger(os.Stderr, testLogLevel, func() string {
+	return BasicLogger(os.Stderr, level, func() string {
 		return time.Now().UTC().Format("[15:04:05.999 ") + pfx + "]"
 	})
 }
@@ -681,7 +694,6 @@ func (c *testConsumer) leaveGroupStatic(cl *Client, instanceID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if c.enable848 {
-		// Look up the server-assigned memberID via ConsumerGroupDescribe.
 		dreq := kmsg.NewPtrConsumerGroupDescribeRequest()
 		dreq.Groups = []string{c.group}
 		dresp, err := dreq.RequestWith(ctx, cl)
@@ -744,6 +756,9 @@ func testChainETL(
 	enable848 bool,
 	instanceID string,
 ) {
+	defer func(start time.Time) {
+		t.Logf("%s completed in %v", t.Name(), time.Since(start))
+	}(time.Now())
 	if instanceID != "" && !allowStaticMembership {
 		t.Skip("broker does not support static membership (requires JoinGroup v5+, KIP-345)")
 	}

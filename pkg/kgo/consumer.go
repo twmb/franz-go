@@ -193,6 +193,7 @@ type consumer struct {
 	mu sync.Mutex
 	d  *directConsumer // if non-nil, we are consuming partitions directly
 	g  *groupConsumer  // if non-nil, we are consuming as a group member
+	s  *shareConsumer  // if non-nil, we are consuming as a share group member
 
 	// On metadata update, if the consumer is set (direct or group), the
 	// client begins a goroutine that updates the consumer kind's
@@ -208,6 +209,12 @@ type consumer struct {
 	// loop, which collapses repeated updates into one extra update, so we
 	// loop as little as necessary.
 	outstandingMetadataUpdates workLoop
+
+	// pollActive / pollWake implement strict-pull gating when
+	// MaxConcurrentFetches == 0. See manageFetchConcurrency for the full
+	// description of the protocol; this pair is the input side.
+	pollActive atomic.Bool
+	pollWake   chan struct{} // buffered(1); nil when maxConcurrentFetches != 0
 
 	// sessionChangeMu is grabbed when a session is stopped and held through
 	// when a session can be started again. The sole purpose is to block an
@@ -334,12 +341,17 @@ func (c *consumer) init(cl *Client) {
 	c.paused.Store(make(pausedTopics))
 	c.sourcesReadyCond = sync.NewCond(&c.sourcesReadyMu)
 	c.pollWaitC = sync.NewCond(&c.pollWaitMu)
+	if cl.cfg.maxConcurrentFetches == 0 {
+		c.pollWake = make(chan struct{}, 1)
+	}
 
 	if len(cl.cfg.topics) > 0 || len(cl.cfg.partitions) > 0 {
 		defer cl.triggerUpdateMetadataNow("querying metadata for consumer initialization") // we definitely want to trigger a metadata update
 	}
 
-	if len(cl.cfg.group) == 0 {
+	if len(cl.cfg.shareGroup) > 0 {
+		c.initShare()
+	} else if len(cl.cfg.group) == 0 {
 		c.initDirect()
 	} else {
 		c.initGroup()
@@ -347,7 +359,7 @@ func (c *consumer) init(cl *Client) {
 }
 
 func (c *consumer) consuming() bool {
-	return c.g != nil || c.d != nil
+	return c.g != nil || c.d != nil || c.s != nil
 }
 
 // addSourceReadyForDraining tracks that a source needs its buffered fetch
@@ -438,6 +450,30 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 		maxPollRecords = -1
 	}
 	c := &cl.consumer
+
+	if c.pollWake != nil {
+		// Store before sending on pollWake: a successful send
+		// synchronizes-before the receive, so the reader's subsequent
+		// pollActive.Load observes this Store. If the send hits the
+		// default (buffer already full), ordering is irrelevant --
+		// manageFetchConcurrency reloads pollActive on its next event.
+		c.pollActive.Store(true)
+		select {
+		case c.pollWake <- struct{}{}:
+		default:
+		}
+		defer func() {
+			c.pollActive.Store(false)
+			select {
+			case c.pollWake <- struct{}{}:
+			default:
+			}
+		}()
+	}
+
+	if c.s != nil {
+		return c.s.poll(ctx, maxPollRecords)
+	}
 
 	c.g.undirtyUncommitted()
 
@@ -637,8 +673,8 @@ func (cl *Client) PauseFetchPartitions(topicPartitions map[string][]int32) map[s
 // paused. Resuming topics that are not currently paused is a per-topic no-op.
 // See the documentation on PauseFetchTopics for more details.
 func (cl *Client) ResumeFetchTopics(topics ...string) {
-	defer cl.allSinksAndSources(func(sns sinkAndSource) {
-		sns.source.maybeConsume()
+	defer cl.allSources(func(s *source) {
+		s.maybeConsume()
 	})
 
 	c := &cl.consumer
@@ -655,8 +691,8 @@ func (cl *Client) ResumeFetchTopics(topics ...string) {
 // per-topic no-op. See the documentation on PauseFetchPartitions for more
 // details.
 func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
-	defer cl.allSinksAndSources(func(sns sinkAndSource) {
-		sns.source.maybeConsume()
+	defer cl.allSources(func(s *source) {
+		s.maybeConsume()
 	})
 
 	c := &cl.consumer
@@ -725,7 +761,15 @@ func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bo
 // that metadata does not load the tps we are changing. Basically, we ensure
 // everything w.r.t. consuming is at a stand still.
 func (c *consumer) purgeTopics(topics []string) {
-	if c.g == nil && c.d == nil {
+	if c.g == nil && c.d == nil && c.s == nil {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.s != nil {
+		c.s.purgeTopics(topics) // save a useless map alloc by doing this early, not in the block below
 		return
 	}
 
@@ -734,12 +778,6 @@ func (c *consumer) purgeTopics(topics []string) {
 		purgeAssignments[topic] = nil
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// The difference for groups is we need to lock the group and there is
-	// a slight type difference in g.using vs d.using.
-	//
 	// assignPartitions removes the topics from 'tps', which removes them
 	// from FUTURE metadata requests meaning they will not be repopulated
 	// in the future. Any loaded tps is fine; metadata updates the topic
@@ -792,6 +830,8 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 
 	if c.g != nil {
 		c.g.tps.storeTopics(topics)
+	} else if c.s != nil {
+		c.s.tps.storeTopics(topics)
 	} else {
 		c.d.tps.storeTopics(topics)
 		for _, topic := range topics {
@@ -811,6 +851,8 @@ func (cl *Client) GetConsumeTopics() []string {
 	var ok bool
 	if c.g != nil {
 		m, ok = c.g.tps.v.Load().(topicsPartitionsData)
+	} else if c.s != nil {
+		m, ok = c.s.tps.v.Load().(topicsPartitionsData)
 	} else {
 		m, ok = c.d.tps.v.Load().(topicsPartitionsData)
 	}
@@ -1233,10 +1275,12 @@ func (c *consumer) filterMetadataAllTopics(topics []string) []string {
 	defer rns.log(&c.cl.cfg)
 
 	var reSeen map[string]bool
-	if c.d != nil {
-		reSeen = c.d.reSeen
-	} else {
+	if c.g != nil {
 		reSeen = c.g.reSeen
+	} else if c.s != nil {
+		reSeen = c.s.reSeen
+	} else {
+		reSeen = c.d.reSeen
 	}
 
 	keep := topics[:0]
@@ -1292,6 +1336,8 @@ func (c *consumer) doOnMetadataUpdate() {
 				}
 			case c.g != nil:
 				c.g.findNewAssignments()
+			case c.s != nil:
+				c.s.maybeStartManage()
 			}
 
 			go c.loadSession().doOnMetadataUpdate()
@@ -1487,6 +1533,139 @@ func (l listOrEpochLoads) loadWithSessionNow(s *consumerSession, why string) boo
 	return false
 }
 
+// fetchManager controls fetch concurrency. Sources register their desire to
+// fetch, and the manager grants permission up to the configured limit. This
+// type is shared by consumerSession (regular consumers) and shareConsumer
+// (share groups).
+type fetchManager struct {
+	ctx    context.Context
+	cancel func()
+
+	// pollActive + pollWake are the consumer's strict-pull-mode state
+	// (MaxConcurrentFetches == 0). Both are nil otherwise. The atomic
+	// is the ground truth ("a poll is in progress"); the channel kicks
+	// the select loop to re-read it. See consumer.pollActive comment.
+	pollActive *atomic.Bool
+	pollWake   chan struct{}
+
+	// We receive desires from sources, we reply when they can fetch, and
+	// they send back when they are done. Thus, three level chan.
+	desireFetchCh       chan chan chan bool
+	cancelFetchCh       chan chan chan bool
+	allowedFetches      int
+	fetchManagerStarted atomic.Bool // atomic, once true, we start the fetch manager
+}
+
+func newFetchManager(ctx context.Context, cancel func(), pollActive *atomic.Bool, pollWake chan struct{}, maxConcurrentFetches int) fetchManager {
+	return fetchManager{
+		ctx:    ctx,
+		cancel: cancel,
+
+		pollActive: pollActive,
+		pollWake:   pollWake,
+
+		// NOTE: This channel must be unbuffered. If it is buffered,
+		// then we can exit manageFetchConcurrency when we should not
+		// and have a deadlock:
+		//
+		// * source sends to desireFetchCh, is buffered
+		// * source seeds context canceled, tries sending to cancelFetchCh
+		// * session concurrently sees context canceled
+		// * session has not drained desireFetchCh, sees activeFetches is 0
+		// * session exits
+		// * source permanently hangs sending to desireFetchCh
+		//
+		// By having desireFetchCh unbuffered, we *ensure* that if the
+		// source indicates it wants a fetch, the session knows it and
+		// tracks it in wantFetch.
+		//
+		// See #198.
+		desireFetchCh: make(chan chan chan bool),
+
+		cancelFetchCh:  make(chan chan chan bool, 4),
+		allowedFetches: maxConcurrentFetches,
+	}
+}
+
+func (fm *fetchManager) desireFetch() chan chan chan bool {
+	if !fm.fetchManagerStarted.Swap(true) {
+		go fm.manageFetchConcurrency()
+	}
+	return fm.desireFetchCh
+}
+
+func (fm *fetchManager) manageFetchConcurrency() {
+	var (
+		activeFetches int
+		doneFetch     = make(chan bool, 20)
+		wantFetch     []chan chan bool
+		pollAllowed   bool
+		ctxCh         = fm.ctx.Done()
+		wantQuit      bool
+	)
+
+	for {
+		select {
+		case register := <-fm.desireFetchCh:
+			wantFetch = append(wantFetch, register)
+		case cancel := <-fm.cancelFetchCh:
+			var found bool
+			for i, want := range wantFetch {
+				if want == cancel {
+					wantFetch = slices.Delete(wantFetch, i, i+1)
+					found = true
+					break
+				}
+			}
+			// If we did not find the channel, then we have already
+			// sent to it, removed it from our wantFetch list, and
+			// bumped activeFetches.
+			if !found {
+				activeFetches--
+			}
+
+		case <-doneFetch:
+			activeFetches--
+		case <-ctxCh:
+			wantQuit = true
+			ctxCh = nil
+		case <-fm.pollWake:
+			// Wake only; the post-select Load below picks up
+			// the current pollActive value.
+		}
+
+		// pollActive is the ground truth; re-read after every event,
+		// not only on the pollWake case. Two reasons the Load cannot
+		// move into the kick case:
+		//   1. newFetchManager may be constructed after PollRecords has
+		//      already run (pollActive==true, wake already consumed or
+		//      silently dropped into a full buffer). The first
+		//      iteration needs to observe pollActive=true without a
+		//      wake to unblock first.
+		//   2. pollActive can flip true => false between the wake's
+		//      buffer send and our Load. Re-reading on every event
+		//      (desireFetch, cancel, doneFetch, ctx) ensures we never
+		//      treat a stale "true" as authoritative for gating the
+		//      next fetch.
+		// Missed wakes (buffer-full default) are harmless because the
+		// next event triggers another Load.
+		if fm.pollActive != nil {
+			pollAllowed = fm.pollActive.Load()
+		}
+
+		if len(wantFetch) > 0 && (activeFetches < fm.allowedFetches || pollAllowed && activeFetches == 0 || fm.allowedFetches < 0) { // negative means unbounded
+			wantFetch[0] <- doneFetch
+			wantFetch = wantFetch[1:]
+			activeFetches++
+			continue
+		}
+
+		if wantQuit && activeFetches == 0 {
+			return
+		}
+	}
+}
+
 // A consumer session is responsible for an era of fetching records for a set
 // of cursors. The set can be added to without killing an active session, but
 // it cannot be removed from. Removing any cursor from being consumed kills the
@@ -1494,22 +1673,11 @@ func (l listOrEpochLoads) loadWithSessionNow(s *consumerSession, why string) boo
 type consumerSession struct {
 	c *consumer
 
-	ctx    context.Context
-	cancel func()
-
 	// tps tracks the topics that were assigned in this session. We use
 	// this field to build and handle list offset / load epoch requests.
 	tps *topicsPartitions
 
-	// desireFetchCh is sized to the number of concurrent fetches we are
-	// configured to be able to send.
-	//
-	// We receive desires from sources, we reply when they can fetch, and
-	// they send back when they are done. Thus, three level chan.
-	desireFetchCh       chan chan chan struct{}
-	cancelFetchCh       chan chan chan struct{}
-	allowedFetches      int
-	fetchManagerStarted atomic.Bool // atomic, once true, we start the fetch manager
+	fetchManager
 
 	// Workers signify the number of fetch and list / epoch goroutines that
 	// are currently running within the context of this consumer session.
@@ -1533,92 +1701,12 @@ func (c *consumer) newConsumerSession(tps *topicsPartitions) *consumerSession {
 	}
 	ctx, cancel := context.WithCancel(c.cl.ctx)
 	session := &consumerSession{
-		c: c,
-
-		ctx:    ctx,
-		cancel: cancel,
-
-		tps: tps,
-
-		// NOTE: This channel must be unbuffered. If it is buffered,
-		// then we can exit manageFetchConcurrency when we should not
-		// and have a deadlock:
-		//
-		// * source sends to desireFetchCh, is buffered
-		// * source seeds context canceled, tries sending to cancelFetchCh
-		// * session concurrently sees context canceled
-		// * session has not drained desireFetchCh, sees activeFetches is 0
-		// * session exits
-		// * source permanently hangs sending to desireFetchCh
-		//
-		// By having desireFetchCh unbuffered, we *ensure* that if the
-		// source indicates it wants a fetch, the session knows it and
-		// tracks it in wantFetch.
-		//
-		// See #198.
-		desireFetchCh: make(chan chan chan struct{}),
-
-		cancelFetchCh:  make(chan chan chan struct{}, 4),
-		allowedFetches: c.cl.cfg.maxConcurrentFetches,
+		c:            c,
+		tps:          tps,
+		fetchManager: newFetchManager(ctx, cancel, &c.pollActive, c.pollWake, c.cl.cfg.maxConcurrentFetches),
 	}
 	session.workersCond = sync.NewCond(&session.workersMu)
 	return session
-}
-
-func (s *consumerSession) desireFetch() chan chan chan struct{} {
-	if !s.fetchManagerStarted.Swap(true) {
-		go s.manageFetchConcurrency()
-	}
-	return s.desireFetchCh
-}
-
-func (s *consumerSession) manageFetchConcurrency() {
-	var (
-		activeFetches int
-		doneFetch     = make(chan struct{}, 20)
-		wantFetch     []chan chan struct{}
-
-		ctxCh    = s.ctx.Done()
-		wantQuit bool
-	)
-	for {
-		select {
-		case register := <-s.desireFetchCh:
-			wantFetch = append(wantFetch, register)
-		case cancel := <-s.cancelFetchCh:
-			var found bool
-			for i, want := range wantFetch {
-				if want == cancel {
-					wantFetch = slices.Delete(wantFetch, i, i+1)
-					found = true
-					break
-				}
-			}
-			// If we did not find the channel, then we have already
-			// sent to it, removed it from our wantFetch list, and
-			// bumped activeFetches.
-			if !found {
-				activeFetches--
-			}
-
-		case <-doneFetch:
-			activeFetches--
-		case <-ctxCh:
-			wantQuit = true
-			ctxCh = nil
-		}
-
-		if len(wantFetch) > 0 && (activeFetches < s.allowedFetches || s.allowedFetches == 0) { // 0 means unbounded
-			wantFetch[0] <- doneFetch
-			wantFetch = wantFetch[1:]
-			activeFetches++
-			continue
-		}
-
-		if wantQuit && activeFetches == 0 {
-			return
-		}
-	}
 }
 
 func (s *consumerSession) incWorker() {
@@ -1717,8 +1805,8 @@ func (c *consumer) stopSession() (listOrEpochLoads, *topicsPartitions) {
 	// our num-fetches manager without worrying about a source trying to
 	// register itself.
 
-	c.cl.allSinksAndSources(func(sns sinkAndSource) {
-		sns.source.session.reset()
+	c.cl.allSources(func(s *source) {
+		s.session.reset()
 	})
 
 	// At this point, if we begin fetching anew, then the sources will not
@@ -1761,8 +1849,8 @@ func (c *consumer) startNewSession(tps *topicsPartitions) *consumerSession {
 
 	c.sessionChangeMu.Unlock()
 
-	c.cl.allSinksAndSources(func(sns sinkAndSource) {
-		sns.source.maybeConsume()
+	c.cl.allSources(func(s *source) {
+		s.maybeConsume()
 	})
 
 	// At this point, any source that was not consuming because it saw the

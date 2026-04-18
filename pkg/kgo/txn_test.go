@@ -161,6 +161,12 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		UnknownTopicRetries(-1),
 		TransactionalID(txid),
 		TransactionTimeout(60 * time.Second),
+		// Transactional tests use an instance ID (below) so member
+		// death leaves the session dangling until the session timeout.
+		// The broker default (up to 45s) keeps partitions locked long
+		// enough that the test deadline can fire before the next
+		// consumer joins, so cap to 20s explicitly.
+		SessionTimeout(20 * time.Second),
 		WithLogger(testLogger()),
 		// Control records have their own unique offset, so for testing,
 		// we keep the record to ensure we do not doubly consume control

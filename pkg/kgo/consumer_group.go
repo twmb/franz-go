@@ -209,49 +209,50 @@ func (g *groupMemberGen) storeGeneration(generation int32) {
 	g.store(g.memberID(), generation)
 }
 
-// LeaveGroup leaves a group. Close automatically leaves the group, so this is
-// only necessary to call if you plan to leave the group but continue to use
-// the client. If a rebalance is in progress, this function waits for the
-// rebalance to complete before the group can be left. This is necessary to
-// allow you to safely issue one final offset commit in OnPartitionsRevoked. If
-// you have overridden the default revoke, you must manually commit offsets
-// before leaving the group.
-//
-// If you have configured the group with an InstanceID, this does not leave the
-// group. With instance IDs, it is expected that clients will restart and
-// re-use the same instance ID. To leave a group using an instance ID, you must
-// manually issue a kmsg.LeaveGroupRequest or use an external tool (kafka
-// scripts or kcl).
-//
-// It is recommended to use LeaveGroupContext to see if the leave was
-// successful.
+// LeaveGroup is equivalent to calling [Client.LeaveGroupContext] with
+// the client's context; it discards any returned error. See
+// LeaveGroupContext for the full behavior.
 func (cl *Client) LeaveGroup() {
 	cl.LeaveGroupContext(cl.ctx)
 }
 
-// LeaveGroupContext leaves a group. Close automatically leaves the group, so this is
-// only necessary to call if you plan to leave the group but continue to use
-// the client. If a rebalance is in progress, this function waits for the
-// rebalance to complete before the group can be left. This is necessary to
-// allow you to safely issue one final offset commit in OnPartitionsRevoked. If
-// you have overridden the default revoke, you must manually commit offsets
-// before leaving the group.
+// LeaveGroupContext leaves a classic consumer group or a share group.
+// Close automatically leaves the group, so this is only necessary to
+// call if you plan to leave the group but continue to use the client.
 //
-// The context can be used to avoid waiting for the client to leave the group.
-// Not waiting may result in your client being stuck in the group and the
-// partitions this client was consuming being stuck until the session timeout.
-// This function returns any leave group error or context cancel error. If the
-// context is nil, this immediately leaves the group and does not wait and does
-// not return an error.
+// The context can be used to avoid waiting for the client to leave the
+// group. Not waiting may result in your client being stuck in the group
+// and the partitions this client was consuming being stuck until the
+// session timeout. This function returns any leave-group error or
+// context cancel error. If the context is nil, this immediately
+// triggers the leave and does not wait, returning nil. In either the
+// ctx-expired or nil-ctx cases, the shutdown work continues in the
+// background to keep client state consistent.
 //
-// If you have configured the group with an InstanceID, this does not leave the
-// group. With instance IDs, it is expected that clients will restart and
-// re-use the same instance ID. To leave a group using an instance ID, you must
-// manually issue a kmsg.LeaveGroupRequest or use an external tool (kafka
-// scripts or kcl).
+// For classic consumer groups: if a rebalance is in progress, this
+// function waits for the rebalance to complete before the group can
+// be left. This is necessary to allow you to safely issue one final
+// offset commit in OnPartitionsRevoked. If you have overridden the
+// default revoke, you must manually commit offsets before leaving the
+// group. If you have configured the group with an InstanceID, this
+// does not leave the group.
+//
+// For share groups: this drains any pending acks, releases records that
+// were acquired but never finalized, closes each per-broker share
+// session, and sends the final ShareGroupHeartbeat with MemberEpoch=-1
+// to leave the group. LeaveGroupContext is safe to call concurrently
+// with [Client.PollRecords], [Client.MarkAcks], and [Record.Ack]:
+// after the leave begins, PollRecords will either return any records
+// that were already buffered (the caller may still ack them) or
+// return an ErrClientClosed fetch; concurrent MarkAcks and Record.Ack
+// either land before the leave's release pass (and succeed) or land
+// after (and are reported via the configured [ShareAckCallback] as
+// failed with an internal "consumer left" error).
+//
+// LeaveGroupContext is a no-op for direct (non-group) consumers.
 func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 	c := &cl.consumer
-	if c.g == nil {
+	if c.g == nil && c.s == nil {
 		return nil
 	}
 	var immediate bool
@@ -260,6 +261,19 @@ func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 		ctx, cancel = context.WithCancel(context.Background())
 		cancel()
 		immediate = true
+	}
+
+	if c.s != nil {
+		go c.s.leave(ctx)
+		select {
+		case <-ctx.Done():
+			if immediate {
+				return nil
+			}
+			return ctx.Err()
+		case <-c.s.left:
+			return c.s.leaveErr
+		}
 	}
 
 	go func() {
@@ -1722,12 +1736,17 @@ start:
 	// server validates MemberEpoch on OffsetFetch and returns
 	// STALE_MEMBER_EPOCH if the epoch changed between the
 	// heartbeat that assigned partitions and this OffsetFetch.
-	// We force a heartbeat to update our epoch and retry.
+	// Under rebalance churn STALE can fire several times in a row
+	// while the server is still advancing epochs; force a
+	// heartbeat and retry up to 10 times (each attempt pauses for
+	// the HB roundtrip, so this is paced, not a spin). Beyond 10,
+	// surface the error so manage848 can reset the member and
+	// re-initialJoin rather than looping here forever.
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		if errors.Is(err, kerr.StaleMemberEpoch) {
 			staleRetries++
-			if staleRetries > 3 {
-				g.cfg.logger.Log(LogLevelError, "fetch offsets failed: stale member epoch after 3 retries", "group", g.cfg.group)
+			if staleRetries > 10 {
+				g.cfg.logger.Log(LogLevelError, "fetch offsets: stale member epoch after 10 retries, giving up", "group", g.cfg.group)
 				return err
 			}
 			g.cfg.logger.Log(LogLevelInfo, "fetch offsets returned stale member epoch, forcing heartbeat and retrying",
@@ -1834,7 +1853,9 @@ start:
 	// topic or partition the broker returned that we did not ask for.
 	// A buggy broker returning extra partitions can cause a data race
 	// if those partitions are already being consumed (see #1271).
-	groupTopics := g.tps.load()
+	// groupTopics was already loaded above to populate reqTopic.TopicID;
+	// reuse that snapshot so we validate against the same view that
+	// built the request.
 	for fetchedTopic, topicOffsets := range offsets {
 		if !groupTopics.hasTopic(fetchedTopic) {
 			delete(offsets, fetchedTopic)
@@ -3114,7 +3135,15 @@ func (g *groupConsumer) commit(
 
 		var resp *kmsg.OffsetCommitResponse
 		var err error
-		for range 5 {
+		// KIP-848 STALE_MEMBER_EPOCH is expected under rebalance
+		// churn: the heartbeat loop needs to observe the new epoch
+		// (via the paired HB response on the same connection) before
+		// we can rebuild the commit. Retry up to 10 times (each
+		// attempt sleeps 500ms between STALE responses) so that
+		// auto-commit before a rebalance does not surface a benign
+		// STALE to the user.
+		staleRetries := 0
+		for {
 			start := time.Now()
 			resp, err = req.RequestWith(commitCtx, g.cl)
 			if err != nil {
@@ -3149,7 +3178,20 @@ func (g *groupConsumer) commit(
 				}
 			}
 			if stale {
-				time.Sleep(500 * time.Millisecond)
+				staleRetries++
+				if staleRetries > 10 {
+					g.cfg.logger.Log(LogLevelError, "offset commit: stale member epoch after 10 retries, giving up", "group", g.cfg.group)
+					break
+				}
+				t := time.NewTimer(500 * time.Millisecond)
+				select {
+				case <-t.C:
+				case <-commitCtx.Done():
+					t.Stop()
+				}
+				if commitCtx.Err() != nil {
+					break
+				}
 				_, newGen := g.memberGen.load()
 				if newGen != req.Generation {
 					g.cfg.logger.Log(LogLevelInfo, "offset commit got stale member epoch, retrying with updated epoch",

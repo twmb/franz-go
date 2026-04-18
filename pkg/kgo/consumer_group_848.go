@@ -62,6 +62,10 @@ func (g *groupConsumer) manage848() {
 		known848Support = true
 		g.cfg.logger.Log(LogLevelInfo, "beginning to manage the next-gen group lifecycle", "group", g.cfg.group)
 		g.cooperative.Store(true) // next gen is always cooperative
+		if !g.cfg.autocommitDisable && g.cfg.autocommitInterval > 0 {
+			g.cfg.logger.Log(LogLevelInfo, "beginning autocommit loop", "group", g.cfg.group)
+			go g.loopCommit()
+		}
 	}
 
 	g.mu.Lock()
@@ -79,6 +83,7 @@ func (g *groupConsumer) manage848() {
 	// backoff scaling. Reset when the inner heartbeat loop is entered
 	// (meaning initialJoin succeeded).
 	var consecutiveErrors int
+	var unreleasedInstanceRetries int // capped at 3; see retryable-error branch below
 outer:
 	for {
 		initialHb, err := g848.initialJoin()
@@ -112,27 +117,48 @@ outer:
 		}
 
 		// Retryable errors from initialJoin should not be surfaced
-		// to the user. Coordinator errors (unavailable, loading,
-		// moved) and broker-level errors (connection closed, EOF)
-		// are transient -- we backoff and retry without going
-		// through manageFailWait (which calls onLost and injects
-		// a fake fetch error to the user).
+		// to the user: coordinator errors and broker-level errors
+		// (connection closed, EOF) are transient, so we backoff and
+		// retry without going through manageFailWait.
 		//
-		// UnreleasedInstanceID is also retryable here: after
-		// FencedMemberEpoch, we immediately retry initialJoin
-		// which sends epoch 0 to rejoin. If the server hasn't
-		// finished releasing the static instance from the old
-		// epoch, it returns UnreleasedInstanceID. We retry with
-		// backoff to give the server time to process the release.
-		//
-		// We can't rely on the client's default retry logic because
-		// ConsumerGroupHeartbeat cannot be retried by default.
-		if err != nil && (g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err) || isRetryableBrokerErr(err) || isAnyDialErr(err) || errors.Is(err, kerr.UnreleasedInstanceID)) {
+		// UnreleasedInstanceID is retryable-with-a-cap: the broker
+		// briefly keeps old static-instance state after
+		// FencedMemberEpoch, so an immediate rejoin can race for
+		// 1-2 cycles. Beyond 3 attempts it indicates a real
+		// cross-process InstanceID conflict and we fall through to
+		// manageFailWait so the user sees it (matches Java's
+		// handleFatalFailure semantics, with a small race budget).
+		retryable := err != nil && (g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err) ||
+			isRetryableBrokerErr(err) || isAnyDialErr(err) ||
+			errors.Is(err, kerr.UnreleasedInstanceID) || errors.Is(err, kerr.StaleMemberEpoch))
+
+		giveUp := false
+		if retryable && errors.Is(err, kerr.UnreleasedInstanceID) {
+			unreleasedInstanceRetries++
+			if unreleasedInstanceRetries > 3 {
+				g.cfg.logger.Log(LogLevelError,
+					"UnreleasedInstanceID after 3 retries - static instance is held by another member; check for duplicate InstanceID config or an unclean peer shutdown",
+					"group", g.cfg.group,
+					"instance", g.cfg.instanceID,
+				)
+				giveUp = true
+			}
+		}
+
+		if retryable && !giveUp {
+			// StaleMemberEpoch on initialJoin means the server
+			// remembers our memberID at a later epoch than the 0
+			// we sent. Reset to a fresh member id so the retry
+			// joins as a new member.
+			if errors.Is(err, kerr.StaleMemberEpoch) {
+				g.memberGen.store(newStringUUID(), 0)
+			}
 			consecutiveErrors++
 			g.cfg.logger.Log(LogLevelInfo, "consumer group initial heartbeat hit retryable error, backing off and retrying",
 				"group", g.cfg.group,
 				"err", err,
 				"consecutive_errors", consecutiveErrors,
+				"unreleased_instance_retries", unreleasedInstanceRetries,
 			)
 			backoff := g.cfg.retryBackoff(consecutiveErrors)
 			g.cl.waitmeta(g.ctx, backoff, "waitmeta during 848 retryable error backoff")
@@ -155,6 +181,7 @@ outer:
 		var consecutiveTransientRestarts int
 		for err == nil {
 			consecutiveErrors = 0
+			unreleasedInstanceRetries = 0
 			var nowAssigned map[string][]int32
 
 			// In heartbeating, if we lose or gain partitions, we need to
@@ -228,7 +255,7 @@ outer:
 				err = nil
 
 			// Retryable broker errors (connection closed, EOF),
-			// dial errors (connection refused — the broker may be
+			// dial errors (connection refused - the broker may be
 			// restarting), and coordinator errors
 			// (NOT_COORDINATOR, etc.) are retried in the
 			// heartbeat loop up to cfg.retries. If the cap is
@@ -247,7 +274,14 @@ outer:
 				}
 				err = nil
 
-			case errors.Is(err, kerr.UnknownMemberID):
+			case errors.Is(err, kerr.UnknownMemberID),
+				errors.Is(err, kerr.StaleMemberEpoch):
+				// UnknownMemberID: server forgot us.
+				// StaleMemberEpoch: our epoch drifted (e.g. a
+				// heartbeat response was lost). Either way, the
+				// fix is identical: abandon the assignment and
+				// re-initialJoin with a fresh member id so the
+				// server hands us back a current epoch.
 				member, gen := g.memberGen.load()
 				g.memberGen.store(newStringUUID(), 0)
 				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat error, abandoning assignment and rejoining with new member id",

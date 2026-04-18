@@ -732,7 +732,6 @@ const (
 	protoTypeVarint = 0
 	protoType64bit  = 1
 	protoTypeLength = 2
-	protoType32bit  = 5
 )
 
 // appendProtoTag adds a Protocol Buffer tag (field number + proto type)
