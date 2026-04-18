@@ -42,11 +42,14 @@ const (
 	BrokerRack                      // Include "rack" label on broker metrics.
 )
 
-// BrokerLabels configures which labels are included on broker-level
-// connection, read, write, request, and batch metrics, overriding the
-// default of (BrokerNodeID). Calling with no arguments removes all
-// broker-level labels, aggregating metrics across all brokers. This is
-// useful for reducing metrics cardinality in environments with many or
+// BrokerLabels configures which labels are included on broker-level connection,
+// read, write, request, and batch metrics, overriding the default of (BrokerNodeID).
+// Calling with no arguments removes all broker-level labels, aggregating
+// metrics across all brokers:
+//
+//	kvictoria.BrokerLabels( /* none */ )
+//
+// This is useful for reducing metrics cardinality in environments with many or
 // frequently changing broker IDs.
 func BrokerLabels(labels ...BrokerLabel) Opt {
 	return opt{func(c *cfg) {

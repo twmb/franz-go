@@ -265,10 +265,14 @@ const (
 
 // BrokerLabels configures which labels are included on broker-level
 // connection, read, write, and request metrics, overriding the default
-// of (BrokerNodeID). Calling with no arguments removes all broker-level
-// labels, aggregating metrics across all brokers. This is useful for
-// reducing metrics cardinality in environments with many or frequently
-// changing broker IDs.
+// of (BrokerNodeID).
+// Calling with no arguments removes all broker-level labels, aggregating
+// metrics across all brokers:
+//
+//	kprom.BrokerLabels( /* none */ )
+//
+// This is useful for reducing metrics cardinality in environments with many or
+// frequently changing broker IDs.
 func BrokerLabels(labels ...BrokerLabel) Opt {
 	return opt{func(c *cfg) {
 		seen := make(map[BrokerLabel]bool)
