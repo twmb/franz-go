@@ -20,9 +20,28 @@ franz-go is a pure Go Kafka client library. The `kgo` package is the main client
 
 ## Protocol Behavior
 
-When debugging protocol issues:
-1. The **Java Kafka client** is the reference implementation - check `clients/src/main/java/org/apache/kafka/` (user has it at `~/src/apache/kafka`)
-2. **KIPs** define protocol behavior: https://cwiki.apache.org/confluence/display/KAFKA/Kafka+Improvement+Proposals
+The Java broker at `~/src/apache/kafka/` is the protocol's ground
+truth. The Java reference client at
+`clients/src/main/java/org/apache/kafka/clients/consumer/internals/` is
+the ground truth for how to talk to it. KIPs are a tertiary source:
+https://cwiki.apache.org/confluence/display/KAFKA/Kafka+Improvement+Proposals
+
+When evaluating whether the broker will accept X, trace the full state
+lifecycle behind X, not just the entry point: creation, destruction
+(leader change `onBecomingFollower`, disconnect `onDisconnect`, member
+fence, acquisition-lock timeout, session replace, cache eviction), and
+rehydration (including what defaults the reloaded state uses for
+transient fields). Missing a destruction or rehydration path is the
+usual failure mode.
+
+Existing conservative kgo guards are presumed correct. Removal requires
+both (a) a broker trace covering creation/destruction/rehydration that
+shows the broker accepts what kgo drops, and (b) the Java reference
+client not having an equivalent guard.
+
+If the user pushes back on a conclusion ("are you sure?", "isn't this
+big?"), retrace the broker from a path you didn't read -- don't
+restate the previous reasoning.
 
 ## Approach
 
@@ -30,31 +49,67 @@ Before implementing a fix for any bug, first verify whether existing code
 already handles the scenario. Analyze the current codebase's safety mechanisms
 (e.g., prerevoke logic, error handlers, retry paths) before writing new code.
 
+### Audit vs. implementation
+
+Audit requests ("review this", "find bugs", "propose a refactor") report
+findings in prose with file:line citations; they do NOT call Edit/Write
+on the audited code. Edits only happen on an explicit imperative for a
+specific change ("apply this", "go ahead") or a direct yes to "want me
+to apply this?". Passing remarks like "you do it" inside an analysis
+request do not count. If a session will land many edits to one file,
+ask for a standing per-file grant scoped to that file and session.
+
+### Refactoring threshold (DRY)
+
+DRY is about logic, not line counts. Reject helpers that exist to
+differentiate callers with a `bool` flag (that's two operations with
+shared infrastructure, not one operation with a knob) or that save
+fewer than ~5 lines per site. Accept helpers that name a genuinely
+duplicated operation, have one job, and leave the call site reading
+like the operation it is performing.
+
+## Tool use
+
+Use `Read`, `Grep`, and `Glob` for code exploration; do not reach for
+`Bash` with `cat`/`head`/`tail`/`find`/`ls`/`awk`/`sed`/`grep`. Reserve
+`Bash` for tests, `gofmt`/`go vet`/`go build`, git, and gh CLI.
+
 ## Key Files
 
-- `broker.go` - Connection handling, SASL authentication, request/response
-- `config.go` - Client configuration options
-- `client.go` - Main client logic
-- `source.go` - Fetch logic, what actually gets data from the broker - this uses an abstraction called a "cursor" to move consume and move forward in a single partition. A "source" owns many cursors fetching from one broker (the source is the broker)
-- `sink.go` - Produce logic, what actually sends data to the broker - this uses an abstraction called a "recBuf" (record buffer) to produce to a single partition. A "sink" owns many recBufs. A recBuf owns many recBatch's (record batch)
-- `consumer.go` - The consumer abstraction around fetching. A consumer owns many sources, and controls what source a cursor belongs to. A consumer also validates the offset a cursor is at - did data loss occur (via OffsetForLeaderEpoch)? What is the "epoch" of the partition, and which broker (source) should the cursor be placed on (ListOffsets)?
-- `producer.go` - The producer abstraction around producing. A producer owns many sinks. The producer file is responsible for picking which sink a record is produced to, for finishing record promises, and contains functions execute on all sinks (flushing, failing records)
-- `consumer_group.go` - Group consumers: this contains logic for managing a consumer group. An internal "consumer" is a separate but related concept to a "group consumer" - the group consumer manages figuring out WHAT partitions to consume, and hookes into the consumer to update the subscription list. The bulk of the file is about managing the group and committing offsets.
-- `consumer_direct.go` - Direct consumer: you assign partitions to directly consume from. Not much logic here besides capturing which new partitions to consume based on metadata updates and your list of topics / regex topics.
-- `txn.go` - GroupTransactSession; this file manages transactions. The transact session bundles some of the group management logic to transaction logic to make it safe - the implementation is paranoid, favoring aborting transactions if anything occurs so that we prevent duplicates.
-- `metadata.go` - Periodically updates information about topics / partitions the client is consuming, and feeding those updates to the producer or consumer.
+- `broker.go` - Connection handling, SASL, request/response.
+- `config.go` - Client configuration options.
+- `client.go` - Main client logic.
+- `source.go` - Fetches from one broker. A source owns many cursors;
+  each cursor tracks consume progress for one partition.
+- `sink.go` - Produces to one broker. A sink owns many recBufs (one
+  per partition); a recBuf owns many recBatch.
+- `consumer.go` - Consumer abstraction over fetching. Validates cursor
+  offsets (OffsetForLeaderEpoch for data loss, ListOffsets for
+  epoch/leader). Owns sources.
+- `producer.go` - Producer abstraction over producing. Picks the sink
+  for each record, finishes promises, and runs cross-sink operations.
+- `consumer_group.go` - Group consumer: decides which partitions to
+  consume and feeds the subscription into consumer. Manages membership
+  and offset commits.
+- `consumer_direct.go` - Direct consumer: user-assigned partitions.
+  Mostly metadata-driven topic/regex resolution.
+- `txn.go` - GroupTransactSession. Bundles group logic with transaction
+  logic; paranoid about aborting to prevent duplicates.
+- `metadata.go` - Periodic metadata refresh; feeds producer/consumer.
 
 ## Testing
 
-- `go test ./...` requires a local Kafka broker to be running on port 9092.
-- `../kfake/` provides a fake Kafka broker for testing
-- kfake is a separate Go module; use a `go.work` in `pkg/kfake/` to test against local kgo changes
-- kfake `ControlKey` intercepts requests by type; without `KeepControl`, consumed after one use
-- Multiple ControlKeys for the same key run in FIFO order; returning `handled=false` continues to the next
-- Observer pattern: `KeepControl` + `return nil, nil, false` to count/signal without intercepting
-- kfake tests live in `pkg/kfake/issues_test.go` (for tests when we fix user reported issues) and `pkg/kfake/behavior_test.go` (for new tests when we add new behavior)
-- kfake is in-process so round-trips are near-instant - always run `go test -race` to catch races not seen with real brokers
-- Unit tests should be fast: tests longer than a few seconds, EVEN IF THEY PASS, are suspicious and should be analyzed. The integration tests in kgo (TestGroupETL / TestTxnETL) are the only ones that should take a long time - up to two minutes without -race, and ~3 to ~4min in race mode.
+- `go test ./...` needs a local broker on port 9092. `../kfake/` is an
+  in-process fake broker for unit-level tests; use a `go.work` in
+  `pkg/kfake/` to test against local kgo changes. Always run
+  `go test -race`.
+- Unit tests should be fast. Tests >2s are suspicious even when
+  passing. Only TestGroupETL / TestTxnETL should take real time
+  (~2min without -race, ~3-4min with).
+- When working in `pkg/kgo`, don't speculatively run kfake tests -- a
+  parallel session may have kfake in a broken state. Verify with
+  `go build` / `go vet`; run kfake tests only when the task is inside
+  `pkg/kfake/` or explicitly asked.
 
 ## Design / concurrency.
 
