@@ -416,8 +416,12 @@ func (os OffsetsByID) Lookup(id TopicID, p int32) (Offset, bool) {
 	return o, exists
 }
 
-// Add adds an offset for a given topic ID / partition.
+// Add adds an offset for a given topic ID / partition. If the offset's
+// TopicID is empty (zero value), this is a no-op.
 func (os *OffsetsByID) Add(o Offset) {
+	if o.TopicID == (TopicID{}) {
+		return
+	}
 	if *os == nil {
 		*os = make(OffsetsByID)
 	}
@@ -453,30 +457,6 @@ func (os OffsetsByID) Each(fn func(Offset)) {
 	}
 }
 
-// ByName converts ID-keyed offsets to name-keyed offsets using the provided
-// id-to-name mapping. Offsets whose ID is not in the map are skipped.
-func (os OffsetsByID) ByName(id2name map[TopicID]string) Offsets {
-	r := make(Offsets)
-	for id, ps := range os {
-		name, ok := id2name[id]
-		if !ok {
-			continue
-		}
-		for p, o := range ps {
-			o.Topic = name
-			r.Add(Offset{
-				Topic:       name,
-				TopicID:     id,
-				Partition:   p,
-				At:          o.At,
-				LeaderEpoch: o.LeaderEpoch,
-				Metadata:    o.Metadata,
-			})
-		}
-	}
-	return r
-}
-
 // OffsetResponsesByID is like OffsetResponses but keyed by topic ID.
 type OffsetResponsesByID map[TopicID]map[int32]OffsetResponse
 
@@ -491,19 +471,6 @@ func (os OffsetResponsesByID) Lookup(id TopicID, p int32) (OffsetResponse, bool)
 	}
 	o, exists := ps[p]
 	return o, exists
-}
-
-// Add adds an offset response for a given topic ID / partition.
-func (os *OffsetResponsesByID) Add(o OffsetResponse) {
-	if *os == nil {
-		*os = make(OffsetResponsesByID)
-	}
-	ot := (*os)[o.TopicID]
-	if ot == nil {
-		ot = make(map[int32]OffsetResponse)
-		(*os)[o.TopicID] = ot
-	}
-	ot[o.Partition] = o
 }
 
 // Each calls fn for every offset response.
@@ -530,27 +497,6 @@ func (os OffsetResponsesByID) Error() error {
 // Ok returns true if there are no errors.
 func (os OffsetResponsesByID) Ok() bool {
 	return os.Error() == nil
-}
-
-// ByName converts ID-keyed offset responses to name-keyed offset responses
-// using the provided id-to-name mapping. Responses whose ID is not in the
-// map are skipped.
-func (os OffsetResponsesByID) ByName(id2name map[TopicID]string) OffsetResponses {
-	r := make(OffsetResponses)
-	for id, ps := range os {
-		name, ok := id2name[id]
-		if !ok {
-			continue
-		}
-		rt := make(map[int32]OffsetResponse)
-		r[name] = rt
-		for p, o := range ps {
-			o.Topic = name
-			o.TopicID = id
-			rt[p] = o
-		}
-	}
-	return r
 }
 
 // TopicsSet is a set of topics and, per topic, a set of partitions.
