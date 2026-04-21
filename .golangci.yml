@@ -21,6 +21,7 @@ linters:
     - exhaustive
     - exptostd
     - fatcontext
+    - forbidigo
     - gocheckcompilerdirectives
     - gochecksumtype
     - gocritic
@@ -53,6 +54,17 @@ linters:
 
     exhaustive:
       default-signifies-exhaustive: true
+
+    forbidigo:
+      # In pkg/kgo non-test files we require xsync.Mutex / xsync.RWMutex.
+      # This lets testing/synctest treat mutex blocking as durably blocked;
+      # see pkg/kgo/internal/xsync.
+      forbid:
+        - pattern: ^sync\.Mutex$
+          msg: use xsync.Mutex in pkg/kgo so testing/synctest treats mutex waits as durably blocked
+        - pattern: ^sync\.RWMutex$
+          msg: use xsync.RWMutex in pkg/kgo so testing/synctest treats mutex waits as durably blocked
+      analyze-types: true
 
     gocritic:
       disabled-checks:
@@ -175,6 +187,13 @@ linters:
         path: _test\.go$
       - linters: [revive]
         text: "context-keys-type" # 848 opt-in uses deliberate string key
+        path: _test\.go$
+      # forbidigo (sync.Mutex/RWMutex ban) only applies to non-test pkg/kgo
+      # files directly in pkg/kgo/. The xsync package itself wraps sync, and
+      # kgo tests can still use sync.Mutex.
+      - linters: [forbidigo]
+        path-except: ^pkg/kgo/[^/]+\.go$
+      - linters: [forbidigo]
         path: _test\.go$
 
 issues:

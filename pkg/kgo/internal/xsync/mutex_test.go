@@ -18,7 +18,7 @@ func HammerMutex(m *Mutex, loops int, cdone chan bool) {
 			continue
 		}
 		m.Lock()
-		//nolint:staticcheck
+		//nolint:staticcheck,gocritic // hammer test copied from stdlib; deliberate immediate unlock to exercise Lock/Unlock pairing
 		m.Unlock()
 	}
 	cdone <- true
@@ -93,6 +93,7 @@ func reader(rwm *RWMutex, numIterations int, activity *int32, cdone chan bool) {
 			rwm.RUnlock()
 			panic(fmt.Sprintf("wlock(%d)\n", n))
 		}
+		//nolint:revive // busy-wait inside read lock; copied from stdlib test
 		for i := 0; i < 100; i++ {
 		}
 		atomic.AddInt32(activity, -1)
@@ -109,6 +110,7 @@ func writer(rwm *RWMutex, numIterations int, activity *int32, cdone chan bool) {
 			rwm.Unlock()
 			panic(fmt.Sprintf("wlock(%d)\n", n))
 		}
+		//nolint:revive // busy-wait inside write lock; copied from stdlib test
 		for i := 0; i < 100; i++ {
 		}
 		atomic.AddInt32(activity, -10000)
