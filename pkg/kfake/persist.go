@@ -2377,10 +2377,18 @@ func (c *Cluster) saveSessionState() error {
 
 	// Save fetch sessions (KIP-227) so clients' incremental fetches
 	// continue working across restart without a full-fetch fallback.
+	// Sessions idle for >1min are NOT saved: real Kafka evicts them
+	// via its eviction timer, and without a bound here, accumulated
+	// dead sessions from long-running test harnesses keep re-saving
+	// and re-loading indefinitely.
+	saveCutoff := time.Now().Add(-time.Minute)
 	var fetchSessionCount int
 	for brokerNode, bs := range c.fetchSessions.sessions {
 		var saved []sessionFetchSession
 		for _, fs := range bs {
+			if fs.lastUsed.Before(saveCutoff) {
+				continue
+			}
 			sf := sessionFetchSession{
 				ID:    fs.id,
 				Epoch: fs.epoch,

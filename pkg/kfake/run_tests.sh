@@ -262,13 +262,41 @@ start_server() {
 }
 
 # Kill server and wait for clean exit.
+#
+# Uses wait_for_exit (kill -0 polling) instead of bash `wait` because the
+# server may have been started by restart_loop, which runs in a subshell;
+# that makes the server a grand-child of main, and bash `wait` on a
+# grand-child silently no-ops. Without a real wait, the caller's rm -rf
+# and next start_server race the old server's still-in-flight saveToDisk
+# (which writes *.tmp files and renames them) -- the new server then
+# panics in persistInitialState with "rename *.tmp: no such file or
+# directory" because both processes are competing on the same data dir.
+# If the graceful shutdown overshoots the 10s poll window, SIGKILL.
+#
+# Then sweep ports 9092-9094 for any server process we failed to track.
+# restart_loop can race with its own kill: if we killed restart_loop
+# after it backgrounded a new server but before it wrote the pid to
+# SERVER_PID_FILE, that server is a tracked-nowhere orphan that would
+# otherwise still be writing to the data dir when the next iteration's
+# rm -rf runs.
 stop_server() {
     local pid
     pid=$(cat "$SERVER_PID_FILE" 2>/dev/null)
     if [ -n "$pid" ]; then
         kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null
+        if ! wait_for_exit "$pid"; then
+            kill -9 "$pid" 2>/dev/null || true
+            wait_for_exit "$pid" || true
+        fi
     fi
+    for port in 9092 9093 9094; do
+        local orphan
+        orphan=$(lsof -ti:$port 2>/dev/null || true)
+        if [ -n "$orphan" ]; then
+            kill -9 "$orphan" 2>/dev/null || true
+            wait_for_exit "$orphan" || true
+        fi
+    done
     SERVER_PID=""
 }
 
