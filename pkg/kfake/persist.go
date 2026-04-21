@@ -2124,6 +2124,15 @@ type (
 	sessionClassicGroup struct {
 		Leader  string                 `json:"leader"`
 		Members []sessionClassicMember `json:"members"`
+		// State captured at shutdown. On reload we re-run
+		// rebalance() if State != groupStable so that partitions
+		// that were orphaned by an in-progress rebalance (e.g. a
+		// LeaveGroup request arrived and transitioned to
+		// PreparingRebalance but the rebalance hadn't completed)
+		// get properly re-assigned. Zero value (groupEmpty) is
+		// treated as "no info" and does NOT force rebalance; empty
+		// groups re-initialize naturally as members join.
+		State groupState `json:"state,omitempty"`
 	}
 
 	sessionClassicMember struct {
@@ -2207,7 +2216,7 @@ func (c *Cluster) saveSessionState() error {
 				g.name, g.state, len(g.members), len(g.consumerMembers))
 			switch {
 			case len(g.members) > 0:
-				sg := sessionClassicGroup{Leader: g.leader}
+				sg := sessionClassicGroup{Leader: g.leader, State: g.state}
 				for _, m := range g.members {
 					sm := sessionClassicMember{
 						ID:                 m.memberID,

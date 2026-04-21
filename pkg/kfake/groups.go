@@ -3520,6 +3520,9 @@ func (g *group) validateMemberGeneration(memberID string, generation int32) int1
 // session state. Members whose session has expired (elapsed time since
 // shutdown >= session timeout) are skipped.
 func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGroup) {
+	// Provisionally set state to groupStable while restoring members;
+	// if the persisted sg.State was non-Stable we re-trigger the
+	// rebalance at the end of the function. See comment near the end.
 	g.state = groupStable
 	g.leader = sg.Leader
 	for _, sm := range sg.Members {
@@ -3564,6 +3567,18 @@ func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGro
 		g.state = groupEmpty
 		g.emptyAt = time.Now()
 		g.leader = ""
+		return
+	}
+	// If the pre-shutdown state was non-Stable, a rebalance was in
+	// progress (e.g. a LeaveGroup had transitioned the group to
+	// PreparingRebalance but the rebalance hadn't completed before
+	// shutdown). Re-trigger rebalance so members rejoin and the
+	// assignment reflects the current member set -- otherwise
+	// partitions owned by departed members stay orphaned. If the
+	// persisted state was Stable, the old assignment is still valid
+	// for the current members; do not force a rebalance.
+	if sg.State != groupStable && sg.State != groupEmpty {
+		g.rebalance()
 	}
 }
 
