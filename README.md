@@ -181,6 +181,7 @@ Supplementary information can be found in the docs directory:
 
 In alphabetical order,
 
+* [Abnormal AI](https://abnormal.ai/)
 * [Alpaca](https://alpaca.markets/blog/alpaca-launches-next-gen-order-management-system/)
 * [Artie](https://www.artie.com/)
 * [Banyan](https://banyan.com)
