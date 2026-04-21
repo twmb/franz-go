@@ -14,6 +14,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -35,7 +36,7 @@ type sink struct {
 	// but sequentially.
 	seqResps ring[*seqResp] // we never call die() on it
 
-	backoffMu   sync.Mutex // guards the following
+	backoffMu   xsync.Mutex // guards the following
 	needBackoff bool
 	backoffSeq  uint32 // prevents pile on failures
 
@@ -45,9 +46,9 @@ type sink struct {
 	// occurs, the backoff is not cleared.
 	consecutiveFailures atomic.Uint32
 
-	recBufsMu    sync.Mutex // guards the following
-	recBufs      []*recBuf  // contains all partition records for batch building
-	recBufsStart int        // incremented every req to avoid large batch starvation
+	recBufsMu    xsync.Mutex // guards the following
+	recBufs      []*recBuf   // contains all partition records for batch building
+	recBufsStart int         // incremented every req to avoid large batch starvation
 }
 
 type seqResp struct {
@@ -338,7 +339,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// context.Canceled error is from *that* context rather than the client
 	// context or something else. So, we go through some special care to
 	// track setting the ctx / looking up if it is canceled.
-	var holCtxMu sync.Mutex
+	var holCtxMu xsync.Mutex
 	var holCtx context.Context
 	ctxFn := func() context.Context {
 		holCtxMu.Lock()
@@ -943,7 +944,7 @@ func (s *sink) handleReqRespBatch(
 
 	err := kerr.ErrorForCode(rp.ErrorCode)
 	if errors.Is(err, kerr.MessageTooLarge) {
-		err = fmt.Errorf("%w (uncompressed_bytes=%d, compressed_bytes=%d).", err, batchMetrics.UncompressedBytes, batchMetrics.CompressedBytes)
+		err = fmt.Errorf("%w (uncompressed_bytes=%d, compressed_bytes=%d)", err, batchMetrics.UncompressedBytes, batchMetrics.CompressedBytes)
 	}
 	failUnknown := batch.owner.checkUnknownFailLimit(err)
 	switch {
@@ -1344,7 +1345,7 @@ type recBuf struct {
 	// of records buffered in total on this recBuf.
 	buffered atomic.Int64
 
-	mu sync.Mutex // guards r/w access to all fields below
+	mu xsync.Mutex // guards r/w access to all fields below
 
 	// sink is who is currently draining us. This can be modified
 	// concurrently during a metadata update.
@@ -1495,7 +1496,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		default: // processed as failure
 			recBuf.cl.prsPool.put(newBatch.records)
 			recBuf.cl.producer.promiseRecord(pr,
-				fmt.Errorf("%w (uncompressed_bytes=%d).", kerr.MessageTooLarge, pr.userSize()),
+				fmt.Errorf("%w (uncompressed_bytes=%d)", kerr.MessageTooLarge, pr.userSize()),
 			)
 			return true
 		}
@@ -1736,7 +1737,7 @@ type recBatch struct {
 	firstTimestamp    int64 // since unix epoch, in millis
 	maxTimestampDelta int64
 
-	mu      sync.Mutex    // guards appendTo's reading of records against failAllRecords emptying it
+	mu      xsync.Mutex   // guards appendTo's reading of records against failAllRecords emptying it
 	records []promisedRec // record w/ length, ts calculated
 }
 
@@ -2086,13 +2087,13 @@ func (cl *Client) baseProduceRequestLength() int32 {
 		2 + // int16 version
 		4 + // int32 correlation ID
 		2 // int16 client ID len (always non flexible)
-	    // empty tag section skipped; see below
+		// empty tag section skipped; see below
 
 	const produceRequestBaseOverhead int32 = 2 + // int16 transactional ID len (flexible or not, since we cap at 16382)
 		2 + // int16 acks
 		4 + // int32 timeout
 		4 // int32 topics non-flexible array length
-	    // empty tag section skipped; see below
+		// empty tag section skipped; see below
 
 	baseLength := messageRequestOverhead + produceRequestBaseOverhead
 	if cl.cfg.id != nil {
@@ -2310,8 +2311,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendArrayLen(dst, len(partitions))
 		}
 
-		var tmetrics map[int32]ProduceBatchMetrics
-		tmetrics = make(map[int32]ProduceBatchMetrics)
+		tmetrics := make(map[int32]ProduceBatchMetrics)
 		p.metrics[topic] = tmetrics
 
 		for partition, batch := range partitions {

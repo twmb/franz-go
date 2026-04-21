@@ -13,6 +13,7 @@ import (
 	"unsafe"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -52,7 +53,7 @@ type (
 		// FlushAcks waiters (broadcast happens under mu only
 		// when pendingAcks reaches 0, to keep the cond
 		// broadcast and the wait-loop's Load consistent).
-		ackMu       sync.Mutex
+		ackMu       xsync.Mutex
 		ackC        *sync.Cond
 		pendingAcks atomic.Int64
 
@@ -74,7 +75,7 @@ type (
 		// mu block //
 		//////////////
 
-		mu       sync.Mutex
+		mu       xsync.Mutex
 		cond     *sync.Cond
 		dying    bool // single-shot leave guard + incWorker gate
 		workers  int  // active goroutines (manage + source loops)
@@ -107,7 +108,7 @@ type (
 		// a similar flow actually makes the code worse.
 		assigned atomic.Bool
 
-		ackMu       sync.Mutex
+		ackMu       xsync.Mutex
 		pendingAcks []shareAckEntry // user acks (r.Ack, finalizePreviousPoll, batchAckRecords)
 		pendingGaps []shareAckRange // internal acks (gap acks, release-undeliverable)
 		closed      bool            // set to reject user-side acks arriving after shutdown

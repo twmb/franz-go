@@ -8,12 +8,12 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -41,7 +41,7 @@ type source struct {
 
 	session fetchSession // supports fetch sessions as per KIP-227
 
-	cursorsMu    sync.Mutex
+	cursorsMu    xsync.Mutex
 	cursors      []*cursor // contains all partitions being consumed on this source
 	cursorsStart int       // incremented every fetch req to ensure all partitions are fetched
 
@@ -52,7 +52,7 @@ type sourceShare struct {
 	s  *source // back-pointer for hook, sem, maybeShareConsume
 	sc *shareConsumer
 
-	mu           sync.Mutex
+	mu           xsync.Mutex
 	cursors      []*shareCursor
 	cursorsStart int
 	sessionEpoch int32              // 0=new, incremented on success, -1=close

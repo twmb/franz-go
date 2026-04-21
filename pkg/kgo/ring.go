@@ -2,6 +2,8 @@ package kgo
 
 import (
 	"sync"
+
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 )
 
 // The ring type is a dynamically-sized circular buffer with optional blocking
@@ -35,7 +37,7 @@ import (
 const minRingCap = 8
 
 type ring[T any] struct {
-	mu sync.Mutex
+	mu xsync.Mutex
 
 	elems []T // circular buffer, min capacity minRingCap
 	head  int // index of first element
