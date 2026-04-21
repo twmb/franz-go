@@ -3,7 +3,7 @@ module testing_with_kfake
 go 1.25.0
 
 require (
-	github.com/twmb/franz-go v1.20.7
+	github.com/twmb/franz-go v1.21.0
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260218055430-fc72d8313608
 )
 

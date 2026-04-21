@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/twmb/franz-go v1.21.0
-	github.com/twmb/franz-go/pkg/kadm v1.17.2
+	github.com/twmb/franz-go/pkg/kadm v1.18.0
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 )
 
