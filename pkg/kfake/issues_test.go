@@ -2858,3 +2858,123 @@ func TestIssue1296(t *testing.T) {
 		}
 	}
 }
+
+// TestDescribeTopicPartitionsCursor verifies KIP-966 pagination:
+// ResponsePartitionLimit caps the number of partitions per response and
+// NextCursor is set to the next un-emitted (topic, partition) pair. A
+// client walking the cursor should see every partition exactly once.
+// Also verifies that mid-topic cursors and bad cursor-topic combinations
+// behave correctly.
+func TestDescribeTopicPartitionsCursor(t *testing.T) {
+	t.Parallel()
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(3, "a"),
+		SeedTopics(5, "b"),
+		SeedTopics(2, "c"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Walk all topics with a small limit; accumulate (topic,partition)
+	// pairs and verify we see every partition exactly once in sorted
+	// order.
+	type tp struct {
+		t string
+		p int32
+	}
+	var got []tp
+	var cursor *kmsg.DescribeTopicPartitionsRequestCursor
+	for range 20 {
+		req := kmsg.NewPtrDescribeTopicPartitionsRequest()
+		req.ResponsePartitionLimit = 2
+		req.Cursor = cursor
+
+		kresp, err := cl.Broker(0).Request(ctx, req)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		resp := kresp.(*kmsg.DescribeTopicPartitionsResponse)
+		for _, rt := range resp.Topics {
+			if rt.ErrorCode != 0 {
+				t.Fatalf("topic %q err %v", *rt.Topic, kerr.ErrorForCode(rt.ErrorCode))
+			}
+			for _, rp := range rt.Partitions {
+				got = append(got, tp{*rt.Topic, rp.Partition})
+			}
+		}
+		if resp.NextCursor == nil {
+			break
+		}
+		nc := kmsg.NewDescribeTopicPartitionsRequestCursor()
+		nc.Topic = resp.NextCursor.Topic
+		nc.Partition = resp.NextCursor.Partition
+		cursor = &nc
+	}
+
+	want := []tp{
+		{"a", 0}, {"a", 1}, {"a", 2},
+		{"b", 0}, {"b", 1}, {"b", 2}, {"b", 3}, {"b", 4},
+		{"c", 0}, {"c", 1},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d partitions, want %d; got=%v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("partition %d: got %v want %v", i, got[i], want[i])
+		}
+	}
+
+	// Cursor mid-topic: start at (b, 3) listing only b - expect b3, b4.
+	req := kmsg.NewPtrDescribeTopicPartitionsRequest()
+	req.ResponsePartitionLimit = 10
+	rt := kmsg.NewDescribeTopicPartitionsRequestTopic()
+	rt.Topic = "b"
+	req.Topics = append(req.Topics, rt)
+	cur := kmsg.NewDescribeTopicPartitionsRequestCursor()
+	cur.Topic = "b"
+	cur.Partition = 3
+	req.Cursor = &cur
+
+	kresp, err := cl.Broker(0).Request(ctx, req)
+	if err != nil {
+		t.Fatalf("mid-cursor request: %v", err)
+	}
+	resp := kresp.(*kmsg.DescribeTopicPartitionsResponse)
+	if len(resp.Topics) != 1 || *resp.Topics[0].Topic != "b" {
+		t.Fatalf("expected 1 topic b, got %v", resp.Topics)
+	}
+	parts := resp.Topics[0].Partitions
+	if len(parts) != 2 || parts[0].Partition != 3 || parts[1].Partition != 4 {
+		t.Fatalf("expected b[3,4], got %v", parts)
+	}
+
+	// Cursor topic not in explicit topic list: expect an error. The
+	// broker returns InvalidRequest before the response is built, which
+	// surfaces as a BrokerErrorResponse.
+	req = kmsg.NewPtrDescribeTopicPartitionsRequest()
+	rt = kmsg.NewDescribeTopicPartitionsRequestTopic()
+	rt.Topic = "a"
+	req.Topics = append(req.Topics, rt)
+	cur = kmsg.NewDescribeTopicPartitionsRequestCursor()
+	cur.Topic = "b"
+	cur.Partition = 0
+	req.Cursor = &cur
+
+	if _, err := cl.Broker(0).Request(ctx, req); err == nil {
+		t.Fatal("expected error for cursor topic not in request list, got nil")
+	}
+}

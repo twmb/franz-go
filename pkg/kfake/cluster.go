@@ -47,6 +47,7 @@ type (
 		quotas             map[string]quotaEntry
 		telem              map[[16]byte]int32
 		telemNextID        int32
+		features           map[string]int16 // KIP-584 finalized feature levels, see 18_api_versions.go
 		fetchSessions      fetchSessions
 		groupConfigs       map[string]map[string]*string // group -> config key -> config value
 		shareGroups        shareGroups
@@ -159,8 +160,9 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			tnorms:    make(map[string]string),
 		},
 		// bcfgs initialized below via storeBcfgs
-		quotas: make(map[string]quotaEntry),
-		telem:  make(map[[16]byte]int32),
+		quotas:   make(map[string]quotaEntry),
+		telem:    make(map[[16]byte]int32),
+		features: defaultFinalizedFeatures(),
 
 		die: make(chan struct{}),
 	}
@@ -636,6 +638,8 @@ outer:
 			kresp, err = c.handleAddOffsetsToTxn(creq)
 		case kmsg.EndTxn:
 			kresp, err = c.handleEndTxn(creq)
+		case kmsg.WriteTxnMarkers:
+			kresp, err = c.handleWriteTxnMarkers(creq)
 		case kmsg.TxnOffsetCommit:
 			kresp, err = c.handleTxnOffsetCommit(creq)
 		case kmsg.DescribeACLs:
@@ -672,6 +676,8 @@ outer:
 			kresp, err = c.handleDescribeUserSCRAMCredentials(creq)
 		case kmsg.AlterUserSCRAMCredentials:
 			kresp, err = c.handleAlterUserSCRAMCredentials(creq)
+		case kmsg.UpdateFeatures:
+			kresp, err = c.handleUpdateFeatures(creq)
 		case kmsg.DescribeCluster:
 			kresp, err = c.handleDescribeCluster(creq)
 		case kmsg.DescribeProducers:
@@ -688,6 +694,10 @@ outer:
 			kresp, err = c.handleGetTelemetrySubscriptions(creq)
 		case kmsg.PushTelemetry:
 			kresp, err = c.handlePushTelemetry(creq)
+		case kmsg.ListConfigResources:
+			kresp, err = c.handleListConfigResources(creq)
+		case kmsg.DescribeTopicPartitions:
+			kresp, err = c.handleDescribeTopicPartitions(creq)
 		case kmsg.ConsumerGroupHeartbeat:
 			kresp, err = c.handleConsumerGroupHeartbeat(creq)
 		case kmsg.ConsumerGroupDescribe:
