@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/jcmturner/gokrb5/v8 v8.4.4
-	github.com/twmb/franz-go v1.20.7
+	github.com/twmb/franz-go v1.21.0
 )
 
 require (
