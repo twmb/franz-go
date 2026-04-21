@@ -58,6 +58,9 @@
 // Note that you MUST use a new [Metrics] instance per client: you'll get a panic if you don't.
 // This is necessary to avoid unexpected behaviour.
 //
+// The labels on broker-level metrics can be configured with the BrokerLabels
+// option to reduce cardinality or add dimensions like host or rack.
+//
 // Note that seed brokers use broker IDs prefixed with "seed_", with the number
 // corresponding to which seed it is.
 package kvictoria
@@ -151,10 +154,7 @@ func (m *Metrics) OnClientClosed(client *kgo.Client) {
 // OnBrokerConnect implements the [kgo.HookBrokerConnect] interface for metrics gathering.
 // This method is meant to be called by the hook system and not by the user.
 func (m *Metrics) OnBrokerConnect(meta kgo.BrokerMetadata, dialTime time.Duration, _ net.Conn, err error) {
-	labels := map[string]string{
-		"client_id": m.clientID,
-		"node_id":   kgo.NodeName(meta.NodeID),
-	}
+	labels := m.brokerLabels(meta)
 
 	if err != nil {
 		m.set.GetOrCreateCounter(m.buildName("connect_errors_total", labels)).Inc()
@@ -168,21 +168,13 @@ func (m *Metrics) OnBrokerConnect(meta kgo.BrokerMetadata, dialTime time.Duratio
 // OnBrokerDisconnect implements the [kgo.HookBrokerDisconnect] interface for metrics gathering.
 // This method is meant to be called by the hook system and not by the user
 func (m *Metrics) OnBrokerDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
-	labels := map[string]string{
-		"client_id": m.clientID,
-		"node_id":   kgo.NodeName(meta.NodeID),
-	}
-
-	m.set.GetOrCreateCounter(m.buildName("disconnects_total", labels)).Inc()
+	m.set.GetOrCreateCounter(m.buildName("disconnects_total", m.brokerLabels(meta))).Inc()
 }
 
 // OnBrokerE2E implements the [kgo.HookBrokerE2E] interface for metrics gathering
 // This method is meant to be called by the hook system and not by the user.
 func (m *Metrics) OnBrokerE2E(meta kgo.BrokerMetadata, _ int16, e2e kgo.BrokerE2E) {
-	labels := map[string]string{
-		"client_id": m.clientID,
-		"node_id":   kgo.NodeName(meta.NodeID),
-	}
+	labels := m.brokerLabels(meta)
 
 	if e2e.WriteErr != nil {
 		m.set.GetOrCreateCounter(m.buildName("write_errors_total", labels)).Inc()
@@ -208,12 +200,7 @@ func (m *Metrics) OnBrokerE2E(meta kgo.BrokerMetadata, _ int16, e2e kgo.BrokerE2
 // OnBrokerThrottle implements the [kgo.HookBrokerThrottle] interface for metrics gathering.
 // This method is meant to be called by the hook system and not by the user.
 func (m *Metrics) OnBrokerThrottle(meta kgo.BrokerMetadata, throttleInterval time.Duration, _ bool) {
-	labels := map[string]string{
-		"client_id": m.clientID,
-		"node_id":   kgo.NodeName(meta.NodeID),
-	}
-
-	m.set.GetOrCreateHistogram(m.buildName("request_throttled_seconds", labels)).Update(throttleInterval.Seconds())
+	m.set.GetOrCreateHistogram(m.buildName("request_throttled_seconds", m.brokerLabels(meta))).Update(throttleInterval.Seconds())
 }
 
 // OnGroupManageError implements the [kgo.HookBrokerThrottle] interface for metrics gathering.
@@ -234,12 +221,9 @@ func (m *Metrics) OnGroupManageError(err error) {
 // OnProduceBatchWritten implements the [kgo.HookProduceBatchWritten] interface for metrics gathering.
 // This method is meant to be called by the hook system and not by the user.
 func (m *Metrics) OnProduceBatchWritten(meta kgo.BrokerMetadata, topic string, partition int32, metrics kgo.ProduceBatchMetrics) {
-	labels := map[string]string{
-		"client_id": m.clientID,
-		"node_id":   kgo.NodeName(meta.NodeID),
-		"topic":     topic,
-		"partition": strconv.FormatInt(int64(partition), 10),
-	}
+	labels := m.brokerLabels(meta)
+	labels["topic"] = topic
+	labels["partition"] = strconv.FormatInt(int64(partition), 10)
 
 	m.set.GetOrCreateCounter(m.buildName("produce_uncompressed_bytes_total", labels)).Add(metrics.UncompressedBytes)
 	m.set.GetOrCreateCounter(m.buildName("produce_compressed_bytes_total", labels)).Add(metrics.CompressedBytes)
@@ -250,17 +234,32 @@ func (m *Metrics) OnProduceBatchWritten(meta kgo.BrokerMetadata, topic string, p
 // OnFetchBatchRead implements the [kgo.HookFetchBatchRead] interface for metrics gathering.
 // This method is meant to be called by the hook system and not by the user.
 func (m *Metrics) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, partition int32, metrics kgo.FetchBatchMetrics) {
-	labels := map[string]string{
-		"client_id": m.clientID,
-		"node_id":   kgo.NodeName(meta.NodeID),
-		"topic":     topic,
-		"partition": strconv.FormatInt(int64(partition), 10),
-	}
+	labels := m.brokerLabels(meta)
+	labels["topic"] = topic
+	labels["partition"] = strconv.FormatInt(int64(partition), 10)
 
 	m.set.GetOrCreateCounter(m.buildName("fetch_uncompressed_bytes_total", labels)).Add(metrics.UncompressedBytes)
 	m.set.GetOrCreateCounter(m.buildName("fetch_compressed_bytes_total", labels)).Add(metrics.CompressedBytes)
 	m.set.GetOrCreateCounter(m.buildName("fetch_batches_total", labels)).Inc()
 	m.set.GetOrCreateCounter(m.buildName("fetch_records_total", labels)).Add(metrics.NumRecords)
+}
+
+func (m *Metrics) brokerLabels(meta kgo.BrokerMetadata) map[string]string {
+	labels := map[string]string{"client_id": m.clientID}
+	if m.cfg.brokerLabelSet[BrokerNodeID] {
+		labels["node_id"] = kgo.NodeName(meta.NodeID)
+	}
+	if m.cfg.brokerLabelSet[BrokerHost] {
+		labels["host"] = meta.Host
+	}
+	if m.cfg.brokerLabelSet[BrokerRack] {
+		rack := ""
+		if meta.Rack != nil {
+			rack = *meta.Rack
+		}
+		labels["rack"] = rack
+	}
+	return labels
 }
 
 // buildName constructs a metric name for the VictoriaMetrics metrics library.
