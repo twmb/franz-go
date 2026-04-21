@@ -1,3 +1,251 @@
+v1.21.0
+===
+
+This is a relatively "major" minor release. It adds support for Kafka 4.2,
+adds full support for [KIP-932 share groups][KIP-932], adds
+[KIP-881 rack-aware partition assignment][KIP-881], adds a handful of other
+features / options, and fixes several niche bugs.
+
+The companion `kfake` package has also been significantly extended; it now
+supports **everything** except delegation tokens, streams APIs, and broker
+internal APIs. kfake can be used as a dumb localhost broker; it has an option
+to persist to disk to tolerate restarts (and it even handles quick restarts
+without interrupting any client state). See the run_tests.sh script and the
+main.go file in pkg/kfake if you want to see about bootstrapping this yourself.
+I may create some tiny 'dumbkafka' binary that supports running on localhost
+with a few options. Regardless, kfake is quite neat.
+
+The `kadm` package has been extended with new share APIs. See the
+incoming `kadm` tag for full details.
+
+[KIP-881]: https://cwiki.apache.org/confluence/display/KAFKA/KIP-881%3A+Rack-aware+Partition+Assignment+for+Kafka+Consumers
+[KIP-932]: https://cwiki.apache.org/confluence/display/KAFKA/KIP-932%3A+Queues+for+Kafka
+
+As a meta note, this was a significant time investment (>4w most evenings and
+weekends for KIP-932 alone). I _hope_ future releases require less work; 932 is
+the last major feature this library has been missing for a while, and of
+upcoming KIPs, only transactional support for 932 looks to _maybe_ be some
+effort. That said, if you get a lot of value from this and have a spare
+quarter, please consider sponsoring.
+
+## API additions
+
+### Share groups (KIP-932)
+
+franz-go now fully supports [KIP-932 share groups][KIP-932] for consuming.
+Share groups are the "queue-like" alternative to consumer groups: many
+consumers can share a single partition, records are individually
+acknowledged, and unacknowledged records are automatically redelivered.
+
+The new share group API mirrors the existing consumer group shape; see
+full documentation on pkg.go.dev:
+
+```go
+type AckStatus int8
+
+const (
+    AckAccept  AckStatus = 1
+    AckRelease AckStatus = 2
+    AckReject  AckStatus = 3
+    AckRenew   AckStatus = 4
+)
+
+type ShareAckResult struct { Topic string; Partition int32; Err error }
+type ShareAckResults []ShareAckResult
+
+func (ShareAckResults) Ok() bool
+func (ShareAckResults) Error() error
+
+func ShareGroup(group string) GroupOpt
+func ShareMaxRecords(n int32) GroupOpt
+func ShareMaxRecordsStrict() GroupOpt
+func ShareAckCallback(fn func(*Client, ShareAckResults)) GroupOpt
+
+func (*Client) MarkAcks(status AckStatus, rs ...*Record)
+func (*Client) FlushAcks(ctx context.Context) error
+
+func (*Record) Ack(status AckStatus)
+func (*Record) DeliveryCount() int32
+func (*Record) AcquisitionDeadline() time.Time
+```
+
+Two new `RecordFormatter` verbs were added alongside this:
+
+* `%D` - share group delivery count
+* `%A` - share group acquisition deadline (timestamp; supports the same
+  strftime/Go formatting as `%d`)
+
+### Rack-aware partition assignment (KIP-881)
+
+Both the range and sticky balancers now understand consumer racks. If you
+set `kgo.Rack`, the leader will preferentially assign you partitions whose
+leader is in the same rack, preserving the existing priority of balance
+over locality over stickiness. I was originally not planning to support this
+in franz-go since the next generation rebalancer was releasing at a similar
+time, but I suspect it's worth it to keep the client-driven rebalancing for
+a while.
+
+Custom balancers that use the consumer protocol can use the new
+`(*ConsumerBalancer).PartitionRacks()` method to access the computed
+partition-rack map.
+
+### Other new kgo APIs
+
+```go
+func AllowIdempotentProduceCancellation() ProducerOpt
+func ProducerBatchMaxBytesFn(fn func(string) int32) ProducerOpt
+func AlwaysRetryEOF() Opt
+
+type HookPollStart interface {
+    OnPollStart(ctx context.Context)
+}
+```
+
+* `AllowIdempotentProduceCancellation` permits cancellation of in-flight
+  idempotent records, at the cost of breaking idempotency's duplicate
+  guarantee. When a record is in-flight, the client cannot tell "never
+  written" from "written but reply lost". Cancelling leaves the client's
+  sequence window inconsistent with the broker: the next produce either
+  silently gap-accepts (broker wrote the cancelled records) or hits
+  `OUT_OF_ORDER_SEQUENCE` and forces a producer ID reload (broker did
+  not). Any application-level retry of a cancelled record that the
+  broker actually stored will duplicate on the broker - idempotent
+  dedupe cannot help because the window has reset. By default the
+  client refuses to cancel in this state and waits for the record's
+  outcome. Use this when time-bounded delivery matters more than
+  duplicate-avoidance. Incompatible with a transactional id.
+* `ProducerBatchMaxBytesFn` takes a topic name and returns the max batch
+  size for that topic, following the `RetryTimeout` / `RetryTimeoutFn`
+  pattern. Useful when you produce to multiple topics with different
+  broker-side `max.message.bytes`.
+* `AlwaysRetryEOF` keeps retrying EOF errors indefinitely for users whose
+  infrastructure considers EOF always transient. This option is actually
+  generally recommended for all users, BUT you really have to ensure your
+  SASL and TLS is setup correctly when using this option. Invalid SASL or
+  TLS is only visible as an EOF error, so the client by default uses
+  heuristics to hard fail requests without retrying if the first write triggers
+  an EOF. This has bit some users over time due to an EOF ALSO being seen
+  during restarts; this new option allows you to say "trust me, I know
+  my configuration is correct: keep retrying".
+* `HookPollStart` fires at the start of each `PollFetches` /
+  `PollRecords` call. Thanks [@rarguellof91](https://github.com/rarguellof91)!
+
+### Misc additions
+
+* `kadm` gained a `RequireStable` option for offset fetching.
+* `kfake.VirtualNetwork` plus a new `kgo` xsync package enable full
+  `testing/synctest` support against an in-process kfake cluster. See
+  `examples/testing_with_kfake_and_synctest`. Thanks
+  [@manuc-conf](https://github.com/manuc-conf)!
+
+## Behavior changes
+
+* `ApiVersions` is now sent on _every_ new broker connection, not just
+  the first one per broker. The broker uses the ApiVersions request's
+  `ClientSoftwareName` / `ClientSoftwareVersion` fields to scope KIP-714
+  metric subscriptions; caching and skipping ApiVersions meant later
+  connections (fetch, group, etc.) registered as `software=unknown`, and
+  one `kgo.Client` appeared as two software entities to the broker.
+  Versions are still cached for request-version selection, so this is
+  only a one-extra-request-per-connection cost.
+
+* Group consumer `OffsetFetch` now hardcodes `RequireStable=true`. The
+  prior behavior could return stale committed offsets during a
+  rebalance, and in the worst case, result in duplicate messages.
+  You no longer need to use the `RequireStableFetchOffsets` option.
+
+* `ErrRecordTimeout` now wraps the last retry error seen while waiting
+  on metadata in `waitUnknownTopic`. `errors.Is` continues to work for
+  `ErrRecordTimeout`; you can now also `errors.Is` the underlying cause
+  (e.g. SASL auth errors that previously disappeared).
+
+* `BlockRebalanceOnPoll` no longer gates the assign-side callback if the
+  user did not register `OnPartitionsAssigned`. Assign only adds
+  partitions, so a user's in-flight commit cannot reference anything
+  they don't still own; the gate only existed to serialize user
+  callbacks with poll.
+
+* `MessageTooLarge` errors now include the uncompressed and compressed
+  message sizes. Thanks [@anubhav21sharma](https://github.com/anubhav21sharma)!
+
+## Bug fixes
+
+* Fixed a KIP-951 bug where `ensureBrokers` could destroy unrelated
+  broker objects when the broker set changed. This would manifest to you
+  as "the broker chosen for the request is dead" (or does not exist).
+
+* `listOffsets` had two related bugs: a nil cursor panic in the drain
+  path, and a race where a metadata signal could be lost. These were
+  possible to encounter on extremely fast setups (the bugs were years
+  old, and I only encountered via localhost kfake testing).
+
+* The KIP-848 heartbeat path had several bugs that were shaken out by
+  long spin loops against the new kfake share/848 support (that said,
+  I am still not opting into KIP-848 by default, and will only allow
+  an option-based opt-in once KIP-1251 is released in Kafka 4.3).
+
+* `fetchOffsets` now validates `OffsetFetch` responses against what was
+  requested (brokers have been seen to omit partitions) and correctly
+  handles the group-level error code.
+
+* Fixed a TOCTOU race between `producerID` and `createReq` that could
+  construct a produce request with a stale producer ID.
+
+* `failDial` now actually clears the stale coordinator / controller
+  cache, so a single bad dial does not poison subsequent discovery.
+
+* Various smaller fixes: retrying when `broker.go` wrote 0 bytes (treat
+  as "didn't try"), transient dial errors now retry for the full
+  configured retry budget rather than the hard-coded ~1.5s cap (which
+  previously caused failures across 5-30s rolling restarts).
+
+## Improvements
+
+* `batchPromises` is now backpressured: the ring is a dynamically-sized
+  circular buffer that can block pushes at `max(maxBufferedRecords,
+  8192)`. Previously it could grow unboundedly and OOM the client when
+  records failed faster than `finishPromises` could process them.
+
+* Two rounds of allocation reductions in hot paths: the produce blocking
+  path no longer forces its closure onto the heap, `recBuf`'s linger
+  timer is reused, `brokerCxn`'s 4-byte read buffer is reused,
+  headerless records no longer allocate an empty header slice, and some
+  deprecated APIs were swapped out.
+
+* `InitProducerID` failures caused by transient broker errors (dial
+  refused, EOF across a broker restart, etc.) no longer surface as a
+  fatal "unrecoverable producer ID" error. The client now marks the
+  producer ID for reload on these errors so the next produce or begin
+  re-runs `InitProducerID` against the (probably now-available) broker.
+
+## Relevant commits
+
+- [`8854973c`](https://github.com/twmb/franz-go/commit/8854973c) **improvement** kgo: recover producer ID from transient broker errors in maybeRecoverProducerID
+- [`c9a91d11`](https://github.com/twmb/franz-go/commit/c9a91d11) **feature** kgo: add xsync package + kfake: add VirtualNetwork for synctest (thanks [@manuc-conf](https://github.com/manuc-conf)!)
+- [`a5a7c6f2`](https://github.com/twmb/franz-go/commit/a5a7c6f2) kgo: send ApiVersions on every new broker connection
+- [`14346ddc`](https://github.com/twmb/franz-go/commit/14346ddc) **feature** kgo: add rack-aware partition assignment (KIP-881)
+- [`40bf3e52`](https://github.com/twmb/franz-go/commit/40bf3e52) **feature** kgo: add HookPollStart hook (thanks [@rarguellof91](https://github.com/rarguellof91)!)
+- [`68c85147`](https://github.com/twmb/franz-go/commit/68c85147) **behavior change** kgo: skip BlockRebalanceOnPoll gate on assign with no OnPartitionsAssigned
+- [`6d9a0188`](https://github.com/twmb/franz-go/commit/6d9a0188) **feature** kgo: add %D (delivery count) and %A (acquisition deadline) to RecordFormatter
+- [`0f0bca22`](https://github.com/twmb/franz-go/commit/0f0bca22) **feature** kgo: add support for share groups (KIP-932)
+- [`8762d567`](https://github.com/twmb/franz-go/commit/8762d567) kgo: retry if we failed at 0 bytes written
+- [`3e2f61a8`](https://github.com/twmb/franz-go/commit/3e2f61a8) kgo: retry transient dial errors for the configured retry budget
+- [`857ed6dc`](https://github.com/twmb/franz-go/commit/857ed6dc) **behavior change** kgo: wrap last retry error into ErrRecordTimeout
+- [`d922b883`](https://github.com/twmb/franz-go/commit/d922b883) kgo: fix failDial to actually clear stale coordinator/controller cache
+- [`af5abf66`](https://github.com/twmb/franz-go/commit/af5abf66) **bugfix** kgo: fix KIP-951 ensureBrokers destroying unrelated broker objects
+- [`6c7aab54`](https://github.com/twmb/franz-go/commit/6c7aab54) **bugfix** kgo: fix listOrEpoch drain and nil cursor panic in listOffsets
+- [`416e8269`](https://github.com/twmb/franz-go/commit/416e8269) kgo: do not cancel prior in-flight offset commits
+- [`2f666797`](https://github.com/twmb/franz-go/commit/2f666797) kgo: simplify STALE_MEMBER_EPOCH retry in offset commit
+- [`9dde6ad8`](https://github.com/twmb/franz-go/commit/9dde6ad8) **behavior change** kgo: hardcode RequireStable for group consumer OffsetFetch
+- [`8a9400df`](https://github.com/twmb/franz-go/commit/8a9400df) **bugfix** kgo: fix listOrEpoch race where metadata signal is lost
+- [`0338467d`](https://github.com/twmb/franz-go/commit/0338467d) **feature** kgo: add AllowIdempotentProduceCancellation option
+- [`bc46151a`](https://github.com/twmb/franz-go/commit/bc46151a) **feature** kgo: add ProducerBatchMaxBytesFn for per-topic batch size limits
+- [`de2dff52`](https://github.com/twmb/franz-go/commit/de2dff52) **bugfix** kgo: handle group-level error code in fetchOffsets
+- [`45ec9cfb`](https://github.com/twmb/franz-go/commit/45ec9cfb) **bugfix** kgo: fix TOCTOU race between producerID and createReq
+- [`63cf8fa6`](https://github.com/twmb/franz-go/commit/63cf8fa6) kgo: add backpressure to batchPromises ring buffer
+- [`9f15841b`](https://github.com/twmb/franz-go/commit/9f15841b) **feature** kgo: add AlwaysRetryEOF option
+- [`1de163c3`](https://github.com/twmb/franz-go/commit/1de163c3) include uncompressed/compressed message size in MessageTooLarge error (thanks [@anubhav21sharma](https://github.com/anubhav21sharma)!)
+
 v1.20.7
 ===
 

@@ -22,7 +22,7 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - Full Exactly-Once-Semantics (EOS)
 - Idempotent & transactional producers
 - Simple (legacy) consumer
-- Group consumers with eager (roundrobin, range, sticky) and cooperative (cooperative-sticky) balancers
+- Group consumers with eager (roundrobin, range, sticky) and cooperative (cooperative-sticky) balancers, with optional rack-aware partition assignment (KIP-881)
 - Share group (queue) consumers (KIP-932)
 - All compression types supported: gzip, snappy, lz4, zstd
 - SSL/TLS provided through custom dialer options
