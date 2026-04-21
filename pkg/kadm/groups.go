@@ -2418,6 +2418,11 @@ func (ds DescribedShareGroups) Error() error {
 	return nil
 }
 
+// Ok returns true if there are no errors across all described groups.
+func (ds DescribedShareGroups) Ok() bool {
+	return ds.Error() == nil
+}
+
 // GroupIDs returns a sorted list of all group IDs.
 func (ds DescribedShareGroups) GroupIDs() []string {
 	all := make([]string, 0, len(ds))
@@ -2838,6 +2843,11 @@ func (os ShareOffsets) Error() error {
 	return nil
 }
 
+// Ok returns true if there are no errors.
+func (os ShareOffsets) Ok() bool {
+	return os.Error() == nil
+}
+
 // DescribedShareGroupOffsets contains the result of describing offsets for a
 // single share group.
 type DescribedShareGroupOffsets struct {
@@ -3025,6 +3035,11 @@ func (rs AlterShareGroupOffsetsResponses) Error() error {
 	return nil
 }
 
+// Ok returns true if there are no errors.
+func (rs AlterShareGroupOffsetsResponses) Ok() bool {
+	return rs.Error() == nil
+}
+
 // AlterShareGroupOffsets alters the start offsets for the given share group
 // (KIP-932). The group must be empty (not actively being consumed). The At
 // field in each Offset is used as the new StartOffset.
@@ -3078,6 +3093,15 @@ func (cl *Client) AlterShareGroupOffsets(ctx context.Context, group string, offs
 // the error will be nil.
 type DeleteShareGroupOffsetsResponses map[string]error
 
+// Lookup returns the error for t and whether it exists in the responses.
+func (rs DeleteShareGroupOffsetsResponses) Lookup(t string) (error, bool) { //nolint:revive // error comes first, it is what it is
+	if len(rs) == 0 {
+		return nil, false
+	}
+	err, exists := rs[t]
+	return err, exists
+}
+
 // EachError calls fn for every topic that has a non-nil error.
 func (rs DeleteShareGroupOffsetsResponses) EachError(fn func(string, error)) {
 	for t, err := range rs {
@@ -3095,6 +3119,11 @@ func (rs DeleteShareGroupOffsetsResponses) Error() error {
 		}
 	}
 	return nil
+}
+
+// Ok returns true if there are no errors.
+func (rs DeleteShareGroupOffsetsResponses) Ok() bool {
+	return rs.Error() == nil
 }
 
 // DeleteShareGroupOffsets deletes share group offsets for the given topics
