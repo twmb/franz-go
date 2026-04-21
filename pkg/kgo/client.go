@@ -1552,28 +1552,30 @@ type retryable struct {
 }
 
 type failDial struct {
-	fails   int8
 	clearFn func()
 }
 
-// The controller and group/txn coordinators are cached. If dialing the
-// cached broker fails, we clear the cache immediately so that the next
-// retry does a fresh lookup, and we return errChosenBrokerDead to make
-// the retryable loop actually retry with backoff (dial errors are
-// otherwise not retryable by shouldRetry, and shouldRetryNext cannot
-// help because loadCoordinator returns the same stale cached broker).
+// handleDialErr converts transient dial errors into errChosenBrokerDead so
+// that the retryable loop retries with backoff. isRetryableBrokerErr excludes
+// dial errors by design, and shouldRetryNext cannot help because pinned broker
+// functions return the same broker every time.
 //
-// After 3 dial failures we give up and return the original error.
+// On every dial failure we call clearFn to drop cached controller and
+// coordinator entries pointing at the dead broker. We call it every time, not just
+// once, because between retries the cache may be repopulated with a different
+// broker that also fails. The clearFns are idempotent.
+//
+// Permanent dial errors (NXDOMAIN, EACCES, EPERM) still clear the cache but
+// are not retried. Retries are bounded by retryTimeout / ctx / RequestRetries.
 func (d *failDial) handleDialErr(err error) error {
 	if !isAnyDialErr(err) {
 		return err
 	}
 	d.clearFn()
-	d.fails++
-	if d.fails <= 3 {
-		return errChosenBrokerDead
+	if isPermanentDialErr(err) {
+		return err
 	}
-	return err
+	return errChosenBrokerDead
 }
 
 func (r *retryable) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
@@ -2116,6 +2118,24 @@ func (cl *Client) deleteStaleCoordinator(name string, typ int8) {
 	}
 }
 
+// deleteStaleCoordinatorsByNode removes all cached coordinator entries
+// resolved to the given broker. Entries that are actively loading are
+// skipped.
+func (cl *Client) deleteStaleCoordinatorsByNode(node int32) {
+	cl.coordinatorsMu.Lock()
+	defer cl.coordinatorsMu.Unlock()
+	for k, v := range cl.coordinators {
+		if v == nil || v.node != node {
+			continue
+		}
+		select {
+		case <-v.loadWait:
+			delete(cl.coordinators, k)
+		default:
+		}
+	}
+}
+
 type brokerOrErr struct {
 	b   *broker
 	err error
@@ -2141,7 +2161,10 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 		cl.maybeDeleteCachedMeta(false, topics...)
 	}
 
-	d := failDial{clearFn: func() { cl.forgetControllerID(r.last.meta.NodeID) }}
+	d := failDial{clearFn: func() {
+		cl.forgetControllerID(r.last.meta.NodeID)
+		cl.deleteStaleCoordinatorsByNode(r.last.meta.NodeID)
+	}}
 	r.parseRetryErr = func(resp kmsg.Response, err error) error {
 		if err != nil {
 			return d.handleDialErr(err)
@@ -2301,7 +2324,10 @@ func (cl *Client) handleReqWithCoordinator(
 	req kmsg.Request,
 ) (*broker, kmsg.Response, error) {
 	r := cl.retryableBrokerFn(coordinator)
-	d := failDial{clearFn: func() { cl.deleteStaleCoordinator(name, typ) }}
+	d := failDial{clearFn: func() {
+		cl.forgetControllerID(r.last.meta.NodeID)
+		cl.deleteStaleCoordinatorsByNode(r.last.meta.NodeID)
+	}}
 	r.parseRetryErr = func(resp kmsg.Response, err error) error {
 		if err != nil {
 			return d.handleDialErr(err)
@@ -2467,9 +2493,24 @@ func (b *Broker) request(ctx context.Context, retry bool, req kmsg.Request) (kms
 				resp, err = br.waitResp(ctx, req)
 			}
 		} else {
-			resp, err = b.cl.retryableBrokerFn(func() (*broker, error) {
+			r := b.cl.retryableBrokerFn(func() (*broker, error) {
 				return b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
-			}).Request(ctx, req)
+			})
+			// Pinned by ID: on dial failure, retry with backoff to give
+			// the broker time to come back (e.g. rolling restart).
+			// Also clear cached controller/coordinator entries pointing
+			// at this broker so other code paths re-resolve.
+			d := failDial{clearFn: func() {
+				b.cl.forgetControllerID(b.id)
+				b.cl.deleteStaleCoordinatorsByNode(b.id)
+			}}
+			r.parseRetryErr = func(_ kmsg.Response, err error) error {
+				if err != nil {
+					return d.handleDialErr(err)
+				}
+				return nil
+			}
+			resp, err = r.Request(ctx, req)
 		}
 	}()
 
