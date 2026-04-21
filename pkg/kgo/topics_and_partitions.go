@@ -19,6 +19,11 @@ import (
 // HELPERS // -- ugly types to eliminate the toil of nil maps and lookups
 /////////////
 
+type tidp struct {
+	id [16]byte
+	p  int32
+}
+
 func strtid(tid [16]byte) string {
 	return base64.RawURLEncoding.EncodeToString(tid[:])
 }
@@ -542,18 +547,36 @@ type topicPartition struct {
 	// whether the data changed (leader or leader epoch, etc.).
 	topicPartitionData
 
-	// If we do not have a load error, we copy the records and cursor
-	// pointers from the old after updating any necessary fields in them
-	// (see migrate functions below).
+	// If we do not have a load error, we copy the records, cursor, or
+	// shareCursor pointer from the old after updating any necessary
+	// fields in them (see migrate functions below).
 	//
-	// Only one of records or cursor is non-nil.
-	records *recBuf
-	cursor  *cursor
+	// Exactly one of records, cursor, or shareCursor is non-nil. The
+	// records field is for produce, cursor for classic consume, and
+	// shareCursor for share consume. shareCursor lives forever on the
+	// topicPartition; its source field updates on leader migration.
+	records     *recBuf
+	cursor      *cursor
+	shareCursor *shareCursor
 }
+
+// partitionKind is what role a topicPartition plays for this client:
+// produce, classic consume, or share consume. Each partition is exactly
+// one of these.
+type partitionKind uint8
+
+const (
+	partitionKindProduce partitionKind = iota
+	partitionKindConsume
+	partitionKindShare
+)
 
 func (tp *topicPartition) partition() int32 {
 	if tp.records != nil {
 		return tp.records.partition
+	}
+	if tp.shareCursor != nil {
+		return tp.shareCursor.partition
 	}
 	return tp.cursor.partition
 }
@@ -647,6 +670,19 @@ func (old *topicPartition) migrateCursorTo( //nolint:revive // old/new naming ma
 
 	old.cursor.source.addCursor(old.cursor)
 	new.cursor = old.cursor
+}
+
+func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) {
+	c := tp.shareCursor
+	cl.sinksAndSourcesMu.Lock()
+	sns := cl.sinksAndSources[new.leader]
+	cl.sinksAndSourcesMu.Unlock()
+	if oldSource := c.source.Load(); oldSource != nil {
+		oldSource.removeShareCursor(c)
+	}
+	c.source.Store(sns.source)
+	sns.source.addShareCursor(c)
+	new.shareCursor = c
 }
 
 type kip951move struct {

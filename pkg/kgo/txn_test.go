@@ -154,13 +154,29 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
 
 	txid := randsha()
+	// Under -race with full-suite parallel load on a single broker, an
+	// otherwise-fast commit can take longer than the default 60s,
+	// triggering the broker's TransactionTimeout and bumping the
+	// producer epoch -- the next TxnOffsetCommit then fails with
+	// InvalidProducerEpoch (which is fatal post-KIP-890 and rightly
+	// fails the test). Give more slack under -race.
+	txnTimeout := 60 * time.Second
+	if testIsRace {
+		txnTimeout = 3 * time.Minute
+	}
 	opts := []Opt{
 		// Kraft sometimes returns success from topic creation, and
 		// then returns UnknownTopicXyz for a while in metadata loads.
 		// It also returns NotLeaderXyz; we handle both problems.
 		UnknownTopicRetries(-1),
 		TransactionalID(txid),
-		TransactionTimeout(60 * time.Second),
+		TransactionTimeout(txnTimeout),
+		// Transactional tests use an instance ID (below) so member
+		// death leaves the session dangling until the session timeout.
+		// The broker default (up to 45s) keeps partitions locked long
+		// enough that the test deadline can fire before the next
+		// consumer joins, so cap to 20s explicitly.
+		SessionTimeout(20 * time.Second),
 		WithLogger(testLogger()),
 		// Control records have their own unique offset, so for testing,
 		// we keep the record to ensure we do not doubly consume control
@@ -200,17 +216,20 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			if consumed := int(c.consumed.Load()); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
-				panic(fmt.Sprintf("invalid: consumed too much from %s (at %d, group %s, tx %s)", c.consumeFrom, consumed, c.group, txid))
+				c.mu.Lock()
+				npo := len(c.partOffsets)
+				c.mu.Unlock()
+				panic(fmt.Sprintf("invalid: consumed too much from %s (at %d, uniq_part_offsets %d, group %s, tx %s)", c.consumeFrom, consumed, npo, c.group, txid))
 			}
 			continue
 		}
 
 		if fetchErrs := fetches.Errors(); len(fetchErrs) > 0 {
-			c.errCh <- fmt.Errorf("poll got unexpected errs: %v", fetchErrs)
+			c.sendErr(fmt.Errorf("poll got unexpected errs: %v", fetchErrs))
 		}
 
 		if err := txnSess.Begin(); err != nil {
-			c.errCh <- fmt.Errorf("BeginTransaction unexpected err: %v", err)
+			c.sendErr(fmt.Errorf("BeginTransaction unexpected err: %v", err))
 		}
 
 		// We save everything we consume in fetchRecs and only account
@@ -231,10 +250,10 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			}
 			keyNum, err := strconv.Atoi(string(r.Key))
 			if err != nil {
-				c.errCh <- err
+				c.sendErr(err)
 			}
 			if !bytes.Equal(r.Value, c.expBody) {
-				c.errCh <- fmt.Errorf("body not what was expected")
+				c.sendErr(fmt.Errorf("body not what was expected"))
 			}
 			fetchRecs[r.Partition] = append(fetchRecs[r.Partition], fetchRec{offset: r.Offset, num: keyNum})
 
@@ -247,7 +266,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 				},
 				func(_ *Record, err error) {
 					if err != nil && !errors.Is(err, ErrAborting) {
-						c.errCh <- fmt.Errorf("unexpected transactional produce err: %v", err)
+						c.sendErr(fmt.Errorf("unexpected transactional produce err: %v", err))
 					}
 				},
 			)
@@ -258,7 +277,16 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 
 		committed, err := txnSess.End(context.Background(), TransactionEndTry(wantCommit))
 		if err != nil {
-			c.errCh <- fmt.Errorf("flush unexpected err: %v", err)
+			// Any err here means kgo's txn.go isAbortableCommitErr
+			// did NOT absorb this error -- either it's a genuinely
+			// fatal condition (producer fence, auth failure) or a
+			// new transient case kgo should be teaching to absorb.
+			// Either way the test should fail so we notice. We
+			// still `continue` so the background ETL goroutines
+			// don't over-count fetchRecs (the records aren't
+			// durably consumed) before the test exit path fires.
+			c.sendErr(fmt.Errorf("flush unexpected err: %v", err))
+			continue
 		} else if !committed {
 			if !wantCommit {
 				return
@@ -274,7 +302,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			for _, rec := range recs {
 				po := partOffset{part, rec.offset}
 				if _, exists := c.partOffsets[po]; exists {
-					c.errCh <- fmt.Errorf("saw double offset t %s p%do%d (txn #%d, txid %s)", c.consumeFrom, po.part, po.offset, ntxns, txid)
+					c.sendErr(fmt.Errorf("saw double offset t %s p%do%d (txn #%d, txid %s)", c.consumeFrom, po.part, po.offset, ntxns, txid))
 				}
 				c.partOffsets[po] = struct{}{}
 

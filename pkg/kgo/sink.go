@@ -751,6 +751,17 @@ func (s *sink) handleReqRespNoack(b *bytes.Buffer, debug bool, req *produceReque
 }
 
 func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response, err error) {
+	// Bump retry counter for every batch in this request. Runs once per
+	// br.do completion, not per AppendTo call, so the broker-level
+	// zero-bytes-written retry at broker.go does not double-count.
+	for _, partitions := range req.batches.bs {
+		for _, batch := range partitions {
+			batch.mu.Lock()
+			batch.tries++
+			batch.mu.Unlock()
+		}
+	}
+
 	if err != nil {
 		s.handleReqClientErr(req, err)
 		return
@@ -2314,8 +2325,16 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 				batch.mu.Unlock()
 				continue
 			}
+			// canFailFromLoadErrs is a monotonic one-way mutation
+			// (true -> false, never the other way). It is safe inside
+			// AppendTo even under the broker-level zero-bytes-written
+			// retry path at broker.go, because the retry re-invokes
+			// AppendTo on the same request; the second call sets the
+			// same value with no behavior change. Any mutation in
+			// AppendTo that affects the serialized bytes must satisfy
+			// the same monotonicity criterion, or it must move out of
+			// AppendTo (see tries, moved to handleReqResp).
 			batch.canFailFromLoadErrs = false // we are going to write this batch: the response status is now unknown
-			batch.tries++
 			var pmetrics ProduceBatchMetrics
 			if p.version < 3 {
 				dst, pmetrics = batch.appendToAsMessageSet(dst, uint8(p.version), p.compressor)

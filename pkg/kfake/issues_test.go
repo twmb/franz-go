@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"context"
+	"hash/crc32"
 	"net"
 	"strconv"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 func TestIssue885(t *testing.T) {
@@ -224,6 +226,7 @@ func TestIssue905(t *testing.T) {
 
 	var leaderReqs, followerReqs atomic.Int32
 	allowFollower := make(chan struct{}, 1)
+	followerHandled := make(chan struct{}, 5)
 	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
 
@@ -265,6 +268,7 @@ func TestIssue905(t *testing.T) {
 
 		<-allowFollower
 		followerReqs.Add(1)
+		followerHandled <- struct{}{}
 
 		return nil, nil, false
 	})
@@ -305,6 +309,7 @@ func TestIssue905(t *testing.T) {
 	{
 		allowFollower <- struct{}{}
 		fs := cl.PollFetches(ctx)
+		<-followerHandled // drain signal from the first follower fetch
 		chkfs(fs, 0)
 		if lr := leaderReqs.Load(); lr != 1 {
 			t.Errorf("stage 1 leader reqs %d != exp 1", lr)
@@ -315,24 +320,35 @@ func TestIssue905(t *testing.T) {
 		allowFollower <- struct{}{} // allow a background buffered fetch
 	}
 
-	// Sleep past the recheck interval so the client rechecks the preferred replica.
-	time.Sleep(150 * time.Millisecond)
-	for followerReqs.Load() != 2 {
-		time.Sleep(50 * time.Millisecond)
+	// Wait for the background fetch to complete. After the follower
+	// handler fires, the source is either processing the response or
+	// blocked on its internal semaphore (waiting for PollFetches to
+	// drain the buffer). Either way, no new createReq has run, so
+	// leaderReqs is stable -- check it now.
+	<-followerHandled
+	if lr := leaderReqs.Load(); lr != 1 {
+		t.Errorf("stage 2 leader reqs %d != exp 1", lr)
 	}
+
+	// Sleep past the recheck interval WHILE the source is blocked on
+	// its semaphore. The cursor's moveAt (set in stage 1) becomes
+	// stale (>100ms old). When PollFetches below drains the buffer and
+	// unblocks the semaphore, the source's next createReq will see
+	// the stale moveAt and trigger a recheck.
+	time.Sleep(150 * time.Millisecond)
+
 	{
 		fs := cl.PollFetches(ctx)
 		chkfs(fs, 1)
-		if lr := leaderReqs.Load(); lr != 1 {
-			t.Errorf("stage 2 leader reqs %d != exp 1", lr)
-		}
 		if fr := followerReqs.Load(); fr != 2 {
 			t.Errorf("stage 2 follower reqs reqs %d != exp 2", fr)
 		}
 	}
 
-	// Poll again. This should go back to the leader, then the follower
-	// again.
+	// PollFetches unblocked the source. Its createReq sees stale
+	// moveAt and triggers a recheck: cursor goes to leader
+	// (leaderReqs=2), redirected back to follower, follower fetch
+	// blocks on allowFollower. Send a token and poll again.
 	{
 		allowFollower <- struct{}{}
 		fs := cl.PollFetches(ctx)
@@ -1338,13 +1354,18 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 
 	groupID := "test-group-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 
-	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	cl1, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cl.Close()
+	defer cl1.Close()
+	cl2, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl2.Close()
 
-	joinGroup := func(memberID string, metadata []byte) (*kmsg.JoinGroupResponse, error) {
+	joinGroup := func(cl *kgo.Client, memberID string, metadata []byte) (*kmsg.JoinGroupResponse, error) {
 		req := kmsg.NewJoinGroupRequest()
 		req.Group = groupID
 		req.MemberID = memberID
@@ -1359,7 +1380,7 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 		return resp, err
 	}
 
-	syncGroup := func(memberID string, gen int32, isLeader bool, assignment []byte) (*kmsg.SyncGroupResponse, error) {
+	syncGroup := func(cl *kgo.Client, memberID string, gen int32, isLeader bool, assignment []byte) (*kmsg.SyncGroupResponse, error) {
 		req := kmsg.NewSyncGroupRequest()
 		req.Group = groupID
 		req.MemberID = memberID
@@ -1378,7 +1399,7 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	assignment := []byte{0, 0, 0, 0}
 
 	// m1 joins, gets MemberIDRequired, rejoins with ID
-	resp1, err := joinGroup("", metadataV1)
+	resp1, err := joinGroup(cl1, "", metadataV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1387,7 +1408,7 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	}
 	m1ID := resp1.MemberID
 
-	resp1, err = joinGroup(m1ID, metadataV1)
+	resp1, err = joinGroup(cl1, m1ID, metadataV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1400,7 +1421,7 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	gen1 := resp1.Generation
 
 	// m1 syncs as leader
-	syncResp, err := syncGroup(m1ID, gen1, true, assignment)
+	syncResp, err := syncGroup(cl1, m1ID, gen1, true, assignment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1409,7 +1430,7 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	}
 
 	// m2 joins (initial), gets MemberIDRequired
-	resp2, err := joinGroup("", metadataV1)
+	resp2, err := joinGroup(cl2, "", metadataV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1440,11 +1461,11 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		resp2Rebalance, err2 = joinGroup(m2ID, metadataV1)
+		resp2Rebalance, err2 = joinGroup(cl2, m2ID, metadataV1)
 	}()
 	<-m2Received
 
-	resp1Rebalance, err1 := joinGroup(m1ID, metadataV1)
+	resp1Rebalance, err1 := joinGroup(cl1, m1ID, metadataV1)
 	wg.Wait()
 
 	if err1 != nil {
@@ -1459,9 +1480,9 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	gen2 := resp1.Generation
 
 	// Sync both members to reach Stable state.
-	_, _ = syncGroup(m1ID, gen2, resp1.LeaderID == m1ID, assignment)
+	_, _ = syncGroup(cl1, m1ID, gen2, resp1.LeaderID == m1ID, assignment)
 	if resp2 != nil {
-		_, _ = syncGroup(m2ID, gen2, resp2.LeaderID == m2ID, assignment)
+		_, _ = syncGroup(cl2, m2ID, gen2, resp2.LeaderID == m2ID, assignment)
 	}
 
 	// THE CRITICAL TEST: m2 (non-leader) rejoins with CHANGED metadata
@@ -1482,7 +1503,7 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		resp2, err = joinGroup(m2ID, metadataV2)
+		resp2, err = joinGroup(cl2, m2ID, metadataV2)
 	}()
 
 	// Wait for m2's JoinGroup to arrive at the server.
@@ -1497,7 +1518,7 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	default:
 		// m2's JoinGroup is blocking - rebalance was triggered (correct).
 		// Complete the rebalance by having m1 rejoin.
-		if _, err := joinGroup(m1ID, metadataV1); err != nil {
+		if _, err := joinGroup(cl1, m1ID, metadataV1); err != nil {
 			t.Fatalf("m1 rejoin error: %v", err)
 		}
 		<-done
@@ -1604,19 +1625,23 @@ func TestKIP447RequireStable(t *testing.T) {
 		}
 	}
 
-	// Use v8+ format with Groups field to work with auto-negotiated versions
+	// Use v8+ format with Groups field to work with auto-negotiated versions.
+	// Set TopicID for v10+ where Topic is not serialized on the wire.
+	ti := c.TopicInfo(testTopic)
 	fetchReq := kmsg.NewOffsetFetchRequest()
 	fetchReq.RequireStable = true
 	rg := kmsg.NewOffsetFetchRequestGroup()
 	rg.Group = groupID
 	rgt := kmsg.NewOffsetFetchRequestGroupTopic()
 	rgt.Topic = testTopic
+	rgt.TopicID = ti.TopicID
 	rgt.Partitions = []int32{0}
 	rg.Topics = append(rg.Topics, rgt)
 	fetchReq.Groups = append(fetchReq.Groups, rg)
 
-	// Test 1: OffsetFetch with RequireStable=true should return UNSTABLE_OFFSET_COMMIT.
-	// Use Broker.Request to bypass the sharder, which retries retriable errors.
+	// Test 1: OffsetFetch with RequireStable=true should return UNSTABLE_OFFSET_COMMIT
+	// per-partition (not per-group -- Kafka sets it on each partition).
+	// Use Broker.Request to bypass the sharder, which retries retryable errors.
 	kresp, err := rawClient.Broker(0).Request(ctx, &fetchReq)
 	if err != nil {
 		t.Fatalf("OffsetFetch RequireStable=true failed: %v", err)
@@ -1625,8 +1650,11 @@ func TestKIP447RequireStable(t *testing.T) {
 	if len(fetchResp.Groups) == 0 {
 		t.Fatal("no groups in RequireStable=true response")
 	}
-	if fetchResp.Groups[0].ErrorCode != kerr.UnstableOffsetCommit.Code {
-		t.Errorf("Test 1: expected UNSTABLE_OFFSET_COMMIT (88), got error code %d", fetchResp.Groups[0].ErrorCode)
+	if len(fetchResp.Groups[0].Topics) == 0 || len(fetchResp.Groups[0].Topics[0].Partitions) == 0 {
+		t.Fatal("no partitions in RequireStable=true response")
+	}
+	if ec := fetchResp.Groups[0].Topics[0].Partitions[0].ErrorCode; ec != kerr.UnstableOffsetCommit.Code {
+		t.Errorf("Test 1: expected per-partition UNSTABLE_OFFSET_COMMIT (88), got error code %d", ec)
 	}
 
 	// Test 2: OffsetFetch with RequireStable=false should succeed (even with pending txn)
@@ -1640,7 +1668,13 @@ func TestKIP447RequireStable(t *testing.T) {
 		t.Fatal("no groups in RequireStable=false response")
 	}
 	if fetchResp.Groups[0].ErrorCode != 0 {
-		t.Errorf("Test 2: expected no error, got error code %d", fetchResp.Groups[0].ErrorCode)
+		t.Errorf("Test 2: expected no group error, got error code %d", fetchResp.Groups[0].ErrorCode)
+	}
+	if len(fetchResp.Groups[0].Topics) == 0 || len(fetchResp.Groups[0].Topics[0].Partitions) == 0 {
+		t.Fatal("no partitions in RequireStable=false response")
+	}
+	if ec := fetchResp.Groups[0].Topics[0].Partitions[0].ErrorCode; ec != 0 {
+		t.Errorf("Test 2: expected no partition error, got error code %d", ec)
 	}
 
 	// Commit the transaction.
@@ -2631,5 +2665,90 @@ type connCountHook struct {
 func (h *connCountHook) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
 	if err == nil {
 		h.connects.Add(1)
+	}
+}
+
+// TestIssue1281 verifies that kfake accepts an idempotent produce for an
+// unknown (PID, epoch) pair, implicitly creating producer state on demand.
+// Apache Kafka and Redpanda do this; prior to the fix kfake returned
+// INVALID_TXN_STATE.
+func TestIssue1281(t *testing.T) {
+	t.Parallel()
+	topic := "t-issue-1281"
+
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 9) // Produce v9: uses topic names, not topic IDs
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	ctx := context.Background()
+
+	makeBatch := func(pid int64, epoch int16, seq int32, numRecs int32) []byte {
+		var recs []byte
+		for i := range numRecs {
+			rec := kmsg.Record{
+				Key:            []byte("k"),
+				Value:          []byte("v"),
+				TimestampDelta: i,
+			}
+			rec.Length = int32(len(rec.AppendTo(nil)) - 1)
+			recs = append(recs, rec.AppendTo(nil)...)
+		}
+		now := time.Now().UnixMilli()
+		batch := kmsg.RecordBatch{
+			PartitionLeaderEpoch: -1,
+			Magic:                2,
+			Attributes:           0,
+			LastOffsetDelta:      numRecs - 1,
+			FirstTimestamp:       now,
+			MaxTimestamp:         now,
+			ProducerID:           pid,
+			ProducerEpoch:        epoch,
+			FirstSequence:        seq,
+			NumRecords:           numRecs,
+			Records:              recs,
+		}
+		raw := batch.AppendTo(nil)
+		batch.Length = int32(len(raw) - 12)
+		raw = batch.AppendTo(nil)
+		batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+		return batch.AppendTo(nil)
+	}
+
+	produce := func(batchBytes []byte) int16 {
+		req := kmsg.NewProduceRequest()
+		req.Version = 3
+		req.Acks = -1
+		req.TimeoutMillis = 5000
+		rt := kmsg.NewProduceRequestTopic()
+		rt.Topic = topic
+		rp := kmsg.NewProduceRequestTopicPartition()
+		rp.Partition = 0
+		rp.Records = batchBytes
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		kresp, err := cl.Broker(0).Request(ctx, &req)
+		if err != nil {
+			t.Fatalf("produce: %v", err)
+		}
+		resp := kresp.(*kmsg.ProduceResponse)
+		return resp.Topics[0].Partitions[0].ErrorCode
+	}
+
+	// Unknown PID 1000 epoch 2, non-zero firstSeq=10: should be accepted.
+	errCode := produce(makeBatch(1000, 2, 10, 3))
+	if errCode != 0 {
+		t.Fatalf("expected success for unknown PID first produce, got: %v", kerr.ErrorForCode(errCode))
+	}
+
+	// Wrong sequence: PID is now known with nextSeq=13, send seq=99.
+	errCode = produce(makeBatch(1000, 2, 99, 1))
+	if errCode != kerr.OutOfOrderSequenceNumber.Code {
+		t.Fatalf("expected OOOSN for wrong seq, got: %v", kerr.ErrorForCode(errCode))
+	}
+
+	// Correct sequence: nextSeq=13, send seq=13.
+	errCode = produce(makeBatch(1000, 2, 13, 2))
+	if errCode != 0 {
+		t.Fatalf("expected success for correct seq, got: %v", kerr.ErrorForCode(errCode))
 	}
 }

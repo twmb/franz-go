@@ -384,5 +384,27 @@ type errApiVersionsReset struct {
 	err error
 }
 
+// errShareConsumerLeft is reported via shareAckCallback for any
+// Record.Ack or MarkAcks call made after LeaveGroup has begun
+// closing the share consumer. Unexported on purpose: there is no
+// importable sentinel for users to errors.Is against, because the
+// situation is non-actionable -- the broker session is gone. Users
+// should treat this as fatal-for-this-record and not retry.
+var errShareConsumerLeft = errors.New("share consumer has left the group; ack will not be delivered")
+
+// errBrokerOmittedAckPartition is reported via shareAckCallback when
+// the broker's ShareFetch or ShareAcknowledge response did not echo a
+// partition we sent acks for. The broker did not return a Kafka error
+// code for the partition; it simply omitted it from the response,
+// which is a protocol violation. Unexported on purpose: like
+// errShareConsumerLeft, there is no importable sentinel for users to
+// errors.Is against. The condition is non-actionable per-record;
+// the right user response is to log and treat the ack as failed.
+//
+// We previously surfaced this as kerr.UnknownServerError, which was
+// misleading because no error code was returned by the broker. The
+// dedicated sentinel makes the actual situation explicit.
+var errBrokerOmittedAckPartition = errors.New("broker omitted partition from share fetch response that we sent acks for")
+
 func (e *errApiVersionsReset) Error() string { return e.err.Error() }
 func (e *errApiVersionsReset) Unwrap() error { return e.err }

@@ -50,6 +50,10 @@ var (
 	// Must match should848() which calls supportsKIP848v1().
 	allow848 = false
 
+	// Share groups require ShareFetch v2 (key 78) and ShareAcknowledge v2
+	// (key 79), which are the stable versions introduced in Kafka 4.2.
+	allowShare = false
+
 	// KGO_TEST_TLS: DSL syntax is ({ca|cert|key}:path),{1,3}
 	testCert *tls.Config
 
@@ -221,6 +225,11 @@ func adm() *Client {
 				if v, ok := versions.LookupMaxKeyVersion(68); ok && v >= 1 { // 68 = ConsumerGroupHeartbeat v1 (KIP-848 stable)
 					allow848 = true
 				}
+				sf, sfOK := versions.LookupMaxKeyVersion(78) // 78 = ShareFetch
+				sa, saOK := versions.LookupMaxKeyVersion(79) // 79 = ShareAcknowledge
+				if sfOK && sf >= 2 && saOK && sa >= 2 {
+					allowShare = true
+				}
 				return
 			}
 			if time.Now().After(deadline) {
@@ -266,9 +275,13 @@ var testLogLevel = func() LogLevel {
 }()
 
 func testLogger() Logger {
+	return testLoggerAt(testLogLevel)
+}
+
+func testLoggerAt(level LogLevel) Logger {
 	num := loggerNum.Add(1)
 	pfx := strconv.Itoa(int(num))
-	return BasicLogger(os.Stderr, testLogLevel, func() string {
+	return BasicLogger(os.Stderr, level, func() string {
 		return time.Now().UTC().Format("[15:04:05.999 ") + pfx + "]"
 	})
 }
@@ -544,6 +557,31 @@ func tmpGroup(tb testing.TB) (string, func()) {
 	}
 }
 
+// tmpShareGroup returns a random share-group id plus a cleanup that deletes
+// the group via DeleteGroups after the test runs. Leaking share groups between
+// tests piles records into the __share_group_state topic; on a small broker
+// heap this pushes the share coordinator into long GC pauses and makes the
+// whole cluster flaky.
+func tmpShareGroup(tb testing.TB) (string, func()) {
+	tb.Helper()
+
+	group := randsha()
+
+	return group, func() {
+		tb.Helper()
+
+		req := kmsg.NewPtrDeleteGroupsRequest()
+		req.Groups = []string{group}
+		resp, err := req.RequestWith(context.Background(), adm())
+		if err == nil && len(resp.Groups) > 0 {
+			err = kerr.ErrorForCode(resp.Groups[0].ErrorCode)
+		}
+		if err != nil {
+			tb.Logf("unable to delete share group %q: %v", group, err)
+		}
+	}
+}
+
 // The point of this pool is that, if used, it *will* return something from the
 // Get's after the Put's have been put into. Using it in txn test allows us to
 // detect races.
@@ -620,6 +658,20 @@ type testConsumer struct {
 	partOffsets map[partOffset]struct{}
 }
 
+// sendErr non-blocking sends an error to errCh. Only the first error
+// matters; if the reader already called t.Fatal, additional sends must
+// not block or the goroutine leaks and holds the ETL semaphore forever.
+// We also fmt.Printf the error so that later errors (e.g. "saw double
+// offset") are visible in `go test -v` output even though the channel
+// already has an error and the send was dropped.
+func (c *testConsumer) sendErr(err error) {
+	fmt.Printf("    testConsumer sendErr group=%s: %v\n", c.group, err)
+	select {
+	case c.errCh <- err:
+	default:
+	}
+}
+
 type partOffset struct {
 	part   int32
 	offset int64
@@ -671,7 +723,6 @@ func (c *testConsumer) leaveGroupStatic(cl *Client, instanceID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if c.enable848 {
-		// Look up the server-assigned memberID via ConsumerGroupDescribe.
 		dreq := kmsg.NewPtrConsumerGroupDescribeRequest()
 		dreq.Groups = []string{c.group}
 		dresp, err := dreq.RequestWith(ctx, cl)
@@ -734,13 +785,16 @@ func testChainETL(
 	enable848 bool,
 	instanceID string,
 ) {
+	defer func(start time.Time) {
+		t.Logf("%s completed in %v", t.Name(), time.Since(start))
+	}(time.Now())
 	if instanceID != "" && !allowStaticMembership {
 		t.Skip("broker does not support static membership (requires JoinGroup v5+, KIP-345)")
 	}
 	if enable848 && !allow848 {
 		t.Skip("broker does not support KIP-848 (requires ConsumerGroupHeartbeat, key 68)")
 	}
-	errs := make(chan error)
+	errs := make(chan error, 1)
 	var (
 		/////////////
 		// LEVEL 1 //

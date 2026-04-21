@@ -283,7 +283,7 @@ func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) 
 				Err: kerr.ErrorForCode(p.ErrorCode),
 			}
 		}
-		tds[*t.Topic] = td
+		tds[td.Topic] = td
 	}
 
 	m := Metadata{

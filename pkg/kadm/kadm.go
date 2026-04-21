@@ -186,6 +186,7 @@ type Partition struct {
 // Offset is an offset for a topic.
 type Offset struct {
 	Topic       string
+	TopicID     TopicID // TopicID, if known; used for OffsetCommit/OffsetFetch v10+.
 	Partition   int32
 	At          int64  // Offset is the partition to set.
 	LeaderEpoch int32  // LeaderEpoch is the broker leader epoch of the record at this offset.
@@ -397,6 +398,105 @@ func OffsetsFromRecords(rs ...kgo.Record) Offsets {
 		os.Add(NewOffsetFromRecord(&r))
 	}
 	return os
+}
+
+// OffsetsByID is like Offsets but keyed by topic ID instead of topic name.
+type OffsetsByID map[TopicID]map[int32]Offset
+
+// Lookup returns the offset at id and p and whether it exists.
+func (os OffsetsByID) Lookup(id TopicID, p int32) (Offset, bool) {
+	if len(os) == 0 {
+		return Offset{}, false
+	}
+	ps := os[id]
+	if len(ps) == 0 {
+		return Offset{}, false
+	}
+	o, exists := ps[p]
+	return o, exists
+}
+
+// Add adds an offset for a given topic ID / partition. If the offset's
+// TopicID is empty (zero value), this is a no-op.
+func (os *OffsetsByID) Add(o Offset) {
+	if o.TopicID == (TopicID{}) {
+		return
+	}
+	if *os == nil {
+		*os = make(OffsetsByID)
+	}
+	ot := (*os)[o.TopicID]
+	if ot == nil {
+		ot = make(map[int32]Offset)
+		(*os)[o.TopicID] = ot
+	}
+	ot[o.Partition] = o
+}
+
+// Delete removes any offset at topic ID id and partition p.
+func (os OffsetsByID) Delete(id TopicID, p int32) {
+	if os == nil {
+		return
+	}
+	ot := os[id]
+	if ot == nil {
+		return
+	}
+	delete(ot, p)
+	if len(ot) == 0 {
+		delete(os, id)
+	}
+}
+
+// Each calls fn for each offset.
+func (os OffsetsByID) Each(fn func(Offset)) {
+	for _, ps := range os {
+		for _, o := range ps {
+			fn(o)
+		}
+	}
+}
+
+// OffsetResponsesByID is like OffsetResponses but keyed by topic ID.
+type OffsetResponsesByID map[TopicID]map[int32]OffsetResponse
+
+// Lookup returns the response at id and p and whether it exists.
+func (os OffsetResponsesByID) Lookup(id TopicID, p int32) (OffsetResponse, bool) {
+	if len(os) == 0 {
+		return OffsetResponse{}, false
+	}
+	ps := os[id]
+	if len(ps) == 0 {
+		return OffsetResponse{}, false
+	}
+	o, exists := ps[p]
+	return o, exists
+}
+
+// Each calls fn for every offset response.
+func (os OffsetResponsesByID) Each(fn func(OffsetResponse)) {
+	for _, ps := range os {
+		for _, o := range ps {
+			fn(o)
+		}
+	}
+}
+
+// Error iterates over all responses and returns the first error encountered.
+func (os OffsetResponsesByID) Error() error {
+	for _, ps := range os {
+		for _, o := range ps {
+			if o.Err != nil {
+				return o.Err
+			}
+		}
+	}
+	return nil
+}
+
+// Ok returns true if there are no errors.
+func (os OffsetResponsesByID) Ok() bool {
+	return os.Error() == nil
 }
 
 // TopicsSet is a set of topics and, per topic, a set of partitions.

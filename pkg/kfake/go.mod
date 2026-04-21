@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/twmb/franz-go v1.20.6
 	github.com/twmb/franz-go/pkg/kadm v1.17.1
-	github.com/twmb/franz-go/pkg/kmsg v1.12.0
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 	golang.org/x/crypto v0.48.0
 )
 
