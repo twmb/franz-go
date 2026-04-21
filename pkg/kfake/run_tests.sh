@@ -384,6 +384,13 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     fi
 
     if [ $TEST_EXIT -ne 0 ]; then
+        # Archive failure logs into a timestamped subdir so subsequent
+        # run_tests.sh invocations don't overwrite them.
+        FAIL_DIR="$LOG_DIR/fail_$(date +%Y%m%d_%H%M%S)_run${i}"
+        mkdir -p "$FAIL_DIR"
+        cp "$CLIENT_LOG_FILE" "$FAIL_DIR/client.log" 2>/dev/null
+        cp "$SERVER_LOG" "$FAIL_DIR/server.log" 2>/dev/null
+        echo "Archived failure logs to $FAIL_DIR"
         if [ -n "$KEEP_LOGS" ]; then
             cp "$CLIENT_LOG_FILE" "$LOG_DIR/client_${i}.log"
             cp "$SERVER_LOG" "$LOG_DIR/server_${i}.log"
