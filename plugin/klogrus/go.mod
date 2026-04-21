@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.10.0
-	github.com/twmb/franz-go v1.20.7
+	github.com/twmb/franz-go v1.21.0
 )
 
 require (
