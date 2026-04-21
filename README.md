@@ -417,6 +417,7 @@ generation.
 | [KIP-1005](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1005%3A+Expose+EarliestLocalOffset+and+TieredOffset) — ListOffsets w. Timestamp -5 | 3.9 | Supported |
 | [KIP-1022](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1022%3A+Formatting+and+Updating+Features) - Formatting changes for features | 4.0 | Supported |
 | [KIP-1023](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1023%3A+Follower+fetch+from+tiered+offset) — ListOffsets earliest pending upload offset | 4.2 | Supported (existing) |
+| [KIP-1025](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1025%3A+Optionally+URL-encode+clientID+and+clientSecret+in+authorization+header) — URL-encode clientID/secret in OAuth auth header | 3.9 | Supported (user callback) |
 | [KIP-1043](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1043%3A+Administration+of+groups) — Administration of groups | 4.0 | Supported |
 | [KIP-1071](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1071%3A+Streams+Rebalance+Protocol) — Streams group protocol | 4.2 | Supported (proto) |
 | [KIP-1073](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1073:+Return+fenced+brokers+in+DescribeCluster+response) — DescribeCluster.IsFenced | 4.0 | Supported |
@@ -427,9 +428,15 @@ generation.
 | [KIP-1139](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1139%3A+Add+support+for+OAuth+jwt-bearer+grant+type) - Oauth JWT bearer grant| 4.0 | Supported |
 | [KIP-1142](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1142%3A+Allow+to+list+non-existent+group+which+has+dynamic+config) - ListConfigResources | 4.1 | Supported (kadm v1.17+) |
 | [KIP-1152](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1152%3A+Add+transactional+ID+pattern+filter+to+ListTransactions+API) - ListTransactions.TransactionalIDPattern | 4.1 | Supported (kadm v1.17+) |
+| [KIP-1160](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1160%3A+Enable+returning+supported+features+from+a+specific+broker) — Per-broker supported features in ApiVersions | 4.2 | Supported (proto) |
 | [KIP-1166](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1166%3A+Improve+high-watermark+replication) - Improve HWM replication (protocol) | 4.1 | Supported |
 | [KIP-1186](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1186%3A+Update+AddRaftVoterRequest+RPC+to+support+auto-join) — AddRaftVoter AckWhenCommitted | 4.2 | Supported (proto) |
+| [KIP-1206](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1206%3A+Strict+max+fetch+records+in+share+fetch) — ShareFetch strict record limit | 4.2 | Supported (via `ShareMaxRecordsStrict`) |
+| [KIP-1222](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1222%3A+Acquisition+lock+timeout+renewal+in+share+consumer+explicit+mode) — Share consumer renew acknowledgements | 4.2 | Supported (via `AckRenew`) |
+| [KIP-1226](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1226%3A+Introducing+Share+Partition+Lag+Persistence+and+Retrieval) — Share partition lag in DescribeShareGroupOffsets | 4.2 | Supported (kadm) |
+| [KIP-1227](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1227%3A+Expose+Rack+ID+in+MemberDescription+and+ShareMemberDescription) — Rack ID in (Share)MemberDescription | 4.2 | Supported (kadm) |
 | [KIP-1228](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1228%3A+Add+Transaction+Version+to+WriteTxnMarkersRequest) — WriteTxnMarkers TransactionVersion | 4.2 | Supported |
+| [KIP-1258](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1258%3A+Add+Support+for+OAuth+Client+Assertion+to+client_credentials+Grant+Type) — OAuth client assertion in client_credentials grant | 4.3 | Supported (user callback) |
 
 KIPs intentionally not implemented (with rationale):
 
