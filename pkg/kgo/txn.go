@@ -4,12 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kmsg"
-
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func ctx2fn(ctx context.Context) func() context.Context { return func() context.Context { return ctx } }
@@ -35,7 +34,7 @@ const (
 type GroupTransactSession struct {
 	cl *Client
 
-	failMu sync.Mutex
+	failMu xsync.Mutex
 
 	revoked   bool
 	revokedCh chan struct{} // closed once when revoked is set; reset after End
