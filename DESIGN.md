@@ -30,11 +30,13 @@ rules](#when-can-a-batch-fail) for produce ordering issues.
 - [The Consume Path](#the-consume-path)
 - [Consumer Sessions](#consumer-sessions)
 - [Group Consumers](#group-consumers)
+- [Share Groups](#share-groups)
 - [Transactions](#transactions)
 - [Metadata](#metadata)
 - [Broker Connections](#broker-connections)
 - [Concurrency Patterns](#concurrency-patterns)
 - [File Map](#file-map)
+- [Things That Will Bite You](#things-that-will-bite-you)
 
 ---
 
@@ -56,11 +58,26 @@ The client's job, in essence, is:
    them to the right broker, report success or failure back to the user
 2. **Consume**: fetch records from the right brokers, buffer them, deliver
    them to user code when polled
-3. **Coordinate**: if consuming as part of a consumer group, participate in
-   the group protocol to decide which partitions this client is responsible
-   for
+3. **Coordinate**: if consuming as part of a consumer group or share group,
+   participate in the group protocol to decide which partitions (or, for
+   share groups, which records) this client is responsible for
 4. **Stay current**: periodically refresh metadata so the client knows where
    each partition lives
+
+This client supports three Kafka group protocols:
+
+- **Classic consumer groups** (the original protocol): JoinGroup/SyncGroup
+  where the leader runs partition assignment client-side.
+- **Next-gen consumer groups** (KIP-848): a single ConsumerGroupHeartbeat
+  RPC where the broker runs assignment server-side. The client transparently
+  upgrades to this when the broker supports it; on `UnsupportedVersion` it
+  falls back to the classic protocol. Both protocols are exclusive partition
+  assignment - one consumer per partition at a time.
+- **Share groups** (KIP-932): cooperative record-level consumption where
+  multiple consumers in the same group concurrently consume from the same
+  partition. Records are individually acquired (with a broker-side lock) and
+  individually acknowledged (accept / release / reject / renew). This is a
+  fundamentally different model than partition-based consumption.
 
 All four of these happen concurrently. The rest of this document explains how.
 
@@ -121,6 +138,12 @@ The core abstractions:
   connections. Each broker maintains up to five connections, separated by
   usage (produce, fetch, group, slow, general) to prevent different workloads
   from blocking each other.
+
+When the client is configured as a **share group** consumer, sources also
+own a parallel set of `shareCursor` objects (`sourceShare` field). The
+share path piggybacks on the same source/broker plumbing but uses
+ShareFetch / ShareAcknowledge instead of Fetch, and tracks per-record ack
+state instead of an offset cursor. See [Share Groups](#share-groups).
 
 When metadata changes (e.g., partition 3 moves from broker 1 to broker 2),
 the client moves the relevant recBuf or cursor from the old sink/source to
@@ -380,8 +403,9 @@ This means:
 - The pattern is always: remove from source, modify fields, Swap(true), add
   to source
 
-Violating this rule causes data races. See the comment on `cursor.move()` in
-source.go for the full explanation.
+Violating this rule causes data races. See the doc comment above
+`cursorOffsetPreferred.move` in source.go (the preferred-replica migration
+path) and `removeCursor` / `addCursor` for the full explanation.
 
 ### Fetch sessions (KIP-227)
 
@@ -478,10 +502,32 @@ A **consumer group** is a set of clients that cooperate to consume a topic.
 Kafka assigns each client a subset of partitions. When clients join or leave,
 the group **rebalances** to redistribute partitions.
 
+The client implements two group protocols and chooses between them at startup
+(see `should848()` in `consumer_group_848.go`):
+
+- **Classic** (`consumer_group.go`, `manage()`): JoinGroup + SyncGroup. The
+  group leader runs the configured balancer client-side and ships the
+  assignment to all members through SyncGroup. Heartbeats are a separate
+  Heartbeat RPC.
+- **Next-gen** (`consumer_group_848.go`, `manage848()`): a single
+  ConsumerGroupHeartbeat RPC carries everything (member info, subscription,
+  assignment ack). The broker runs assignment server-side - the client picks
+  a server-side assignor name (`uniform` for sticky, `range` for range)
+  matching the user's `Balancers` opt. This protocol is always cooperative.
+
+The 848 manage loop falls back to `manage()` if the broker returns
+`UnsupportedVersion` on the first heartbeat - this lets the same client
+binary talk to both old and new brokers without configuration. The fallback
+is one-way: once classic, the client stays classic for that group session.
+Most of the rest of this section describes the classic flow because the 848
+flow has a similar shape (join => assigned => heartbeat => revoke) just
+collapsed into the heartbeat RPC.
+
 ### The manage loop
 
-The group consumer has a dedicated goroutine (`manage()`) that runs for the
-lifetime of the group. It handles the full lifecycle:
+The group consumer has a dedicated goroutine (`manage()` for classic,
+`manage848()` for next-gen) that runs for the lifetime of the group. It
+handles the full lifecycle:
 
 ```mermaid
 stateDiagram-v2
@@ -534,6 +580,9 @@ a chance to commit offsets.
 
 ### Eager vs. cooperative consumers
 
+This distinction only applies to the classic protocol. The KIP-848 protocol
+is always cooperative.
+
 **Eager** (default pre-KIP-429): on every rebalance, ALL partitions are
 revoked from ALL members. Then, after rejoining, partitions are reassigned.
 This causes a brief period where no one is consuming anything.
@@ -542,6 +591,16 @@ This causes a brief period where no one is consuming anything.
 members are revoked. Everyone else keeps consuming uninterrupted. The client
 handles this with `diffAssigned()`, which computes the difference between the
 last assignment and the new one.
+
+### Rack-aware assignment (KIP-881)
+
+When a `Rack` is configured on the client, the sticky and range balancers
+prefer assigning partitions whose leader replica lives in the same rack as
+the consumer. The mapping (topic => partition => leader rack) is built once
+per balance from cached broker racks and partition leader info; see
+`buildPartitionRacks` and `PartitionRacks` in `group_balancer.go`. The 848
+path forwards `RackID` in `ShareGroupHeartbeat` / `ConsumerGroupHeartbeat`
+and lets the broker's server-side assignor do the equivalent thing.
 
 ### Lock ordering
 
@@ -558,6 +617,236 @@ If you need both locks, acquire `consumer.mu` first. Never acquire
 What each lock protects:
 - `consumer.mu`: the set of active cursors (`usingCursors`), session state
 - `groupConsumer.mu`: uncommitted offset tracking, group state
+
+---
+
+## Share Groups
+
+A **share group** (KIP-932, Kafka 4.0+) is a different consumption model from
+classic consumer groups. Instead of assigning whole partitions exclusively to
+one consumer at a time, a share group assigns each consumer a *subset of the
+partitions in the group's subscription*, but multiple consumers can be reading
+from the same partition concurrently. Each record is acquired with a
+broker-side acquisition lock, individually acknowledged, and may be redelivered
+if not acked before the lock expires.
+
+This model is well-suited to queue-style workloads where per-record latency
+matters more than per-partition ordering, and where slow records should not
+block a partition for everyone.
+
+### What is fundamentally different
+
+```
+                 Classic consumer group       Share group
+                 ----------------------       -----------
+Assignment       Whole partitions, one        Subset of partitions, but
+                 consumer per partition.      a partition can be shared
+                                              across many consumers.
+Position         One offset per partition.    No client-side offset; broker
+                                              tracks per-record state.
+Ack model        Bulk: commit the next        Per-record: each fetched record
+                 offset to read.              is accepted/released/rejected
+                                              individually (or renewed).
+Redelivery       Only on consumer failure +   Automatic when the broker's
+                 rebalance.                   acquisition lock expires.
+Order            In-partition order.          Best-effort; release re-queues.
+RPCs             Fetch / OffsetCommit.        ShareFetch / ShareAcknowledge,
+                                              both keyed off the share group
+                                              coordinator (`coordinatorTypeShare`).
+Group protocol   Classic or KIP-848.          ShareGroupHeartbeat (KIP-932),
+                                              same shape as 848.
+```
+
+Because the model is so different, the share consumer is its own type
+(`shareConsumer` in `consumer_share.go`) sitting alongside `consumer` rather
+than a mode switch inside the classic consumer. It reuses the existing
+broker pool, source per broker, fetchManager, metadata loop, and ring/workLoop
+primitives - but it does NOT use `cursor`, `consumerSession`, or any of the
+offset-commit machinery.
+
+### Architecture
+
+```mermaid
+graph TB
+    SC[shareConsumer<br/><i>per client</i>]
+    SC --> Manage[manage goroutine<br/>ShareGroupHeartbeat loop]
+    SC --> CallbackRing[callbackRing<br/>per-ack callbacks]
+    SC --> AckCounter[pendingAcks atomic counter<br/>+ ackC cond for FlushAcks]
+
+    SC --> Src1[source<br/>broker 1]
+    SC --> Src2[source<br/>broker 2]
+
+    Src1 --> SS1[sourceShare<br/>+ session epoch<br/>+ shareCursors<br/>+ ackCh / ackFlushCh]
+    Src1 --> LSF1[loopShareFetch goroutine]
+
+    SS1 --> ShC1[shareCursor<br/>topicA/p0]
+    SS1 --> ShC2[shareCursor<br/>topicA/p1]
+
+    ShC1 --> Slab[shareAckSlab per fetched batch<br/>+ shareAckState per record]
+```
+
+The share consumer overlay on each source (`source.share` of type
+`sourceShare`):
+
+- `sessionEpoch` - broker-tracked share-fetch session epoch. 0 = new
+  session, incremented on each successful response, -1 = closing.
+- `sessionParts` - set of (topic-id, partition) the broker currently
+  considers part of the session. `createShareFetchReq` diffs the current
+  WANT (assigned + has-data) against this to compute add/forget lists.
+- `cursors` - `[]*shareCursor` for partitions whose leader currently lives
+  on this source's broker. Cursors migrate between sources just like
+  classic cursors do, but the trigger is a `CurrentLeader` hint in a
+  ShareFetch response (see [Leader hints](#leader-hints) below) rather
+  than a metadata refresh.
+- `ackCh` / `ackFlushCh` - wake signals for the per-source
+  `loopShareFetch` goroutine: "you have pending acks to drain" and "drain
+  them right now (don't wait for the timer)".
+
+Each `shareCursor` carries:
+
+- `assigned atomic.Bool` - flipped by the manage loop when the broker
+  hands us / takes away the partition. Unlike classic `useState`, this is
+  NOT toggled at request-build time; the per-source single-threaded
+  `loopShareFetch` plus the fetchManager already serialize fetches, so the
+  classic flip-and-restore dance is unnecessary and would make the code
+  worse.
+- `pendingAcks` and `pendingGaps` - outbound ack queues. User acks land
+  in `pendingAcks`; gap acks (records the broker delivered but the client
+  could not surface, or release-undeliverable on shutdown) land in
+  `pendingGaps`. Both flush on the next ShareFetch / ShareAcknowledge.
+
+### The poll / ack cycle
+
+```mermaid
+sequenceDiagram
+    participant User as User Code
+    participant Poll as PollRecords
+    participant SC as shareConsumer
+    participant Src as source (loopShareFetch)
+    participant Brk as Broker
+
+    Note over Src: loopShareFetch is awake
+    Src->>Brk: ShareFetch (topics + session epoch + ack ranges)
+    Brk-->>Src: ShareFetch resp (records + acquisition deadline)
+    Src->>Src: decode into shareAckSlab + shareAckState[]
+    Src->>SC: notify pollWake / sourcesReady
+
+    User->>Poll: PollRecords()
+    Poll->>SC: finalizePreviousPoll (auto-accept stale records)
+    Poll->>Src: takeBuffered
+    Poll-->>User: Fetches
+
+    User->>User: process records, call r.Ack(...)
+    Note over User: each Ack CAS-es shareAckState.status,<br/>appends a shareAckEntry to the cursor,<br/>increments sc.pendingAcks
+    User->>Src: signalShareAcks (or signalShareAckFlush)
+
+    Src->>Brk: next ShareFetch (carrying ack ranges)<br/>or ShareAcknowledge if no fetch is needed
+    Brk-->>Src: per-partition ack results
+    Src->>SC: enqueue ShareAckCallback, decrement pendingAcks
+```
+
+Key per-record states (`AckStatus`):
+
+- **AckAccept** - broker advances past this record.
+- **AckRelease** - return to the broker for redelivery (delivery count++).
+- **AckReject** - permanently archive (poison-pill handling).
+- **AckRenew** (KIP-1222, Kafka 4.2+) - extend the acquisition lock
+  without completing. Renews do NOT persist across polls: any renewed
+  record not given a terminal status before the next `PollRecords` is
+  auto-accepted by `finalizePreviousPoll`.
+
+On client close, any record still in `AckRenew` (or unset) is converted
+to `AckRelease` so another consumer can pick it up immediately rather
+than waiting for the broker's acquisition-lock timeout.
+
+### Acks: how state lands on the wire
+
+The hot path for `r.Ack()` must be lock-free. The flow:
+
+1. `r.Ack(status)` does a CAS on the per-record `shareAckState.status`
+   (one of accept/release/reject/renew). Terminal statuses override an
+   existing `AckRenew` but not another terminal; renew is rejected if the
+   record is already in any non-zero state.
+2. If the CAS wins, append a `shareAckEntry{offset, source, status,
+   sessionEpoch}` to the cursor's `pendingAcks` (under cursor `ackMu`)
+   and atomically `pendingAcks++` on the shareConsumer.
+3. Signal the source via `signalShareAcks` (non-blocking send on a 1-slot
+   channel) so its `loopShareFetch` knows there is something to send.
+
+When the source builds its next ShareFetch (or a standalone
+ShareAcknowledge if there are no partitions to fetch from), it drains
+`pendingAcks` per cursor, dedupes by offset (collapsing
+e.g. `AckRenew` => `AckAccept` into a single terminal range so the
+broker does not see duplicate `AcknowledgementBatches` at the same
+offset, which would be rejected with `INVALID_RECORD_STATE`), and
+serializes them as compact ack ranges.
+
+A **staleness filter** on each entry's `(source, sessionEpoch)` drops
+acks the broker would reject anyway: if the source's session was reset
+or the cursor has migrated since the record was decoded, there is no
+acquisition lock to release. The slab carries the same `(ackSource,
+sessionEpoch)` so individual entries do not need to repeat them.
+
+After the broker responds, a `shareCallbackEntry` is pushed onto
+`sc.callbackRing` (the same ring + spawn-on-empty pattern used by
+`producer.batchPromises`) carrying both the per-partition results and
+the count of acks completed. The drainer invokes the user's
+`ShareAckCallback`, then subtracts that count from `sc.pendingAcks`.
+This means `FlushAcks` blocks until the user's callbacks have actually
+returned, not just until the broker replied.
+
+### Leader hints
+
+Classic consumers learn about leader changes via metadata refresh.
+ShareFetch responses can include a `CurrentLeader` per partition - a
+direct hint that "this partition's leader is now node X." The share
+consumer applies these hints in `applyMoves` (under
+`blockingMetadataFn` so it serializes with metadata refresh and
+PurgeTopics), seeding the broker into `sinksAndSources` from the
+response's `NodeEndpoints` if necessary, and migrating the cursor
+between sources without waiting for a metadata round-trip.
+
+### Lifecycle (manage loop)
+
+The share consumer's `manage()` goroutine drives a
+ShareGroupHeartbeat RPC loop, structurally similar to `manage848()`:
+
+1. Generate a client-side member UUID, start at epoch 0.
+2. Heartbeat at the broker-driven interval. Send
+   `SubscribedTopicNames` / `RackID` only when they change since the
+   last successful heartbeat (re-sent on any error).
+3. The heartbeat response either renews the assignment, hands us a new
+   one, or returns nothing. On a new assignment, `assignPartitions`
+   flips `shareCursor.assigned` for added/removed partitions and wakes
+   the affected sources via `maybeShareConsume`.
+4. On `UnknownMemberID` or `FencedMemberEpoch`, keep the same UUID
+   (matches the Java client) but reset epoch to 0 to re-join. Drop the
+   current assignment and reset every source's share session.
+5. On retryable errors (broker dial / coordinator stale / retryable
+   broker errors), back off and retry. On unknown errors, surface a
+   fake `ErrGroupSession` into the poll path AND fire
+   `HookGroupManageError`, but do NOT eagerly drop the assignment
+   (the broker may still consider us assigned; clearing eagerly causes
+   churn).
+
+### Graceful shutdown
+
+`shareConsumer.leave` runs an ordered shutdown:
+
+1. Set `dying` (single-shot guard) and cancel `fm.ctx`. The manage and
+   `loopShareFetch` goroutines select on `fm.ctx.Done` and exit.
+2. Wait on `sc.cond` until `workers == 0`. After this we have
+   exclusive access to all share state.
+3. Under `c.mu`, clear the source ready queue and re-route any unacked
+   `lastPolled` records to `AckRelease` (so another consumer picks them
+   up immediately rather than waiting for the broker's
+   acquisition-lock timeout).
+4. For each source, run `closeShareSession` in parallel: release any
+   buffered-but-never-polled records, then send a FINAL_EPOCH
+   (`sessionEpoch = -1`) ShareAcknowledge with all remaining
+   per-cursor `pendingAcks` piggybacked.
+5. Send a leave heartbeat (`MemberEpoch = -1`). Failure here is
+   recorded on `sc.leaveErr` but does not block close.
 
 ---
 
@@ -730,10 +1019,10 @@ Each broker maintains up to five independent TCP connections:
 | Connection | Used for | Why separate |
 |-----------|----------|--------------|
 | `cxnProduce` | Produce requests | Avoids head-of-line blocking from other requests |
-| `cxnFetch` | Fetch requests | Fetch can block for `maxWait` (seconds); must not block other RPCs |
+| `cxnFetch` | Fetch and ShareFetch requests | Both long-poll for `maxWait`; must not block other RPCs |
 | `cxnGroup` | JoinGroup, SyncGroup | Can block for minutes during rebalance |
 | `cxnSlow` | Any timeout-bearing request | Long-running operations |
-| `cxnNormal` | Everything else | General purpose |
+| `cxnNormal` | Everything else (incl. heartbeats, ShareAcknowledge) | General purpose |
 
 Without this separation, a long-running fetch (waiting for data) could block a
 produce request from being sent, or a JoinGroup that takes 30 seconds could
@@ -897,18 +1186,20 @@ Swap.
 | `config.go` | All configuration options (200+ options) | `Opt`, `cfg` |
 | `broker.go` | TCP connection management, request/response I/O, SASL auth | `broker`, `brokerCxn`, `writeConn`, `readConn` |
 | `sink.go` | Produce buffering, batching, drain loop, produce request building, response handling | `sink`, `recBuf`, `recBatch`, `produceRequest` |
-| `source.go` | Fetch request building, response parsing, cursor management, record decompression | `source`, `cursor`, `fetchRequest`, `fetchSession` |
+| `source.go` | Fetch / ShareFetch request building, response parsing, cursor management, record decompression | `source`, `cursor`, `sourceShare`, `fetchRequest`, `fetchSession`, `loopShareFetch` |
 | `producer.go` | `Produce()` entry point, flush, backpressure, unknown topic handling, promise delivery | `producer`, `Produce`, `Flush` |
 | `consumer.go` | Consumer session management, `PollFetches`, partition assignment, offset management | `consumer`, `consumerSession`, `Offset` |
-| `consumer_group.go` | Group join/sync/heartbeat, rebalance, cooperative/eager, offset commits | `groupConsumer`, `manage`, `heartbeat` |
-| `consumer_group_848.go` | KIP-848 (new) consumer group protocol | `manage848` |
-| `consumer_direct.go` | Direct (non-group) partition assignment | `directConsumer` |
+| `consumer_group.go` | Classic group join/sync/heartbeat, rebalance, cooperative/eager, offset commits | `groupConsumer`, `manage`, `heartbeat` |
+| `consumer_group_848.go` | KIP-848 next-gen consumer group protocol (single-RPC heartbeat, server-side assignment) | `manage848`, `should848`, `g848` |
+| `consumer_share.go` | KIP-932 share groups: ShareGroupHeartbeat lifecycle, per-record ack state, ShareFetch / ShareAcknowledge driving | `shareConsumer`, `shareCursor`, `AckStatus`, `shareAckSlab`, `MarkAcks`, `FlushAcks` |
+| `consumer_direct.go` | Direct (non-group) partition assignment, including regex-based topic discovery off metadata | `directConsumer`, `findNewAssignments` |
 | `metadata.go` | Metadata loop, partition merging, topic/partition creation and migration | `updateMetadataLoop`, `mergeTopicPartitions` |
 | `txn.go` | `GroupTransactSession`, exactly-once semantics, EndTransaction | `GroupTransactSession`, `End` |
 | `record_and_fetch.go` | Public `Record`, `Fetch`, `Fetches` types, iteration helpers | `Record`, `Fetches`, `FetchesRecordIter` |
 | `topics_and_partitions.go` | Internal topic/partition tracking, migration helpers | `topicPartition`, `migrateProductionTo` |
 | `compression.go` | Compression/decompression with sync.Pool reuse | `compressor`, `decompressor` |
 | `partitioner.go` | Partitioning strategies (round-robin, hash, sticky, etc.) | `Partitioner`, `StickyKeyPartitioner` |
+| `group_balancer.go` | Classic group leader-side partition assignors (sticky, range, round-robin), plus rack-aware (KIP-881) | `GroupBalancer`, `stickyBalancer`, `rangeBalancer`, `PartitionRacks` |
 | `hooks.go` | Hook interface definitions for observability | `Hook`, `HookProduceBatchWritten`, etc. |
 | `errors.go` | Error types and helpers | `ErrDataLoss`, `ErrRecordTimeout`, etc. |
 | `atomic_maybe_work.go` | `workLoop` state machine, `lazyI32` atomic helper | `workLoop` |
@@ -953,10 +1244,12 @@ If you are modifying the code, check whether your change violates any of these.
   after this point races with a concurrent fetch. This has caused real bugs
   (see #1167).
 
-- **`move()` must be: remove, modify, Swap(true), add.** All field writes
-  must happen before the Swap (which publishes availability). The add must
-  happen after the Swap (which makes the cursor fetchable). Between remove
-  and add, no source has the cursor, so no concurrent fetch can pick it up.
+- **Migrating a cursor must be: remove, modify, Swap(true), add.** All
+  field writes must happen before the Swap (which publishes availability).
+  The add must happen after the Swap (which makes the cursor fetchable).
+  Between remove and add, no source has the cursor, so no concurrent fetch
+  can pick it up. This rule applies to both metadata-driven migration and
+  the preferred-replica `cursorOffsetPreferred.move` path.
 
 - **Fetch sessions are per-source, not per-client.** Each broker tracks its
   own session state. Resetting one source's session does not affect others.
@@ -965,11 +1258,52 @@ If you are modifying the code, check whether your change violates any of these.
   fields that metadata updates also modify. This is safe only because metadata
   updates stop the session before modifying cursors.
 
+### Share consumer
+
+- **Per-record state is in `shareAckSlab`, not on the `Record`.** Slabs
+  are allocated per fetched batch and pointed at from the record's
+  context (`shareAckFromCtx`). `r.Ack` does pointer arithmetic from the
+  slab's `records0` to find the per-record `shareAckState`. If you add
+  a code path that materializes a `Record` outside a fetch decode
+  (e.g. testing helpers, format conversions), do not expect `r.Ack` to
+  do anything for it.
+
+- **The `(source, sessionEpoch)` pair on every ack is a staleness
+  filter, not metadata.** The drain path drops acks whose source has
+  since been reset or whose cursor has migrated, because the broker
+  has already released the acquisition lock and would reject the ack
+  with `INVALID_RECORD_STATE`. If you change how sessions reset or how
+  cursors migrate, also consider whether the filter still does the
+  right thing.
+
+- **`AckRenew` does not persist across polls.** `finalizePreviousPoll`
+  auto-accepts any record still in `AckRenew` (or unset) at the start
+  of the next `PollRecords`. On `leave`, anything still renewed gets
+  released so another consumer can pick it up immediately.
+
+- **`shareCursor.assigned` is NOT toggled at request-build time.**
+  Unlike classic `cursor.useState`, the share path does not flip-and-
+  restore around request build. The fetchManager + per-source
+  single-threaded `loopShareFetch` already serialize fetches; copying
+  the classic dance here makes the code worse without buying anything.
+
+- **`leave` must run from a fresh goroutine.** `LeaveGroupContext`
+  spawns it that way. Calling `leave` directly from a context that
+  holds any consumer locks risks deadlock against the manage / source
+  loops it is waiting to drain.
+
 ### Group consumer
 
 - **`onAssigned` and `onRevoked` never run concurrently.** The
   `assignRevokeSession` ensures this. If you add a new path that calls user
   callbacks, you must go through this mechanism.
+
+- **848 fallback to classic is one-way.** If `manage848`'s first
+  heartbeat returns `UnsupportedVersion`, it hands off to `manage()`
+  by spawning that goroutine and returning. It transfers ownership of
+  closing `manageDone` via the `fallbackToClassic` flag - if you add
+  another exit path in `manage848`, make sure `manageDone` is still
+  closed exactly once.
 
 - **Heartbeating starts before offsets are fetched.** This is intentional -
   the broker needs heartbeats to know we are alive. But it means fetch offset
