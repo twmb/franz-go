@@ -208,6 +208,24 @@ type someHook struct {
 	index int
 }
 
+type pollStartHook struct{}
+
+func (*pollStartHook) OnPollStart(_ context.Context) {}
+
+func TestHookPollStartRecognized(t *testing.T) {
+	h := &pollStartHook{}
+	if !implementsAnyHook(h) {
+		t.Fatal("HookPollStart implementor not recognized by implementsAnyHook")
+	}
+	hooks, err := processHooks([]Hook{h})
+	if err != nil {
+		t.Fatal("unexpected error from processHooks:", err)
+	}
+	if len(hooks) != 1 || hooks[0] != h {
+		t.Fatalf("expected hook to pass through processHooks unchanged, got %+v", hooks)
+	}
+}
+
 func (*someHook) OnNewClient(*Client) {
 	// ignore
 }
