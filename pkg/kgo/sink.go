@@ -47,8 +47,8 @@ type sink struct {
 	consecutiveFailures atomic.Uint32
 
 	recBufsMu    xsync.Mutex // guards the following
-	recBufs      []*recBuf  // contains all partition records for batch building
-	recBufsStart int        // incremented every req to avoid large batch starvation
+	recBufs      []*recBuf   // contains all partition records for batch building
+	recBufsStart int         // incremented every req to avoid large batch starvation
 }
 
 type seqResp struct {
@@ -944,7 +944,7 @@ func (s *sink) handleReqRespBatch(
 
 	err := kerr.ErrorForCode(rp.ErrorCode)
 	if errors.Is(err, kerr.MessageTooLarge) {
-		err = fmt.Errorf("%w (uncompressed_bytes=%d, compressed_bytes=%d).", err, batchMetrics.UncompressedBytes, batchMetrics.CompressedBytes)
+		err = fmt.Errorf("%w (uncompressed_bytes=%d, compressed_bytes=%d)", err, batchMetrics.UncompressedBytes, batchMetrics.CompressedBytes)
 	}
 	failUnknown := batch.owner.checkUnknownFailLimit(err)
 	switch {
@@ -1496,7 +1496,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		default: // processed as failure
 			recBuf.cl.prsPool.put(newBatch.records)
 			recBuf.cl.producer.promiseRecord(pr,
-				fmt.Errorf("%w (uncompressed_bytes=%d).", kerr.MessageTooLarge, pr.userSize()),
+				fmt.Errorf("%w (uncompressed_bytes=%d)", kerr.MessageTooLarge, pr.userSize()),
 			)
 			return true
 		}
@@ -2087,13 +2087,13 @@ func (cl *Client) baseProduceRequestLength() int32 {
 		2 + // int16 version
 		4 + // int32 correlation ID
 		2 // int16 client ID len (always non flexible)
-	    // empty tag section skipped; see below
+		// empty tag section skipped; see below
 
 	const produceRequestBaseOverhead int32 = 2 + // int16 transactional ID len (flexible or not, since we cap at 16382)
 		2 + // int16 acks
 		4 + // int32 timeout
 		4 // int32 topics non-flexible array length
-	    // empty tag section skipped; see below
+		// empty tag section skipped; see below
 
 	baseLength := messageRequestOverhead + produceRequestBaseOverhead
 	if cl.cfg.id != nil {
@@ -2311,8 +2311,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendArrayLen(dst, len(partitions))
 		}
 
-		var tmetrics map[int32]ProduceBatchMetrics
-		tmetrics = make(map[int32]ProduceBatchMetrics)
+		tmetrics := make(map[int32]ProduceBatchMetrics)
 		p.metrics[topic] = tmetrics
 
 		for partition, batch := range partitions {

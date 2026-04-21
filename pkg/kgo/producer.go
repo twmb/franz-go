@@ -555,7 +555,7 @@ func (cl *Client) produce(
 	if cl.cfg.maxBufferedBytes > 0 && userSize > cl.cfg.maxBufferedBytes {
 		p.promiseRecordBeforeBuf(
 			promisedRec{ctx, promise, r},
-			fmt.Errorf("%w (uncompressed_bytes=%d).", kerr.MessageTooLarge, userSize),
+			fmt.Errorf("%w (uncompressed_bytes=%d)", kerr.MessageTooLarge, userSize),
 		)
 		return
 	}

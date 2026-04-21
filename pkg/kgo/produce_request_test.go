@@ -778,5 +778,4 @@ func TestClient_ProduceLargeMessages(t *testing.T) {
 			t.Errorf("expected error message to contain compressed_bytes=%d but got: %v", recordSize, err)
 		}
 	})
-
 }
