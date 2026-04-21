@@ -829,6 +829,21 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 
 	var ke *kerr.Error
 	if ok := errors.As(err, &ke); !ok {
+		// The stored PID error is not a kerr (broker-side) error -- most
+		// likely a transient network error wrapped in errProducerIDLoadFail
+		// (dial refused, EOF, etc.) from a broker restart or transient
+		// unreachability. Rather than surfacing "producer ID has a fatal,
+		// unrecoverable error" to the caller, flag the PID for reload so
+		// the next produce/begin re-runs InitProducerID now that the
+		// broker is (probably) back.
+		if isRetryableBrokerErr(err) || isAnyDialErr(err) {
+			cl.producer.id.Store(&producerID{
+				id:    id,
+				epoch: epoch,
+				err:   errReloadProducerID,
+			})
+			return true, true, nil
+		}
 		return true, false, err
 	}
 

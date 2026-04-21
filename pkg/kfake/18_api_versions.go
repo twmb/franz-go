@@ -78,48 +78,32 @@ func (c *Cluster) handleApiVersions(kreq kmsg.Request) (kmsg.Response, error) {
 	if hasGroup && c.cfg.maxVersions != nil {
 		_, hasGroup = c.cfg.maxVersions.LookupMaxKeyVersion(68)
 	}
-	if hasTxn {
-		sf := kmsg.NewApiVersionsResponseSupportedFeature()
-		sf.Name = "transaction.version"
-		sf.MinVersion = 0
-		sf.MaxVersion = 2
-		resp.SupportedFeatures = append(resp.SupportedFeatures, sf)
-
-		ff := kmsg.NewApiVersionsResponseFinalizedFeature()
-		ff.Name = "transaction.version"
-		ff.MinVersionLevel = 0
-		ff.MaxVersionLevel = 2
-		resp.FinalizedFeatures = append(resp.FinalizedFeatures, ff)
-	}
-	if hasGroup {
-		sf := kmsg.NewApiVersionsResponseSupportedFeature()
-		sf.Name = "group.version"
-		sf.MinVersion = 0
-		sf.MaxVersion = 1
-		resp.SupportedFeatures = append(resp.SupportedFeatures, sf)
-
-		ff := kmsg.NewApiVersionsResponseFinalizedFeature()
-		ff.Name = "group.version"
-		ff.MinVersionLevel = 0
-		ff.MaxVersionLevel = 1
-		resp.FinalizedFeatures = append(resp.FinalizedFeatures, ff)
-	}
 	_, hasShare := apiVersionsKeys[76] // ShareGroupHeartbeat
 	if hasShare && c.cfg.maxVersions != nil {
 		_, hasShare = c.cfg.maxVersions.LookupMaxKeyVersion(76)
 	}
-	if hasShare {
+	addFeature := func(name string) {
+		spec := kfakeFeatureSpecs[name]
 		sf := kmsg.NewApiVersionsResponseSupportedFeature()
-		sf.Name = "share.version"
-		sf.MinVersion = 0
-		sf.MaxVersion = 1
+		sf.Name = name
+		sf.MinVersion = spec.minSupported
+		sf.MaxVersion = spec.maxSupported
 		resp.SupportedFeatures = append(resp.SupportedFeatures, sf)
 
 		ff := kmsg.NewApiVersionsResponseFinalizedFeature()
-		ff.Name = "share.version"
+		ff.Name = name
 		ff.MinVersionLevel = 0
-		ff.MaxVersionLevel = 1
+		ff.MaxVersionLevel = c.features[name]
 		resp.FinalizedFeatures = append(resp.FinalizedFeatures, ff)
+	}
+	if hasTxn {
+		addFeature("transaction.version")
+	}
+	if hasGroup {
+		addFeature("group.version")
+	}
+	if hasShare {
+		addFeature("share.version")
 	}
 	if len(resp.FinalizedFeatures) > 0 {
 		resp.FinalizedFeaturesEpoch = 1

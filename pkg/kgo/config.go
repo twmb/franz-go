@@ -1123,21 +1123,31 @@ func DisableIdempotentWrite() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.disableIdempotency = true }}
 }
 
-// AllowIdempotentProduceCancellation allows records to be cancelled even
-// when idempotent production is enabled and the records are in-flight
-// (outcome unknown). By default, the client prevents cancellation of
-// in-flight idempotent records to avoid accidental duplicates: if the
-// broker actually did process the produce request but the client
-// cancelled it due to a network timeout, the client would not know the
-// record was written. Enabling this option allows context cancellation,
-// RecordDeliveryTimeout, and RecordRetries to fail in-flight records,
-// accepting the risk that a cancelled record may have actually been
-// produced.
+// AllowIdempotentProduceCancellation permits cancellation of in-flight
+// idempotent records, at the cost of breaking idempotency's
+// duplicate-avoidance guarantee.
 //
-// This option is useful when time-bounded delivery is more important
-// than guaranteed delivery. Note that while this effectively works as
-// an "at most once" semantic, in rare broker conditions idempotency
-// could be lost and a duplicate may still occur.
+// When a record is in-flight, the client cannot tell "the broker never
+// received it" from "the broker wrote it but the reply was lost".
+// Cancelling at this point leaves the client's idempotent sequence
+// window inconsistent with the broker: once cancelled records are
+// failed to the user, the next produce either silently gap-accepts (if
+// the broker wrote them) or hits OUT_OF_ORDER_SEQUENCE and forces the
+// client to reload its producer ID (new epoch, reset sequence). A
+// subsequent application-level retry of the cancelled record races
+// against what the broker may already have stored - the broker cannot
+// dedupe it, and you can get duplicates. By default, the client refuses
+// to cancel in this state and instead waits for the record's outcome
+// so idempotency holds.
+//
+// With this option, context cancellation, RecordDeliveryTimeout, and
+// RecordRetries exhaustion are allowed to fail in-flight records.
+// Idempotent dedupe continues to protect the client's own internal
+// retry path, but any cancelled record that the application re-produces
+// may land on the broker twice.
+//
+// Use this when time-bounded delivery matters more than
+// duplicate-avoidance.
 //
 // This option is incompatible with specifying a transactional id.
 func AllowIdempotentProduceCancellation() ProducerOpt {
@@ -1202,11 +1212,18 @@ func ProducerBatchMaxBytes(v int32) ProducerOpt {
 	return ProducerBatchMaxBytesFn(func(string) int32 { return v })
 }
 
-// ProducerBatchMaxBytesFn returns the upper bound on the size of a record
-// batch for the given topic, overriding the default 1,000,012 bytes. This is
-// the functional version of ProducerBatchMaxBytes, allowing per-topic batch
-// size limits. This is useful when different topics have different
-// max.message.bytes configurations on the broker.
+// ProducerBatchMaxBytesFn is the functional form of [ProducerBatchMaxBytes]:
+// it returns the per-batch byte cap for the given topic, overriding the
+// default 1,000,012 bytes. This is useful when different topics have
+// different max.message.bytes configurations on the broker.
+//
+// The function is called once when a partition is first discovered and the
+// result is cached on the per-partition record buffer - it is NOT consulted
+// per record or per batch, and topic-config changes at runtime are not
+// picked up until partition state is rebuilt. Return a value in
+// [512, 1<<30]; returning a value outside that range for a specific topic
+// will cause produces to that topic to fail (config validation only checks
+// the return for the empty-topic at client construction).
 //
 // For a static limit applied to all topics, see [ProducerBatchMaxBytes].
 func ProducerBatchMaxBytesFn(fn func(string) int32) ProducerOpt {
@@ -1808,13 +1825,15 @@ func ShareMaxRecords(n int32) GroupOpt {
 
 // ShareMaxRecordsStrict opts into strict record-count limiting for share
 // fetch requests. By default, the broker may return more records than
-// [ShareMaxRecords] to avoid splitting record batches. With this option the
-// broker returns at most [ShareMaxRecords] records, splitting batches if
-// necessary.
+// [ShareMaxRecords] to avoid splitting record batches. With this option
+// the broker returns at most [ShareMaxRecords] records per fetch,
+// splitting batches if necessary.
 //
-// This option also disables pre-fetching: a share fetch request is issued
-// only at the time you call poll. You can override this with MaxConcurrentFetches,
-// but it is not recommended as this will opt into pre-fetching data.
+// As a secondary effect, this option also flips the [MaxConcurrentFetches]
+// default from unbounded to 0 (one fetch per poll). Setting
+// [MaxConcurrentFetches] to a positive value re-enables pre-fetching;
+// note that the per-fetch limit still holds but in-flight concurrent
+// fetches can cumulatively return more.
 //
 // This option only applies when using [ShareGroup].
 func ShareMaxRecordsStrict() GroupOpt {

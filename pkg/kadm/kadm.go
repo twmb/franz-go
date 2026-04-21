@@ -67,6 +67,7 @@
 package kadm
 
 import (
+	"bytes"
 	"errors"
 	"regexp"
 	"runtime/debug"
@@ -457,6 +458,19 @@ func (os OffsetsByID) Each(fn func(Offset)) {
 	}
 }
 
+// Sorted returns the offsets sorted by topic ID and partition.
+func (os OffsetsByID) Sorted() []Offset {
+	var s []Offset
+	os.Each(func(o Offset) { s = append(s, o) })
+	sort.Slice(s, func(i, j int) bool {
+		if c := bytes.Compare(s[i].TopicID[:], s[j].TopicID[:]); c != 0 {
+			return c < 0
+		}
+		return s[i].Partition < s[j].Partition
+	})
+	return s
+}
+
 // OffsetResponsesByID is like OffsetResponses but keyed by topic ID.
 type OffsetResponsesByID map[TopicID]map[int32]OffsetResponse
 
@@ -480,6 +494,37 @@ func (os OffsetResponsesByID) Each(fn func(OffsetResponse)) {
 			fn(o)
 		}
 	}
+}
+
+// Offsets returns these offset responses as offsets keyed by topic ID.
+// Responses with an empty TopicID are skipped.
+func (os OffsetResponsesByID) Offsets() OffsetsByID {
+	i := make(OffsetsByID)
+	os.Each(func(o OffsetResponse) {
+		if o.TopicID == (TopicID{}) {
+			return
+		}
+		ot := i[o.TopicID]
+		if ot == nil {
+			ot = make(map[int32]Offset)
+			i[o.TopicID] = ot
+		}
+		ot[o.Partition] = o.Offset
+	})
+	return i
+}
+
+// Sorted returns the responses sorted by topic ID and partition.
+func (os OffsetResponsesByID) Sorted() []OffsetResponse {
+	var s []OffsetResponse
+	os.Each(func(o OffsetResponse) { s = append(s, o) })
+	sort.Slice(s, func(i, j int) bool {
+		if c := bytes.Compare(s[i].TopicID[:], s[j].TopicID[:]); c != 0 {
+			return c < 0
+		}
+		return s[i].Partition < s[j].Partition
+	})
+	return s
 }
 
 // Error iterates over all responses and returns the first error encountered.

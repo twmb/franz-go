@@ -242,7 +242,19 @@ func adm() *Client {
 }
 
 func testClientOpts(opts ...Opt) []Opt {
-	opts = append(opts, getSeedBrokers())
+	opts = append(opts,
+		getSeedBrokers(),
+		// kfake run_tests.sh --restart (and, rarely, real-broker restarts
+		// mid-run) cut client connections mid-request. The default "first
+		// EOF is likely SASL misconfig" pessimism then strands the in-flight
+		// request as non-retryable, which for a classic-group heartbeat
+		// drops us through OnPartitionsLost instead of OnPartitionsRevoked
+		// -- skipping the commit and causing re-delivery after rebalance
+		// (a "saw double offset" under the testConsumer's strict check).
+		// Test infra knows the broker is correctly configured, so always
+		// retry EOF.
+		AlwaysRetryEOF(),
+	)
 	if testCert != nil {
 		opts = append(opts, DialTLSConfig(testCert))
 	}
