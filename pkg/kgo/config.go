@@ -197,11 +197,12 @@ type cfg struct {
 	rebalanceTimeout  time.Duration
 	heartbeatInterval time.Duration
 
-	onAssigned func(context.Context, *Client, map[string][]int32)
-	onRevoked  func(context.Context, *Client, map[string][]int32)
-	onLost     func(context.Context, *Client, map[string][]int32)
-	onBlocked  func(context.Context, *Client)
-	onFetched  func(context.Context, *Client, *kmsg.OffsetFetchResponse) error
+	onAssigned      func(context.Context, *Client, map[string][]int32)
+	onRevoked       func(context.Context, *Client, map[string][]int32)
+	onLost          func(context.Context, *Client, map[string][]int32)
+	onBlocked       func(context.Context, *Client)
+	onFetched       func(context.Context, *Client, *kmsg.OffsetFetchResponse) error
+	userHasOnAssign bool // captured before initGroup wraps onAssigned non-nil
 
 	adjustOffsetsBeforeAssign func(ctx context.Context, offsets map[string]map[int32]Offset) (map[string]map[int32]Offset, error)
 
@@ -1931,10 +1932,14 @@ func RequireStableFetchOffsets() GroupOpt {
 // fast. If your record processing may be slow, it is recommended you also use
 // PollRecords rather than PollFetches so that you can bound how many records
 // you process at once. You must always AllowRebalances when you are done
-// processing the records you received. Only rebalances that lose partitions
-// are blocked; rebalances that are strictly net additions or non-modifications
-// do not block (the On callbacks are always blocked so that you can ensure
-// their serialization).
+// processing the records you received.
+//
+// Polls and rebalance callbacks gate each other so that you cannot commit
+// offsets across a rebalance: polls block while a callback is running, and
+// callbacks wait for in-flight polls to release via AllowRebalance before
+// running. The assign phase is gated only when you registered
+// [OnPartitionsAssigned]; otherwise it runs concurrent with poll because
+// adding partitions cannot cause a wrong-ownership commit.
 //
 // You can use [OnPartitionsCallbackBlocked] as a signal that a rebalance WANTS
 // to happen, but you are currently blocking it, and that you need to either

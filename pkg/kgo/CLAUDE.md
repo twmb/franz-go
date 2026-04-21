@@ -11,6 +11,16 @@ franz-go is a pure Go Kafka client library. The `kgo` package is the main client
 - Internal comments should explain WHY we are doing something, not just WHAT we are doing. WHAT comments are almost never useful, unless the block that follows is complex.
 - Comments around subtle race conditions (logic or data) should contain a walkthrough of how the race is encountered. Don't JUST say what the race is, but also how a sequence of events can encounter the race.
 
+## Context keys: NEVER use empty struct as a key
+
+Per the Go spec, two distinct zero-size variables may share the same address. That means `type myKey struct{}` is unsafe as a `context.WithValue` key - it can collide with any other package using the same pattern. Use the project's pointer-to-string idiom instead:
+
+```go
+var myKey = func() *string { s := "my_key"; return &s }()
+```
+
+The string body is for debugging; the pointer's identity is what makes the key unique. Examples in this package: `ctxPinReq` (broker.go), `noShardRetryCtx` (client.go), `commitContextFn` / `txnCommitContextFn` (consumer_group.go), `ctxRecRecycle` (pools.go).
+
 ## Commit Style
 
 - Format: `kgo: <description>` (lowercase, no period)
