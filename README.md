@@ -83,7 +83,7 @@ As an example, your require section in go.mod may look like this:
 
 ```
 require (
-	github.com/twmb/franz-go v1.20.7
+	github.com/twmb/franz-go v1.21.0
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 )
 ```
