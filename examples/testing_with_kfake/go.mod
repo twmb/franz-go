@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/twmb/franz-go v1.21.0
-	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260421205846-2b4a83824bd2
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260421213655-a7255a3f2bc7
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 )
 
