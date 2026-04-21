@@ -557,6 +557,31 @@ func tmpGroup(tb testing.TB) (string, func()) {
 	}
 }
 
+// tmpShareGroup returns a random share-group id plus a cleanup that deletes
+// the group via DeleteGroups after the test runs. Leaking share groups between
+// tests piles records into the __share_group_state topic; on a small broker
+// heap this pushes the share coordinator into long GC pauses and makes the
+// whole cluster flaky.
+func tmpShareGroup(tb testing.TB) (string, func()) {
+	tb.Helper()
+
+	group := randsha()
+
+	return group, func() {
+		tb.Helper()
+
+		req := kmsg.NewPtrDeleteGroupsRequest()
+		req.Groups = []string{group}
+		resp, err := req.RequestWith(context.Background(), adm())
+		if err == nil && len(resp.Groups) > 0 {
+			err = kerr.ErrorForCode(resp.Groups[0].ErrorCode)
+		}
+		if err != nil {
+			tb.Logf("unable to delete share group %q: %v", group, err)
+		}
+	}
+}
+
 // The point of this pool is that, if used, it *will* return something from the
 // Get's after the Put's have been put into. Using it in txn test allows us to
 // detect races.
@@ -636,7 +661,11 @@ type testConsumer struct {
 // sendErr non-blocking sends an error to errCh. Only the first error
 // matters; if the reader already called t.Fatal, additional sends must
 // not block or the goroutine leaks and holds the ETL semaphore forever.
+// We also fmt.Printf the error so that later errors (e.g. "saw double
+// offset") are visible in `go test -v` output even though the channel
+// already has an error and the send was dropped.
 func (c *testConsumer) sendErr(err error) {
+	fmt.Printf("    testConsumer sendErr group=%s: %v\n", c.group, err)
 	select {
 	case c.errCh <- err:
 	default:

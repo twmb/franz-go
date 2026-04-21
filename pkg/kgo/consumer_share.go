@@ -792,7 +792,7 @@ func (s *source) closeShareSession(ctx context.Context) {
 		}
 	}
 
-	sc.cfg.logger.Log(LogLevelInfo, "closing share session on broker",
+	sc.cfg.logger.Log(LogLevelDebug, "closing share session on broker",
 		"broker", logID(s.nodeID),
 		"group", sc.cfg.shareGroup,
 		"piggybacked_ack_records", nLive,
@@ -927,7 +927,7 @@ func (s *source) closeShareSession(ctx context.Context) {
 //     heartbeat response drives assignPartitions to clean up
 //     nowAssigned.
 func (sc *shareConsumer) purgeTopics(topics []string) {
-	sc.cfg.logger.Log(LogLevelInfo, "purging share group topics",
+	sc.cfg.logger.Log(LogLevelDebug, "purging share group topics",
 		"group", sc.cfg.shareGroup,
 		"topics", topics,
 	)
@@ -1062,7 +1062,7 @@ func (sc *shareConsumer) manage() {
 
 		consecutiveErrors++
 		backoff := sc.cfg.retryBackoff(consecutiveErrors)
-		sc.cfg.logger.Log(LogLevelWarn, "share group manage loop errored",
+		sc.cfg.logger.Log(LogLevelInfo, "share group manage loop hit a retryable error, retrying",
 			"group", sc.cfg.shareGroup,
 			"err", err,
 			"consecutive_errors", consecutiveErrors,
@@ -1098,6 +1098,11 @@ func (sc *shareConsumer) heartbeat() (time.Duration, error) {
 		req.SubscribedTopicNames = subscribedTopics
 	}
 
+	sc.cfg.logger.Log(LogLevelDebug, "share group heartbeating",
+		"group", sc.cfg.shareGroup,
+		"member_id", req.MemberID,
+		"member_epoch", req.MemberEpoch,
+	)
 	resp, err := req.RequestWith(sc.fm.ctx, sc.cl)
 	sleep := sc.cfg.heartbeatInterval
 	if err == nil {
@@ -1107,6 +1112,16 @@ func (sc *shareConsumer) heartbeat() (time.Duration, error) {
 			sleep = time.Second // sanity
 		}
 	}
+	sc.cfg.logger.Log(LogLevelDebug, "share group heartbeat complete",
+		"group", sc.cfg.shareGroup,
+		"new_member_epoch", func() int32 {
+			if resp != nil {
+				return resp.MemberEpoch
+			}
+			return 0
+		}(),
+		"err", err,
+	)
 	if err != nil {
 		return sleep, err
 	}
@@ -1128,7 +1143,6 @@ func (sc *shareConsumer) handleHeartbeatResp(resp *kmsg.ShareGroupHeartbeatRespo
 	// The member ID is client-generated and immutable; only
 	// update the epoch from the response.
 	sc.memberGen.storeGeneration(resp.MemberEpoch)
-	sc.cfg.logger.Log(LogLevelDebug, "storing share epoch", "group", sc.cfg.shareGroup, "epoch", resp.MemberEpoch)
 
 	if resp.Assignment == nil {
 		if len(sc.unresolvedAssigns) == 0 {
@@ -1721,6 +1735,14 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 		}
 		req.Topics[tidx].Partitions = append(req.Topics[tidx].Partitions, rp)
 	}
+	sc.cfg.logger.Log(LogLevelDebug, "sending share acknowledge",
+		"broker", logID(s.nodeID),
+		"group", sc.cfg.shareGroup,
+		"session_epoch", req.ShareSessionEpoch,
+		"n_topics", len(req.Topics),
+		"n_ack_records", nAcks,
+		"is_renew_ack", req.IsRenewAck,
+	)
 	// A retry is likely useless if the request actually left the client,
 	// the broker rejects duplicate acks with INVALID_RECORD_STATE.
 	// But, if the request did not leave the client, we benefit, and
@@ -2305,6 +2327,18 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 		s.shareAck(nil)
 		return false
 	}
+
+	sc.cfg.logger.Log(LogLevelDebug, "sending share fetch",
+		"broker", logID(s.nodeID),
+		"group", sc.cfg.shareGroup,
+		"session_epoch", req.ShareSessionEpoch,
+		"n_topics", len(req.Topics),
+		"n_forgotten_topics", len(req.ForgottenTopicsData),
+		"max_wait_ms", req.MaxWaitMillis,
+		"max_records", req.MaxRecords,
+		"batch_size", req.BatchSize,
+		"n_piggyback_acks", nAcks,
+	)
 
 	// Bound the broker round-trip to MaxWait + 5s. The broker caps
 	// its own wait at MaxWaitMillis, so a healthy response arrives

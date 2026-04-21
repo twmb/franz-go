@@ -154,13 +154,23 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
 
 	txid := randsha()
+	// Under -race with full-suite parallel load on a single broker, an
+	// otherwise-fast commit can take longer than the default 60s,
+	// triggering the broker's TransactionTimeout and bumping the
+	// producer epoch -- the next TxnOffsetCommit then fails with
+	// InvalidProducerEpoch (which is fatal post-KIP-890 and rightly
+	// fails the test). Give more slack under -race.
+	txnTimeout := 60 * time.Second
+	if testIsRace {
+		txnTimeout = 3 * time.Minute
+	}
 	opts := []Opt{
 		// Kraft sometimes returns success from topic creation, and
 		// then returns UnknownTopicXyz for a while in metadata loads.
 		// It also returns NotLeaderXyz; we handle both problems.
 		UnknownTopicRetries(-1),
 		TransactionalID(txid),
-		TransactionTimeout(60 * time.Second),
+		TransactionTimeout(txnTimeout),
 		// Transactional tests use an instance ID (below) so member
 		// death leaves the session dangling until the session timeout.
 		// The broker default (up to 45s) keeps partitions locked long
@@ -206,7 +216,10 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			if consumed := int(c.consumed.Load()); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
-				panic(fmt.Sprintf("invalid: consumed too much from %s (at %d, group %s, tx %s)", c.consumeFrom, consumed, c.group, txid))
+				c.mu.Lock()
+				npo := len(c.partOffsets)
+				c.mu.Unlock()
+				panic(fmt.Sprintf("invalid: consumed too much from %s (at %d, uniq_part_offsets %d, group %s, tx %s)", c.consumeFrom, consumed, npo, c.group, txid))
 			}
 			continue
 		}
@@ -264,7 +277,16 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 
 		committed, err := txnSess.End(context.Background(), TransactionEndTry(wantCommit))
 		if err != nil {
+			// Any err here means kgo's txn.go isAbortableCommitErr
+			// did NOT absorb this error -- either it's a genuinely
+			// fatal condition (producer fence, auth failure) or a
+			// new transient case kgo should be teaching to absorb.
+			// Either way the test should fail so we notice. We
+			// still `continue` so the background ETL goroutines
+			// don't over-count fetchRecs (the records aren't
+			// durably consumed) before the test exit path fires.
 			c.sendErr(fmt.Errorf("flush unexpected err: %v", err))
+			continue
 		} else if !committed {
 			if !wantCommit {
 				return

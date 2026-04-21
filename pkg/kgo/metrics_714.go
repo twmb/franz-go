@@ -81,7 +81,7 @@ func (cl *Client) pushMetrics() {
 		cl.cfg.logger.Log(LogLevelInfo, "received client metrics subscription, beginning periodic send loop",
 			"client_instance_id", fmt.Sprintf("%x", gresp.ClientInstanceID),
 			"subscription_id", gresp.SubscriptionID,
-			"accepteded_compression_types", gresp.AcceptedCompressionTypes,
+			"accepted_compression_types", gresp.AcceptedCompressionTypes,
 			"telemetry_max_bytes", gresp.TelemetryMaxBytes,
 			"push_interval", time.Duration(gresp.PushIntervalMillis)*time.Millisecond,
 			"requested_metrics", gresp.RequestedMetrics,

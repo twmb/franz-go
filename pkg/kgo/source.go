@@ -2695,9 +2695,14 @@ func (s *source) signalShareAckFlush() {
 
 func (s *source) resetShareSession() {
 	s.share.mu.Lock()
+	prev := s.share.sessionEpoch
 	s.share.sessionEpoch = 0
 	clear(s.share.sessionParts) // must also be cleared, else we'll have a corrupted session
 	s.share.mu.Unlock()
+	s.cl.cfg.logger.Log(LogLevelDebug, "resetting share session",
+		"broker", logID(s.nodeID),
+		"prev_session_epoch", prev,
+	)
 }
 
 // bumpShareSessionEpochIfCurrent increments the session epoch only if

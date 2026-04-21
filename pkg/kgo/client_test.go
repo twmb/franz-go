@@ -343,9 +343,10 @@ func TestShareGroup(t *testing.T) {
 
 	topic, topicCleanup := tmpTopicPartitions(t, 1)
 	defer topicCleanup()
-	group := randsha()
+	group, groupCleanup := tmpShareGroup(t)
+	defer groupCleanup()
 
-	admin, _ := newTestClient(DefaultProduceTopic(topic))
+	admin, _ := newTestClient(DefaultProduceTopic(topic), UnknownTopicRetries(-1))
 	defer admin.Close()
 	setShareAutoOffsetReset(t, admin, group)
 

@@ -65,8 +65,10 @@ func TestShareGroupETL(t *testing.T) {
 		topic3bCleanup()
 	})
 
-	group1 := randsha()
-	group2 := randsha()
+	group1, group1Cleanup := tmpShareGroup(t)
+	group2, group2Cleanup := tmpShareGroup(t)
+	t.Cleanup(group1Cleanup)
+	t.Cleanup(group2Cleanup)
 
 	// SPSO at log start so we see records produced before consumers join,
 	// and shorten the broker's acquisition-lock timeout from the 30s
@@ -376,7 +378,21 @@ func TestShareGroupETL(t *testing.T) {
 			name, len(allKeys), totalAccepts, p, dups, len(lvl.redelivered), lvl.maxDC, lvl.consumed.Load())
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// Without -race, a 500k-record 2-hop share ETL finishes in 20-60s
+	// even when running alongside TestGroupETL / TestTxnEtl. 5m is
+	// generous slack.
+	//
+	// Under -race the whole hot path (atomics, maps, channels) is
+	// instrumented and can slow full-suite execution ~10x on a single
+	// broker. Solo race = ~90s; full-suite race has been seen at 800s+.
+	// We use 19m there so this test doesn't fail in the 1-in-20 long-tail
+	// iteration. Outer `go test -timeout` must be >= 20m when running
+	// with -race.
+	testCtxTimeout := 5 * time.Minute
+	if testIsRace {
+		testCtxTimeout = 19 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), testCtxTimeout)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -399,6 +415,7 @@ func TestShareGroupETL(t *testing.T) {
 	prodCl, _ := newTestClient(
 		MaxBufferedRecords(10000),
 		MaxBufferedBytes(50000),
+		UnknownTopicRetries(-1), // under -race, metadata propagation can lag past the default retry budget
 		WithLogger(testLogger()),
 	)
 	defer prodCl.Close()
@@ -710,9 +727,10 @@ func TestShareGroupAckOnClose(t *testing.T) {
 
 	topic, topicCleanup := tmpTopicPartitions(t, 1)
 	defer topicCleanup()
-	group := randsha()
+	group, groupCleanup := tmpShareGroup(t)
+	defer groupCleanup()
 
-	admin, _ := newTestClient(DefaultProduceTopic(topic))
+	admin, _ := newTestClient(DefaultProduceTopic(topic), UnknownTopicRetries(-1))
 	defer admin.Close()
 	setShareAutoOffsetReset(t, admin, group)
 
@@ -808,7 +826,18 @@ func TestShareGroupAckOnClose(t *testing.T) {
 }
 
 // setShareGroupConfigs applies one or more share-group configs in a
-// single IncrementalAlterConfigs call on the GROUP resource.
+// single IncrementalAlterConfigs call on the GROUP resource, then
+// polls DescribeConfigs until the broker's DynamicConfigPublisher has
+// actually applied the change.
+//
+// IncrementalAlterConfigs returns success as soon as the change is
+// committed to the metadata log, but the broker-side publisher that
+// feeds ShareGroupConfigProvider runs asynchronously behind other
+// metadata work and can lag several seconds under load. A share
+// consumer that joins in that gap initializes its SharePartition
+// with the DEFAULT share.auto.offset.reset (latest) -- so records
+// produced before the gap closes become invisible to the group,
+// breaking any test that assumes earliest.
 func setShareGroupConfigs(t *testing.T, cl *Client, group string, kvs ...string) {
 	t.Helper()
 	if len(kvs)%2 != 0 {
@@ -834,6 +863,50 @@ func setShareGroupConfigs(t *testing.T, cl *Client, group string, kvs ...string)
 		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
 			t.Fatalf("IncrementalAlterConfigs resource error: %v", err)
 		}
+	}
+
+	want := make(map[string]string, len(kvs)/2)
+	for i := 0; i < len(kvs); i += 2 {
+		want[kvs[i]] = kvs[i+1]
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		dreq := kmsg.NewPtrDescribeConfigsRequest()
+		dres := kmsg.NewDescribeConfigsRequestResource()
+		dres.ResourceType = kmsg.ConfigResourceTypeGroupConfig
+		dres.ResourceName = group
+		for k := range want {
+			dres.ConfigNames = append(dres.ConfigNames, k)
+		}
+		dreq.Resources = append(dreq.Resources, dres)
+		dresp, err := dreq.RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatalf("DescribeConfigs: %v", err)
+		}
+		applied := true
+		for _, r := range dresp.Resources {
+			if e := kerr.ErrorForCode(r.ErrorCode); e != nil {
+				t.Fatalf("DescribeConfigs resource error: %v", e)
+			}
+			got := make(map[string]string, len(r.Configs))
+			for _, c := range r.Configs {
+				if c.Value != nil {
+					got[c.Name] = *c.Value
+				}
+			}
+			for k, v := range want {
+				if got[k] != v {
+					applied = false
+				}
+			}
+		}
+		if applied {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("share group %q configs %v not applied after 30s", group, want)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
