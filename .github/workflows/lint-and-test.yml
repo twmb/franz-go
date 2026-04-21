@@ -126,6 +126,7 @@ jobs:
                 KAFKA_GROUP_COORDINATOR_REBALANCE_PROTOCOLS: classic,consumer,share
                 KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
                 KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+                KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS: 5
                 KAFKA_SASL_ENABLED_MECHANISMS: SCRAM-SHA-256
                 KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/jaas.conf"
               volumes:
