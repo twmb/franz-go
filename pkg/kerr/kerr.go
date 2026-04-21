@@ -83,7 +83,7 @@ var (
 	RequestTimedOut                    = &Error{"REQUEST_TIMED_OUT", 7, true, "The request timed out."}
 	BrokerNotAvailable                 = &Error{"BROKER_NOT_AVAILABLE", 8, true, "The broker is not available."}
 	ReplicaNotAvailable                = &Error{"REPLICA_NOT_AVAILABLE", 9, true, "The replica is not available for the requested topic-partition."}
-	MessageTooLarge                    = &Error{"MESSAGE_TOO_LARGE", 10, false, "The request included a message larger than the max message size the server will accept."}
+	MessageTooLarge                    = &Error{"MESSAGE_TOO_LARGE", 10, false, "The request included a message larger than the max message size the server will accept"} /* error description doesn't have period at the end as more info would be appended to it upstream */
 	StaleControllerEpoch               = &Error{"STALE_CONTROLLER_EPOCH", 11, false, "The controller moved to another broker."}
 	OffsetMetadataTooLarge             = &Error{"OFFSET_METADATA_TOO_LARGE", 12, false, "The metadata field of the offset request was too large."}
 	NetworkException                   = &Error{"NETWORK_EXCEPTION", 13, true, "The server disconnected before a response was received."}
