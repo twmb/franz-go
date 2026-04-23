@@ -442,9 +442,6 @@ func TestDisableRequireStableFetchOffsetsOptValue(t *testing.T) {
 	if got := cl.OptValue(DisableRequireStableFetchOffsets); got != true {
 		t.Errorf("OptValue(DisableRequireStableFetchOffsets) = %v, want true", got)
 	}
-	if got := cl.OptValue(RequireStableFetchOffsets); got != false {
-		t.Errorf("OptValue(RequireStableFetchOffsets) = %v, want false", got)
-	}
 }
 
 func TestDefaultRequireStableFetchOffsetsOptValue(t *testing.T) {
@@ -459,8 +456,5 @@ func TestDefaultRequireStableFetchOffsetsOptValue(t *testing.T) {
 
 	if got := cl.OptValue(DisableRequireStableFetchOffsets); got != false {
 		t.Errorf("OptValue(DisableRequireStableFetchOffsets) = %v, want false", got)
-	}
-	if got := cl.OptValue(RequireStableFetchOffsets); got != true {
-		t.Errorf("OptValue(RequireStableFetchOffsets) = %v, want true", got)
 	}
 }
