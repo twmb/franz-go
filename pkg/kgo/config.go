@@ -208,6 +208,8 @@ type cfg struct {
 
 	blockRebalanceOnPoll bool
 
+	disableRequireStable bool
+
 	autocommitDisable  bool // true if autocommit was disabled or we are transactional
 	autocommitGreedy   bool
 	autocommitMarks    bool
@@ -1918,9 +1920,38 @@ func HeartbeatInterval(interval time.Duration) GroupOpt {
 // "stable" fetch offsets before consuming from the group.
 //
 // Deprecated: RequireStable is now permanently enabled for all group
-// consumers. This function is a no-op.
+// consumers. This function is a no-op. If you need to opt out of the
+// new default (e.g. because your broker is Kafka-API-compatible but does
+// not implement KIP-447), use [DisableRequireStableFetchOffsets] instead.
 func RequireStableFetchOffsets() GroupOpt {
 	return groupOpt{func(*cfg) {}}
+}
+
+// DisableRequireStableFetchOffsets disables the default RequireStable=true
+// behavior that the group consumer uses on OffsetFetch requests.
+//
+// By default, the group consumer sets RequireStable=true on OffsetFetch.
+// This is correct against any Kafka broker that implements KIP-447
+// (Kafka 2.5+): if there are pending transactional offset commits for the
+// group, the broker returns PENDING_TRANSACTION and the client retries
+// until they resolve, preventing duplicate or lost records in
+// consume-transform-produce pipelines.
+//
+// Some Kafka-API-compatible brokers do not implement KIP-447 and respond
+// to RequireStable=true with an unrelated error code (e.g.
+// UNKNOWN_TOPIC_OR_PARTITION at the group/response level) instead of the
+// expected pending-transaction semantics. For those brokers, this option
+// restores the pre-hardcoded behavior by sending RequireStable=false on
+// OffsetFetch.
+//
+// Use this option only if you know your broker does not support KIP-447
+// and your workload does not involve transactional offset commits for
+// this group (i.e. no external transactional producer writes to the same
+// group's offsets). Using this option against a KIP-447-capable broker
+// that has pending transactional offset commits for this group can result
+// in duplicate or lost records on rebalance.
+func DisableRequireStableFetchOffsets() GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.disableRequireStable = true }}
 }
 
 // BlockRebalanceOnPoll switches the client to block rebalances whenever you

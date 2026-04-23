@@ -1718,7 +1718,7 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int
 start:
 	member, gen := g.memberGen.load()
 	req := kmsg.NewPtrOffsetFetchRequest()
-	req.RequireStable = true
+	req.RequireStable = !g.cfg.disableRequireStable
 	reqg := kmsg.NewOffsetFetchRequestGroup()
 	reqg.Group = g.cfg.group
 	if member != "" {

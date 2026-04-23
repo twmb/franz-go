@@ -435,6 +435,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.group}
 	case namefn(DisableAutoCommit):
 		return []any{cfg.autocommitDisable}
+	case namefn(DisableRequireStableFetchOffsets):
+		return []any{cfg.disableRequireStable}
 	case namefn(GreedyAutoCommit):
 		return []any{cfg.autocommitGreedy}
 	case namefn(GroupProtocol):
@@ -459,7 +461,7 @@ func (cl *Client) OptValues(opt any) []any {
 	case namefn(RebalanceTimeout):
 		return []any{cfg.rebalanceTimeout}
 	case namefn(RequireStableFetchOffsets):
-		return []any{true}
+		return []any{!cfg.disableRequireStable}
 	case namefn(SessionTimeout):
 		return []any{cfg.sessionTimeout}
 
