@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -160,6 +161,66 @@ func (cl *Client) EnsureProduceConnectionIsOpen(ctx context.Context, brokers ...
 	wg.Wait()
 
 	return errors.Join(errs...)
+}
+
+// EnsureProduceTopicsAreReady attempts to ensure, that the required metadata
+// is available for the given topics and the `defaultProduceTopic` (if set),
+// to avoid immediate metadata updates being triggered when producing to a
+// topic for the first time.
+//
+// This can be used in an attempt to reduce the latency when producing for the
+// first time and to determine readiness.
+func (cl *Client) EnsureProduceTopicsAreReady(ctx context.Context, topics ...string) []error {
+	var (
+		wg sync.WaitGroup
+		//mu   sync.Mutex
+		errs []error
+	)
+
+	// append the defaultProduceTopic if not in list of topics
+	if len(cl.cfg.defaultProduceTopic) > 0 {
+		if !slices.Contains(topics, cl.cfg.defaultProduceTopic) {
+			topics = append(topics, cl.cfg.defaultProduceTopic)
+		}
+	}
+
+	// register interest so metadata loop will load these topics
+	cl.producer.topics.storeTopics(topics)
+
+	cl.producer.unknownTopicsMu.Lock()
+
+	for _, t := range topics {
+		unknown := cl.producer.unknownTopics[t]
+		if unknown == nil {
+			unknown = &unknownTopicProduces{
+				buffered: make([]promisedRec, 0, 1),
+				wait:     make(chan error, 5),
+				fatal:    make(chan error, 1),
+			}
+			cl.producer.unknownTopics[t] = unknown
+			wg.Go(func() {
+				cl.waitUnknownTopic(ctx, ctx, t, unknown)
+				if len(unknown.wait) > 0 {
+					err := <-unknown.wait
+					if err != nil {
+						errs = append(errs, err)
+					}
+				}
+			})
+		}
+	}
+	// explicitly unlocking here, as otherwise waitUnknownTopic would not be able to get the lock
+	cl.producer.unknownTopicsMu.Unlock()
+
+	// force immediate metadata update
+	if len(topics) > 0 {
+		cl.triggerUpdateMetadataNow("EnsureProduceTopicsAreReady: preload topic metadata")
+	}
+
+	// wait for unknown topics
+	wg.Wait()
+
+	return errs
 }
 
 type unknownTopicProduces struct {
