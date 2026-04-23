@@ -415,3 +415,52 @@ func TestShareGroup(t *testing.T) {
 		t.Fatalf("expected %d records, got %d", totalRecords, n)
 	}
 }
+
+func TestDisableRequireStableFetchOffsetsOpt(t *testing.T) {
+	cfg := defaultCfg()
+	if cfg.disableRequireStable {
+		t.Errorf("default cfg.disableRequireStable = true, want false")
+	}
+
+	DisableRequireStableFetchOffsets().apply(&cfg)
+	if !cfg.disableRequireStable {
+		t.Errorf("cfg.disableRequireStable = false after DisableRequireStableFetchOffsets(), want true")
+	}
+}
+
+func TestDisableRequireStableFetchOffsetsOptValue(t *testing.T) {
+	cl, err := NewClient(
+		SeedBrokers("127.0.0.1:9092"),
+		ConsumerGroup("test-group"),
+		DisableRequireStableFetchOffsets(),
+	)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer cl.Close()
+
+	if got := cl.OptValue(DisableRequireStableFetchOffsets); got != true {
+		t.Errorf("OptValue(DisableRequireStableFetchOffsets) = %v, want true", got)
+	}
+	if got := cl.OptValue(RequireStableFetchOffsets); got != false {
+		t.Errorf("OptValue(RequireStableFetchOffsets) = %v, want false", got)
+	}
+}
+
+func TestDefaultRequireStableFetchOffsetsOptValue(t *testing.T) {
+	cl, err := NewClient(
+		SeedBrokers("127.0.0.1:9092"),
+		ConsumerGroup("test-group"),
+	)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer cl.Close()
+
+	if got := cl.OptValue(DisableRequireStableFetchOffsets); got != false {
+		t.Errorf("OptValue(DisableRequireStableFetchOffsets) = %v, want false", got)
+	}
+	if got := cl.OptValue(RequireStableFetchOffsets); got != true {
+		t.Errorf("OptValue(RequireStableFetchOffsets) = %v, want true", got)
+	}
+}
