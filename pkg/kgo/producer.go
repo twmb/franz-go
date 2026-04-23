@@ -172,8 +172,7 @@ func (cl *Client) EnsureProduceConnectionIsOpen(ctx context.Context, brokers ...
 // first time and to determine readiness.
 func (cl *Client) EnsureProduceTopicsAreReady(ctx context.Context, topics ...string) []error {
 	var (
-		wg sync.WaitGroup
-		//mu   sync.Mutex
+		wg   sync.WaitGroup
 		errs []error
 	)
 
