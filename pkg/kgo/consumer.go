@@ -1058,7 +1058,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 	// The internal code can avoid giving an assign reason in cases where
 	// the caller logs itself immediately before assigning. We only log if
 	// there is a reason.
-	if len(why) > 0 {
+	if len(why) > 0 && c.cl.cfg.logger.Level() >= LogLevelInfo {
 		c.cl.cfg.logger.Log(LogLevelInfo, "assigning partitions",
 			"why", why,
 			"how", how,

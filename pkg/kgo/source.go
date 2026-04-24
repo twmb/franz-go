@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"cmp"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -326,19 +327,7 @@ func (cs cursorPreferreds) String() string {
 	for t, ps := range ts {
 		tsorted = append(tsorted, t)
 		slices.SortFunc(ps, func(l, r pnext) int {
-			if l.p < r.p {
-				return -1
-			}
-			if l.p > r.p {
-				return 1
-			}
-			if l.next < r.next {
-				return -1
-			}
-			if l.next > r.next {
-				return 1
-			}
-			return 0
+			return cmp.Or(cmp.Compare(l.p, r.p), cmp.Compare(l.next, r.next))
 		})
 	}
 	slices.Sort(tsorted)
@@ -410,34 +399,20 @@ type bufferedFetch struct {
 }
 
 func (s *source) hook(f *Fetch, buffered, polled bool) {
+	// Collect matching hooks once, then fuse dispatch with the metrics walk
+	// so we visit each record exactly once regardless of hook count.
+	var (
+		bufH []HookFetchRecordBuffered
+		unbH []HookFetchRecordUnbuffered
+	)
 	s.cl.cfg.hooks.each(func(h Hook) {
 		if buffered {
-			h, ok := h.(HookFetchRecordBuffered)
-			if !ok {
-				return
-			}
-			for i := range f.Topics {
-				t := &f.Topics[i]
-				for j := range t.Partitions {
-					p := &t.Partitions[j]
-					for _, r := range p.Records {
-						h.OnFetchRecordBuffered(r)
-					}
-				}
+			if h, ok := h.(HookFetchRecordBuffered); ok {
+				bufH = append(bufH, h)
 			}
 		} else {
-			h, ok := h.(HookFetchRecordUnbuffered)
-			if !ok {
-				return
-			}
-			for i := range f.Topics {
-				t := &f.Topics[i]
-				for j := range t.Partitions {
-					p := &t.Partitions[j]
-					for _, r := range p.Records {
-						h.OnFetchRecordUnbuffered(r, polled)
-					}
-				}
+			if h, ok := h.(HookFetchRecordUnbuffered); ok {
+				unbH = append(unbH, h)
 			}
 		}
 	})
@@ -450,7 +425,14 @@ func (s *source) hook(f *Fetch, buffered, polled bool) {
 			p := &t.Partitions[j]
 			nrecs += len(p.Records)
 			for k := range p.Records {
-				nbytes += p.Records[k].userSize()
+				r := p.Records[k]
+				nbytes += r.userSize()
+				for _, h := range bufH {
+					h.OnFetchRecordBuffered(r)
+				}
+				for _, h := range unbH {
+					h.OnFetchRecordUnbuffered(r, polled)
+				}
 			}
 		}
 	}
@@ -698,10 +680,12 @@ func (s *source) createReq() *fetchRequest {
 	var rechecks cursorPreferreds
 	defer func() {
 		if len(rechecks) > 0 {
-			s.cl.cfg.logger.Log(LogLevelInfo, "redirecting follower fetchers back to their leader to re-check if a new follower should be chosen",
-				"from_broker", s.nodeID,
-				"moves", rechecks.String(),
-			)
+			if s.cl.cfg.logger.Level() >= LogLevelInfo {
+				s.cl.cfg.logger.Log(LogLevelInfo, "redirecting follower fetchers back to their leader to re-check if a new follower should be chosen",
+					"from_broker", s.nodeID,
+					"moves", rechecks.String(),
+				)
+			}
 			for _, c := range rechecks {
 				c.move()
 			}
@@ -981,10 +965,12 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 	// or reloading cursors from being modified when the records that were
 	// fetched are finally polled.
 	if len(preferreds) > 0 {
-		s.cl.cfg.logger.Log(LogLevelInfo, "fetch partitions returned preferred replicas",
-			"from_broker", s.nodeID,
-			"moves", preferreds.String(),
-		)
+		if s.cl.cfg.logger.Level() >= LogLevelInfo {
+			s.cl.cfg.logger.Log(LogLevelInfo, "fetch partitions returned preferred replicas",
+				"from_broker", s.nodeID,
+				"moves", preferreds.String(),
+			)
+		}
 		preferreds.eachPreferred(func(c cursorOffsetPreferred) {
 			c.move()
 			deleteReqUsedOffset(c.from.topic, c.from.partition)
