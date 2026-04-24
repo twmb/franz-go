@@ -490,8 +490,9 @@ func (cl *Client) TryProduce(
 // If the client is configured to automatically flush the client currently has
 // the configured maximum amount of records buffered, Produce will block. The
 // context can be used to cancel waiting while records flush to make space. In
-// contrast, if flushing is configured, the record will be failed immediately
-// with ErrMaxBuffered (this same behavior can be had with TryProduce).
+// contrast, if manual flushing is configured, the record will be failed
+// immediately with ErrMaxBuffered (this same behavior can be had with
+// TryProduce).
 //
 // Once a record is buffered into a batch, it can be canceled in three ways:
 // canceling the context, the record timing out, or hitting the maximum
