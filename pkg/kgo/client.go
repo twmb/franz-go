@@ -2840,6 +2840,11 @@ func onRespShardErr(err *error, newKerr error) {
 
 // a convenience function for when a request needs to be issued identically to
 // all brokers.
+//
+// If the request returns objects that are owned by a coordinator (groups,
+// transactional IDs, etc.), an object that is mid-migration can transiently
+// appear in BOTH the old and new coordinator's response. The sharder's should
+// dedupe.
 func (cl *Client) allBrokersShardedReq(ctx context.Context, fn func() kmsg.Request) ([]issueShard, bool, error) {
 	if err := cl.fetchBrokerMetadata(ctx); err != nil {
 		return nil, false, err
@@ -3815,6 +3820,11 @@ func (*listGroupsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
 
 func (*listGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrListGroupsResponse()
+	// During a coordinator migration, a group can transiently appear in
+	// both the old and new coordinator's ListGroups response. We dedupe
+	// by group name so callers do not see duplicates; the first shard
+	// response wins.
+	seen := make(map[string]struct{})
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.ListGroupsResponse)
 		merged.Version = resp.Version
@@ -3822,7 +3832,13 @@ func (*listGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 		if merged.ErrorCode == 0 {
 			merged.ErrorCode = resp.ErrorCode
 		}
-		merged.Groups = append(merged.Groups, resp.Groups...)
+		for _, g := range resp.Groups {
+			if _, ok := seen[g.Group]; ok {
+				continue
+			}
+			seen[g.Group] = struct{}{}
+			merged.Groups = append(merged.Groups, g)
+		}
 	})
 }
 
@@ -5214,6 +5230,11 @@ func (*listTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response, er
 	merged := kmsg.NewPtrListTransactionsResponse()
 
 	unknownStates := make(map[string]struct{})
+	// During a txn coordinator migration, a transactional ID can
+	// transiently appear in both the old and new coordinator's
+	// ListTransactions response. Dedupe by transactional ID; the first
+	// shard response wins.
+	seen := make(map[string]struct{})
 
 	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.ListTransactionsResponse)
@@ -5225,7 +5246,13 @@ func (*listTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response, er
 		for _, state := range resp.UnknownStateFilters {
 			unknownStates[state] = struct{}{}
 		}
-		merged.TransactionStates = append(merged.TransactionStates, resp.TransactionStates...)
+		for _, s := range resp.TransactionStates {
+			if _, ok := seen[s.TransactionalID]; ok {
+				continue
+			}
+			seen[s.TransactionalID] = struct{}{}
+			merged.TransactionStates = append(merged.TransactionStates, s)
+		}
 	})
 	for unknownState := range unknownStates {
 		merged.UnknownStateFilters = append(merged.UnknownStateFilters, unknownState)
