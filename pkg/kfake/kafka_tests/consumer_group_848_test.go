@@ -76,6 +76,7 @@ func Test848ConsumerLeaveReassigns(t *testing.T) {
 	nPartitions := 4
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	adm := newAdminClient(t, c)
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
@@ -83,7 +84,17 @@ func Test848ConsumerLeaveReassigns(t *testing.T) {
 	c1 := newGroupConsumer(t, c, topic, group)
 	c2 := newGroupConsumer(t, c, topic, group)
 
-	// Consume all existing records to stabilize.
+	// Wait for the group to stabilize with both members assigned.
+	// Otherwise c1 may fetch and poll records for partitions that
+	// are then revoked to c2. The cooperative revoke-commit path
+	// (defaultRevoke) uses the head offset, which with default
+	// autocommit lags one poll behind dirty. If the test loop exits
+	// after a single poll, head is still at 0 so the revoke commits
+	// nothing for the revoked partitions, and c1 re-reads those
+	// records when it retakes them after c2 leaves.
+	waitForStableGroup(t, adm, group, 2, 10*time.Second)
+
+	// Consume all existing records.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	got := 0
@@ -412,6 +423,7 @@ func Test848SessionTimeout(t *testing.T) {
 			"group.consumer.session.timeout.ms": "3000",
 		}),
 	)
+	adm := newAdminClient(t, c)
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
@@ -422,7 +434,16 @@ func Test848SessionTimeout(t *testing.T) {
 		kgo.RebalanceTimeout(500*time.Millisecond),
 	)
 
-	// Consume all records to stabilize both consumers.
+	// Wait for both members to be assigned before consuming. If the
+	// rebalance that revokes partitions from c1 to c2 happens during
+	// the consumption loop, c1 may poll records for partitions it
+	// then loses; the cooperative revoke-commit (defaultRevoke) uses
+	// head offsets, which with default autocommit lag one poll behind
+	// dirty, so the revoke commits nothing and c1 later re-reads
+	// those records.
+	waitForStableGroup(t, adm, group, 2, 10*time.Second)
+
+	// Consume all records.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	got := 0
