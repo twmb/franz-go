@@ -985,6 +985,8 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 	// there was an error, the body was empty (so processing is basically a
 	// no-op). We process the fetch session error now.
 	switch err := kerr.ErrorForCode(resp.ErrorCode); err {
+	case nil:
+		// success; fall through to session bump below
 	case kerr.FetchSessionIDNotFound:
 		if s.session.epoch == 0 {
 			// If the epoch was zero, the broker did not even
@@ -1006,6 +1008,16 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		s.cl.cfg.logger.Log(LogLevelInfo, "topic id issues, resetting session and updating metadata", "broker", logID(s.nodeID), "err", err)
 		s.session.reset()
 		s.cl.triggerUpdateMetadataNow("topic id issues")
+		return fetched
+
+	default:
+		// Any other top-level error is unexpected: current brokers
+		// only emit session-related codes here. Rather than bumping
+		// the session epoch against a failed request, reset defensively
+		// so the next request re-establishes state the broker agrees
+		// with.
+		s.cl.cfg.logger.Log(LogLevelWarn, "fetch response has unexpected top-level error, resetting session", "broker", logID(s.nodeID), "err", err)
+		s.session.reset()
 		return fetched
 	}
 
@@ -1734,7 +1746,7 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	}
 
 	recordCtx := poolsCtx
-	if o.shareAckSlab != nil {
+	if o.shareAckSlab != nil && len(rrecords) > 0 {
 		if slab := o.shareAckSlab(numRecords, &rrecords[0]); slab != nil {
 			parent := poolsCtx
 			if parent == nil {

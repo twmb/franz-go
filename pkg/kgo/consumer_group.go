@@ -3170,11 +3170,31 @@ func (g *groupConsumer) commit(
 		// attempt sleeps 500ms between STALE responses) so that
 		// auto-commit before a rebalance does not surface a benign
 		// STALE to the user.
+		//
+		// On gen change, filter req.Topics down to partitions we
+		// still own before retrying so we do not race the new owner's
+		// commits for revoked partitions. The filtered-out partitions
+		// get synthesized REBALANCE_IN_PROGRESS responses after the
+		// loop so the caller still sees a per-partition result for
+		// everything they asked us to commit. We restore the original
+		// req.Topics before invoking onDone so the callback sees the
+		// caller's full request.
+		origReqTopics := req.Topics
+		// dropped tracks (topic name, topic id) -> partitions that
+		// were filtered out of req.Topics during retries.
+		type droppedTopic struct {
+			name       string
+			id         [16]byte
+			partitions []int32
+		}
+		var dropped []droppedTopic
+
 		staleRetries := 0
 		for {
 			start := time.Now()
 			resp, err = req.RequestWith(commitCtx, g.cl)
 			if err != nil {
+				req.Topics = origReqTopics
 				onDone(g.cl, req, nil, err)
 				return
 			}
@@ -3222,17 +3242,80 @@ func (g *groupConsumer) commit(
 				}
 				_, newGen := g.memberGen.load()
 				if newGen != req.Generation {
+					owned := g.nowAssigned.read()
+					keptTopics := make([]kmsg.OffsetCommitRequestTopic, 0, len(req.Topics))
+					droppedParts := 0
+					for _, rt := range req.Topics {
+						ownedParts := owned[rt.Topic]
+						kept := make([]kmsg.OffsetCommitRequestTopicPartition, 0, len(rt.Partitions))
+						var drop []int32
+						for _, rp := range rt.Partitions {
+							if slices.Contains(ownedParts, rp.Partition) {
+								kept = append(kept, rp)
+							} else {
+								drop = append(drop, rp.Partition)
+							}
+						}
+						if len(drop) > 0 {
+							dropped = append(dropped, droppedTopic{rt.Topic, rt.TopicID, drop})
+							droppedParts += len(drop)
+						}
+						if len(kept) > 0 {
+							rt.Partitions = kept
+							keptTopics = append(keptTopics, rt)
+						}
+					}
+					req.Topics = keptTopics
 					g.cfg.logger.Log(LogLevelInfo, "offset commit got stale member epoch, retrying with updated epoch",
 						"group", g.cfg.group,
 						"old_epoch", req.Generation,
 						"new_epoch", newGen,
+						"lost_partitions_filtered", droppedParts,
 					)
 					req.Generation = newGen
+					if len(req.Topics) == 0 {
+						// Nothing left on the wire; synthesize an empty
+						// response that the dropped-partition fill below
+						// will populate.
+						resp = kmsg.NewPtrOffsetCommitResponse()
+						resp.Version = req.Version
+						break
+					}
 					continue
 				}
 			}
 			break
 		}
+
+		// Inject synthetic responses for partitions filtered out
+		// during retries so the caller sees a per-partition result
+		// for everything they asked us to commit.
+		for _, d := range dropped {
+			var rt *kmsg.OffsetCommitResponseTopic
+			for i := range resp.Topics {
+				if resp.Topics[i].Topic == d.name && resp.Topics[i].TopicID == d.id {
+					rt = &resp.Topics[i]
+					break
+				}
+			}
+			if rt == nil {
+				resp.Topics = append(resp.Topics, kmsg.OffsetCommitResponseTopic{
+					Topic:   d.name,
+					TopicID: d.id,
+				})
+				rt = &resp.Topics[len(resp.Topics)-1]
+			}
+			for _, p := range d.partitions {
+				rt.Partitions = append(rt.Partitions, kmsg.OffsetCommitResponseTopicPartition{
+					Partition: p,
+					ErrorCode: kerr.RebalanceInProgress.Code,
+				})
+			}
+		}
+
+		// Restore so updateCommitted and onDone see the caller's
+		// original request, not the wire-filtered one.
+		req.Topics = origReqTopics
 
 		g.updateCommitted(req, resp)
 		onDone(g.cl, req, resp, nil)
