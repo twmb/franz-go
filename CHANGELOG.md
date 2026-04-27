@@ -136,7 +136,7 @@ type HookPollStart interface {
 * `kfake.VirtualNetwork` plus a new `kgo` xsync package enable full
   `testing/synctest` support against an in-process kfake cluster. See
   `examples/testing_with_kfake_and_synctest`. Thanks
-  [@manuc-conf](https://github.com/manuc-conf)!
+  [@cupcicm](https://github.com/cupcicm)!
 
 ## Behavior changes
 
