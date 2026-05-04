@@ -3379,13 +3379,16 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 		unresolvedNames []string
 		unresolvedIDs   [][16]byte
 	)
+	var resolving bool
 	for _, g := range req.Groups {
 		for _, t := range g.Topics {
 			if t.Topic == "" && t.TopicID != ([16]byte{}) {
 				unresolvedIDs = append(unresolvedIDs, t.TopicID)
+				resolving = true
 			}
 			if t.Topic != "" && t.TopicID == ([16]byte{}) {
 				unresolvedNames = append(unresolvedNames, t.Topic)
+				resolving = true
 			}
 		}
 	}
@@ -3396,16 +3399,19 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 	if len(unresolvedNames) > 0 {
 		nameMeta, _ = cl.resolveTopicMeta(ctx, unresolvedNames, true, 0)
 	}
-	id2t := cl.id2tMap()
-	for i := range req.Groups {
-		for j := range req.Groups[i].Topics {
-			t := &req.Groups[i].Topics[j]
-			if t.Topic == "" && t.TopicID != ([16]byte{}) {
-				t.Topic = id2t[t.TopicID]
-			}
-			if t.TopicID == ([16]byte{}) && t.Topic != "" {
-				if ct, ok := nameMeta[t.Topic]; ok {
-					t.TopicID = ct.id
+	if resolving {
+		id2t := cl.id2tMap()
+		for i := range req.Groups {
+			g := &req.Groups[i]
+			for j := range g.Topics {
+				t := &g.Topics[j]
+				if t.Topic == "" && t.TopicID != ([16]byte{}) {
+					t.Topic = id2t[t.TopicID]
+				}
+				if t.TopicID == ([16]byte{}) && t.Topic != "" {
+					if ct, ok := nameMeta[t.Topic]; ok {
+						t.TopicID = ct.id
+					}
 				}
 			}
 		}
@@ -3507,6 +3513,16 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 	// All-topics fetches could leave topics nil, in which case we DONT
 	// bi-directionally resolve the name in shard. Thus, we have to handle
 	// here.
+	//
+	// We always run the resolution from cache (it lets clients use the
+	// "by ID" APIs against v9 brokers via name -> ID fallback). What we
+	// gate on resp.Version >= 10 is the safety-net error injection:
+	// below v10, TopicID is structurally absent from the wire, so a
+	// zero TopicID after cache lookup is expected, not an error. At v10+
+	// the broker should have sent the missing side; failing to resolve
+	// is a real surprise. See #1312 for the EH case where a v8/v9 OffsetFetch
+	// against a sub-v10 Metadata broker would synthesize a bogus
+	// UNKNOWN_TOPIC_OR_PARTITION on every partition.
 	var unresolvedIDs [][16]byte
 	var unresolvedNames []string
 	for i := range resp.Groups {
@@ -3531,16 +3547,16 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 	if len(unresolvedIDs) > 0 || len(unresolvedNames) > 0 {
 		// Use metaCache which was just populated by the resolve
 		// calls above. If we cannot map topic ID or topic name,
-		// we inject an error. This SHOULDN'T happen, but we don't
-		// want to have a case where the user is expecting one
-		// or the other and don't have it.
+		// we inject an error - but only at v10+, where TopicID is
+		// expected on the wire. Below v10 the absence is structural,
+		// not a broker error.
 		cl.metaCache.mu.Lock()
 		for i := range resp.Groups {
 			for j := range resp.Groups[i].Topics {
 				t := &resp.Groups[i].Topics[j]
 				if t.Topic == "" && t.TopicID != ([16]byte{}) {
 					t.Topic = cl.metaCache.byID[t.TopicID]
-					if t.Topic == "" {
+					if t.Topic == "" && resp.Version >= 10 {
 						for k := range t.Partitions {
 							if t.Partitions[k].ErrorCode == 0 {
 								t.Partitions[k].ErrorCode = kerr.UnknownTopicID.Code
@@ -3552,7 +3568,7 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 					if ct, ok := cl.metaCache.topics[t.Topic]; ok {
 						t.TopicID = ct.id
 					}
-					if t.TopicID == ([16]byte{}) {
+					if t.TopicID == ([16]byte{}) && resp.Version >= 10 {
 						for k := range t.Partitions {
 							if t.Partitions[k].ErrorCode == 0 {
 								t.Partitions[k].ErrorCode = kerr.UnknownTopicOrPartition.Code
