@@ -78,11 +78,22 @@ func (cl *Client) newSink(nodeID int32) *sink {
 func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bool) {
 	tx890p2 := s.cl.producer.tx890p2.Load()
 
+	// produceMax is the highest Produce version we will let the broker dispatch
+	// negotiate for this request. Cap at 11 unless we can use v12+ (KIP-890
+	// part 2: no AddPartitionsToTxn round-trip), and additionally cap at 12 if
+	// any recBuf in this request lacks a TopicID, because Produce v13 puts the
+	// TopicID on the wire (see #1312 - quirky brokers can advertise Produce v13
+	// while capping Metadata below v10, leaving us without TopicIDs).
+	produceMax := int16(11)
+	if s.cl.cfg.txnID == nil || tx890p2 {
+		produceMax = 13
+	}
+
 	req := &produceRequest{
-		can12:   s.cl.cfg.txnID == nil || tx890p2,
-		txnID:   s.cl.cfg.txnID,
-		acks:    s.cl.cfg.acks.val,
-		timeout: int32(s.cl.cfg.produceTimeout.Milliseconds()),
+		produceMax: produceMax,
+		txnID:      s.cl.cfg.txnID,
+		acks:       s.cl.cfg.acks.val,
+		timeout:    int32(s.cl.cfg.produceTimeout.Milliseconds()),
 
 		producerID:    id,
 		producerEpoch: epoch,
@@ -96,7 +107,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		txnID: req.txnID,
 		id:    id,
 		epoch: epoch,
-		pv12:  req.can12, // produce request v12 && transaction.version >= 2 means we no longer send AddPartitionsToTxn
+		pv12:  produceMax >= 12, // v12 means no AddPartitionsToTxn round-trip
 	}
 
 	var moreToDrain bool
@@ -120,6 +131,9 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 			recBuf.mu.Unlock()
 			moreToDrain = true
 			continue
+		}
+		if req.produceMax > 12 && recBuf.topicID == ([16]byte{}) {
+			req.produceMax = 12
 		}
 
 		if s.cl.cfg.disableIdempotency || s.cl.cfg.allowIdempotentProduceCancellation {
@@ -1885,8 +1899,8 @@ func (b *recBatch) decInflight() {
 //
 // It is the same as kmsg.ProduceRequest, but with a custom AppendTo.
 type produceRequest struct {
-	version int16
-	can12   bool // we can send v12+ if we aren't using txns OR the broker has feature transaction.version >= 2
+	version    int16
+	produceMax int16 // negotiation cap: 11 if !(non-txn || tx890p2), else 13, lowered to 12 if any added recBuf lacks a TopicID
 
 	backoffSeq uint32
 
@@ -2281,12 +2295,7 @@ func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32
 
 func (*produceRequest) Key() int16 { return 0 }
 
-func (p *produceRequest) MaxVersion() int16 {
-	if !p.can12 {
-		return 11
-	}
-	return 13
-}
+func (p *produceRequest) MaxVersion() int16  { return p.produceMax }
 func (p *produceRequest) SetVersion(v int16) { p.version = v }
 func (p *produceRequest) GetVersion() int16  { return p.version }
 func (p *produceRequest) IsFlexible() bool   { return p.version >= 9 }
