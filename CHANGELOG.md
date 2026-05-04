@@ -1,4 +1,4 @@
-v1.21.1 (unreleased)
+v1.21.1
 ===
 
 This patch release contains a few bug fixes in the new share consumer and a
@@ -24,8 +24,18 @@ interested in all the improvements, check the commits.
   auto-fixed after some time and there were no correctness issues, but
   now the logic race has been eliminated.
 
+* Azure Event Hubs (and any other broker that advertises high
+  Produce / OffsetFetch / OffsetCommit versions while capping Metadata
+  below v10) is now handled correctly. Previously, OffsetFetch v8/v9
+  responses were spuriously stamped with `UNKNOWN_TOPIC_OR_PARTITION`
+  client-side, and Produce v13 / OffsetFetch v10+ / OffsetCommit v10+
+  could be sent with zero TopicIDs on the wire. The Produce path now
+  caps at v12 if any partition lacks a TopicID, and OffsetFetch /
+  OffsetCommit now pin to v9 in the same situation. Fixes #1312.
+
 ## Relevant commits
 
+- [`3c1d0d2e`](https://github.com/twmb/franz-go/commit/3c1d0d2e) [`b7463fd8`](https://github.com/twmb/franz-go/commit/b7463fd8) [`7bb7ccbc`](https://github.com/twmb/franz-go/commit/7bb7ccbc) **improvement** kgo: add guards across Produce / OffsetFetch / OffsetCommit for brokers that advertise high request versions while capping Metadata below v10 (Azure Event Hubs); fixes #1312
 - [`c606410e`](https://github.com/twmb/franz-go/commit/c606410e) **bugfix** (and other stuff) kgo: simplify share-consumer ack tracking, fix pool-reuse race
 - [`2ff493a1`](https://github.com/twmb/franz-go/commit/2ff493a1) kgo: consumer-path audit fixes
 - [`1623daba`](https://github.com/twmb/franz-go/commit/1623daba) kgo: produce path audit fixes
