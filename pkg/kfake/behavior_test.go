@@ -3,6 +3,7 @@ package kfake_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"maps"
 	"math/rand"
@@ -5691,4 +5692,258 @@ func TestUnreleasedInstanceIDRaceResolves(t *testing.T) {
 		t.Fatalf("expected %d records, got %d", nRecords, len(records))
 	}
 	t.Logf("consumed %d records after %d initialJoin attempts", len(records), initialJoinAttempts.Load())
+}
+
+// TestConsumeRecordHeaders is a regression test for the per-batch
+// RecordHeader slab in processRecordBatch: records with differing header
+// counts in the same batch must each round-trip with their own headers.
+// A bug in the slab sub-slice cursor would cross-contaminate headers
+// between neighboring records.
+func TestConsumeRecordHeaders(t *testing.T) {
+	t.Parallel()
+	topic := "t-record-headers"
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	consumer := newPlainClient(t, c,
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+			topic: {0: kgo.NewOffset().At(0)},
+		}),
+	)
+
+	// Mix 0-header and multi-header records so the hot path exercises
+	// both the h==nil branch and the sub-slice branch. Tag each header
+	// with its record index so cross-record aliasing surfaces as a
+	// content mismatch, not a silent pass.
+	const nRecords = 5
+	recs := make([]*kgo.Record, nRecords)
+	for i := range recs {
+		hdrs := make([]kgo.RecordHeader, i)
+		for j := range hdrs {
+			hdrs[j] = kgo.RecordHeader{
+				Key:   fmt.Sprintf("r%d-k%d", i, j),
+				Value: []byte(fmt.Sprintf("r%d-v%d", i, j)),
+			}
+		}
+		recs[i] = &kgo.Record{
+			Value:   []byte(strconv.Itoa(i)),
+			Headers: hdrs,
+		}
+	}
+	produceSync(t, producer, recs...)
+
+	got := consumeN(t, consumer, nRecords, 5*time.Second)
+
+	for i, r := range got {
+		if string(r.Value) != strconv.Itoa(i) {
+			t.Fatalf("record %d: value %q != %q", i, r.Value, strconv.Itoa(i))
+		}
+		if len(r.Headers) != i {
+			t.Fatalf("record %d: header count %d != %d", i, len(r.Headers), i)
+		}
+		for j, h := range r.Headers {
+			wantK := fmt.Sprintf("r%d-k%d", i, j)
+			wantV := fmt.Sprintf("r%d-v%d", i, j)
+			if h.Key != wantK || string(h.Value) != wantV {
+				t.Fatalf("record %d header %d: got (%q,%q) want (%q,%q)",
+					i, j, h.Key, h.Value, wantK, wantV)
+			}
+		}
+	}
+}
+
+// testRecordPool is a deterministically-reusing PoolRecords. The first
+// slice we see is cached and handed back on every subsequent GetRecords
+// whose size fits -- so the []Record memory for batch 1 becomes the
+// same memory for batch 2. This reproduces the pool-reuse aliasing
+// scenario that motivates the lastPolledSlabs identity check.
+type testRecordPool struct {
+	mu   sync.Mutex
+	recs []kgo.Record
+}
+
+func (p *testRecordPool) GetRecords(n int) []kgo.Record {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if cap(p.recs) >= n {
+		r := p.recs[:n]
+		p.recs = nil
+		return r
+	}
+	return make([]kgo.Record, 0, n)
+}
+
+func (p *testRecordPool) PutRecords(r []kgo.Record) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if cap(r) > cap(p.recs) {
+		p.recs = r
+	}
+}
+
+// TestShareGroupRecyclePoolAliasing guards against the pool-reuse
+// aliasing bug where calling Record.Recycle without Ack, combined with
+// a PoolRecords that hands the same []Record back on the next fetch,
+// would cause finalizePreviousPoll to silently auto-accept the NEW
+// batch's records via aliased *Record pointers -- overriding the
+// user's subsequent explicit Ack. The fix materializes the minimum
+// ack state (slab + state pointer + offset) in sc.lastPolled so
+// finalize never dereferences the aliased *Record, eliminating both
+// the logical aliasing AND the underlying r.Context read/write data
+// race.
+//
+// Correct behavior observed on the wire:
+//
+//   - Batch 1 offsets: AckAccept (finalize auto-accepts records the
+//     user neither Acked nor Rejected, per the next-poll contract).
+//   - Batch 2 offsets: AckReject (user's explicit intent preserved).
+//
+// Buggy behavior would show AckAccept for batch 2 offsets.
+func TestShareGroupRecyclePoolAliasing(t *testing.T) {
+	t.Parallel()
+	topic, group := "share-pool-reuse", "share-pool-reuse-g"
+	c := newCluster(t, kfake.SeedTopics(1, topic))
+
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	setShareAutoOffsetReset(t, admin, group)
+
+	pool := &testRecordPool{}
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ShareGroup(group),
+		kgo.WithPools(pool),
+		kgo.FetchMaxWait(100*time.Millisecond),
+	)
+
+	// Observe per-offset ack types on the wire (from both standalone
+	// ShareAcknowledge and piggybacked ShareFetch ack batches). Pass
+	// through so the cluster handles them normally.
+	type ackObs struct {
+		offset int64
+		at     int8
+	}
+	var (
+		ackMu    sync.Mutex
+		observed []ackObs
+	)
+	captureBatches := func(bs []kmsg.ShareAcknowledgeRequestTopicPartitionAcknowledgementBatch) {
+		ackMu.Lock()
+		defer ackMu.Unlock()
+		for _, b := range bs {
+			if len(b.AcknowledgeTypes) == 1 {
+				for off := b.FirstOffset; off <= b.LastOffset; off++ {
+					observed = append(observed, ackObs{offset: off, at: b.AcknowledgeTypes[0]})
+				}
+			} else {
+				for i, at := range b.AcknowledgeTypes {
+					observed = append(observed, ackObs{offset: b.FirstOffset + int64(i), at: at})
+				}
+			}
+		}
+	}
+	c.ControlKey(int16(kmsg.ShareAcknowledge), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.ShareAcknowledgeRequest)
+		for _, rt := range req.Topics {
+			for _, rp := range rt.Partitions {
+				captureBatches(rp.AcknowledgementBatches)
+			}
+		}
+		c.KeepControl()
+		return nil, nil, false
+	})
+	c.ControlKey(int16(kmsg.ShareFetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.ShareFetchRequest)
+		for _, rt := range req.Topics {
+			for _, rp := range rt.Partitions {
+				if len(rp.AcknowledgementBatches) > 0 {
+					// ShareFetch and ShareAcknowledge share the same
+					// AcknowledgementBatch wire shape; reinterpret.
+					reshaped := make([]kmsg.ShareAcknowledgeRequestTopicPartitionAcknowledgementBatch, len(rp.AcknowledgementBatches))
+					for i, b := range rp.AcknowledgementBatches {
+						reshaped[i] = kmsg.ShareAcknowledgeRequestTopicPartitionAcknowledgementBatch{
+							FirstOffset:      b.FirstOffset,
+							LastOffset:       b.LastOffset,
+							AcknowledgeTypes: b.AcknowledgeTypes,
+						}
+					}
+					captureBatches(reshaped)
+				}
+			}
+		}
+		c.KeepControl()
+		return nil, nil, false
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Batch 1 (offsets 0..2): produce, poll, Recycle all without Acking.
+	produceNStrings(t, admin, topic, 3)
+	var batch1 []*kgo.Record
+	for len(batch1) < 3 {
+		fs := consumer.PollFetches(ctx)
+		fs.EachRecord(func(r *kgo.Record) { batch1 = append(batch1, r) })
+	}
+	batch1Addrs := []*kgo.Record{batch1[0], batch1[1], batch1[2]}
+	for _, r := range batch1 {
+		r.Recycle()
+	}
+
+	// Batch 2 (offsets 3..5): produce and let the source loop fetch
+	// into the re-used pooled slice, aliasing batch 1's memory.
+	produceNStrings(t, admin, topic, 3)
+	time.Sleep(500 * time.Millisecond)
+
+	var batch2 []*kgo.Record
+	for len(batch2) < 3 {
+		fs := consumer.PollFetches(ctx)
+		fs.EachRecord(func(r *kgo.Record) { batch2 = append(batch2, r) })
+	}
+
+	// Sanity: confirm the pool reused the slice so batch 2's
+	// *Record pointers coincide with batch 1's (proving we are
+	// exercising the aliasing path).
+	aliased := 0
+	for _, r := range batch2 {
+		for _, ba := range batch1Addrs {
+			if r == ba {
+				aliased++
+				break
+			}
+		}
+	}
+	if aliased != 3 {
+		t.Fatalf("pool did not reuse memory; aliased=%d want 3 (bug repro setup failed)", aliased)
+	}
+
+	// Explicit Reject of batch 2.
+	for _, r := range batch2 {
+		r.Ack(kgo.AckReject)
+	}
+	if err := consumer.FlushAcks(ctx); err != nil {
+		t.Fatalf("FlushAcks: %v", err)
+	}
+
+	ackMu.Lock()
+	defer ackMu.Unlock()
+	byOffset := make(map[int64]kgo.AckStatus, len(observed))
+	for _, o := range observed {
+		byOffset[o.offset] = kgo.AckStatus(o.at)
+	}
+	// Batch 1 (offsets 0..2) must appear as Accept (auto-accepted
+	// by finalizePreviousPoll per the documented contract).
+	for _, off := range []int64{0, 1, 2} {
+		if got := byOffset[off]; got != kgo.AckAccept {
+			t.Errorf("batch 1 offset %d: got ack=%v, want AckAccept (finalize auto-accept)", off, got)
+		}
+	}
+	// Batch 2 (offsets 3..5) must appear as Reject. The bug would
+	// manifest here as AckAccept, meaning finalize silently
+	// auto-accepted via the aliased pointer and the user's
+	// explicit Ack(AckReject) was dropped.
+	for _, off := range []int64{3, 4, 5} {
+		if got := byOffset[off]; got != kgo.AckReject {
+			t.Errorf("batch 2 offset %d: got ack=%v, want AckReject (pool-reuse aliasing regression?)", off, got)
+		}
+	}
 }

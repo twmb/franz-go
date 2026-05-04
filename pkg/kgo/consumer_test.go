@@ -186,6 +186,12 @@ func TestDirectPartitionPurge(t *testing.T) {
 		DefaultProduceTopic(topic),
 		RecordPartitioner(ManualPartitioner()),
 		UnknownTopicRetries(-1),
+		// Short FetchMaxWait so the post-AddConsumeTopics fetch loop
+		// cycles quickly: under heavy parallel load the cursor setup
+		// after metadata refresh can take a moment, and we want the
+		// next fetch attempt to fire promptly once cursors are live
+		// rather than stalling on the broker-side hang.
+		FetchMaxWait(250*time.Millisecond),
 		ConsumePartitions(map[string]map[int32]Offset{
 			topic: {0: NewOffset().At(0)},
 		}),
@@ -215,7 +221,7 @@ func TestDirectPartitionPurge(t *testing.T) {
 		"foo": true,
 		"bar": true,
 	}
-	for {
+	for len(exp) > 0 {
 		fs := cl.PollFetches(ctx)
 		if err := fs.Err0(); err == context.DeadlineExceeded {
 			break

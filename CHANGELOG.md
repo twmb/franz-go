@@ -1,3 +1,47 @@
+v1.21.1
+===
+
+This patch release contains a few bug fixes in the new share consumer and a
+few internal improvements. The highlights are noted below; if you are
+interested in all the improvements, check the commits.
+
+* Share consuming no longer panics on empty batches from the broker.
+
+* The share acking previously did not work in tandem with Record.Recycle;
+  that has been fixed. Records that are recycled without being ack'd are
+  now also auto-accepted.
+
+* `PurgeFetchTopics` no longer panics on KIP-848 consumer groups.
+
+* `ListGroups` and `ListTransactions` fan out to every broker and
+  merge the responses. During a group-coordinator or
+  transaction state leader migration, the same group or
+  transactional ID can transiently appear in both the old and new
+  coordinator's response, producing duplicates in the merged result.
+  The merges now dedupe by key (first shard response wins).
+
+* Two narrow producer logic races have been fixed; the code previously
+  auto-fixed after some time and there were no correctness issues, but
+  now the logic race has been eliminated.
+
+* Azure Event Hubs (and any other broker that advertises high
+  Produce / OffsetFetch / OffsetCommit versions while capping Metadata
+  below v10) is now handled correctly. Previously, OffsetFetch v8/v9
+  responses were spuriously stamped with `UNKNOWN_TOPIC_OR_PARTITION`
+  client-side, and Produce v13 / OffsetFetch v10+ / OffsetCommit v10+
+  could be sent with zero TopicIDs on the wire. The Produce path now
+  caps at v12 if any partition lacks a TopicID, and OffsetFetch /
+  OffsetCommit now pin to v9 in the same situation. Fixes #1312.
+
+## Relevant commits
+
+- [`3c1d0d2e`](https://github.com/twmb/franz-go/commit/3c1d0d2e) [`b7463fd8`](https://github.com/twmb/franz-go/commit/b7463fd8) [`7bb7ccbc`](https://github.com/twmb/franz-go/commit/7bb7ccbc) **improvement** kgo: add guards across Produce / OffsetFetch / OffsetCommit for brokers that advertise high request versions while capping Metadata below v10 (Azure Event Hubs); fixes #1312
+- [`c606410e`](https://github.com/twmb/franz-go/commit/c606410e) **bugfix** (and other stuff) kgo: simplify share-consumer ack tracking, fix pool-reuse race
+- [`2ff493a1`](https://github.com/twmb/franz-go/commit/2ff493a1) kgo: consumer-path audit fixes
+- [`1623daba`](https://github.com/twmb/franz-go/commit/1623daba) kgo: produce path audit fixes
+- [`e7bed5fc`](https://github.com/twmb/franz-go/commit/e7bed5fc) **improvement** kgo: dedupe groups and txns in fan-out sharders
+- [`96a14015`](https://github.com/twmb/franz-go/commit/96a14015) **improvement** kgo: consume-path alloc reductions and log-level gates
+
 v1.21.0
 ===
 
@@ -139,6 +183,16 @@ type HookPollStart interface {
   [@cupcicm](https://github.com/cupcicm)!
 
 ## Behavior changes
+
+* `MaxConcurrentFetches(0)` previously meant "unbounded"; it now means
+  "no background fetches: a single fetch is only issued while you are
+  polling". This was a deliberate change to support
+  `ShareMaxRecordsStrict`, where no buffering is recommended because the
+  broker-side acquisition timer starts as soon as records are
+  returned. Use a negative value (e.g. `-1`) for the prior unbounded
+  behavior (or just don't use the option; the default is unbounded).
+  This also means you can now use 0 to disable pre-fetching entirely,
+  even outside of share groups.
 
 * `ApiVersions` is now sent on _every_ new broker connection, not just
   the first one per broker. The broker uses the ApiVersions request's
