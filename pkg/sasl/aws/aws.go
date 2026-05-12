@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -117,7 +118,14 @@ func challenge(auth Auth, host string) ([]byte, error) {
 	}
 	region, err := identifyRegion(host)
 	if err != nil {
-		return nil, err
+		region = os.Getenv("AWS_REGION")
+		if region == "" {
+			region = os.Getenv("AWS_DEFAULT_REGION")
+		}
+		if region == "" {
+			return nil, err
+		}
+		log.Printf("MSK IAM: host %q does not contain a valid AWS region, using %q from environment", host, region)
 	}
 
 	var (
