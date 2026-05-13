@@ -125,7 +125,6 @@ func challenge(auth Auth, host string) ([]byte, error) {
 		if region == "" {
 			return nil, err
 		}
-		log.Printf("MSK IAM: host %q does not contain a valid AWS region, using %q from environment", host, region)
 	}
 
 	var (
