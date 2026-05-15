@@ -3401,9 +3401,40 @@ func (g *groupConsumer) commit(
 		// original request, not the wire-filtered one.
 		req.Topics = origReqTopics
 
+		// If any partition returns a fatal member-identity
+		// error, our session with the coordinator is invalid.
+		// Trigger a rejoin so the heartbeat loop exits and the
+		// manage(848) loop restarts the session. Without this,
+		// we continue processing messages but all commits fail
+		// until the heartbeat eventually detects the error.
+		if fatalErr := commitHasFatalMemberError(resp); fatalErr != nil {
+			g.cfg.logger.Log(LogLevelInfo, "offset commit detected a fatal member error, triggering rejoin",
+				"group", g.cfg.group,
+				"err", fatalErr,
+			)
+			g.rejoin(fmt.Sprintf("offset commit: %s", fatalErr))
+		}
 		g.updateCommitted(req, resp)
 		onDone(g.cl, req, resp, nil)
 	}()
+}
+
+// commitHasFatalMemberError returns the first per-partition error that
+// invalidates the member's session with the coordinator. If any partition
+// returns one of these errors, no further commits can succeed until the
+// member rejoins.
+func commitHasFatalMemberError(resp *kmsg.OffsetCommitResponse) error {
+	for i := range resp.Topics {
+		for _, p := range resp.Topics[i].Partitions {
+			switch p.ErrorCode {
+			case kerr.UnknownMemberID.Code,
+				kerr.IllegalGeneration.Code,
+				kerr.FencedMemberEpoch.Code:
+				return kerr.ErrorForCode(p.ErrorCode)
+			}
+		}
+	}
+	return nil
 }
 
 type reNews struct {
