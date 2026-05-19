@@ -767,6 +767,13 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 	mapping := partsData.writablePartitions
 	if parts.partitioner.RequiresConsistency(pr.Record) {
 		mapping = partsData.partitions
+	} else if len(mapping) == 0 && len(partsData.partitions) > 0 {
+		// Every partition has a retriable load error. Fall back to the
+		// full set so the record buffers into a recBuf whose existing
+		// sink retry path drains it once a leader recovers, mirroring
+		// the requiresConsistency branch above and Java's
+		// BuiltInPartitioner.
+		mapping = partsData.partitions
 	}
 	if len(mapping) == 0 {
 		cl.producer.promiseRecord(pr, errors.New("unable to partition record due to no usable partitions"))
