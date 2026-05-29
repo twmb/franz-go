@@ -825,6 +825,156 @@ func TestShareGroupAckOnClose(t *testing.T) {
 	}
 }
 
+// TestShareGroupOffsetsAdmin is the real-broker regression test for #1330: it
+// exercises Alter/Describe/DeleteShareGroupOffsets, which kgo had routed via a
+// SHARE-typed FindCoordinator (rejected with INVALID_REQUEST, since SHARE keys
+// must be groupId:topicId:partition) instead of the group coordinator.
+//
+// No consumer runs, so the group stays empty (required to alter/delete offsets);
+// altering a fresh group creates the share state we then describe and delete.
+func TestShareGroupOffsetsAdmin(t *testing.T) {
+	t.Parallel()
+	adm() // ensure allowShare is initialized
+	if !allowShare {
+		t.Skip("broker does not support share groups (requires ShareFetch v2 and ShareAcknowledge v2, Kafka 4.2+)")
+	}
+
+	const (
+		nrecs   = 20
+		setSPSO = 8 // strictly within (0, nrecs) so the round-trip is unambiguous
+	)
+
+	topic, topicCleanup := tmpTopicPartitions(t, 1)
+	defer topicCleanup()
+	group, groupCleanup := tmpShareGroup(t)
+	defer groupCleanup()
+
+	cl, err := newTestClient(DefaultProduceTopic(topic), UnknownTopicRetries(-1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Produce nrecs records to the single partition so its HWM is nrecs and an
+	// SPSO of setSPSO is a real, in-range offset.
+	for i := range nrecs {
+		cl.Produce(ctx, StringRecord(strconv.Itoa(i)), func(_ *Record, err error) {
+			if err != nil {
+				t.Errorf("produce: %v", err)
+			}
+		})
+	}
+	if err := cl.Flush(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	// AlterShareGroupOffsets: create the (empty) group's share state and set
+	// its SPSO. Pre-#1330 this failed with INVALID_REQUEST at FindCoordinator.
+	{
+		req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
+		req.GroupID = group
+		rt := kmsg.NewAlterShareGroupOffsetsRequestTopic()
+		rt.Topic = topic
+		rp := kmsg.NewAlterShareGroupOffsetsRequestTopicPartition()
+		rp.Partition = 0
+		rp.StartOffset = setSPSO
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatalf("AlterShareGroupOffsets: %v", err)
+		}
+		if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+			t.Fatalf("AlterShareGroupOffsets group error: %v", err)
+		}
+		if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+			t.Fatalf("AlterShareGroupOffsets: unexpected response shape %+v", resp.Topics)
+		}
+		if err := kerr.ErrorForCode(resp.Topics[0].Partitions[0].ErrorCode); err != nil {
+			t.Fatalf("AlterShareGroupOffsets partition error: %v", err)
+		}
+	}
+
+	// describeStartOffset returns the SPSO for topic/partition 0. allTopics=true
+	// sends nil Topics (the "all partitions" path kadm uses); both paths must
+	// route to the group coordinator and report the altered offset.
+	describeStartOffset := func(allTopics bool) int64 {
+		t.Helper()
+		req := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+		rg := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+		rg.GroupID = group
+		if !allTopics {
+			rt := kmsg.NewDescribeShareGroupOffsetsRequestGroupTopic()
+			rt.Topic = topic
+			rt.Partitions = []int32{0}
+			rg.Topics = append(rg.Topics, rt)
+		}
+		req.Groups = append(req.Groups, rg)
+
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatalf("DescribeShareGroupOffsets(all=%v): %v", allTopics, err)
+		}
+		if len(resp.Groups) != 1 {
+			t.Fatalf("DescribeShareGroupOffsets(all=%v): expected 1 group, got %d", allTopics, len(resp.Groups))
+		}
+		g := resp.Groups[0]
+		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+			t.Fatalf("DescribeShareGroupOffsets(all=%v) group error: %v", allTopics, err)
+		}
+		for _, rt := range g.Topics {
+			if rt.Topic != topic {
+				continue
+			}
+			for _, rp := range rt.Partitions {
+				if rp.Partition != 0 {
+					continue
+				}
+				if err := kerr.ErrorForCode(rp.ErrorCode); err != nil {
+					t.Fatalf("DescribeShareGroupOffsets(all=%v) partition error: %v", allTopics, err)
+				}
+				return rp.StartOffset
+			}
+		}
+		t.Fatalf("DescribeShareGroupOffsets(all=%v): topic %s partition 0 not in response", allTopics, topic)
+		return 0
+	}
+
+	if got := describeStartOffset(false); got != setSPSO {
+		t.Errorf("describe (explicit topic): StartOffset = %d, want %d", got, setSPSO)
+	}
+	if got := describeStartOffset(true); got != setSPSO {
+		t.Errorf("describe (all topics): StartOffset = %d, want %d", got, setSPSO)
+	}
+
+	// DeleteShareGroupOffsets: remove the topic's share state. Same routing
+	// path as the above, so pre-#1330 it also failed with INVALID_REQUEST.
+	{
+		req := kmsg.NewPtrDeleteShareGroupOffsetsRequest()
+		req.GroupID = group
+		rt := kmsg.NewDeleteShareGroupOffsetsRequestTopic()
+		rt.Topic = topic
+		req.Topics = append(req.Topics, rt)
+
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatalf("DeleteShareGroupOffsets: %v", err)
+		}
+		if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+			t.Fatalf("DeleteShareGroupOffsets group error: %v", err)
+		}
+		for _, rt := range resp.Topics {
+			if err := kerr.ErrorForCode(rt.ErrorCode); err != nil {
+				t.Errorf("DeleteShareGroupOffsets topic %s error: %v", rt.Topic, err)
+			}
+		}
+	}
+}
+
 // setShareGroupConfigs applies one or more share-group configs in a
 // single IncrementalAlterConfigs call on the GROUP resource, then
 // polls DescribeConfigs until the broker's DynamicConfigPublisher has
