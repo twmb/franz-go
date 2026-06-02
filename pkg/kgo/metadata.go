@@ -187,6 +187,7 @@ func (cl *Client) updateMetadataLoop() {
 	defer close(cl.metadone)
 	var consecutiveErrors int
 	var lastAt time.Time
+	lastSuccess := time.Now()
 
 	ticker := time.NewTicker(cl.cfg.metadataMaxAge)
 	defer ticker.Stop()
@@ -289,10 +290,25 @@ loop:
 			cl.metawait.signal()
 			cl.consumer.doOnMetadataUpdate()
 			consecutiveErrors = 0
+			lastSuccess = time.Now()
 			continue
 		}
 
 		consecutiveErrors++
+		// KIP-1102 timeout based rebootstrap: if we have been unable to obtain
+		// a successful metadata response for longer than the configured
+		// trigger, rebootstrap from our seed brokers (re-resolving their
+		// addresses) and reconnect.
+		if cl.cfg.rebootstrapTrigger > 0 && time.Since(lastSuccess) >= cl.cfg.rebootstrapTrigger {
+			if rerr := cl.rebootstrap(); rerr != nil {
+				cl.cfg.logger.Log(LogLevelWarn, "rebootstrap trigger fired but rebootstrapping failed", "err", rerr)
+			} else {
+				cl.cfg.logger.Log(LogLevelInfo, "rebootstrapped from seed brokers after metadata was unavailable for longer than the rebootstrap trigger", "trigger", cl.cfg.rebootstrapTrigger)
+			}
+			// Reset regardless of outcome so we wait another full trigger
+			// interval before attempting to rebootstrap again.
+			lastSuccess = time.Now()
+		}
 		// We sleep a bit in case the max metadata age is very small;
 		// typically this sleep is inconsequential.
 		after := time.NewTimer(cl.cfg.retryBackoff(consecutiveErrors))
@@ -307,6 +323,30 @@ loop:
 			goto backoff
 		}
 	}
+}
+
+// rebootstrap re-bootstraps the client from its seed brokers, re-resolving
+// their addresses and dropping current seed connections. If OnRebootstrapRequired
+// is configured it is consulted for the seeds to use, otherwise the originally
+// configured seed brokers are reused. This backs the RebootstrapTrigger timeout
+// trigger from KIP-1102 (the error code trigger is handled inline in
+// fetchMetadata).
+func (cl *Client) rebootstrap() error {
+	seeds := cl.cfg.seedBrokers
+	if cl.cfg.onRebootstrapRequired != nil {
+		s, err := cl.cfg.onRebootstrapRequired()
+		if err != nil {
+			return err
+		}
+		if len(s) > 0 {
+			seeds = s
+		}
+	}
+	if err := cl.UpdateSeedBrokers(seeds...); err != nil {
+		return err
+	}
+	cl.updateBrokers(nil)
+	return nil
 }
 
 var errMissingTopic = errors.New("topic_missing")

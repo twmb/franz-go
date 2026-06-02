@@ -319,6 +319,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.missingTopicDelete}
 	case namefn(OnRebootstrapRequired):
 		return []any{cfg.onRebootstrapRequired}
+	case namefn(RebootstrapTrigger):
+		return []any{cfg.rebootstrapTrigger}
 	case namefn(WithContext):
 		return []any{cfg.ctx}
 	case namefn(DisableClientMetrics):

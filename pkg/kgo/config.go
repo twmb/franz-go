@@ -93,6 +93,7 @@ type cfg struct {
 	minVersions *kversion.Versions
 
 	onRebootstrapRequired func() ([]string, error)
+	rebootstrapTrigger    time.Duration
 
 	retryBackoff func(int) time.Duration
 	retries      int64
@@ -1008,6 +1009,29 @@ func ConsiderMissingTopicDeletedAfter(t time.Duration) Opt {
 // You can read KIP-1102 for more info about this option.
 func OnRebootstrapRequired(fn func() ([]string, error)) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.onRebootstrapRequired = fn }}
+}
+
+// RebootstrapTrigger sets a duration after which, if the client has been unable
+// to obtain a successful metadata response for that long, the client
+// rebootstraps using its seed brokers (re-resolving them) and reconnects. A
+// value of 0 (the default) disables timeout based rebootstrapping.
+//
+// This is the timeout based rebootstrap trigger described in KIP-1102, the
+// counterpart to the error code trigger handled by [OnRebootstrapRequired].
+// Whereas the error code trigger relies on the broker returning
+// REBOOTSTRAP_REQUIRED, this trigger lets the client rebootstrap on its own
+// when its currently known brokers all become unreachable, mirroring the Java
+// client's metadata.recovery.rebootstrap.trigger.ms.
+//
+// Note that franz-go already periodically queries a seed broker to recover from
+// the scenario where all previously discovered brokers are unavailable, so this
+// option is primarily useful when you want a bounded, configurable window after
+// which a full rebootstrap (including re-resolving seed broker addresses, e.g.
+// for DNS based failover) is forced. If [OnRebootstrapRequired] is set, it is
+// consulted for the seeds to use; otherwise the originally configured
+// [SeedBrokers] are re-resolved.
+func RebootstrapTrigger(d time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.rebootstrapTrigger = d }}
 }
 
 // DisableClientMetrics opts out of collecting and sending client metrics to
