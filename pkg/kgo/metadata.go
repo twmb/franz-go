@@ -431,12 +431,27 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 			}
 			if _, exists := knownNames[mt.topic]; exists {
 				// This name already has an ID in the map.
-				// Only update if it's the same ID (normal
-				// case), skip if it's a different ID
-				// (recreated topic).
 				if _, sameID := merged[mt.id]; sameID {
+					// Same ID (normal case): refresh mapping.
 					merged[mt.id] = mt.topic
+					continue
 				}
+				// A different ID for a name we already know means the
+				// topic's ID changed: the topic was deleted+recreated,
+				// or (super-seed DR) the client failed over to another
+				// cluster where the same topic name has a different ID.
+				// Previously we pinned the stale ID until the user called
+				// PurgeTopicsFromClient, which makes consumers loop
+				// forever on UNKNOWN_TOPIC_ID. Instead, re-resolve to the
+				// new ID from this fresh metadata, dropping the stale
+				// ID->name entries so we keep exactly one ID per name.
+				for id, name := range merged {
+					if name == mt.topic {
+						delete(merged, id)
+					}
+				}
+				merged[mt.id] = mt.topic
+				knownNames[mt.topic] = struct{}{}
 				continue
 			}
 			merged[mt.id] = mt.topic
