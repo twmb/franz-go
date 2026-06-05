@@ -6064,3 +6064,95 @@ func TestShareGroupRecyclePoolAliasing(t *testing.T) {
 		}
 	}
 }
+
+// injectOffsetCommitError returns a one-shot ControlKey callback that
+// fails every partition of the next OffsetCommit with the given error
+// code. Returning true pops the control after first use.
+func injectOffsetCommitError(code int16) func(kmsg.Request) (kmsg.Response, error, bool) {
+	return func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.OffsetCommitRequest)
+		resp := req.ResponseKind().(*kmsg.OffsetCommitResponse)
+		for _, t := range req.Topics {
+			rt := kmsg.NewOffsetCommitResponseTopic()
+			rt.Topic = t.Topic
+			rt.TopicID = t.TopicID
+			for _, p := range t.Partitions {
+				rp := kmsg.NewOffsetCommitResponseTopicPartition()
+				rp.Partition = p.Partition
+				rp.ErrorCode = code
+				rt.Partitions = append(rt.Partitions, rp)
+			}
+			resp.Topics = append(resp.Topics, rt)
+		}
+		return resp, nil, true
+	}
+}
+
+// TestCommitFatalMemberErrorTriggersRejoin verifies that a classic
+// (non-848) group member rejoins immediately when an OffsetCommit
+// returns an error meaning the broker no longer recognizes the member.
+// Without the fix, the consumer would zombie along (consuming but
+// unable to commit) until the heartbeat loop noticed the dead session
+// up to a heartbeat interval later.
+func TestCommitFatalMemberErrorTriggersRejoin(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name string
+		code int16
+	}{
+		{"UnknownMemberID", kerr.UnknownMemberID.Code},
+		{"IllegalGeneration", kerr.IllegalGeneration.Code},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "t-commit-fatal-" + test.name
+			group := "g-commit-fatal-" + test.name
+			const nRecords = 10
+
+			c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+			produceNStrings(t, newPlainClient(t, c), topic, nRecords)
+
+			cl := newPlainClient(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.FetchMaxWait(250*time.Millisecond),
+				kgo.DisableAutoCommit(),
+			)
+			consumeN(t, cl, nRecords, 10*time.Second)
+
+			// Count JoinGroups to observe the rejoin; the group is
+			// stable now, so any join from here on is the rejoin.
+			var joins atomic.Int64
+			c.ControlKey(int16(kmsg.JoinGroup), func(kmsg.Request) (kmsg.Response, error, bool) {
+				c.KeepControl()
+				joins.Add(1)
+				return nil, nil, false
+			})
+
+			c.ControlKey(int16(kmsg.OffsetCommit), injectOffsetCommitError(test.code))
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cl.CommitUncommittedOffsets(ctx) // fails with the injected error; the fix reacts to it
+
+			deadline := time.Now().Add(10 * time.Second)
+			for joins.Load() == 0 && time.Now().Before(deadline) {
+				time.Sleep(50 * time.Millisecond)
+			}
+			if joins.Load() == 0 {
+				t.Fatal("timed out waiting for a rejoin after a fatal commit error")
+			}
+
+			// The member must fully recover: new records are consumable
+			// and committable after the rejoin.
+			produceNStrings(t, newPlainClient(t, c), topic, nRecords)
+			if got := consumeN(t, cl, nRecords, 15*time.Second); len(got) != nRecords {
+				t.Fatalf("expected %d records after recovery, got %d", nRecords, len(got))
+			}
+			if err := cl.CommitUncommittedOffsets(context.Background()); err != nil {
+				t.Fatalf("commit after recovery: %v", err)
+			}
+		})
+	}
+}

@@ -3159,6 +3159,7 @@ func (g *groupConsumer) commit(
 	req.Generation = generation
 	req.MemberID = memberID
 	req.InstanceID = g.cfg.instanceID
+	is848 := g.is848 // g.mu is held, per the function comment above
 
 	if ctx.Done() != nil {
 		go func() {
@@ -3401,9 +3402,65 @@ func (g *groupConsumer) commit(
 		// original request, not the wire-filtered one.
 		req.Topics = origReqTopics
 
+		// If the broker no longer recognizes our member (the session
+		// expired during a network blip, or the group rebalanced
+		// without us), every commit from here on fails identically
+		// while we keep consuming as a zombie, until the heartbeat
+		// loop sees the same error up to a full heartbeat interval
+		// later. Rejoin immediately instead; the join itself repairs
+		// the session (joinAndSync clears the member id and retries
+		// if the broker rejects the join with UnknownMemberID).
+		//
+		// Classic protocol only: in 848 mode, a forced "rejoin" does
+		// not actually rejoin. The heartbeat loop treats the signal
+		// as RebalanceInProgress and the manage loop restarts the
+		// session with the same member id and epoch; only a
+		// heartbeat error resets the member to epoch 0. Worse, with
+		// autocommit the restart livelocks: ending a session runs
+		// the default revoke, which sync-commits uncommitted
+		// offsets; that commit fails with the same fatal error and
+		// re-queues the rejoin signal; the restarted session then
+		// consumes the queued signal before its first heartbeat
+		// timer can fire, and the cycle repeats forever without a
+		// single heartbeat reaching the broker. Classic does not
+		// loop because joinAndSync drains rejoinCh before joining
+		// and the join re-registers us. For 848 we leave fatal
+		// member errors to the heartbeat loop, matching the Java
+		// clients: the classic Java consumer rejoins from the commit
+		// path, while the next-gen one leaves fencing detection to
+		// the heartbeat.
+		if !is848 {
+			if fatalErr := commitHasFatalMemberError(resp); fatalErr != nil {
+				g.cfg.logger.Log(LogLevelInfo, "offset commit returned a fatal group member error, triggering rejoin",
+					"group", g.cfg.group,
+					"err", fatalErr,
+				)
+				g.rejoin(fmt.Sprintf("offset commit error: %s", fatalErr))
+			}
+		}
+
 		g.updateCommitted(req, resp)
 		onDone(g.cl, req, resp, nil)
 	}()
+}
+
+// commitHasFatalMemberError returns the first per-partition error that
+// means the broker no longer recognizes this member's session. The
+// broker validates membership before any per-partition handling, so
+// these errors arrive on every partition or none. FencedInstanceID is
+// deliberately not included: it means another instance with our
+// instance id has taken over, and rejoining would fight that instance
+// for the group slot rather than repair anything.
+func commitHasFatalMemberError(resp *kmsg.OffsetCommitResponse) error {
+	for i := range resp.Topics {
+		for _, p := range resp.Topics[i].Partitions {
+			switch p.ErrorCode {
+			case kerr.UnknownMemberID.Code, kerr.IllegalGeneration.Code:
+				return kerr.ErrorForCode(p.ErrorCode)
+			}
+		}
+	}
+	return nil
 }
 
 type reNews struct {
