@@ -1810,6 +1810,181 @@ func TestFirstMetadataPartitionErrors(t *testing.T) {
 	}
 }
 
+// TestIssue1331 verifies that the leaderEpoch=-1 "no leader" sentinel is never
+// accepted as a partition's leader epoch, even when the leaderless window spans
+// more than maxEpochRewinds (5) metadata refreshes.
+//
+// When a partition briefly loses its leader (e.g. every replica restarts in a
+// full cluster bounce), the broker advertises leaderEpoch=-1. franz-go used to
+// treat -1 < oldEpoch as a leader-epoch rewind and count it toward the
+// maxEpochRewinds=5 valve; after 5 leaderless refreshes it would "keep the
+// metadata to allow forward progress" and accept -1 as the partition's epoch.
+// That clobbers the cursor's real epoch: a cursor at epoch -1 opts out of
+// KIP-320 fencing, so migrateCursorTo skips OffsetForLeaderEpoch validation (a
+// real truncation goes undetected) and the consumer fetches with
+// currentLeaderEpoch -1 (never fenced) and stalls. The client must instead keep
+// its last known real epoch and wait for a real leader to reappear.
+func TestIssue1331(t *testing.T) {
+	t.Parallel()
+	const (
+		testTopic = "foo"
+		nrecs     = 5
+	)
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ti := c.TopicInfo(testTopic)
+	pi := c.PartitionInfo(testTopic, 0)
+	host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
+	port, _ := strconv.Atoi(portStr)
+
+	// Produce a few records so the partition has a real, non-negative leader
+	// epoch for the consumer to consume and validate against.
+	func() {
+		cl, err := kgo.NewClient(
+			kgo.DefaultProduceTopic(testTopic),
+			kgo.SeedBrokers(c.ListenAddrs()...),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+		for i := 0; i < nrecs; i++ {
+			if err := cl.ProduceSync(context.Background(), kgo.StringRecord(strconv.Itoa(i))).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}()
+
+	// Once armed, every metadata refresh for our topic reports the partition
+	// as leaderless (leaderEpoch=-1) while keeping the leader reachable. We
+	// count the refreshes so we can wait until the leaderless window has
+	// clearly spanned past maxEpochRewinds (5).
+	var (
+		armed atomic.Bool
+		fires atomic.Int64
+	)
+	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		if !armed.Load() {
+			return nil, nil, false
+		}
+		req := kreq.(*kmsg.MetadataRequest)
+		wants := len(req.Topics) == 0
+		for _, rt := range req.Topics {
+			if (rt.Topic != nil && *rt.Topic == testTopic) || rt.TopicID == ti.TopicID {
+				wants = true
+			}
+		}
+		if !wants {
+			return nil, nil, false
+		}
+		fires.Add(1)
+
+		resp := req.ResponseKind().(*kmsg.MetadataResponse)
+		sb := kmsg.NewMetadataResponseBroker()
+		sb.NodeID = pi.Leader
+		sb.Host = host
+		sb.Port = int32(port)
+		resp.Brokers = append(resp.Brokers, sb)
+		resp.ControllerID = pi.Leader
+
+		st := kmsg.NewMetadataResponseTopic()
+		st.Topic = kmsg.StringPtr(testTopic)
+		st.TopicID = ti.TopicID
+		sp := kmsg.NewMetadataResponseTopicPartition()
+		sp.Partition = 0
+		sp.Leader = pi.Leader
+		sp.LeaderEpoch = -1 // the "no leader" sentinel
+		sp.Replicas = []int32{pi.Leader}
+		sp.ISR = []int32{pi.Leader}
+		st.Partitions = append(st.Partitions, sp)
+		resp.Topics = append(resp.Topics, st)
+		return resp, nil, true
+	})
+
+	// Refresh metadata frequently so the leaderless window spans many
+	// refreshes quickly.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.MetadataMaxAge(100*time.Millisecond),
+		kgo.MetadataMinAge(20*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// Consume the seeded records so the cursor has a real consumed epoch.
+	for consumed := 0; consumed < nrecs; {
+		fs := cl.PollFetches(ctx)
+		if errs := fs.Errors(); errs != nil {
+			t.Fatalf("consume error: %v", errs)
+		}
+		consumed += fs.NumRecords()
+	}
+
+	// Baseline: the client must have picked up a real (non-negative) leader
+	// epoch. A -1 here means kfake / the client are not using leader epochs,
+	// which would invalidate the test premise.
+	if _, epoch, err := cl.PartitionLeader(testTopic, 0); err != nil || epoch < 0 {
+		t.Fatalf("baseline PartitionLeader epoch = %d, err = %v; want a real non-negative epoch", epoch, err)
+	}
+
+	// Arm the leaderless window and wait until it spans well past
+	// maxEpochRewinds (5) refreshes.
+	armed.Store(true)
+	deadline := time.Now().Add(15 * time.Second)
+	for fires.Load() < 8 {
+		if time.Now().After(deadline) {
+			t.Fatalf("metadata only refreshed %d times under the -1 window, want >= 8", fires.Load())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// The fix: -1 is never accepted, so the client keeps its real epoch.
+	// Before the fix, the epoch is clobbered to -1 once the valve trips on
+	// the 6th leaderless refresh.
+	if _, epoch, err := cl.PartitionLeader(testTopic, 0); err != nil || epoch < 0 {
+		t.Fatalf("during the leaderless window PartitionLeader epoch = %d, err = %v; want the real epoch kept (>= 0), not the -1 no-leader sentinel", epoch, err)
+	}
+
+	// Disarm and verify the consumer still makes forward progress: newly
+	// produced records are consumed once a real leader epoch is reported again.
+	armed.Store(false)
+	prod, err := kgo.NewClient(
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.SeedBrokers(c.ListenAddrs()...),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prod.Close()
+	for i := 0; i < nrecs; i++ {
+		if err := prod.ProduceSync(ctx, kgo.StringRecord("after-"+strconv.Itoa(i))).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for consumed := 0; consumed < nrecs; {
+		fs := cl.PollFetches(ctx)
+		if errs := fs.Errors(); errs != nil {
+			t.Fatalf("post-window consume error: %v", errs)
+		}
+		consumed += fs.NumRecords()
+	}
+}
+
 func TestRequestCachedMetadata(t *testing.T) {
 	t.Parallel()
 	c, err := NewCluster(
