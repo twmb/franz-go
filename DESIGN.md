@@ -651,8 +651,10 @@ Redelivery       Only on consumer failure +   Automatic when the broker's
                  rebalance.                   acquisition lock expires.
 Order            In-partition order.          Best-effort; release re-queues.
 RPCs             Fetch / OffsetCommit.        ShareFetch / ShareAcknowledge,
-                                              both keyed off the share group
-                                              coordinator (`coordinatorTypeShare`).
+                                              sent to partition leaders like
+                                              Fetch (not to a coordinator); the
+                                              broker tracks per-record state
+                                              via the share-state coordinator.
 Group protocol   Classic or KIP-848.          ShareGroupHeartbeat (KIP-932),
                                               same shape as 848.
 ```

@@ -2978,3 +2978,57 @@ func TestDescribeTopicPartitionsCursor(t *testing.T) {
 		t.Fatal("expected error for cursor topic not in request list, got nil")
 	}
 }
+
+// TestIssue1330 verifies the share-state coordinator (FindCoordinator type 2)
+// rejects keys that are not groupId:topicId:partition triplets with
+// INVALID_REQUEST, matching the real broker. kfake previously accepted any key,
+// so the #1330 mis-routing passed every kfake test yet failed a real broker.
+func TestIssue1330(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t)
+	cl := newPlainClient(t, c)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	const (
+		bareKey  = "hello-share"                          // a bare group id, as the #1330 bug sent
+		validKey = "hello-share:nT3i4OXyR0mr0my1RZx9pQ:0" // groupId:topicId:partition
+	)
+
+	req := kmsg.NewPtrFindCoordinatorRequest()
+	req.CoordinatorType = 2 // share
+	req.CoordinatorKeys = []string{bareKey, validKey}
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("FindCoordinator: %v", err)
+	}
+	if len(resp.Coordinators) != 2 {
+		t.Fatalf("expected 2 coordinators, got %d", len(resp.Coordinators))
+	}
+
+	got := make(map[string]kmsg.FindCoordinatorResponseCoordinator, 2)
+	for _, co := range resp.Coordinators {
+		got[co.Key] = co
+	}
+
+	// The bare group id is not a valid SharePartitionKey -> INVALID_REQUEST.
+	if co, ok := got[bareKey]; !ok {
+		t.Errorf("missing coordinator entry for %q", bareKey)
+	} else if co.ErrorCode != kerr.InvalidRequest.Code {
+		t.Errorf("bare group id: got error code %d (%v), want INVALID_REQUEST",
+			co.ErrorCode, kerr.ErrorForCode(co.ErrorCode))
+	}
+
+	// A well-formed SharePartitionKey resolves to a real broker.
+	if co, ok := got[validKey]; !ok {
+		t.Errorf("missing coordinator entry for %q", validKey)
+	} else {
+		if err := kerr.ErrorForCode(co.ErrorCode); err != nil {
+			t.Errorf("valid SharePartitionKey: unexpected error %v", err)
+		}
+		if co.NodeID < 0 {
+			t.Errorf("valid SharePartitionKey: got NodeID %d, want a real broker node", co.NodeID)
+		}
+	}
+}
