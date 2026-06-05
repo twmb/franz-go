@@ -3207,3 +3207,104 @@ func TestIssue1330(t *testing.T) {
 		}
 	}
 }
+
+// TestIssue1328 reproduces a data race in the metadata cache.
+//
+// Sequence of events:
+//   - The metadata loop calls fetchMetadata, which caches the broker
+//     response by storing a reference to topic.Partitions in metaCache.
+//   - fetchMetadata returns; fetchTopicMetadata then sort.Slice's the
+//     response's Partitions in place to validate strictly-increasing
+//     partition IDs.
+//   - Concurrently, a caller (kadm.Metadata => RequestCachedMetadata)
+//     reads the cached topic. resolveTopicMeta copies the cached entry
+//     under metaCache.mu, but the copy still shares the underlying
+//     Partitions slice. The caller then iterates that slice without the
+//     lock, racing the in-flight sort.
+//
+// The fix is to clone Partitions when storing into the cache so that
+// later mutations of the broker response do not touch the cached slice.
+func TestIssue1328(t *testing.T) {
+	t.Parallel()
+	const (
+		topic         = "test-topic"
+		numPartitions = 10
+	)
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(numPartitions, topic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ti := c.TopicInfo(topic)
+	host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
+	port, _ := strconv.Atoi(portStr)
+
+	// Build partitions in reverse order so sort.Slice in fetchTopicMetadata
+	// actually swaps elements -- already-sorted input sorts without writes,
+	// and without a write there is no race to detect.
+	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+
+		resp := kreq.(*kmsg.MetadataRequest).ResponseKind().(*kmsg.MetadataResponse)
+		sb := kmsg.NewMetadataResponseBroker()
+		sb.NodeID = 0
+		sb.Host = host
+		sb.Port = int32(port)
+		resp.Brokers = append(resp.Brokers, sb)
+		resp.ControllerID = 0
+
+		st := kmsg.NewMetadataResponseTopic()
+		st.Topic = kmsg.StringPtr(topic)
+		st.TopicID = ti.TopicID
+		for p := int32(numPartitions - 1); p >= 0; p-- {
+			sp := kmsg.NewMetadataResponseTopicPartition()
+			sp.Partition = p
+			sp.Leader = -1
+			sp.Replicas = []int32{0}
+			sp.ISR = []int32{0}
+			st.Partitions = append(st.Partitions, sp)
+		}
+		resp.Topics = append(resp.Topics, st)
+		return resp, nil, true
+	})
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.MetadataMinAge(10*time.Millisecond),
+		kgo.MetadataMaxAge(50*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	adm := kadm.NewClient(cl)
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				adm.Metadata(ctx, topic) //nolint:errcheck // best-effort racer
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for ctx.Err() == nil {
+			cl.ForceMetadataRefresh()
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	wg.Wait()
+}
