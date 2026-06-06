@@ -811,7 +811,25 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 	}
 
 	if stage != revokeThisSession { // cooperative consumers rejoin after revoking what they lost
-		defer g.rejoin("after revoking what we lost from a rebalance")
+		// The rejoin triggers the second join of the classic
+		// cooperative two-phase rebalance: after giving up lost
+		// partitions, the member rejoins so the group can reassign
+		// them. 848 has no second join, the server reconciles
+		// through heartbeats. There, this signal would only tear
+		// down and rebuild the heartbeat session: the session that
+		// called us already handled both our lost and added
+		// partitions, so the rebuilt session re-enters with an empty
+		// diff, and because rebuilding re-arms the heartbeat timer
+		// at a full interval, the bounce also DELAYS the heartbeat
+		// that acks our revocation to the server. For 848, prerevoke
+		// instead forces an immediate heartbeat to ack the
+		// revocation.
+		g.mu.Lock()
+		is848 := g.is848
+		g.mu.Unlock()
+		if !is848 {
+			defer g.rejoin("after revoking what we lost from a rebalance")
+		}
 	}
 
 	// The block below deletes everything lost from our uncommitted map.
@@ -863,6 +881,7 @@ func (s *assignRevokeSession) prerevoke(g *groupConsumer, lost map[string][]int3
 	// very first concurrent heartbeat sends keepalive.
 	g.mu.Lock()
 	g848 := g.g848
+	is848 := g.is848 // g848 stays non-nil after a fallback to classic; is848 is what tracks the protocol
 	g.mu.Unlock()
 	if g848 != nil {
 		g848.prerevoking.Store(true)
@@ -876,6 +895,33 @@ func (s *assignRevokeSession) prerevoke(g *groupConsumer, lost map[string][]int3
 		// subsequent heartbeats resume sending full requests.
 		if g848 != nil {
 			g848.prerevoking.Store(false)
+		}
+		// If we revoked, ack the revocation to the server right away
+		// rather than waiting out the heartbeat timer: the server
+		// cannot give the revoked partitions to other members until
+		// it sees a heartbeat without them, so an immediate full
+		// heartbeat (prerevoking was cleared above, so it will not
+		// be a keepalive) directly speeds group-wide reconciliation.
+		// The Java client acks the same way the moment revocation
+		// callbacks complete.
+		//
+		// The send must be best effort, NOT blocking. If the
+		// heartbeat loop exits on a fatal error before consuming our
+		// send (its first heartbeat can fail while we are still
+		// revoking), nothing reads heartbeatForceCh again until the
+		// next session begins, but the next session cannot begin
+		// until we return: setupAssignedAndHeartbeat waits on
+		// assignDone, which waits on prerevokeDone, which closes
+		// only when this goroutine exits. A blocking send would
+		// deadlock the manage loop. If the send is missed (loop
+		// mid-heartbeat or already gone), the regular heartbeat
+		// timer acks within one interval, which is no worse than
+		// what the session bounce this replaced provided.
+		if is848 && len(lost) > 0 {
+			select {
+			case g.heartbeatForceCh <- func(error) {}:
+			default:
+			}
 		}
 	}()
 	return s.prerevokeDone
