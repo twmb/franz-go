@@ -13,7 +13,11 @@ import (
 // that all sources can exit once the session context is canceled.
 //
 // Since v1.21.0, manageFetchConcurrency gates fetch grants on pollActive
-// (with the default MaxConcurrentFetches == 0). When no poll is in progress,
+// when MaxConcurrentFetches == 0. Zero is not the default (that is -1,
+// unbounded; before v1.21.0, zero WAS both the default and unbounded): it is
+// poll-gated mode, entered by explicitly opting in with
+// MaxConcurrentFetches(0), or forced for share groups by
+// ShareMaxRecordsStrict. When no poll is in progress,
 // registered sources accumulate in wantFetch ungranted. If the session is
 // then stopped (metadata update -> migrateCursorTo -> stopSession cancels the
 // session ctx), manageFetchConcurrency observes wantQuit && activeFetches ==
@@ -39,7 +43,9 @@ func TestFetchManagerQuitDrainsPendingFetches(t *testing.T) {
 	var pollActive atomic.Bool // false: no poll in progress
 	pollWake := make(chan struct{}, 1)
 
-	fm := newFetchManager(ctx, cancel, &pollActive, pollWake, 0) // 0 == default MaxConcurrentFetches
+	// 0 == poll-gated mode: explicit MaxConcurrentFetches(0), or forced by
+	// ShareMaxRecordsStrict; not the default, which is -1 (unbounded).
+	fm := newFetchManager(ctx, cancel, &pollActive, pollWake, 0)
 
 	var registered sync.WaitGroup
 	var finished sync.WaitGroup
@@ -55,6 +61,13 @@ func TestFetchManagerQuitDrainsPendingFetches(t *testing.T) {
 			canFetch := make(chan chan bool, 1)
 			select {
 			case <-ctx.Done():
+				// Unreachable: cancel() fires only after
+				// registered.Wait() returns. If this ever
+				// fires, the premise below that every source
+				// is sitting in wantFetch is silently broken
+				// (we would count this source as registered
+				// without it registering), so flag it.
+				t.Error("ctx canceled before all sources registered; the all-sources-in-wantFetch premise is broken")
 				registered.Done()
 				return
 			case fm.desireFetch() <- canFetch:
@@ -65,9 +78,15 @@ func TestFetchManagerQuitDrainsPendingFetches(t *testing.T) {
 			case <-ctx.Done():
 				fm.cancelFetchCh <- canFetch // bare send, as in source.go
 			case doneFetch := <-canFetch:
-				select {
-				case <-ctx.Done():
-				default:
+				// Unreachable in this test (no poll is ever
+				// active and allowed fetches is 0, so the
+				// manager never grants); kept to document the
+				// full loopFetch shape, mirroring source.go
+				// exactly: a grant that lost the race with
+				// cancelation returns the token with false.
+				if ctx.Err() != nil {
+					doneFetch <- false
+					return
 				}
 				doneFetch <- true
 			}
