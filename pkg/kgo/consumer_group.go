@@ -2158,7 +2158,23 @@ func (g *groupConsumer) findNewAssignments() {
 	}
 
 	if numNewTopics > 0 {
-		g.rejoin("rejoining because there are more topics to consume, our interests have changed")
+		// 848 needs no rejoin here: mkreq rebuilds the subscription
+		// from live state on every heartbeat and the keepalive check
+		// sends a full request when it changes, so the next heartbeat
+		// already carries our new interests. Bouncing the session
+		// would only delay that, since rebuilding re-arms the
+		// heartbeat timer at a full interval. Instead, force an
+		// immediate heartbeat (best effort, must not block; see the
+		// walkthrough in prerevoke); if the force is missed, the
+		// timer sends within one interval.
+		if g.is848 {
+			select {
+			case g.heartbeatForceCh <- func(error) {}:
+			default:
+			}
+		} else {
+			g.rejoin("rejoining because there are more topics to consume, our interests have changed")
+		}
 	} else if g.leader.Load() {
 		if len(toChange) > 0 {
 			g.rejoin("rejoining because we are the leader and noticed some topics have new partitions")
