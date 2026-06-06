@@ -1,3 +1,45 @@
+v1.21.3
+===
+
+This patch release contains a few bug fixes and a few internal improvements.
+
+* `PollRecords` / `PollFetches` could permanently hang since v1.21.0 if a
+  consumer session stopped (usually via metadata updates) while
+  fetches to more than four brokers were pending and no poll was in
+  flight. This could only affect users that deliberately set `MaxConcurrentFetches(0)`,
+  or that were using `ShareMaxRecordsStrict`.
+
+* Producing to a topic whose partitions ALL have a retriable load error
+  (e.g. a rolling restart of an RF=1 broker briefly leaving every
+  partition leaderless) no longer fails records up front with "unable to
+  partition record due to no usable partitions". Instead, the records
+  remain buffered and retried as metadata reloads.
+
+* Classic consumer groups now rejoin immediately when an offset commit
+  returns `UNKNOWN_MEMBER_ID` or `ILLEGAL_GENERATION` (the broker lost
+  the member, e.g. a session expired during a network blip), rather than
+  consuming as a zombie until the heartbeat loop notices the dead session.
+
+* `DescribeShareGroupOffsets`, `AlterShareGroupOffsets`, and
+  `DeleteShareGroupOffsets` are now routed to the group coordinator
+  rather than the share coordinator (which would reject the requests
+  for being misrouted).
+
+* The client-internal metadata cache now deeply clones the cached response
+  before putting it into the cache and before returning it via
+  `RequestCachedMetadata` (which is now used by default in kadm), eliminating
+  data race possibilities.
+
+* Various next-gen rebalancer session improvements.
+
+## Relevant commits
+
+- [`f8842170`](https://github.com/twmb/franz-go/commit/f8842170) **improvement** kgo: fall back to all partitions when no partition is writable (thanks @ericsg666!)
+- [`824e34d2`](https://github.com/twmb/franz-go/commit/824e34d2) **improvement** kgo: rejoin a classic group when a commit returns a fatal member error (thanks @v14dis14v!)
+- [`f520e820`](https://github.com/twmb/franz-go/commit/f520e820) **bugfix** kgo: do not exit manageFetchConcurrency while sources are pending in wantFetch (thanks @SLoeuillet!)
+- [`8d9c836b`](https://github.com/twmb/franz-go/commit/8d9c836b) **bugfix** kgo: isolate metadata cache from broker response
+- [`19f7dbb2`](https://github.com/twmb/franz-go/commit/19f7dbb2) **bugfix** kgo,kfake: route share group offset RPCs to the group coordinator
+
 v1.21.2
 ===
 
