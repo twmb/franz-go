@@ -851,9 +851,11 @@ func (cl *Client) mergeTopicPartitions(
 			// consuming, the partition is part of a group or part
 			// of what was loaded for direct consuming.
 			//
-			// We only clear a partition if it is purged from the
-			// client (which can happen automatically for consumers
-			// if the user opted into ConsumeRecreatedTopics).
+			// We only clear a partition if the topic is purged from
+			// the client, either manually via PurgeTopicsFromClient
+			// or automatically for regex consumers when the topic
+			// has been missing from metadata for longer than
+			// ConsiderMissingTopicDeletedAfter.
 			dup := *oldTP
 			newTP := &dup
 			newTP.loadErr = errMissingMetadataPartition
