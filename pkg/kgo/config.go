@@ -1296,16 +1296,21 @@ func RecordRetries(n int) ProducerOpt {
 }
 
 // UnknownTopicRetries sets the number of times a record can fail with
-// UNKNOWN_TOPIC_OR_PARTITION, overriding the default 4.
+// UNKNOWN_TOPIC_OR_PARTITION or UNKNOWN_TOPIC_ID, overriding the default 4.
 //
 // This is a separate limit from RecordRetries because unknown topic or
 // partition errors should only happen if the topic does not exist. It is
 // pointless for the client to continue producing to a topic that does not
 // exist, and if we repeatedly see that the topic does not exist across
 // multiple metadata queries (which are going to different brokers), then we
-// may as well stop trying and fail the records.
+// may as well stop trying and fail the records. The count is reset whenever
+// a produce to the partition succeeds; errors other than the two unknown
+// topic errors leave it unchanged. UNKNOWN_TOPIC_ID in particular is what
+// produce requests receive after a topic is deleted and recreated: produce
+// v13+ addresses topics by ID, and the client keeps the old ID until the
+// topic is purged and re-added (see PurgeTopicsFromClient).
 //
-// If this is -1, the client never fails records with this error.
+// If this is -1, the client never fails records with these errors.
 func UnknownTopicRetries(n int) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.maxUnknownFailures = int64(n) }}
 }

@@ -1625,7 +1625,7 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 		batch0Fail     = batch0.maybeFailErr(&recBuf.cl.cfg) != nil                                                                                              // timeout, retries, or aborting
 		netErr         = isRetryableBrokerErr(err) || isDialNonTimeoutErr(err)                                                                                   // we can fail if this is *not* a network error
 		retryableKerr  = kerr.IsRetriable(err)                                                                                                                   // we fail if this is not a retryable kerr,
-		isUnknownLimit = recBuf.checkUnknownFailLimit(err)                                                                                                       // or if it is, but it is UnknownTopicOrPartition and we are at our limit
+		isUnknownLimit = recBuf.checkUnknownFailLimit(err)                                                                                                       // or if it is, but it is an unknown topic error and we are at our limit
 
 		willFail = canFail && (batch0Fail || !netErr && (!retryableKerr || retryableKerr && isUnknownLimit))
 	)
@@ -1650,13 +1650,28 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	}
 }
 
-// Called locked, if err is an unknown error, bumps our limit, otherwise resets
-// it. This returns if we have reached or exceeded the limit.
+// Called locked. A nil err (successful produce) resets our count, an unknown
+// topic error bumps it, and any other error leaves it unchanged: if other
+// errors reset the count, then errors interleaving with the unknowns (e.g. a
+// transient NOT_LEADER_FOR_PARTITION from a moving partition, or a request
+// timeout) would keep the count below the limit forever and the limit would
+// never trigger.
+//
+// UNKNOWN_TOPIC_ID counts the same as UNKNOWN_TOPIC_OR_PARTITION: produce
+// v13+ addresses topics by ID (KIP-516), and if our topic is deleted and
+// recreated, we keep the old ID forever (we never swap to the new ID; the
+// user must purge and re-add the topic). Every produce after recreation
+// returns UNKNOWN_TOPIC_ID, and since the error is retriable and record
+// retries / the record timeout are unbounded by default, this limit is the
+// only thing that fails the records and surfaces the recreation to the user.
+//
+// This returns whether we have exceeded the limit.
 func (recBuf *recBuf) checkUnknownFailLimit(err error) bool {
-	if errors.Is(err, kerr.UnknownTopicOrPartition) {
-		recBuf.unknownFailures++
-	} else {
+	switch {
+	case err == nil:
 		recBuf.unknownFailures = 0
+	case errors.Is(err, kerr.UnknownTopicOrPartition) || errors.Is(err, kerr.UnknownTopicID):
+		recBuf.unknownFailures++
 	}
 	return recBuf.cl.cfg.maxUnknownFailures >= 0 && recBuf.unknownFailures > recBuf.cl.cfg.maxUnknownFailures
 }
