@@ -890,11 +890,18 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 		rt := &kresp.Topics[i]
 		topic := rt.Topic
 		tid := rt.TopicID
+		// For topics (and partitions below) that we did not produce to,
+		// we deliberately do NOT touch req.metrics: metrics entries only
+		// exist for batches that were actually appended to the request,
+		// so a genuinely invented entry has nothing to remove -- and a
+		// DUPLICATED reply entry lands here too (the first occurrence
+		// empties req.batches), where deleting would erase the metrics
+		// of a batch the first occurrence legitimately processed and
+		// silently skip its OnProduceBatchWritten hook.
 		if req.version >= 13 {
 			var ok bool
 			if topic, ok = req.batches.id2t[rt.TopicID]; !ok {
-				s.cl.cfg.logger.Log(LogLevelError, "broker erroneously replied with topic id in produce request that we did not produce to", "broker", logID(s.nodeID), "topic", topic, "topic_id", strtid(rt.TopicID))
-				delete(req.metrics, topic)
+				s.cl.cfg.logger.Log(LogLevelError, "broker erroneously replied with topic id in produce request that we did not produce to", "broker", logID(s.nodeID), "topic_id", strtid(rt.TopicID))
 				continue
 			}
 		} else {
@@ -903,7 +910,6 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 		partitions, ok := req.batches.bs[topic]
 		if !ok {
 			s.cl.cfg.logger.Log(LogLevelError, "broker erroneously replied with topic in produce request that we did not produce to", "broker", logID(s.nodeID), "topic", topic)
-			delete(req.metrics, topic)
 			continue
 		}
 
@@ -918,8 +924,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 			batch, ok := partitions[partition]
 			if !ok {
 				s.cl.cfg.logger.Log(LogLevelError, "broker erroneously replied with partition in produce request that we did not produce to", "broker", logID(s.nodeID), "topic", rt.Topic, "partition", partition)
-				delete(tmetrics, partition)
-				continue // should not hit this
+				continue // should not hit this; see the topic-level comment above for why tmetrics is left alone
 			}
 			delete(partitions, partition)
 
