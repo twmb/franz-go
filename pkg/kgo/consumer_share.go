@@ -106,6 +106,13 @@ type (
 		// sources concurrent with user acking.
 		source atomic.Pointer[source]
 
+		// unknownIDFails counts consecutive UnknownTopicID fetch
+		// errors, mirroring cursor.unknownIDFails: the error is
+		// transient on a just-created topic while brokers sync, so we
+		// strip it for a few fetches, but persistent means the topic
+		// was recreated and we surface it forever (stall loudly).
+		unknownIDFails atomic.Int32
+
 		cursorsIdx int
 
 		// assigned is true when the cursor's partition is currently
@@ -2367,12 +2374,18 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 	}
 
 	var didBackoff bool
-	backoff := func() {
+	backoff := func(why any) {
 		// Release fetch slot before sleeping so other sources
 		// can fetch during our backoff.
 		doneFetch <- false
 		alreadySentToDoneFetch = true
 		didBackoff = true
+
+		// Like the classic source backoff: a fetch failure is the
+		// only signal we get when a broker dies (no response means no
+		// CurrentLeader hint), so opportunistically refresh metadata
+		// to migrate our cursors to the new leader.
+		s.cl.triggerUpdateMetadata(false, fmt.Sprintf("opportunistic load during share source backoff: %v", why))
 		s.consecutiveFailures++
 		after := time.NewTimer(sc.cfg.retryBackoff(s.consecutiveFailures))
 		defer after.Stop()
@@ -2389,7 +2402,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 
 	if err != nil {
 		s.resetShareSession()
-		backoff()
+		backoff(err)
 		sc.enqueueAckErrors(piggybackAcks, err, nAcks)
 		return fetched
 	}
@@ -2399,7 +2412,13 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 	res := s.handleShareReqResp(req, resp, usable, piggybackAcks, sentPiggyback)
 
 	if res.discardErr != nil {
+		// Top-level errors are not necessarily transient (e.g. group
+		// auth revoked mid-run answers GROUP_AUTHORIZATION_FAILED
+		// top-level on every fetch); without a backoff this loops at
+		// round-trip pace. Transport errors and all-errors-stripped
+		// responses already back off; treat top-level errors the same.
 		sc.enqueueAckErrors(piggybackAcks, res.discardErr, nAcks)
+		backoff(res.discardErr)
 		return fetched
 	}
 
@@ -2419,7 +2438,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 		s.hook(&res.fetch, true, false)
 		sc.c.addSourceReadyForDraining(s)
 	} else if res.allErrsStripped {
-		backoff()
+		backoff("empty share fetch response due to all partitions having retryable errors")
 	}
 	return fetched
 }
@@ -2503,6 +2522,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 		ackRequeued        int64
 		partitionsWithErrs int
 		seen               = make(map[tidp]struct{}, len(usable)+len(piggybackAcks))
+		updateWhy          multiUpdateWhy
 	)
 
 	for i := range resp.Topics {
@@ -2571,13 +2591,44 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 					})
 					continue
 				}
+				// No leader hint: classify like the classic fetch
+				// path (source.go handleReqResp). Retriable errors
+				// are stripped and heal via the metadata update
+				// triggered below (the broker only fills
+				// CurrentLeader for NotLeader/FencedLeaderEpoch and
+				// only when it knows the new leader, so hint-less
+				// errors are common: leaderless windows, storage
+				// errors, topic ID propagation). Non-retriable
+				// errors surface: share sessions give the user no
+				// other signal.
 				partErr := kerr.ErrorForCode(rp.ErrorCode)
-				partitions = append(partitions, FetchPartition{
-					Partition: rp.Partition,
-					Err:       partErr,
-				})
+				updateWhy.add(topicName, rp.Partition, partErr)
+				keep := true
+				switch {
+				case errors.Is(partErr, kerr.UnknownTopicID):
+					// Transient on just-created topics while
+					// brokers sync; persistent means recreation.
+					// Strip a few, then surface forever, exactly
+					// like the classic cursor's grace counter.
+					if fails := cursor.unknownIDFails.Add(1); fails > 5 {
+						cursor.unknownIDFails.Add(-1)
+					} else if !sc.cfg.keepRetryableFetchErrors {
+						keep = false
+					}
+				default:
+					if kerr.IsRetriable(partErr) && !sc.cfg.keepRetryableFetchErrors {
+						keep = false
+					}
+				}
+				if keep {
+					partitions = append(partitions, FetchPartition{
+						Partition: rp.Partition,
+						Err:       partErr,
+					})
+				}
 				continue
 			}
+			cursor.unknownIDFails.Store(0)
 
 			if len(rp.Records) == 0 && len(rp.AcquiredRecords) == 0 {
 				continue
@@ -2627,6 +2678,22 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 				"partition", tp.p,
 			)
 			ackResults = append(ackResults, ShareAckResult{topic, tp.p, errBrokerOmittedAckPartition})
+		}
+	}
+
+	// Like the classic fetch path: per-partition errors trigger an
+	// immediate metadata update so the cursor can migrate (this is the
+	// only heal when the response carries no CurrentLeader hint), except
+	// pure unknown-topic reasons, which likely mean the topic does not
+	// exist yet and reloading is wasteful - those ride the debounced
+	// trigger. Hinted moves are handled via applyMoves and do not land
+	// in updateWhy.
+	if updateWhy != nil {
+		why := updateWhy.reason(fmt.Sprintf("share fetch had inner topic errors from broker %d", s.nodeID))
+		if updateWhy.isOnly(kerr.UnknownTopicOrPartition) || updateWhy.isOnly(kerr.UnknownTopicID) {
+			s.cl.triggerUpdateMetadata(false, why)
+		} else {
+			s.cl.triggerUpdateMetadataNow(why)
 		}
 	}
 
