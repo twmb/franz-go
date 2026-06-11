@@ -2957,10 +2957,10 @@ func (cl *Client) commitOffsets(ctx context.Context, offsets map[string]map[int3
 	return rerr
 }
 
-// CommitOffsetsSync cancels any active CommitOffsets, begins a commit that
-// cannot be canceled, and waits for that commit to complete. This function
-// will not return until the commit is done and the onDone callback is
-// complete.
+// CommitOffsetsSync waits for any active CommitOffsets to complete, begins a
+// commit that cannot be canceled, and waits for that commit to complete.
+// This function will not return until the commit is done and the onDone
+// callback is complete.
 //
 // The purpose of this function is for use in OnPartitionsRevoked or committing
 // before leaving a group, because you do not want to have a commit issued in
@@ -3092,12 +3092,14 @@ func (g *groupConsumer) commitOffsetsSync(
 // It is invalid to use this function to commit offsets for a transaction.
 //
 // Note that this function ensures absolute ordering of commit requests by
-// canceling prior requests and ensuring they are done before executing a new
-// one. This means, for absolute control, you can use this function to
-// periodically commit async and then issue a final sync commit before quitting
-// (this is the behavior of autocommiting and using the default revoke). This
-// differs from the Java async commit, which does not retry requests to avoid
-// trampling on future commits.
+// waiting for any prior in-flight commit to complete before issuing a new
+// one. Prior commits are never canceled: canceling kills the connection,
+// and the broker could then process a replacement commit issued on a new
+// connection before the original. This means, for absolute control, you can
+// use this function to periodically commit async and then issue a final sync
+// commit before quitting (this is the behavior of autocommiting and using
+// the default revoke). This differs from the Java async commit, which does
+// not retry requests to avoid trampling on future commits.
 //
 // It is highly recommended to check the response's partition's error codes if
 // the response is non-nil. While unlikely, individual partitions can error.
