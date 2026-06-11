@@ -1207,7 +1207,7 @@ func (sc *shareConsumer) assignPartitions(assignments map[string][]int32) {
 			if slices.Contains(newPs, p) { // linear, *usually* fast...
 				continue
 			}
-			if int(p) >= len(td.partitions) {
+			if p < 0 || int(p) >= len(td.partitions) {
 				continue
 			}
 			cursor := td.partitions[p].shareCursor
@@ -1237,6 +1237,17 @@ func (sc *shareConsumer) assignPartitions(assignments map[string][]int32) {
 		}
 		td := tp.load()
 		for _, p := range newPs {
+			if p < 0 {
+				// A sane broker never assigns a negative partition;
+				// guard a buggy/hostile one. Unlike the too-large
+				// case below, a negative index can never become
+				// valid, so do not set pendingAssigns for it.
+				sc.cfg.logger.Log(LogLevelWarn, "share assignment contains a negative partition, ignoring it",
+					"topic", t,
+					"partition", p,
+				)
+				continue
+			}
 			if int(p) >= len(td.partitions) {
 				// Assigned a partition our metadata does not know
 				// yet (partitions were just added and the
@@ -1332,7 +1343,7 @@ func (sc *shareConsumer) applyMoves(moves []shareMove, endpoints []BrokerMetadat
 				continue
 			}
 			td := tp.load()
-			if int(m.partition) >= len(td.partitions) {
+			if m.partition < 0 || int(m.partition) >= len(td.partitions) {
 				continue
 			}
 			cursor := td.partitions[m.partition].shareCursor
