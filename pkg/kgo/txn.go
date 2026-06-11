@@ -696,12 +696,18 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// issues AddOffsetsToTxn, which internally adds a __consumer_offsets
 	// partition to the transaction. Thus, if we added offsets, then we
 	// also produced.
-	var anyAdded bool
-	if g := cl.consumer.g; g != nil {
+	var (
+		anyAdded         bool
+		addedSwapped     []*recBuf // every addedToTxn we consume, restored if the commit is not attempted
+		offsetsWereAdded bool
+	)
+	g := cl.consumer.g
+	if g != nil {
 		// We do not lock because we expect commitTransactionOffsets to
 		// be called *before* ending a transaction.
 		if g.offsetsAddedToTxn {
 			g.offsetsAddedToTxn = false
+			offsetsWereAdded = true
 			anyAdded = true
 		}
 	} else {
@@ -712,7 +718,10 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// addedToTxn to false outside of any mutex.
 	for _, parts := range cl.producer.topics.load() {
 		for _, part := range parts.load().partitions {
-			anyAdded = part.records.addedToTxn.Swap(false) || anyAdded
+			if part.records.addedToTxn.Swap(false) {
+				addedSwapped = append(addedSwapped, part.records)
+				anyAdded = true
+			}
 		}
 	}
 
@@ -748,6 +757,25 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	id, epoch, err := cl.producerID(ctx2fn(ctx))
 	if err != nil {
 		if commit {
+			// We are NOT attempting the commit: restore everything this
+			// call consumed (inTxn, addedToTxn, offsetsAddedToTxn). We
+			// document that the caller should retry with TryAbort, and
+			// that retry must still see the transaction state to issue
+			// the EndTxn abort; consuming the state here would turn the
+			// retry into a silent no-op that leaves the broker-side
+			// transaction ongoing (stalling read_committed consumers on
+			// the LSO) until the transaction timeout aborts it.
+			// producingTxn deliberately stays false: produces between
+			// the failed commit and the abort retry fail fast with
+			// errNotInTransaction rather than buffering against a
+			// failed producer ID.
+			for _, rb := range addedSwapped {
+				rb.addedToTxn.Store(true)
+			}
+			if offsetsWereAdded {
+				g.offsetsAddedToTxn = true
+			}
+			cl.producer.inTxn = true
 			return kerr.OperationNotAttempted
 		}
 
