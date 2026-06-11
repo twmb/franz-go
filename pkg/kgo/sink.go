@@ -1614,9 +1614,11 @@ func (recBuf *recBuf) unlingerAndManuallyDrain() {
 // load errors during metadata updates.
 //
 // Partition load errors are generally temporary (leader/listener/replica not
-// available), and this try bump is not expected to do much. If for some reason
-// a partition errors for a long time and we are not idempotent, this function
-// drops all buffered records.
+// available, or a metadata response from an out of date broker that is
+// missing a partition we know about), and this try bump is not expected to do
+// much. Records are failed only once a bound trips: the record timeout or
+// retry limit, or for unknown-partition style errors (including a metadata
+// response missing the partition), the unknown fail limit.
 func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
@@ -1634,10 +1636,10 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 		canFail        = !recBuf.cl.idempotent() || recBuf.cl.cfg.allowIdempotentProduceCancellation || (batch0.canFailFromLoadErrs && !batch0.unsureIfProduced) // we can only fail if we are not idempotent, cancellation is allowed, or if we have no outstanding requests
 		batch0Fail     = batch0.maybeFailErr(&recBuf.cl.cfg) != nil                                                                                              // timeout, retries, or aborting
 		netErr         = isRetryableBrokerErr(err) || isDialNonTimeoutErr(err)                                                                                   // we can fail if this is *not* a network error
-		retryableKerr  = kerr.IsRetriable(err)                                                                                                                   // we fail if this is not a retryable kerr,
+		retryableErr   = kerr.IsRetriable(err) || errors.Is(err, errMissingMetadataPartition)                                                                    // we fail if this is not a retryable error (missing-metadata-partition retries like unknown topic),
 		isUnknownLimit = recBuf.checkUnknownFailLimit(err)                                                                                                       // or if it is, but it is an unknown topic error and we are at our limit
 
-		willFail = canFail && (batch0Fail || !netErr && (!retryableKerr || retryableKerr && isUnknownLimit))
+		willFail = canFail && (batch0Fail || !netErr && (!retryableErr || retryableErr && isUnknownLimit))
 	)
 	batch0.isFailingFromLoadErr = willFail
 	batch0.mu.Unlock()
@@ -1650,7 +1652,7 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 		"can_fail", canFail,
 		"batch0_should_fail", batch0Fail,
 		"is_network_err", netErr,
-		"is_retryable_kerr", retryableKerr,
+		"is_retryable_err", retryableErr,
 		"is_unknown_limit", isUnknownLimit,
 		"will_fail", willFail,
 	)
@@ -1675,12 +1677,20 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 // retries / the record timeout are unbounded by default, this limit is the
 // only thing that fails the records and surfaces the recreation to the user.
 //
+// errMissingMetadataPartition also counts: it is the metadata-side twin of
+// the broker's unknown-partition errors. A metadata response can omit a
+// partition we previously had if it came from an out of date broker (e.g.
+// one that has not yet seen a CreatePartitions), which heals on a later
+// refresh and must not fail records immediately -- but a topic recreated
+// with fewer partitions never heals, so the error must stay bounded by this
+// same limit rather than retrying forever.
+//
 // This returns whether we have exceeded the limit.
 func (recBuf *recBuf) checkUnknownFailLimit(err error) bool {
 	switch {
 	case err == nil:
 		recBuf.unknownFailures = 0
-	case errors.Is(err, kerr.UnknownTopicOrPartition) || errors.Is(err, kerr.UnknownTopicID):
+	case errors.Is(err, kerr.UnknownTopicOrPartition) || errors.Is(err, kerr.UnknownTopicID) || errors.Is(err, errMissingMetadataPartition):
 		recBuf.unknownFailures++
 	}
 	return recBuf.cl.cfg.maxUnknownFailures >= 0 && recBuf.unknownFailures > recBuf.cl.cfg.maxUnknownFailures

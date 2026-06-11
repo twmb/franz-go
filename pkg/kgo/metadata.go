@@ -835,8 +835,11 @@ func (cl *Client) mergeTopicPartitions(
 	//
 	// 2) a topic was deleted and recreated with fewer partitions
 	//
-	// Both of these scenarios should be rare to non-existent, and we do
-	// nothing if we encounter them.
+	// Case 1 is temporary and heals on a later refresh; case 2 is
+	// permanent. Below, we keep the missing partition around either way.
+	// For producers we bump its load error, which fails buffered records
+	// only once the unknown fail limit trips (so case 1 does not fail
+	// records); consumers keep consuming through the existing cursor.
 
 	// Migrating topicPartitions is a little tricky because we have to
 	// worry about underlying pointers that may currently be loaded.
