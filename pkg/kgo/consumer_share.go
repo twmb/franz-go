@@ -43,6 +43,16 @@ type (
 		// names. Owned by the manage goroutine.
 		unresolvedAssigns map[topicID][]int32
 
+		// Whether the last assignPartitions pass skipped activating an
+		// assigned partition because our metadata does not know it yet
+		// (the broker assigned newly added partitions before our
+		// metadata refreshed). We ack the member epoch regardless, so
+		// the broker never re-sends the assignment; while this is true,
+		// handleHeartbeatResp re-returns the current assignment so we
+		// retry activation once metadata catches up. Owned by the
+		// manage goroutine.
+		pendingAssigns bool
+
 		lastSentSubscribedTopics []string
 		lastSentRack             bool
 
@@ -1095,14 +1105,17 @@ func (sc *shareConsumer) handleHeartbeatResp(resp *kmsg.ShareGroupHeartbeatRespo
 	sc.memberGen.storeGeneration(resp.MemberEpoch)
 
 	if resp.Assignment == nil {
-		if len(sc.unresolvedAssigns) == 0 {
+		if len(sc.unresolvedAssigns) == 0 && !sc.pendingAssigns {
 			return nil
 		}
-		// No assignment: try to resolve prior un-resolvable
-		// topics. If we can, that updates our current assignment
-		// and we return the new update.
+		// No assignment: try to resolve prior un-resolvable topics,
+		// and if a prior assignPartitions could not activate some
+		// partitions (pendingAssigns), re-return the current
+		// assignment so activation is retried: the broker considers
+		// the assignment delivered (we acked the epoch) and will not
+		// re-send it on its own.
 		resolved := sc.resolveUnresolvedTopicIDs()
-		if len(resolved) == 0 {
+		if len(resolved) == 0 && !sc.pendingAssigns {
 			return nil
 		}
 		current := sc.nowAssigned.read()
@@ -1196,26 +1209,41 @@ func (sc *shareConsumer) assignPartitions(assignments map[string][]int32) {
 		}
 	}
 
-	// Add what is new.
+	// Add what is new. We skip based on the cursor's own activation
+	// state, not on what nowAssigned previously contained: a partition
+	// can be in nowAssigned but never activated (skipped below because
+	// our metadata did not know it yet), and it must be re-attempted on
+	// a later pass.
 	var needsMetaUpdate bool
+	sc.pendingAssigns = false
 	for t, newPs := range assignments {
-		oldPs := old[t]
 		tp, ok := tps[t]
 		if !ok {
+			// Not subscribed (e.g. purged): the broker revokes once
+			// our next heartbeat updates SubscribedTopicNames. We
+			// deliberately do not set pendingAssigns: the topic will
+			// never appear in tps, and the broker is guaranteed to
+			// send a new assignment in response to the subscription
+			// change.
 			needsMetaUpdate = true
-			continue // if we don't know the tps data, we can't assign it; force a meta refresh
+			continue
 		}
 		td := tp.load()
 		for _, p := range newPs {
-			if slices.Contains(oldPs, p) {
-				continue // already was assigned, no-op
-			}
 			if int(p) >= len(td.partitions) {
+				// Assigned a partition our metadata does not know
+				// yet (partitions were just added and the
+				// coordinator is ahead of our metadata). We cannot
+				// activate it now; retry after the metadata
+				// refresh below.
+				sc.pendingAssigns = true
 				needsMetaUpdate = true
 				continue
 			}
 			cursor := td.partitions[p].shareCursor
-			cursor.assigned.Store(true)
+			if cursor.assigned.Swap(true) {
+				continue // already active from a prior pass
+			}
 			sourcesToWake[cursor.source.Load()] = struct{}{}
 		}
 	}
