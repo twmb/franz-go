@@ -1489,7 +1489,13 @@ type recBuf struct {
 	// this recBuf. Every time this hits zero, if the batchDrainIdx is not
 	// at the end, we clear inflightOnSink and trigger the *current* sink
 	// to drain.
-	inflight uint8
+	//
+	// This is bounded by the sink's inflight sem: 1 or 4 when idempotent,
+	// or the user's MaxProduceRequestsInflightPerBroker (no upper bound)
+	// when idempotency is disabled -- which is why this is an int32 and
+	// not a small type that a large user value could wrap, breaking the
+	// != 0 drain gates here and in createReq.
+	inflight int32
 
 	lastAckedOffset int64 // last ProduceResponse's BaseOffset + how many records we produced
 
