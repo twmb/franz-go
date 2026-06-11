@@ -519,11 +519,13 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 				// This includes TransactionAbortable. We used to
 				// continue into producing on TransactionAbortable so
 				// the produce failure would carry the error to the
-				// user, but doTxnReq's error path has already removed
-				// every batch from the transaction and decremented
-				// its inflight count: producing those batches anyway
-				// would decrement inflight a second time (wrapping
-				// the uint8 and permanently wedging the recBuf's
+				// user, but doTxnReq's error path has already
+				// requeued every batch in the request (reset drain
+				// indexes, decremented inflight, and un-marked
+				// addedToTxn for the partitions whose add actually
+				// failed): producing those batches anyway would
+				// decrement inflight a second time (wrapping the
+				// counter and permanently wedging the recBuf's
 				// drain gate) and could re-drain batches that are
 				// already in flight. Failing the producer ID delivers
 				// the same error to all buffered records on the next
@@ -628,14 +630,29 @@ func (s *sink) doTxnReq(
 	req *produceRequest,
 	txnReq *kmsg.AddPartitionsToTxnRequest,
 ) (stripped bool, err error) {
-	// If we return an unretryable error, then we have to reset everything
-	// to not be in the transaction and begin draining at the start.
+	// If we return an unretryable error, every batch in this request must
+	// be requeued: reset the drain index and dec inflight, since we will
+	// not issue the produce request. Un-marking addedToTxn is scoped to
+	// partitions that are actually in the failed txnReq: a partition
+	// added by an earlier AddPartitionsToTxn of this transaction is a
+	// broker-acked fact and is deliberately absent from this request (see
+	// txnReqBuilder.add). If we cleared it here, EndTransaction's
+	// anyAdded walk would see no added partition, skip EndTxn entirely,
+	// and leave the broker-side transaction -- holding previously
+	// appended batches -- ongoing until the transaction timeout aborts
+	// it: a commit that returned nil while its data is later discarded.
 	//
 	// These batches must be the first in their recBuf, because we would
 	// not be trying to add them to a partition if they were not.
 	defer func() {
 		if err != nil {
-			req.batches.eachOwnerLocked(seqRecBatch.removeFromTxn)
+			req.batches.eachOwnerLocked(func(batch seqRecBatch) {
+				if txnReqContains(txnReq, batch.owner.topic, batch.owner.partition) {
+					batch.owner.addedToTxn.Store(false)
+				}
+				batch.owner.resetBatchDrainIdx()
+				batch.decInflight()
+			})
 		}
 	}()
 	// We do NOT let record context cancelations fail this request: doing
@@ -643,11 +660,36 @@ func (s *sink) doTxnReq(
 	// similar to the warning we give in the txn.go file, but the
 	// difference there is the user knows explicitly at the function call
 	// that canceling the context will opt them into invalid state.
+	//
+	// Note that the concurrent-transactions wrapper is defensive only:
+	// AddPartitionsToTxn is pinned at most v3 (no top-level error code)
+	// and a per-partition CONCURRENT_TRANSACTIONS is retriable, so it is
+	// stripped in issueTxnReq and healed by requeue+backoff rather than
+	// ever surfacing to the wrapper.
 	err = s.cl.doWithConcurrentTransactions(s.cl.ctx, fmt.Sprintf("AddPartitionsToTxn-sink%d", s.nodeID), func() error {
 		stripped, err = s.issueTxnReq(req, txnReq)
 		return err
 	})
 	return stripped, err
+}
+
+// txnReqContains returns whether the AddPartitionsToTxn request contains the
+// topic and partition. Partitions already in the transaction from an earlier
+// request are deliberately absent (see txnReqBuilder.add); failure handling
+// and response processing must not touch their addedToTxn state.
+func txnReqContains(txnReq *kmsg.AddPartitionsToTxnRequest, topic string, partition int32) bool {
+	for i := range txnReq.Topics {
+		t := &txnReq.Topics[i]
+		if t.Topic != topic {
+			continue
+		}
+		for _, p := range t.Partitions {
+			if p == partition {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Removing a batch from the transaction means we will not be issuing it
@@ -675,7 +717,24 @@ func (s *sink) issueTxnReq(
 			continue
 		}
 		for _, partition := range topic.Partitions {
-			if err := kerr.ErrorForCode(partition.ErrorCode); err != nil && err != kerr.TransactionAbortable { // see below for txn abortable
+			// TransactionAbortable partitions are deliberately NOT
+			// handled as errors here: the batch stays in the request,
+			// the subsequent produce fails with the same abortable
+			// error, and the record promises carry it to the user (who
+			// then aborts; recovery happens via EndTransaction).
+			if err := kerr.ErrorForCode(partition.ErrorCode); err != nil && err != kerr.TransactionAbortable {
+				// An errored partition that we did not ask to add must
+				// not strip a batch nor fail the producer ID: it could
+				// name a partition added by an earlier request of this
+				// transaction (deliberately absent from this txnReq),
+				// and un-marking that would break EndTransaction's
+				// anyAdded accounting -- see doTxnReq's deferred
+				// failure handling.
+				if !txnReqContains(txnReq, topic.Topic, partition.Partition) {
+					s.cl.cfg.logger.Log(LogLevelError, "broker replied with errored partition in AddPartitionsToTxnResponse that was not in the request", "topic", topic.Topic, "partition", partition.Partition)
+					continue
+				}
+
 				// OperationNotAttempted is set for all partitions that are authorized
 				// if any partition is unauthorized _or_ does not exist. We simply remove
 				// unattempted partitions and treat them as retryable.
