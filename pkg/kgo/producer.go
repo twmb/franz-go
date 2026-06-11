@@ -485,9 +485,14 @@ func (cl *Client) TryProduce(
 // Kafka replies. For a synchronous produce, see ProduceSync. Records are
 // produced in order per partition if the record is produced successfully.
 // Successfully produced records will have their attributes, offset, and
-// partition set before the promise is called. All promises are called serially
-// (and should be relatively fast). If a record's timestamp is unset, this
-// sets the timestamp to time.Now.
+// partition set before the promise is called. All promises are called
+// serially, so they should be relatively fast and must not block: a promise
+// that blocks on the client itself -- for example, a blocking Produce while
+// the client is at its max-buffered limits, or a Flush -- waits on progress
+// that only later promises can deliver and can deadlock the client. To
+// produce from within a promise, use TryProduce or spawn a goroutine (as
+// AbortingFirstErrPromise does for aborting). If a record's timestamp is
+// unset, this sets the timestamp to time.Now.
 //
 // If the topic field is empty, the client will use the DefaultProduceTopic; if
 // that is also empty, the record is failed immediately. If the record is too

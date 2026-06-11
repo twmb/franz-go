@@ -31,9 +31,9 @@ type sink struct {
 
 	drainState workLoop
 
-	// seqRespsMu, guarded by seqRespsMu, contains responses that must
-	// be handled sequentially. These responses are handled asynchronously,
-	// but sequentially.
+	// seqResps contains responses that must be handled sequentially: the
+	// ring preserves issue order, and its single transient worker handles
+	// responses asynchronously but in that order.
 	seqResps ring[*seqResp] // we never call die() on it
 
 	backoffMu   xsync.Mutex // guards the following
@@ -586,9 +586,10 @@ func (s *sink) doSequenced(
 
 	// We can NOT use any record context. If we do, we force the request to
 	// fail while also force the batch to be unfailable (due to no
-	// response). If and only if the user has disabled idempotency, we
-	// allow the user to cancel the request via some random record with a
-	// canceling context.
+	// response). Only if the user has disabled idempotency or opted into
+	// AllowIdempotentProduceCancellation do we allow canceling the request
+	// via some random record with a canceling context (createReq only
+	// sets firstCancelingCtx under those options).
 	ctx := req.firstCancelingCtx
 	if ctx == nil {
 		ctx = s.cl.ctx
@@ -2023,7 +2024,7 @@ type produceRequest struct {
 	timeout int32
 	batches seqRecBatches
 
-	firstCancelingCtx context.Context // of all batches added, the first one with a record that has a canceling context; only used with disableIdempotency
+	firstCancelingCtx context.Context // of all batches added, the first one with a record that has a canceling context; only used with disableIdempotency or allowIdempotentProduceCancellation
 
 	producerID    int64
 	producerEpoch int16
