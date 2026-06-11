@@ -383,7 +383,16 @@ func (g *groupConsumer) leave848(ctx context.Context) {
 		g.leaveErr = err
 		return
 	}
-	g.leaveErr = errCodeMessage(resp.ErrorCode, resp.ErrorMessage)
+	err = errCodeMessage(resp.ErrorCode, resp.ErrorMessage)
+	// The leave rides the coordinator retry wrapper: if a prior attempt
+	// succeeded but its response was lost (the connection died), the
+	// retry finds the member already gone. Same if the session expired
+	// before we could leave. Either way the member is out of the group,
+	// which is the goal state of leaving, not an error.
+	if errors.Is(err, kerr.UnknownMemberID) {
+		err = nil
+	}
+	g.leaveErr = err
 }
 
 type g848 struct {

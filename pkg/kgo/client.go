@@ -2297,8 +2297,18 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 	case *kmsg.OffsetDeleteRequest:
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 
-	// ConsumerGroupHeartbeat cannot be retried at all
+	// ConsumerGroupHeartbeat carries reconciliation state and cannot be
+	// blindly retried; the 848 heartbeat loop owns retries with full
+	// state knowledge. The exception is leaving (MemberEpoch -1, or -2
+	// for static members): a leave carries no reconcilable state and is
+	// idempotent, and the coordinator moving is precisely when leaves
+	// are issued against a stale cached coordinator - firing it once
+	// would lose the leave to a single NOT_COORDINATOR and ghost the
+	// member until the session timeout.
 	case *kmsg.ConsumerGroupHeartbeatRequest:
+		if t.MemberEpoch < 0 {
+			return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
+		}
 		br, err := cl.loadCoordinator(ctx, coordinatorTypeGroup, t.Group)
 		var resp kmsg.Response
 		if err == nil {
@@ -2310,10 +2320,14 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 	// SHARE //
 	///////////
 
-	// ShareGroupHeartbeat cannot be retried (like ConsumerGroupHeartbeat).
-	// Like ConsumerGroupHeartbeat, share membership is managed by the
-	// GROUP coordinator, not the share-state coordinator.
+	// ShareGroupHeartbeat cannot be retried (like ConsumerGroupHeartbeat),
+	// except for the leave, which is retried for the same reason as
+	// above. Share membership is managed by the GROUP coordinator, not
+	// the share-state coordinator.
 	case *kmsg.ShareGroupHeartbeatRequest:
+		if t.MemberEpoch < 0 {
+			return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.GroupID, req)
+		}
 		br, err := cl.loadCoordinator(ctx, coordinatorTypeGroup, t.GroupID)
 		var resp kmsg.Response
 		if err == nil {
@@ -2387,6 +2401,8 @@ func (cl *Client) handleReqWithCoordinator(
 		case *kmsg.SyncGroupResponse:
 			code = t.ErrorCode
 		case *kmsg.ConsumerGroupHeartbeatResponse:
+			code = t.ErrorCode
+		case *kmsg.ShareGroupHeartbeatResponse:
 			code = t.ErrorCode
 		}
 
