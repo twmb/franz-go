@@ -963,7 +963,28 @@ func (cl *Client) supportsKeyVersion(key, version int16) bool {
 }
 
 func (cl *Client) supportsKIP890p2() bool {
-	return cl.supportsFeature("transaction.version", 2)
+	if !cl.supportsFeature("transaction.version", 2) {
+		return false
+	}
+	// The KIP-890 part 2 paths change what goes on the wire: produce v12+
+	// skips AddPartitionsToTxn, TxnOffsetCommit v5+ skips AddOffsetsToTxn,
+	// and EndTxn v5+ bumps the producer epoch. A user MaxVersions cap
+	// below any of those keeps the OLD wire versions while skipping the
+	// explicit add requests, and the broker then rejects the produces
+	// with INVALID_TXN_STATE because the partitions were never added to
+	// the transaction. Only opt in if the cap allows the new versions.
+	if mv := cl.cfg.maxVersions; mv != nil {
+		if v, ok := mv.LookupMaxKeyVersion(int16(kmsg.Produce)); !ok || v < 12 {
+			return false
+		}
+		if v, ok := mv.LookupMaxKeyVersion(int16(kmsg.EndTxn)); !ok || v < 5 {
+			return false
+		}
+		if v, ok := mv.LookupMaxKeyVersion(int16(kmsg.TxnOffsetCommit)); !ok || v < 5 {
+			return false
+		}
+	}
+	return true
 }
 
 // Same as above. A cluster returns a max version for a feature only once the

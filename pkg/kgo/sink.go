@@ -510,18 +510,28 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		batchesStripped, err := s.doTxnReq(req, txnReq)
 		if err != nil {
 			switch {
-			case errors.Is(err, kerr.TransactionAbortable):
-				// If we get TransactionAbortable, we continue into producing.
-				// The produce will fail with the same error, and this is the
-				// only way to notify the user to abort the txn.
 			case isRetryableBrokerErr(err) || isDialNonTimeoutErr(err):
 				s.cl.bumpRepeatedLoadErr(err)
 				s.cl.cfg.logger.Log(LogLevelWarn, "unable to AddPartitionsToTxn due to retryable broker err, bumping client's buffered record load errors by 1 and retrying", "err", err)
 				s.cl.triggerUpdateMetadata(false, "attempting to refresh broker list due to failed AddPartitionsToTxn requests")
 				return moreToDrain || len(req.batches.bs) > 0 // nothing stripped if request-issuing error
 			default:
-				// Note that err can be InvalidProducerEpoch, which is
-				// potentially recoverable in EndTransaction.
+				// This includes TransactionAbortable. We used to
+				// continue into producing on TransactionAbortable so
+				// the produce failure would carry the error to the
+				// user, but doTxnReq's error path has already removed
+				// every batch from the transaction and decremented
+				// its inflight count: producing those batches anyway
+				// would decrement inflight a second time (wrapping
+				// the uint8 and permanently wedging the recBuf's
+				// drain gate) and could re-drain batches that are
+				// already in flight. Failing the producer ID delivers
+				// the same error to all buffered records on the next
+				// drain, and TransactionAbortable remains recoverable
+				// via EndTransaction.
+				//
+				// Note that err can also be InvalidProducerEpoch,
+				// which is potentially recoverable in EndTransaction.
 				//
 				// We do not fail all buffered records here,
 				// because that can lead to undesirable behavior

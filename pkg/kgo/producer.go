@@ -62,6 +62,15 @@ type producer struct {
 	txnMu   xsync.Mutex
 	inTxn   bool
 	tx890p2 atomic.Bool
+
+	// producedInTxn is set when a record is buffered within the current
+	// transaction and reset by BeginTransaction. EndTransaction consults
+	// it under KIP-890 part 2, where produce requests implicitly add
+	// partitions broker-side before the data append: a transaction whose
+	// every produce FAILED still needs an EndTxn abort even though no
+	// partition was marked addedToTxn client-side (marking happens only
+	// on produce success).
+	producedInTxn atomic.Bool
 }
 
 // BufferedProduceRecords returns the number of records currently buffered for
@@ -645,6 +654,10 @@ func (cl *Client) produce(
 	p.bufferedBytes += userSize
 	p.mu.Unlock()
 
+	if cl.cfg.txnID != nil && !p.producedInTxn.Load() {
+		p.producedInTxn.Store(true)
+	}
+
 	cl.loadPartsAndPartition(promisedRec{ctx, promise, r})
 }
 
@@ -1009,7 +1022,21 @@ func (cl *Client) doInitProducerID(ctxFn func() context.Context, lastID int64, l
 		if err != nil {
 			return err
 		}
-		return nil // resp.ErrorCode handled below
+		// We return ConcurrentTransactions so that our wrapping
+		// doWithConcurrentTransactions retries in place: the
+		// coordinator replies with it while still completing (or
+		// fence-aborting) a previous transaction for this
+		// transactional ID. Notably, taking over a crashed
+		// incarnation's ongoing transaction ALWAYS receives it at
+		// least once: the broker internally aborts the old
+		// transaction and tells us to retry. Surfacing the error
+		// instead would bubble a routine, transient condition up as a
+		// BeginTransaction failure. All other response error codes
+		// are classified below.
+		if err := kerr.ErrorForCode(resp.ErrorCode); errors.Is(err, kerr.ConcurrentTransactions) {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		if errors.Is(err, errUnknownRequestKey) || errors.Is(err, errBrokerTooOld) {

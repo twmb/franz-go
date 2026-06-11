@@ -1414,9 +1414,9 @@ func TransactionalID(id string) ProducerOpt {
 // default 40s. It is a good idea to keep this less than a group's session
 // timeout, so that a group member will always be alive for the duration of a
 // transaction even if connectivity dies. This helps prevent a transaction
-// finishing after a rebalance, which is problematic pre-Kafka 2.5. If you
-// are on Kafka 2.5+, then you can use the RequireStableFetchOffsets option
-// when assigning the group, and you can set this to whatever you would like.
+// finishing after a rebalance, which is problematic pre-Kafka 2.5. On Kafka
+// 2.5+, the client always requires stable fetch offsets (KIP-447), so you
+// can set this to whatever you would like.
 //
 // Transaction timeouts begin when the first record is produced within a
 // transaction, not when a transaction begins.
@@ -1882,9 +1882,9 @@ func Balancers(balancers ...GroupBalancer) GroupOpt {
 // If you are using a [GroupTransactSession] for EOS, wish to lower this, and are
 // talking to a Kafka cluster pre 2.5, consider lowering the
 // TransactionTimeout. If you do not, you risk a transaction finishing after a
-// group has rebalanced, which could lead to duplicate processing. If you are
-// talking to a Kafka 2.5+ cluster, you can safely use the
-// RequireStableFetchOffsets group option and prevent any problems.
+// group has rebalanced, which could lead to duplicate processing. On a Kafka
+// 2.5+ cluster there is no problem: the client always requires stable fetch
+// offsets (KIP-447).
 //
 // This option corresponds to Kafka's session.timeout.ms setting and must be
 // within the broker's group.min.session.timeout.ms and
