@@ -275,14 +275,11 @@ outer:
 				}
 				err = nil
 
-			case errors.Is(err, kerr.UnknownMemberID),
-				errors.Is(err, kerr.StaleMemberEpoch):
-				// UnknownMemberID: server forgot us.
-				// StaleMemberEpoch: our epoch drifted (e.g. a
-				// heartbeat response was lost). Either way, the
-				// fix is identical: abandon the assignment and
-				// re-initialJoin with a fresh member id so the
-				// server hands us back a current epoch.
+			case errors.Is(err, kerr.UnknownMemberID):
+				// The server forgot us (session expired during an
+				// outage, or we were administratively removed).
+				// Abandon the assignment and re-initialJoin with a
+				// fresh member id.
 				member, gen := g.memberGen.load()
 				g.cfg.logger.Log(LogLevelInfo, "consumer group heartbeat error, abandoning assignment and rejoining with new member id",
 					"group", g.cfg.group,
@@ -294,7 +291,17 @@ outer:
 				g.memberGen.store(newStringUUID(), 0)
 				continue outer
 
+			// StaleMemberEpoch means our epoch drifted from the
+			// server's; it reaches us via OffsetFetch (the heartbeat
+			// itself fences with FencedMemberEpoch), so the server
+			// still has this member. We must KEEP our member id:
+			// rejoining at epoch 0 with the same id is the protocol's
+			// lost-response recovery - the server re-admits the member
+			// in place and re-delivers its assignment. Rejoining with
+			// a fresh id would strand the old member server-side,
+			// parking its partitions until the session timeout.
 			case errors.Is(err, kerr.FencedMemberEpoch),
+				errors.Is(err, kerr.StaleMemberEpoch),
 				errors.Is(err, kerr.GroupMaxSizeReached),
 				errors.Is(err, kerr.UnsupportedAssignor):
 				lvl := LogLevelInfo
@@ -332,8 +339,9 @@ outer:
 		}
 
 		// The errors we have to handle are:
-		// * UnknownMemberID: abandon partitions, rejoin
-		// * FencedMemberEpoch: abandon partitions, rejoin
+		// * UnknownMemberID: abandon partitions, rejoin w/ new member id
+		// * FencedMemberEpoch / StaleMemberEpoch: abandon partitions,
+		//   rejoin with the SAME member id
 		// * UnreleasedInstanceID: fatal error, do not rejoin
 		// * General error: fatal error, do not rejoin
 		//
