@@ -1122,6 +1122,7 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 	for {
 		var err error
 		var force func(error)
+		var fetchErr bool
 		heartbeat = false
 		select {
 		case <-cooperativeFastCheck:
@@ -1137,6 +1138,7 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 			err = kerr.RebalanceInProgress
 		case err = <-fetchErrCh:
 			fetchErrCh = nil
+			fetchErr = true
 		case <-revoked:
 			revoked = nil
 			didRevoke = true
@@ -1193,7 +1195,22 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 		// If cfg.retries consecutive failures occur without any
 		// success, the error propagates to manage848 which
 		// rebuilds the session.
-		if is848 && (isRetryableBrokerErr(err) || isAnyDialErr(err) || g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err)) {
+		//
+		// This arm must only see errors from the heartbeat itself,
+		// never from fetchErrCh, even though both feed the same err
+		// variable. Walkthrough of what would go wrong: the
+		// coordinator moves, OffsetFetch exhausts its internal
+		// retries, fetchOffsets returns the retryable error here, we
+		// "retry" by heartbeating in place, the next heartbeat
+		// succeeds and resets the counter - and the session lives on
+		// with partitions that were never handed to assignPartitions
+		// (that only happens after a successful fetch). The fetch
+		// goroutine is already gone and nothing inside a live session
+		// re-runs it, so those partitions silently never consume.
+		// Only re-entering setupAssignedAndHeartbeat re-fetches (via
+		// g.fetching), so a fetch error must propagate to manage848,
+		// whose transient arm restarts the session.
+		if is848 && !fetchErr && (isRetryableBrokerErr(err) || isAnyDialErr(err) || g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err)) {
 			if int64(hbBrokerRetries) < g.cfg.retries {
 				hbBrokerRetries++
 				backoff := g.cfg.retryBackoff(hbBrokerRetries)
