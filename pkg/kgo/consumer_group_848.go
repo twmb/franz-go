@@ -231,7 +231,12 @@ outer:
 				sleep := g.cfg.heartbeatInterval
 				if err == nil {
 					err = errCodeMessage(resp.ErrorCode, resp.ErrorMessage)
-					sleep = time.Duration(resp.HeartbeatIntervalMillis) * time.Millisecond
+					// A zero or negative server interval (buggy or
+					// hostile broker) would hot-loop heartbeats at
+					// round-trip pace; keep the configured cadence.
+					if hb := time.Duration(resp.HeartbeatIntervalMillis) * time.Millisecond; hb > 0 {
+						sleep = hb
+					}
 				}
 				if err != nil {
 					// Reset last-sent state so the next attempt
@@ -428,6 +433,23 @@ type g848 struct {
 	prerevoking atomic.Bool
 }
 
+// sanitizePartitions returns the broker-provided partitions sorted, with
+// duplicates and negatives dropped. A duplicated partition is not just
+// redundant: it survives into nowAssigned, makes the assignment compare as
+// changed, and diffAssigned then re-"adds" the partition we already own -
+// re-fetching its committed offset and rewinding the live cursor into
+// duplicate consumption. Negative numbers can only come from a buggy or
+// hostile broker and would otherwise flow into the offset-load machinery.
+func sanitizePartitions(ps []int32) []int32 {
+	ps = slices.Clone(ps)
+	slices.Sort(ps)
+	ps = slices.Compact(ps)
+	for len(ps) > 0 && ps[0] < 0 {
+		ps = ps[1:]
+	}
+	return ps
+}
+
 // v1+ requires the end user to generate their own MemberID, with the
 // recommendation being v4 uuid base64 encoded so it can be put in URLs. We
 // roughly do that (no version nor variant bits). crypto/rand does not fail
@@ -493,10 +515,30 @@ func (g *g848) initialJoin() (time.Duration, error) {
 		"now_assigned", nowAssigned,
 	)
 
-	return time.Duration(resp.HeartbeatIntervalMillis) * time.Millisecond, nil
+	// As in the heartbeat closure: never adopt a zero/negative server
+	// interval, it would hot-loop the heartbeat timer.
+	if hb := time.Duration(resp.HeartbeatIntervalMillis) * time.Millisecond; hb > 0 {
+		return hb, nil
+	}
+	return g.g.cfg.heartbeatInterval, nil
 }
 
 func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.ConsumerGroupHeartbeatResponse) map[string][]int32 {
+	// A success response can only legitimately carry a negative member
+	// epoch as the echo of a leave (-1, or -2 static), which this loop
+	// never sends; the broker rejects requests below -2 outright. If a
+	// buggy or hostile broker hands us a negative epoch here and we
+	// store it, our next heartbeat would BE a leave: the member silently
+	// exits the group while fetches continue. Ignore the response
+	// entirely, like the Java client does.
+	if resp.MemberEpoch < 0 {
+		g.g.cfg.logger.Log(LogLevelWarn, "ignoring consumer group heartbeat response with an invalid negative member epoch",
+			"group", g.g.cfg.group,
+			"epoch", resp.MemberEpoch,
+		)
+		return nil
+	}
+
 	id2t := g.g.cl.id2tMap()
 	newAssigned := make(map[string][]int32)
 
@@ -520,16 +562,16 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 		// Fresh assignment from server - replace unresolved state.
 		g.unresolvedAssigned = nil
 		for _, t := range resp.Assignment.Topics {
+			ps := sanitizePartitions(t.Partitions)
 			name := id2t[t.TopicID]
 			if name == "" {
 				if g.unresolvedAssigned == nil {
 					g.unresolvedAssigned = make(map[topicID][]int32)
 				}
-				g.unresolvedAssigned[topicID(t.TopicID)] = slices.Clone(t.Partitions)
+				g.unresolvedAssigned[topicID(t.TopicID)] = ps
 				continue
 			}
-			slices.Sort(t.Partitions)
-			newAssigned[name] = t.Partitions
+			newAssigned[name] = ps
 		}
 	}
 
@@ -540,7 +582,6 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 	// simpler and only costs one heartbeat interval (~5s).
 	for id, ps := range g.unresolvedAssigned {
 		if name := id2t[[16]byte(id)]; name != "" {
-			slices.Sort(ps)
 			newAssigned[name] = ps
 			delete(g.unresolvedAssigned, id)
 		}
