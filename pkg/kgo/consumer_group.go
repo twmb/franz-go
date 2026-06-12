@@ -3504,8 +3504,18 @@ func (g *groupConsumer) commit(
 		for _, d := range dropped {
 			var rt *kmsg.OffsetCommitResponseTopic
 			for i := range resp.Topics {
-				if resp.Topics[i].Topic == d.name && resp.Topics[i].TopicID == d.id {
-					rt = &resp.Topics[i]
+				// v10+ responses carry only the TopicID (Topic is
+				// v0-v9 on the wire, so kept topics arrive with an
+				// empty name); v9 and below carry only the name (and
+				// pinV9 above guarantees an id-less topic never goes
+				// out v10+, so a zero d.id implies a v9 response).
+				// Match whichever side the wire carried; requiring
+				// both duplicated the topic on v10 and the length
+				// mismatch then made updateCommitted skip the whole
+				// response.
+				t := &resp.Topics[i]
+				if d.id != ([16]byte{}) && t.TopicID == d.id || t.Topic != "" && t.Topic == d.name {
+					rt = t
 					break
 				}
 			}
