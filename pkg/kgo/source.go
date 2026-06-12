@@ -1114,6 +1114,15 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		numErrsStripped  int
 		kip320           = s.cl.supportsOffsetForLeaderEpoch()
 		kmove            kip951move
+		// seen guards against a broker returning the same partition (or the
+		// same topic) more than once in a single fetch response. Each
+		// requested partition maps to one stable *cursorOffsetNext for the
+		// life of the request; processing one twice would double-advance its
+		// offset / double-append its records, or enqueue two move()s for one
+		// cursor (the #1167 concurrent-source hazard). We must not dedup by
+		// deleting from req.usedOffsets - that map re-enables the cursor
+		// after the response - so we track seen pointers separately.
+		seen map[*cursorOffsetNext]struct{}
 	)
 	defer kmove.maybeBeginMove(s.cl)
 
@@ -1163,6 +1172,18 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				)
 				continue
 			}
+			if _, dup := seen[partOffset]; dup {
+				s.cl.cfg.logger.Log(LogLevelWarn, "broker returned a duplicate partition in a fetch response, ignoring the duplicate",
+					"broker", logID(s.nodeID),
+					"topic", topic,
+					"partition", partition,
+				)
+				continue
+			}
+			if seen == nil {
+				seen = make(map[*cursorOffsetNext]struct{}, req.numOffsets)
+			}
+			seen[partOffset] = struct{}{}
 			c := partOffset.from
 
 			// If we are fetching from the replica already, Kafka replies with a -1
