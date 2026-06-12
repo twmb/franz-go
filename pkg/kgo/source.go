@@ -1709,6 +1709,24 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	uncompressedBytes := len(rawRecords)
 
 	numRecords := int(batch.NumRecords)
+	// NumRecords is decoded straight off the wire and is therefore
+	// attacker/bug controlled. A negative count would panic the slice
+	// sizing below (ensureLen does s[:n], which panics for n<0); reject it
+	// as a corrupt batch, matching the Java client's InvalidRecordException
+	// guard (DefaultRecordBatch: "Found invalid record count"). A count
+	// larger than the available record bytes is likewise impossible for a
+	// well-formed batch - every record needs at least one byte - so clamp
+	// the up-front allocation to the byte count to keep a bogus huge count
+	// from driving a massive allocation. The true decodable count is
+	// recomputed by readRawRecordsInto, and the truncation defer below
+	// leaves the offset unadvanced whenever it disagrees with numRecords.
+	if numRecords < 0 {
+		fp.Err = fmt.Errorf("invalid record batch: negative record count %d", numRecords)
+		return 0, 0
+	}
+	if numRecords > len(rawRecords) {
+		numRecords = len(rawRecords)
+	}
 	var krecords []kmsg.Record
 	var krecordsPool PoolKRecords
 	pools(o.Pools).each(func(p Pool) bool {
