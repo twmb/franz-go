@@ -36,6 +36,17 @@ var ctxPinReq = func() *string { v := "pin_req"; return &v }()
 
 type forceOpenReq struct{ kmsg.Request }
 
+// reauthDrainReq is an internal sentinel pushed through the broker's request
+// ring by a connection's handleResps worker as it exits with a sasl
+// reauthentication pending. It runs handleReauthDrain on the broker worker
+// goroutine: reauthenticate now that no reads are in flight, then replay the
+// requests that parked while the pipeline drained. The embedded kmsg.Request
+// is nil and never used; handleReq dispatches on the type before touching it.
+type reauthDrainReq struct {
+	kmsg.Request
+	cxn *brokerCxn
+}
+
 type promisedReq struct {
 	ctx     context.Context
 	req     kmsg.Request
@@ -323,6 +334,11 @@ start:
 
 func (b *broker) handleReq(pr promisedReq) {
 	req := pr.req
+	if r, ok := req.(*reauthDrainReq); ok {
+		b.handleReauthDrain(r.cxn)
+		pr.promise(nil, nil) // internal sentinel; the promise is a no-op
+		return
+	}
 	var cxn *brokerCxn
 	var retriedOnNewConnection bool
 start:
@@ -420,7 +436,7 @@ start:
 	req.SetVersion(ourMax)
 
 	if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) && !cxn.hasDiscard {
-		// If we are after the reauth time, try to reauth, for KIP-368.
+		// If we are after the reauth time, reauthenticate, for KIP-368.
 		// We can only have an expiry if we went the authenticate flow,
 		// so we know we are authenticating again.
 		//
@@ -432,16 +448,28 @@ start:
 		//     element stays in the ring while handleResps processes
 		//     it), handleResps is reading this connection and our read
 		//     would race it byte-by-byte, interleaving the two
-		//     responses' bytes between the two readers. We postpone:
-		//     our expiry is deliberately pessimistic (2-5% early, 1s
-		//     floor; see doSasl), so the session is still valid
-		//     server-side and we issue this request as-is. A later
-		//     request reauthenticates once the pipeline drains; if the
-		//     pipeline never drains within the margin, the broker
-		//     closes the connection at the true deadline and we
-		//     reconnect, the same recovery as any connection death.
-		//     The Java client similarly only begins reauthentication
-		//     when the channel has no in-progress write.
+		//     responses' bytes between the two readers. We park this
+		//     request (and every following request for this connection)
+		//     so the pipeline drains -- under sustained pipelining the
+		//     pipeline never goes empty on its own, so we must stop
+		//     feeding it. Our expiry is deliberately pessimistic (2-5%
+		//     early, 1s floor; see doSasl), so the in-flight responses
+		//     are on a still-valid session and the drain (bounded by
+		//     their read timeouts) fits the margin. handleResps pushes
+		//     a reauthDrainReq as it exits; handleReauthDrain then
+		//     reauthenticates and replays the parked requests in
+		//     order. Only this connection parks: the broker worker
+		//     keeps serving its other connections. The Java client
+		//     similarly holds the channel's queued send while
+		//     reauthenticating, and it too only begins with no write
+		//     in progress.
+		//
+		//     Ordering of the pending store vs the empty check below
+		//     matters: we store before checking, and handleResps reads
+		//     the flag after its final dropPeek. empty() and dropPeek
+		//     both take the ring mutex, so if we observe a non-empty
+		//     ring, our store happens-before the drain's flag read and
+		//     a parked request can never miss its drain signal.
 		//
 		//   * acks=0 produce connections run a discard goroutine that
 		//     owns all reads forever (hasDiscard, checked above), so
@@ -452,7 +480,9 @@ start:
 		//     pessimism (the fresh connection is already "expired");
 		//     issuing the request on the just-authenticated connection
 		//     is correct, and the next request picks up a new one.
-		if cxn.resps.empty() {
+		cxn.reauthPending.Store(true)
+		if !cxn.anyParked() && cxn.resps.empty() {
+			cxn.reauthPending.Store(false)
 			// Some implementations (AWS) occasionally fail for
 			// unclear reasons (principals change, somehow). If
 			// we receive SASL_AUTHENTICATION_FAILED, we retry
@@ -469,7 +499,8 @@ start:
 				return
 			}
 		} else {
-			cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached but responses are in flight, postponing reauthentication", "broker", logID(cxn.b.meta.NodeID))
+			cxn.park(pr)
+			return
 		}
 	}
 
@@ -840,6 +871,67 @@ type brokerCxn struct {
 	// reauthentication can never happen in place; see handleReq and
 	// loadConnection.
 	hasDiscard bool
+
+	// reauthPending is set by the broker worker when the sasl expiry has
+	// passed but responses are still in flight (handleResps owns reads,
+	// so reauthenticating would race it). While pending, requests for
+	// this connection park instead of being written, so the pipeline
+	// drains; handleResps pushes a reauthDrainReq as it exits to
+	// reauthenticate and replay them. See handleReq's expiry arm for the
+	// store/load ordering argument.
+	reauthPending atomic.Bool
+
+	// parkMu guards parked/parkFailed. parked holds requests, in arrival
+	// order, that are waiting for a pending reauthentication; order
+	// matters for idempotent produce, whose sequence numbers were
+	// assigned at request build. die fails everything parked (and marks
+	// parkFailed) so a dead connection cannot strand requests.
+	parkMu     xsync.Mutex
+	parked     []promisedReq
+	parkFailed bool
+}
+
+// park holds a request destined for this connection while a sasl
+// reauthentication is pending; handleReauthDrain replays parked requests in
+// order once the pipeline drains. If the connection already died (die fails
+// everything parked), the request fails immediately with the same retryable
+// error that ring-queued requests receive on broker death.
+func (cxn *brokerCxn) park(pr promisedReq) {
+	cxn.parkMu.Lock()
+	if cxn.parkFailed {
+		cxn.parkMu.Unlock()
+		pr.promise(nil, errChosenBrokerDead)
+		return
+	}
+	cxn.parked = append(cxn.parked, pr)
+	n := len(cxn.parked)
+	cxn.parkMu.Unlock()
+	cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached but responses are in flight, parking request until the pipeline drains", "broker", logID(cxn.b.meta.NodeID), "parked_reqs", n)
+}
+
+func (cxn *brokerCxn) anyParked() bool {
+	cxn.parkMu.Lock()
+	defer cxn.parkMu.Unlock()
+	return len(cxn.parked) > 0
+}
+
+func (cxn *brokerCxn) takeParked() []promisedReq {
+	cxn.parkMu.Lock()
+	defer cxn.parkMu.Unlock()
+	parked := cxn.parked
+	cxn.parked = nil
+	return parked
+}
+
+func (cxn *brokerCxn) failParked() {
+	cxn.parkMu.Lock()
+	parked := cxn.parked
+	cxn.parked = nil
+	cxn.parkFailed = true
+	cxn.parkMu.Unlock()
+	for _, pr := range parked {
+		pr.promise(nil, errChosenBrokerDead)
+	}
 }
 
 func (cxn *brokerCxn) init(isProduceCxn bool, tries int) error {
@@ -1501,13 +1593,15 @@ func (cxn *brokerCxn) closeConn() {
 }
 
 // die kills a broker connection (which could be dead already) and replies to
-// all requests awaiting responses appropriately.
+// all requests awaiting responses appropriately, including requests parked
+// for a pending reauthentication.
 func (cxn *brokerCxn) die() {
 	if cxn == nil || cxn.dead.Swap(true) {
 		return
 	}
 	cxn.closeConn()
 	cxn.resps.die()
+	cxn.failParked()
 }
 
 // waitResp, called serially by a broker's handleReqs, manages handling a
@@ -1672,6 +1766,45 @@ start:
 	pr, more, dead = cxn.resps.dropPeek()
 	if more {
 		goto start
+	}
+
+	// The ring is empty and this worker is exiting: no read is in flight
+	// and none can start (only the broker worker pushes responses, and it
+	// parks requests for this connection while a reauth is pending). If a
+	// reauth is pending, signal the broker worker to perform it and
+	// replay the parked requests. If the broker is stopping, the failed
+	// push is fine: stopForever dies every connection, and die fails
+	// everything parked.
+	if cxn.reauthPending.Load() {
+		cxn.b.do(cxn.cl.ctx, &reauthDrainReq{cxn: cxn}, func(kmsg.Response, error) {})
+	}
+}
+
+// handleReauthDrain runs on the broker worker goroutine when a connection
+// with a pending reauthentication has drained its in-flight responses (its
+// handleResps worker pushed this sentinel as it exited). No reads can be in
+// flight: handleResps exited, only this goroutine starts another (by writing
+// a request), and every request for this connection since the expiry passed
+// was parked. Reauthenticate and replay the parked requests in their
+// original order -- order matters for idempotent produce, whose sequence
+// numbers were assigned at request build.
+func (b *broker) handleReauthDrain(cxn *brokerCxn) {
+	// Take the parked requests before a possible die below: a failed
+	// reauth must not fail them, it replays them through the normal path,
+	// which builds a fresh connection with a fresh authentication -- the
+	// same recovery the in-place reauth arm provides via its
+	// retry-on-new-connection. (If the connection died earlier, die
+	// already failed everything parked and this take returns nil.)
+	parked := cxn.takeParked()
+	if cxn.reauthPending.Swap(false) && !cxn.dead.Load() {
+		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached and responses have drained, reauthenticating", "broker", logID(cxn.b.meta.NodeID), "parked_reqs", len(parked))
+		if err := cxn.sasl(); err != nil {
+			cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, killing connection; any parked requests retry on a new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
+			cxn.die()
+		}
+	}
+	for _, pr := range parked {
+		b.handleReq(pr)
 	}
 }
 
