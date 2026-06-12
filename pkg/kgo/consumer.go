@@ -1115,6 +1115,23 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 								offset:            assignPart.at,
 								lastConsumedEpoch: assignPart.epoch,
 							})
+							// This partition can have a pending list or epoch
+							// load: an OffsetOutOfRange reload, or an epoch
+							// validation from a leader move. The cursor is then
+							// unusable and the load's completion is its only
+							// re-enabler -- and that completion would also
+							// overwrite the offset we just set with the load's
+							// now-stale result. A transact session resetting to
+							// committed offsets after an abort would be undone:
+							// consumption would resume at the pre-abort position,
+							// never re-consuming the aborted records. The set
+							// offset is the new truth: drop the load and
+							// re-enable the cursor ourselves. Safe here because
+							// the session is stopped (no source can use the
+							// cursor until the new session starts).
+							if loadOffsets.removeLoad(usedCursor.topic, usedCursor.partition) {
+								usedCursor.allowUsable()
+							}
 						}
 					}
 				}
@@ -1140,8 +1157,12 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		case assignInvalidateAll:
 			loadOffsets = listOrEpochLoads{}
 		case assignSetMatching:
-			// We had not yet loaded this partition, so there is
-			// nothing to set, and we keep everything.
+			// Loads for partitions that were being consumed were
+			// handled in the cursor walk above (offset set directly,
+			// pending load dropped). Anything remaining is a load for
+			// a partition that never finished loading; SetOffsets
+			// documents those are skipped, so we keep their loads
+			// untouched.
 		case assignInvalidateMatching:
 			loadOffsets.keepFilter(func(t string, p int32) bool {
 				if assignTopic, ok := assignments[t]; ok {
@@ -1466,7 +1487,7 @@ func (l *listOrEpochLoads) addLoad(t string, p int32, loadType listOrEpochLoadTy
 	ps[p] = load
 }
 
-func (l *listOrEpochLoads) removeLoad(t string, p int32) {
+func (l *listOrEpochLoads) removeLoad(t string, p int32) (removed bool) {
 	for _, m := range []offsetLoadMap{
 		l.List,
 		l.Epoch,
@@ -1478,11 +1499,16 @@ func (l *listOrEpochLoads) removeLoad(t string, p int32) {
 		if ps == nil {
 			continue
 		}
+		if _, exists := ps[p]; !exists {
+			continue
+		}
 		delete(ps, p)
+		removed = true
 		if len(ps) == 0 {
 			delete(m, t)
 		}
 	}
+	return removed
 }
 
 func (l listOrEpochLoads) each(fn func(string, int32)) {
