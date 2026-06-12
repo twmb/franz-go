@@ -323,7 +323,7 @@ func (rs ProduceResults) FirstErr() error {
 	return nil
 }
 
-// First the first record and error in the produce results.
+// First returns the first record and error in the produce results.
 //
 // This function is useful if you only passed one record to ProduceSync.
 func (rs ProduceResults) First() (*Record, error) {
@@ -515,9 +515,9 @@ func (cl *Client) TryProduce(
 // If the topic field is empty, the client will use the DefaultProduceTopic; if
 // that is also empty, the record is failed immediately. If the record is too
 // large to fit in a batch on its own in a produce request, the record will be
-// failed with immediately kerr.MessageTooLarge.
+// failed immediately with kerr.MessageTooLarge.
 //
-// If the client is configured to automatically flush the client currently has
+// If the client is configured to automatically flush and the client currently has
 // the configured maximum amount of records buffered, Produce will block. The
 // context can be used to cancel waiting while records flush to make space. In
 // contrast, if manual flushing is configured, the record will be failed
@@ -944,7 +944,7 @@ type producerID struct {
 
 var errReloadProducerID = errors.New("producer id needs reloading")
 
-// initProducerID initializes the client's producer ID for idempotent
+// producerID returns, loading if necessary, the client's producer ID for idempotent
 // producing only (no transactions, which are more special). After the first
 // load, this clears all buffered unknown topics.
 func (cl *Client) producerID(ctxFn func() context.Context) (int64, int16, error) {
@@ -1240,7 +1240,11 @@ func (cl *Client) addUnknownTopicRecord(pr promisedRec) {
 	}
 }
 
-// waitUnknownTopic waits for a notification
+// waitUnknownTopic waits for the topic to be resolved by a metadata update
+// (the wait channel is closed, or receives retryable load errors that count
+// toward the retry limits), or for the record/produce contexts, the client,
+// the record timeout, or an abort (the fatal channel) to end the wait and
+// fail all buffered records.
 func (cl *Client) waitUnknownTopic(
 	pctx context.Context, // context passed to Produce
 	rctx context.Context, // context on the record itself
@@ -1287,7 +1291,11 @@ func (cl *Client) waitUnknownTopic(
 		case err = <-unknown.fatal:
 		case retryableErr, ok := <-unknown.wait:
 			if !ok {
-				cl.cfg.logger.Log(LogLevelInfo, "done waiting for metadata for new topic", "topic", topic)
+				// The channel is closed when the topic's partitions
+				// load, but also when the topic is purged or all
+				// buffered records are failed; whoever closed it
+				// already handled the buffered records.
+				cl.cfg.logger.Log(LogLevelInfo, "done waiting on metadata for new topic", "topic", topic)
 				return // metadata was successful!
 			}
 			cl.cfg.logger.Log(LogLevelInfo, "new topic metadata wait failed, retrying wait", "topic", topic, "err", retryableErr)
@@ -1347,7 +1355,7 @@ func (cl *Client) unlingerDueToMaxRecsBuffered() {
 // If the context finishes (Done), this returns the context's error.
 //
 // This function is safe to call multiple times concurrently, and safe to call
-// concurrent with Flush.
+// concurrent with AbortBufferedRecords.
 func (cl *Client) Flush(ctx context.Context) error {
 	p := &cl.producer
 

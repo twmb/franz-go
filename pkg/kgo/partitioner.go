@@ -15,8 +15,8 @@ import (
 // from producing through partitioning, so you can set fields in the record
 // struct before producing to aid in partitioning with a custom partitioner.
 type Partitioner interface {
-	// forTopic returns a partitioner for an individual topic. It is
-	// guaranteed that only one record will use the an individual topic's
+	// ForTopic returns a partitioner for an individual topic. It is
+	// guaranteed that only one record will use an individual topic's
 	// topicPartitioner at a time, meaning partitioning within a topic does
 	// not require locks.
 	ForTopic(string) TopicPartitioner
@@ -245,7 +245,7 @@ func (p *leastBackupTopicPartitioner) PartitionByBackup(_ *Record, n int, backup
 ///////////////////
 
 // UniformBytesPartitioner is a redux of the StickyPartitioner, proposed in
-// KIP-794 and release with the Java client in Kafka 3.3. This partitioner
+// KIP-794 and released with the Java client in Kafka 3.3. This partitioner
 // returns the same partition until 'bytes' is hit. At that point, a
 // re-partitioning happens. If adaptive is false, this chooses a new random
 // partition, otherwise this chooses a broker based on the inverse of the
@@ -475,7 +475,7 @@ type PartitionerHasher func([]byte, int) int
 // KafkaHasher returns a PartitionerHasher using hashFn that mirrors how Kafka
 // partitions after hashing data. In Kafka, after hashing into a uint32, the
 // hash is converted to an int32 and the high bit is stripped. Kafka by default
-// uses murmur2 hashing, and the StickyKeyPartiitoner uses this by default.
+// uses murmur2 hashing, and the StickyKeyPartitioner uses this by default.
 // Using this KafkaHasher function is only necessary if you want to change the
 // underlying hashing algorithm.
 func KafkaHasher(hashFn func([]byte) uint32) PartitionerHasher {

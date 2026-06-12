@@ -591,7 +591,7 @@ func (cl *Client) EndAndBeginTransaction(
 	return cl.EndTransaction(ctx, commit)
 }
 
-// AbortBufferedRecords fails all unflushed records with ErrAborted and waits
+// AbortBufferedRecords fails all unflushed records with ErrAborting and waits
 // for there to be no buffered records.
 //
 // This accepts a context to quit the wait early, but quitting the wait may
@@ -628,7 +628,7 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	return cl.Flush(ctx)
 }
 
-// UnsafeAbortBufferedRecords fails all unflushed records with ErrAborted and
+// UnsafeAbortBufferedRecords fails all unflushed records with ErrAborting and
 // waits for there to be no buffered records. This function does NOT wait for
 // any inflight produce requests to finish, meaning topics in the client may be
 // in an invalid state and producing to an invalid-state topic may cause the
