@@ -334,3 +334,35 @@ func TestAuditPurgeVsProduceUnknownTopicNoOrphan(t *testing.T) {
 		t.Fatal("second U record's promise never fired, even through client close")
 	}
 }
+
+// Failed records previously inherited the batchPromise zero values: a failed
+// record's Offset was its index within the failed batch and its
+// ProducerID/ProducerEpoch were 0 - plausible-looking garbage. Failures must
+// carry the -1 unknown-sentinels (the success path already does for acks=0's
+// unknown base offset).
+func TestAuditFailedRecordSentinels(t *testing.T) {
+	t.Parallel()
+
+	cl, err := NewClient(SeedBrokers("127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	done := make(chan struct{})
+	cl.TryProduce(context.Background(), &Record{}, func(r *Record, err error) {
+		defer close(done)
+		if err == nil {
+			t.Error("expected topic-less record to fail")
+		}
+		if r.Offset != -1 || r.ProducerID != -1 || r.ProducerEpoch != -1 || r.LeaderEpoch != -1 {
+			t.Errorf("failed record carries offset=%d pid=%d pepoch=%d lepoch=%d, want -1 sentinels",
+				r.Offset, r.ProducerID, r.ProducerEpoch, r.LeaderEpoch)
+		}
+	})
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("promise never fired")
+	}
+}

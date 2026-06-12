@@ -747,16 +747,27 @@ func (p *producer) finishPromises(b batchPromise) {
 start:
 	for i, pr := range b.recs {
 		pr.LeaderEpoch = -1
-		if b.baseOffset == -1 {
-			// if the base offset is invalid/unknown (-1), all record offsets should
-			// be treated as unknown
+		if b.err != nil {
+			// Failed records carry unknown-sentinels, not the
+			// batchPromise zero values: without this, a failed
+			// record's offset was its index within the failed
+			// batch and its producer id/epoch were 0 -
+			// plausible-looking garbage.
 			pr.Offset = -1
+			pr.ProducerID = -1
+			pr.ProducerEpoch = -1
 		} else {
-			pr.Offset = b.baseOffset + int64(i)
+			if b.baseOffset == -1 {
+				// if the base offset is invalid/unknown (-1), all record offsets should
+				// be treated as unknown
+				pr.Offset = -1
+			} else {
+				pr.Offset = b.baseOffset + int64(i)
+			}
+			pr.ProducerID = b.pid
+			pr.ProducerEpoch = b.epoch
+			pr.Attrs = b.attrs
 		}
-		pr.ProducerID = b.pid
-		pr.ProducerEpoch = b.epoch
-		pr.Attrs = b.attrs
 		recBroadcast := cl.finishRecordPromise(pr, b.err, b.beforeBuf)
 		broadcast = broadcast || recBroadcast
 	}
