@@ -254,14 +254,20 @@ func (b *broker) stopForever() {
 
 	b.reqs.die() // no more pushing
 
+	// Snapshot the connections under reapMu but die outside of it: die
+	// runs the user's OnBrokerDisconnect hook, and a hook must not run
+	// under reapMu (a hook that waits on anything that itself needs
+	// reapMu, e.g. a concurrent request's loadConnection, would
+	// deadlock). b.dead is already set above and loadConnection re-checks
+	// it under reapMu before storing, so no new connection can be stored
+	// after this snapshot.
 	b.reapMu.Lock()
-	defer b.reapMu.Unlock()
+	cxns := []*brokerCxn{b.cxnNormal, b.cxnProduce, b.cxnFetch, b.cxnGroup, b.cxnSlow}
+	b.reapMu.Unlock()
 
-	b.cxnNormal.die()
-	b.cxnProduce.die()
-	b.cxnFetch.die()
-	b.cxnGroup.die()
-	b.cxnSlow.die()
+	for _, cxn := range cxns {
+		cxn.die()
+	}
 }
 
 // do issues a request to the broker, eventually calling the response
@@ -676,24 +682,28 @@ doConnect:
 	}
 
 	b.reapMu.Lock()
-	defer b.reapMu.Unlock()
 
 	// If stopForever ran while we were connecting, the broker is
-	// dead and we must not store the connection. stopForever kills
-	// cxnProduce/etc under reapMu, but if the connection was nil at
-	// that time (we were mid-connect), stopForever's die() was a
-	// no-op. Without this check, the connection escapes destruction
+	// dead and we must not store the connection. stopForever reads
+	// cxnProduce/etc under reapMu before killing them, but if the
+	// connection was nil at that time (we were mid-connect), it was
+	// not seen. Without this check, the connection escapes destruction
 	// and a produce request succeeds on a connection that will never
 	// be reused, which -- combined with other connections from other
 	// broker objects for the same nodeID -- breaks the single-
 	// connection-per-broker ordering guarantee that Kafka requires
 	// for idempotent produce.
+	//
+	// closeConn runs the user's OnBrokerDisconnect hook, so it runs
+	// after the unlock (see stopForever for why).
 	if b.dead.Load() {
+		b.reapMu.Unlock()
 		cxn.closeConn()
 		return nil, errChosenBrokerDead
 	}
 
 	*pcxn = cxn
+	b.reapMu.Unlock()
 	return cxn, nil
 }
 
@@ -737,16 +747,20 @@ func (cl *Client) reapConnections(idleTimeout time.Duration) (total int) {
 }
 
 func (b *broker) reapConnections(idleTimeout time.Duration) (total int) {
+	// Snapshot under reapMu, evaluate and die outside: die runs the
+	// user's OnBrokerDisconnect hook, which must not run under reapMu
+	// (see stopForever).
 	b.reapMu.Lock()
-	defer b.reapMu.Unlock()
-
-	for _, cxn := range []*brokerCxn{
+	cxns := []*brokerCxn{
 		b.cxnNormal,
 		b.cxnProduce,
 		b.cxnFetch,
 		b.cxnGroup,
 		b.cxnSlow,
-	} {
+	}
+	b.reapMu.Unlock()
+
+	for _, cxn := range cxns {
 		if cxn == nil || cxn.dead.Load() {
 			continue
 		}
