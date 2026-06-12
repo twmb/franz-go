@@ -2007,6 +2007,13 @@ func AdjustFetchOffsetsFn(adjustOffsetsBeforeAssign func(context.Context, map[st
 // This function can be called at any time you are polling or processing
 // records. If you want to ensure this function is called serially with
 // processing, consider the BlockRebalanceOnPoll option.
+//
+// Do not call Close or LeaveGroup synchronously from within this callback
+// (nor from OnPartitionsRevoked or OnPartitionsLost): leaving the group
+// waits for the group management loop to finish, and the loop is waiting
+// for your callback to return - a permanent deadlock. To leave from within
+// a callback, use LeaveGroupContext with a nil context (it triggers the
+// leave without waiting), or call LeaveGroup from a separate goroutine.
 func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onAssigned = onAssigned }}
 }
@@ -2039,6 +2046,9 @@ func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][
 //
 // This function is called if a "fatal" group error is encountered and you have
 // not set [OnPartitionsLost]. See OnPartitionsLost for more details.
+//
+// Do not call Close or LeaveGroup synchronously from within this callback;
+// see the warning on [OnPartitionsAssigned].
 func OnPartitionsRevoked(onRevoked func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onRevoked = onRevoked }}
 }
@@ -2058,6 +2068,9 @@ func OnPartitionsRevoked(onRevoked func(context.Context, *Client, map[string][]i
 // This function can be called at any time you are polling or processing
 // records. If you want to ensure this function is called serially with
 // processing, consider the BlockRebalanceOnPoll option.
+//
+// Do not call Close or LeaveGroup synchronously from within this callback;
+// see the warning on [OnPartitionsAssigned].
 func OnPartitionsLost(onLost func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onLost = onLost }}
 }

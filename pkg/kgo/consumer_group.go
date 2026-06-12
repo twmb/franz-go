@@ -263,6 +263,13 @@ func (cl *Client) LeaveGroup() {
 // failed with an internal "consumer left" error).
 //
 // LeaveGroupContext is a no-op for direct (non-group) consumers.
+//
+// Do not call this function with a non-nil context synchronously from
+// within an OnPartitions callback: the leave waits for the group
+// management loop to finish, and the loop is waiting for your callback to
+// return. With the client's own context (LeaveGroup), that is a permanent
+// deadlock. A nil context is safe anywhere: it triggers the leave and
+// returns immediately.
 func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 	c := &cl.consumer
 	if c.g == nil && c.s == nil {
@@ -478,7 +485,7 @@ func (g *groupConsumer) manageFailWait(consecutiveErrors int, err error) (ctxCan
 		g.resetExternal()
 	}
 
-	// Unblock bolling now that we have called onLost and
+	// Unblock polling now that we have called onLost and
 	// re-assigned.
 	g.c.unaddRebalance()
 
@@ -3069,9 +3076,10 @@ func (cl *Client) commitOffsets(ctx context.Context, offsets map[string]map[int3
 }
 
 // CommitOffsetsSync waits for any active CommitOffsets to complete, begins a
-// commit that cannot be canceled, and waits for that commit to complete.
-// This function will not return until the commit is done and the onDone
-// callback is complete.
+// commit that cannot be canceled by other commits or by rebalancing, and
+// waits for that commit to complete. The commit is canceled only if the
+// passed context is canceled. This function will not return until the commit
+// is done and the onDone callback is complete.
 //
 // The purpose of this function is for use in OnPartitionsRevoked or committing
 // before leaving a group, because you do not want to have a commit issued in
@@ -3352,16 +3360,6 @@ func (g *groupConsumer) commit(
 	req.MemberID = memberID
 	req.InstanceID = g.cfg.instanceID
 	is848 := g.is848 // g.mu is held, per the function comment above
-
-	if ctx.Done() != nil {
-		go func() {
-			select {
-			case <-ctx.Done():
-				commitCancel()
-			case <-commitCtx.Done():
-			}
-		}()
-	}
 
 	go func() {
 		defer close(commitDone) // allow future commits to continue when we are done
