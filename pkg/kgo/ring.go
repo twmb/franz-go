@@ -65,6 +65,15 @@ func (r *ring[T]) die() {
 	}
 }
 
+// empty returns whether the ring currently holds no elements. Because an
+// element being processed stays in the ring until dropPeek removes it,
+// empty also means no worker goroutine is mid-element.
+func (r *ring[T]) empty() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.l == 0
+}
+
 func (r *ring[T]) push(elem T) (first, dead bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

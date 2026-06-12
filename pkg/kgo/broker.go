@@ -411,27 +411,57 @@ start:
 	}
 	req.SetVersion(ourMax)
 
-	if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) {
-		// If we are after the reauth time, try to reauth. We
-		// can only have an expiry if we went the authenticate
-		// flow, so we know we are authenticating again.
+	if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) && !cxn.hasDiscard {
+		// If we are after the reauth time, try to reauth, for KIP-368.
+		// We can only have an expiry if we went the authenticate flow,
+		// so we know we are authenticating again.
 		//
-		// Some implementations (AWS) occasionally fail for
-		// unclear reasons (principals change, somehow). If
-		// we receive SASL_AUTHENTICATION_FAILED, we retry
-		// once on a new connection. See #249.
+		// Reauthenticating reads the handshake and authenticate
+		// responses on this goroutine, so it requires that nothing
+		// else can be reading the connection:
 		//
-		// For KIP-368.
-		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
-		if err := cxn.sasl(); err != nil {
-			cxn.die()
-			if errors.Is(err, kerr.SaslAuthenticationFailed) && !retriedOnNewConnection {
-				cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
-				retriedOnNewConnection = true
-				goto start
+		//   * If any response is in flight (resps is non-empty -- an
+		//     element stays in the ring while handleResps processes
+		//     it), handleResps is reading this connection and our read
+		//     would race it byte-by-byte, interleaving the two
+		//     responses' bytes between the two readers. We postpone:
+		//     our expiry is deliberately pessimistic (2-5% early, 1s
+		//     floor; see doSasl), so the session is still valid
+		//     server-side and we issue this request as-is. A later
+		//     request reauthenticates once the pipeline drains; if the
+		//     pipeline never drains within the margin, the broker
+		//     closes the connection at the true deadline and we
+		//     reconnect, the same recovery as any connection death.
+		//     The Java client similarly only begins reauthentication
+		//     when the channel has no in-progress write.
+		//
+		//   * acks=0 produce connections run a discard goroutine that
+		//     owns all reads forever (hasDiscard, checked above), so
+		//     in-place reauth is never possible: loadConnection
+		//     recreates expired discard connections instead, and a
+		//     fresh connection authenticates in init. We can still get
+		//     here if the connection's lifetime is shorter than our
+		//     pessimism (the fresh connection is already "expired");
+		//     issuing the request on the just-authenticated connection
+		//     is correct, and the next request picks up a new one.
+		if cxn.resps.empty() {
+			// Some implementations (AWS) occasionally fail for
+			// unclear reasons (principals change, somehow). If
+			// we receive SASL_AUTHENTICATION_FAILED, we retry
+			// once on a new connection. See #249.
+			cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
+			if err := cxn.sasl(); err != nil {
+				cxn.die()
+				if errors.Is(err, kerr.SaslAuthenticationFailed) && !retriedOnNewConnection {
+					cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
+					retriedOnNewConnection = true
+					goto start
+				}
+				pr.promise(nil, err)
+				return
 			}
-			pr.promise(nil, err)
-			return
+		} else {
+			cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached but responses are in flight, postponing reauthentication", "broker", logID(cxn.b.meta.NodeID))
 		}
 	}
 
@@ -576,12 +606,19 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 		pcxn = &b.cxnSlow
 	}
 
-	// Do not reuse a connection that has been idle for longer than idle timeout.
-	// Kill it instead.
-	if *pcxn != nil && !(*pcxn).dead.Load() && (*pcxn).isIdleTimeout(b.cl.cfg.connIdleTimeout) {
-		// die() in a goroutine to avoid blocking
-		go (*pcxn).die()
-		reuse = false
+	// Do not reuse a connection that has been idle for longer than idle
+	// timeout; kill it instead. Same for an acks=0 produce connection
+	// whose sasl session expired: the discard goroutine owns all reads on
+	// it, so in-place reauthentication (which reads handshake responses)
+	// is impossible -- a fresh connection authenticates in init.
+	if *pcxn != nil && !(*pcxn).dead.Load() {
+		cxn := *pcxn
+		expired := cxn.hasDiscard && !cxn.expiry.IsZero() && time.Now().After(cxn.expiry)
+		if cxn.isIdleTimeout(b.cl.cfg.connIdleTimeout) || expired {
+			// die() in a goroutine to avoid blocking
+			go cxn.die()
+			reuse = false
+		}
 	}
 
 	if reuse && *pcxn != nil && !(*pcxn).dead.Load() {
@@ -777,8 +814,14 @@ type brokerCxn struct {
 	resps ring[promisedResp]
 	// dead is an atomic so that a backed up resps cannot block cxn death.
 	dead atomic.Bool
-	// closed in cloneConn; allows throttle waiting to quit
+	// closed in closeConn; allows throttle waiting to quit
 	deadCh chan struct{}
+	// hasDiscard is set during init (before the connection is shared) if
+	// this is an acks=0 produce connection running the discard goroutine.
+	// The discard goroutine owns all reads on the connection, so sasl
+	// reauthentication can never happen in place; see handleReq and
+	// loadConnection.
+	hasDiscard bool
 }
 
 func (cxn *brokerCxn) init(isProduceCxn bool, tries int) error {
@@ -811,6 +854,7 @@ func (cxn *brokerCxn) init(isProduceCxn bool, tries int) error {
 	}
 
 	if isProduceCxn && cxn.cl.cfg.acks.val == 0 {
+		cxn.hasDiscard = true
 		go cxn.discard() // see docs on discard for why we do this
 	}
 	return nil
