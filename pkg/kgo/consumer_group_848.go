@@ -641,8 +641,17 @@ func (g *g848) mkreq() *kmsg.ConsumerGroupHeartbeatRequest {
 		// the already-resolved topic names from g.tps (which
 		// filterMetadataAllTopics populates with excludes applied).
 		// New topics are picked up on the next metadata refresh.
+		//
+		// Skip internal topics: classic regex consuming never uses them
+		// (findNewAssignments skips isInternal), and the broker honors
+		// explicit name subscriptions to internal topics, so emulating
+		// the regex with names would otherwise consume e.g.
+		// __consumer_offsets whenever the regex matches it.
 		subscribedTopics := make([]string, 0, len(tps))
-		for t := range tps {
+		for t, tp := range tps {
+			if tp.load().isInternal {
+				continue
+			}
 			subscribedTopics = append(subscribedTopics, t)
 		}
 		slices.Sort(subscribedTopics)
