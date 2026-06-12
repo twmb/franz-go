@@ -928,9 +928,19 @@ start:
 			cxn.cl.cfg.logger.Log(LogLevelDebug, "broker does not know our ApiVersions version, downgrading to version 0 and retrying", "broker", logID(cxn.b.meta.NodeID))
 			goto start
 		case len(resp.ApiKeys) == 1 && resp.ApiKeys[0].ApiKey == 18:
-			maxVersion = resp.ApiKeys[0].MaxVersion
-			cxn.cl.cfg.logger.Log(LogLevelDebug, fmt.Sprintf("broker does not know our ApiVersions version but replied version %[1]d, downgrading to version %[1]d and retrying", maxVersion), "broker", logID(cxn.b.meta.NodeID))
-			goto start
+			// KIP-511: the broker replies with the version we should
+			// retry with. Only accept a strictly lower, non-negative
+			// version: a real broker advertises less than what it
+			// just rejected, and accepting anything else would let a
+			// buggy/hostile broker keep us in this downgrade loop
+			// forever (the init path runs on no request context, so
+			// only client close would stop it).
+			if v := resp.ApiKeys[0].MaxVersion; v >= 0 && v < maxVersion {
+				maxVersion = v
+				cxn.cl.cfg.logger.Log(LogLevelDebug, fmt.Sprintf("broker does not know our ApiVersions version but replied version %[1]d, downgrading to version %[1]d and retrying", maxVersion), "broker", logID(cxn.b.meta.NodeID))
+				goto start
+			}
+			return fmt.Errorf("broker replied with UNSUPPORTED_VERSION to our v%d ApiVersions request but advertised non-downgrade version %d", maxVersion, resp.ApiKeys[0].MaxVersion)
 		default:
 			// Should not hit this case, but we hope the broker replied with all keys
 		}
