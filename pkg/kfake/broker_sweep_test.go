@@ -2,6 +2,9 @@ package kfake
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,25 +56,82 @@ func discoverBroker(t *testing.T, cl *kgo.Client) *kgo.Broker {
 	return cl.Broker(int(brokers[0].NodeID))
 }
 
+// reauthOrderHook tracks, per broker node, how many written requests are
+// still awaiting their response, and records a violation if a SASLHandshake
+// is ever written while any response is outstanding: a reauth read would race
+// the connection's response reader byte-by-byte. Writes and reads for one
+// connection are serial on their respective goroutines, so the count is exact
+// for tests that drive a single connection per node.
+type reauthOrderHook struct {
+	mu          sync.Mutex
+	outstanding map[int32]int
+	violations  []string
+}
+
+func newReauthOrderHook() *reauthOrderHook {
+	return &reauthOrderHook{outstanding: make(map[int32]int)}
+}
+
+func (h *reauthOrderHook) OnBrokerWrite(meta kgo.BrokerMetadata, key int16, _ int, _, _ time.Duration, err error) {
+	if err != nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch key {
+	case 17: // SASLHandshake: must only be written on a quiet connection
+		if n := h.outstanding[meta.NodeID]; n > 0 {
+			h.violations = append(h.violations,
+				fmt.Sprintf("sasl handshake written to node %d with %d responses outstanding", meta.NodeID, n))
+		}
+	case 36: // SASLAuthenticate: part of the (re)auth flow, not counted
+	default:
+		h.outstanding[meta.NodeID]++
+	}
+}
+
+func (h *reauthOrderHook) OnBrokerRead(meta kgo.BrokerMetadata, key int16, _ int, _, _ time.Duration, _ error) {
+	if key == 17 || key == 36 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.outstanding[meta.NodeID] > 0 {
+		h.outstanding[meta.NodeID]--
+	}
+}
+
+func (h *reauthOrderHook) OnBrokerDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.outstanding[meta.NodeID] = 0
+}
+
+func (h *reauthOrderHook) takeViolations() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.violations
+}
+
 // A sasl reauthentication (KIP-368) reads the handshake response on the
 // broker's request-handling goroutine. Before the fix, it did so even while a
 // pipelined response was in flight, racing handleResps byte-by-byte on the
 // shared connection: both readers got fragments of each other's responses and
-// every in-flight request failed. The fix postpones reauthentication while
-// responses are pending (the client-side expiry is deliberately pessimistic,
-// so the session is still valid) and reauthenticates on a later request once
-// the pipeline is empty.
+// every in-flight request failed. The fix parks requests for the connection
+// while its pipeline drains (sustained traffic would otherwise never leave
+// the connection quiet), reauthenticates once the last in-flight response is
+// read, and then replays the parked requests in order.
 //
 // Flow: request A is stalled server-side past the session expiry; request B
-// arrives after expiry while A's response is pending (pre-fix: reauth +
-// corruption; post-fix: postponed); request C arrives after both drained and
-// performs the clean reauth.
-//
-// The byte-level corruption depends on kernel reader-wakeup ordering and only
-// sometimes fires, so the deterministic pre-fix signal is the handshake count
-// itself: pre-fix, B unconditionally writes a reauth handshake while A is in
-// flight, so the broker sees a handshake before C is ever issued; post-fix,
-// no handshake may exist between the warm request and C.
+// arrives after expiry while A's response is in flight. Pre-fix, B's handleReq
+// writes the reauth handshake immediately - while A is outstanding - which the
+// reauthOrderHook flags deterministically (the byte-level corruption itself
+// depends on kernel reader-wakeup ordering and only sometimes fires). With
+// the fix, B parks, the reauth runs only after A's response drains, and B is
+// replayed after it: by the time B completes, exactly one reauth handshake
+// has happened and no handshake ever overlapped an outstanding response. A
+// postpone-only approach also fails here: B would complete with no reauth
+// having happened at all.
 func TestAuditSaslReauthPipelinedNoCorruption(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t,
@@ -97,7 +157,8 @@ func TestAuditSaslReauthPipelinedNoCorruption(t *testing.T) {
 		return nil, nil, false
 	})
 
-	cl := newPlainClient(t, c, saslPlainOpts(c)...)
+	hook := newReauthOrderHook()
+	cl := newPlainClient(t, c, append(saslPlainOpts(c), kgo.WithHooks(hook))...)
 	br := discoverBroker(t, cl)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -123,7 +184,8 @@ func TestAuditSaslReauthPipelinedNoCorruption(t *testing.T) {
 		errA <- err
 	}()
 
-	// B: crosses the expiry while A's response is pending.
+	// B: crosses the expiry while A's response is pending; it must park,
+	// and the reauth+replay happens once A's response drains.
 	time.Sleep(1200 * time.Millisecond)
 	errB := make(chan error, 1)
 	go func() {
@@ -142,20 +204,21 @@ func TestAuditSaslReauthPipelinedNoCorruption(t *testing.T) {
 		}
 	}
 
-	// The deterministic signal: B crossed the expiry while A's response
-	// was in flight, so reauthenticating there would have raced
-	// handleResps on the shared connection. No handshake may exist yet.
-	if got := handshakes.Load(); got != base {
-		t.Errorf("a reauthentication handshake was issued while a response was in flight: handshakes went %d -> %d before any quiet-connection request", base, got)
+	// No reauth handshake may ever overlap an outstanding response: this
+	// catches the original in-place reauth deterministically (B's
+	// handshake was written while A was in flight, whether or not the
+	// kernel interleaved the response bytes).
+	for _, v := range hook.takeViolations() {
+		t.Errorf("read-ownership violation: %s", v)
 	}
 
-	// C: the connection is quiet now (A and B fully drained), so this
-	// request performs the postponed reauthentication in place.
-	if _, err := br.Request(ctx, kmsg.NewPtrMetadataRequest()); err != nil {
-		t.Errorf("request after pipeline drain failed: %v", err)
-	}
+	// B completing means the parked request was replayed, which happens
+	// only after the drain-triggered reauthentication: exactly one reauth
+	// handshake must exist by now. A postpone-only behavior fails here
+	// with zero reauths (B would have been issued on the old session and
+	// nothing afterward reauthenticated).
 	if got := handshakes.Load(); got != base+1 {
-		t.Errorf("expected the postponed reauthentication on the first quiet-connection request: handshakes went %d -> %d", base, got)
+		t.Errorf("expected exactly one reauthentication handshake once the parked request completed: handshakes went %d -> %d", base, got)
 	}
 }
 
