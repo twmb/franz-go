@@ -96,6 +96,7 @@ func (cl *Client) BufferedProduceBytes() int64 {
 
 // EnsureProduceConnectionIsOpen attempts to open a produce connection to all
 // specified brokers, or all brokers if `brokers` is empty or contains -1.
+// Broker IDs less than -1 are ignored.
 //
 // This can be used in an attempt to reduce the latency when producing if your
 // application produces infrequently: you can force open a produce connection a
@@ -136,7 +137,7 @@ func (cl *Client) EnsureProduceConnectionIsOpen(ctx context.Context, brokers ...
 		}
 		cl.brokersMu.RUnlock()
 	} else {
-		for _, b := range brokers {
+		for _, b := range keep {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
