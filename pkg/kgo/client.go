@@ -371,7 +371,7 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.recordTimeout}
 	case namefn(TransactionalID):
 		if cfg.txnID != nil {
-			return []any{cfg.txnID, true}
+			return []any{*cfg.txnID, true}
 		}
 		return []any{"", false}
 	case namefn(TransactionTimeout):
@@ -461,6 +461,14 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{true}
 	case namefn(SessionTimeout):
 		return []any{cfg.sessionTimeout}
+	case namefn(ShareGroup):
+		return []any{cfg.shareGroup}
+	case namefn(ShareAckCallback):
+		return []any{cfg.shareAckCallback}
+	case namefn(ShareMaxRecords):
+		return []any{cfg.shareMaxRecords}
+	case namefn(ShareMaxRecordsStrict):
+		return []any{cfg.shareMaxRecordsStrict}
 
 	default:
 		return nil
