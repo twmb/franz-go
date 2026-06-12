@@ -29,6 +29,8 @@ func (cl *Client) pushMetrics() {
 	select {
 	case <-cl.ctx.Done():
 		return
+	case <-m.quitting:
+		return
 	case <-m.firstObserve:
 	}
 
@@ -58,6 +60,9 @@ func (cl *Client) pushMetrics() {
 			case <-cl.ctx.Done():
 				after.Stop()
 				return
+			case <-m.quitting:
+				after.Stop()
+				return
 			case <-after.C:
 			}
 			continue
@@ -74,6 +79,10 @@ func (cl *Client) pushMetrics() {
 			select {
 			case <-cl.ctx.Done():
 				terminating = true
+				after.Stop()
+			case <-m.quitting:
+				terminating = true
+				after.Stop()
 			case <-after.C:
 			}
 			continue
@@ -120,12 +129,24 @@ func (cl *Client) pushMetrics() {
 			}
 
 			// Wait until our push interval; if the client is quitting,
-			// we immediately send a push with Terminating=true.
+			// we immediately send a push with Terminating=true. The
+			// quitting signal fires during Close BEFORE the client
+			// context is canceled - once cl.ctx is dead, the request
+			// path aborts everything and the push could not be
+			// delivered. This assigns the outer terminating so that
+			// after the terminating push is handled, both loops exit
+			// and our deferred ctxCancel releases Close's bounded
+			// wait; a shadowing variable here would re-enter the loop
+			// and send a second terminating push (which brokers
+			// reject).
 			after := time.NewTimer(wait)
-			var terminating bool
 			select {
 			case <-cl.ctx.Done():
 				terminating = true
+				after.Stop()
+			case <-m.quitting:
+				terminating = true
+				after.Stop()
 			case <-after.C:
 			}
 
@@ -331,6 +352,12 @@ type (
 
 		firstObserve chan struct{}
 
+		// quitting is closed by Close before the client context is
+		// canceled, asking pushMetrics to send its final terminating
+		// push while requests can still complete.
+		quitting       chan struct{}
+		closedQuitting atomic.Bool
+
 		ctx       context.Context
 		ctxCancel func()
 	}
@@ -340,7 +367,16 @@ func (m *metrics) init(cl *Client) {
 	m.cl = cl
 	m.initNano = time.Now().UnixNano()
 	m.firstObserve = make(chan struct{})
+	m.quitting = make(chan struct{})
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background()) // for graceful shutdown
+}
+
+// quit asks pushMetrics to send its final terminating push and exit; it is
+// safe to call multiple times (Close can run more than once).
+func (m *metrics) quit() {
+	if !m.closedQuitting.Swap(true) {
+		close(m.quitting)
+	}
 }
 
 func safeDiv[T ~int64 | ~float64](num, denom T) T {

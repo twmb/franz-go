@@ -1305,22 +1305,27 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 	wg.Wait()
 	sessCloseCancel()
 
+	// Tell the metrics loop to send its final Terminating=true push and
+	// give it 1s to do so. This must happen BEFORE we cancel the client
+	// context: the entire request path (shardedRequest's cancel watchdog,
+	// Broker.request's select, and the broker connection write/read
+	// loops) aborts requests once cl.ctx is dead, so a terminating push
+	// started after cancelation could never be delivered. The metrics
+	// loop cancels metrics.ctx when it exits; clients with metrics
+	// disabled, unsupported, or never observed pass through instantly.
+	cl.metrics.quit()
+	after := time.NewTimer(time.Second)
+	select {
+	case <-cl.metrics.ctx.Done():
+		after.Stop()
+	case <-after.C:
+		cl.metrics.ctxCancel()
+	}
+
 	// Now we kill the client context and all brokers, ensuring all
 	// requests fail. This will finish all producer callbacks and
 	// stop the metadata loop and metrics loop.
 	cl.ctxCancel()
-
-	// Before killing brokers, give metrics 1s to push any final
-	// terminating message. The client context cancelation awakens
-	// the push-period-wait loop.
-	after := time.NewTimer(time.Second)
-	select {
-	case <-cl.metrics.ctx.Done():
-	case <-after.C:
-		cl.metrics.ctxCancel()
-	case <-ctx.Done():
-		cl.metrics.ctxCancel()
-	}
 
 	cl.brokersMu.Lock()
 	cl.stopBrokers = true
