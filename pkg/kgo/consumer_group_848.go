@@ -91,19 +91,28 @@ outer:
 
 		// Even if Kafka replies that the API is available, if we use it
 		// and the broker is not configured to support it, we receive
-		// UnsupportedVersion. On the first loop
+		// UnsupportedVersion. Until a join attempt settles the question
+		// (any other kerr, or success, means the API is really served),
+		// an UnsupportedVersion error falls back to classic group
+		// management.
 		if !known848Support {
 			if err != nil {
 				var ke *kerr.Error
 				if errors.As(err, &ke) {
 					if ke.Code == kerr.UnsupportedVersion.Code {
 						// It's okay to update is848 here. This is used while leaving
-						// and while heartbeating. We have not yet entered heartbeating,
-						// and if the user is concurrently leaving, the lack of a memberID
-						// means both 848 and old group mgmt leaves return early.
+						// and while heartbeating. We have not yet entered heartbeating.
 						g.mu.Lock()
 						g.is848 = false
 						g.mu.Unlock()
+						// We pre-stored a self-generated member id (v1 semantics)
+						// that the server never admitted - the join just failed.
+						// Clear it so a concurrent leave returns early (there is
+						// no member to remove; both the 848 and classic leave
+						// paths check for an empty member id) and so the classic
+						// join below starts with an empty member id rather than
+						// burning an UNKNOWN_MEMBER_ID round trip on our UUID.
+						g.memberGen.store("", -1)
 						g.cfg.logger.Log(LogLevelInfo, "falling back to standard consumer group management due to lack of broker support", "group", g.cfg.group)
 						fallbackToClassic = true
 						go g.manage()

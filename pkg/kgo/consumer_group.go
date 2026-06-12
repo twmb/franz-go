@@ -237,6 +237,12 @@ func (cl *Client) LeaveGroup() {
 // group. If you have configured the group with an InstanceID, this
 // does not leave the group.
 //
+// For next-gen (KIP-848) consumer groups, the leave is a final
+// heartbeat with MemberEpoch -1; with an InstanceID configured the
+// epoch is -2 instead, a temporary "static" departure where the
+// member's partitions stay reserved until the session timeout or
+// until a replacement with the same InstanceID rejoins.
+//
 // For share groups: this drains any pending acks, releases records that
 // were acquired but never finalized, closes each per-broker share
 // session, and sends the final ShareGroupHeartbeat with MemberEpoch=-1
