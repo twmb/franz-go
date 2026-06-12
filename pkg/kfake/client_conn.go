@@ -22,6 +22,14 @@ type (
 		saslStage saslStage
 		s0        *scramServer0
 		user      string // authenticated user, set after SASL completes
+
+		// hasSessionExpiry is set at authenticate time when
+		// connections.max.reauth.ms is positive. Re-authentication is
+		// gated on the connection's stored session expiration, not the
+		// live config (KafkaChannel.maybeBeginServerReauthentication
+		// checks the authenticator's session expiration time), so a
+		// config change affects only sessions established after it.
+		hasSessionExpiry bool
 	}
 
 	clientReq struct {
