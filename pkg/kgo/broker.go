@@ -1789,6 +1789,21 @@ start:
 // original order -- order matters for idempotent produce, whose sequence
 // numbers were assigned at request build.
 func (b *broker) handleReauthDrain(cxn *brokerCxn) {
+	// A sentinel can be spurious: the quiet-connection reauth arm stores
+	// the pending flag and clears it just after, and a concurrently
+	// exiting handleResps can observe the transient true. That alone is
+	// a harmless no-op below -- but if the broker also hands out
+	// immediately-expiring lifetimes, a request queued behind this
+	// sentinel's push may have re-parked by now with a NEW response in
+	// flight (the inline arm's own request), so "drained" no longer
+	// holds. If anything is in flight, touch nothing: that response's
+	// handleResps exit re-signals (the parker stored the pending flag
+	// before observing the non-empty ring, so the exit cannot miss it)
+	// and the re-signal finds the connection actually quiet.
+	if !cxn.resps.empty() {
+		return
+	}
+
 	// Take the parked requests before a possible die below: a failed
 	// reauth must not fail them, it replays them through the normal path,
 	// which builds a fresh connection with a fresh authentication -- the
