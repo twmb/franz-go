@@ -727,11 +727,6 @@ func (p *producer) finishPromises(b batchPromise) {
 	cl := p.cl
 	var more bool
 	var broadcast bool
-	defer func() {
-		if broadcast {
-			p.c.Broadcast()
-		}
-	}()
 start:
 	for i, pr := range b.recs {
 		pr.LeaderEpoch = -1
@@ -751,6 +746,18 @@ start:
 	clear(b.recs) // drop references so the pooled slice does not retain them
 	if cap(b.recs) > 4 {
 		cl.prsPool.put(b.recs)
+	}
+
+	// We broadcast per batch, not per record (waking blocked producers on
+	// every record forces tiny one-record batches; see ead18d3c) - but
+	// also not once per ring drain: while pre-buffer failure promises keep
+	// arriving from other goroutines, this loop never observes an empty
+	// ring and never exits, and a deferred-to-exit broadcast would starve
+	// a Flush whose condition (bufferedRecords == 0) became true mid-drain
+	// and blocked Produce calls whose space opened.
+	if broadcast {
+		p.c.Broadcast()
+		broadcast = false
 	}
 
 	b, more, _ = p.batchPromises.dropPeek()

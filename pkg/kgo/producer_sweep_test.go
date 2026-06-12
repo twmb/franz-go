@@ -121,3 +121,95 @@ func TestAuditTryProduceFromPromiseNoDeadlock(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// finishPromises accumulated its cond broadcast and fired it only when the
+// worker exited, i.e. when the ring was observed empty - but ead18d3c's
+// stated batching granularity was "one broadcast at the end of a batch". As
+// long as new promise elements kept arriving, a Flush whose condition had
+// long become true (bufferedRecords hit 0) was never woken, and blocked
+// Produce calls starved the same way.
+//
+// The chain below makes the starvation causal rather than timing-dependent:
+// each chain promise pushes the next element from within the worker, so the
+// worker never observes an empty ring and never exits while the chain runs,
+// and the chain only stops once Flush returns (or at a generous cap).
+// Pre-fix, Flush cannot return before the chain ends (no broadcast is ever
+// fired mid-drain and nothing else broadcasts), so the chain provably hits
+// its cap. Post-fix, the broadcast after the first (counted) element wakes
+// Flush within a few chain links.
+func TestAuditFlushNotStarvedByPromiseChain(t *testing.T) {
+	t.Parallel()
+
+	cl, err := NewClient(SeedBrokers("127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx := context.Background()
+	p := &cl.producer
+
+	// One manually-accounted buffered record; Flush waits on it. The
+	// record carries no key/value so bufferedBytes stays balanced.
+	p.mu.Lock()
+	p.bufferedRecords = 1
+	p.mu.Unlock()
+
+	flushDone := make(chan struct{})
+	go func() {
+		defer close(flushDone)
+		cl.Flush(ctx)
+	}()
+	// Flush bumps flushing before it waits; the cond protocol makes the
+	// wake-up safe regardless, but we want the broadcast condition
+	// (flushing > 0) to be set before the counted record finishes.
+	deadline := time.Now().Add(10 * time.Second)
+	for p.flushing.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("flush never started")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	const chainCap = 20000
+	var (
+		chainLinks int
+		capHit     bool
+		chainDone  = make(chan struct{})
+		chain      func(*Record, error)
+	)
+	chain = func(*Record, error) {
+		select {
+		case <-flushDone:
+			close(chainDone) // flush returned while the chain was alive: success
+			return
+		default:
+		}
+		chainLinks++
+		if chainLinks >= chainCap {
+			capHit = true
+			close(chainDone)
+			return
+		}
+		cl.TryProduce(ctx, &Record{}, chain) // no topic: fails pre-buffer, pushes the next link
+	}
+
+	// The counted record: its finish drops bufferedRecords to 0 (making
+	// Flush's condition true) and its promise seeds the chain, so the
+	// ring is already non-empty when the worker finishes this element.
+	p.promiseBatch(batchPromise{
+		recs: []promisedRec{{ctx, func(*Record, error) {
+			cl.TryProduce(ctx, &Record{}, chain)
+		}, &Record{}}},
+	})
+
+	select {
+	case <-chainDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("promise chain neither observed flush completion nor hit its cap")
+	}
+	if capHit {
+		t.Fatalf("flush starved: %d promise elements drained without a broadcast while flush's condition was satisfied", chainLinks)
+	}
+	<-flushDone
+}
