@@ -153,10 +153,17 @@ type groupConsumer struct {
 	// done, and then starts its own.
 	commitDone chan struct{}
 
-	// blockAuto is set and cleared in CommitOffsets{,Sync} to block
-	// autocommitting if autocommitting is active. This ensures that an
-	// autocommit does not cancel the user's manual commit.
-	blockAuto bool
+	// blockAuto counts outstanding CommitOffsets{,Sync} commits and
+	// blocks autocommitting while any are in flight. This ensures that
+	// an autocommit does not trample a user's manual commit: the
+	// autocommit snapshot is taken when the commit is enqueued, but the
+	// request is issued only after all prior commits complete, so a
+	// snapshot taken while a higher manual commit is in flight would be
+	// committed after it and rewind the broker's offset. This must be a
+	// count, not a bool: with two overlapping async commits, the first
+	// completion would otherwise re-enable autocommit while the second
+	// is still in flight, reopening exactly that window.
+	blockAuto int
 
 	// We set this once to manage the group lifecycle once.
 	// If we detect we should run in 848 mode, we set is848 true.
@@ -2593,7 +2600,7 @@ func (g *groupConsumer) loopCommit() {
 		// offsets.
 		g.noCommitDuringJoinAndSync.RLock()
 		g.mu.Lock()
-		if !g.blockAuto {
+		if g.blockAuto == 0 {
 			uncommitted := g.getUncommittedLocked(true, false)
 			if len(uncommitted) == 0 {
 				g.cfg.logger.Log(LogLevelDebug, "skipping autocommit due to no offsets to commit", "group", g.cfg.group)
@@ -3101,12 +3108,12 @@ func (g *groupConsumer) commitOffsetsSync(
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.blockAuto = true
+	g.blockAuto++
 	unblockAuto := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		unblockCommits(cl, req, resp, err)
 		g.mu.Lock()
 		defer g.mu.Unlock()
-		g.blockAuto = false
+		g.blockAuto--
 	}
 
 	g.commit(ctx, uncommitted, unblockAuto)
@@ -3184,12 +3191,12 @@ func (cl *Client) CommitOffsets(
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.blockAuto = true
+	g.blockAuto++
 	unblockAuto := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		unblockJoinSync(cl, req, resp, err)
 		g.mu.Lock()
 		defer g.mu.Unlock()
-		g.blockAuto = false
+		g.blockAuto--
 	}
 
 	g.commit(ctx, uncommitted, unblockAuto)
