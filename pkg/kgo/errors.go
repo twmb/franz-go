@@ -99,11 +99,6 @@ func isRetryableBrokerErr(err error) bool {
 	if errors.Is(err, errChosenBrokerDead) {
 		return true
 	}
-	// A broker kept giving us short sasl lifetimes, so we killed the
-	// connection ourselves. We can retry on a new connection.
-	if errors.Is(err, errSaslReauthLoop) {
-		return true
-	}
 	// We really should not get correlation mismatch, but if we do, we can
 	// retry.
 	if errors.Is(err, errCorrelationIDMismatch) {
@@ -198,11 +193,6 @@ var (
 	// either from a metadata update or from the connection closing
 	// while a request was in-flight.
 	errChosenBrokerDead = errors.New("the broker connection has died and the request will be retried on a new connection")
-
-	// If a broker repeatedly gives us tiny sasl lifetimes, we fail a
-	// request after a few tries to forcefully kill the connection and
-	// restart a new connection ourselves.
-	errSaslReauthLoop = errors.New("the broker is repeatedly giving us sasl lifetimes that are too short to write a request")
 
 	// A temporary error returned when Kafka replies with a different
 	// correlation ID than we were expecting for the request the client

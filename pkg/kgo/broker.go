@@ -137,10 +137,12 @@ type broker struct {
 	addr string // net.JoinHostPort(meta.Host, meta.Port)
 	meta BrokerMetadata
 
-	// versions tracks the first load of an ApiVersions. We store this
-	// after the first connect, which helps speed things up on future
-	// reconnects (across any of the three broker connections) because we
-	// will never look up API versions for this broker again.
+	// versions tracks the broker's last loaded ApiVersions. Every new
+	// connection re-issues ApiVersions and re-stores the result (see
+	// brokerCxn.init), but the stored value serves request version
+	// resolution across all five broker connections and client-level
+	// capability checks (supportsKeyVersion, supportsFeature) without
+	// opening a connection.
 	versions atomic.Value // *brokerVersions
 
 	// The cxn fields each manage a single tcp connection to one broker.
@@ -1483,9 +1485,11 @@ func (cxn *brokerCxn) readResponse(
 	return buf[4:], nil
 }
 
-// closeConn is the one place we close broker connections. This is always done
-// in either die, which is called when handleResps returns, or if init fails,
-// which means we did not succeed enough to start handleResps.
+// closeConn is the one place we close broker connections. It is reached via
+// die (callable from anywhere once the connection is live: read/write errors,
+// reaping, broker stoppage) or directly when the connection was never shared:
+// init failure, the ApiVersions-reset retry, and loadConnection's dead-broker
+// arm.
 func (cxn *brokerCxn) closeConn() {
 	cxn.cl.cfg.hooks.each(func(h Hook) {
 		if h, ok := h.(HookBrokerDisconnect); ok {
@@ -1628,7 +1632,7 @@ func (cxn *brokerCxn) discard() {
 				}
 				nread2, err = cxn.conn.Read(discard)
 				nread += nread2
-				size -= int32(nread2) // nread2 max is 128
+				size -= int32(nread2) // nread2 max is len(discardBuf), 256
 			}
 		}()
 
