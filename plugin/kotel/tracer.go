@@ -136,7 +136,7 @@ func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 		semconv.MessagingSourceName(r.Topic),
 		semconv.MessagingOperationProcess,
 		semconv.MessagingKafkaSourcePartition(int(r.Partition)),
-		semconv.MessagingKafkaMessageOffset(int(r.Offset)),
+		semconv.MessagingKafkaMessageOffsetKey.Int64(r.Offset),
 	}
 	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
@@ -213,6 +213,7 @@ func (t *Tracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 	defer span.End()
 	span.SetAttributes(
 		semconv.MessagingKafkaDestinationPartition(int(r.Partition)),
+		semconv.MessagingKafkaMessageOffsetKey.Int64(r.Offset),
 	)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
@@ -235,6 +236,7 @@ func (t *Tracer) OnFetchRecordBuffered(r *kgo.Record) {
 		semconv.MessagingSourceName(r.Topic),
 		semconv.MessagingOperationReceive,
 		semconv.MessagingKafkaSourcePartition(int(r.Partition)),
+		semconv.MessagingKafkaMessageOffsetKey.Int64(r.Offset),
 	}
 	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
