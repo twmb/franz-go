@@ -1869,20 +1869,23 @@ func findBroker(candidates []*broker, node int32) *broker {
 // that error.
 func (cl *Client) brokerOrErr(ctx context.Context, id int32, err error) (*broker, error) {
 	if id < 0 {
+		// Negative IDs are seed brokers (unknownSeedID), exposed to
+		// users via SeedBrokers(). Any other negative ID (-1 unknown
+		// controller / coordinator sentinels) never exists, and
+		// metadata responses cannot introduce negative IDs, so we
+		// look up seeds directly and never try a metadata load.
+		if b := findBroker(cl.loadSeeds(), id); b != nil {
+			return b, nil
+		}
 		return nil, err
 	}
 
 	tryLoad := ctx != nil
 	tries := 0
 start:
-	var broker *broker
-	if id < 0 {
-		broker = findBroker(cl.loadSeeds(), id)
-	} else {
-		cl.brokersMu.RLock()
-		broker = findBroker(cl.brokers, id)
-		cl.brokersMu.RUnlock()
-	}
+	cl.brokersMu.RLock()
+	broker := findBroker(cl.brokers, id)
+	cl.brokersMu.RUnlock()
 
 	if broker == nil {
 		if tryLoad {
