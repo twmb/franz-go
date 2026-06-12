@@ -1112,6 +1112,16 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 	}
 
 	if lifetimeMillis > 0 {
+		// A hostile/buggy broker can reply with a lifetime so large
+		// that converting it to a time.Duration overflows, wrapping
+		// the expiry into the past and forcing a reauth before every
+		// request. Anything beyond a year never matters for a real
+		// connection; clamp.
+		const maxLifetimeMillis = 365 * 24 * int64(time.Hour/time.Millisecond)
+		if lifetimeMillis > maxLifetimeMillis {
+			lifetimeMillis = maxLifetimeMillis
+		}
+
 		// Lifetime is problematic. We need to be a bit pessimistic.
 		//
 		// We want a lowerbound: we use 1s (arbitrary), but if 1.1x our
@@ -1150,6 +1160,14 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			"lifetime_pessimism", time.Duration(usePessimismMillis)*time.Millisecond,
 			"reauthenticate_in", cxn.expiry.Sub(now),
 		)
+	} else {
+		// No (or zero) lifetime means the broker does not require
+		// reauthentication, KIP-368. If a previous authenticate on
+		// this connection set an expiry (reauth was enabled then, e.g.
+		// before a dynamic broker config change), clear it: keeping
+		// the old, already-passed expiry would re-run the full sasl
+		// flow before every subsequent request on this connection.
+		cxn.expiry = time.Time{}
 	}
 	return nil
 }
