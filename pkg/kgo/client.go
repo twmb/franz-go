@@ -3133,6 +3133,12 @@ func (cl *Client) storeCachedMeta(meta *kmsg.MetadataResponse, all bool, results
 			ps:   make(map[int32]kmsg.MetadataResponseTopicPartition),
 			when: when,
 		}
+		// A recreated topic comes back under a new ID. Delete the old
+		// ID's mapping when overwriting the entry, else byID accumulates
+		// stale IDs forever and resolves IDs that no longer exist.
+		if old, ok := cl.metaCache.topics[topicName]; ok && old.id != topic.TopicID && old.id != zeroID {
+			delete(cl.metaCache.byID, old.id)
+		}
 		cl.metaCache.topics[topicName] = t
 		for _, partition := range topic.Partitions {
 			t.ps[partition.Partition] = partition
