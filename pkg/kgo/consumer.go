@@ -410,7 +410,7 @@ func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err er
 }
 
 // NewErrFetch returns a fake fetch containing a single empty topic with a
-// single zero partition with the given error.
+// single partition of -1 with the given error.
 func NewErrFetch(err error) Fetches {
 	return []Fetch{{
 		Topics: []FetchTopic{{
@@ -429,7 +429,7 @@ func NewErrFetch(err error) Fetches {
 // equivalent to calling PollRecords(ctx, 0).
 //
 // If the client is closed, a fake fetch will be injected that has no topic, a
-// partition of 0, and a partition error of ErrClientClosed. If the context is
+// partition of -1, and a partition error of ErrClientClosed. If the context is
 // canceled, a fake fetch will be injected with ctx.Err. These injected errors
 // can be used to break out of a poll loop.
 //
@@ -1054,10 +1054,9 @@ func (f fmtAssignment) String() string {
 // assignPartitions, called under the consumer's mu, is used to set new cursors
 // or add to the existing cursors.
 //
-// We do not need to pass tps when we are bumping the session or when we are
-// invalidating all. All other cases, we want the tps -- the logic below does
-// not fully differentiate needing to start a new session vs. just reusing the
-// old (third if case below)
+// We do not need to pass tps when we are invalidating all. All other cases,
+// we want the tps: guarding the session may create a new session needing it,
+// and stopping the session needs it for the restart.
 func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow, tps *topicsPartitions, why string) {
 	if c.mu.TryLock() {
 		c.mu.Unlock()
@@ -2479,10 +2478,14 @@ func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load
 		return
 	}
 
-	// If the version is < 2, we are speaking to an old broker. We should
-	// not have an old version, but we could have spoken to a new broker
-	// first then an old broker in the middle of a broker roll. For now, we
-	// will just loop retrying until the broker is upgraded.
+	// If the negotiated version is < 2, we are speaking to an old broker:
+	// possible mid-roll when metadata (with leader epochs) came from an
+	// upgraded broker while the partition leader is not yet upgraded. The
+	// request then goes out without CurrentLeaderEpoch fencing, and a v0
+	// response carries no LeaderEpoch (kmsg defaults it to -1). Validation
+	// still compares EndOffset and completes, just unfenced and without
+	// epoch information - a degraded but correct fallback for a window
+	// that only exists rolling from pre-KIP-320 brokers.
 
 	topics := tps.load()
 	resp := kresp.(*kmsg.OffsetForLeaderEpochResponse)
