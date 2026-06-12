@@ -1297,8 +1297,33 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 // If neither of the cases above are true (this member is not a leader, and the
 // join group metadata has not changed), then Kafka will not actually trigger a
 // rebalance and will instead reply to the member with its current assignment.
+//
+// For next-gen (KIP-848) consumer groups, assignment is entirely server
+// driven and there is no client-side join to redo: this instead forces an
+// immediate full heartbeat (best effort), which re-syncs the subscription
+// and assignment with the broker.
 func (cl *Client) ForceRebalance() {
 	if g := cl.consumer.g; g != nil {
+		g.mu.Lock()
+		is848 := g.is848
+		g.mu.Unlock()
+		if is848 {
+			// Feeding rejoinCh (the classic path) would only bounce the
+			// heartbeat session: the server reconciles through
+			// heartbeats, so the rebuilt session re-enters with an
+			// empty diff - and the bounce runs the session-end revoke
+			// concurrently with live heartbeats, the one interleaving
+			// where a completing heartbeat's nowAssigned store can be
+			// lost to revoke's read-modify-write. With this redirect,
+			// nothing feeds rejoinCh in 848 mode and every remaining
+			// session-end path stops heartbeating (or has a dead
+			// context) before revoke runs.
+			select {
+			case g.heartbeatForceCh <- func(error) {}:
+			default:
+			}
+			return
+		}
 		g.rejoin("from ForceRebalance")
 	}
 }
