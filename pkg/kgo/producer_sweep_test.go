@@ -20,22 +20,26 @@ func batchPromisesLen(cl *Client) int {
 	return r.l
 }
 
-// The batchPromises ring gained maxLen backpressure (#1194): push parks when
-// the ring is full. The promise worker is the ring's only drainer (dropPeek
-// is the only Signal site), so any push made FROM the worker goroutine parks
-// forever once the ring is full. The documented way to produce from inside a
-// promise is TryProduce - and a TryProduce whose record fails before
-// buffering (no topic, not in txn, over limits) pushes its failure promise
-// right back onto the ring from the worker goroutine. Pre-fix this wedged
-// the whole producer: every promise, Flush, and blocked Produce.
+// The batchPromises ring's maxLen backpressure (#1194) exists because
+// records can fail faster than promises drain: every accepted record costs
+// memory until its promise runs, and the promise is the only completion
+// channel, so produce-entry failure pushes - blocking Produce and TryProduce
+// alike - must park at the bound rather than grow the ring without bound.
+// This test pins all three properties of the design:
 //
-// The same blocking push was also reachable while holding client locks
-// (purgeTopics and failBufferedRecords under topicsMu+unknownTopicsMu,
-// storePartitionsUpdate under unknownTopicsMu, recBuf failure paths under
-// recBuf.mu); the worker re-enters those locks through user promises, so a
-// parked lock-holder deadlocks the same way. The internal promiseBatch entry
-// must therefore never park either, which the probe below exercises.
-func TestAuditTryProduceFromPromiseNoDeadlock(t *testing.T) {
+//  1. The bound holds: a TryProduce failure spin-loop plateaus the ring at
+//     exactly maxLen (the spinner parks); it must not push past it.
+//  2. Internal pushes never park: purgeTopics/failBufferedRecords push under
+//     topicsMu+unknownTopicsMu, storePartitionsUpdate under unknownTopicsMu,
+//     and recBuf failure paths under recBuf.mu. The promise worker is the
+//     ring's only drainer and re-enters those locks through user promises,
+//     so a parked lock-holder deadlocks the client. Internal pushes are
+//     bounded by the max-buffered admission instead, so forcing them does
+//     not unbound the ring.
+//  3. The documented produce-from-promise pattern (spawn a goroutine, as
+//     AbortingFirstErrPromise does) converges even at the bound: the
+//     goroutine's push parks while the worker - NOT parked itself - drains.
+func TestAuditFullPromiseRingBoundAndConvergence(t *testing.T) {
 	t.Parallel()
 
 	cl, err := NewClient(
@@ -52,24 +56,22 @@ func TestAuditTryProduceFromPromiseNoDeadlock(t *testing.T) {
 
 	// Element 1: parks the promise worker on a gate. The element stays in
 	// the ring until the worker finishes it, so the ring never empties
-	// and no second worker can spawn.
+	// and no second worker can spawn. Its promise produces via the
+	// documented goroutine pattern.
 	gate := make(chan struct{})
-	reentered := make(chan struct{})
+	viaGoroutine := make(chan struct{})
 	cl.TryProduce(ctx, &Record{}, func(*Record, error) {
 		<-gate
-		// The documented in-promise produce pattern; the record has no
-		// topic so it fails pre-buffer and pushes onto the ring from
-		// the worker goroutine.
-		cl.TryProduce(ctx, &Record{}, func(*Record, error) { close(reentered) })
+		go cl.TryProduce(ctx, &Record{}, func(*Record, error) { close(viaGoroutine) })
 	})
 
-	// Fill the ring to maxLen. Pre-fix, TryProduce itself parks at the
-	// limit (violating its fail-fast contract), so fill from a goroutine
-	// and wait for the ring to report full.
+	// A failure spin-loop: pushes one promise element per record. With the
+	// worker gated, the ring fills to maxLen and the spinner parks.
+	const extra = 64
 	fillerDone := make(chan struct{})
 	go func() {
 		defer close(fillerDone)
-		for i := 0; i < maxLen+64; i++ {
+		for i := 0; i < maxLen+extra; i++ {
 			cl.TryProduce(ctx, &Record{}, nil)
 		}
 	}()
@@ -80,9 +82,16 @@ func TestAuditTryProduceFromPromiseNoDeadlock(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+	// Give the spinner time to (wrongly) push past the bound, then assert
+	// the plateau: this is the #1194 OOM protection.
+	time.Sleep(50 * time.Millisecond)
+	if n := batchPromisesLen(cl); n > maxLen {
+		t.Fatalf("ring grew to %d past maxLen %d: TryProduce failure pushes are not bounded and a failure spin-loop OOMs the client", n, maxLen)
+	}
 
 	// Probe the internal promiseBatch entry (what purge/fail paths and
-	// storePartitionsUpdate use, under client locks): it must not park.
+	// storePartitionsUpdate use, under client locks): it must not park
+	// even at the bound.
 	internalDone := make(chan struct{})
 	go func() {
 		defer close(internalDone)
@@ -98,22 +107,20 @@ func TestAuditTryProduceFromPromiseNoDeadlock(t *testing.T) {
 		t.Fatal("internal promiseBatch parked on a full ring; lock-holding pushers would deadlock against the promise worker")
 	}
 
-	// Release the worker; its in-promise TryProduce must complete.
+	// Release the worker: the goroutine'd in-promise produce, the parked
+	// spinner, and the ring itself must all converge.
 	close(gate)
 	select {
-	case <-reentered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("promise worker deadlocked pushing its own TryProduce failure onto the full ring")
+	case <-viaGoroutine:
+	case <-time.After(15 * time.Second):
+		t.Fatal("goroutine'd produce-from-promise never completed after the worker resumed")
 	}
-
-	// Post-fix the filler never parks; wait for it and for the ring to
-	// drain so Close is clean.
 	select {
 	case <-fillerDone:
-	case <-time.After(10 * time.Second):
-		t.Fatal("TryProduce filler parked; TryProduce must not block on the promise ring")
+	case <-time.After(15 * time.Second):
+		t.Fatal("parked TryProduce spinner never resumed as the worker drained")
 	}
-	deadline = time.Now().Add(10 * time.Second)
+	deadline = time.Now().Add(15 * time.Second)
 	for batchPromisesLen(cl) > 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("promise ring never drained")
