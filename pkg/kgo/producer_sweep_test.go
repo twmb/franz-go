@@ -213,3 +213,124 @@ func TestAuditFlushNotStarvedByPromiseChain(t *testing.T) {
 	}
 	<-flushDone
 }
+
+// purgeTopics deleted unknown-topic waiters and stored the cleaned topics
+// map AFTER releasing unknownTopicsMu (the store via a late defer): a
+// produce racing inside that window saw the topic still present in
+// producer.topics, took the exists-path, and re-created an unknownTopics
+// waiter that the purge then orphaned by removing the topic from the map.
+// The metadata request set is built from producer.topics and response
+// handling iterates only requested topics, so nothing could ever notify the
+// orphan: the record's promise never fired, BufferedProduceRecords stayed
+// stuck, and Flush hung forever (no record timeout by default). The heal
+// invariant is the one storePartitionsUpdate already documents: state that
+// gates waiter creation must change while unknownTopicsMu is held.
+//
+// The test freezes the purge inside its window deterministically: the purge
+// fails the purged topics' recBufs via sink.removeRecBuf, which takes
+// sink.recBufsMu - held by the test. Pre-fix the freeze point is after the
+// waiter sweep but before the topics store; post-fix the store happens under
+// unknownTopicsMu before the freeze point, and the produce's re-check makes
+// it re-register the topic properly.
+func TestAuditPurgeVsProduceUnknownTopicNoOrphan(t *testing.T) {
+	t.Parallel()
+
+	cl, err := NewClient(SeedBrokers("127.0.0.1:1")) // metadata never loads; failures only tick retry counters
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx := context.Background()
+	p := &cl.producer
+
+	// Craft a known topic K with one partition on a sink, mirroring what a
+	// metadata load builds: the purge's recBuf removal is our freeze
+	// vehicle.
+	s := cl.newSink(1)
+	r := &recBuf{
+		cl:                  cl,
+		topic:               "K",
+		partition:           0,
+		maxRecordBatchBytes: 1 << 20,
+		recBufsIdx:          -1,
+		lastAckedOffset:     -1,
+		sink:                s,
+	}
+	s.addRecBuf(r)
+	p.topics.storeTopics([]string{"K"})
+	tp := &topicPartition{records: r}
+	p.topics.load()["K"].v.Store(&topicPartitionsData{
+		topic:              "K",
+		partitions:         []*topicPartition{tp},
+		writablePartitions: []*topicPartition{tp},
+	})
+
+	// First produce to U: stores U in producer.topics and registers the
+	// unknown-topic waiter that the purge will sweep.
+	pU1 := make(chan error, 1)
+	cl.Produce(ctx, &Record{Topic: "U", Value: []byte("v")}, func(_ *Record, err error) { pU1 <- err })
+
+	// Freeze point armed: the purge will block removing K's recBuf.
+	s.recBufsMu.Lock()
+	purgeDone := make(chan struct{})
+	go func() {
+		defer close(purgeDone)
+		cl.PurgeTopicsFromClient("K", "U")
+	}()
+
+	// The waiter sweep promises U's first record errPurged; once observed,
+	// the purge is at or before the frozen recBuf removal, strictly before
+	// it finishes.
+	select {
+	case err := <-pU1:
+		if !errors.Is(err, errPurged) {
+			t.Fatalf("first U record failed with %v, want errPurged", err)
+		}
+	case <-time.After(10 * time.Second):
+		s.recBufsMu.Unlock()
+		t.Fatal("purge never swept the unknown-topic waiter")
+	}
+
+	// Produce to U inside the purge window. Pre-fix this lands in the
+	// exists-path (topics map not yet stored) and re-creates the waiter
+	// the purge orphans; post-fix it blocks on topicsMu and re-registers
+	// the topic after the purge.
+	pU2 := make(chan error, 1)
+	produceReturned := make(chan struct{})
+	go func() {
+		defer close(produceReturned)
+		cl.Produce(ctx, &Record{Topic: "U", Value: []byte("v2")}, func(_ *Record, err error) { pU2 <- err })
+	}()
+	time.Sleep(100 * time.Millisecond) // let the produce reach the window (pre-fix) or park on topicsMu (post-fix)
+
+	s.recBufsMu.Unlock()
+	<-purgeDone
+	select {
+	case <-produceReturned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("produce never returned after the purge completed")
+	}
+
+	// The invariant: an unknownTopics waiter must imply its topic is in
+	// producer.topics, else no metadata update will ever request the topic
+	// and the waiter is silently permanent.
+	p.unknownTopicsMu.Lock()
+	_, unknownExists := p.unknownTopics["U"]
+	p.unknownTopicsMu.Unlock()
+	if !unknownExists {
+		t.Fatal("expected an unknown-topic waiter for U (record is buffered awaiting metadata)")
+	}
+	if p.topics.load()["U"] == nil {
+		t.Fatal("unknown-topic waiter for U exists but U is not in producer.topics: the waiter is orphaned and the record hangs forever")
+	}
+
+	// Close must fail the still-buffered record (the waiter resolves via
+	// client shutdown); guard against a promise leak either way.
+	cl.Close()
+	select {
+	case <-pU2:
+	case <-time.After(10 * time.Second):
+		t.Fatal("second U record's promise never fired, even through client close")
+	}
+}

@@ -221,6 +221,20 @@ func (p *producer) purgeTopics(topics []string) {
 	p.topicsMu.Lock()
 	defer p.topicsMu.Unlock()
 
+	// We sweep unknown-topic waiters AND store the cleaned topics map
+	// while unknownTopicsMu is held. The store must not happen after the
+	// mu is released: partitionsForTopicProduce re-checks the topic's
+	// presence in p.topics under this mu before (re)creating an
+	// unknown-topic waiter, so holding the mu across both steps means a
+	// concurrent produce either sees the topic still present - and its
+	// just-added waiter is then swept by us - or sees it gone and
+	// re-registers the topic properly. If we instead released the mu
+	// between the sweep and the store (old behavior), a produce could
+	// land in that window: it saw the topic in p.topics, re-created a
+	// waiter, and we then removed the topic from the map - orphaning the
+	// waiter, which no metadata update would ever notify (the request set
+	// is built from p.topics), silently hanging the record forever. This
+	// mirrors storePartitionsUpdate's store-before-unlock requirement.
 	p.unknownTopicsMu.Lock()
 	for _, topic := range topics {
 		if unknown, exists := p.unknownTopics[topic]; exists {
@@ -232,17 +246,20 @@ func (p *producer) purgeTopics(topics []string) {
 			})
 		}
 	}
-	p.unknownTopicsMu.Unlock()
-
 	toStore := p.topics.clone()
-	defer p.topics.storeData(toStore)
-
+	var purged []*topicPartitionsData
 	for _, topic := range topics {
 		d := toStore.loadTopic(topic)
 		if d == nil {
 			continue
 		}
 		delete(toStore, topic)
+		purged = append(purged, d)
+	}
+	p.topics.storeData(toStore)
+	p.unknownTopicsMu.Unlock()
+
+	for _, d := range purged {
 		for _, p := range d.partitions {
 			r := p.records
 
@@ -1130,47 +1147,68 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 	p := &cl.producer
 	topic := pr.Topic
 
-	topics := p.topics.load()
-	parts, exists := topics[topic]
-	if exists {
+	for {
+		topics := p.topics.load()
+		parts, exists := topics[topic]
+		if exists {
+			if v := parts.load(); len(v.partitions) > 0 {
+				return parts, v
+			}
+		}
+
+		if !exists { // topic did not exist: check again under mu and potentially create it
+			p.topicsMu.Lock()
+			if parts, exists = p.topics.load()[topic]; !exists {
+				// Before we store the new topic, we lock unknown
+				// topics to prevent a concurrent metadata update
+				// seeing our new topic before we are waiting from the
+				// addUnknownTopicRecord fn. Otherwise, we would wait
+				// and never be re-notified.
+				p.unknownTopicsMu.Lock()
+				p.topics.storeTopics([]string{topic})
+				cl.addUnknownTopicRecord(pr)
+				cl.triggerUpdateMetadataNow("forced load because we are producing to a topic for the first time")
+				p.unknownTopicsMu.Unlock()
+				p.topicsMu.Unlock()
+				return nil, nil
+			}
+			p.topicsMu.Unlock()
+		}
+
+		// Here, the topic existed, but maybe has not loaded partitions
+		// yet. We have to lock unknown topics first to ensure ordering
+		// just in case a load has not happened.
+		p.unknownTopicsMu.Lock()
+
+		// Re-resolve the topic now that we hold the mu. Both sides of
+		// the entry's lifecycle change only under unknownTopicsMu:
+		// storePartitionsUpdate stores loaded partitions before
+		// releasing it, and purgeTopics stores the topic's removal
+		// from p.topics before releasing it. Without the re-check we
+		// could add a waiter for a topic a concurrent purge already
+		// swept: the purge then removes the topic from p.topics, no
+		// metadata update ever requests it (the request set is built
+		// from p.topics), and the waiter - and its records - silently
+		// hang forever. Re-resolving from the current map (not the
+		// `parts` pointer loaded above) also covers a purge+recreate
+		// swapping the topicPartitions object in between.
+		parts, exists = p.topics.load()[topic]
+		if !exists {
+			// Purged between our load and the lock; retry from the
+			// top, which re-creates the topic properly.
+			p.unknownTopicsMu.Unlock()
+			continue
+		}
 		if v := parts.load(); len(v.partitions) > 0 {
+			p.unknownTopicsMu.Unlock()
 			return parts, v
 		}
+		cl.addUnknownTopicRecord(pr)
+		cl.triggerUpdateMetadata(false, "reload trigger due to produce topic still not known")
+		p.unknownTopicsMu.Unlock()
+
+		return nil, nil // our record is buffered waiting for metadata update; nothing to return
 	}
-
-	if !exists { // topic did not exist: check again under mu and potentially create it
-		p.topicsMu.Lock()
-		defer p.topicsMu.Unlock()
-
-		if parts, exists = p.topics.load()[topic]; !exists { // update parts for below
-			// Before we store the new topic, we lock unknown
-			// topics to prevent a concurrent metadata update
-			// seeing our new topic before we are waiting from the
-			// addUnknownTopicRecord fn. Otherwise, we would wait
-			// and never be re-notified.
-			p.unknownTopicsMu.Lock()
-			defer p.unknownTopicsMu.Unlock()
-
-			p.topics.storeTopics([]string{topic})
-			cl.addUnknownTopicRecord(pr)
-			cl.triggerUpdateMetadataNow("forced load because we are producing to a topic for the first time")
-			return nil, nil
-		}
-	}
-
-	// Here, the topic existed, but maybe has not loaded partitions yet. We
-	// have to lock unknown topics first to ensure ordering just in case a
-	// load has not happened.
-	p.unknownTopicsMu.Lock()
-	defer p.unknownTopicsMu.Unlock()
-
-	if v := parts.load(); len(v.partitions) > 0 {
-		return parts, v
-	}
-	cl.addUnknownTopicRecord(pr)
-	cl.triggerUpdateMetadata(false, "reload trigger due to produce topic still not known")
-
-	return nil, nil // our record is buffered waiting for metadata update; nothing to return
 }
 
 // addUnknownTopicRecord adds a record to a topic whose partitions are
