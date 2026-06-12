@@ -917,7 +917,14 @@ func (s *assignRevokeSession) prerevoke(g *groupConsumer, lost map[string][]int3
 		// mid-heartbeat or already gone), the regular heartbeat
 		// timer acks within one interval, which is no worse than
 		// what the session bounce this replaced provided.
-		if is848 && len(lost) > 0 {
+		//
+		// We force even when nothing was lost: a session (re)entry
+		// with only added partitions also owes the server an ack -
+		// the next full heartbeat's Topics is what reports the new
+		// assignment as owned. The Java client likewise heartbeats
+		// the moment reconciliation completes rather than waiting
+		// out the interval.
+		if is848 {
 			select {
 			case g.heartbeatForceCh <- func(error) {}:
 			default:
