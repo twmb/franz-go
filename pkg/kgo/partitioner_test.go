@@ -55,3 +55,44 @@ func TestLeastBackupPicksLeast(t *testing.T) {
 		}
 	}
 }
+
+// Golden vectors from Kafka's UtilsTest.testMurmur2; murmur2 must match the
+// reference implementation exactly for KafkaHasher placement compatibility.
+func TestMurmur2KafkaVectors(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		in   string
+		want int32
+	}{
+		{"21", -973932308},
+		{"foobar", -790332482},
+		{"a-little-bit-long-string", -985981536},
+		{"a-little-bit-longer-string", -1486304829},
+		{"lkjh234lh9fiuh90y23oiuhsafujhadof229phr9h19h89h8", -58897971},
+		{"abc", 479470107},
+	} {
+		if got := int32(murmur2([]byte(c.in))); got != c.want {
+			t.Errorf("murmur2(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+// SaramaHasher's documented behavior (librdkafka-consistent: unsigned hash
+// mod n, no negation) is what 64-bit platforms have always produced; the
+// arithmetic must not depend on int width. A high-bit hash is the
+// discriminator: int(uint32(0x80000001)) is positive on 64-bit but negative
+// (and was then negated) on 32-bit GOARCH.
+func TestSaramaHasherIntWidth(t *testing.T) {
+	t.Parallel()
+	h := SaramaHasher(func([]byte) uint32 { return 0x80000001 })
+	// 0x80000001 = 2147483649; 2147483649 % 10 = 9. The pre-fix 32-bit
+	// path computed -(int32(0x80000001)) % 10 = 2147483647 % 10 = 7.
+	if got := h(nil, 10); got != 9 {
+		t.Errorf("SaramaHasher high-bit hash partition = %d, want 9 (unsigned semantics)", got)
+	}
+	// A low-bit hash is identical under both interpretations.
+	h = SaramaHasher(func([]byte) uint32 { return 12345 })
+	if got := h(nil, 10); got != 5 {
+		t.Errorf("SaramaHasher low-bit hash partition = %d, want 5", got)
+	}
+}

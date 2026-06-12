@@ -499,11 +499,15 @@ func KafkaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 // zendesk/ruby-kafka partitioner.
 func SaramaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 	return func(key []byte, n int) int {
-		p := int(hashFn(key)) % n
-		if p < 0 {
-			p = -p
-		}
-		return p
+		// Go through int64 so the arithmetic is identical on 32-bit
+		// platforms: int(uint32) is always non-negative when int is 64
+		// bits (matching librdkafka's unsigned modulo, this function's
+		// compatibility target), but wraps negative for high-bit
+		// hashes when int is 32 bits, which silently produced
+		// different partitioning on 386/arm. The result of the int64
+		// modulo is always non-negative, so the historical negation
+		// branch (live only on 32-bit) is gone.
+		return int(int64(hashFn(key)) % int64(n))
 	}
 }
 
