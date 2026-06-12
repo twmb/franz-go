@@ -52,6 +52,7 @@ type (
 		corr  int32
 		err   error
 		seq   uint32
+		skip  bool // acks=0 produce: nothing to write, just advance seq
 	}
 )
 
@@ -199,6 +200,12 @@ func (cc *clientConn) write() {
 		} else {
 			delete(oooresp, seq)
 			seq++
+		}
+		// acks=0 produce: no response bytes exist for this sequence
+		// number; the sentinel only advances seq (above) and unmutes.
+		if resp.skip {
+			cc.unmute(true)
+			continue
 		}
 		if err := resp.err; err != nil {
 			cc.c.cfg.logger.Logf(LogLevelInfo, "client %s request unable to be handled: %v", who, err)
