@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"math/bits"
 	"testing"
 )
 
@@ -77,18 +78,23 @@ func TestMurmur2KafkaVectors(t *testing.T) {
 	}
 }
 
-// SaramaHasher's documented behavior (librdkafka-consistent: unsigned hash
-// mod n, no negation) is what 64-bit platforms have always produced; the
-// arithmetic must not depend on int width. A high-bit hash is the
-// discriminator: int(uint32(0x80000001)) is positive on 64-bit but negative
-// (and was then negated) on 32-bit GOARCH.
-func TestSaramaHasherIntWidth(t *testing.T) {
+// SaramaHasher's arithmetic is int-width dependent BY DESIGN: the function
+// exists to preserve a historical placement, so each platform's behavior is
+// pinned exactly as it has always been (64-bit matches librdkafka's unsigned
+// modulo; 32-bit negates wrapped high-bit hashes). See the SaramaHasher doc.
+// If this test trips, key->partition mappings remap for existing
+// deployments.
+func TestSaramaHasherPinnedPlacement(t *testing.T) {
 	t.Parallel()
 	h := SaramaHasher(func([]byte) uint32 { return 0x80000001 })
-	// 0x80000001 = 2147483649; 2147483649 % 10 = 9. The pre-fix 32-bit
-	// path computed -(int32(0x80000001)) % 10 = 2147483647 % 10 = 7.
-	if got := h(nil, 10); got != 9 {
-		t.Errorf("SaramaHasher high-bit hash partition = %d, want 9 (unsigned semantics)", got)
+	// 64-bit: int(0x80000001) = 2147483649; % 10 = 9.
+	// 32-bit: int(0x80000001) = -2147483647; negated, % 10 = 7.
+	want := 9
+	if bits.UintSize == 32 {
+		want = 7
+	}
+	if got := h(nil, 10); got != want {
+		t.Errorf("SaramaHasher high-bit hash partition = %d, want %d (historical %d-bit placement)", got, want, bits.UintSize)
 	}
 	// A low-bit hash is identical under both interpretations.
 	h = SaramaHasher(func([]byte) uint32 { return 12345 })

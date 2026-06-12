@@ -497,17 +497,30 @@ func KafkaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 // In particular, using this function with a crc32.ChecksumIEEE hasher makes
 // this partitioner match librdkafka's consistent partitioner, or the
 // zendesk/ruby-kafka partitioner.
+//
+// Note that the arithmetic depends on Go's int width: on 32-bit platforms,
+// hashes with the high bit set choose a different partition than on 64-bit
+// platforms (only the 64-bit behavior matches librdkafka). This is
+// deliberately left alone: the function exists to preserve a historical
+// placement, and changing either platform's placement would remap keys for
+// deployments relying on it.
 func SaramaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 	return func(key []byte, n int) int {
-		// Go through int64 so the arithmetic is identical on 32-bit
-		// platforms: int(uint32) is always non-negative when int is 64
-		// bits (matching librdkafka's unsigned modulo, this function's
-		// compatibility target), but wraps negative for high-bit
-		// hashes when int is 32 bits, which silently produced
-		// different partitioning on 386/arm. The result of the int64
-		// modulo is always non-negative, so the historical negation
-		// branch (live only on 32-bit) is gone.
-		return int(int64(hashFn(key)) % int64(n))
+		// The int conversion makes this arithmetic int-width
+		// dependent: on 64-bit platforms int(uint32) is always
+		// non-negative (the negation below is dead and the result
+		// matches librdkafka's unsigned modulo), while on 32-bit
+		// platforms a hash with the high bit set wraps negative and
+		// is negated, choosing a different partition. This stays
+		// as-is deliberately: this function's entire purpose is
+		// preserving a historical placement (see the doc above), and
+		// existing deployments on either width depend on the
+		// placement they have been writing with.
+		p := int(hashFn(key)) % n
+		if p < 0 {
+			p = -p
+		}
+		return p
 	}
 }
 
