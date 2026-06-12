@@ -934,7 +934,21 @@ func (cl *Client) supportsOffsetForLeaderEpoch() bool {
 // v1 introduces support for regex and requires the client to generate
 // the member ID, and fully stabilizes KIP-848.
 func (cl *Client) supportsKIP848v1() bool {
-	return cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 1)
+	if !cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 1) {
+		return false
+	}
+	// The 848 manage loop runs v1 semantics (client-generated member ID,
+	// regex subscriptions). If the user's MaxVersions caps the heartbeat
+	// below v1, the wire request would be v0 while we behave as v1: v0
+	// has no SubscribedTopicRegex field at all, so a regex consumer's
+	// join would carry no subscription and silently consume nothing.
+	// Only opt in if the cap allows v1, mirroring supportsKIP890p2.
+	if mv := cl.cfg.maxVersions; mv != nil {
+		if v, ok := mv.LookupMaxKeyVersion(int16(kmsg.ConsumerGroupHeartbeat)); !ok || v < 1 {
+			return false
+		}
+	}
+	return true
 }
 
 // Called after the first metric observed, which is always after a response.
