@@ -1852,6 +1852,7 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int
 	// Groups format, and resp.Topics is a copy that may lose TopicID.
 	var staleRetries int
 	var unknownTopicIDRetries int
+	var omittedRetries int
 start:
 	member, gen := g.memberGen.load()
 	req := kmsg.NewPtrOffsetFetchRequest()
@@ -1955,6 +1956,7 @@ start:
 
 	id2t := g.cl.id2tMap()
 	offsets := make(map[string]map[int32]Offset)
+	var injected mtmps // partitions we deliberately dropped via error injection below
 	for _, rTopic := range resp.Groups[0].Topics {
 		topic := rTopic.Topic
 		if topic == "" {
@@ -2030,6 +2032,7 @@ start:
 					"err", err,
 				)
 				g.c.addFakeReadyForDraining(topic, rPartition.Partition, err, "fetch offsets returned a non-retryable partition error")
+				injected.add(topic, rPartition.Partition)
 				continue
 			}
 			offset := Offset{
@@ -2039,7 +2042,12 @@ start:
 			if resp.Version >= 5 && kip320 { // KIP-320
 				offset.epoch = rPartition.LeaderEpoch
 			}
-			if rPartition.Offset == -1 {
+			// The coordinator's "no committed offset" sentinel is -1.
+			// We treat ANY negative offset as no-commit, matching the
+			// Java client's `offset >= 0` test: a buggy broker's -5
+			// must not flow into partition assignment as a literal
+			// negative offset.
+			if rPartition.Offset < 0 {
 				offset = g.cfg.startOffset
 			}
 			topicOffsets[rPartition.Partition] = offset
@@ -2073,6 +2081,64 @@ start:
 			if _, ok := requested[partition]; !ok {
 				delete(topicOffsets, partition)
 				g.cfg.logger.Log(LogLevelWarn, "broker returned partition in OffsetFetch response that we did not request, skipping", "group", g.cfg.group, "topic", fetchedTopic, "partition", partition)
+			}
+		}
+	}
+
+	// The dual of the validation above: every partition we requested must
+	// be present in the response. The group coordinator answers every
+	// requested partition (filling -1 for those with no commit), so an
+	// omission is a buggy/hostile broker - as is a duplicated topic entry,
+	// which overwrites and discards the earlier entry's partitions in the
+	// response loop above. A partition silently absent from `offsets` is
+	// never assigned a cursor, and a successful return here clears
+	// g.fetching: nothing inside a live session ever re-fetches it, so for
+	// cooperative and 848 sessions (whose unchanged assignment diffs to an
+	// empty "added" on the next session) the partition would silently
+	// never consume. Retry a few times in case the omission is transient,
+	// then surface a loud error fetch and drop the partition from this
+	// assignment, exactly like the non-retryable partition error path
+	// above.
+	var omitted mtmps
+	for topic, partitions := range added {
+		if !groupTopics.hasTopic(topic) {
+			continue // already warned and skipped above
+		}
+		topicOffsets := offsets[topic]
+		for _, partition := range partitions {
+			if injected != nil {
+				if _, ok := injected[topic][partition]; ok {
+					continue // deliberately dropped, not omitted
+				}
+			}
+			if _, ok := topicOffsets[partition]; !ok {
+				omitted.add(topic, partition)
+			}
+		}
+	}
+	if len(omitted) > 0 {
+		if omittedRetries < 3 {
+			omittedRetries++
+			g.cfg.logger.Log(LogLevelError, "fetch offsets response omitted requested partitions, waiting 1s and retrying",
+				"group", g.cfg.group,
+				"omitted", omitted,
+				"attempt", omittedRetries,
+			)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+				goto start
+			}
+		}
+		for topic, partitions := range omitted {
+			for partition := range partitions {
+				g.cfg.logger.Log(LogLevelError, "fetch offsets response repeatedly omitted a requested partition; injecting error and continuing with remaining partitions",
+					"group", g.cfg.group,
+					"topic", topic,
+					"partition", partition,
+				)
+				g.c.addFakeReadyForDraining(topic, partition, errOffsetFetchOmitted, "fetch offsets response omitted the partition")
 			}
 		}
 	}

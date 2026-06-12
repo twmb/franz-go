@@ -233,6 +233,13 @@ var (
 	// broker misbehavior surfaces in polls; the load is still retried.
 	errNegativeListedOffset = errors.New("broker replied to a ListOffsets request with an invalid negative offset")
 
+	// Injected as a fake errored fetch when an OffsetFetch response
+	// repeatedly omits a partition we requested; the group coordinator
+	// answers every requested partition, so an omission is a broker bug
+	// that would otherwise leave the partition silently unconsumed for
+	// the rest of the group session.
+	errOffsetFetchOmitted = errors.New("broker repeatedly omitted a requested partition from an OffsetFetch response")
+
 	// Returned by the 848 heartbeat closure when it detects an assignment
 	// change. The heartbeat loop treats this like RebalanceInProgress but
 	// suppresses further heartbeat requests so that a second heartbeat
