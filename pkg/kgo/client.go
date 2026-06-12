@@ -688,7 +688,7 @@ func (cl *Client) Ping(ctx context.Context) error {
 //
 // For admin requests, this deletes the topic from the cached metadata map for
 // sharded requests. Metadata for sharded admin requests is only cached for
-// MetadataMinAge anyway, but the map is not cleaned up one the metadata
+// MetadataMinAge anyway, but the map is not cleaned up once the metadata
 // expires. This function ensures the map is purged.
 func (cl *Client) PurgeTopicsFromClient(topics ...string) {
 	if len(topics) == 0 {
@@ -1414,6 +1414,8 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 //	ListGroups
 //	DeleteRecords
 //	OffsetForLeaderEpoch
+//	AddPartitionsToTxn
+//	WriteTxnMarkers
 //	DescribeConfigs
 //	AlterConfigs
 //	AlterReplicaLogDirs
@@ -1722,7 +1724,7 @@ type ResponseShard struct {
 	// unknown (node ID -1) metadata if the request could not be issued.
 	//
 	// Requests can fail to even be issued if an appropriate broker cannot
-	// be loaded of if the client cannot understand the request.
+	// be loaded or if the client cannot understand the request.
 	Meta BrokerMetadata
 
 	// Req is the request that was issued to this broker.
@@ -1748,9 +1750,9 @@ type ResponseShard struct {
 //
 // If, in the process of splitting a request, some topics or partitions are
 // found to not exist, or Kafka replies that a request should go to a broker
-// that does not exist, all those non-existent pieces are grouped into one
-// request to the first seed broker. This will show up as a seed broker node ID
-// (min int32) and the response will likely contain purely errors.
+// that does not exist, all those non-existent pieces are not issued; they are
+// returned as error shards with an unknown broker metadata (node ID -1) and
+// the error that prevented the piece from being mapped to a broker.
 //
 // The response shards are ordered by broker metadata.
 func (cl *Client) RequestSharded(ctx context.Context, req kmsg.Request) []ResponseShard {
@@ -2007,13 +2009,13 @@ func (cl *Client) loadCoordinators(ctx context.Context, typ int8, keys ...string
 	}
 }
 
-// doLoadCoordinators uses the caller context to cancel loading metadata
-// (brokerOrErr), but we use the client context to actually issue the request.
-// There should be only one direct call to doLoadCoordinators, just above in
-// loadCoordinator. It is possible for two requests to be loading the same
-// coordinator (in fact, that's the point of this function -- collapse these
-// requests). We do not want the first request canceling it's context to cause
-// errors for the second request.
+// doLoadCoordinators issues the FindCoordinator request - and any broker
+// metadata load needed to resolve the response - on the client context. It is
+// possible for two requests to be loading the same coordinator (in fact,
+// that's the point of this function -- collapse these requests). We do not
+// want the first request canceling its context to cause errors for the
+// second request. The caller context only cancels the caller's wait, via
+// loadCoordinators above.
 //
 // It is ok to leave FindCoordinator running even if the caller quits. Worst
 // case, we just cache things for some time in the future; yay.
@@ -2819,13 +2821,18 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 			start:
 				tries++
 
-				br := cl.broker()
+				var br *broker
 				var err error
 				if !myIssue.any {
 					br, err = cl.brokerOrErr(ctx, myIssue.broker, errUnknownBroker)
-				} else if avoidBroker != -1 {
-					for i := 0; i < 3 && br.meta.NodeID == avoidBroker; i++ {
-						br = cl.broker()
+				} else {
+					// Only consume an any-broker rotation slot for
+					// shards that actually go to any broker.
+					br = cl.broker()
+					if avoidBroker != -1 {
+						for i := 0; i < 3 && br.meta.NodeID == avoidBroker; i++ {
+							br = cl.broker()
+						}
 					}
 				}
 				if err != nil {
