@@ -838,7 +838,7 @@ func (c *consumer) purgeTopics(topics []string) {
 // entire topic is purged.
 func (cl *Client) AddConsumeTopics(topics ...string) {
 	c := &cl.consumer
-	if len(topics) == 0 || c.g == nil && c.d == nil || cl.cfg.regex {
+	if len(topics) == 0 || !c.consuming() || cl.cfg.regex {
 		return
 	}
 
@@ -863,7 +863,7 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 // GetConsumeTopics retrieves a list of current topics being consumed.
 func (cl *Client) GetConsumeTopics() []string {
 	c := &cl.consumer
-	if c.g == nil && c.d == nil {
+	if !c.consuming() {
 		return nil
 	}
 	var m map[string]*topicPartitions
