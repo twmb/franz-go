@@ -297,7 +297,25 @@ func (p *cursorOffsetPreferred) move() {
 	c.source.cl.sinksAndSourcesMu.Unlock()
 
 	if !exists {
+		// The preferred replica is a broker we have not yet learned from
+		// metadata - e.g. a freshly added replica that the broker we
+		// fetched from already knows about, before our periodic refresh
+		// caught up. We force a metadata update so the source comes to
+		// exist for a future move, but we must ALSO re-enable the cursor
+		// on its current (leader) source. The caller (source.fetch) deletes
+		// this cursor from the request's used offsets right after we return,
+		// so neither the fetch's used-offset finishing nor a later buffered
+		// poll will re-enable it: leaving it unusable here would strand the
+		// partition. The leader is unchanged, so no cursor
+		// migration re-enables it, and a metadata refresh that merely
+		// learns the new broker never touches cursor usability - the
+		// partition would silently never be consumed again until an
+		// unrelated session restart (rebalance, assign, leader change).
+		//
+		// Re-enabling on the current source keeps us consuming from the
+		// leader until a later fetch's preferred replica can be honored.
 		c.source.cl.triggerUpdateMetadataNow("cursor moving to a different broker that is not yet known")
+		c.allowUsable()
 		return
 	}
 
