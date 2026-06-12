@@ -238,6 +238,11 @@ var (
 
 	errNoCommittedOffset = errors.New("partition has no prior committed offset")
 
+	// Returned when a ListOffsets success response carries a negative
+	// offset, which no legitimate listing produces. Non-retryable so the
+	// broker misbehavior surfaces in polls; the load is still retried.
+	errNegativeListedOffset = errors.New("broker replied to a ListOffsets request with an invalid negative offset")
+
 	// Returned by the 848 heartbeat closure when it detects an assignment
 	// change. The heartbeat loop treats this like RebalanceInProgress but
 	// suppresses further heartbeat requests so that a second heartbeat

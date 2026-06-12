@@ -2437,8 +2437,23 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 					offset = start
 				}
 			}
+			// Every arm above yields a non-negative offset from a
+			// well-behaved broker: by-time listings exist only for
+			// afterMilli, whose -1 is replaced by the end listing,
+			// and the start/end/exact arms bound within the
+			// responses. A negative offset here means the broker
+			// violated the protocol; clamping to 0 (the old
+			// behavior) would silently re-consume the partition
+			// from the start. Surface the misbehavior and retry
+			// the load instead.
 			if offset < 0 {
-				offset = 0 // sanity
+				loaded.add(loadedOffset{
+					topic:     topic,
+					partition: partition,
+					err:       errNegativeListedOffset,
+					request:   loadPart,
+				})
+				continue
 			}
 
 			loaded.add(loadedOffset{
