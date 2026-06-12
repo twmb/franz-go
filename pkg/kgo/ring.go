@@ -75,12 +75,33 @@ func (r *ring[T]) empty() bool {
 }
 
 func (r *ring[T]) push(elem T) (first, dead bool) {
+	return r.doPush(elem, true)
+}
+
+// pushForce pushes even when the ring is at maxLen. The maxLen wait can only
+// be used by pushers that the ring's worker goroutine does not depend on and
+// that do not depend on the worker: the worker is the only goroutine that
+// signals space (dropPeek), so a push from the worker itself - a promise
+// calling TryProduce with a record that fails before buffering - would park
+// with nobody left to drain, and a push made while holding a client lock
+// (purge/fail paths, storePartitionsUpdate, recBuf failure paths) parks
+// holding a lock the worker can need through a user promise re-entering the
+// client. Such pushers force; forced volume is bounded elsewhere (buffered
+// records were admitted under the max-buffered accounting, and TryProduce's
+// fail-fast contract forbids parking).
+func (r *ring[T]) pushForce(elem T) (first, dead bool) {
+	return r.doPush(elem, false)
+}
+
+func (r *ring[T]) doPush(elem T, wait bool) (first, dead bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// If a max length is set, block until there's space.
-	for r.maxLen > 0 && r.l >= r.maxLen && !r.dead {
-		r.cond.Wait()
+	if wait {
+		for r.maxLen > 0 && r.l >= r.maxLen && !r.dead {
+			r.cond.Wait()
+		}
 	}
 
 	if r.dead {

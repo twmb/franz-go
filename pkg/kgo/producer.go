@@ -557,11 +557,11 @@ func (cl *Client) produce(
 
 	// We can now fail the rec after the buffered hook.
 	if r.Topic == "" {
-		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, errNoTopic)
+		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, errNoTopic, block)
 		return
 	}
 	if cl.cfg.txnID != nil && !p.producingTxn.Load() {
-		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, errNotInTransaction)
+		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, errNotInTransaction, block)
 		return
 	}
 
@@ -570,6 +570,7 @@ func (cl *Client) produce(
 		p.promiseRecordBeforeBuf(
 			promisedRec{ctx, promise, r},
 			fmt.Errorf("%w (uncompressed_bytes=%d)", kerr.MessageTooLarge, userSize),
+			block,
 		)
 		return
 	}
@@ -583,7 +584,7 @@ func (cl *Client) produce(
 	if overMaxRecs || overMaxBytes {
 		if !block || cl.cfg.manualFlushing {
 			p.mu.Unlock()
-			p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, ErrMaxBuffered)
+			p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, ErrMaxBuffered, block)
 			return
 		}
 
@@ -640,7 +641,7 @@ func (cl *Client) produce(
 			}()
 			<-wait // we wait for the goroutine to exit, then unlock again (since the goroutine leaves the mutex locked)
 			p.mu.Unlock()
-			p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, err)
+			p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, err, block)
 		}
 
 		select {
@@ -677,8 +678,18 @@ type batchPromise struct {
 	err        error
 }
 
+// promiseBatch finishes a batch of records. This never parks on the ring's
+// maxLen: every caller either carries records already admitted under the
+// max-buffered accounting (sink responses, fail/purge paths) or holds a
+// client lock (purgeTopics and failBufferedRecords under topicsMu and
+// unknownTopicsMu, storePartitionsUpdate under unknownTopicsMu, recBuf
+// failure paths under recBuf.mu). A parked lock-holder can deadlock: the
+// promise worker is the only goroutine that frees ring space, and a user
+// promise may re-enter the client (TryProduce) and need the very lock the
+// parked pusher holds, so the worker would wait on the lock while the lock
+// holder waits on the worker.
 func (p *producer) promiseBatch(b batchPromise) {
-	if first, _ := p.batchPromises.push(b); first {
+	if first, _ := p.batchPromises.pushForce(b); first {
 		go p.finishPromises(b)
 	}
 }
@@ -687,8 +698,29 @@ func (p *producer) promiseRecord(pr promisedRec, err error) {
 	p.promiseBatch(batchPromise{recs: []promisedRec{pr}, err: err})
 }
 
-func (p *producer) promiseRecordBeforeBuf(pr promisedRec, err error) {
-	p.promiseBatch(batchPromise{recs: []promisedRec{pr}, beforeBuf: true, err: err})
+// promiseRecordBeforeBuf finishes a record that failed before it was ever
+// buffered (and before it counted toward bufferedRecords). Only this entry
+// applies the ring's maxLen backpressure, and only for blocking Produce
+// calls: pre-buffer failures are the one promise source not bounded by the
+// max-buffered admission, so a spin loop of failing produces could otherwise
+// grow the ring without bound (#1194). TryProduce must not park, both per
+// its fail-fast contract and because the documented way to produce from
+// within a promise is TryProduce: that call runs on the promise worker
+// goroutine, and the worker parking on its own ring - which only it drains -
+// would deadlock every promise, Flush, and blocked Produce. (A blocking
+// Produce inside a promise deadlocks regardless and is documented as
+// forbidden on Produce.)
+func (p *producer) promiseRecordBeforeBuf(pr promisedRec, err error, block bool) {
+	b := batchPromise{recs: []promisedRec{pr}, beforeBuf: true, err: err}
+	var first bool
+	if block {
+		first, _ = p.batchPromises.push(b)
+	} else {
+		first, _ = p.batchPromises.pushForce(b)
+	}
+	if first {
+		go p.finishPromises(b)
+	}
 }
 
 func (p *producer) finishPromises(b batchPromise) {
