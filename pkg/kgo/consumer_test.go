@@ -986,3 +986,40 @@ func TestHookPollStart(t *testing.T) {
 		})
 	}
 }
+
+// pollWaitState packs the poller count in the low 32 bits and the waiting
+// rebalance count in the high 32. AllowRebalance zeroes the poller count; a
+// poll still in flight at that moment (a contract violation, but a silent and
+// otherwise permanent one) releases afterwards and must not decrement past
+// zero: the borrow would corrupt the rebalance bits and block both polls and
+// rebalances forever.
+func TestPollWaitStateNoUnderflow(t *testing.T) {
+	t.Parallel()
+
+	cl := &Client{cfg: cfg{blockRebalanceOnPoll: true}}
+	c := &consumer{cl: cl}
+	c.pollWaitC = sync.NewCond(&c.pollWaitMu)
+
+	c.waitAndAddPoller() // T1 polls and receives fetches; poller held
+	c.waitAndAddPoller() // T2 polls concurrently
+	c.allowRebalance()   // T1 done processing; user allows rebalances
+	c.unaddPoller()      // T2's poll found nothing; its deferred release lands
+
+	if state := c.pollWaitState; state != 0 {
+		t.Fatalf("got pollWaitState %#x != 0; poller release underflowed past AllowRebalance's reset", state)
+	}
+
+	// The real-world symptom of the underflow: the rebalance gate blocks
+	// forever even though no poller exists.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.waitAndAddRebalance()
+		c.unaddRebalance()
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("rebalance gate blocked after AllowRebalance raced a poll")
+	}
+}

@@ -263,7 +263,16 @@ func (c *consumer) unaddPoller() {
 	}
 	c.pollWaitMu.Lock()
 	defer c.pollWaitMu.Unlock()
-	c.pollWaitState--
+	// AllowRebalance zeroes the poller count outright. If the user calls it
+	// while another goroutine's poll is still in flight (a contract
+	// violation: AllowRebalance means "all pollers are done"), that poll's
+	// release lands here after the mask and must not decrement: the low 32
+	// bits would underflow and borrow into the rebalance count, permanently
+	// blocking both polls and rebalances. A poller whose accounting was
+	// force-cleared simply no-ops its release.
+	if c.pollWaitState&math.MaxUint32 > 0 {
+		c.pollWaitState--
+	}
 	c.pollWaitC.Broadcast()
 }
 
