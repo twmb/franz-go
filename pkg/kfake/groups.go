@@ -1992,6 +1992,19 @@ func (g *group) handleConsumerHeartbeat(creq *clientReq) kmsg.Response {
 }
 
 func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.ConsumerGroupHeartbeatResponse) *kmsg.ConsumerGroupHeartbeatResponse {
+	// A real broker validates that the owned-partitions field is an
+	// empty list on every (re)join: null and non-empty are both
+	// rejected with "TopicPartitions must be empty when (re-)joining."
+	// before the request reaches the group state machine. Mirroring
+	// the rejection matters: a client that leaks stale owned state
+	// into its join would otherwise be silently accepted here while a
+	// real broker rejects it on every attempt, forever.
+	if req.Topics == nil || len(req.Topics) > 0 {
+		resp.ErrorCode = kerr.InvalidRequest.Code
+		resp.ErrorMessage = kmsg.StringPtr("TopicPartitions must be empty when (re-)joining.")
+		return resp
+	}
+
 	memberID := req.MemberID
 	if memberID == "" {
 		memberID = generateMemberID(creq.cid, req.InstanceID)
