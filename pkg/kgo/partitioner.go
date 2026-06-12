@@ -229,7 +229,7 @@ func (p *leastBackupTopicPartitioner) PartitionByBackup(_ *Record, n int, backup
 				leastBackup = backup
 				p.onPart = pick
 				npicked = 1
-			} else {
+			} else if backup == leastBackup {
 				npicked++ // reservoir sampling with k = 1
 				if p.rng.Intn(npicked) == 0 {
 					p.onPart = pick
