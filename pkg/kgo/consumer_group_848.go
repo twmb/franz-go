@@ -274,6 +274,15 @@ outer:
 					}, "consumer group heartbeat persistently failing")
 				}
 				err = nil
+				// Continue directly: we nil err only to keep the
+				// session loop going, not because anything
+				// succeeded. Falling into the err == nil reset
+				// below would zero the counter we just
+				// incremented, capping it at 1 forever and making
+				// the every-cfg.retries notification above
+				// unreachable. The reset is for the other arms,
+				// whose nil means a processed response.
+				continue
 
 			case errors.Is(err, kerr.UnknownMemberID):
 				// The server forgot us (session expired during an
