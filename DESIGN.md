@@ -1152,10 +1152,20 @@ sequenceDiagram
     Note over W: exit goroutine
 ```
 
-The ring uses a fixed-size 8-element array for the common case (no allocation
-after initialization) with overflow to a slice for bursts. The `die()` method
+The ring is a dynamically-sized circular buffer: it starts at capacity 8,
+doubles when full, and shrinks back when mostly empty. The `die()` method
 prevents further pushes, which is used when shutting down to ensure no new
 work is accepted.
+
+A ring can optionally have a max length (`initMaxLen`), at which `push`
+blocks until the worker drains space - `producer.batchPromises` uses this to
+backpressure spin-loops of failing produces instead of growing without bound.
+Only blocking `Produce` calls take the blocking push: the worker goroutine is
+the only thing that frees space, so pushes made from the worker itself (a
+promise calling `TryProduce` with a record that fails before buffering) or
+made while holding client locks that user promises can re-enter (purge/fail
+paths) use `pushForce`, which ignores the max; their volume is bounded by the
+max-buffered-records admission instead.
 
 Used by: `sink.seqResps` (ordered produce responses), `producer.batchPromises`
 (callback delivery), `brokerCxn.resps` (ordered response reading).
