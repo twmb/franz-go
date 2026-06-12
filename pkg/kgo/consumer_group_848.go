@@ -441,6 +441,19 @@ func (g *g848) initialJoin() (time.Duration, error) {
 	g.g.memberGen.storeGeneration(0)
 	g.lastSubscribedTopics = nil
 	g.lastTopics = nil
+	// A (re)join must carry an EMPTY owned-partitions list: the broker
+	// rejects any epoch-0 heartbeat whose Topics is non-empty (or null)
+	// with INVALID_REQUEST, "TopicPartitions must be empty when
+	// (re-)joining." unresolvedAssigned holds the OLD member's
+	// server-side assignment, and mkreq folds it into Topics - so
+	// carrying it across a member reset would poison every join, and
+	// permanently: the only other thing that clears unresolvedAssigned
+	// is a successful assignment-carrying response, which a rejected
+	// join never produces. Dropping it loses nothing - the join
+	// response always re-delivers the member's full assignment. The
+	// Java client likewise clears its unresolved-IDs cache on every
+	// transition to joining.
+	g.unresolvedAssigned = nil
 	g.prerevoking.Store(false)
 	// Drain any stale rejoin signal, mirroring joinAndSync. Nothing
 	// else on the 848 path consumes the channel across a member reset:
