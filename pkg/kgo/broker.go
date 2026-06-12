@@ -626,9 +626,13 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 	}
 
 	var tries int
-	start := time.Now()
 doConnect:
 	tries++
+	// start, conn, and err are declared per attempt so that each attempt's
+	// deferred OnBrokerConnect hook reports that attempt's connection,
+	// error, and duration (a backward goto over := re-executes the
+	// declaration; prior attempts' defers keep their own variables).
+	start := time.Now()
 	conn, err := b.connect(ctx)
 	defer func() {
 		since := time.Since(start)
@@ -654,12 +658,10 @@ doConnect:
 		// EventHubs does not handle v4 and resets the connection. We
 		// retry twice. On the first and second attempt, we try our max
 		// version possible (as should be allowed). On the third try,
-		// we downgrade to v0.
-		if er := (*errApiVersionsReset)(nil); errors.As(err, &er) {
-			if tries < 3 {
-				tries++
-				goto doConnect
-			}
+		// we downgrade to v0 (see requestAPIVersions).
+		if er := (*errApiVersionsReset)(nil); errors.As(err, &er) && tries < 3 {
+			cxn.closeConn()
+			goto doConnect
 		}
 		b.cl.cfg.logger.Log(LogLevelDebug, "connection initialization failed", "addr", b.addr, "broker", logID(b.meta.NodeID), "err", err)
 		cxn.closeConn()
