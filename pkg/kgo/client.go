@@ -1022,32 +1022,42 @@ func (cl *Client) supportsFeature(name string, version int16) bool {
 }
 
 // fetchBrokerMetadata issues a metadata request solely for broker information.
+//
+// Concurrent callers collapse onto one in-flight request. The request itself
+// runs on the client context: if it ran on the initiating caller's context,
+// that caller canceling would fail every collapsed waiter with the canceled
+// error even though their own contexts are live (the same reasoning as
+// doLoadCoordinators). Each caller's context governs only its own wait; an
+// abandoned fetch still completes and updates broker state, which is fine.
 func (cl *Client) fetchBrokerMetadata(ctx context.Context) error {
 	cl.fetchingBrokersMu.Lock()
 	wait := cl.fetchingBrokers
-	if wait != nil {
-		cl.fetchingBrokersMu.Unlock()
-		<-wait.done
-		return wait.err
+	if wait == nil {
+		wait = &struct {
+			done chan struct{}
+			err  error
+		}{done: make(chan struct{})}
+		cl.fetchingBrokers = wait
+		go func() {
+			defer func() {
+				cl.fetchingBrokersMu.Lock()
+				defer cl.fetchingBrokersMu.Unlock()
+				cl.fetchingBrokers = nil
+				close(wait.done)
+			}()
+			req := kmsg.NewPtrMetadataRequest()
+			req.Topics = []kmsg.MetadataRequestTopic{}
+			_, _, wait.err = cl.fetchMetadata(cl.ctx, req, true, nil)
+		}()
 	}
-	wait = &struct {
-		done chan struct{}
-		err  error
-	}{done: make(chan struct{})}
-	cl.fetchingBrokers = wait
 	cl.fetchingBrokersMu.Unlock()
 
-	defer func() {
-		cl.fetchingBrokersMu.Lock()
-		defer cl.fetchingBrokersMu.Unlock()
-		cl.fetchingBrokers = nil
-		close(wait.done)
-	}()
-
-	req := kmsg.NewPtrMetadataRequest()
-	req.Topics = []kmsg.MetadataRequestTopic{}
-	_, _, wait.err = cl.fetchMetadata(ctx, req, true, nil)
-	return wait.err
+	select {
+	case <-wait.done:
+		return wait.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (cl *Client) fetchMetadataByName(ctx context.Context, all bool, topics []string, results map[string]cachedMetaTopic) (*broker, *kmsg.MetadataResponse, error) {
