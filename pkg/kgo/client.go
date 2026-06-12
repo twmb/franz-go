@@ -4288,15 +4288,26 @@ func (cl *addPartitionsToTxnSharder) shard(ctx context.Context, kreq kmsg.Reques
 
 	var issues []issueShard
 	for id, req := range brokerReqs {
-		if len(req.Transactions) <= 1 || len(req.Transactions) == 1 && !req.Transactions[0].VerifyOnly {
+		if len(req.Transactions) == 1 && !req.Transactions[0].VerifyOnly {
+			// Clients must use v3 and below; v4+ requires CLUSTER_ACTION
+			// authorization because it is the broker-to-broker side of
+			// KIP-890.
 			issues = append(issues, issueShard{
 				req:    req,
 				pin:    &pinReq{pinMax: true, max: 3},
 				broker: id,
 			})
 		} else {
+			// Batched transactions and VerifyOnly only exist in v4+:
+			// the v3 body has no Transactions array and no VerifyOnly
+			// field, so serializing this request any lower silently
+			// drops everything that matters - VerifyOnly in particular
+			// would turn a verification into a real partition add. Pin
+			// min 4 so brokers that cannot express the request fail
+			// loudly with errBrokerTooOld instead.
 			issues = append(issues, issueShard{
 				req:    req,
+				pin:    &pinReq{pinMin: true, min: 4},
 				broker: id,
 			})
 		}
