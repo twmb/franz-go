@@ -1159,13 +1159,17 @@ work is accepted.
 
 A ring can optionally have a max length (`initMaxLen`), at which `push`
 blocks until the worker drains space - `producer.batchPromises` uses this to
-backpressure spin-loops of failing produces instead of growing without bound.
-Only blocking `Produce` calls take the blocking push: the worker goroutine is
-the only thing that frees space, so pushes made from the worker itself (a
-promise calling `TryProduce` with a record that fails before buffering) or
-made while holding client locks that user promises can re-enter (purge/fail
-paths) use `pushForce`, which ignores the max; their volume is bounded by the
-max-buffered-records admission instead.
+backpressure spin-loops of failing produces (blocking `Produce` and
+`TryProduce` alike) instead of growing without bound: a record's promise is
+its only completion channel, so every accepted record costs memory until the
+promise runs. Internal pushes (sink responses, purge/fail paths,
+`storePartitionsUpdate`) use `pushForce`, which ignores the max: they are
+bounded by the max-buffered-records admission already, and several run under
+client locks that user promises can re-enter - a parked lock-holder would
+deadlock against the worker, the ring's only drainer. The worker itself must
+never push at the bound either, which is why producing from within a promise
+is documented as spawn-a-goroutine: the goroutine's push parks safely while
+the worker keeps draining.
 
 Used by: `sink.seqResps` (ordered produce responses), `producer.batchPromises`
 (callback delivery), `brokerCxn.resps` (ordered response reading).
