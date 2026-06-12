@@ -9,11 +9,13 @@ package kfake
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -166,5 +168,75 @@ func TestAuditPreferredReplicaUnknownBrokerNoStrand(t *testing.T) {
 	}
 	if got < producedMessages {
 		t.Fatalf("BUG REPRODUCED: consumed %d/%d records; the cursor was stranded unusable by a preferred-replica move to an unknown broker", got, producedMessages)
+	}
+}
+
+// TestAuditFetchDuplicatePartitionDeduped verifies that a fetch response
+// listing the same partition more than once - a buggy/hostile broker, since a
+// correct one never duplicates - is processed exactly once. Pre-fix,
+// handleReqResp processed every occurrence against the same cursor: the error
+// (or records) surfaced twice and a duplicate preferred-replica entry would
+// enqueue two move() calls for one cursor (the #1167 concurrent-source hazard).
+func TestAuditFetchDuplicatePartitionDeduped(t *testing.T) {
+	t.Parallel()
+
+	const topic = "dup-topic"
+
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	produceN(t, c, topic, 1) // ensure AtStart resolves and partition 0 is fetched
+	ti := c.TopicInfo(topic)
+	pi := c.PartitionInfo(topic, 0)
+
+	// The first fetch is answered with partition 0 listed twice, each carrying
+	// the same non-retryable error. Later fetches are served normally.
+	var injected atomic.Bool
+	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.FetchRequest)
+		if injected.Swap(true) {
+			return nil, nil, false
+		}
+		resp := req.ResponseKind().(*kmsg.FetchResponse)
+		rt := kmsg.NewFetchResponseTopic()
+		rt.Topic = topic
+		rt.TopicID = ti.TopicID
+		for range 2 {
+			rp := kmsg.NewFetchResponseTopicPartition()
+			rp.Partition = 0
+			rp.ErrorCode = kerr.TopicAuthorizationFailed.Code // non-retryable: kept and surfaced
+			rp.HighWatermark = pi.HighWatermark
+			rp.LastStableOffset = pi.LastStableOffset
+			rp.LogStartOffset = 0
+			rt.Partitions = append(rt.Partitions, rp)
+		}
+		resp.Topics = append(resp.Topics, rt)
+		return resp, nil, true
+	})
+
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.DisableFetchSessions(),
+		kgo.FetchMaxWait(100*time.Millisecond),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var authErrs int
+	for ctx.Err() == nil {
+		fs := cl.PollFetches(ctx)
+		var n int
+		fs.EachError(func(_ string, p int32, err error) {
+			if p == 0 && errors.Is(err, kerr.TopicAuthorizationFailed) {
+				n++
+			}
+		})
+		if n > 0 {
+			authErrs = n
+			break
+		}
+	}
+	if authErrs != 1 {
+		t.Fatalf("BUG REPRODUCED: a duplicated partition surfaced its error %d times, want exactly 1", authErrs)
 	}
 }
