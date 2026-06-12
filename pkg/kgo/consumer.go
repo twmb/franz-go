@@ -1978,6 +1978,19 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 		}
 	}
 
+	// If the session is dying, park: the loads were stored in waiting above,
+	// and stopSession returns waiting loads to the caller for the next
+	// session. Without this check, a dying session whose metadata is fresh
+	// busy-loops until metadataMinAge elapses: wait is false above, so we
+	// would issue requests on the dead context, every one fails instantly,
+	// the reload timer below is canceled by the same dead context, and its
+	// loadWithSession re-enters this function - burning CPU and holding the
+	// session-stop (every revoke, leave, close, or seek) for the full
+	// metadataMinAge.
+	if s.ctx.Err() != nil {
+		return
+	}
+
 	s.listOrEpochMu.Lock()
 	loading := s.listOrEpochLoadsWaiting
 	s.listOrEpochLoadsLoading.mergeFrom(loading)
