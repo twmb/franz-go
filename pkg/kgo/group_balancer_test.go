@@ -413,3 +413,19 @@ func TestAdjustCooperativeStaleClaimIsTransfer(t *testing.T) {
 		t.Errorf("expected b to keep two partitions, got %v", got)
 	}
 }
+
+// Member metadata that fails to parse (and is not the #493 buggy-v1 shape)
+// must surface an error rather than balancing with whatever prefix parsed:
+// a truncated Topics array leaves phantom "" topics behind.
+func TestNewConsumerBalancerMalformedMetadataErrors(t *testing.T) {
+	t.Parallel()
+
+	// v0, Topics array claims two strings, only one present.
+	bad := []byte{0, 0, 0, 0, 0, 2, 0, 1, 'a'}
+	_, err := NewConsumerBalancer(new(roundRobinBalancer), []kmsg.JoinGroupResponseMember{
+		{MemberID: "m", ProtocolMetadata: bad},
+	})
+	if err == nil {
+		t.Error("expected an error for truncated member metadata, got nil")
+	}
+}

@@ -225,12 +225,13 @@ func NewConsumerBalancer(balance ConsumerBalancerBalance, members []kmsg.JoinGro
 			// claiming higher and higher version support and not
 			// actually supporting them. Sarama has a similarish
 			// workaround. See #493.
-			if bytes.HasPrefix(memberMeta, []byte{0, 1}) {
-				memberMeta[0] = 0
-				memberMeta[1] = 0
-				if err = meta.ReadFrom(memberMeta); err != nil {
-					return nil, fmt.Errorf("unable to read member metadata: %v", err)
-				}
+			if !bytes.HasPrefix(memberMeta, []byte{0, 1}) {
+				return nil, fmt.Errorf("unable to read member metadata: %v", err)
+			}
+			memberMeta[0] = 0
+			memberMeta[1] = 0
+			if err = meta.ReadFrom(memberMeta); err != nil {
+				return nil, fmt.Errorf("unable to read member metadata: %v", err)
 			}
 		}
 		for _, topic := range meta.Topics {
