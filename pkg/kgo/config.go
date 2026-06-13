@@ -363,7 +363,7 @@ func (cfg *cfg) validate() error {
 		{name: "rebalance timeout", v: int64(cfg.rebalanceTimeout), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
 		{name: "autocommit interval", v: int64(cfg.autocommitInterval), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
 
-		{v: int64(cfg.heartbeatInterval), allowed: int64(cfg.rebalanceTimeout) * int64(time.Millisecond), badcmp: i64gt, durs: true, fmt: "heartbeat interval %v is erroneously larger than the session timeout %v"},
+		{v: int64(cfg.heartbeatInterval), allowed: int64(cfg.sessionTimeout), badcmp: i64gt, durs: true, fmt: "heartbeat interval %v is erroneously larger than the session timeout %v"},
 	} {
 		bad, cmp := limit.badcmp(limit.v, limit.allowed)
 		if bad {
