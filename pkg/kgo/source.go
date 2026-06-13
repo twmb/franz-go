@@ -1638,6 +1638,25 @@ func buildAborter(rp *kmsg.FetchResponseTopicPartition) aborter {
 	for _, abort := range rp.AbortedTransactions {
 		a[abort.ProducerID] = append(a[abort.ProducerID], abort.FirstOffset)
 	}
+	// shouldAbortBatch and trackAbortedPID below both treat a[pid][0] as the
+	// smallest remaining aborted first offset for that producer: a batch is
+	// aborted once its FirstOffset reaches a[pid][0], and each abort marker
+	// pops a[pid][0]. The broker is NOT required to return a producer's aborted
+	// transactions sorted by first offset, though. Apache Kafka happens to (its
+	// transaction index is appended in last-offset order, which for one
+	// producer's strictly sequential transactions coincides with first-offset
+	// order), but Redpanda concatenates its newest in-memory aborted ranges
+	// (highest offsets) ahead of older on-disk snapshot ranges, so one
+	// producer's entries can arrive highest-first-offset first. With a[pid][0]
+	// not the smallest, a lower aborted transaction slips past the
+	// `FirstOffset < pidAborts[0]` guard and its records are surfaced to the
+	// application as committed - a read_committed violation. Sort each
+	// producer's first offsets ascending to restore the invariant the rest of
+	// the filtering relies on (the Java client makes the same guarantee with a
+	// first-offset-ordered priority queue).
+	for pid := range a {
+		slices.Sort(a[pid])
+	}
 	return a
 }
 
