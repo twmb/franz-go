@@ -176,7 +176,7 @@ out:
 		case CodecGzip:
 			level := gzip.DefaultCompression
 			if codec.level != 0 {
-				if _, err := gzip.NewWriterLevel(nil, codec.level); err != nil {
+				if _, err := gzip.NewWriterLevel(nil, codec.level); err == nil {
 					level = codec.level
 				}
 			}

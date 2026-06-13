@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"fmt"
 	"math/rand"
@@ -56,6 +57,69 @@ func TestNewCompressor(t *testing.T) {
 		fail := err != nil
 		if fail != test.fail {
 			t.Errorf("#%d: ok? %v, exp ok? %v", i, !fail, !test.fail)
+		}
+	}
+}
+
+// Regression test: DefaultCompressor's gzip arm adopted the user's level
+// only when the validation probe FAILED (inverted since b7a6f5a9,
+// "compression: check level errors ahead of time"). A valid custom level
+// was silently ignored, and an invalid level was adopted, making the pool
+// hand out typed-nil *gzip.Writers that panicked on first use. This test
+// panics pre-fix on the invalid-level arm and fails pre-fix on the
+// levels-differ assertion.
+func TestGzipCompressionLevels(t *testing.T) {
+	t.Parallel()
+
+	// Compressible-but-not-uniform input so that BestSpeed and
+	// BestCompression provably emit different bytes.
+	in := bytes.Repeat([]byte("abcdefghijklmno pqrs tuvwxy   z0123456789 the quick brown fox "), 2048)
+
+	compress := func(c Compressor) []byte {
+		w := new(bytes.Buffer)
+		out, codec := c.Compress(w, in)
+		if codec != CodecGzip {
+			t.Fatalf("got codec %d != exp gzip", codec)
+		}
+		return bytes.Clone(out)
+	}
+
+	c1, err := DefaultCompressor(GzipCompression().WithLevel(gzip.BestSpeed))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	c9, err := DefaultCompressor(GzipCompression().WithLevel(gzip.BestCompression))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	cDefault, err := DefaultCompressor(GzipCompression())
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	// WithLevel docs: an invalid level falls back to the default level.
+	cBad, err := DefaultCompressor(GzipCompression().WithLevel(127))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	out1, out9, outDefault, outBad := compress(c1), compress(c9), compress(cDefault), compress(cBad)
+
+	if bytes.Equal(out1, out9) {
+		t.Error("BestSpeed and BestCompression unexpectedly compressed identically; custom levels are being ignored")
+	}
+	if !bytes.Equal(outBad, outDefault) {
+		t.Error("invalid level did not fall back to the default level")
+	}
+
+	d := DefaultDecompressor()
+	for i, out := range [][]byte{out1, out9, outDefault, outBad} {
+		got, err := d.Decompress(out, CodecGzip)
+		if err != nil {
+			t.Errorf("#%d: unexpected decompress err: %v", i, err)
+			continue
+		}
+		if !bytes.Equal(got, in) {
+			t.Errorf("#%d: decompressed != input", i)
 		}
 	}
 }
