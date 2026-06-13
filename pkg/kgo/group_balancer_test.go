@@ -360,3 +360,56 @@ func TestNewConsumerBalancerIssue493(t *testing.T) {
 		t.Errorf("got unexpected error: %v", err)
 	}
 }
+
+// A cooperative plan must never hand a partition to a member whose ownership
+// claim is stale (a strictly higher-generation claim exists elsewhere): the
+// current owner is still consuming it, and skipping the revoke round means
+// two members consume the partition simultaneously. The stale claimant's own
+// OwnedPartitions must not mask the transfer.
+func TestAdjustCooperativeStaleClaimIsTransfer(t *testing.T) {
+	t.Parallel()
+
+	mkMeta := func(gen int32, owned map[string][]int32) []byte {
+		meta := kmsg.NewConsumerMemberMetadata()
+		meta.Version = 3
+		meta.Topics = []string{"t"}
+		meta.Generation = gen
+		for topic, parts := range owned {
+			op := kmsg.NewConsumerMemberMetadataOwnedPartition()
+			op.Topic = topic
+			op.Partitions = parts
+			meta.OwnedPartitions = append(meta.OwnedPartitions, op)
+		}
+		return meta.AppendTo(nil)
+	}
+
+	// a claims t/0 from generation 1; b claims t/0,1,2 from generation 2.
+	// Sticky's resticky pass deliberately moves t/0 back to the lighter a,
+	// which is fine for eager but must be a two-phase transfer when
+	// cooperative: b revokes first, a gets it next round.
+	members := []kmsg.JoinGroupResponseMember{
+		{MemberID: "a", ProtocolMetadata: mkMeta(1, map[string][]int32{"t": {0}})},
+		{MemberID: "b", ProtocolMetadata: mkMeta(2, map[string][]int32{"t": {0, 1, 2}})},
+	}
+
+	gb, _, err := CooperativeStickyBalancer().MemberBalancer(members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	into, err := gb.(GroupMemberBalancerOrError).BalanceOrError(map[string]int32{"t": 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := into.(*BalancePlan).AsMemberIDMap()
+
+	for member, topics := range plan {
+		for _, p := range topics["t"] {
+			if p == 0 {
+				t.Errorf("t/0 assigned to %s while generation-2 owner b has not yet revoked it", member)
+			}
+		}
+	}
+	if got := plan["b"]["t"]; len(got) != 2 {
+		t.Errorf("expected b to keep two partitions, got %v", got)
+	}
+}

@@ -972,6 +972,37 @@ func (p *BalancePlan) AdjustCooperative(b *ConsumerBalancer) {
 	tmap := make(map[string]struct{}) // reusable topic existence map
 	pmap := make(map[int32]struct{})  // reusable partitions existence map
 
+	// KIP-792 / KAFKA-12983: an OwnedPartitions claim only proves current
+	// ownership when no other member claims the same partition at a
+	// strictly higher generation. A member that missed rebalances can
+	// rejoin still claiming a partition that has since been assigned to
+	// (and is actively consumed by) another member. The balance plan may
+	// deliberately move the partition back to that stale claimant (sticky
+	// re-sticking); if the claimant's own stale claim then masks the move
+	// as "already owned", we skip the revoke round and two members consume
+	// the partition until the current owner's next sync. We track the
+	// highest claimed generation per partition and ignore strictly lower
+	// claims when computing what was added. Same-generation claims all
+	// count: each claimant keeps what the plan gave it and revokes the
+	// rest at its own sync, which creates no new overlap. The revoked side
+	// below stays unfiltered on purpose -- any claimant might still be
+	// consuming, and revoking more is always safe.
+	maxClaim := make(map[string]map[int32]int32, 8)
+	b.EachMember(func(_ *kmsg.JoinGroupResponseMember, meta *kmsg.ConsumerMemberMetadata) {
+		for _, otopic := range meta.OwnedPartitions {
+			claimT := maxClaim[otopic.Topic]
+			if claimT == nil {
+				claimT = make(map[int32]int32, 20)
+				maxClaim[otopic.Topic] = claimT
+			}
+			for _, opartition := range otopic.Partitions {
+				if gen, ok := claimT[opartition]; !ok || meta.Generation > gen {
+					claimT[opartition] = meta.Generation
+				}
+			}
+		}
+	})
+
 	plan := p.plan
 
 	// First, on all members, we find what was added and what was removed
@@ -997,12 +1028,17 @@ func (p *BalancePlan) AdjustCooperative(b *ConsumerBalancer) {
 				continue
 			}
 			// calculate what was added by creating a planned existence map,
-			// then removing what was owned, and anything that remains is new,
+			// then removing what was owned, and anything that remains is new.
+			// A claim beaten by a strictly higher-generation claim elsewhere
+			// is stale and does not count as owned: the planned partition is
+			// then a real transfer that must wait for the owner's revoke.
 			for _, ppartition := range ppartitions {
 				pmap[ppartition] = struct{}{}
 			}
 			for _, opartition := range otopic.Partitions {
-				delete(pmap, opartition)
+				if meta.Generation >= maxClaim[topic][opartition] {
+					delete(pmap, opartition)
+				}
 			}
 			if len(pmap) > 0 {
 				allAddedT := addT(topic)
