@@ -205,6 +205,34 @@ func ParseConsumerSyncAssignment(assignment []byte) (map[string][]int32, error) 
 //
 // If any metadata parsing fails, this returns an error.
 func NewConsumerBalancer(balance ConsumerBalancerBalance, members []kmsg.JoinGroupResponseMember) (*ConsumerBalancer, error) {
+	// A buggy or hostile broker can list the same member ID twice in one
+	// JoinGroup response. Balancers key plans by member ID, so a duplicate
+	// either merges (range, roundrobin) or, worse, overwrites: the sticky
+	// engine balances the duplicates as two members and then loses one
+	// side's partitions when keying its returned plan -- partitions
+	// assigned to nobody. Keep the first occurrence.
+	for i := 1; i < len(members); i++ {
+		var dup bool
+		for j := range i {
+			if members[j].MemberID == members[i].MemberID {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			dedup := make([]kmsg.JoinGroupResponseMember, 0, len(members))
+			seen := make(map[string]struct{}, len(members))
+			for _, member := range members {
+				if _, exists := seen[member.MemberID]; !exists {
+					seen[member.MemberID] = struct{}{}
+					dedup = append(dedup, member)
+				}
+			}
+			members = dedup
+			break
+		}
+	}
+
 	b := &ConsumerBalancer{
 		b:         balance,
 		members:   members,
@@ -494,6 +522,13 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		}
 	} else {
 		into = memberBalancer.Balance(topicPartitionCount)
+	}
+
+	// A custom balancer that fails is documented to SetError and return
+	// nil; if it returns nil without setting an error, fail loudly rather
+	// than dereferencing the nil interface below.
+	if into == nil {
+		return nil, fmt.Errorf("balancer %s returned a nil plan with no error", proto)
 	}
 
 	if p, ok := into.(*BalancePlan); ok {

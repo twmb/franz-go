@@ -429,3 +429,34 @@ func TestNewConsumerBalancerMalformedMetadataErrors(t *testing.T) {
 		t.Error("expected an error for truncated member metadata, got nil")
 	}
 }
+
+// A buggy or hostile broker can list the same member twice in one JoinGroup
+// response. The sticky engine balances list entries independently but keys
+// its returned plan by member ID, so without deduplication the duplicate's
+// partitions overwrite each other and some partitions are assigned to nobody.
+func TestNewConsumerBalancerDuplicateMemberIDs(t *testing.T) {
+	t.Parallel()
+
+	members := []kmsg.JoinGroupResponseMember{
+		{MemberID: "a", ProtocolMetadata: simpleMemberMetadata([]string{"t"}, 0)},
+		{MemberID: "a", ProtocolMetadata: simpleMemberMetadata([]string{"t"}, 0)},
+	}
+
+	gb, _, err := StickyBalancer().MemberBalancer(members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	into, err := gb.(GroupMemberBalancerOrError).BalanceOrError(map[string]int32{"t": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := into.(*BalancePlan).AsMemberIDMap()
+
+	var total int
+	for _, topics := range plan {
+		total += len(topics["t"])
+	}
+	if total != 2 {
+		t.Errorf("expected 2 partitions assigned, got %d (plan %v)", total, plan)
+	}
+}
