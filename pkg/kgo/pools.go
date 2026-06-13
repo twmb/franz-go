@@ -145,6 +145,13 @@ func (r *Record) Recycle() {
 		return
 	}
 
+	ps.release()
+}
+
+// release zeroes and puts the pooled slices back. Called by a batch's last
+// Recycle, or directly by the fetch processor when a batch kept no records
+// (so no Recycle will ever run).
+func (ps *recordPools) release() {
 	// Reset the length of slices to max to ensure we zero things and so
 	// that users can avoid this resetting.
 	ps.decompressBytes = ps.decompressBytes[:cap(ps.decompressBytes)]

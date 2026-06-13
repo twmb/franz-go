@@ -1803,8 +1803,10 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	}
 
 	recordCtx := poolsCtx
+	var slabbed bool
 	if o.shareAckSlab != nil && len(rrecords) > 0 {
 		if slab := o.shareAckSlab(numRecords, &rrecords[0]); slab != nil {
+			slabbed = true
 			parent := poolsCtx
 			if parent == nil {
 				parent = context.Background()
@@ -1814,9 +1816,28 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	}
 	var nkept int
 	defer func() {
-		if p != nil && nkept > 0 {
-			p.n.Add(int64(nkept))
+		if p == nil {
+			return
 		}
+		if nkept > 0 {
+			p.n.Add(int64(nkept))
+			return
+		}
+		// No record from this batch was kept: an aborted transaction's
+		// data batch, a control/marker batch, or a batch wholly below
+		// the requested offset. Nothing will ever call Recycle, so the
+		// recordPools put-back would never run and abort-heavy
+		// read_committed workloads would leak every pool Get. Release
+		// the pooled slices now, zeroing the written-then-discarded
+		// records like Recycle would have. Skip when a share-ack slab
+		// was created: the slab indexes rrecords by pointer, and putting
+		// the slice back would let the pool hand out memory the slab
+		// still references.
+		if slabbed {
+			return
+		}
+		clear(p.recs)
+		p.release()
 	}()
 
 	for i := range krecords {
