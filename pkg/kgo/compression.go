@@ -415,7 +415,15 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 		return rfn(), nil
 	case CodecSnappy:
 		if len(src) > 16 && bytes.HasPrefix(src, xerialPfx) {
-			return xerialDecode(src)
+			// Decode into the pooled destination when one exists;
+			// this path previously ignored the pool's Get entirely
+			// (fresh allocation every batch, and the Get'd slice was
+			// orphaned: never used, never put back).
+			var xdst []byte
+			if userPooled {
+				xdst = out.Bytes()
+			}
+			return xerialDecode(xdst, src)
 		}
 		// The decoded length is read from the header and allocated up
 		// front; check the claim before decoding.
@@ -462,13 +470,15 @@ var xerialPfx = []byte{130, 83, 78, 65, 80, 80, 89, 0}
 
 var errMalformedXerial = errors.New("malformed xerial framing")
 
-func xerialDecode(src []byte) ([]byte, error) {
+// xerialDecode appends the decoded chunks to dst (commonly a len-0 pooled
+// slice, or nil) and returns the result.
+func xerialDecode(dst, src []byte) ([]byte, error) {
 	// bytes 0-8: xerial header
 	// bytes 8-16: xerial version
 	// everything after: uint32 chunk size, snappy chunk
 	// we come into this function knowing src is at least 16
 	src = src[16:]
-	var dst, chunk []byte
+	var chunk []byte
 	var err error
 	for len(src) > 0 {
 		if len(src) < 4 {

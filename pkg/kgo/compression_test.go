@@ -293,6 +293,37 @@ func TestDecompressUserPoolLenNonzero(t *testing.T) {
 	}
 }
 
+type capturingDecompressPool struct{ got []byte }
+
+func (p *capturingDecompressPool) GetDecompressBytes([]byte, CompressionCodecType) []byte {
+	p.got = make([]byte, 0, 64<<10)
+	return p.got
+}
+
+func (p *capturingDecompressPool) PutDecompressBytes([]byte) {}
+
+// Xerial-framed snappy must decode into the pooled destination like every
+// other codec path; pre-fix it took the pool's Get, ignored it, and
+// allocated fresh (orphaning the Get'd slice from the pool's perspective).
+func TestXerialDecodeUsesPool(t *testing.T) {
+	t.Parallel()
+	data, err := base64.StdEncoding.DecodeString("glNOQVBQWQAAAAABAAAAAQAAAA8NMEhlbGxvLCBXb3JsZCE=")
+	if err != nil {
+		t.Fatalf("base64 decode error = %v", err)
+	}
+	pool := new(capturingDecompressPool)
+	got, err := DefaultDecompressor(pool).Decompress(data, CodecSnappy)
+	if err != nil {
+		t.Fatalf("unexpected decompress err: %v", err)
+	}
+	if string(got) != "Hello, World!" {
+		t.Errorf("got %q != exp %q", got, "Hello, World!")
+	}
+	if len(got) == 0 || cap(pool.got) == 0 || &got[0] != &pool.got[:1][0] {
+		t.Error("xerial decode did not decode into the pooled slice")
+	}
+}
+
 // A zstd frame whose header claims a huge content size must be rejected by
 // the decoder's content-size bound. Pre-fix the decoder accepted claims up
 // to the library-default 64 GiB and this truncated frame failed with a
@@ -387,7 +418,7 @@ func Test_xerialDecode(t *testing.T) {
 				t.Errorf("base64 decode error = %v", err)
 				return
 			}
-			got, err := xerialDecode(data)
+			got, err := xerialDecode(nil, data)
 			if (err != nil) != test.wantErr {
 				t.Errorf("xerialDecode() error = %v, wantErr %v", err, test.wantErr)
 				return
