@@ -29,7 +29,7 @@ type readerFrom interface {
 // another fetch in the background.
 type source struct {
 	cl     *Client // our owning client, for cfg, metadata triggering, context, etc.
-	nodeID int32   // the node ID of the broker this sink belongs to
+	nodeID int32   // the node ID of the broker this source belongs to
 
 	// Tracks how many _failed_ fetch requests we have in a row (unable to
 	// receive a response). Any response, even responses with an ErrorCode
@@ -2808,7 +2808,7 @@ func (s *source) removeShareCursor(c *shareCursor) {
 		s.share.cursorsStart = 0
 	}
 	s.share.mu.Unlock()
-	// We don't ned to wake the source to send this is a forgotten
+	// We don't need to wake the source to send this as a forgotten
 	// partition, but it doesn't hurt.
 	s.maybeShareConsume()
 }

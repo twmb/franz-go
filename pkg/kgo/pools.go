@@ -11,7 +11,7 @@ import (
 
 ////////////////////////////////////////////////////////////////
 // NOTE:                                                      //
-// NOTE: Make sure new hooks are checked in implementsAnyPool //
+// NOTE: Make sure new pools are checked in implementsAnyPool //
 // NOTE:                                                      //
 ////////////////////////////////////////////////////////////////
 
@@ -201,6 +201,10 @@ func implementsAnyPool(p Pool) bool {
 	return false
 }
 
+// ensureLen returns s reset to exactly length n, growing it if needed. n
+// must be >= 0: a negative n panics on the s[:n] slice expression. Callers
+// pass a record count read off the wire, which is rejected for < 0 before
+// reaching here (see processRecordBatch's negative-count guard).
 func ensureLen[S ~[]E, E any](s S, n int) S {
 	s = s[:cap(s)]
 	if len(s) >= n {

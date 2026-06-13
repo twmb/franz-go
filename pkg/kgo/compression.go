@@ -54,8 +54,9 @@ const (
 	// CodecZstd is a compression codec signifying zstd compression.
 	CodecZstd
 
-	// CodecError is returned from compressing or decompressing if an error
-	// occurred.
+	// CodecError is returned as the used-codec from Compress if an error
+	// occurred while compressing (Decompress reports errors via its error
+	// return instead).
 	CodecError = -1
 )
 
