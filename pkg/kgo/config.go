@@ -720,6 +720,12 @@ func WithLogger(l Logger) Opt {
 // WithContext sets the client to use a custom context.
 //
 // By default, the client uses context.Background.
+//
+// Canceling this context stops the client's background goroutines and fails
+// in-flight requests with ErrClientClosed, but it does not replace Close:
+// records still buffered for producing are reliably failed only by Close, and
+// a group leave is sent only by Close. Always call Close for a clean shutdown;
+// canceling this context first (to interrupt blocking calls) is fine.
 func WithContext(ctx context.Context) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.ctx = ctx }}
 }
