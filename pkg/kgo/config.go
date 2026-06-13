@@ -443,6 +443,40 @@ func (cfg *cfg) validate() error {
 		return errors.New("invalid use of ConsumeExcludeTopics when not using ConsumeRegex")
 	}
 
+	// A topic literally named "" cannot exist; consuming it would spin on
+	// UNKNOWN_TOPIC metadata forever with no surfaced error. In regex mode the
+	// ConsumeTopics values are patterns ("" is a valid match-all regex), so we
+	// only reject empty names when not consuming via regex.
+	if !cfg.regex {
+		for topic := range cfg.topics {
+			if topic == "" {
+				return errors.New("invalid empty topic name in ConsumeTopics")
+			}
+		}
+	}
+	for topic, partitions := range cfg.partitions {
+		if topic == "" {
+			return errors.New("invalid empty topic name in ConsumePartitions")
+		}
+		for p := range partitions {
+			if p < 0 {
+				return fmt.Errorf("invalid negative partition %d for topic %q in ConsumePartitions", p, topic)
+			}
+		}
+	}
+
+	// These options take a value; if explicitly set to "" it is a mistake (an
+	// empty transactional or instance ID is not valid). Both are *string so an
+	// explicit "" is distinguishable from unset (nil). ConsumerGroup and
+	// ShareGroup are plain strings, indistinguishable from unset, so they are
+	// not checked here.
+	if cfg.txnID != nil && *cfg.txnID == "" {
+		return errors.New("invalid empty TransactionalID")
+	}
+	if cfg.instanceID != nil && *cfg.instanceID == "" {
+		return errors.New("invalid empty InstanceID")
+	}
+
 	if cfg.topics != nil && cfg.partitions != nil {
 		for topic := range cfg.partitions {
 			if _, exists := cfg.topics[topic]; exists {
