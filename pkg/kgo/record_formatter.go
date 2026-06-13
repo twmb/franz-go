@@ -1226,7 +1226,11 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 
 		switch escaped {
 		default:
-			return fmt.Errorf("unknown percent escape sequence %q", layout[:1])
+			// escaped is the verb byte; layout has already advanced past
+			// it (and past any '{'), so it can be empty here - slicing
+			// layout[:1] would panic for an unknown verb at the end of
+			// the layout (e.g. "%q").
+			return fmt.Errorf("unknown percent escape sequence %q", string(escaped))
 
 		case 'T', 'K', 'V', 'H':
 			var dst *uint64
@@ -1391,7 +1395,7 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 				inner(b, r)
 				return nil
 			}}
-			bit.set(bit)
+			bits.set(bit)
 			if bits.has(bitSize) {
 				if re != nil {
 					return errors.New("cannot specify exact size and regular expression")
@@ -1837,10 +1841,34 @@ func (r *RecordReader) readRe(re *regexp.Regexp) error {
 }
 
 func (r *RecordReader) readSize(n int) error {
-	r.buf = append(r.buf, make([]byte, n)...)
-	n, err := io.ReadFull(r.r, r.buf)
-	r.buf = r.buf[:n]
-	return err
+	if n < 0 {
+		// A size verb (%T/%K/%V) reads its value from the input as a
+		// uint64; converting to int can wrap negative for values above
+		// math.MaxInt64. Reject rather than panicking in make below.
+		return fmt.Errorf("invalid negative read size %d", n)
+	}
+	// Read in bounded chunks rather than pre-allocating n bytes up front:
+	// a hostile or corrupt size verb can claim a huge length that would
+	// OOM the process before io.ReadFull notices the input is short. The
+	// caller resets r.buf to empty before invoking us, so we accumulate
+	// from index 0.
+	const chunk = 64 << 10
+	for len(r.buf) < n {
+		start := len(r.buf)
+		r.buf = append(r.buf, make([]byte, min(n-start, chunk))...)
+		nn, err := io.ReadFull(r.r, r.buf[start:])
+		r.buf = r.buf[:start+nn]
+		if err != nil {
+			// io.ReadFull reports EOF only when it read zero bytes of
+			// this chunk; if we have already accumulated bytes for this
+			// field the value is truncated, which is an unexpected EOF.
+			if err == io.EOF && len(r.buf) > 0 {
+				err = io.ErrUnexpectedEOF
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *RecordReader) readExact(d []byte) error {
@@ -2263,7 +2291,10 @@ func parseLayoutSlash(layout string) (byte, int, error) {
 			return 0, 0, errors.New("invalid non-terminated hex escape sequence at end of delim string")
 		}
 		hex := layout[1:3]
-		n, err := strconv.ParseInt(hex, 16, 8)
+		// A \xNN escape names the byte with hex value NN, i.e. the full
+		// [0, 255] range. ParseInt with bitSize 8 caps at 0x7f and
+		// rejected 0x80-0xff; ParseUint with bitSize 8 accepts [0, 255].
+		n, err := strconv.ParseUint(hex, 16, 8)
 		if err != nil {
 			return 0, 0, fmt.Errorf("unable to parse hex escape sequence %q: %v", hex, err)
 		}

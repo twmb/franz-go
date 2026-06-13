@@ -98,6 +98,13 @@ func TestRecordFormatter(t *testing.T) {
 		},
 
 		{
+			// \xNN names the full [0,255] byte range; high bytes
+			// (0x80-0xff) were previously rejected by the parser.
+			layout: `\x00\x7f\x80\xfe\xff`,
+			expR:   "\x00\x7f\x80\xfe\xff",
+		},
+
+		{
 			layout: "%T %K %V %H %p %o %e %i %x %y",
 			expR:   "26 3 5 2 3 343 -1 1 791 1",
 			expP:   "26 3 5 2 3 343 -1 2 791 1",
@@ -840,5 +847,49 @@ func BenchmarkRecordReader(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// An invalid layout must yield an error, never a panic. The reader's unknown
+// escape arm sliced layout[:1] after layout was advanced past the verb, so an
+// unknown verb at the end of the layout (e.g. "%q") indexed an empty string.
+// The size-after-value arms (e.g. "%t%T") relied on a bits flag that a typo
+// (bit.set(bit) instead of bits.set(bit)) never set, so those layouts were
+// silently accepted.
+func TestNewRecordReaderRejectsBadLayouts(t *testing.T) {
+	for _, layout := range []string{
+		"%q",   // unknown verb at end of layout
+		"%qx",  // unknown verb mid-layout
+		"%t%T", // topic size spec after topic value spec
+		"%v%V", // value size spec after value value spec
+		"%k%K", // key size spec after key value spec
+	} {
+		t.Run(layout, func(t *testing.T) {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("NewRecordReader(%q) panicked: %v", layout, p)
+				}
+			}()
+			if _, err := NewRecordReader(strings.NewReader(""), layout); err == nil {
+				t.Errorf("NewRecordReader(%q): got nil error, want an error", layout)
+			}
+		})
+	}
+}
+
+// A size verb whose value overflows int (here math.MaxUint64) must produce a
+// read error, not a panic in make([]byte, n) with a wrapped-negative length.
+func TestRecordReaderOverflowingSizeNoPanic(t *testing.T) {
+	r, err := NewRecordReader(strings.NewReader("18446744073709551615x"), "%V%v")
+	if err != nil {
+		t.Fatalf("unexpected layout parse error: %v", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			t.Fatalf("ReadRecord panicked on an overflowing size verb: %v", p)
+		}
+	}()
+	if _, err := r.ReadRecord(); err == nil {
+		t.Error("got nil error reading an overflowing size verb, want an error")
 	}
 }
