@@ -1535,7 +1535,13 @@ func ProcessFetchPartition(o ProcessFetchPartitionOpts, rp *kmsg.FetchResponseTo
 		offset := int64(binary.BigEndian.Uint64(in))
 		length = int32(binary.BigEndian.Uint32(in[8:]))
 		length += 12 // for the int64 offset we skipped and int32 length field itself
-		if len(in) < int(length) {
+		// length is read as a signed int32: a high-bit-set length field (or a
+		// near-MaxInt32 one, which overflows negative once we add 12) is
+		// negative and would slip past the truncation check below, panicking
+		// check()'s in[:length] with a negative bound. Treat a negative length
+		// as an untrustworthy/truncated batch and stop, matching the negative
+		// guards already in parseReadSize and the xerial decoder.
+		if length < 0 || len(in) < int(length) {
 			break
 		}
 
@@ -1896,7 +1902,10 @@ out:
 	for len(rawInner) > 17 { // magic at byte 17
 		length := int32(binary.BigEndian.Uint32(rawInner[8:]))
 		length += 12 // offset and length fields
-		if len(rawInner) < int(length) {
+		// A negative length (high-bit-set length field, signed int32) would
+		// slip past the truncation check and panic rawInner[:length]; treat it
+		// as a truncated message set. See the record-batch loop's guard.
+		if length < 0 || len(rawInner) < int(length) {
 			break
 		}
 
@@ -2009,7 +2018,10 @@ func (o *ProcessFetchPartitionOpts) processV0OuterMessage(
 	for len(rawInner) > 17 { // magic at byte 17
 		length := int32(binary.BigEndian.Uint32(rawInner[8:]))
 		length += 12 // offset and length fields
-		if len(rawInner) < int(length) {
+		// A negative length (high-bit-set length field, signed int32) would
+		// slip past the truncation check and panic rawInner[:length]; treat it
+		// as a truncated message set. See the record-batch loop's guard.
+		if length < 0 || len(rawInner) < int(length) {
 			break // truncated batch
 		}
 		var m kmsg.MessageV0
