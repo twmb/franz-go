@@ -17,7 +17,8 @@ import (
 // bug. The second version introduced generations with the default generation
 // from the first generation's consumers defaulting to -1.
 
-// We can support up to 65533 members; two slots are reserved.
+// We can support up to 65533 members; the unassignedPart sentinel and one
+// spare slot are reserved.
 // We can support up to 2,147,483,647 partitions.
 // I expect a server to fall over before reaching either of these numbers.
 

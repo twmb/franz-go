@@ -803,13 +803,13 @@ func (*rangeBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) Into
 // StickyBalancer returns a group balancer that ensures minimal partition
 // movement on group changes while also ensuring optimal balancing.
 //
-// Suppose there are three members M0, M1, and M2, and two topics t0 and t1
-// each with three partitions p0, p1, and p2. If the initial balance plan looks
-// like
+// Suppose there are three members M0, M1, and M2, and three topics t0, t1,
+// and t2 each with three partitions p0, p1, and p2. If the initial balance
+// plan looks like
 //
 //	M0: [t0p0, t0p1, t0p2]
 //	M1: [t1p0, t1p1, t1p2]
-//	M2: [t2p0, t2p2, t2p2]
+//	M2: [t2p0, t2p1, t2p2]
 //
 // If M2 disappears, both roundrobin and range would have mostly destructive
 // reassignments.
