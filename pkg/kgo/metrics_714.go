@@ -310,16 +310,17 @@ type (
 
 	// metricRate is a count per second and a total.
 	metricRate struct {
-		count   atomic.Int64 // Sum of events this period; rate == float64(count/time) at rollup
+		count   atomic.Int64 // Events this period; rate == count/elapsed-seconds at rollup.
 		tot     atomic.Int64 // Total events over all time.
 		lastTot int64        // Updated when encoding; the last value for tot in case broker requests DELTA.
 	}
 
-	// metricTime reports average latency, max latency, and total latency.
-	// The unit is in milliseconds.
+	// metricTime reports average latency and max latency. The unit is in
+	// milliseconds.
 	metricTime struct {
-		sum atomic.Int64 // With separate aggDur field, avg = sum/aggDur at rollup.
-		max atomic.Int64 // Max latency seen during this window.
+		sum   atomic.Int64 // Sum of all observations this period; avg = sum/count at rollup.
+		count atomic.Int64 // Number of observations this period; the avg denominator.
+		max   atomic.Int64 // Max latency seen during this window.
 	}
 
 	// We skip:
@@ -393,13 +394,17 @@ func (t *metricRate) observe() {
 	t.tot.Add(1)
 }
 
-func (t *metricRate) rollNums() (rate float64, tot, lastTot int64) {
+func (t *metricRate) rollNums(aggDur time.Duration) (rate float64, tot, lastTot int64) {
 	count := t.count.Swap(0)
 	lastTot = t.lastTot
 	tot = t.tot.Load()
 	t.lastTot = tot
 
-	rate = safeDiv(float64(count), float64(tot-lastTot))
+	// A rate is events-per-second over the aggregation window, matching
+	// Kafka's Rate stat (value / elapsed-time). The previous divisor was
+	// tot-lastTot, which equals count by construction (observe increments
+	// both count and tot), so the rate was a constant ~1.0.
+	rate = safeDiv(float64(count), aggDur.Seconds())
 	return rate, tot, lastTot
 }
 
@@ -407,6 +412,7 @@ func (t *metricRate) rollNums() (rate float64, tot, lastTot int64) {
 // triggerFirstObserve is always called.
 func (t *metricTime) observe(millis int64) {
 	t.sum.Add(millis)
+	t.count.Add(1)
 	for {
 		max := t.max.Load()
 		if millis < max {
@@ -418,10 +424,14 @@ func (t *metricTime) observe(millis int64) {
 	}
 }
 
-func (t *metricTime) rollNums(aggDur time.Duration) (avg float64, max int64) {
+func (t *metricTime) rollNums() (avg float64, max int64) {
 	sum := t.sum.Swap(0)
+	count := t.count.Swap(0)
 	max = t.max.Swap(0)
-	avg = safeDiv(float64(sum), float64(aggDur.Milliseconds()))
+	// An avg is the mean observation, matching Kafka's Avg stat
+	// (total / count). The previous divisor was the aggregation window
+	// duration in millis, which is not the number of observations.
+	avg = safeDiv(float64(sum), float64(count))
 	return avg, max
 }
 
@@ -584,18 +594,18 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 	} {
 		switch t := s.v.(type) {
 		case *metricRate:
-			rate, tot, lastTot := t.rollNums()
+			rate, tot, lastTot := t.rollNums(aggDur)
 			appendGauge(s.name+".rate", 0, rate, nil)
 			appendSum(s.name+".total", tot, lastTot, nil)
 
 		case *metricTime:
-			avg, max := t.rollNums(aggDur)
+			avg, max := t.rollNums()
 			appendGauge(s.name+".avg", 0, avg, nil)
 			appendGauge(s.name+".max", max, 0, nil)
 
 		case *map[int32]*metricTime:
 			for broker, m := range *t {
-				avg, max := m.rollNums(aggDur)
+				avg, max := m.rollNums()
 				attrs := map[string]any{"node_id": broker}
 				appendGauge(s.name+".avg", 0, avg, attrs)
 				appendGauge(s.name+".max", max, 0, attrs)
@@ -933,18 +943,13 @@ func (d *otelNumDataPoint) appendTo(b []byte) []byte {
 }
 
 func appendOtelAttributesTo(b []byte, fieldNumber int, attrs map[string]any) []byte {
-outer:
 	for key, value := range attrs {
-		b = appendProtoTag(b, fieldNumber, protoTypeLength)
-
-		kvBytes := []byte{}
-		// Field 1: key (string)
-		kvBytes = appendProtoTag(kvBytes, 1, protoTypeLength)
-		kvBytes = appendProtoString(kvBytes, key)
-
-		// Field 2: value (AnyValue)
-		kvBytes = appendProtoTag(kvBytes, 2, protoTypeLength)
-
+		// We must determine that the value is serializable BEFORE we
+		// write anything to b: an unsupported type continues the loop,
+		// and if we had already appended the field tag we would leave a
+		// dangling tag with no length+payload, corrupting the whole
+		// protobuf (the documented Attrs contract is to silently skip
+		// unsupported types).
 		var anyValueBytes []byte
 		switch t := value.(type) {
 		case *string, string:
@@ -1009,9 +1014,18 @@ outer:
 			anyValueBytes = binary.AppendUvarint(anyValueBytes, uint64(len(t)))
 			anyValueBytes = append(anyValueBytes, t...)
 		default:
-			continue outer
+			continue
 		}
 
+		b = appendProtoTag(b, fieldNumber, protoTypeLength)
+
+		kvBytes := []byte{}
+		// Field 1: key (string)
+		kvBytes = appendProtoTag(kvBytes, 1, protoTypeLength)
+		kvBytes = appendProtoString(kvBytes, key)
+
+		// Field 2: value (AnyValue)
+		kvBytes = appendProtoTag(kvBytes, 2, protoTypeLength)
 		kvBytes = binary.AppendUvarint(kvBytes, uint64(len(anyValueBytes)))
 		kvBytes = append(kvBytes, anyValueBytes...)
 
