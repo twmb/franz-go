@@ -42,7 +42,9 @@ func (ps pools) each(fn func(Pool) bool) {
 type PoolDecompressBytes interface {
 	// GetDecompressBytes returns a slice to decompress into. This
 	// interface is given the compressed data and the codec that will be
-	// used for decompressing.
+	// used for decompressing. Only the returned slice's capacity is used;
+	// data is written starting at index 0 regardless of the slice's
+	// length.
 	//
 	// For many decompression algorithms, it is not possible to accurately
 	// know the size that data will be once decompressed. You can guess a

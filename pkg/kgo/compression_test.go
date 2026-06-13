@@ -250,6 +250,49 @@ func TestDecompressBombBounded(t *testing.T) {
 	}
 }
 
+type lenfulDecompressPool struct{}
+
+func (lenfulDecompressPool) GetDecompressBytes([]byte, CompressionCodecType) []byte {
+	// Return a slice with nonzero length and garbage contents: only the
+	// capacity may be used as the decompression destination.
+	b := make([]byte, 64, 64<<10)
+	for i := range b {
+		b[i] = 0xAA
+	}
+	return b
+}
+
+func (lenfulDecompressPool) PutDecompressBytes([]byte) {}
+
+// A PoolDecompressBytes implementation may return a slice with len > 0
+// (e.g. make([]byte, sizeGuess)). Decompression must write from index 0,
+// not append after the existing length: pre-fix, gzip/lz4/zstd returned
+// the slice's stale prefix followed by the decompressed data, corrupting
+// every compressed batch (snappy alone overwrote from index 0).
+func TestDecompressUserPoolLenNonzero(t *testing.T) {
+	t.Parallel()
+	in := bytes.Repeat([]byte("payload bytes 01234 "), 64)
+	for _, codec := range []CompressionCodecType{CodecGzip, CodecSnappy, CodecLz4, CodecZstd} {
+		c, err := DefaultCompressor(CompressionCodec{codec: codec})
+		if err != nil {
+			t.Fatalf("codec %d: unexpected compressor err: %v", codec, err)
+		}
+		w := new(bytes.Buffer)
+		compressed, used := c.Compress(w, in)
+		if used != codec {
+			t.Fatalf("codec %d: compressed with %d", codec, used)
+		}
+		got, err := DefaultDecompressor(lenfulDecompressPool{}).Decompress(compressed, codec)
+		if err != nil {
+			t.Errorf("codec %d: unexpected decompress err: %v", codec, err)
+			continue
+		}
+		if !bytes.Equal(got, in) {
+			t.Errorf("codec %d: decompressed data corrupted (len %d, exp %d)", codec, len(got), len(in))
+		}
+	}
+}
+
 // A zstd frame whose header claims a huge content size must be rejected by
 // the decoder's content-size bound. Pre-fix the decoder accepted claims up
 // to the library-default 64 GiB and this truncated frame failed with a

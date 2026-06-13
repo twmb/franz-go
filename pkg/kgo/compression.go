@@ -372,7 +372,12 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 	d.pools.each(func(p Pool) bool {
 		if pdecompressBytes, ok := p.(PoolDecompressBytes); ok {
 			s := pdecompressBytes.GetDecompressBytes(src, codecType)
-			out = bytes.NewBuffer(s)
+			// Only the slice's capacity is used: decompressed data
+			// must start at index 0, while a buffer initialized with
+			// len(s) > 0 (a pool returning make([]byte, sizeGuess))
+			// would have the copy/append based codecs write AFTER the
+			// existing length, prefixing the output with stale bytes.
+			out = bytes.NewBuffer(s[:0])
 			rfn = out.Bytes
 			userPooled = true
 			return true
