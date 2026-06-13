@@ -1658,7 +1658,16 @@ func (a aborter) shouldAbortBatch(b *kmsg.RecordBatch) bool {
 }
 
 func (a aborter) trackAbortedPID(producerID int64) {
-	remaining := a[producerID][1:]
+	pidAborts := a[producerID]
+	if len(pidAborts) == 0 {
+		// Already exhausted for this PID. A well-formed response pops once
+		// per aborted transaction (one abort marker each), so this is only
+		// reachable from a buggy/hostile broker; reslicing a[producerID][1:]
+		// on the nil/empty slice would panic. Java removes the PID from a Set
+		// here, which is idempotent - mirror that.
+		return
+	}
+	remaining := pidAborts[1:]
 	if len(remaining) == 0 {
 		delete(a, producerID)
 	} else {
@@ -1846,6 +1855,12 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 		p.release()
 	}()
 
+	// A control batch ends at most one aborted transaction for its producer,
+	// so we pop the aborter at most once per batch. A well-formed control
+	// batch holds a single marker record; a buggy/hostile broker can pack many
+	// (and Java inspects only a control batch's first record), so without this
+	// guard a second abort marker would pop an already-empty aborter slice.
+	abortMarkerHandled := false
 	for i := range krecords {
 		record := &rrecords[i]
 		recordToRecord(
@@ -1861,12 +1876,13 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 			nkept++
 		}
 
-		if abortBatch && record.Attrs.IsControl() {
+		if abortBatch && !abortMarkerHandled && record.Attrs.IsControl() {
 			// A control record has a key and a value where the key
 			// is int16 version and int16 type. Aborted records
 			// have a type of 0.
 			if key := record.Key; len(key) >= 4 && key[2] == 0 && key[3] == 0 {
 				aborter.trackAbortedPID(batch.ProducerID)
+				abortMarkerHandled = true
 			}
 		}
 	}
