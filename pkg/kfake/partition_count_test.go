@@ -193,18 +193,28 @@ func TestProducePersistentMissingPartitionStillFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	// Load client metadata with the true two-partition view BEFORE
+	// producing the doomed record, matching the sibling transient test's
+	// canary. Without it the test is racy: bufferedRecords is incremented
+	// at produce admission (producer.go, before loadPartsAndPartition), so
+	// BufferedProduceRecords()!=0 only proves the record was admitted, not
+	// that it was partitioned against the two-partition view. Under load
+	// the record can still sit in the unknown-topics wait list when the
+	// stale one-partition view below lands, and its FIRST partitioning then
+	// runs against that view - failing via doPartition's out-of-range
+	// "invalid partitioning choice" (NOT_BUGS #10) instead of the
+	// errMissingMetadataPartition path under test. The canary makes the
+	// topic known with two partitions, so the doomed record partitions
+	// synchronously onto partition 1's recBuf, which the stale view then
+	// makes vanish.
+	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: "t", Partition: 1, Value: []byte("canary")}).FirstErr(); err != nil {
+		t.Fatalf("canary produce: %v", err)
+	}
+
 	done := make(chan error, 1)
 	cl.Produce(ctx, &kgo.Record{Topic: "t", Partition: 1, Value: []byte("doomed")}, func(_ *kgo.Record, err error) {
 		done <- err
 	})
-	// Wait for the async first metadata load to complete and the record to
-	// buffer; the load sees the true two-partition view.
-	for cl.BufferedProduceRecords() == 0 {
-		if ctx.Err() != nil {
-			t.Fatal("record never buffered")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 
 	stale := truncateMetadataPartitions(captureMetadata(t, cl, "t"), "t", 1)
 	defer serveStaleMetadata(c, stale)()
