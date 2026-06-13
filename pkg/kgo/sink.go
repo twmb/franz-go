@@ -1590,6 +1590,27 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		return true
 	}
 
+	// If the client is closing, fail the record rather than buffering it
+	// into a recBuf whose sink drain loop has already exited. close() cancels
+	// cl.ctx and then sweeps every recBuf exactly once via
+	// failBufferedRecords; a record buffered after that sweep would never be
+	// failed - its promise would never fire, BufferedProduceRecords would
+	// never return to zero, and a later Flush would hang - contradicting the
+	// documented ErrClientClosed contract ("for producing, records are failed
+	// with this error"). Checking cl.ctx under recBuf.mu (held here and by
+	// failAllRecords) is race-free given the close ordering (ctxCancel then
+	// sweep): we either observe the cancel and fail here, or we buffer before
+	// the sweep and the sweep fails us. The unknown-topic sibling path already
+	// honors this via waitUnknownTopic's cl.ctx.Done arm; this is the missing
+	// guard on the known-topic sibling. We select on Done rather than calling
+	// Err to keep this per-record hot path free of the context's per-call mutex.
+	select {
+	case <-recBuf.cl.ctx.Done():
+		recBuf.cl.producer.promiseRecord(pr, ErrClientClosed)
+		return true
+	default:
+	}
+
 	var (
 		mkNewBatch     = true
 		produceVersion = recBuf.sink.produceVersion.Load()
