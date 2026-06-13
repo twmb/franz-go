@@ -246,7 +246,10 @@ func (b *balancer) partNumByTopic(topic string, partition int32) (int32, bool) {
 		return 0, false
 	}
 	topicInfo := b.topicInfos[topicNum]
-	if partition >= topicInfo.partitions {
+	// Claimed partitions are arbitrary input from other group members; a
+	// negative partition would index our flat partition state at a
+	// negative offset (or alias into the preceding topic's range).
+	if partition < 0 || partition >= topicInfo.partitions {
 		return 0, false
 	}
 	return topicInfo.partNum + partition, true

@@ -2,6 +2,8 @@ package sticky
 
 import (
 	"testing"
+
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // A member that lost a partition to a higher-generation claimant is recorded
@@ -92,5 +94,33 @@ func TestStaleSkipDoesNotAbortOthers(t *testing.T) {
 		if got := plan["a"]["v"]; len(got) != 1 || got[0] != 0 {
 			t.Fatalf("iter %d: expected a to be re-stickied v/0, got %v (full plan %v)", i, got, plan)
 		}
+	}
+}
+
+// Member metadata is arbitrary input from other group members: a negative
+// claimed partition must be ignored, not index partition state at a negative
+// offset (leader panic) or alias into a neighboring topic's partition range.
+func TestNegativeClaimedPartitionNoPanic(t *testing.T) {
+	t.Parallel()
+
+	members := []GroupMember{
+		{
+			ID: "a", Topics: []string{"t"},
+			Cooperative: true, Generation: 1,
+			Owned: []kmsg.ConsumerMemberMetadataOwnedPartition{
+				{Topic: "t", Partitions: []int32{-1, 0}},
+			},
+		},
+		{ID: "b", Topics: []string{"t"}, UserData: newUD().setGeneration(1).assign("t", -2).encode()},
+	}
+
+	plan := Balance(members, map[string]int32{"t": 2})
+
+	var total int
+	for _, topics := range plan {
+		total += len(topics["t"])
+	}
+	if total != 2 {
+		t.Errorf("expected both partitions assigned exactly once, got plan %v", plan)
 	}
 }
