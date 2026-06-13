@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/base64"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand"
 	"reflect"
 	"sync"
 	"testing"
 
+	"github.com/klauspost/compress/s2"
+	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
 )
 
@@ -189,6 +193,80 @@ func TestCompressDecompress(t *testing.T) {
 		}(flag)
 	}
 	wg.Wait()
+}
+
+// Tests that a small compressed input expanding past the decompressed-size
+// bound is rejected rather than materialized (decompression bomb). The wire
+// fetch limits bound only compressed bytes; pre-fix every arm of this test
+// succeeded, and in production zstd accepted up to the library-default
+// 64 GiB while gzip/lz4 had no bound at all.
+func TestDecompressBombBounded(t *testing.T) {
+	// Not parallel: overrides maxDecompressedSize.
+	old := maxDecompressedSize
+	defer func() { maxDecompressedSize = old }()
+	maxDecompressedSize = 1 << 20
+
+	huge := make([]byte, 8<<20) // zeros compress tightly under every codec
+	for _, codec := range []CompressionCodecType{CodecGzip, CodecSnappy, CodecLz4, CodecZstd} {
+		c, err := DefaultCompressor(CompressionCodec{codec: codec})
+		if err != nil {
+			t.Fatalf("codec %d: unexpected compressor err: %v", codec, err)
+		}
+		w := new(bytes.Buffer)
+		compressed, used := c.Compress(w, huge)
+		if used != codec {
+			t.Fatalf("codec %d: compressed with %d", codec, used)
+		}
+		if _, err := DefaultDecompressor().Decompress(compressed, codec); err == nil {
+			t.Errorf("codec %d: decompressing an 8MiB-decoded batch under a 1MiB bound unexpectedly succeeded", codec)
+		}
+	}
+
+	// No false positives: inputs under the bound still round trip.
+	small := bytes.Repeat([]byte("abc123 "), 512)
+	for _, codec := range []CompressionCodecType{CodecGzip, CodecSnappy, CodecLz4, CodecZstd} {
+		c, _ := DefaultCompressor(CompressionCodec{codec: codec})
+		w := new(bytes.Buffer)
+		compressed, used := c.Compress(w, small)
+		got, err := DefaultDecompressor().Decompress(compressed, used)
+		if err != nil {
+			t.Errorf("codec %d: unexpected decompress err: %v", codec, err)
+		} else if !bytes.Equal(got, small) {
+			t.Errorf("codec %d: round trip mismatch", codec)
+		}
+	}
+
+	// Xerial-framed snappy accumulates chunks; the cumulative output must
+	// respect the bound even when each chunk individually is under it.
+	chunk := s2.EncodeSnappy(nil, make([]byte, 768<<10))
+	xer := append([]byte{}, xerialPfx...)
+	xer = append(xer, make([]byte, 8)...) // version + compat fields
+	for range 2 {
+		xer = binary.BigEndian.AppendUint32(xer, uint32(len(chunk)))
+		xer = append(xer, chunk...)
+	}
+	if _, err := DefaultDecompressor().Decompress(xer, CodecSnappy); err == nil {
+		t.Error("xerial chunks summing past the bound unexpectedly succeeded")
+	}
+}
+
+// A zstd frame whose header claims a huge content size must be rejected by
+// the decoder's content-size bound. Pre-fix the decoder accepted claims up
+// to the library-default 64 GiB and this truncated frame failed with a
+// generic EOF error only because no blocks follow the header; a
+// non-truncated bomb materialized in full. The frame deliberately carries
+// a small window descriptor so the claim is caught by the size bound, not
+// the unrelated window-size check.
+func TestDecompressZstdHugeClaim(t *testing.T) {
+	t.Parallel()
+	frame := []byte{0x28, 0xb5, 0x2f, 0xfd} // zstd magic, little endian
+	frame = append(frame, 0xc0)             // frame header descriptor: 8-byte frame content size, not single segment
+	frame = append(frame, 0x00)             // window descriptor: 1 KiB
+	frame = binary.LittleEndian.AppendUint64(frame, 8<<30)
+	_, err := DefaultDecompressor().Decompress(frame, CodecZstd)
+	if !errors.Is(err, zstd.ErrDecoderSizeExceeded) {
+		t.Errorf("got err %v != exp zstd.ErrDecoderSizeExceeded", err)
+	}
 }
 
 func BenchmarkCompress(b *testing.B) {
