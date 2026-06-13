@@ -777,7 +777,7 @@ func parseUnpack(layout string) (func([]byte, []byte) []byte, error) {
 		islittle := little
 		fns = append(fns, func(dst, src []byte) ([]byte, int) {
 			if len(src) < need {
-				return append(dst, fmt.Sprintf("%%!%%s(have %d bytes, need %d)", len(src), need)...), len(src)
+				return append(dst, fmt.Sprintf("%%!(have %d bytes, need %d)", len(src), need)...), len(src)
 			}
 
 			var ul, ub uint64

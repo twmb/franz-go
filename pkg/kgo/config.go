@@ -813,7 +813,7 @@ func MinVersions(versions *kversion.Versions) Opt {
 
 // RetryBackoffFn sets the backoff strategy for how long to backoff for a given
 // amount of retries, overriding the default jittery exponential backoff that
-// ranges from 250ms min to 2.5s max.
+// ranges from 250ms min to 5s max.
 //
 // This (roughly) corresponds to Kafka's retry.backoff.ms setting and
 // retry.backoff.max.ms (which is being introduced with KIP-500).
