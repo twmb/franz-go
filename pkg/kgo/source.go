@@ -1029,13 +1029,21 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		return fetched
 
 	default:
-		// Any other top-level error is unexpected: current brokers
-		// only emit session-related codes here. Rather than bumping
-		// the session epoch against a failed request, reset defensively
-		// so the next request re-establishes state the broker agrees
-		// with.
-		s.cl.cfg.logger.Log(LogLevelWarn, "fetch response has unexpected top-level error, resetting session", "broker", logID(s.nodeID), "err", err)
-		s.session.reset()
+		// Any other top-level error is unexpected: current brokers only
+		// emit session-related codes here, and every one of those arms
+		// above self-heals in a single round-trip (a reset re-establishes
+		// the session at epoch 0, which the broker then accepts). An
+		// unexpected code has no such bounded heal: a non-conformant or
+		// future broker that returns one persistently would spin this
+		// fetch at round-trip pace, re-logging on every iteration, because
+		// nothing here paces the loop. Back off rather than bumping the
+		// session epoch against a failed request; backoff also resets the
+		// session defensively so the next request re-establishes state the
+		// broker agrees with. This mirrors the transport-error and
+		// all-partitions-stripped paths, and the share fetch loop's
+		// top-level-error arm.
+		s.cl.cfg.logger.Log(LogLevelWarn, "fetch response has unexpected top-level error, resetting session and backing off", "broker", logID(s.nodeID), "err", err)
+		backoff(err)
 		return fetched
 	}
 
