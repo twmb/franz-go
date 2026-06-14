@@ -282,7 +282,7 @@ outer:
 				isAnyDialErr(err),
 				g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err):
 				consecutiveTransientRestarts++
-				if int64(consecutiveTransientRestarts) >= g.cfg.retries && int64(consecutiveTransientRestarts)%g.cfg.retries == 0 {
+				if shouldNotify848Restart(int64(consecutiveTransientRestarts), g.cfg.retries) {
 					g.c.addFakeReadyForDraining("", 0, &ErrGroupSession{
 						Err: fmt.Errorf("consumer group %s heartbeat has been failing for %d consecutive attempts, still retrying: %w", g.cfg.group, consecutiveTransientRestarts, err),
 					}, "consumer group heartbeat persistently failing")
@@ -382,6 +382,25 @@ outer:
 			return
 		}
 	}
+}
+
+// shouldNotify848Restart reports whether a transient-restart count warrants
+// surfacing the "heartbeat persistently failing" notification - the only
+// user-visible signal that an 848 group is unreachable: once we have
+// restarted at least `retries` times, on every `retries`-th restart.
+//
+// retries <= 0 means the user disabled retries (RequestRetries(0)). That also
+// disables in-session heartbeat retries - heartbeat() propagates the first
+// transient error immediately rather than retrying in place - so every
+// transient error is its own restart and each one warrants the notification.
+// We must therefore notify on every restart, NOT divide restarts by zero
+// (an integer divide-by-zero panic that would crash the manage goroutine on
+// the first transient heartbeat error).
+func shouldNotify848Restart(restarts, retries int64) bool {
+	if retries < 1 {
+		return true
+	}
+	return restarts >= retries && restarts%retries == 0
 }
 
 func (g *groupConsumer) leave848(ctx context.Context) {
