@@ -90,7 +90,7 @@ type (
 		mu       xsync.Mutex
 		cond     *sync.Cond
 		dying    bool // single-shot leave guard + incWorker gate
-		workers  int  // active goroutines (manage + source loops)
+		workers  int  // active goroutines (manage + source loops + in-flight cursor migrations)
 		left     chan struct{}
 		leaveErr error
 
@@ -1283,7 +1283,28 @@ func (sc *shareConsumer) applyMoves(moves []shareMove, endpoints []BrokerMetadat
 	if len(moves) == 0 {
 		return
 	}
-	go sc.cl.blockingMetadataFn(func() {
+	go sc.applyMovesBlocking(moves, endpoints)
+}
+
+// applyMovesBlocking performs the cursor migration on the metadata loop.
+// It registers as a share-consumer worker (incWorker/decWorker) so leave's
+// barrier waits for an in-flight migration before it drains and closes the
+// per-source sessions: the move runs via blockingMetadataFn and can relocate
+// a cursor (or create a brand-new source) concurrently with leave. Without
+// the worker registration, a CurrentLeader-hint move racing LeaveGroup/Close
+// can land a cursor on a source whose closeShareSession already drained (or
+// on a source created after leave snapshotted the source list), stranding
+// that cursor's pending acks: sc.pendingAcks never returns to 0 (FlushAcks
+// hangs) and the held records release only via the broker's acquisition-lock
+// timeout. If the consumer is already dying, incWorker returns false and the
+// move is skipped; the cursor stays on its current source, which the leave's
+// closeShareSession drains.
+func (sc *shareConsumer) applyMovesBlocking(moves []shareMove, endpoints []BrokerMetadata) {
+	if !sc.incWorker() {
+		return
+	}
+	defer sc.decWorker()
+	sc.cl.blockingMetadataFn(func() {
 		// Seed any brokers from the response's NodeEndpoints that we
 		// do not yet know about. Same merge-without-remove invariant
 		// as kip951move.ensureBrokers.
