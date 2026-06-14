@@ -685,6 +685,32 @@ func (old *topicPartition) migrateCursorTo( //nolint:revive // old/new naming ma
 
 func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) {
 	c := tp.shareCursor
+	new.shareCursor = c
+
+	// Relocating the cursor between sources races the share consumer's
+	// leave. leave waits for every share worker to exit (sc.workers == 0),
+	// then drains each source's cursors via closeShareSession, iterating a
+	// snapshot of the source list taken after that barrier. A relocation that
+	// removes the cursor from its old source before that source is drained,
+	// and lands it on an already-drained source (or on one created after the
+	// snapshot), leaves the cursor's pending acks on a source nothing will
+	// drain: sc.pendingAcks never returns to 0 (FlushAcks hangs) and the held
+	// records release only via the broker's acquisition-lock timeout.
+	//
+	// Register the migration as a share worker so leave's barrier waits for an
+	// in-flight migration before it snapshots and drains. This mirrors
+	// applyMovesBlocking, the CurrentLeader-hint sibling that already does
+	// this; the metadata-merge path (this function) was the only share-cursor
+	// relocation not covered by the barrier. If the consumer is already dying,
+	// incWorker returns false: skip the swap and leave the cursor on its
+	// current source, which closeShareSession then drains. new.shareCursor is
+	// assigned above either way, so the stored partition data is always valid.
+	sc := cl.consumer.s
+	if !sc.incWorker() {
+		return
+	}
+	defer sc.decWorker()
+
 	cl.sinksAndSourcesMu.Lock()
 	sns := cl.sinksAndSources[new.leader]
 	cl.sinksAndSourcesMu.Unlock()
@@ -693,7 +719,6 @@ func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) 
 	}
 	c.source.Store(sns.source)
 	sns.source.addShareCursor(c)
-	new.shareCursor = c
 }
 
 type kip951move struct {
