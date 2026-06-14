@@ -438,10 +438,11 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	// We have a few potential retryable errors from EndTransaction.
 	// OperationNotAttempted will be returned at most once.
 	//
-	// UnknownServerError should not be returned, but some brokers do:
-	// technically this is fatal, but there is no downside to retrying
-	// (even retrying a commit) and seeing if we are successful or if we
-	// get a better error.
+	// UnknownServerError should not be returned, but some brokers do
+	// (e.g. Redpanda in certain versions). It leaves the commit/abort
+	// unconfirmed: the broker may or may not have completed it. We
+	// retry as an abort (see the arm below) rather than reporting a
+	// commit we cannot confirm.
 	var tries int
 retry:
 	endTxnErr := s.cl.EndTransaction(ctx, TransactionEndTry(willTryCommit))
@@ -459,13 +460,20 @@ retry:
 			goto retry
 
 		case errors.Is(endTxnErr, kerr.UnknownServerError):
-			s.cl.cfg.logger.Log(LogLevelInfo, "end transaction with commit unknown server error; retrying")
-			after := time.NewTimer(s.cl.cfg.retryBackoff(tries))
-			select {
-			case <-after.C: // context canceled; we will see when we retry
-			case <-s.cl.ctx.Done():
-				after.Stop()
-			}
+			// We must downgrade to an abort exactly like the two arms
+			// above. EndTransaction already consumed inTxn on the
+			// erroring call, so re-calling it returns nil at its !inTxn
+			// guard without issuing another EndTxn: we cannot actually
+			// re-commit. If willTryCommit stayed true, that manufactured
+			// nil would fall into the "willTryCommit && endTxnErr == nil"
+			// success tail below and report a committed transaction,
+			// advancing the consumer offsets to postcommit even though the
+			// broker's UNKNOWN_SERVER_ERROR may have aborted it: a silent
+			// EOS data loss. Retrying as an abort reports not-committed and
+			// rewinds to the last committed offsets, so the caller
+			// reprocesses (at-least-once).
+			s.cl.cfg.logger.Log(LogLevelInfo, "end transaction returned an unknown server error; the commit is unconfirmed, retrying as abort to avoid reporting a false commit")
+			willTryCommit = false
 			goto retry
 		}
 	}
