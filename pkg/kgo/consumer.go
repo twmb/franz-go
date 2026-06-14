@@ -2542,7 +2542,27 @@ func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load
 			// validating.
 			offset := loadPart.at
 			var err error
-			if rPartition.EndOffset < offset {
+			switch {
+			case rPartition.EndOffset < 0:
+				// KIP-320 UNDEFINED_EPOCH_OFFSET: a conformant broker
+				// answers endOffset -1 (and leaderEpoch -1) when its
+				// leader-epoch cache holds no record of the requested
+				// epoch - an empty or freshly-truncated cache, an unclean
+				// election to a replica with no epoch history, or an epoch
+				// newer than anything in the log. This is NOT data loss; the
+				// broker simply cannot tell us a truncation point. The old
+				// `EndOffset < offset` arm treated the -1 sentinel as
+				// "truncated to offset -1", surfacing a spurious ErrDataLoss
+				// and pinning the cursor at -1. Instead carry the sentinel
+				// through so the next fetch hits OFFSET_OUT_OF_RANGE and
+				// resets via the configured ConsumeResetOffset (or, under
+				// NoResetOffset, surfaces OOOR rather than a bogus data-loss
+				// error) - the same reset path the cursor already took,
+				// minus the false alarm. Matches the Java client, which
+				// resets per policy on this sentinel rather than comparing
+				// -1 against the validating position.
+				offset = rPartition.EndOffset
+			case rPartition.EndOffset < offset:
 				err = &ErrDataLoss{topic, partition, offset, loadPart.epoch, rPartition.EndOffset, rPartition.LeaderEpoch}
 				offset = rPartition.EndOffset
 			}
