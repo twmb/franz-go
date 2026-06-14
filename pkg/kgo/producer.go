@@ -662,6 +662,18 @@ func (cl *Client) produce(
 			}()
 			<-wait // we wait for the goroutine to exit, then unlock again (since the goroutine leaves the mutex locked)
 			p.mu.Unlock()
+			// The goroutine above decremented p.blocked, but this is the
+			// cancel path: the record is failed, not buffered, so there is
+			// no compensating bufferedRecords++ (the success path below
+			// has one, keeping the sum unchanged). The bufferedRecords +
+			// blocked sum that Flush waits on therefore just dropped, and
+			// the only broadcast on this path - the one that woke the
+			// goroutine above - fired BEFORE its decrement, so a Flush that
+			// re-checked its predicate in between observed the stale
+			// pre-decrement sum and went back to waiting. Broadcast now,
+			// after the decrement is visible, so a Flush whose sum reached
+			// zero is woken; without this it can hang forever.
+			p.c.Broadcast()
 			p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, err)
 		}
 

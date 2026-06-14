@@ -373,3 +373,86 @@ func TestAuditFailedRecordSentinels(t *testing.T) {
 		t.Fatal("promise never fired")
 	}
 }
+
+// On the produce block path, a record that hits the max-buffered limit waits
+// in a goroutine; when its context is canceled, drainBuffered decrements
+// p.blocked. Unlike the success path - which compensates with bufferedRecords++
+// so the bufferedRecords+blocked sum Flush waits on is unchanged - the cancel
+// path just drops the sum, and pre-fix the only broadcast on that path (the one
+// that wakes the block goroutine) fired BEFORE the decrement. A Flush that
+// re-checked its predicate in between observed the stale pre-decrement sum and
+// went back to waiting; once the real sum reached zero it was never woken, so
+// Flush(context.Background()) hung forever.
+//
+// Whether Flush re-acquires the lock before the block goroutine decrements is a
+// scheduler race, so this drives the scenario many times. Pre-fix at least one
+// iteration loses the race and Flush hangs; post-fix every iteration completes
+// because drainBuffered broadcasts after the decrement.
+func TestAuditFlushWokenByBlockedProduceCancel(t *testing.T) {
+	t.Parallel()
+
+	cl, err := NewClient(SeedBrokers("127.0.0.1:1"), MaxBufferedRecords(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	p := &cl.producer
+
+	waitUntil := func(cond func() bool) bool {
+		deadline := time.Now().Add(10 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				return false
+			}
+			time.Sleep(50 * time.Microsecond)
+		}
+		return true
+	}
+
+	for i := 0; i < 200; i++ {
+		// Pretend one record is already buffered so the next Produce blocks
+		// at the max-buffered limit. The record carries no key/value so the
+		// byte accounting stays balanced.
+		p.mu.Lock()
+		p.bufferedRecords = 1
+		p.mu.Unlock()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		produceDone := make(chan struct{})
+		go func() {
+			defer close(produceDone)
+			cl.Produce(ctx, &Record{Topic: "t"}, func(*Record, error) {})
+		}()
+		if !waitUntil(func() bool { return p.blocked.Load() == 1 }) {
+			t.Fatalf("iteration %d: produce never blocked", i)
+		}
+
+		flushDone := make(chan struct{})
+		go func() {
+			defer close(flushDone)
+			cl.Flush(context.Background())
+		}()
+		if !waitUntil(func() bool { return p.flushing.Load() > 0 }) {
+			t.Fatalf("iteration %d: flush never started", i)
+		}
+		time.Sleep(time.Millisecond) // let Flush reach its cond Wait
+
+		// The "buffered" record completes, but with no broadcast (in
+		// production Flush already consumed that broadcast and re-waited):
+		// now only blocked holds the sum above zero.
+		p.mu.Lock()
+		p.bufferedRecords = 0
+		p.mu.Unlock()
+
+		// Cancel the blocked produce: drainBuffered decrements blocked to 0.
+		cancel()
+
+		select {
+		case <-flushDone:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("iteration %d: Flush hung after a blocked produce was canceled - lost wakeup on the drainBuffered cancel path", i)
+		}
+		<-produceDone
+	}
+}
