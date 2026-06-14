@@ -412,3 +412,108 @@ func TestAuditOffsetFetchOmittedPartition(t *testing.T) {
 		t.Errorf("expected the omitted response to be retried, saw %d OffsetFetch requests", n)
 	}
 }
+
+// TestAuditOffsetFetchDuplicateInjectAcrossRetries reproduces the round-23
+// ledger re-sweep finding (consumer-group-resweep), an extension of B3 above.
+// fetchOffsets surfaces a partition's non-retryable error via addFakeReady-
+// ForDraining, which is NOT idempotent. The `injected` dedup set was declared
+// AFTER the start label, so it reset on every goto-start retry: a partition
+// holding a non-retryable error was re-injected once per retry pass, emitting
+// a duplicate error fetch each time.
+//
+// A conformant Kafka broker never triggers this: it never omits a requested
+// partition (so the omitted retry never runs) and it orders authorized topics
+// ahead of error topics, so TOPIC_AUTHORIZATION_FAILED always sorts after any
+// UNSTABLE_OFFSET_COMMIT partition and the retryable goto-start short-circuits
+// before the loop reaches it. This repro therefore drives the bug with a
+// non-conformant broker: partition 0 returns the non-retryable
+// TOPIC_AUTHORIZATION_FAILED and partition 1 is omitted, driving the bounded
+// omitted-retry (3 passes + a terminal pass).
+//
+// Pre-fix: partition 0's error is surfaced 4 times (once per pass). Post-fix:
+// exactly once, because `injected` now persists across the goto-start retries.
+// The number of OffsetFetch requests is unchanged by the fix (the retry cadence
+// is identical); only the per-partition injection is now deduped.
+func TestAuditOffsetFetchDuplicateInjectAcrossRetries(t *testing.T) {
+	t.Parallel()
+	const (
+		topic = "audit-offsetfetch-dupinject"
+		group = "audit-offsetfetch-dupinject-g"
+	)
+
+	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+
+	var reqs atomic.Int64
+	c.ControlKey(int16(kmsg.OffsetFetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.OffsetFetchRequest)
+		if len(req.Groups) != 1 || req.Groups[0].Group != group {
+			return nil, nil, false
+		}
+		reqs.Add(1)
+		resp := req.ResponseKind().(*kmsg.OffsetFetchResponse)
+		rg := kmsg.NewOffsetFetchResponseGroup()
+		rg.Group = group
+		for _, rt := range req.Groups[0].Topics {
+			st := kmsg.NewOffsetFetchResponseGroupTopic()
+			st.Topic = rt.Topic
+			st.TopicID = rt.TopicID
+			for _, p := range rt.Partitions {
+				if p == 1 {
+					continue // omitted: drives the bounded omitted-retry
+				}
+				// partition 0: a non-retryable per-partition error.
+				sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
+				sp.Partition = p
+				sp.ErrorCode = kerr.TopicAuthorizationFailed.Code
+				sp.Offset = -1
+				sp.LeaderEpoch = -1
+				st.Partitions = append(st.Partitions, sp)
+			}
+			rg.Topics = append(rg.Topics, st)
+		}
+		resp.Groups = append(resp.Groups, rg)
+		return resp, nil, true
+	})
+
+	consumer := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+
+	// Drain error fetches. Partition 1's omission error is injected on the
+	// final pass, AFTER every partition-0 injection (partition 0 in the
+	// response loop, partition 1 in the omitted-fill). The fake-fetch queue
+	// is drained wholesale and in FIFO order, so by the time partition 1's
+	// error is observed, every partition-0 error already has been; we can
+	// stop and assert as soon as partition 1 surfaces.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var p0Errs, p1Errs int
+	for ctx.Err() == nil && p1Errs == 0 {
+		fetches := consumer.PollFetches(ctx)
+		fetches.EachError(func(et string, ep int32, _ error) {
+			if et != topic {
+				return
+			}
+			switch ep {
+			case 0:
+				p0Errs++
+			case 1:
+				p1Errs++
+			}
+		})
+		fetches.EachRecord(func(r *kgo.Record) {
+			t.Fatalf("unexpected record for %s p%d; both partitions should be dropped", r.Topic, r.Partition)
+		})
+	}
+
+	if p1Errs == 0 {
+		t.Fatalf("test control never drove fetchOffsets to completion: partition 1 omission error never surfaced (saw %d OffsetFetch requests)", reqs.Load())
+	}
+	if p0Errs != 1 {
+		t.Errorf("BUG REPRODUCED: partition 0's non-retryable OffsetFetch error was surfaced %d times across %d OffsetFetch passes; it must be surfaced exactly once (addFakeReadyForDraining is not idempotent and injected reset on every goto-start)", p0Errs, reqs.Load())
+	}
+}
