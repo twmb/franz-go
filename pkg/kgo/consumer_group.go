@@ -1860,6 +1860,15 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int
 	var staleRetries int
 	var unknownTopicIDRetries int
 	var omittedRetries int
+	// injected tracks partitions whose non-retryable error we have already
+	// surfaced via a fake fetch. It is declared BEFORE the start label so it
+	// survives the goto-start retries below. addFakeReadyForDraining is not
+	// idempotent: a non-conformant broker that omits a requested partition
+	// (driving the omitted retry) or returns a non-retryable partition error
+	// ordered ahead of an UNSTABLE_OFFSET_COMMIT partition (driving the
+	// retryable goto-start) would otherwise re-run the injection arm every
+	// pass and emit a duplicate fake fetch for the same partition each retry.
+	var injected mtmps
 start:
 	member, gen := g.memberGen.load()
 	req := kmsg.NewPtrOffsetFetchRequest()
@@ -1963,7 +1972,6 @@ start:
 
 	id2t := g.cl.id2tMap()
 	offsets := make(map[string]map[int32]Offset)
-	var injected mtmps // partitions we deliberately dropped via error injection below
 	for _, rTopic := range resp.Groups[0].Topics {
 		topic := rTopic.Topic
 		if topic == "" {
@@ -2032,6 +2040,15 @@ start:
 				// Instead we surface the error to the user via a
 				// fake fetch and drop the partition from this
 				// assignment; the rest of the session proceeds.
+				//
+				// Surface each partition's error exactly once across
+				// the goto-start retries: injected persists (declared
+				// before the start label), so a partition already
+				// surfaced on an earlier pass is skipped here rather
+				// than re-injected.
+				if _, ok := injected[topic][rPartition.Partition]; ok {
+					continue
+				}
 				g.cfg.logger.Log(LogLevelError, "fetch offsets failed for partition; injecting error and continuing with remaining partitions",
 					"group", g.cfg.group,
 					"topic", topic,
