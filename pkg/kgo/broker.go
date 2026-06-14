@@ -518,6 +518,20 @@ start:
 	}
 
 	if _, isForceOpen := req.(*forceOpenReq); isForceOpen {
+		// The connection is already fully open: loadConnection ran init
+		// (dial, ApiVersions, SASL). On an acks=0 produce connection the
+		// discard goroutine owns all reads (hasDiscard), so issuing a
+		// response-expecting request here would start a second reader
+		// (handleResps, via waitResp below) that races the discard read on
+		// the same socket -- the two io.ReadFulls split one byte stream,
+		// the same concurrent-reader hazard the expiry arm and
+		// loadConnection already avoid for reauthentication. The connection
+		// is warm; report success without probing it (init already proved
+		// the connection works end to end).
+		if cxn.hasDiscard {
+			pr.promise(nil, nil)
+			return
+		}
 		// We issue ApiVersions with v0; we could try to bound the
 		// version by going to the start above, but it really does
 		// not matter much.
