@@ -277,6 +277,86 @@ func TestAuditSaslReauthAcks0DiscardConn(t *testing.T) {
 	}
 }
 
+// concReadConn wraps a net.Conn and records whether two goroutines were ever
+// inside Read on the SAME connection at once. inRead is per-connection; saw is
+// shared across all dialed connections so the test can assert no connection
+// ever had concurrent readers.
+type concReadConn struct {
+	net.Conn
+	inRead atomic.Int32
+	saw    *atomic.Bool
+}
+
+func (c *concReadConn) Read(p []byte) (int, error) {
+	if c.inRead.Add(1) >= 2 {
+		c.saw.Store(true)
+	}
+	defer c.inRead.Add(-1)
+	return c.Conn.Read(p)
+}
+
+// An acks=0 produce connection runs the discard goroutine, which owns all reads
+// on the connection (no promisedResp is ever pushed for acks=0 produce). Before
+// the fix, EnsureProduceConnectionIsOpen issued a force-open request that, after
+// loadConnection opened+inited the connection (spawning the discard goroutine),
+// was rewritten to an ApiVersions request and sent through waitResp -- starting
+// a handleResps reader that raced the discard goroutine on the same socket (the
+// two io.ReadFulls split one byte stream). This is the same concurrent-reader
+// hazard the reauth path already avoids; the force-open arm just predated the
+// hasDiscard mechanism. The fix reports success without probing a discard
+// connection (init already proved it works).
+//
+// The ApiVersions response is delayed so the discard read and the force-open
+// read are reliably both blocked at once, making the race deterministic rather
+// than dependent on which reader the kernel happens to wake first.
+func TestAuditEnsureProduceConnectionAcks0NoConcurrentRead(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1))
+
+	c.ControlKey(18, func(kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		c.SleepControl(func() { time.Sleep(300 * time.Millisecond) })
+		return nil, nil, false
+	})
+
+	var saw atomic.Bool
+	dialer := func(ctx context.Context, network, host string) (net.Conn, error) {
+		conn, err := (&net.Dialer{}).DialContext(ctx, network, host)
+		if err != nil {
+			return nil, err
+		}
+		return &concReadConn{Conn: conn, saw: &saw}, nil
+	}
+
+	cl := newPlainClient(t, c,
+		kgo.RequiredAcks(kgo.NoAck()),
+		kgo.DisableIdempotentWrite(),
+		kgo.Dialer(dialer),
+		// Bound the pre-fix symptom: the force-open read that loses its
+		// response to the discard goroutine blocks until this read timeout
+		// (well above the 300ms response delay), so the test fails promptly
+		// instead of hanging to the context deadline.
+		kgo.RequestTimeoutOverhead(3*time.Second),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err := cl.EnsureProduceConnectionIsOpen(ctx)
+
+	// The concurrent-read detector is the direct signal of the bug; check it
+	// first so the pre-fix failure reports the race rather than the
+	// downstream connection error.
+	if saw.Load() {
+		t.Error("a second reader raced the discard goroutine on the acks=0 produce connection: the force-open request must not issue a response-expecting request on a discard-owned connection")
+	}
+	// Post-fix the force-open reports success without probing; pre-fix the
+	// raced read corrupts the connection and this errors too.
+	if err != nil {
+		t.Errorf("EnsureProduceConnectionIsOpen failed: %v", err)
+	}
+}
+
 // A broker replying UNSUPPORTED_VERSION to ApiVersions with a KIP-511 version
 // hint that is not strictly lower than what we sent kept the client in the
 // downgrade-retry loop forever - and connection init runs on no request
