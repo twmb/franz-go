@@ -127,6 +127,19 @@ type (
 		// a similar flow actually makes the code worse.
 		assigned atomic.Bool
 
+		// moving is true while a leader-move (applyMoves) is queued and
+		// in flight for this cursor. createShareReq skips a moving cursor
+		// (it then falls into the forget set, dropping it from the old
+		// broker's session like the classic strip), so the old source does
+		// not keep re-fetching the partition - getting NOT_LEADER and
+		// re-queuing the move - until the async migration lands. This is
+		// the share analog of the classic cursor going unusable for the
+		// duration of a move (source.go use() + strip, never re-enabled
+		// until the move replaces the cursor). applyMoves sets it before
+		// spawning the migration; applyMovesBlocking clears it and
+		// re-signals the cursor's source once the move has run.
+		moving atomic.Bool
+
 		ackMu       xsync.Mutex
 		pendingAcks []*shareAckState // user acks (r.Ack, finalizePreviousPoll, batchAckRecords)
 		pendingGaps []shareAckRange  // internal acks (gap acks, release-undeliverable)
@@ -162,6 +175,7 @@ type (
 		topicID   [16]byte
 		partition int32
 		leaderID  int32
+		cursor    *shareCursor // cursor to re-enable (clear moving) after the migration runs; see shareCursor.moving
 	}
 
 	// shareAckRange is a contiguous offset range with a fixed ack
@@ -1283,6 +1297,15 @@ func (sc *shareConsumer) applyMoves(moves []shareMove, endpoints []BrokerMetadat
 	if len(moves) == 0 {
 		return
 	}
+	// Mark each migrating cursor unusable BEFORE spawning, on this (the
+	// fetch) goroutine, so the very next createShareReq already skips it.
+	// Setting it inside the spawned goroutine would race the next fetch,
+	// which could rebuild a request that re-fetches the partition (getting
+	// NOT_LEADER again) before the goroutine runs. applyMovesBlocking clears
+	// the flag once the migration has run. See shareCursor.moving.
+	for i := range moves {
+		moves[i].cursor.moving.Store(true)
+	}
 	go sc.applyMovesBlocking(moves, endpoints)
 }
 
@@ -1383,6 +1406,22 @@ func (sc *shareConsumer) applyMovesBlocking(moves []shareMove, endpoints []Broke
 				"total_hints", len(moves),
 				"applied", moved,
 			)
+		}
+
+		// Re-enable each cursor for fetching now that its move has run, and
+		// re-signal its (current) source. addShareCursor above woke the new
+		// source's loop while moving was still set, so that loop may have
+		// skipped this cursor and exited via maybeFinish before we got here;
+		// maybeShareConsume re-fetches it. Cursors whose move was skipped
+		// (topic unresolved, out of range, already on the leader) are
+		// re-enabled on their current source so they retry. This clear runs
+		// before decWorker, so it cannot race leave's barrier; the dying
+		// bail and the cl.ctx escape skip it, but those are shutdown paths
+		// where closeShareSession drains the cursor regardless of moving.
+		for i := range moves {
+			c := moves[i].cursor
+			c.moving.Store(false)
+			c.source.Load().maybeShareConsume()
 		}
 	})
 }
@@ -1815,6 +1854,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 						topicID:   rt.TopicID,
 						partition: rp.Partition,
 						leaderID:  rp.CurrentLeader.LeaderID,
+						cursor:    drained.cursor,
 					})
 				}
 				if isShareAckRetryable(partErr) {
@@ -2620,6 +2660,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 						topicID:   rt.TopicID,
 						partition: rp.Partition,
 						leaderID:  rp.CurrentLeader.LeaderID,
+						cursor:    cursor,
 					})
 					continue
 				}
@@ -2972,7 +3013,13 @@ func (s *source) createShareReq(skipAckDrain bool) (
 	for range s.share.cursors {
 		c := s.share.cursors[ci]
 		ci = (ci + 1) % nShareCursors
-		if !c.assigned.Load() || paused.has(c.topic, c.partition) {
+		// Skip a cursor whose leader move is in flight (moving): leaving it
+		// in the want-set would re-fetch the partition on the old leader,
+		// getting NOT_LEADER and re-queuing the move until the migration
+		// lands. Skipping drops it into the forget set below, releasing it
+		// from the old broker's session (the share analog of the classic
+		// strip). applyMovesBlocking re-enables it once the move has run.
+		if !c.assigned.Load() || c.moving.Load() || paused.has(c.topic, c.partition) {
 			continue
 		}
 		wantSet[tidp{c.topicID, c.partition}] = struct{}{}
