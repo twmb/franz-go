@@ -1331,27 +1331,16 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 // and assignment with the broker.
 func (cl *Client) ForceRebalance() {
 	if g := cl.consumer.g; g != nil {
+		// Classic rejoins; 848 forces a heartbeat (848 must never feed
+		// rejoinCh - see signalSubscriptionChange). Routing every
+		// rejoinCh feeder through the one helper is what keeps "nothing
+		// feeds rejoinCh in 848 mode" true: every remaining session-end
+		// path stops heartbeating (or has a dead context) before revoke
+		// runs, so revoke's nowAssigned read-modify-write never races a
+		// live heartbeat's store.
 		g.mu.Lock()
-		is848 := g.is848
+		g.signalSubscriptionChange("from ForceRebalance")
 		g.mu.Unlock()
-		if is848 {
-			// Feeding rejoinCh (the classic path) would only bounce the
-			// heartbeat session: the server reconciles through
-			// heartbeats, so the rebuilt session re-enters with an
-			// empty diff - and the bounce runs the session-end revoke
-			// concurrently with live heartbeats, the one interleaving
-			// where a completing heartbeat's nowAssigned store can be
-			// lost to revoke's read-modify-write. With this redirect,
-			// nothing feeds rejoinCh in 848 mode and every remaining
-			// session-end path stops heartbeating (or has a dead
-			// context) before revoke runs.
-			select {
-			case g.heartbeatForceCh <- func(error) {}:
-			default:
-			}
-			return
-		}
-		g.rejoin("from ForceRebalance")
 	}
 }
 
@@ -1363,6 +1352,36 @@ func (g *groupConsumer) rejoin(why string) {
 	case g.rejoinCh <- why:
 	default:
 	}
+}
+
+// signalSubscriptionChange tells the manage loop that our local set of
+// subscribed topics changed (AddConsumeTopics growth, PurgeConsumeTopics
+// shrink) and a reconcile is owed. The caller must hold g.mu (we read
+// g.is848).
+//
+// Classic and 848 reconcile differently, and routing every caller through
+// here is what keeps the difference from being re-derived (and forgotten)
+// at each site:
+//
+//   - Classic: bounce the heartbeat session via rejoinCh so the member
+//     re-joins and the group re-balances with the new subscription.
+//   - 848: the server reconciles through heartbeats, so feeding rejoinCh
+//     would only bounce the session pointlessly - AND that bounce runs the
+//     session-end revoke concurrently with live heartbeats, the one
+//     interleaving where a completing heartbeat's nowAssigned store is lost
+//     to revoke's read-modify-write. Instead force an immediate heartbeat
+//     (best effort, must not block; see the walkthrough in prerevoke): the
+//     next request rebuilds the subscription from live state, and if the
+//     force is missed the heartbeat timer sends within one interval.
+func (g *groupConsumer) signalSubscriptionChange(why string) {
+	if g.is848 {
+		select {
+		case g.heartbeatForceCh <- func(error) {}:
+		default:
+		}
+		return
+	}
+	g.rejoin(why)
 }
 
 // Joins and then syncs, issuing the two slow requests in goroutines to allow
@@ -2310,23 +2329,9 @@ func (g *groupConsumer) findNewAssignments() {
 	}
 
 	if numNewTopics > 0 {
-		// 848 needs no rejoin here: mkreq rebuilds the subscription
-		// from live state on every heartbeat and the keepalive check
-		// sends a full request when it changes, so the next heartbeat
-		// already carries our new interests. Bouncing the session
-		// would only delay that, since rebuilding re-arms the
-		// heartbeat timer at a full interval. Instead, force an
-		// immediate heartbeat (best effort, must not block; see the
-		// walkthrough in prerevoke); if the force is missed, the
-		// timer sends within one interval.
-		if g.is848 {
-			select {
-			case g.heartbeatForceCh <- func(error) {}:
-			default:
-			}
-		} else {
-			g.rejoin("rejoining because there are more topics to consume, our interests have changed")
-		}
+		// Our subscription grew; reconcile per protocol (848 forces a
+		// heartbeat, classic rejoins). See signalSubscriptionChange.
+		g.signalSubscriptionChange("rejoining because there are more topics to consume, our interests have changed")
 	} else if g.leader.Load() {
 		if len(toChange) > 0 {
 			g.rejoin("rejoining because we are the leader and noticed some topics have new partitions")

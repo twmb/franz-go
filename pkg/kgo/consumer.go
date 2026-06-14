@@ -825,7 +825,12 @@ func (c *consumer) purgeTopics(topics []string) {
 			delete(c.g.using, topic)
 			delete(c.g.reSeen, topic)
 		}
-		c.g.rejoin("rejoin from PurgeFetchTopics")
+		// Our subscription shrank; reconcile per protocol. This MUST NOT
+		// feed rejoinCh in 848 mode (signalSubscriptionChange forces a
+		// heartbeat instead): a rejoinCh bounce there runs the session-end
+		// revoke's nowAssigned read-modify-write concurrently with live
+		// heartbeats, losing a heartbeat's nowAssigned store.
+		c.g.signalSubscriptionChange("topics purged from consuming")
 	} else {
 		c.assignPartitions(purgeAssignments, assignPurgeMatching, c.d.tps, fmt.Sprintf("purge of %v requested", topics))
 		for _, topic := range topics {
