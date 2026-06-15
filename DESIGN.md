@@ -5,7 +5,8 @@ client is structured, what the main code paths do, and what you need to
 understand before changing things.
 
 You should be comfortable with Go concurrency (goroutines, channels, mutexes,
-atomics). If you have never used Kafka, the Background section will orient you.
+atomics) and the basics of Kafka - topics, partitions, brokers, and consumer
+groups.
 
 ## How to Use This Document
 
@@ -24,7 +25,6 @@ rules](#when-can-a-batch-fail) for produce ordering issues.
 
 ## Table of Contents
 
-- [Background: What This Client Does](#background-what-this-client-does)
 - [Architecture Overview](#architecture-overview)
 - [The Produce Path](#the-produce-path)
 - [The Consume Path](#the-consume-path)
@@ -35,51 +35,9 @@ rules](#when-can-a-batch-fail) for produce ordering issues.
 - [Metadata](#metadata)
 - [Broker Connections](#broker-connections)
 - [Concurrency Patterns](#concurrency-patterns)
+- [Client Metrics (KIP-714)](#client-metrics-kip-714)
 - [File Map](#file-map)
-- [Things That Will Bite You](#things-that-will-bite-you)
-
----
-
-## Background: What This Client Does
-
-Kafka is a distributed log. Data is organized into **topics**, each split into
-**partitions**. Each partition lives on a specific **broker** (the "leader").
-Producing a record means sending it to the correct broker for that partition.
-Consuming means fetching records from the correct broker for each partition.
-
-The mapping from partitions to brokers changes over time - brokers go down,
-partitions are reassigned, new topics are created. The client discovers this
-mapping through **metadata requests** and reacts to changes by moving its
-internal state between brokers.
-
-The client's job, in essence, is:
-
-1. **Produce**: accept records from user code, batch them efficiently, send
-   them to the right broker, report success or failure back to the user
-2. **Consume**: fetch records from the right brokers, buffer them, deliver
-   them to user code when polled
-3. **Coordinate**: if consuming as part of a consumer group or share group,
-   participate in the group protocol to decide which partitions (or, for
-   share groups, which records) this client is responsible for
-4. **Stay current**: periodically refresh metadata so the client knows where
-   each partition lives
-
-This client supports three Kafka group protocols:
-
-- **Classic consumer groups** (the original protocol): JoinGroup/SyncGroup
-  where the leader runs partition assignment client-side.
-- **Next-gen consumer groups** (KIP-848): a single ConsumerGroupHeartbeat
-  RPC where the broker runs assignment server-side. The client transparently
-  upgrades to this when the broker supports it; on `UnsupportedVersion` it
-  falls back to the classic protocol. Both protocols are exclusive partition
-  assignment - one consumer per partition at a time.
-- **Share groups** (KIP-932): cooperative record-level consumption where
-  multiple consumers in the same group concurrently consume from the same
-  partition. Records are individually acquired (with a broker-side lock) and
-  individually acknowledged (accept / release / reject / renew). This is a
-  fundamentally different model than partition-based consumption.
-
-All four of these happen concurrently. The rest of this document explains how.
+- [Non-obvious](#non-obvious)
 
 ---
 
@@ -859,6 +817,11 @@ transaction groups produces and offset commits into an atomic unit: either all
 are committed or all are rolled back. The typical pattern is ETL - consume
 records, transform, produce results, commit input offsets, end transaction.
 
+> Future/tabled work: KIP-939 (participation in 2-phase commit) is designed but
+> not built - it is blocked on the broker (the wire version is still marked
+> unstable and the resume path is stubbed). See
+> [`future/KIP939-2PC.md`](future/KIP939-2PC.md) before starting it.
+
 ### Transaction lifecycle
 
 ```mermaid
@@ -1164,7 +1127,7 @@ Used by: `sink.seqResps` (ordered produce responses), `producer.batchPromises`
 
 An `atomic.Bool` that gates whether a cursor can be used in a fetch request.
 See [Cursors: tracking where we are](#cursors-tracking-where-we-are) for the
-state diagram and [Things That Will Bite You](#consume-side) for the ordering
+state diagram and [the consume-side invariants](#consume-side) for the ordering
 rules. The short version:
 
 ```go
@@ -1177,6 +1140,33 @@ func (c *cursor) allowUsable() {
 
 **Remove, modify, Swap(true), add.** Never modify after Swap. Never add before
 Swap.
+
+---
+
+## Client Metrics (KIP-714)
+
+KIP-714 lets a broker collect client-side observability without the application
+wiring anything up: the broker tells the client which metrics it wants and how
+often, and the client pushes them. This is the opposite direction from the
+`plugin/kprom` Prometheus hook (which exposes metrics to the application) -
+KIP-714 metrics flow to the broker.
+
+`metrics_714.go` runs a single `pushMetrics` goroutine. It is skipped when
+client metrics are disabled via config, or when the broker does not advertise
+the telemetry RPCs. The loop is:
+
+1. `GetTelemetrySubscriptions` - ask the broker for its subscription. The
+   broker assigns a `ClientInstanceID` (kept for the client's lifetime) and
+   returns the requested metric prefixes, a push interval, accepted compression
+   codecs, and a max payload size. An empty subscription means "nothing for
+   now" - the client sleeps the push interval and asks again.
+2. `PushTelemetry` - on each interval, serialize the subscribed metrics
+   (OpenTelemetry encoding), compress with a broker-accepted codec, and send.
+   Errors back off (30s) and retry; the loop exits on client close.
+
+The metrics themselves (request latencies, connection and throttle counts,
+etc.) are accumulated on the client's request hot paths and rolled up at push
+time.
 
 ---
 
@@ -1208,11 +1198,11 @@ Swap.
 | `ring.go` | MPSC ring buffer (replaces channels) | `ring[T]` |
 | `pools.go` | Record/header allocation pool interfaces for zero-alloc consuming | `Pool`, `PoolRecords` |
 | `record_formatter.go` | Printf-style record formatting | `RecordFormatter` |
-| `metrics_714.go` | Prometheus-compatible metrics via hooks | Various metric types |
+| `metrics_714.go` | KIP-714 client telemetry: pushes client-side metrics to the broker on a broker-dictated subscription/interval | `pushMetrics`, `GetTelemetrySubscriptions`/`PushTelemetry` |
 
 ---
 
-## Things That Will Bite You
+## Non-obvious
 
 This section lists non-obvious invariants that have caused bugs in the past.
 If you are modifying the code, check whether your change violates any of these.
@@ -1246,12 +1236,20 @@ If you are modifying the code, check whether your change violates any of these.
   after this point races with a concurrent fetch. This has caused real bugs
   (see #1167).
 
-- **Migrating a cursor must be: remove, modify, Swap(true), add.** All
-  field writes must happen before the Swap (which publishes availability).
-  The add must happen after the Swap (which makes the cursor fetchable).
-  Between remove and add, no source has the cursor, so no concurrent fetch
-  can pick it up. This rule applies to both metadata-driven migration and
-  the preferred-replica `cursorOffsetPreferred.move` path.
+- **Migrating a cursor: writes before publish, add after - but the exact
+  steps depend on whether a fetch session is live.**
+  - **Live-session move** (the preferred-replica `cursorOffsetPreferred.move`
+    path) must be: remove, modify, `Swap(true)`, add. All field writes happen
+    before the Swap (which publishes availability); the add happens after it
+    (which makes the cursor fetchable). After the Swap, do not touch cursor
+    fields.
+  - **Metadata-driven migration** stops the consumer session first, so no
+    concurrent fetch can race the migration. It is a plain remove, modify, add
+    with no Swap needed (see the `handleReqResp` invariant below - the same
+    session-stop is what makes that safe too).
+
+  In both cases, between remove and add no source has the cursor, so no
+  concurrent fetch can pick it up.
 
 - **Fetch sessions are per-source, not per-client.** Each broker tracks its
   own session state. Resetting one source's session does not affect others.
