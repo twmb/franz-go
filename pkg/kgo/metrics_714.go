@@ -70,6 +70,21 @@ func (cl *Client) pushMetrics() {
 
 		clientInstanceID = gresp.ClientInstanceID
 
+		// A broker must advertise a positive push interval; a <=0 value is
+		// invalid. We substitute Kafka's documented default rather than honor
+		// it, matching the Java client's validateIntervalMs. Without this, the
+		// no-requested-metrics arm below times on the raw interval (no floor,
+		// unlike the push loop's max(..., time.Second)), so a broker returning
+		// an empty RequestedMetrics list with a non-positive interval would
+		// re-issue GetTelemetrySubscriptions at round-trip pace forever.
+		if v := validatePushIntervalMillis(gresp.PushIntervalMillis); v != gresp.PushIntervalMillis {
+			cl.cfg.logger.Log(LogLevelWarn, "broker advertised a non-positive telemetry push interval, substituting the default",
+				"advertised", gresp.PushIntervalMillis,
+				"substituted", v,
+			)
+			gresp.PushIntervalMillis = v
+		}
+
 		// If there are no requested metrics, we wait the push interval
 		// and re-get.
 		if len(gresp.RequestedMetrics) == 0 {
@@ -218,6 +233,22 @@ func (cl *Client) pushMetrics() {
 			}
 		}
 	}
+}
+
+// defaultPushIntervalMillis is Kafka's documented telemetry push interval
+// default (5m), substituted when a broker advertises a non-positive interval
+// (Java's ClientTelemetryReporter.DEFAULT_PUSH_INTERVAL_MS).
+const defaultPushIntervalMillis = 5 * 60 * 1000
+
+// validatePushIntervalMillis returns the broker-advertised telemetry push
+// interval, substituting the default for a non-positive (invalid) value so the
+// re-get / push loops always pace on a sane interval. Mirrors the Java client's
+// ClientTelemetryUtils.validateIntervalMs.
+func validatePushIntervalMillis(advertised int32) int32 {
+	if advertised <= 0 {
+		return defaultPushIntervalMillis
+	}
+	return advertised
 }
 
 func buildNameFilter(requested []string) func(string) bool {

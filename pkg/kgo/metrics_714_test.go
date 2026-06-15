@@ -82,6 +82,31 @@ func TestAppendOtelAttributesSkipsUnsupported(t *testing.T) {
 	}
 }
 
+// A broker that advertises a non-positive PushIntervalMillis with an empty
+// RequestedMetrics list would, without validation, drive the no-requested-
+// metrics re-get arm to time on time.Duration(<=0)*time.Millisecond - a timer
+// that fires immediately - re-issuing GetTelemetrySubscriptions at round-trip
+// pace forever (the push loop already floors at max(..., time.Second), but the
+// re-get arm did not). validatePushIntervalMillis substitutes Kafka's default,
+// matching the Java client.
+func TestValidatePushIntervalMillis(t *testing.T) {
+	for _, advertised := range []int32{0, -1, -1000, -1 << 31} {
+		if got := validatePushIntervalMillis(advertised); got != defaultPushIntervalMillis {
+			t.Errorf("advertised=%d: got %d, want default %d", advertised, got, defaultPushIntervalMillis)
+		}
+		// The substituted interval must produce a non-immediate timer in the
+		// re-get arm.
+		if wait := time.Duration(validatePushIntervalMillis(advertised)) * time.Millisecond; wait <= 0 {
+			t.Errorf("advertised=%d: substituted wait %v is non-positive (would hot-loop)", advertised, wait)
+		}
+	}
+	for _, advertised := range []int32{1, 1000, 30000, 1 << 30} {
+		if got := validatePushIntervalMillis(advertised); got != advertised {
+			t.Errorf("advertised=%d: got %d, want unchanged", advertised, got)
+		}
+	}
+}
+
 // protoFields parses a flat protobuf message into (fieldNumber, wireType,
 // payload) tuples. For length-delimited fields the payload is the inner bytes;
 // for varint fields it is the raw varint bytes; other wire types are returned
