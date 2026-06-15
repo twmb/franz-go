@@ -1485,6 +1485,13 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 			reads = append(reads, fn)
 		}
 	}
+	// A layout consisting solely of noread verbs (fixed sizes/numbers like
+	// "%p{3}") never consumes input, so next() never reaches an EOF, never
+	// sets r.done, and ReadRecord returns identical records forever. Reject
+	// it at construction rather than looping at read time.
+	if len(reads) == 0 {
+		return errors.New("RecordReader: layout reads nothing from the input")
+	}
 	r.fns = make([]readParse, 0, len(noreads)+len(reads))
 	r.fns = append(r.fns, noreads...)
 	r.fns = append(r.fns, reads...)
@@ -1769,6 +1776,20 @@ func (r *RecordReader) next(rec *Record) error {
 
 		if fn.parse == nil {
 			continue
+		}
+
+		// If the input EOF'd before a fixed-size read accumulated its full
+		// byte count, r.buf is short. This happens on the fall-through
+		// above: a zero-byte read surfaces as plain io.EOF (readSize only
+		// reports io.EOF when it read nothing; a partial read is already
+		// io.ErrUnexpectedEOF), and if that read is the last fn after an
+		// earlier real read it is not the clean record boundary, so it
+		// reaches here with an empty buffer. The fixed-width number parsers
+		// index r.buf at constant offsets (binary.*.Uint64 etc.) and panic
+		// on a short slice, so surface the truncation as the unexpected EOF
+		// that ReadRecord's doc already promises for a mid-record EOF.
+		if fn.read.size > 0 && len(r.buf) < fn.read.size {
+			return io.ErrUnexpectedEOF
 		}
 
 		if err := fn.parse(r.buf, rec); err != nil {
