@@ -286,6 +286,18 @@ func (cfg *cfg) validate() error {
 
 	i64lt := func(l, r int64) (bool, string) { return l < r, "less" }
 	i64gt := func(l, r int64) (bool, string) { return l > r, "larger" }
+
+	// Several Durations are serialized to int32-millisecond wire fields
+	// (JoinGroup SessionTimeoutMs / RebalanceTimeoutMs, ProduceRequest
+	// TimeoutMs, InitProducerId TransactionTimeoutMs). A Duration whose
+	// millisecond value exceeds an int32 silently overflows that field when
+	// cast - e.g. a 30 day session timeout wraps to a negative wire value,
+	// and a ~50 day one wraps to a small positive value the broker quietly
+	// accepts as a completely different timeout. Java cannot hit this because
+	// its equivalent configs are int32-millisecond typed at the source; kgo
+	// takes a Duration, so the bound must be enforced here. The wire field's
+	// capacity is the only principled cap.
+	const maxInt32Millis = time.Duration(math.MaxInt32) * time.Millisecond
 	for _, limit := range []struct {
 		name    string
 		v       int64
@@ -343,6 +355,11 @@ func (cfg *cfg) validate() error {
 		{name: "max buffered bytes", v: cfg.maxBufferedBytes, allowed: 0, badcmp: i64lt},
 		{name: "linger", v: int64(cfg.linger), allowed: int64(time.Minute), badcmp: i64gt, durs: true},
 		{name: "produce timeout", v: int64(cfg.produceTimeout), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
+		{name: "produce timeout", v: int64(cfg.produceTimeout), allowed: int64(maxInt32Millis), badcmp: i64gt, durs: true},
+
+		// The transaction timeout is serialized to an int32-millisecond wire
+		// field and is otherwise unvalidated; bound it so it cannot overflow.
+		{name: "transaction timeout", v: int64(cfg.txnTimeout), allowed: int64(maxInt32Millis), badcmp: i64gt, durs: true},
 		{name: "record timeout", v: int64(cfg.recordTimeout), allowed: int64(time.Second), badcmp: func(l, r int64) (bool, string) {
 			if l == 0 {
 				return false, "" // we print nothing when things are good
@@ -360,7 +377,9 @@ func (cfg *cfg) validate() error {
 		{name: "consumer protocol length", v: int64(len(cfg.protocol)), allowed: 1, badcmp: i64lt},
 
 		{name: "session timeout", v: int64(cfg.sessionTimeout), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
+		{name: "session timeout", v: int64(cfg.sessionTimeout), allowed: int64(maxInt32Millis), badcmp: i64gt, durs: true},
 		{name: "rebalance timeout", v: int64(cfg.rebalanceTimeout), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
+		{name: "rebalance timeout", v: int64(cfg.rebalanceTimeout), allowed: int64(maxInt32Millis), badcmp: i64gt, durs: true},
 		{name: "autocommit interval", v: int64(cfg.autocommitInterval), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
 
 		{v: int64(cfg.heartbeatInterval), allowed: int64(cfg.sessionTimeout), badcmp: i64gt, durs: true, fmt: "heartbeat interval %v is erroneously larger than the session timeout %v"},

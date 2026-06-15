@@ -86,3 +86,51 @@ func TestConfigRejectsEmptyIDs(t *testing.T) {
 		t.Errorf("unexpected error for valid InstanceID: %v", err)
 	}
 }
+
+// SessionTimeout, RebalanceTimeout, ProduceRequestTimeout, and
+// TransactionTimeout are all serialized to int32-millisecond wire fields. A
+// Duration whose millisecond value exceeds an int32 silently overflows that
+// field when cast: a 30 day timeout wraps to a negative wire value, and a ~50
+// day one wraps to a small positive value the broker quietly accepts as a
+// completely different timeout. These must be rejected at construction rather
+// than corrupted on the wire.
+func TestConfigRejectsInt32MillisOverflow(t *testing.T) {
+	// 30 days in milliseconds (2,592,000,000) exceeds math.MaxInt32
+	// (2,147,483,647); int32(...) wraps it to a negative value.
+	overflow := 30 * 24 * time.Hour
+	// 50 days wraps to a small positive int32, the silently-wrong case.
+	overflowPositive := 50 * 24 * time.Hour
+
+	bad := []struct {
+		name string
+		opts []Opt
+	}{
+		{"session timeout overflow", []Opt{ConsumerGroup("g"), SessionTimeout(overflow), RebalanceTimeout(time.Minute), HeartbeatInterval(time.Second)}},
+		{"session timeout overflow positive", []Opt{ConsumerGroup("g"), SessionTimeout(overflowPositive), RebalanceTimeout(time.Minute), HeartbeatInterval(time.Second)}},
+		{"rebalance timeout overflow", []Opt{ConsumerGroup("g"), RebalanceTimeout(overflow)}},
+		{"produce timeout overflow", []Opt{ProduceRequestTimeout(overflow)}},
+		{"transaction timeout overflow", []Opt{TransactionalID("tx"), TransactionTimeout(overflow)}},
+		{"transaction timeout overflow positive", []Opt{TransactionalID("tx"), TransactionTimeout(overflowPositive)}},
+	}
+	for _, b := range bad {
+		if _, _, err := validateCfg(b.opts...); err == nil {
+			t.Errorf("%s: expected an error, got nil", b.name)
+		}
+	}
+
+	// Values that fit comfortably in the int32-millisecond wire field still
+	// validate.
+	good := []struct {
+		name string
+		opts []Opt
+	}{
+		{"large but fitting session timeout", []Opt{ConsumerGroup("g"), SessionTimeout(20 * 24 * time.Hour), RebalanceTimeout(20 * 24 * time.Hour), HeartbeatInterval(time.Hour)}},
+		{"large but fitting produce timeout", []Opt{ProduceRequestTimeout(20 * 24 * time.Hour)}},
+		{"large but fitting transaction timeout", []Opt{TransactionalID("tx"), TransactionTimeout(20 * 24 * time.Hour)}},
+	}
+	for _, g := range good {
+		if _, _, err := validateCfg(g.opts...); err != nil {
+			t.Errorf("%s: unexpected error: %v", g.name, err)
+		}
+	}
+}
