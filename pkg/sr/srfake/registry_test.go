@@ -463,6 +463,83 @@ func TestModeSubject(t *testing.T) {
 	}
 }
 
+func TestDeletedQueryParams(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	if _, err := cl.CreateSchema(ctx, "user-value", userSchema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.CreateSchema(ctx, "user-value", userSchemaV2); err != nil {
+		t.Fatal(err)
+	}
+	// Soft-delete version 1.
+	if err := cl.DeleteSchema(ctx, "user-value", 1, sr.SoftDelete); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	eq := func(name string, got []int, want ...int) {
+		t.Helper()
+		if fmt.Sprintf("%v", got) != fmt.Sprintf("%v", want) {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
+	}
+
+	// Default: only active versions.
+	v, err := cl.SubjectVersions(ctx, "user-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq("default versions", v, 2)
+
+	// deleted=true: active + soft-deleted.
+	v, err = cl.SubjectVersions(sr.WithParams(ctx, sr.ShowDeleted), "user-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq("deleted versions", v, 1, 2)
+
+	// deletedOnly=true: only soft-deleted.
+	v, err = cl.SubjectVersions(sr.WithParams(ctx, sr.DeletedOnly), "user-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq("deletedOnly versions", v, 1)
+
+	// A soft-deleted version is hidden by default, visible with deleted=true.
+	if _, err := cl.SchemaByVersion(ctx, "user-value", 1); err == nil {
+		t.Error("expected soft-deleted version 1 to be hidden by default")
+	}
+	if _, err := cl.SchemaByVersion(sr.WithParams(ctx, sr.ShowDeleted), "user-value", 1); err != nil {
+		t.Errorf("expected soft-deleted version 1 visible with deleted=true: %v", err)
+	}
+}
+
+func TestSubjectQueryParamOnSchemaByID(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	reg.SeedSchema("user-value", 1, 1, userSchema)
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Scoped to the owning subject: found.
+	if _, err := cl.SchemaByID(sr.WithParams(ctx, sr.Subject("user-value")), 1); err != nil {
+		t.Errorf("SchemaByID scoped to owning subject: %v", err)
+	}
+	// Scoped to a different subject: not found.
+	if _, err := cl.SchemaByID(sr.WithParams(ctx, sr.Subject("other-value")), 1); err == nil {
+		t.Error("expected SchemaByID scoped to a non-owning subject to fail")
+	}
+}
+
 func TestSchemaHandlers(t *testing.T) {
 	reg := srfake.New()
 	t.Cleanup(reg.Close)

@@ -380,7 +380,7 @@ func (r *Registry) SetMode(subject string, m sr.Mode) error {
 
 // GetSchema retrieves a schema by subject and version.
 func (r *Registry) GetSchema(subject string, version int) (sr.SubjectSchema, bool) {
-	return r.getSchemaBySubjectVersion(subject, version)
+	return r.getSchemaBySubjectVersion(subject, version, false)
 }
 
 // SubjectExists returns true if subject exists and has not been hard-deleted.
@@ -403,19 +403,36 @@ func (r *Registry) Reset() {
 	r.globalCompat = sr.CompatBackward
 }
 
-// getSchemaBySubjectVersionLocked is like getSchemaBySubjectVersion but assumes caller holds lock
-func (r *Registry) getSchemaBySubjectVersionLocked(subject string, version int) (sr.SubjectSchema, bool) {
+// getSchemaBySubjectVersionLocked is like getSchemaBySubjectVersion but assumes
+// caller holds lock. If includeDeleted is true, soft-deleted subjects/versions
+// are returned (matching the ?deleted=true query parameter).
+func (r *Registry) getSchemaBySubjectVersionLocked(subject string, version int, includeDeleted bool) (sr.SubjectSchema, bool) {
 	subj, ok := r.subjects[subject]
-	if !ok || subj.isDeleted {
+	if !ok || (subj.isDeleted && !includeDeleted) {
 		return sr.SubjectSchema{}, false
 	}
 
 	versionData, ok := subj.versions[version]
-	if !ok || versionData.isDeleted {
+	if !ok || (versionData.isDeleted && !includeDeleted) {
 		return sr.SubjectSchema{}, false
 	}
 
 	return versionData.schema, true
+}
+
+// schemaIDInSubjectLocked reports whether schema id is registered under subject.
+// Caller must hold the lock.
+func (r *Registry) schemaIDInSubjectLocked(id int, subject string) bool {
+	subj, ok := r.subjects[subject]
+	if !ok {
+		return false
+	}
+	for _, vd := range subj.versions {
+		if vd.schema.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // isSchemaReferenced checks if the given schema version is referenced by any other schemas.
@@ -521,7 +538,7 @@ func (r *Registry) deleteVersion(subject string, version int, permanent bool) er
 	return nil
 }
 
-func (r *Registry) resolveVersion(subject, versionStr string) (int, error) {
+func (r *Registry) resolveVersion(subject, versionStr string, includeDeleted bool) (int, error) {
 	if versionStr == "latest" {
 		r.mu.RLock()
 		defer r.mu.RUnlock()
@@ -532,8 +549,12 @@ func (r *Registry) resolveVersion(subject, versionStr string) (int, error) {
 			return 0, errSubjectNotFound(subject)
 		}
 		if subj.latestVersion == 0 {
-			// Subject exists but has no active versions - for "latest" requests,
-			// this should be treated as "subject not found" per Confluent API behavior
+			// No active versions. With ?deleted=true, fall back to the highest
+			// ever-assigned version (which is soft-deleted); otherwise treat as
+			// not found, per Confluent API behavior.
+			if includeDeleted && subj.highestVersion > 0 {
+				return subj.highestVersion, nil
+			}
 			return 0, errSubjectNotFound(subject)
 		}
 		return subj.latestVersion, nil
@@ -545,11 +566,11 @@ func (r *Registry) resolveVersion(subject, versionStr string) (int, error) {
 	return v, nil
 }
 
-func (r *Registry) getSchemaBySubjectVersion(subject string, version int) (sr.SubjectSchema, bool) {
+func (r *Registry) getSchemaBySubjectVersion(subject string, version int, includeDeleted bool) (sr.SubjectSchema, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	return r.getSchemaBySubjectVersionLocked(subject, version)
+	return r.getSchemaBySubjectVersionLocked(subject, version, includeDeleted)
 }
 
 func (*Registry) schemasEqual(a, b sr.Schema) bool {
