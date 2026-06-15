@@ -59,6 +59,15 @@ type producer struct {
 
 	batchPromises ring[batchPromise] // we never call die() on it
 
+	// onBatchPromiseBroadcast, if non-nil, is invoked from finishPromises
+	// immediately before the per-batch p.c.Broadcast() fires, with moreQueued
+	// reporting whether further promise elements are still queued in the ring
+	// (i.e. the broadcast is firing mid-drain rather than at ring exit). It
+	// exists purely so tests can observe the broadcast deterministically at
+	// its source instead of racing a woken goroutine; it is always nil in
+	// production.
+	onBatchPromiseBroadcast func(moreQueued bool)
+
 	txnMu   xsync.Mutex
 	inTxn   bool
 	tx890p2 atomic.Bool
@@ -795,6 +804,16 @@ start:
 	// a Flush whose condition (bufferedRecords == 0) became true mid-drain
 	// and blocked Produce calls whose space opened.
 	if broadcast {
+		if p.onBatchPromiseBroadcast != nil {
+			// The current (just-processed) element is still in the ring
+			// here, since dropPeek runs below; l > 1 thus means more
+			// elements are queued behind it and the broadcast is firing
+			// mid-drain rather than at ring exit.
+			p.batchPromises.mu.Lock()
+			moreQueued := p.batchPromises.l > 1
+			p.batchPromises.mu.Unlock()
+			p.onBatchPromiseBroadcast(moreQueued)
+		}
 		p.c.Broadcast()
 		broadcast = false
 	}

@@ -3,6 +3,7 @@ package kgo
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -138,12 +139,18 @@ func TestAuditFullPromiseRingBoundAndConvergence(t *testing.T) {
 //
 // The chain below makes the starvation causal rather than timing-dependent:
 // each chain promise pushes the next element from within the worker, so the
-// worker never observes an empty ring and never exits while the chain runs,
-// and the chain only stops once Flush returns (or at a generous cap).
-// Pre-fix, Flush cannot return before the chain ends (no broadcast is ever
-// fired mid-drain and nothing else broadcasts), so the chain provably hits
-// its cap. Post-fix, the broadcast after the first (counted) element wakes
-// Flush within a few chain links.
+// worker never observes an empty ring and never exits while the chain runs.
+// The fixed property - "a broadcast fires per batch, mid-drain, not only at
+// ring exit" - is asserted at its source: the onBatchPromiseBroadcast test
+// hook fires on the producer's per-batch p.c.Broadcast(), reporting whether
+// further elements are still queued. With the self-feeding chain keeping the
+// worker in its drain loop, a broadcast that fires while more is still queued
+// is exactly the mid-drain broadcast the fix introduced. Pre-fix the only
+// broadcast happens at ring exit (moreQueued == false) and the chain runs to
+// completion before any broadcast at all; observing a moreQueued broadcast is
+// therefore both necessary and sufficient, and fully deterministic - no woken
+// goroutine has to win a scheduler race. As a corroborating end-to-end check,
+// a real Flush goroutine blocked on the same condition must then return.
 func TestAuditFlushNotStarvedByPromiseChain(t *testing.T) {
 	t.Parallel()
 
@@ -155,6 +162,24 @@ func TestAuditFlushNotStarvedByPromiseChain(t *testing.T) {
 
 	ctx := context.Background()
 	p := &cl.producer
+
+	// midDrainBroadcast is closed (once) the first time the per-batch
+	// broadcast fires while more promise elements are still queued - the
+	// mid-drain broadcast that the fix guarantees. stopChain is closed
+	// alongside it so the self-feeding chain stops growing the ring.
+	var (
+		midDrainBroadcast = make(chan struct{})
+		stopChain         = make(chan struct{})
+		broadcastOnce     sync.Once
+	)
+	p.onBatchPromiseBroadcast = func(moreQueued bool) {
+		if moreQueued {
+			broadcastOnce.Do(func() {
+				close(midDrainBroadcast)
+				close(stopChain)
+			})
+		}
+	}
 
 	// One manually-accounted buffered record; Flush waits on it. The
 	// record carries no key/value so bufferedBytes stays balanced.
@@ -178,24 +203,34 @@ func TestAuditFlushNotStarvedByPromiseChain(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
+	// The self-feeding chain keeps the worker in its drain loop: each link
+	// pushes the next element before returning, so the ring is never empty
+	// and the worker never exits while the chain runs. The chain stops once
+	// stopChain is closed (by the hook on a mid-drain broadcast) or at a
+	// generous cap, so a regression cannot spin forever. chainStopped is
+	// closed when the chain actually returns, so the test can read chainLinks
+	// and capHit without racing the worker goroutine that mutates them. Those
+	// two vars are only ever touched on the worker goroutine while the chain
+	// runs (the drain loop is single-threaded), so no lock is needed there.
 	const chainCap = 20000
 	var (
-		chainLinks int
-		capHit     bool
-		chainDone  = make(chan struct{})
-		chain      func(*Record, error)
+		chainLinks   int
+		capHit       bool
+		chainStopped = make(chan struct{})
+		stopOnce     sync.Once
+		chain        func(*Record, error)
 	)
 	chain = func(*Record, error) {
 		select {
-		case <-flushDone:
-			close(chainDone) // flush returned while the chain was alive: success
+		case <-stopChain:
+			stopOnce.Do(func() { close(chainStopped) })
 			return
 		default:
 		}
 		chainLinks++
 		if chainLinks >= chainCap {
 			capHit = true
-			close(chainDone)
+			stopOnce.Do(func() { close(chainStopped) })
 			return
 		}
 		cl.TryProduce(ctx, &Record{}, chain) // no topic: fails pre-buffer, pushes the next link
@@ -210,15 +245,35 @@ func TestAuditFlushNotStarvedByPromiseChain(t *testing.T) {
 		}, &Record{}}},
 	})
 
+	// Deterministic assertion: a broadcast must fire mid-drain. This does
+	// not depend on any goroutine being scheduled - it is observed directly
+	// on the producer's broadcast path. On regression the hook never closes
+	// midDrainBroadcast and the chain runs to its cap, closing chainStopped.
 	select {
-	case <-chainDone:
+	case <-midDrainBroadcast:
+	case <-chainStopped:
 	case <-time.After(30 * time.Second):
-		t.Fatal("promise chain neither observed flush completion nor hit its cap")
+		t.Fatal("flush starved: no per-batch broadcast fired mid-drain and the chain never stopped")
+	}
+
+	// Wait for the chain to fully stop before reading chainLinks/capHit, so
+	// the reads do not race the worker goroutine.
+	select {
+	case <-chainStopped:
+	case <-time.After(30 * time.Second):
+		t.Fatal("chain never stopped after mid-drain broadcast")
 	}
 	if capHit {
-		t.Fatalf("flush starved: %d promise elements drained without a broadcast while flush's condition was satisfied", chainLinks)
+		t.Fatalf("flush starved: %d promise elements drained without a mid-drain broadcast", chainLinks)
 	}
-	<-flushDone
+
+	// Corroborating end-to-end check: the broadcast we observed must wake
+	// the real Flush blocked on the same condition.
+	select {
+	case <-flushDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("mid-drain broadcast fired but Flush never returned")
+	}
 }
 
 // purgeTopics deleted unknown-topic waiters and stored the cleaned topics
