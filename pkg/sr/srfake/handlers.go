@@ -127,6 +127,10 @@ func (r *Registry) handleGetSchemaByID(w http.ResponseWriter, req *http.Request)
 			return
 		}
 	}
+	if subject := req.URL.Query().Get("subject"); subject != "" && !r.schemaIDInSubjectLocked(id, subject) {
+		r.handleAPIError(w, errSchemaNotFound())
+		return
+	}
 	respondJSON(w, http.StatusOK, sch)
 }
 
@@ -152,6 +156,10 @@ func (r *Registry) handleGetRawSchemaByID(w http.ResponseWriter, req *http.Reque
 			return
 		}
 	}
+	if subject := req.URL.Query().Get("subject"); subject != "" && !r.schemaIDInSubjectLocked(id, subject) {
+		r.handleAPIError(w, errSchemaNotFound())
+		return
+	}
 	respondJSON(w, http.StatusOK, sch.Schema)
 }
 
@@ -165,6 +173,8 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 	}
 
 	ctx := requestContext(req)
+	del := parseDeleted(req)
+	subjectParam := req.URL.Query().Get("subject")
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -178,18 +188,17 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 	// Find all subject-version pairs that use this schema ID
 	var usages []map[string]any
 	for subject, subj := range r.subjects {
-		if subj.isDeleted {
+		if !del.keep(subj.isDeleted) {
 			continue
 		}
 		if ctx != "" && subjectContext(subject) != ctx {
 			continue
 		}
+		if subjectParam != "" && subject != subjectParam {
+			continue
+		}
 		for version, versionData := range subj.versions {
-			if versionData.schema.ID == id {
-				// Skip soft-deleted versions
-				if versionData.isDeleted {
-					continue
-				}
+			if versionData.schema.ID == id && del.keep(versionData.isDeleted) {
 				usages = append(usages, map[string]any{
 					"subject": subject,
 					"version": version,
@@ -215,6 +224,8 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 	}
 
 	ctx := requestContext(req)
+	del := parseDeleted(req)
+	subjectParam := req.URL.Query().Get("subject")
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -226,14 +237,17 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 
 	subjectSet := make(map[string]bool)
 	for subject, subj := range r.subjects {
-		if subj.isDeleted {
+		if !del.keep(subj.isDeleted) {
 			continue
 		}
 		if ctx != "" && subjectContext(subject) != ctx {
 			continue
 		}
+		if subjectParam != "" && subject != subjectParam {
+			continue
+		}
 		for _, vd := range subj.versions {
-			if !vd.isDeleted && vd.schema.ID == id {
+			if del.keep(vd.isDeleted) && vd.schema.ID == id {
 				subjectSet[subject] = true
 				break
 			}
@@ -260,15 +274,97 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 
 // handleGetSubjects emulates GET /subjects to return a list of all registered
 // subjects.
-func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
+// deletedFilter captures the ?deleted and ?deletedOnly query parameters.
+// deletedOnly returns only soft-deleted items, deleted returns active and
+// soft-deleted, and neither returns only active items.
+type deletedFilter struct {
+	includeDeleted bool
+	onlyDeleted    bool
+}
+
+func parseDeleted(req *http.Request) deletedFilter {
+	q := req.URL.Query()
+	return deletedFilter{
+		includeDeleted: q.Get("deleted") == "true",
+		onlyDeleted:    q.Get("deletedOnly") == "true",
+	}
+}
+
+// keep reports whether an item with the given soft-delete state is included.
+func (f deletedFilter) keep(isDeleted bool) bool {
+	if f.onlyDeleted {
+		return isDeleted
+	}
+	if f.includeDeleted {
+		return true
+	}
+	return !isDeleted
+}
+
+// any reports whether soft-deleted items are requested at all, used by
+// single-item lookups to decide whether a soft-deleted item may be returned.
+func (f deletedFilter) any() bool { return f.includeDeleted || f.onlyDeleted }
+
+// handleGetSchemas implements GET /schemas, returning every schema across all
+// subjects and versions. It supports the subjectPrefix, deleted, deletedOnly,
+// and latestOnly query parameters.
+func (r *Registry) handleGetSchemas(w http.ResponseWriter, req *http.Request) {
 	includeDeleted := req.URL.Query().Get("deleted") == "true"
+	subjPrefix := req.URL.Query().Get("subjectPrefix")
+	latestOnly := req.URL.Query().Get("latestOnly") == "true"
+	ctx := requestContext(req)
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	subjects := make([]string, 0, len(r.subjects))
+	for s := range r.subjects {
+		subjects = append(subjects, s)
+	}
+	sort.Strings(subjects)
+
+	out := make([]sr.SubjectSchema, 0)
+	for _, s := range subjects {
+		subj := r.subjects[s]
+		if !includeDeleted && subj.isDeleted {
+			continue
+		}
+		if ctx != "" && subjectContext(s) != ctx {
+			continue
+		}
+		if subjPrefix != "" && !strings.HasPrefix(s, subjPrefix) {
+			continue
+		}
+
+		versions := make([]int, 0, len(subj.versions))
+		for v := range subj.versions {
+			versions = append(versions, v)
+		}
+		sort.Ints(versions)
+		for _, v := range versions {
+			vd := subj.versions[v]
+			if !includeDeleted && vd.isDeleted {
+				continue
+			}
+			if latestOnly && v != subj.latestVersion {
+				continue
+			}
+			out = append(out, vd.schema)
+		}
+	}
+
+	respondJSON(w, http.StatusOK, out)
+}
+
+func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
+	del := parseDeleted(req)
 	subjPrefix := req.URL.Query().Get("subjectPrefix")
 	ctx := requestContext(req)
 
 	r.mu.RLock()
 	subjects := make([]string, 0, len(r.subjects))
 	for s, subj := range r.subjects {
-		if !includeDeleted && subj.isDeleted {
+		if !del.keep(subj.isDeleted) {
 			continue
 		}
 		if ctx != "" && subjectContext(s) != ctx {
@@ -292,20 +388,20 @@ func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
 // a list of all versions for a given subject.
 func (r *Registry) handleGetSubjectVersions(w http.ResponseWriter, req *http.Request) {
 	subject := req.PathValue("subject")
-	includeDeleted := req.URL.Query().Get("deleted") == "true"
+	del := parseDeleted(req)
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	subj, ok := r.subjects[subject]
-	if !ok || (subj.isDeleted && !includeDeleted) {
+	if !ok || (subj.isDeleted && !del.any()) {
 		r.handleAPIError(w, errSubjectNotFound(subject))
 		return
 	}
 
 	var versions []int
 	for v, versionData := range subj.versions {
-		if !includeDeleted && versionData.isDeleted {
+		if !del.keep(versionData.isDeleted) {
 			continue
 		}
 		versions = append(versions, v)
@@ -339,14 +435,15 @@ func (r *Registry) handlePostSubjectVersion(w http.ResponseWriter, req *http.Req
 func (r *Registry) handleGetSubjectSchemaByVersion(w http.ResponseWriter, req *http.Request) {
 	subject := req.PathValue("subject")
 	versionStr := req.PathValue("version")
+	del := parseDeleted(req)
 
-	version, err := r.resolveVersion(subject, versionStr)
+	version, err := r.resolveVersion(subject, versionStr, del.any())
 	if err != nil {
 		r.handleAPIError(w, err)
 		return
 	}
 
-	sch, ok := r.getSchemaBySubjectVersion(subject, version)
+	sch, ok := r.getSchemaBySubjectVersion(subject, version, del.any())
 	if !ok {
 		r.handleAPIError(w, errVersionNotFound(subject, version))
 		return
@@ -359,14 +456,15 @@ func (r *Registry) handleGetSubjectSchemaByVersion(w http.ResponseWriter, req *h
 func (r *Registry) handleGetSubjectRawSchemaByVersion(w http.ResponseWriter, req *http.Request) {
 	subject := req.PathValue("subject")
 	versionStr := req.PathValue("version")
+	del := parseDeleted(req)
 
-	version, err := r.resolveVersion(subject, versionStr)
+	version, err := r.resolveVersion(subject, versionStr, del.any())
 	if err != nil {
 		r.handleAPIError(w, err)
 		return
 	}
 
-	sch, ok := r.getSchemaBySubjectVersion(subject, version)
+	sch, ok := r.getSchemaBySubjectVersion(subject, version, del.any())
 	if !ok {
 		r.handleAPIError(w, errVersionNotFound(subject, version))
 		return
@@ -379,8 +477,9 @@ func (r *Registry) handleGetSubjectRawSchemaByVersion(w http.ResponseWriter, req
 func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Request) {
 	subject := req.PathValue("subject")
 	versionStr := req.PathValue("version")
+	del := parseDeleted(req)
 
-	version, err := r.resolveVersion(subject, versionStr)
+	version, err := r.resolveVersion(subject, versionStr, del.any())
 	if err != nil {
 		r.handleAPIError(w, err)
 		return
@@ -390,7 +489,7 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 	defer r.mu.RUnlock()
 
 	// Check if the target schema exists
-	_, exists := r.getSchemaBySubjectVersionLocked(subject, version)
+	_, exists := r.getSchemaBySubjectVersionLocked(subject, version, del.any())
 	if !exists {
 		r.handleAPIError(w, errVersionNotFound(subject, version))
 		return
@@ -399,14 +498,12 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 	// Find all schemas that reference this target schema
 	referencingIDs := make([]int, 0) // Initialize as empty slice, not nil
 	for _, subj := range r.subjects {
-		// Skip soft-deleted subjects
-		if subj.isDeleted {
+		if !del.keep(subj.isDeleted) {
 			continue
 		}
 
 		for _, versionData := range subj.versions {
-			// Skip soft-deleted versions
-			if versionData.isDeleted {
+			if !del.keep(versionData.isDeleted) {
 				continue
 			}
 
@@ -483,18 +580,20 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	del := parseDeleted(req)
+
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	// Check if subject exists and is not soft-deleted
 	subj, ok := r.subjects[subject]
-	if !ok || subj.isDeleted {
+	if !ok || (subj.isDeleted && !del.any()) {
 		r.handleAPIError(w, errSubjectNotFound(subject))
 		return
 	}
 
 	for v, versionData := range subj.versions {
-		if versionData.isDeleted || !r.schemasEqual(versionData.schema.Schema, body) {
+		if !del.keep(versionData.isDeleted) || !r.schemasEqual(versionData.schema.Schema, body) {
 			continue
 		}
 		resp := map[string]any{
@@ -613,10 +712,87 @@ func (r *Registry) handleDeleteSubjectConfig(w http.ResponseWriter, req *http.Re
    Handler – Mode
    ------------------------------------------------------------------------- */
 
-// handleGetMode emulates GET /mode and returns the mock's current operational
-// mode.
-func (*Registry) handleGetMode(w http.ResponseWriter, _ *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]string{"mode": "READWRITE"})
+// handleGetMode emulates GET /mode and returns the global mode.
+func (r *Registry) handleGetMode(w http.ResponseWriter, _ *http.Request) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": r.globalMode})
+}
+
+// handlePutMode emulates PUT /mode and sets the global mode. The ?force query
+// parameter is accepted but not enforced: the mock does not restrict setting
+// IMPORT mode on a non-empty registry.
+func (r *Registry) handlePutMode(w http.ResponseWriter, req *http.Request) {
+	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
+	var body struct {
+		Mode sr.Mode `json:"mode"`
+	}
+	if err := decodeJSONRequest(req.Body, &body); err != nil {
+		r.handleAPIError(w, errInvalidMode(err.Error()))
+		return
+	}
+	r.mu.Lock()
+	r.globalMode = body.Mode
+	r.mu.Unlock()
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": body.Mode})
+}
+
+// handleGetSubjectMode emulates GET /mode/{subject}. If the subject has no mode
+// override it falls back to the global mode unless defaultToGlobal=false.
+func (r *Registry) handleGetSubjectMode(w http.ResponseWriter, req *http.Request) {
+	subject := req.PathValue("subject")
+	useDefault := req.URL.Query().Get("defaultToGlobal") != "false"
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	subj, ok := r.subjects[subject]
+	switch {
+	case ok && subj.mode != nil:
+		respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": *subj.mode})
+	case useDefault:
+		respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": r.globalMode})
+	default:
+		r.handleAPIError(w, errSubjectNotFound(subject))
+	}
+}
+
+// handlePutSubjectMode emulates PUT /mode/{subject} and sets a per-subject mode.
+// As with the global setter, ?force is accepted but not enforced.
+func (r *Registry) handlePutSubjectMode(w http.ResponseWriter, req *http.Request) {
+	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
+	subject := req.PathValue("subject")
+
+	var body struct {
+		Mode sr.Mode `json:"mode"`
+	}
+	if err := decodeJSONRequest(req.Body, &body); err != nil {
+		r.handleAPIError(w, errInvalidMode(err.Error()))
+		return
+	}
+	if err := r.SetMode(subject, body.Mode); err != nil {
+		r.handleAPIError(w, errInvalidMode(err.Error()))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": body.Mode})
+}
+
+// handleDeleteSubjectMode emulates DELETE /mode/{subject}, removing a
+// per-subject mode override and returning the mode that was removed.
+func (r *Registry) handleDeleteSubjectMode(w http.ResponseWriter, req *http.Request) {
+	subject := req.PathValue("subject")
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	subj, ok := r.subjects[subject]
+	if !ok || subj.mode == nil {
+		r.handleAPIError(w, errSubjectNotFound(subject))
+		return
+	}
+	deleted := *subj.mode
+	subj.mode = nil
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": deleted})
 }
 
 /* -------------------------------------------------------------------------

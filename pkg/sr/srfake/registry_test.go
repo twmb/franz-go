@@ -350,6 +350,196 @@ func TestSubjectHandlers(t *testing.T) {
 	}
 }
 
+func TestGetAllSchemas(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	reg.SeedSchema("user-value", 1, 1, userSchema)
+	reg.SeedSchema("user-value", 2, 2, userSchemaV2)
+	reg.SeedSchema("product-value", 1, 3, productSchema)
+
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	all, err := cl.AllSchemas(ctx)
+	if err != nil {
+		t.Fatalf("AllSchemas: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("AllSchemas: got %d schemas, want 3", len(all))
+	}
+	// Sorted by subject then version.
+	if all[0].Subject != "product-value" || all[1].Subject != "user-value" || all[1].Version != 1 || all[2].Version != 2 {
+		t.Errorf("AllSchemas unexpected ordering: %+v", all)
+	}
+
+	latest, err := cl.AllSchemas(sr.WithParams(ctx, sr.LatestOnly))
+	if err != nil {
+		t.Fatalf("AllSchemas(latestOnly): %v", err)
+	}
+	if len(latest) != 2 {
+		t.Fatalf("AllSchemas(latestOnly): got %d, want 2 (one per subject)", len(latest))
+	}
+}
+
+func TestCheckCompatibilityAllVersions(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	reg.SeedSchema("user-value", 1, 1, userSchema)
+
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Version -2 posts to /compatibility/subjects/{subject}/versions (all versions).
+	res, err := cl.CheckCompatibility(context.Background(), "user-value", -2, userSchemaV2)
+	if err != nil {
+		t.Fatalf("CheckCompatibility(all versions): %v", err)
+	}
+	if !res.Is {
+		t.Fatal("want is_compatible true")
+	}
+}
+
+func TestModeGlobal(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Default global mode is READWRITE.
+	got := cl.Mode(ctx)
+	if len(got) != 1 || got[0].Err != nil || got[0].Mode != sr.ModeReadWrite {
+		t.Fatalf("default global mode: %+v", got)
+	}
+
+	// Set then read it back.
+	set := cl.SetMode(ctx, sr.ModeReadOnly)
+	if len(set) != 1 || set[0].Err != nil || set[0].Mode != sr.ModeReadOnly {
+		t.Fatalf("set global mode: %+v", set)
+	}
+	if got = cl.Mode(ctx); got[0].Mode != sr.ModeReadOnly {
+		t.Fatalf("global mode after set = %v, want READONLY", got[0].Mode)
+	}
+}
+
+func TestModeSubject(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	reg.SeedSchema("user-value", 1, 1, userSchema)
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// With no subject override, it falls back to the global mode.
+	got := cl.Mode(ctx, "user-value")
+	if got[0].Err != nil || got[0].Mode != sr.ModeReadWrite {
+		t.Fatalf("subject mode fallback: %+v", got)
+	}
+
+	// Set a per-subject override.
+	set := cl.SetMode(ctx, sr.ModeReadOnly, "user-value")
+	if set[0].Err != nil || set[0].Mode != sr.ModeReadOnly {
+		t.Fatalf("set subject mode: %+v", set)
+	}
+	if got = cl.Mode(ctx, "user-value"); got[0].Mode != sr.ModeReadOnly {
+		t.Fatalf("subject mode after set = %v, want READONLY", got[0].Mode)
+	}
+
+	// Reset reverts to the global default.
+	rst := cl.ResetMode(ctx, "user-value")
+	if len(rst) != 1 || rst[0].Err != nil {
+		t.Fatalf("reset subject mode: %+v", rst)
+	}
+	if got = cl.Mode(ctx, "user-value"); got[0].Mode != sr.ModeReadWrite {
+		t.Fatalf("subject mode after reset = %v, want READWRITE (global)", got[0].Mode)
+	}
+}
+
+func TestDeletedQueryParams(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	if _, err := cl.CreateSchema(ctx, "user-value", userSchema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.CreateSchema(ctx, "user-value", userSchemaV2); err != nil {
+		t.Fatal(err)
+	}
+	// Soft-delete version 1.
+	if err := cl.DeleteSchema(ctx, "user-value", 1, sr.SoftDelete); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	eq := func(name string, got []int, want ...int) {
+		t.Helper()
+		if fmt.Sprintf("%v", got) != fmt.Sprintf("%v", want) {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
+	}
+
+	// Default: only active versions.
+	v, err := cl.SubjectVersions(ctx, "user-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq("default versions", v, 2)
+
+	// deleted=true: active + soft-deleted.
+	v, err = cl.SubjectVersions(sr.WithParams(ctx, sr.ShowDeleted), "user-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq("deleted versions", v, 1, 2)
+
+	// deletedOnly=true: only soft-deleted.
+	v, err = cl.SubjectVersions(sr.WithParams(ctx, sr.DeletedOnly), "user-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq("deletedOnly versions", v, 1)
+
+	// A soft-deleted version is hidden by default, visible with deleted=true.
+	if _, err := cl.SchemaByVersion(ctx, "user-value", 1); err == nil {
+		t.Error("expected soft-deleted version 1 to be hidden by default")
+	}
+	if _, err := cl.SchemaByVersion(sr.WithParams(ctx, sr.ShowDeleted), "user-value", 1); err != nil {
+		t.Errorf("expected soft-deleted version 1 visible with deleted=true: %v", err)
+	}
+}
+
+func TestSubjectQueryParamOnSchemaByID(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	reg.SeedSchema("user-value", 1, 1, userSchema)
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Scoped to the owning subject: found.
+	if _, err := cl.SchemaByID(sr.WithParams(ctx, sr.Subject("user-value")), 1); err != nil {
+		t.Errorf("SchemaByID scoped to owning subject: %v", err)
+	}
+	// Scoped to a different subject: not found.
+	if _, err := cl.SchemaByID(sr.WithParams(ctx, sr.Subject("other-value")), 1); err == nil {
+		t.Error("expected SchemaByID scoped to a non-owning subject to fail")
+	}
+}
+
 func TestSchemaHandlers(t *testing.T) {
 	reg := srfake.New()
 	t.Cleanup(reg.Close)
