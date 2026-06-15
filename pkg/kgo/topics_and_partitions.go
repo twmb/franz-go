@@ -294,9 +294,10 @@ func newTopicPartitions() *topicPartitions {
 type topicPartitions struct {
 	v atomic.Value // *topicPartitionsData
 
-	partsMu     xsync.Mutex
-	partitioner TopicPartitioner
-	lb          *leastBackupInput // for partitioning if the partitioner is a LoadTopicPartitioner
+	partsMu      xsync.Mutex
+	partitioner  TopicPartitioner
+	lb           *leastBackupInput // for partitioning if the partitioner is a LoadTopicPartitioner
+	rackEligible []*topicPartition // reusable same-rack subset for RackAwarePartitioning
 }
 
 func (t *topicPartitions) load() *topicPartitionsData { return t.v.Load().(*topicPartitionsData) }

@@ -765,7 +765,8 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 	}
 
 	mapping := partsData.writablePartitions
-	if parts.partitioner.RequiresConsistency(pr.Record) {
+	consistent := parts.partitioner.RequiresConsistency(pr.Record)
+	if consistent {
 		mapping = partsData.partitions
 	} else if len(mapping) == 0 && len(partsData.partitions) > 0 {
 		// Every partition has a retriable load error, e.g. a rolling
@@ -783,6 +784,21 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 	if len(mapping) == 0 {
 		cl.producer.promiseRecord(pr, errors.New("unable to partition record due to no usable partitions"))
 		return
+	}
+
+	// KIP-1123: prefer partitions whose leader is in our rack, but ONLY for
+	// records that do not require consistency. doPartition runs for keyed
+	// (consistency-requiring) records too - the check above merely widens
+	// their mapping to all partitions, it does not return - so we must gate
+	// on !consistent here. Rack-filtering a keyed record's candidate set
+	// would make the partitioner hash its key into a different partition and
+	// break key->partition stability. If no leader is in our rack, we fall
+	// through with the full mapping.
+	if !consistent && cl.cfg.rackAwarePartitioning && cl.cfg.rack != "" {
+		if eligible := rackEligible(parts.rackEligible, mapping, cl.brokerRacks(), cl.cfg.rack); len(eligible) > 0 {
+			parts.rackEligible = eligible
+			mapping = eligible
+		}
 	}
 
 	var pick int
@@ -823,6 +839,20 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 		partition = mapping[pick]
 		partition.records.bufferRecord(pr, false) // KIP-480
 	}
+}
+
+// rackEligible returns the subset of mapping whose partition leader is in the
+// given rack, reusing dst's backing array (dst[:0]). A leader with no known
+// rack, or whose rack differs, is excluded. The result may be empty, in which
+// case the caller falls back to the full mapping. See KIP-1123.
+func rackEligible(dst, mapping []*topicPartition, racks map[int32]string, rack string) []*topicPartition {
+	dst = dst[:0]
+	for _, p := range mapping {
+		if racks[p.leader] == rack {
+			dst = append(dst, p)
+		}
+	}
+	return dst
 }
 
 // ProducerID returns, loading if necessary, the current producer ID and epoch.
