@@ -117,7 +117,17 @@ func (s *source) removeCursor(rm *cursor) {
 
 // cursor is where we are consuming from for an individual partition.
 type cursor struct {
-	topic     string
+	topic string
+	// topicID is written once at cursor creation and is deliberately
+	// never re-adopted if a delete+recreate hands back a new ID for the
+	// same name: a recreated topic stalls loudly (UNKNOWN_TOPIC_ID, see
+	// the UnknownTopicID arm below) and the user must purge+re-add. This
+	// is the principled alternative to librdkafka/Java's adopt-and-gamble;
+	// issue #908 records why auto-adoption was backed out (PR #391/#377:
+	// OffsetForLeaderEpoch has no TopicID field, so an adopted ID cannot
+	// be validated against truncation). The metadata merge copies this
+	// pointer over rather than swapping the ID; do not "fix" the stall
+	// into an adopt without solving #908.
 	topicID   [16]byte
 	partition int32
 

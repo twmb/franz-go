@@ -1883,6 +1883,14 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 	if readErr == nil {
 		if throttleResponse, ok := pr.resp.(kmsg.ThrottleResponse); ok {
 			millis, throttlesAfterResp := throttleResponse.Throttle()
+			// A throttle is honored in full with NO upper cap (KIP-219),
+			// matching Java's NetworkClient. millis <= 0 is ignored; a
+			// positive value - even a hostile near-MaxInt32 (~24.8 days) -
+			// delays the next write on this connection (writeRequest), which
+			// selects on the request ctx and client Close, so the wait is
+			// always interruptible and holds no lock. Capping it would break
+			// the quota mechanism; an absurd throttle is equivalent to a slow
+			// broker, which is always possible. Do not add a cap.
 			if millis > 0 {
 				if pr.resp.Key() == 0 {
 					cxn.b.cl.metrics.observeTime(&cxn.b.cl.metrics.pThrottle, int64(millis))

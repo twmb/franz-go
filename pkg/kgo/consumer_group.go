@@ -1705,6 +1705,13 @@ func (g *groupExternal) eachTopic(fn func(string)) {
 }
 
 func (g *groupExternal) updateLatest(meta map[string]*metadataTopic) {
+	// These are topics the leader balances but does not itself consume, so
+	// there is no kept-partition floor like the leader's own topics have
+	// (metadata.go). We rewrite the cached count and trigger a rejoin on
+	// ANY change, INCLUDING a one-response stale shrink - that is one churn
+	// cycle (revoke + re-assign) that self-heals on the next refresh. This
+	// is the same stale-snapshot exposure Java's leader carries; it is
+	// intentional, not a bug to silence with a shrink filter.
 	g.cloned(func(tps map[string]int32) {
 		var rejoin bool
 		for t, ps := range tps {
@@ -2016,7 +2023,18 @@ start:
 				// Some partition errors are retryable:
 				//
 				// - UnstableOffsetCommit (KIP-447): a pending
-				//   transaction should be committing soon.
+				//   transaction should be committing soon. This
+				//   1s retry is deliberately UNBOUNDED and has no
+				//   counter - the block is protocol-mandated:
+				//   require_stable hides pending txnal offsets
+				//   until the commit marker lands, so a bound
+				//   would convert a mandated wait into a spurious
+				//   error. The worst legal wait is the blocking
+				//   producer's transaction timeout; an adversarial
+				//   producer extending its txn extends the block
+				//   server-side, exactly as it does for Java. Only
+				//   session teardown (ctx below) interrupts it.
+				//   Do not add a retry cap.
 				//
 				// - UnknownTopicID: the broker has not yet
 				//   propagated the topic ID for a newly created
@@ -2384,6 +2402,18 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 	// We set the head offset if autocommitting is disabled (because we
 	// only use head / committed in that case), or if we are greedily
 	// autocommitting (so that the latest head is available to autocommit).
+	//
+	// Under DEFAULT autocommit (neither disabled nor greedy) we set only
+	// dirty here, and undirtyUncommitted promotes dirty->head at the START
+	// of the next poll. This one-poll lag is INTENTIONAL and is what makes
+	// default autocommit at-least-once: defaultRevoke commits head, so a
+	// revoke between poll N and N+1 commits none of poll N's records and
+	// the new owner re-reads them. Committing dirty at revoke instead would
+	// mark records consumed while the app may still be mid-processing them -
+	// a loss window. Do not "fix" the duplicate re-read by committing dirty
+	// on revoke; users wanting eager semantics use AutoCommitGreedy or their
+	// own OnPartitionsRevoked -> CommitUncommittedOffsets (user decision
+	// 2026-04-24).
 	setHead := g.cfg.autocommitDisable || g.cfg.autocommitGreedy
 
 	g.mu.Lock()

@@ -1172,8 +1172,16 @@ func (cl *Client) updateMetadataBrokers(resp *kmsg.MetadataResponse) {
 }
 
 // updateBrokers is called with the broker portion of every metadata response.
-// All metadata responses contain all known live brokers, so we can always
-// use the response.
+// All metadata responses contain all known live brokers, so the response list
+// is authoritative and we diff-merge it: brokers absent from it are stopped.
+//
+// An EMPTY list therefore wipes all discovered brokers and falls back to
+// seeds, which is INTENTIONAL: an empty Brokers list is the KIP-1102
+// REBOOTSTRAP_REQUIRED signal, and the rebootstrap path calls
+// updateBrokers(nil) explicitly. A buggy broker sending a transient subset
+// only kills those connections (in-flight requests fail with retriable
+// errChosenBrokerDead) and the next good response heals. Do not special-case
+// the empty list back into a no-op.
 func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	sort.Slice(brokers, func(i, j int) bool { return brokers[i].NodeID < brokers[j].NodeID })
 	newBrokers := make([]*broker, 0, len(brokers))
