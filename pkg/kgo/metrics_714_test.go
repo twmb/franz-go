@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 	"time"
 )
@@ -78,5 +79,134 @@ func TestAppendOtelAttributesSkipsUnsupported(t *testing.T) {
 	mixed := appendOtelAttributesTo(nil, 7, map[string]any{"k": "v", "bad": []string{"x"}})
 	if !bytes.Equal(good, mixed) {
 		t.Errorf("supported attr corrupted by sibling unsupported attr:\n good  %x\n mixed %x", good, mixed)
+	}
+}
+
+// protoFields parses a flat protobuf message into (fieldNumber, wireType,
+// payload) tuples. For length-delimited fields the payload is the inner bytes;
+// for varint fields it is the raw varint bytes; other wire types are returned
+// as their fixed-width bytes. It is intentionally minimal: enough to walk the
+// OTLP nesting in tests without pulling in a protobuf dependency.
+func protoFields(t *testing.T, b []byte) []struct {
+	num     int
+	wire    int
+	payload []byte
+} {
+	t.Helper()
+	var out []struct {
+		num     int
+		wire    int
+		payload []byte
+	}
+	for len(b) > 0 {
+		tag, n := binary.Uvarint(b)
+		if n <= 0 {
+			t.Fatalf("bad tag varint at %x", b)
+		}
+		b = b[n:]
+		num, wire := int(tag>>3), int(tag&0x7)
+		var payload []byte
+		switch wire {
+		case 0: // varint
+			_, n := binary.Uvarint(b)
+			if n <= 0 {
+				t.Fatalf("bad varint payload at %x", b)
+			}
+			payload, b = b[:n], b[n:]
+		case 1: // 64-bit
+			payload, b = b[:8], b[8:]
+		case 2: // length-delimited
+			l, n := binary.Uvarint(b)
+			if n <= 0 {
+				t.Fatalf("bad length varint at %x", b)
+			}
+			b = b[n:]
+			payload, b = b[:l], b[l:]
+		case 5: // 32-bit
+			payload, b = b[:4], b[4:]
+		default:
+			t.Fatalf("unsupported wire type %d", wire)
+		}
+		out = append(out, struct {
+			num     int
+			wire    int
+			payload []byte
+		}{num, wire, payload})
+	}
+	return out
+}
+
+// field returns the payload of the first field with the given number/wire, or
+// nil if not present.
+func protoField(t *testing.T, b []byte, num, wire int) []byte {
+	t.Helper()
+	for _, f := range protoFields(t, b) {
+		if f.num == num && f.wire == wire {
+			return f.payload
+		}
+	}
+	return nil
+}
+
+// A cumulative or delta sum emitted for a ".total" counter (e.g.
+// connection.creation.total) is a monotonically increasing counter; OTLP's
+// Sum.is_monotonic (field 3, bool) declares that semantic so downstream
+// collectors treat it as a counter rather than an up-down gauge. appendSum
+// built the otelSum but never set isMonotonic, so the field was never
+// serialized even though otelSum.appendTo was ready to emit it and the struct
+// comment promised "We always set isMonotonic to true." Java sets
+// setIsMonotonic(monotonic) for these counters.
+func TestAppendSumIsMonotonic(t *testing.T) {
+	for _, delta := range []bool{false, true} {
+		cl := &Client{}
+		m := &cl.metrics
+		m.init(cl)
+		m.cl = cl
+
+		// One connection-creation observation yields a non-zero
+		// pConnCreation total, so appendSum emits a ".total" sum.
+		m.pConnCreation.observe()
+
+		serialized, _, n := m.appendTo(nil, delta, 1<<30, func(string) bool { return true }, nil)
+		if n == 0 {
+			t.Fatalf("delta=%v: no metrics serialized", delta)
+		}
+
+		// Walk: MetricsData(1) -> ResourceMetrics(1) -> ScopeMetrics(2) ->
+		// Metric(2, repeated). Find the Metric whose name ends in ".total"
+		// and assert its Sum(7) carries is_monotonic(3)==true.
+		rm := protoField(t, serialized, 1, 2)
+		if rm == nil {
+			t.Fatalf("delta=%v: no resourceMetrics", delta)
+		}
+		sm := protoField(t, rm, 2, 2)
+		if sm == nil {
+			t.Fatalf("delta=%v: no scopeMetrics", delta)
+		}
+		var sawTotalSum bool
+		for _, f := range protoFields(t, sm) {
+			if f.num != 2 || f.wire != 2 { // Metric (repeated)
+				continue
+			}
+			metric := f.payload
+			name := string(protoField(t, metric, 1, 2))
+			sum := protoField(t, metric, 7, 2) // Sum
+			if sum == nil {
+				continue
+			}
+			sawTotalSum = true
+			mono := protoField(t, sum, 3, 0) // is_monotonic varint
+			if len(mono) == 0 {
+				t.Errorf("delta=%v: sum %q missing is_monotonic", delta, name)
+				continue
+			}
+			v, _ := binary.Uvarint(mono)
+			if v != 1 {
+				t.Errorf("delta=%v: sum %q is_monotonic=%d, want 1", delta, name, v)
+			}
+		}
+		if !sawTotalSum {
+			t.Fatalf("delta=%v: no sum metric found in serialized output", delta)
+		}
 	}
 }

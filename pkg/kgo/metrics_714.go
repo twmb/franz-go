@@ -558,6 +558,7 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 						timeNano:   nowNano,
 					},
 					aggregationTemporality: otelTempDelta,
+					isMonotonic:            true,
 				},
 			})
 		} else {
@@ -571,6 +572,7 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 						timeNano:   nowNano,
 					},
 					aggregationTemporality: otelTempCumulative,
+					isMonotonic:            true,
 				},
 			})
 		}
