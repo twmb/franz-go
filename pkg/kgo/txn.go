@@ -962,6 +962,31 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 // If a transaction is begun too quickly after finishing an old transaction,
 // Kafka may still be finalizing its commit / abort and will return a
 // concurrent transactions error. We handle that by retrying for a bit.
+//
+// Constraints any change to EOS-under-coordinator-churn (here and in
+// maybeRecoverProducerID / EndTransaction) must preserve — established by the
+// txn-churn audit:
+//
+//  1. This wrapper / coordinator-retry division stays: the coordinator
+//     wrapper retries only coordinator-move codes; CONCURRENT_TRANSACTIONS
+//     loops belong to callers, ctx-bounded, because CT can legitimately last
+//     as long as a marker drain. Route CT recovery through this loop, not a
+//     second one.
+//  2. anyAdded gating stays for TV1 — EndTxn on an EMPTY TV1 transaction is
+//     INVALID_TXN_STATE. The TV2 forced-abort-when-every-produce-failed path
+//     must stay TV2-only and attempted-only; idle Begin/End cycles stay
+//     wireless.
+//  3. Producer-fenced means dead: no fix may add recovery for PRODUCER_FENCED
+//     from coordinator paths. Only the timeout-abort IPE-on-produce path is
+//     recoverable, and only under TV1 semantics.
+//
+// Two design-sized items remain deliberately NOT taken (would need their own
+// round; until then docs + AbortingFirstErrPromise carry them): (a)
+// commit-after-failed-produce — kgo commits whatever succeeded if the caller
+// asks, unlike Java's abortable-state block, so changing it means tracking
+// per-txn batch failures and changing End's contract; (b) TV2 feature
+// downgrade mid-session (transaction.version 2=>1 while a client lives) —
+// Java's per-EndTxn re-check is the reference shape if it ever bites.
 func (cl *Client) doWithConcurrentTransactions(ctx context.Context, name string, fn func() error) error {
 	start := time.Now()
 	tries := 0
