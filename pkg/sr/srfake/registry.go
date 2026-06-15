@@ -121,6 +121,7 @@ func NewRegistry(opts ...Option) *Registry {
 	mux := http.NewServeMux()
 
 	// schema routes
+	mux.HandleFunc("GET /schemas", r.handleGetSchemas)
 	mux.HandleFunc("GET /schemas/ids/{id}", r.handleGetSchemaByID)
 	mux.HandleFunc("GET /schemas/ids/{id}/schema", r.handleGetRawSchemaByID)
 	mux.HandleFunc("GET /schemas/ids/{id}/versions", r.handleGetSchemaVersionsByID)
@@ -144,8 +145,9 @@ func NewRegistry(opts ...Option) *Registry {
 	mux.HandleFunc("PUT /config/{subject}", r.handlePutSubjectConfig)
 	mux.HandleFunc("DELETE /config/{subject}", r.handleDeleteSubjectConfig)
 
-	// compatibility route
+	// compatibility routes (against one version, or against all versions)
 	mux.HandleFunc("POST /compatibility/subjects/{subject}/versions/{version}", r.handleCheckCompatibility)
+	mux.HandleFunc("POST /compatibility/subjects/{subject}/versions", r.handleCheckCompatibility)
 
 	// context routes (standalone endpoints, not subject to prefix stripping)
 	mux.HandleFunc("GET /contexts", r.handleGetContexts)

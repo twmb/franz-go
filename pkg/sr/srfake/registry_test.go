@@ -350,6 +350,59 @@ func TestSubjectHandlers(t *testing.T) {
 	}
 }
 
+func TestGetAllSchemas(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	reg.SeedSchema("user-value", 1, 1, userSchema)
+	reg.SeedSchema("user-value", 2, 2, userSchemaV2)
+	reg.SeedSchema("product-value", 1, 3, productSchema)
+
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	all, err := cl.AllSchemas(ctx)
+	if err != nil {
+		t.Fatalf("AllSchemas: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("AllSchemas: got %d schemas, want 3", len(all))
+	}
+	// Sorted by subject then version.
+	if all[0].Subject != "product-value" || all[1].Subject != "user-value" || all[1].Version != 1 || all[2].Version != 2 {
+		t.Errorf("AllSchemas unexpected ordering: %+v", all)
+	}
+
+	latest, err := cl.AllSchemas(sr.WithParams(ctx, sr.LatestOnly))
+	if err != nil {
+		t.Fatalf("AllSchemas(latestOnly): %v", err)
+	}
+	if len(latest) != 2 {
+		t.Fatalf("AllSchemas(latestOnly): got %d, want 2 (one per subject)", len(latest))
+	}
+}
+
+func TestCheckCompatibilityAllVersions(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	reg.SeedSchema("user-value", 1, 1, userSchema)
+
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Version -2 posts to /compatibility/subjects/{subject}/versions (all versions).
+	res, err := cl.CheckCompatibility(context.Background(), "user-value", -2, userSchemaV2)
+	if err != nil {
+		t.Fatalf("CheckCompatibility(all versions): %v", err)
+	}
+	if !res.Is {
+		t.Fatal("want is_compatible true")
+	}
+}
+
 func TestSchemaHandlers(t *testing.T) {
 	reg := srfake.New()
 	t.Cleanup(reg.Close)

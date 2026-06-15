@@ -260,6 +260,57 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 
 // handleGetSubjects emulates GET /subjects to return a list of all registered
 // subjects.
+// handleGetSchemas implements GET /schemas, returning every schema across all
+// subjects and versions. It supports the subjectPrefix, deleted, and latestOnly
+// query parameters.
+func (r *Registry) handleGetSchemas(w http.ResponseWriter, req *http.Request) {
+	includeDeleted := req.URL.Query().Get("deleted") == "true"
+	subjPrefix := req.URL.Query().Get("subjectPrefix")
+	latestOnly := req.URL.Query().Get("latestOnly") == "true"
+	ctx := requestContext(req)
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	subjects := make([]string, 0, len(r.subjects))
+	for s := range r.subjects {
+		subjects = append(subjects, s)
+	}
+	sort.Strings(subjects)
+
+	out := make([]sr.SubjectSchema, 0)
+	for _, s := range subjects {
+		subj := r.subjects[s]
+		if !includeDeleted && subj.isDeleted {
+			continue
+		}
+		if ctx != "" && subjectContext(s) != ctx {
+			continue
+		}
+		if subjPrefix != "" && !strings.HasPrefix(s, subjPrefix) {
+			continue
+		}
+
+		versions := make([]int, 0, len(subj.versions))
+		for v := range subj.versions {
+			versions = append(versions, v)
+		}
+		sort.Ints(versions)
+		for _, v := range versions {
+			vd := subj.versions[v]
+			if !includeDeleted && vd.isDeleted {
+				continue
+			}
+			if latestOnly && v != subj.latestVersion {
+				continue
+			}
+			out = append(out, vd.schema)
+		}
+	}
+
+	respondJSON(w, http.StatusOK, out)
+}
+
 func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
 	includeDeleted := req.URL.Query().Get("deleted") == "true"
 	subjPrefix := req.URL.Query().Get("subjectPrefix")
