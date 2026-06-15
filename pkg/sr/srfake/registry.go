@@ -67,7 +67,8 @@ func (r *Registry) getOrCreateSubject(subject string) *subjectData {
 // Registry is an in-memory Schema-Registry suitable for tests. All methods are
 // safe for concurrent use.
 type Registry struct {
-	srv *httptest.Server
+	srv     *httptest.Server
+	handler http.Handler
 
 	mu sync.RWMutex
 	// Consolidated state
@@ -88,8 +89,23 @@ type Registry struct {
 // response it must return true so that the default handler chain is skipped.
 type Interceptor func(w http.ResponseWriter, r *http.Request) (handled bool)
 
-// New spins up a Registry and applies any functional options.
+// New spins up a Registry backed by an httptest.Server (on a random port) and
+// applies any functional options. Use URL to get its address.
+//
+// To run the registry on a listener you control (for example a fixed port),
+// use NewRegistry instead and serve its Handler yourself.
 func New(opts ...Option) *Registry {
+	r := NewRegistry(opts...)
+	r.srv = httptest.NewServer(r.handler)
+	return r
+}
+
+// NewRegistry builds a Registry without starting any server. The caller serves
+// its Handler (for example via http.Serve on a net.Listener bound to a chosen
+// port). URL returns "" since no server is started and Close is a no-op; the
+// in-memory seeding/inspection methods (SeedSchema, RegisterSchema, etc.) work
+// as usual.
+func NewRegistry(opts ...Option) *Registry {
 	r := &Registry{
 		// Simplified state initialization
 		subjects:     make(map[string]*subjectData),
@@ -145,15 +161,31 @@ func New(opts ...Option) *Registry {
 	}
 	h = r.interceptorMiddleware(h)
 
-	r.srv = httptest.NewServer(h)
+	r.handler = h
 	return r
 }
 
-// Close shuts down the underlying server.
-func (r *Registry) Close() { r.srv.Close() }
+// Handler returns the registry's HTTP handler. This is the same handler served
+// by New's internal httptest.Server, exposed so callers can serve it on their
+// own listener.
+func (r *Registry) Handler() http.Handler { return r.handler }
 
-// URL returns the base URL of the running mock.
-func (r *Registry) URL() string { return r.srv.URL }
+// Close shuts down the underlying server, if New started one. It is a no-op
+// for registries created via NewHandler.
+func (r *Registry) Close() {
+	if r.srv != nil {
+		r.srv.Close()
+	}
+}
+
+// URL returns the base URL of the running mock, or "" if the registry was
+// created via NewHandler (no server started).
+func (r *Registry) URL() string {
+	if r.srv != nil {
+		return r.srv.URL
+	}
+	return ""
+}
 
 // Intercept appends handler to the interceptor chain.
 func (r *Registry) Intercept(i Interceptor) {
