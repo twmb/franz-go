@@ -248,8 +248,8 @@ func (p *leastBackupTopicPartitioner) PartitionByBackup(_ *Record, n int, backup
 // KIP-794 and released with the Java client in Kafka 3.3. This partitioner
 // returns the same partition until 'bytes' is hit. At that point, a
 // re-partitioning happens. If adaptive is false, this chooses a new random
-// partition, otherwise this chooses a broker based on the inverse of the
-// backlog currently buffered for that broker. If keys is true, this uses
+// partition, otherwise this chooses a partition based on the inverse of the
+// backlog currently buffered for that partition. If keys is true, this uses
 // standard hashing based on record key for records with non-nil keys. hasher
 // is optional; if nil, the default hasher murmur2 (Kafka's default).
 //
@@ -355,8 +355,8 @@ func (p *uniformBytesTopicPartitioner) PartitionByBackup(r *Record, n int, backu
 	} else {
 		p.calc = p.calc[:0]
 
-		// For adaptive, the logic is that we pick by broker according
-		// to the inverse of the queue size. Presumably this means
+		// For adaptive, the logic is that we pick a partition according
+		// to the inverse of its queue size. Presumably this means
 		// bytes, but we use records for simplicity.
 		//
 		// We calculate 1/recs for all brokers and choose the first one
