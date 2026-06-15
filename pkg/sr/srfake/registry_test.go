@@ -403,6 +403,66 @@ func TestCheckCompatibilityAllVersions(t *testing.T) {
 	}
 }
 
+func TestModeGlobal(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Default global mode is READWRITE.
+	got := cl.Mode(ctx)
+	if len(got) != 1 || got[0].Err != nil || got[0].Mode != sr.ModeReadWrite {
+		t.Fatalf("default global mode: %+v", got)
+	}
+
+	// Set then read it back.
+	set := cl.SetMode(ctx, sr.ModeReadOnly)
+	if len(set) != 1 || set[0].Err != nil || set[0].Mode != sr.ModeReadOnly {
+		t.Fatalf("set global mode: %+v", set)
+	}
+	if got = cl.Mode(ctx); got[0].Mode != sr.ModeReadOnly {
+		t.Fatalf("global mode after set = %v, want READONLY", got[0].Mode)
+	}
+}
+
+func TestModeSubject(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	reg.SeedSchema("user-value", 1, 1, userSchema)
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// With no subject override, it falls back to the global mode.
+	got := cl.Mode(ctx, "user-value")
+	if got[0].Err != nil || got[0].Mode != sr.ModeReadWrite {
+		t.Fatalf("subject mode fallback: %+v", got)
+	}
+
+	// Set a per-subject override.
+	set := cl.SetMode(ctx, sr.ModeReadOnly, "user-value")
+	if set[0].Err != nil || set[0].Mode != sr.ModeReadOnly {
+		t.Fatalf("set subject mode: %+v", set)
+	}
+	if got = cl.Mode(ctx, "user-value"); got[0].Mode != sr.ModeReadOnly {
+		t.Fatalf("subject mode after set = %v, want READONLY", got[0].Mode)
+	}
+
+	// Reset reverts to the global default.
+	rst := cl.ResetMode(ctx, "user-value")
+	if len(rst) != 1 || rst[0].Err != nil {
+		t.Fatalf("reset subject mode: %+v", rst)
+	}
+	if got = cl.Mode(ctx, "user-value"); got[0].Mode != sr.ModeReadWrite {
+		t.Fatalf("subject mode after reset = %v, want READWRITE (global)", got[0].Mode)
+	}
+}
+
 func TestSchemaHandlers(t *testing.T) {
 	reg := srfake.New()
 	t.Cleanup(reg.Close)

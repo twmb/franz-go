@@ -69,6 +69,10 @@ func errInvalidCompatLevel(msg string) *registryError {
 	return newErr(http.StatusBadRequest, sr.ErrInvalidCompatibilityLevel.Code, "%s", msg)
 }
 
+func errInvalidMode(msg string) *registryError {
+	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidMode.Code, "%s", msg)
+}
+
 func errCircularDependency(subject string) *registryError {
 	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "circular dependency detected: subject %s is referenced in a cycle", subject)
 }

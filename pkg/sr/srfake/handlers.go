@@ -664,10 +664,84 @@ func (r *Registry) handleDeleteSubjectConfig(w http.ResponseWriter, req *http.Re
    Handler – Mode
    ------------------------------------------------------------------------- */
 
-// handleGetMode emulates GET /mode and returns the mock's current operational
-// mode.
-func (*Registry) handleGetMode(w http.ResponseWriter, _ *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]string{"mode": "READWRITE"})
+// handleGetMode emulates GET /mode and returns the global mode.
+func (r *Registry) handleGetMode(w http.ResponseWriter, _ *http.Request) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": r.globalMode})
+}
+
+// handlePutMode emulates PUT /mode and sets the global mode.
+func (r *Registry) handlePutMode(w http.ResponseWriter, req *http.Request) {
+	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
+	var body struct {
+		Mode sr.Mode `json:"mode"`
+	}
+	if err := decodeJSONRequest(req.Body, &body); err != nil {
+		r.handleAPIError(w, errInvalidMode(err.Error()))
+		return
+	}
+	r.mu.Lock()
+	r.globalMode = body.Mode
+	r.mu.Unlock()
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": body.Mode})
+}
+
+// handleGetSubjectMode emulates GET /mode/{subject}. If the subject has no mode
+// override it falls back to the global mode unless defaultToGlobal=false.
+func (r *Registry) handleGetSubjectMode(w http.ResponseWriter, req *http.Request) {
+	subject := req.PathValue("subject")
+	useDefault := req.URL.Query().Get("defaultToGlobal") != "false"
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	subj, ok := r.subjects[subject]
+	switch {
+	case ok && subj.mode != nil:
+		respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": *subj.mode})
+	case useDefault:
+		respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": r.globalMode})
+	default:
+		r.handleAPIError(w, errSubjectNotFound(subject))
+	}
+}
+
+// handlePutSubjectMode emulates PUT /mode/{subject} and sets a per-subject mode.
+func (r *Registry) handlePutSubjectMode(w http.ResponseWriter, req *http.Request) {
+	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
+	subject := req.PathValue("subject")
+
+	var body struct {
+		Mode sr.Mode `json:"mode"`
+	}
+	if err := decodeJSONRequest(req.Body, &body); err != nil {
+		r.handleAPIError(w, errInvalidMode(err.Error()))
+		return
+	}
+	if err := r.SetMode(subject, body.Mode); err != nil {
+		r.handleAPIError(w, errInvalidMode(err.Error()))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": body.Mode})
+}
+
+// handleDeleteSubjectMode emulates DELETE /mode/{subject}, removing a
+// per-subject mode override and returning the mode that was removed.
+func (r *Registry) handleDeleteSubjectMode(w http.ResponseWriter, req *http.Request) {
+	subject := req.PathValue("subject")
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	subj, ok := r.subjects[subject]
+	if !ok || subj.mode == nil {
+		r.handleAPIError(w, errSubjectNotFound(subject))
+		return
+	}
+	deleted := *subj.mode
+	subj.mode = nil
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": deleted})
 }
 
 /* -------------------------------------------------------------------------

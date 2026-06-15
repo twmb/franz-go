@@ -36,6 +36,7 @@ type subjectData struct {
 	highestVersion int                    // The highest version number ever assigned (persists through deletes to prevent reuse)
 	isDeleted      bool                   // Whether the subject is soft-deleted
 	compatLevel    *sr.CompatibilityLevel // Pointer to distinguish "not set" from a zero-value
+	mode           *sr.Mode               // Pointer to distinguish "not set" from a zero-value
 }
 
 // recalculateLatestVersion updates the latestVersion field to the highest
@@ -78,6 +79,7 @@ type Registry struct {
 
 	// Global/unrelated state
 	globalCompat sr.CompatibilityLevel
+	globalMode   sr.Mode
 
 	// middleware
 	expectedAuth string
@@ -112,6 +114,7 @@ func NewRegistry(opts ...Option) *Registry {
 		schemasByID:  make(map[int]sr.Schema),
 		nextID:       1,
 		globalCompat: sr.CompatBackward,
+		globalMode:   sr.ModeReadWrite,
 	}
 
 	for _, opt := range opts {
@@ -153,8 +156,12 @@ func NewRegistry(opts ...Option) *Registry {
 	mux.HandleFunc("GET /contexts", r.handleGetContexts)
 	mux.HandleFunc("DELETE /contexts/{context}", r.handleDeleteContext)
 
-	// mode route
+	// mode routes (global and per-subject)
 	mux.HandleFunc("GET /mode", r.handleGetMode)
+	mux.HandleFunc("PUT /mode", r.handlePutMode)
+	mux.HandleFunc("GET /mode/{subject}", r.handleGetSubjectMode)
+	mux.HandleFunc("PUT /mode/{subject}", r.handlePutSubjectMode)
+	mux.HandleFunc("DELETE /mode/{subject}", r.handleDeleteSubjectMode)
 
 	var h http.Handler = mux
 	h = r.contextMiddleware(h)
@@ -355,6 +362,19 @@ func (r *Registry) SetCompat(subject string, c sr.CompatibilityLevel) error {
 	subj := r.getOrCreateSubject(subject)
 
 	subj.compatLevel = &c
+	return nil
+}
+
+// SetMode sets the per-subject mode override, creating the subject if needed.
+func (r *Registry) SetMode(subject string, m sr.Mode) error {
+	if m.String() == "" {
+		return fmt.Errorf("invalid mode")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	subj := r.getOrCreateSubject(subject)
+	subj.mode = &m
 	return nil
 }
 
