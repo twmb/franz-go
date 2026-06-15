@@ -126,6 +126,7 @@ type cfg struct {
 	maxProduceInflight                 int                // if idempotency is disabled, we allow a configurable max inflight
 	compression                        []CompressionCodec // order of preference
 
+	rackAwarePartitioning     bool
 	defaultProduceTopic       string
 	defaultProduceTopicAlways bool
 	maxRecordBatchBytes       func(string) int32
@@ -1403,6 +1404,35 @@ func StopProducerOnDataLossDetected() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.stopOnDataLoss = true }}
 }
 
+// RackAwarePartitioning opts in to preferring partition leaders that are in the
+// same rack as this client when producing, overriding the default false. This
+// option is a no-op unless the client's rack is also set via Rack.
+//
+// When enabled and a rack is set, records that do not require partition
+// consistency (keyless / auto-partition records) are restricted to candidate
+// partitions whose leader broker is in the client's rack before the configured
+// partitioner picks among them. If at least one same-rack partition exists, the
+// partitioner only sees those; if none qualify, the client falls back to all
+// partitions. Records with a key or that otherwise require consistency are
+// never affected.
+//
+// This composes with any configured partitioner (the default uniform
+// partitioner, round-robin, least-backup, or a custom one): the rack filtering
+// happens before the partitioner is consulted, and the partitioner then picks
+// over only the filtered set. This deliberately goes beyond the Java client,
+// which only makes its built-in default partitioner rack-aware.
+//
+// Preferring same-rack leaders reduces cross-rack (often cross datacenter)
+// produce traffic and cost. However, it can SKEW partition distribution: if
+// your producers are not spread across racks in roughly the same proportion as
+// your partition leaders, the racks with more producers will receive
+// disproportionately more records, leaving some partitions comparatively
+// under-filled. Ensuring a sensible producer-to-leader rack balance is an
+// operator responsibility; monitor your partition distribution when using this.
+func RackAwarePartitioning() ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.rackAwarePartitioning = true }}
+}
+
 // ProducerOnDataLossDetected sets a function to call if data loss is detected
 // when producing records if the client is configured to continue on data loss.
 // Thus, this option is mutually exclusive with StopProducerOnDataLossDetected.
@@ -1675,6 +1705,13 @@ func ConsumeResetOffset(offset Offset) ConsumerOpt {
 //
 // Consuming from a preferred replica can increase latency but can decrease
 // cross datacenter costs. See KIP-392 for more information.
+//
+// This option also feeds produce-side rack-aware partitioning: if
+// RackAwarePartitioning is enabled, the producer prefers partition leaders in
+// this same rack for records that do not require consistency. A producer-only
+// client may pass this option to NewClient even though it does not consume; it
+// remains a ConsumerOpt only to preserve API compatibility (a ConsumerOpt is
+// usable everywhere an Opt is).
 func Rack(rack string) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.rack = rack }}
 }

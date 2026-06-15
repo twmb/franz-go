@@ -894,7 +894,8 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 	}
 
 	mapping := partsData.writablePartitions
-	if parts.partitioner.RequiresConsistency(pr.Record) {
+	consistent := parts.partitioner.RequiresConsistency(pr.Record)
+	if consistent {
 		mapping = partsData.partitions
 	} else if len(mapping) == 0 && len(partsData.partitions) > 0 {
 		// Every partition has a retriable load error, e.g. a rolling
@@ -912,6 +913,24 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 	if len(mapping) == 0 {
 		cl.producer.promiseRecord(pr, errors.New("unable to partition record due to no usable partitions"))
 		return
+	}
+
+	// KIP-1123: prefer partitions whose leader is in our rack, but ONLY for
+	// records that do not require consistency. doPartition runs for keyed
+	// (consistency-requiring) records too - the check above merely widens
+	// their mapping to all partitions, it does not return - so we must gate
+	// on !consistent here. Rack-filtering a keyed record's candidate set
+	// would make the partitioner hash its key into a different partition and
+	// break key->partition stability.
+	//
+	// rackEligible is the precomputed same-rack subset of writablePartitions
+	// (see mergeTopicPartitions), so producing never allocates or locks here.
+	// It is nil unless RackAwarePartitioning is enabled with a rack set, and
+	// empty if no available leader is in our rack - including the all-
+	// unavailable fallback above where mapping widened to partitions - in
+	// which case we keep the full mapping unfiltered, matching KIP-1123.
+	if !consistent && len(partsData.rackEligible) > 0 {
+		mapping = partsData.rackEligible
 	}
 
 	var pick int
@@ -952,6 +971,32 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 		partition = mapping[pick]
 		partition.records.bufferRecord(pr, false) // KIP-480
 	}
+}
+
+// rackEligiblePartitions returns the same-rack subset of writable, the
+// available partitions a non-consistency record is normally partitioned
+// across. A leader with no known rack, or whose rack differs, is excluded.
+//
+// Only available (writable) partitions are ever rack-filtered. When none are
+// available this returns empty and doPartition falls back to the full
+// partition set UNFILTERED. That matches KIP-1123 and the Kafka producer's
+// BuiltInPartitioner, which drop the rack preference and select among all
+// partitions once the same-rack partitions are unavailable, rather than
+// pinning records to a possibly-stale same-rack leader during an outage.
+//
+// This is computed once per metadata merge rather than per record, so the
+// eligibility reflects leaders as of the last merge; a leader migration
+// between merges is picked up on the next refresh. That staleness only shifts
+// the best-effort rack preference, never which partition a keyed record lands
+// on.
+func rackEligiblePartitions(writable []*topicPartition, racks map[int32]string, rack string) []*topicPartition {
+	var eligible []*topicPartition
+	for _, p := range writable {
+		if racks[p.leader] == rack {
+			eligible = append(eligible, p)
+		}
+	}
+	return eligible
 }
 
 // ProducerID returns, loading if necessary, the current producer ID and epoch.
