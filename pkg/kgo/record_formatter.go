@@ -84,7 +84,7 @@ func (f *RecordFormatter) AppendPartitionRecord(b []byte, p *FetchPartition, r *
 //	%D    share group delivery count (0 if not from a share group)
 //	%A    share group acquisition deadline (timestamp, 0 if not from a share group)
 //
-// For AppendPartitionRecord, the formatter also undersands the following three
+// For AppendPartitionRecord, the formatter also understands the following three
 // formatting options:
 //
 //	%[    partition log start offset
@@ -238,9 +238,7 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 	var f RecordFormatter
 
 	var literal []byte // non-formatted raw text to output
-	var i int
 	for len(layout) > 0 {
-		i++
 		c, size := utf8.DecodeRuneInString(layout)
 		rawc := layout[:size]
 		layout = layout[size:]
