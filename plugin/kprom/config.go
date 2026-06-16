@@ -3,6 +3,7 @@ package kprom
 import (
 	"maps"
 	"reflect"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -23,6 +24,11 @@ type cfg struct {
 	fetchProduceOpts fetchProduceOpts
 	brokerLabels     []string
 
+	disableClassicHistograms        bool
+	nativeHistogramBucketFactor     float64
+	nativeHistogramMaxBucketNumber  uint32
+	nativeHistogramMinResetDuration time.Duration
+
 	handlerOpts  promhttp.HandlerOpts
 	goCollectors bool
 }
@@ -40,6 +46,10 @@ func newCfg(namespace string, opts ...Opt) cfg {
 			labels:            []string{"node_id", "topic"},
 		},
 		brokerLabels: []string{"node_id"},
+
+		nativeHistogramBucketFactor:     DefNativeHistogramBucketFactor,
+		nativeHistogramMaxBucketNumber:  DefNativeHistogramMaxBucketNumber,
+		nativeHistogramMinResetDuration: DefNativeHistogramMinResetDuration,
 	}
 
 	for _, opt := range opts {
@@ -139,6 +149,50 @@ func Buckets(buckets []float64) Opt {
 // DefBuckets are the default Histogram buckets. The default buckets are
 // tailored to broadly measure the kafka timings (in seconds).
 var DefBuckets = []float64{0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256, 0.512, 1.024, 2.048}
+
+// Default native histogram parameters, used by all kprom histograms unless
+// overridden with the NativeHistogram* options.
+const (
+	DefNativeHistogramBucketFactor     = 1.1
+	DefNativeHistogramMaxBucketNumber  = 100
+	DefNativeHistogramMinResetDuration = time.Hour
+)
+
+// NativeHistogramBucketFactor sets the bucket factor used by all kprom native
+// histograms, overriding the default of DefNativeHistogramBucketFactor. It
+// controls the resolution of native histogram buckets: the growth factor
+// between consecutive buckets is at most this value. It must be greater than 1
+// to enable native histograms; a value of 1 or less disables native histograms,
+// leaving only the classic histograms.
+func NativeHistogramBucketFactor(factor float64) Opt {
+	return opt{func(c *cfg) { c.nativeHistogramBucketFactor = factor }}
+}
+
+// NativeHistogramMaxBucketNumber sets the maximum number of buckets used by all
+// kprom native histograms, overriding the default of
+// DefNativeHistogramMaxBucketNumber. Once exceeded, buckets are widened to keep
+// cardinality bounded. A value of 0 means no limit.
+func NativeHistogramMaxBucketNumber(n uint32) Opt {
+	return opt{func(c *cfg) { c.nativeHistogramMaxBucketNumber = n }}
+}
+
+// NativeHistogramMinResetDuration sets the minimum duration that must pass
+// before kprom native histogram buckets may be reset to keep them within the
+// max bucket number, overriding the default of
+// DefNativeHistogramMinResetDuration.
+func NativeHistogramMinResetDuration(d time.Duration) Opt {
+	return opt{func(c *cfg) { c.nativeHistogramMinResetDuration = d }}
+}
+
+// DisableClassicHistograms stops kprom from emitting classic (fixed-bucket)
+// histograms, leaving only native histograms. Native histograms must be enabled
+// for this to work: if the native bucket factor is 1 or less (see
+// NativeHistogramBucketFactor), prometheus silently falls back to its own
+// default classic buckets (prometheus.DefBuckets), which are neither the kprom
+// defaults nor tailored to Kafka timings.
+func DisableClassicHistograms() Opt {
+	return opt{func(c *cfg) { c.disableClassicHistograms = true }}
+}
 
 // A Histogram is an identifier for a kprom histogram that can be enabled
 type Histogram uint8

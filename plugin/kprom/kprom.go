@@ -150,13 +150,16 @@ func (m *Metrics) OnNewClient(client *kgo.Client) {
 
 	// newHistogramOpts builds HistogramOpts for histogram h: classic buckets
 	// (custom if configured, else default) plus the shared native-histogram
-	// parameters. Setting NativeHistogramBucketFactor while keeping Buckets makes
-	// each histogram emit both classic and native representations, preserving
-	// backward compatibility.
+	// parameters. By default both classic and native histograms are emitted;
+	// DisableClassicHistograms drops the classic buckets and a native bucket
+	// factor of 1 or less disables native histograms (see NativeHistogramBucketFactor).
 	newHistogramOpts := func(h Histogram, name, help string) prometheus.HistogramOpts {
-		buckets := m.cfg.defBuckets
-		if b, ok := m.cfg.histograms[h]; ok && len(b) != 0 {
-			buckets = b
+		var buckets []float64
+		if !m.cfg.disableClassicHistograms {
+			buckets = m.cfg.defBuckets
+			if b, ok := m.cfg.histograms[h]; ok && len(b) != 0 {
+				buckets = b
+			}
 		}
 		return prometheus.HistogramOpts{
 			Namespace:                       namespace,
@@ -165,9 +168,9 @@ func (m *Metrics) OnNewClient(client *kgo.Client) {
 			Name:                            name,
 			Help:                            help,
 			Buckets:                         buckets,
-			NativeHistogramBucketFactor:     1.1,
-			NativeHistogramMaxBucketNumber:  100,
-			NativeHistogramMinResetDuration: time.Hour,
+			NativeHistogramBucketFactor:     m.cfg.nativeHistogramBucketFactor,
+			NativeHistogramMaxBucketNumber:  m.cfg.nativeHistogramMaxBucketNumber,
+			NativeHistogramMinResetDuration: m.cfg.nativeHistogramMinResetDuration,
 		}
 	}
 
