@@ -3308,3 +3308,67 @@ func TestIssue1328(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+func TestIssue1349(t *testing.T) {
+	t.Parallel()
+	const testTopic = "foo"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Every ListOffsets fails with a reloadable error, so the group member can
+	// never finish loading its start offset and keeps scheduling reloads.
+	c.ControlKey(int16(kmsg.ListOffsets), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.ListOffsetsRequest)
+		resp := req.ResponseKind().(*kmsg.ListOffsetsResponse)
+		for _, reqTopic := range req.Topics {
+			rt := kmsg.NewListOffsetsResponseTopic()
+			rt.Topic = reqTopic.Topic
+			for _, reqPart := range reqTopic.Partitions {
+				rp := kmsg.NewListOffsetsResponseTopicPartition()
+				rp.Partition = reqPart.Partition
+				rp.ErrorCode = kerr.NotLeaderForPartition.Code
+				rt.Partitions = append(rt.Partitions, rp)
+			}
+			resp.Topics = append(resp.Topics, rt)
+		}
+		return resp, nil, true
+	})
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup("g"),
+		kgo.ConsumeTopics(testTopic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.MetadataMinAge(time.Minute),
+		kgo.MetadataMaxAge(time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Join the group and start the failing offset load.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	cl.PollFetches(ctx)
+	cancel()
+
+	// Close leaves the group, cancelling the session while an offset load is
+	// outstanding. It must return rather than busy looping reloads.
+	done := make(chan struct{})
+	go func() {
+		cl.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Close hung leaving the group with an outstanding offset load")
+	}
+}

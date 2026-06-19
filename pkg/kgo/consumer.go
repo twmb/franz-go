@@ -1980,12 +1980,17 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 				// add things back to the session, we could abandon
 				// loading these offsets and have a stuck cursor.
 				defer s.decWorker()
-				defer reloads.loadWithSession(s, "reload offsets from load failure")
 				after := time.NewTimer(time.Second)
 				defer after.Stop()
 				select {
 				case <-after.C:
+					reloads.loadWithSession(s, "reload offsets from load failure")
 				case <-s.ctx.Done():
+					// Session is stopping; do not requeue. Requeuing here
+					// would skip the backoff above and immediately spawn a
+					// new listOrEpoch whose context is also already
+					// canceled, busy looping until the session is torn
+					// down. The session stop path manages waiting loads.
 					return
 				}
 			}()
