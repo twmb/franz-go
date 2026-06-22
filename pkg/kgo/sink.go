@@ -1775,30 +1775,14 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	}
 }
 
-// Called locked. A nil err (successful produce) resets our count, an unknown
-// topic error bumps it, and any other error leaves it unchanged: if other
-// errors reset the count, then errors interleaving with the unknowns (e.g. a
-// transient NOT_LEADER_FOR_PARTITION from a moving partition, or a request
-// timeout) would keep the count below the limit forever and the limit would
-// never trigger.
-//
-// UNKNOWN_TOPIC_ID counts the same as UNKNOWN_TOPIC_OR_PARTITION: produce
-// v13+ addresses topics by ID (KIP-516), and if our topic is deleted and
-// recreated, we keep the old ID forever (we never swap to the new ID; the
-// user must purge and re-add the topic). Every produce after recreation
-// returns UNKNOWN_TOPIC_ID, and since the error is retriable and record
-// retries / the record timeout are unbounded by default, this limit is the
-// only thing that fails the records and surfaces the recreation to the user.
-//
-// errMissingMetadataPartition also counts: it is the metadata-side twin of
-// the broker's unknown-partition errors. A metadata response can omit a
-// partition we previously had if it came from an out of date broker (e.g.
-// one that has not yet seen a CreatePartitions), which heals on a later
-// refresh and must not fail records immediately -- but a topic recreated
-// with fewer partitions never heals, so the error must stay bounded by this
-// same limit rather than retrying forever.
-//
-// This returns whether we have exceeded the limit.
+// Called locked. A successful produce (nil err) resets the count; an unknown
+// topic error bumps it; any other error leaves it unchanged -- resetting only
+// on success is what keeps interleaved errors (e.g. an alternating
+// NOT_LEADER_FOR_PARTITION) from holding the count below the limit forever.
+// Three errors count: UNKNOWN_TOPIC_OR_PARTITION, UNKNOWN_TOPIC_ID (a deleted-
+// and-recreated topic returns it until the user purges and re-adds, since
+// produce v13+ keys topics by ID), and the metadata-side
+// errMissingMetadataPartition twin. Returns whether we have exceeded the limit.
 func (recBuf *recBuf) checkUnknownFailLimit(err error) bool {
 	switch {
 	case err == nil:

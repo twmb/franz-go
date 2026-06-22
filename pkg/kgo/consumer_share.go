@@ -43,14 +43,13 @@ type (
 		// names. Owned by the manage goroutine.
 		unresolvedAssigns map[topicID][]int32
 
-		// Whether the last assignPartitions pass skipped activating an
-		// assigned partition because our metadata does not know it yet
-		// (the broker assigned newly added partitions before our
-		// metadata refreshed). We ack the member epoch regardless, so
-		// the broker never re-sends the assignment; while this is true,
-		// handleHeartbeatResp re-returns the current assignment so we
-		// retry activation once metadata catches up. Owned by the
-		// manage goroutine.
+		// Whether the last assignPartitions pass skipped an assigned
+		// partition our metadata does not know yet (the broker assigned
+		// newly added partitions before our metadata refreshed). We ack
+		// the member epoch regardless, so the broker never re-sends the
+		// assignment; while true, handleHeartbeatResp re-returns the
+		// current assignment so we retry once metadata catches up. Owned
+		// by the manage goroutine.
 		pendingAssigns bool
 
 		lastSentSubscribedTopics []string

@@ -703,6 +703,12 @@ func (cl *Client) produce(
 	p.bufferedBytes += userSize
 	p.mu.Unlock()
 
+	// Set at buffer time, before any produce reaches the broker, so this can
+	// over-set: a record counted here may still be failed locally (client
+	// close, unknown-topic timeout) before it is ever sent. The only
+	// consequence is an unnecessary EndTxn abort, which is always legal under
+	// KIP-890p2 -- an empty abort succeeds, bumps the epoch, and has nothing to
+	// commit. See the producedInTxn field doc and EndTransaction.
 	if cl.cfg.txnID != nil && !p.producedInTxn.Load() {
 		p.producedInTxn.Store(true)
 	}

@@ -1908,6 +1908,23 @@ start:
 	groupTopics := g.tps.load()
 	pinV9 := false
 	for topic, partitions := range added {
+		// Skip partitions we have already surfaced a non-retryable error
+		// for and dropped (injected, below). On the first pass injected is
+		// nil and nothing is filtered; on a goto-start retry (driven by an
+		// UNSTABLE_OFFSET_COMMIT or UNKNOWN_TOPIC_ID partition) this avoids
+		// re-fetching partitions we will never re-add to the assignment.
+		if inj := injected[topic]; inj != nil {
+			kept := partitions[:0:0] // fresh backing array; do not mutate added
+			for _, p := range partitions {
+				if _, ok := inj[p]; !ok {
+					kept = append(kept, p)
+				}
+			}
+			partitions = kept
+		}
+		if len(partitions) == 0 {
+			continue
+		}
 		reqTopic := kmsg.NewOffsetFetchRequestGroupTopic()
 		reqTopic.Topic = topic
 		reqTopic.TopicID = groupTopics.loadTopic(topic).id

@@ -1364,10 +1364,7 @@ func RecordRetries(n int) ProducerOpt {
 // multiple metadata queries (which are going to different brokers), then we
 // may as well stop trying and fail the records. The count is reset whenever
 // a produce to the partition succeeds; errors other than the two unknown
-// topic errors leave it unchanged. UNKNOWN_TOPIC_ID in particular is what
-// produce requests receive after a topic is deleted and recreated: produce
-// v13+ addresses topics by ID, and the client keeps the old ID until the
-// topic is purged and re-added (see PurgeTopicsFromClient).
+// topic errors leave it unchanged.
 //
 // If this is -1, the client never fails records with these errors.
 func UnknownTopicRetries(n int) ProducerOpt {

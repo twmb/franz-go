@@ -1176,12 +1176,14 @@ func (cl *Client) updateMetadataBrokers(resp *kmsg.MetadataResponse) {
 // is authoritative and we diff-merge it: brokers absent from it are stopped.
 //
 // An EMPTY list therefore wipes all discovered brokers and falls back to
-// seeds, which is INTENTIONAL: an empty Brokers list is the KIP-1102
-// REBOOTSTRAP_REQUIRED signal, and the rebootstrap path calls
-// updateBrokers(nil) explicitly. A buggy broker sending a transient subset
-// only kills those connections (in-flight requests fail with retriable
-// errChosenBrokerDead) and the next good response heals. Do not special-case
-// the empty list back into a no-op.
+// seeds. This is intentional and long-standing: if a broker ever answers
+// metadata with no brokers, falling back to the seeds is safer than being
+// left with none, and it re-covers every seed should the cluster have somehow
+// split. KIP-1102's rebootstrap rides the same path, calling updateBrokers(nil)
+// explicitly. A buggy broker sending a transient subset only kills those
+// connections (in-flight requests fail with retriable errChosenBrokerDead) and
+// the next good response heals. Do not special-case the empty list back into a
+// no-op.
 func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	sort.Slice(brokers, func(i, j int) bool { return brokers[i].NodeID < brokers[j].NodeID })
 	newBrokers := make([]*broker, 0, len(brokers))

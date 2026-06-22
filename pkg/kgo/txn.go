@@ -27,12 +27,6 @@ const (
 // GroupTransactSession abstracts away the proper way to begin and end a
 // transaction when consuming in a group, modifying records, and producing
 // (EOS).
-//
-// The client always requires stable fetch offsets (KIP-447): an OffsetFetch
-// for partitions with pending transactional offsets returns
-// UNSTABLE_OFFSET_COMMIT and is retried, so a rebalanced-to consumer cannot
-// fetch offsets that a still-open transaction could yet abort. The deprecated
-// RequireStableFetchOffsets option is a no-op.
 type GroupTransactSession struct {
 	cl *Client
 

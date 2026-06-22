@@ -211,26 +211,20 @@ func NewConsumerBalancer(balance ConsumerBalancerBalance, members []kmsg.JoinGro
 	// engine balances the duplicates as two members and then loses one
 	// side's partitions when keying its returned plan -- partitions
 	// assigned to nobody. Keep the first occurrence.
-	for i := 1; i < len(members); i++ {
-		var dup bool
-		for j := range i {
-			if members[j].MemberID == members[i].MemberID {
-				dup = true
-				break
+	seen := make(map[string]struct{}, len(members))
+	for _, member := range members {
+		seen[member.MemberID] = struct{}{}
+	}
+	if len(seen) != len(members) {
+		dedup := make([]kmsg.JoinGroupResponseMember, 0, len(seen))
+		clear(seen)
+		for _, member := range members {
+			if _, exists := seen[member.MemberID]; !exists {
+				seen[member.MemberID] = struct{}{}
+				dedup = append(dedup, member)
 			}
 		}
-		if dup {
-			dedup := make([]kmsg.JoinGroupResponseMember, 0, len(members))
-			seen := make(map[string]struct{}, len(members))
-			for _, member := range members {
-				if _, exists := seen[member.MemberID]; !exists {
-					seen[member.MemberID] = struct{}{}
-					dedup = append(dedup, member)
-				}
-			}
-			members = dedup
-			break
-		}
+		members = dedup
 	}
 
 	b := &ConsumerBalancer{
