@@ -481,25 +481,24 @@ start:
 		//     issuing the request on the just-authenticated connection
 		//     is correct, and the next request picks up a new one.
 		cxn.reauthPending.Store(true)
-		if !cxn.anyParked() && cxn.resps.empty() {
-			cxn.reauthPending.Store(false)
-			// Some implementations (AWS) occasionally fail for
-			// unclear reasons (principals change, somehow). If
-			// we receive SASL_AUTHENTICATION_FAILED, we retry
-			// once on a new connection. See #249.
-			cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
-			if err := cxn.sasl(); err != nil {
-				cxn.die()
-				if errors.Is(err, kerr.SaslAuthenticationFailed) && !retriedOnNewConnection {
-					cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
-					retriedOnNewConnection = true
-					goto start
-				}
-				pr.promise(nil, err)
-				return
-			}
-		} else {
+		if cxn.anyParked() || !cxn.resps.empty() {
 			cxn.park(pr)
+			return
+		}
+		cxn.reauthPending.Store(false)
+		// Some implementations (AWS) occasionally fail for
+		// unclear reasons (principals change, somehow). If
+		// we receive SASL_AUTHENTICATION_FAILED, we retry
+		// once on a new connection. See #249.
+		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
+		if err := cxn.sasl(); err != nil {
+			cxn.die()
+			if errors.Is(err, kerr.SaslAuthenticationFailed) && !retriedOnNewConnection {
+				cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
+				retriedOnNewConnection = true
+				goto start
+			}
+			pr.promise(nil, err)
 			return
 		}
 	}

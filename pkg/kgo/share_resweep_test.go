@@ -246,4 +246,3 @@ func TestAuditShareMoveCollapseMarksCursorUnusable(t *testing.T) {
 		t.Fatal("after the migration ran, the re-enabled cursor should be back in the fetch request")
 	}
 }
-

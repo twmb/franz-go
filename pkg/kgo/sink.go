@@ -704,8 +704,8 @@ func txnReqContains(txnReq *kmsg.AddPartitionsToTxnRequest, topic string, partit
 // coordinator never learned the partition belongs to). txnReq is nil for
 // non-transactional and pv12+ (KIP-890p2) producers, which never stage
 // addedToTxn in createReq, so the clear is correctly skipped for them.
-func (req *produceRequest) undoStagedBatches(txnReq *kmsg.AddPartitionsToTxnRequest) {
-	req.batches.eachOwnerLocked(func(batch seqRecBatch) {
+func (p *produceRequest) undoStagedBatches(txnReq *kmsg.AddPartitionsToTxnRequest) {
+	p.batches.eachOwnerLocked(func(batch seqRecBatch) {
 		if txnReq != nil && txnReqContains(txnReq, batch.owner.topic, batch.owner.partition) {
 			batch.owner.addedToTxn.Store(false)
 		}

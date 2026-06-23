@@ -217,7 +217,8 @@ func TestProducePersistentMissingPartitionStillFails(t *testing.T) {
 	})
 
 	stale := truncateMetadataPartitions(captureMetadata(t, cl, "t"), "t", 1)
-	defer serveStaleMetadata(c, stale)()
+	stop := serveStaleMetadata(c, stale)
+	defer stop()
 
 	cl.ForceMetadataRefresh()
 	select {
@@ -301,7 +302,7 @@ func Test848AssignedNewPartitionStaleMetadata(t *testing.T) {
 
 	hbEpochs := observeHeartbeatEpochs(c, int16(kmsg.ConsumerGroupHeartbeat))
 
-	ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true) //nolint:revive,staticcheck // the 848 opt-in key is a plain string
+	ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
 	cl := newPlainClient(t, c,
 		kgo.WithContext(ctx848),
 		kgo.ConsumerGroup(group),

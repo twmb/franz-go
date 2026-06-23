@@ -300,7 +300,7 @@ func (p *capturingDecompressPool) GetDecompressBytes([]byte, CompressionCodecTyp
 	return p.got
 }
 
-func (p *capturingDecompressPool) PutDecompressBytes([]byte) {}
+func (*capturingDecompressPool) PutDecompressBytes([]byte) {}
 
 // Xerial-framed snappy must decode into the pooled destination like every
 // other codec path; pre-fix it took the pool's Get, ignored it, and
@@ -334,8 +334,9 @@ func TestXerialDecodeUsesPool(t *testing.T) {
 func TestDecompressZstdHugeClaim(t *testing.T) {
 	t.Parallel()
 	frame := []byte{0x28, 0xb5, 0x2f, 0xfd} // zstd magic, little endian
-	frame = append(frame, 0xc0)             // frame header descriptor: 8-byte frame content size, not single segment
-	frame = append(frame, 0x00)             // window descriptor: 1 KiB
+	// frame header descriptor 0xc0 (8-byte frame content size, not single
+	// segment), then window descriptor 0x00 (1 KiB).
+	frame = append(frame, 0xc0, 0x00)
 	frame = binary.LittleEndian.AppendUint64(frame, 8<<30)
 	_, err := DefaultDecompressor().Decompress(frame, CodecZstd)
 	if !errors.Is(err, zstd.ErrDecoderSizeExceeded) {

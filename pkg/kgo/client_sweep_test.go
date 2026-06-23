@@ -55,7 +55,7 @@ func TestOptValuesTxnIDAndShare(t *testing.T) {
 	if v := cl.OptValue(TransactionalID); v != "txid" {
 		t.Errorf("OptValue(TransactionalID) = %v (%T), want the string %q", v, v, "txid")
 	}
-	if vs := cl.OptValues(TransactionalID); len(vs) != 2 || vs[0] != "txid" || vs[1] != true {
+	if vs := cl.OptValues(TransactionalID); len(vs) != 2 || vs[0] != "txid" || vs[1] != any(true) {
 		t.Errorf("OptValues(TransactionalID) = %v, want [txid true]", vs)
 	}
 
@@ -76,7 +76,7 @@ func TestOptValuesTxnIDAndShare(t *testing.T) {
 	if v := shcl.OptValue(ShareMaxRecords); v != int32(10) {
 		t.Errorf("OptValue(ShareMaxRecords) = %v (%T), want int32(10)", v, v)
 	}
-	if v := shcl.OptValue(ShareMaxRecordsStrict); v != true {
+	if v := shcl.OptValue(ShareMaxRecordsStrict); v != any(true) {
 		t.Errorf("OptValue(ShareMaxRecordsStrict) = %v, want true", v)
 	}
 	if vs := shcl.OptValues(ShareAckCallback); vs == nil {

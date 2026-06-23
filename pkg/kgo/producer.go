@@ -1205,7 +1205,7 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 
 		if !exists { // topic did not exist: check again under mu and potentially create it
 			p.topicsMu.Lock()
-			if parts, exists = p.topics.load()[topic]; !exists {
+			if _, exists = p.topics.load()[topic]; !exists {
 				// Before we store the new topic, we lock unknown
 				// topics to prevent a concurrent metadata update
 				// seeing our new topic before we are waiting from the
