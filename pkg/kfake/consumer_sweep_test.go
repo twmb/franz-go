@@ -178,6 +178,119 @@ func TestAuditStopSessionPromptWhilePendingReload(t *testing.T) {
 	}
 }
 
+// TestAuditPendingReloadSurvivesPartitionRevoke verifies that an offset load
+// caught mid-reload is carried into the next session when the session is stopped
+// by a revoke that RETAINS the loading partition - the cooperative-rebalance
+// shape (assignInvalidateMatching), driven deterministically here via
+// RemoveConsumePartitions on a direct consumer with explicit partitions.
+//
+// The dying-session guard in listOrEpoch returns early once the session context
+// is dead, but only AFTER the loads were parked in the session's waiting set;
+// the reload goroutine still re-parks its loads on cancellation too. stopSession
+// returns that waiting set to the next session, which re-issues the load. Were
+// the guard instead to DROP the reload (return without re-parking it, as a more
+// targeted "do not requeue on a dead session" fix would), the retained
+// partition would have no cursor and no pending load in the new session - and
+// because these are explicit ConsumePartitions, nothing re-lists it, so it would
+// never consume again. The kept topic's records arriving proves the reload
+// survived the revoke; if it were dropped, this test hangs to its deadline.
+func TestAuditPendingReloadSurvivesPartitionRevoke(t *testing.T) {
+	t.Parallel()
+
+	const (
+		kept    = "reload-survive-kept"
+		dropped = "reload-survive-dropped"
+		msgs    = 5
+	)
+
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, kept, dropped))
+	produceN(t, c, kept, msgs)
+
+	var failKept atomic.Bool
+	failKept.Store(true)
+	var signaled atomic.Bool
+	keptFailing := make(chan struct{})
+
+	// Fail the kept topic's offset listing with a retriable error while
+	// failKept is set, keeping it in a reload loop. Everything else (the
+	// dropped topic, and the kept topic once we allow it) lists to offset 0,
+	// the log start of these freshly seeded topics.
+	c.ControlKey(int16(kmsg.ListOffsets), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.ListOffsetsRequest)
+		resp := req.ResponseKind().(*kmsg.ListOffsetsResponse)
+		for _, rt := range req.Topics {
+			st := kmsg.NewListOffsetsResponseTopic()
+			st.Topic = rt.Topic
+			for _, rp := range rt.Partitions {
+				sp := kmsg.NewListOffsetsResponseTopicPartition()
+				sp.Partition = rp.Partition
+				if rt.Topic == kept && failKept.Load() {
+					sp.ErrorCode = kerr.NotLeaderForPartition.Code
+					if !signaled.Swap(true) {
+						close(keptFailing)
+					}
+				} else {
+					sp.Offset = 0
+				}
+				st.Partitions = append(st.Partitions, sp)
+			}
+			resp.Topics = append(resp.Topics, st)
+		}
+		return resp, nil, true
+	})
+
+	cl := newPlainClient(t, c,
+		kgo.FetchMaxWait(100*time.Millisecond),
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+			kept:    {0: kgo.NewOffset().AtStart()},
+			dropped: {0: kgo.NewOffset().AtStart()},
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recs := make(chan *kgo.Record, msgs)
+	go func() {
+		for ctx.Err() == nil {
+			fs := cl.PollFetches(ctx)
+			fs.EachRecord(func(r *kgo.Record) {
+				select {
+				case recs <- r:
+				case <-ctx.Done():
+				}
+			})
+		}
+	}()
+
+	// Wait for the kept partition to enter its retriable reload loop. Firing
+	// the revoke now lands while the reload is in flight or in its backoff.
+	select {
+	case <-keptFailing:
+	case <-time.After(10 * time.Second):
+		t.Fatal("kept partition never entered the offset reload loop")
+	}
+
+	// Stop the session by revoking the OTHER partition. kept is retained, so
+	// its in-flight reload must be carried into the new session.
+	cl.RemoveConsumePartitions(map[string][]int32{dropped: {0}})
+
+	// Let kept's listing succeed. It only resumes if the reload survived the
+	// stop; if it was dropped, kept has no cursor and never lists again.
+	failKept.Store(false)
+
+	got := 0
+	deadline := time.After(15 * time.Second)
+	for got < msgs {
+		select {
+		case <-recs:
+			got++
+		case <-deadline:
+			t.Fatalf("BUG: kept consumed %d/%d records after another partition was revoked; its pending offset load was dropped by the session stop", got, msgs)
+		}
+	}
+}
+
 // TestAuditTxnAbortRewindNotClobberedByPendingLoad verifies the
 // GroupTransactSession abort path: End(TryAbort) rewinds consumption to the
 // committed offsets via setOffsets so the aborted records are re-consumed.
