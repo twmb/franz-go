@@ -123,6 +123,7 @@ func TestStaticMemberClassicRejoinNoRebalance(t *testing.T) {
 		kgo.FetchMaxWait(250*time.Millisecond),
 		kgo.InstanceID(instanceID),
 		kgo.SessionTimeout(500*time.Millisecond),
+		kgo.HeartbeatInterval(100*time.Millisecond), // must be < session timeout
 	)
 	if err != nil {
 		t.Fatal(err)

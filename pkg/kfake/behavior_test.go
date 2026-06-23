@@ -751,6 +751,9 @@ func Test848UnsupportedAssignor(t *testing.T) {
 	bad := "nonexistent"
 	req.ServerAssignor = &bad
 	req.SubscribedTopicNames = []string{"t"}
+	// Joins must carry an empty (non-null) owned-partitions list; null is
+	// rejected with INVALID_REQUEST before assignor validation runs.
+	req.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
 	resp, err := req.RequestWith(ctx, cl)
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
@@ -3301,6 +3304,7 @@ func TestStaticMemberClassicRejoin(t *testing.T) {
 		kgo.FetchMaxWait(250*time.Millisecond),
 		kgo.InstanceID(instanceID),
 		kgo.SessionTimeout(500*time.Millisecond),
+		kgo.HeartbeatInterval(100*time.Millisecond), // must be < session timeout
 	)
 	if err != nil {
 		t.Fatal(err)

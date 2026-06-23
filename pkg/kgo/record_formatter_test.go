@@ -98,6 +98,13 @@ func TestRecordFormatter(t *testing.T) {
 		},
 
 		{
+			// \xNN names the full [0,255] byte range; high bytes
+			// (0x80-0xff) were previously rejected by the parser.
+			layout: `\x00\x7f\x80\xfe\xff`,
+			expR:   "\x00\x7f\x80\xfe\xff",
+		},
+
+		{
 			layout: "%T %K %V %H %p %o %e %i %x %y",
 			expR:   "26 3 5 2 3 343 -1 1 791 1",
 			expP:   "26 3 5 2 3 343 -1 2 791 1",
@@ -838,6 +845,87 @@ func BenchmarkRecordReader(b *testing.B) {
 				if err := r.ReadRecordInto(into); err != nil {
 					b.Fatal(err)
 				}
+			}
+		})
+	}
+}
+
+// An invalid layout must yield an error, never a panic. The reader's unknown
+// escape arm sliced layout[:1] after layout was advanced past the verb, so an
+// unknown verb at the end of the layout (e.g. "%q") indexed an empty string.
+// The size-after-value arms (e.g. "%t%T") relied on a bits flag that a typo
+// (bit.set(bit) instead of bits.set(bit)) never set, so those layouts were
+// silently accepted.
+func TestNewRecordReaderRejectsBadLayouts(t *testing.T) {
+	for _, layout := range []string{
+		"%q",         // unknown verb at end of layout
+		"%qx",        // unknown verb mid-layout
+		"%t%T",       // topic size spec after topic value spec
+		"%v%V",       // value size spec after value value spec
+		"%k%K",       // key size spec after key value spec
+		"%p{3}",      // only a fixed-number verb: reads nothing, would loop forever
+		"%T{3}",      // only a fixed-size spec with no value verb: reads nothing
+		"%p{3}%o{4}", // all fixed-number verbs: reads nothing
+	} {
+		t.Run(layout, func(t *testing.T) {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("NewRecordReader(%q) panicked: %v", layout, p)
+				}
+			}()
+			if _, err := NewRecordReader(strings.NewReader(""), layout); err == nil {
+				t.Errorf("NewRecordReader(%q): got nil error, want an error", layout)
+			}
+		})
+	}
+}
+
+// A size verb whose value overflows int (here math.MaxUint64) must produce a
+// read error, not a panic in make([]byte, n) with a wrapped-negative length.
+func TestRecordReaderOverflowingSizeNoPanic(t *testing.T) {
+	r, err := NewRecordReader(strings.NewReader("18446744073709551615x"), "%V%v")
+	if err != nil {
+		t.Fatalf("unexpected layout parse error: %v", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			t.Fatalf("ReadRecord panicked on an overflowing size verb: %v", p)
+		}
+	}()
+	if _, err := r.ReadRecord(); err == nil {
+		t.Error("got nil error reading an overflowing size verb, want an error")
+	}
+}
+
+// A fixed-width number read (%o{big64}, %p{byte}, ...) at the end of a layout,
+// where the input EOFs right at that field after an earlier read already
+// consumed bytes, must surface as io.ErrUnexpectedEOF (the documented
+// mid-record EOF) rather than panicking in the binary decoder on the empty
+// buffer that the io.EOF fall-through in next() hands it.
+func TestRecordReaderTruncatedFixedSizeNoPanic(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		layout string
+		in     string
+	}{
+		{"big64", "%p{big32}%o{big64}", "\x00\x00\x00\x01"},                 // partition read, 8-byte offset truncated to 0 bytes
+		{"little64", "%p{big32}%o{little64}", "\x00\x00\x00\x01"},           // same, little endian
+		{"big32", "%o{big64}%p{big32}", "\x00\x00\x00\x00\x00\x00\x00\x01"}, // offset read, 4-byte partition truncated
+		{"big16", "%k:%e{big16}", "key:"},                                   // key read via delim, 2-byte epoch truncated
+		{"byte", "%k:%p{byte}", "key:"},                                     // key read via delim, 1-byte partition truncated
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r, err := NewRecordReader(strings.NewReader(test.in), test.layout)
+			if err != nil {
+				t.Fatalf("unexpected layout parse error: %v", err)
+			}
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("ReadRecord panicked on a truncated fixed-size read: %v", p)
+				}
+			}()
+			if _, err := r.ReadRecord(); err != io.ErrUnexpectedEOF {
+				t.Errorf("got err %v, want io.ErrUnexpectedEOF", err)
 			}
 		})
 	}

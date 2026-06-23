@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"context"
+	"errors"
 	"hash/crc32"
 	"net"
 	"strconv"
@@ -3307,4 +3308,153 @@ func TestIssue1328(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// TestProduceUnknownFailLimitRecreatedTopic verifies that a producer whose
+// topic is deleted and recreated fails its buffered records with
+// UNKNOWN_TOPIC_ID once the unknown-topic fail limit (UnknownTopicRetries)
+// is reached, rather than retrying forever.
+//
+// Produce v13+ addresses topics by ID (KIP-516). The client deliberately
+// never adopts a recreated topic's new ID, so every produce after recreation
+// is answered with UNKNOWN_TOPIC_ID. That error is retriable and the default
+// produce limits are unbounded (RecordRetries is effectively infinite and
+// RecordDeliveryTimeout is disabled), so the unknown-topic fail limit is the
+// only bound: UNKNOWN_TOPIC_ID must count toward it. It used to reset the
+// count instead, leaving records buffered and retrying silently forever.
+func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
+	t.Parallel()
+	const testTopic = "foo"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// MetadataMaxAge is long so that no periodic refresh can observe the
+	// sub-millisecond delete/create window below and fail the topic's
+	// load with UNKNOWN_TOPIC_OR_PARTITION; we want the produce failures
+	// alone (always UNKNOWN_TOPIC_ID) to drive the test.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.UnknownTopicRetries(2),
+		kgo.RetryBackoffFn(func(int) time.Duration { return time.Millisecond }),
+		kgo.MetadataMinAge(10*time.Millisecond),
+		kgo.MetadataMaxAge(time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Produce once successfully so the client locks in the original
+	// incarnation's topic ID on its per-partition produce buffer.
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("before")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recreate the topic: the new incarnation gets a new topic ID, and
+	// the client keeps producing with the old one.
+	adm := kadm.NewClient(cl)
+	if _, err := adm.DeleteTopics(ctx, testTopic); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adm.CreateTopics(ctx, 1, 1, nil, testTopic); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cl.ProduceSync(context.Background(), kgo.StringRecord("after")).FirstErr()
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, kerr.UnknownTopicID) {
+			t.Fatalf("got %v, want UnknownTopicID", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("produce to a recreated topic did not fail within 10s; UNKNOWN_TOPIC_ID is defeating the unknown-topic fail limit")
+	}
+}
+
+// TestProduceUnknownFailLimitNotResetByOtherErrors verifies that the
+// unknown-topic fail limit cannot be defeated by other errors interleaving
+// with UNKNOWN_TOPIC_OR_PARTITION. The limit used to reset on any
+// non-unknown error, so a broker alternating UNKNOWN_TOPIC_OR_PARTITION
+// with any other retriable error kept the count below the limit forever and
+// the records never failed. Now only a successful produce resets the count;
+// other errors leave it unchanged.
+func TestProduceUnknownFailLimitNotResetByOtherErrors(t *testing.T) {
+	t.Parallel()
+	const testTopic = "foo"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Fail every produce request, alternating UNKNOWN_TOPIC_OR_PARTITION
+	// with the retriable NOT_ENOUGH_REPLICAS. Only the unknown errors may
+	// count toward the fail limit; the others must not reset the count.
+	var produceCalls atomic.Int32
+	c.ControlKey(int16(kmsg.Produce), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.ProduceRequest)
+		errCode := kerr.UnknownTopicOrPartition.Code
+		if produceCalls.Add(1)%2 == 0 {
+			errCode = kerr.NotEnoughReplicas.Code
+		}
+		resp := req.ResponseKind().(*kmsg.ProduceResponse)
+		for _, rt := range req.Topics {
+			st := kmsg.NewProduceResponseTopic()
+			st.Topic = rt.Topic
+			st.TopicID = rt.TopicID
+			for _, rp := range rt.Partitions {
+				sp := kmsg.NewProduceResponseTopicPartition()
+				sp.Partition = rp.Partition
+				sp.ErrorCode = errCode
+				st.Partitions = append(st.Partitions, sp)
+			}
+			resp.Topics = append(resp.Topics, st)
+		}
+		return resp, nil, true
+	})
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.UnknownTopicRetries(2),
+		kgo.RetryBackoffFn(func(int) time.Duration { return time.Millisecond }),
+		kgo.MetadataMinAge(10*time.Millisecond),
+		kgo.MetadataMaxAge(time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cl.ProduceSync(context.Background(), kgo.StringRecord("x")).FirstErr()
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, kerr.UnknownTopicOrPartition) {
+			t.Fatalf("got %v, want UnknownTopicOrPartition", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("produce did not fail within 10s; interleaved errors are resetting the unknown-topic fail limit")
+	}
 }

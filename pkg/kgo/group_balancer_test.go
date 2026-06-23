@@ -360,3 +360,103 @@ func TestNewConsumerBalancerIssue493(t *testing.T) {
 		t.Errorf("got unexpected error: %v", err)
 	}
 }
+
+// A cooperative plan must never hand a partition to a member whose ownership
+// claim is stale (a strictly higher-generation claim exists elsewhere): the
+// current owner is still consuming it, and skipping the revoke round means
+// two members consume the partition simultaneously. The stale claimant's own
+// OwnedPartitions must not mask the transfer.
+func TestAdjustCooperativeStaleClaimIsTransfer(t *testing.T) {
+	t.Parallel()
+
+	mkMeta := func(gen int32, owned map[string][]int32) []byte {
+		meta := kmsg.NewConsumerMemberMetadata()
+		meta.Version = 3
+		meta.Topics = []string{"t"}
+		meta.Generation = gen
+		for topic, parts := range owned {
+			op := kmsg.NewConsumerMemberMetadataOwnedPartition()
+			op.Topic = topic
+			op.Partitions = parts
+			meta.OwnedPartitions = append(meta.OwnedPartitions, op)
+		}
+		return meta.AppendTo(nil)
+	}
+
+	// a claims t/0 from generation 1; b claims t/0,1,2 from generation 2.
+	// Sticky's resticky pass deliberately moves t/0 back to the lighter a,
+	// which is fine for eager but must be a two-phase transfer when
+	// cooperative: b revokes first, a gets it next round.
+	members := []kmsg.JoinGroupResponseMember{
+		{MemberID: "a", ProtocolMetadata: mkMeta(1, map[string][]int32{"t": {0}})},
+		{MemberID: "b", ProtocolMetadata: mkMeta(2, map[string][]int32{"t": {0, 1, 2}})},
+	}
+
+	gb, _, err := CooperativeStickyBalancer().MemberBalancer(members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	into, err := gb.(GroupMemberBalancerOrError).BalanceOrError(map[string]int32{"t": 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := into.(*BalancePlan).AsMemberIDMap()
+
+	for member, topics := range plan {
+		for _, p := range topics["t"] {
+			if p == 0 {
+				t.Errorf("t/0 assigned to %s while generation-2 owner b has not yet revoked it", member)
+			}
+		}
+	}
+	if got := plan["b"]["t"]; len(got) != 2 {
+		t.Errorf("expected b to keep two partitions, got %v", got)
+	}
+}
+
+// Member metadata that fails to parse (and is not the #493 buggy-v1 shape)
+// must surface an error rather than balancing with whatever prefix parsed:
+// a truncated Topics array leaves phantom "" topics behind.
+func TestNewConsumerBalancerMalformedMetadataErrors(t *testing.T) {
+	t.Parallel()
+
+	// v0, Topics array claims two strings, only one present.
+	bad := []byte{0, 0, 0, 0, 0, 2, 0, 1, 'a'}
+	_, err := NewConsumerBalancer(new(roundRobinBalancer), []kmsg.JoinGroupResponseMember{
+		{MemberID: "m", ProtocolMetadata: bad},
+	})
+	if err == nil {
+		t.Error("expected an error for truncated member metadata, got nil")
+	}
+}
+
+// A buggy or hostile broker can list the same member twice in one JoinGroup
+// response. The sticky engine balances list entries independently but keys
+// its returned plan by member ID, so without deduplication the duplicate's
+// partitions overwrite each other and some partitions are assigned to nobody.
+func TestNewConsumerBalancerDuplicateMemberIDs(t *testing.T) {
+	t.Parallel()
+
+	members := []kmsg.JoinGroupResponseMember{
+		{MemberID: "a", ProtocolMetadata: simpleMemberMetadata([]string{"t"}, 0)},
+		{MemberID: "a", ProtocolMetadata: simpleMemberMetadata([]string{"t"}, 0)},
+	}
+
+	gb, _, err := StickyBalancer().MemberBalancer(members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	into, err := gb.(GroupMemberBalancerOrError).BalanceOrError(map[string]int32{"t": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := into.(*BalancePlan).AsMemberIDMap()
+
+	var total int
+	for _, topics := range plan {
+		total += len(topics["t"])
+	}
+	if total != 2 {
+		t.Errorf("expected 2 partitions assigned, got %d (plan %v)", total, plan)
+	}
+}
