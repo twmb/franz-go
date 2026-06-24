@@ -1,3 +1,115 @@
+v1.21.4
+===
+
+This release is a "large" (many commits) release that has many small or
+hard to encounter bugs fixed. I pointed Claude's Fable at this repo and
+ran some audit rounds while available and thankfully got through the highest
+value audit rounds before Fable was removed.
+
+For once, I will not be describing every bug fixed nor calling out every
+relevant commit. Instead, if you are curious, look at
+[#1348](https://github.com/twmb/franz-go/pull/1348). Some worthwhile
+description is below.
+
+Three important bug fixes to call out:
+
+* In transactional exactly-once consuming, a `SetOffsets` seek (which happens
+  during `GroupTransactSession.End` after an aborted transaction) could be
+  undone by a concurrent offset load (via a background list or epoch load) that
+  completed slightly later. This could happen when the client discovers a
+  partition leader moved while you are aborting, which could result in missed
+  records.
+
+* Consuming with `read_committed` against a broker that returns a partition's
+  aborted-transaction list out of offset order could surface aborted,
+  rolled-back records as if they were committed. Apache Kafka always returns
+  them in order so this was never observed there, but Redpanda does not (when
+  an aborted transaction is still in memory and an earlier one is already on
+  disk). The list is now sorted client-side, matching the Java client,
+  librdkafka, and Sarama.
+
+* `GroupTransactSession.End` no longer reports a successful commit when the
+  broker answers `EndTxn` with `UNKNOWN_SERVER_ERROR` (seen from Redpanda in
+  some older versions). Previously the consumer's offsets were advanced past a
+  transaction that may have aborted; now the commit is reported as failing
+  and the session rewinds for reprocessing.
+
+Beyond those, by area:
+
+* Many transaction-path fixes for coordinator churn and KIP-890 part 2 that
+  would have resulted in not-working (hard client fail) or hung transactions:
+  `InitProducerID` retries `CONCURRENT_TRANSACTIONS` when taking over a
+  crashed producer's transaction, retriable producer-id load failures are no
+  longer treated as fatal, KIP-890p2 is opted into only when the negotiated
+  versions actually support it (fixing spurious `INVALID_TXN_STATE` on 4.0+
+  clusters running older semantics), a transaction whose every produce failed
+  now aborts instead of hanging until the transaction timeout, and a failed
+  `AddPartitionsToTxn` no longer drops partitions added by an earlier request.
+
+* `GzipCompression().WithLevel(...)` was completely broken and would panic.
+
+* More KIP-848 (next-gen consumer group) robustness fixes under coordinator
+  and leader churn.
+
+* Stale consumer-group member rejoining fixes: a member that rejoins claiming a
+  partition at an old generation no longer panics the group leader or causes
+  two members to consume the same partition. Malformed member metadata,
+  duplicate member ids, and negative claimed partitions in a join are now
+  rejected or sanitized rather than mis-balancing or panicking the leader.
+
+* Metadata and topic recreation: a stale per-broker metadata view that
+  momentarily omits a just-added partition (the window right after
+  `CreatePartitions`) no longer fails buffered producer records or leaves a
+  newly assigned consumer / share partition silently unconsumed; both heal
+  once metadata catches up.
+
+* Share consumer: fetch errors are now classified like the classic consumer
+  (retriable errors stripped, a metadata refresh triggered to heal a leader
+  move, top-level errors backed off) instead of stalling for up to
+  `MetadataMaxAge` or hot-looping, and leader-move migrations are tracked so
+  that leaving or closing cannot strand un-acked records.
+
+* SASL: KIP-368 re-authentication no longer races the connection's other
+  reader, which could corrupt pipelined traffic on brokers that set a session
+  lifetime (e.g. AWS MSK IAM); requests now park and replay across a re-auth.
+  The Azure Event Hubs ApiVersions reset retry no longer leaks the abandoned
+  connection or silently downgrades it to v0.
+
+* KIP-714 client telemetry: the terminating push is now actually delivered on
+  `Close`, the `.rate` and `.avg` rollups are computed correctly (they were
+  constant / wrong before), and an unsupported user-metric attribute no longer
+  corrupts the OTLP payload (which had disabled metrics for the rest of the
+  client's life).
+
+* Smaller consumer fixes: overlapping manual `CommitOffsets` no longer reopen
+  autocommit early (which could rewind the committed offset), a conformant
+  `UNDEFINED_EPOCH_OFFSET` epoch response no longer raises a false
+  `ErrDataLoss`, and `Fetches.EachTopic` now preserves `TopicID` across
+  multi-broker responses (it was zero whenever more than one broker replied,
+  i.e. normally).
+
+* `RecordReader` / `RecordFormatter` no longer panic on truncated or malformed
+  layouts, accept `\xNN` escapes for bytes above 0x7f, and reject layouts that
+  would read nothing and loop forever.
+
+* `WithPools`: decompression no longer produces garbage when a pool hands back
+  a non-zero-length sized slice, and pooled slices are no longer leaked for
+  batches that keep no records (e.g. aborted-transaction data under
+  `read_committed`).
+
+* Other producer fixes: `EnsureProduceConnectionIsOpen` dials the right broker
+  for filtered ids and no longer breaks an `acks=0` connection, the adaptive
+  `LeastBackupPartitioner` now actually picks the least-backed-up partition,
+  and producing during or after `Close` fails cleanly instead of hanging a
+  later `Flush`.
+
+* A broad set of guards against malformed or hostile broker responses that
+  could previously panic the fetcher, hot-loop, or mis-consume: negative or
+  oversized record counts and batch lengths, decompression bombs, duplicate or
+  omitted partitions, negative offsets, and unexpected top-level fetch errors.
+  The client is also more resilient when its own API contracts are violated
+  (e.g. `AllowRebalance` called while a poll is in flight).
+
 v1.21.3
 ===
 
