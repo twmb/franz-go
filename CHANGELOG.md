@@ -1,3 +1,22 @@
+v1.21.5 (unreleased)
+===
+
+This patch release contains a bug fix for the new share consumer.
+
+* A share partition that was listed in a ShareFetch only to carry a
+  piggybacked acknowledgement -- for a cursor that was revoked, paused, or
+  migrated to a new leader after its records were drained -- was added to the
+  broker's share session but never tracked client-side, so it could never be
+  forgotten. The broker would re-acquire and redeliver that partition's
+  records indefinitely while the client discarded them ("broker returned
+  partition ... we did not ask for"), spinning the share fetch loop. The
+  client now tracks every partition it sends, matching the broker's session
+  bookkeeping.
+
+## Relevant commits
+
+- [`754bc349`](https://github.com/twmb/franz-go/commit/754bc349) **bugfix** kgo: forget piggyback-only partitions from the share session
+
 v1.21.4
 ===
 
