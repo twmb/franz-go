@@ -1,3 +1,13 @@
+v1.22.0
+===
+
+* Fixed a data race on a coordinator's cached node ID. When a broker
+  disconnected while a `FindCoordinator` load for that broker was still in
+  flight, `deleteStaleCoordinatorsByNode` could read the in-flight load's
+  `node` field before the loading goroutine published it (via closing the
+  load's wait channel), which `go test -race` flagged. The node read now
+  happens only after the load has been observed as complete.
+
 v1.21.4
 ===
 
