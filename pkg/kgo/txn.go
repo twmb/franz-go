@@ -355,25 +355,54 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	// We should not be booted from the group if we receive an ok
 	// heartbeat, meaning that, as mentioned, we should be able to end the
 	// transaction safely.
+	//
+	// If the commit carried no offsets (the user produced but polled
+	// nothing), we skip the heartbeat: its only purpose is to secure the
+	// rebalance-timeout window so a rebalance cannot hand our committed
+	// offsets to another consumer before our EndTxn writes the markers.
+	// With nothing committed, membership is irrelevant to the transaction
+	// and an empty end is always safe. Skipping also matters for liveness:
+	// the force below is received only by a running heartbeat loop, and
+	// the manage loop that runs it starts only once a metadata update
+	// discovers a topic to consume. Walkthrough of the hang this avoids:
+	// the session consumes a topic that does not exist yet, the user
+	// begins, produces, and ends -- the group never joined, so nothing
+	// receives heartbeatForceCh, and no revoke or lost callback can ever
+	// fire to close revokedCh/lostCh; every select arm below blocks
+	// forever and End never returns.
+	//
+	// The ctx arms bound the remaining offsets-committed case: a
+	// first-ever join can legally block for the full rebalance timeout
+	// with the heartbeat loop not yet running, and the group could also
+	// never complete a join at all. Cancellation leaves okHeartbeat false
+	// and falls into the abort path below, same as a failed heartbeat.
 	var okHeartbeat bool
 	var heartbeatRebalance bool
 	if g != nil && commitErr == nil {
-		waitHeartbeat := make(chan struct{})
-		var heartbeatErr error
-		select {
-		case g.heartbeatForceCh <- func(err error) {
-			defer close(waitHeartbeat)
-			heartbeatErr = err
-		}:
+		if len(postcommit) == 0 {
+			okHeartbeat = true
+		} else {
+			waitHeartbeat := make(chan struct{})
+			var heartbeatErr error
 			select {
-			case <-waitHeartbeat:
-				okHeartbeat = heartbeatErr == nil
-				heartbeatRebalance = errors.Is(heartbeatErr, kerr.RebalanceInProgress)
+			case g.heartbeatForceCh <- func(err error) {
+				defer close(waitHeartbeat)
+				heartbeatErr = err
+			}:
+				select {
+				case <-waitHeartbeat:
+					okHeartbeat = heartbeatErr == nil
+					heartbeatRebalance = errors.Is(heartbeatErr, kerr.RebalanceInProgress)
+				case <-s.revokedCh:
+				case <-s.lostCh:
+				case <-ctx.Done():
+				case <-s.cl.ctx.Done():
+				}
 			case <-s.revokedCh:
 			case <-s.lostCh:
+			case <-ctx.Done():
+			case <-s.cl.ctx.Done():
 			}
-		case <-s.revokedCh:
-		case <-s.lostCh:
 		}
 	}
 
