@@ -1,6 +1,22 @@
-v1.21.5 (unreleased)
+v1.21.5
+===
 
-This patch release contains a few bug fixes.
+Three bug fixes:
+
+* Fixed a nil-pointer panic when building a group `OffsetFetch`: if the group
+  was assigned a topic the client was not itself tracking -- reachable when
+  regex consuming, or when the group hands the client a topic it did not ask
+  for (unlikely) -- `loadTopic` returned nil and dereferencing it for the topic
+  ID crashed the client. The topic ID is now only set when the topic is known.
+  Thanks [@iwittkau](https://github.com/iwittkau)!
+
+* Fixed a data race on a coordinator's cached node ID. When a broker
+  disconnected while a `FindCoordinator` load for that broker was still in
+  flight, `deleteStaleCoordinatorsByNode` could read the in-flight load's
+  `node` field before the loading goroutine published it (via closing the
+  load's wait channel), which `go test -race` flagged. The node read now
+  happens only after the load has been observed as complete. Thanks
+  [@nikolauspschuetz](https://github.com/nikolauspschuetz)!
 
 * A share partition that was listed in a ShareFetch only to carry a
   piggybacked acknowledgement -- for a cursor that was revoked, paused, or
@@ -11,16 +27,11 @@ This patch release contains a few bug fixes.
   partition ... we did not ask for"), spinning the share fetch loop. The
   client now tracks every partition it sends, matching the broker's session
   bookkeeping.
-  
-* Fixed a data race on a coordinator's cached node ID. When a broker
-  disconnected while a `FindCoordinator` load for that broker was still in
-  flight, `deleteStaleCoordinatorsByNode` could read the in-flight load's
-  `node` field before the loading goroutine published it (via closing the
-  load's wait channel), which `go test -race` flagged. The node read now
-  happens only after the load has been observed as complete.
 
 ## Relevant commits
 
+- [`ab185e42`](https://github.com/twmb/franz-go/commit/ab185e42) **bugfix** kgo: add nil check when loading topics in groupConsumer (thanks [@iwittkau](https://github.com/iwittkau)!)
+- [`aca084ed`](https://github.com/twmb/franz-go/commit/aca084ed) **bugfix** kgo: fix data race on coordinatorLoad.node (thanks [@nikolauspschuetz](https://github.com/nikolauspschuetz)!)
 - [`754bc349`](https://github.com/twmb/franz-go/commit/754bc349) **bugfix** kgo: forget piggyback-only partitions from the share session
 
 v1.21.4
