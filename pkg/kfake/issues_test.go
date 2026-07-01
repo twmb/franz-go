@@ -821,6 +821,70 @@ func TestTransactionCommit(t *testing.T) {
 	}
 }
 
+// TestTransactSessionEndNeverJoined ensures GroupTransactSession.End returns
+// when the group has never joined. The session consumes a topic that does not
+// exist, so the group manage loop never starts and nothing runs a heartbeat
+// loop. A produce-only End(TryCommit) then commits no offsets; End used to
+// force a heartbeat regardless, blocking forever on a channel with no
+// receiver and no possible revoke/lost escape.
+func TestTransactSessionEndNeverJoined(t *testing.T) {
+	t.Parallel()
+	const produceTopic = "txn-end-never-joined"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, produceTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	sess, err := kgo.NewGroupTransactSession(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(produceTopic),
+		kgo.TransactionalID("txn-end-never-joined"),
+		kgo.ConsumerGroup("g-txn-end-never-joined"),
+		kgo.ConsumeTopics("topic-that-never-exists"),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := sess.Begin(); err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := sess.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+		t.Fatalf("failed to produce: %v", err)
+	}
+
+	type endRes struct {
+		committed bool
+		err       error
+	}
+	done := make(chan endRes, 1)
+	go func() {
+		committed, err := sess.End(ctx, kgo.TryCommit)
+		done <- endRes{committed, err}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("End errored: %v", res.err)
+		}
+		if !res.committed {
+			t.Error("expected the produce-only transaction to commit")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("End did not return; the pre-EndTxn heartbeat force hung with no group joined")
+	}
+}
+
 func TestTransactionAbort(t *testing.T) {
 	t.Parallel()
 	const testTopic = "txn-abort-test"
