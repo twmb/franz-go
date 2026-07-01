@@ -1,7 +1,6 @@
 v1.21.5 (unreleased)
-===
 
-This patch release contains a bug fix for the new share consumer.
+This patch release contains a few bug fixes.
 
 * A share partition that was listed in a ShareFetch only to carry a
   piggybacked acknowledgement -- for a cursor that was revoked, paused, or
@@ -12,6 +11,13 @@ This patch release contains a bug fix for the new share consumer.
   partition ... we did not ask for"), spinning the share fetch loop. The
   client now tracks every partition it sends, matching the broker's session
   bookkeeping.
+  
+* Fixed a data race on a coordinator's cached node ID. When a broker
+  disconnected while a `FindCoordinator` load for that broker was still in
+  flight, `deleteStaleCoordinatorsByNode` could read the in-flight load's
+  `node` field before the loading goroutine published it (via closing the
+  load's wait channel), which `go test -race` flagged. The node read now
+  happens only after the load has been observed as complete.
 
 ## Relevant commits
 
