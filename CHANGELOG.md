@@ -1,12 +1,27 @@
-v1.22.0
-===
+v1.21.5 (unreleased)
 
+This patch release contains a few bug fixes.
+
+* A share partition that was listed in a ShareFetch only to carry a
+  piggybacked acknowledgement -- for a cursor that was revoked, paused, or
+  migrated to a new leader after its records were drained -- was added to the
+  broker's share session but never tracked client-side, so it could never be
+  forgotten. The broker would re-acquire and redeliver that partition's
+  records indefinitely while the client discarded them ("broker returned
+  partition ... we did not ask for"), spinning the share fetch loop. The
+  client now tracks every partition it sends, matching the broker's session
+  bookkeeping.
+  
 * Fixed a data race on a coordinator's cached node ID. When a broker
   disconnected while a `FindCoordinator` load for that broker was still in
   flight, `deleteStaleCoordinatorsByNode` could read the in-flight load's
   `node` field before the loading goroutine published it (via closing the
   load's wait channel), which `go test -race` flagged. The node read now
   happens only after the load has been observed as complete.
+
+## Relevant commits
+
+- [`754bc349`](https://github.com/twmb/franz-go/commit/754bc349) **bugfix** kgo: forget piggyback-only partitions from the share session
 
 v1.21.4
 ===

@@ -418,3 +418,154 @@ func TestShareAssignmentNegativePartitionNoPanic(t *testing.T) {
 		t.Errorf("consumed %d of %d records after negative-partition assignment", got, total)
 	}
 }
+
+// TestShareFetchPiggybackAckForgetNoLeak reproduces the share-session leak
+// that hung TestShareGroupETL. The broker adds EVERY partition listed in a
+// ShareFetch's topics to its share session, whether the partition is there to
+// fetch or only to carry piggybacked acks. The client, however, tracked only
+// fetched partitions in sessionParts, and it computes its forget set as
+// sessionParts minus the want-set. So a partition listed only to piggyback an
+// ack -- one revoked, paused, or migrated after its records were drained --
+// was added to the broker session but never recorded by the client, hence
+// never forgotten. The broker then kept re-acquiring and redelivering its
+// records forever while the client discarded them ("broker returned partition
+// ... we did not ask for") and spun the fetch loop until the test timed out.
+//
+// The minimal deterministic trigger staged here:
+//   - partition 0 holds a record; partition 1 stays empty so the consumer
+//     keeps issuing ShareFetches that piggybacked acks can ride (empty
+//     responses are not buffered, so this needs no polling),
+//   - poll once and hold partition 0's record unacked,
+//   - pause partition 0 so the client forgets it (no acks drained yet),
+//   - ack the held record: the ack rides a ShareFetch as a piggyback-only
+//     re-add of partition 0, which the broker puts back in the session.
+//
+// We watch the client's actual ShareFetch requests. Post-fix, after the
+// piggyback re-add the client tracks partition 0 and forgets it again (a
+// fresh ForgottenTopicsData entry). Pre-fix it never does -- the leak.
+func TestShareFetchPiggybackAckForgetNoLeak(t *testing.T) {
+	t.Parallel()
+
+	const (
+		topic = "share-piggyback-leak"
+		group = "share-piggyback-leak-g"
+	)
+
+	c := newCluster(t,
+		NumBrokers(1),
+		SeedTopics(2, topic),
+		BrokerConfigs(map[string]string{
+			"group.share.heartbeat.interval.ms": "100",
+		}),
+	)
+
+	ti := c.TopicInfo(topic)
+	if ti == nil {
+		t.Fatal("topic info missing")
+	}
+
+	// Seed exactly one record on partition 0; partition 1 stays empty.
+	pcl := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	setShareAutoOffsetReset(t, pcl, group)
+	if err := pcl.ProduceSync(context.Background(),
+		&kgo.Record{Topic: topic, Partition: 0, Value: []byte("v")}).FirstErr(); err != nil {
+		t.Fatalf("produce: %v", err)
+	}
+
+	// Observe the client's ShareFetch requests (pass-through, never
+	// answering). p0ForgetCount counts ForgottenTopicsData entries for
+	// partition 0; sawPiggybackAfterAck records the piggyback-only re-add.
+	var (
+		acked                atomic.Bool
+		p0ForgetCount        atomic.Int32
+		sawPiggybackAfterAck atomic.Bool
+	)
+	c.ControlKey(int16(kmsg.ShareFetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.ShareFetchRequest)
+		for i := range req.Topics {
+			rt := &req.Topics[i]
+			if rt.TopicID != ti.TopicID {
+				continue
+			}
+			for j := range rt.Partitions {
+				rp := &rt.Partitions[j]
+				if rp.Partition == 0 && len(rp.AcknowledgementBatches) > 0 && acked.Load() {
+					sawPiggybackAfterAck.Store(true)
+				}
+			}
+		}
+		for i := range req.ForgottenTopicsData {
+			ft := &req.ForgottenTopicsData[i]
+			if ft.TopicID != ti.TopicID {
+				continue
+			}
+			for _, p := range ft.Partitions {
+				if p == 0 {
+					p0ForgetCount.Add(1)
+				}
+			}
+		}
+		return nil, nil, false
+	})
+
+	cl := newShareConsumer(t, c, topic, group, kgo.FetchMaxWait(100*time.Millisecond))
+
+	// Poll exactly once and hold partition 0's record unacked. Polling
+	// again would auto-accept it (the share consumer accepts un-acked
+	// records on the next poll), draining the ack before we want it.
+	// Partition 1 is empty, so the consumer keeps long-polling it without
+	// us draining anything.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var held []*kgo.Record
+	for ctx.Err() == nil && len(held) == 0 {
+		held = cl.PollFetches(ctx).Records()
+	}
+	if len(held) != 1 || held[0].Partition != 0 {
+		t.Fatalf("wanted 1 record on partition 0, got %d records", len(held))
+	}
+
+	// Pause partition 0. It is in sessionParts and no longer wanted, so the
+	// client forgets it on the next ShareFetch (no acks drained yet). Wait
+	// for that forget so the later ack is a clean piggyback-only re-add.
+	cl.PauseFetchPartitions(map[string][]int32{topic: {0}})
+	waitFor(t, 5*time.Second, "partition 0 was never forgotten after pause",
+		func() bool { return p0ForgetCount.Load() >= 1 })
+	forgetsBeforeAck := p0ForgetCount.Load()
+
+	// Ack the held record. The ack rides a ShareFetch as a piggyback-only
+	// entry for partition 0, which the broker re-adds to its session.
+	acked.Store(true)
+	for _, r := range held {
+		r.Ack(kgo.AckAccept)
+	}
+
+	// Sanity: confirm the leak trigger actually fired (true for both the
+	// buggy and fixed client -- the fix changes only what happens next).
+	waitFor(t, 5*time.Second, "partition 0's ack never rode a ShareFetch as a piggyback re-add", sawPiggybackAfterAck.Load)
+
+	// The fix: now that partition 0 is back in the broker session, the
+	// client must forget it again (it is tracked in sessionParts and still
+	// unwanted). Pre-fix it is untracked, so no further forget is ever
+	// sent and the partition leaks.
+	waitFor(t, 5*time.Second,
+		"BUG REPRODUCED: a piggyback-only ack re-added partition 0 to the broker share session and the client never forgot it (sessionParts omitted piggyback-only partitions); the broker would redeliver its records forever",
+		func() bool { return p0ForgetCount.Load() > forgetsBeforeAck })
+}
+
+// waitFor polls cond until it returns true or the timeout elapses, failing
+// with msg on timeout.
+func waitFor(t *testing.T, timeout time.Duration, msg string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(msg)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
