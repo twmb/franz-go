@@ -3545,6 +3545,15 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 	dup := *req
 	req = &dup
 
+	// Deep-dup the groups: the struct copy above still shares the
+	// caller's Groups slice (and each group's Topics slice), and the
+	// Topic/TopicID resolution fill below would otherwise write into the
+	// caller's request structs in place.
+	req.Groups = slices.Clone(req.Groups)
+	for i := range req.Groups {
+		req.Groups[i].Topics = slices.Clone(req.Groups[i].Topics)
+	}
+
 	if len(req.Groups) == 0 {
 		req.Groups = append(req.Groups, offsetFetchReqToGroup(req))
 	}
@@ -3856,7 +3865,11 @@ func (*findCoordinatorSharder) shard(_ context.Context, kreq kmsg.Request, lastE
 			uniq[key] = struct{}{}
 		}
 	}
-	req.CoordinatorKeys = req.CoordinatorKeys[:0]
+	// Build the deduplicated keys in a FRESH slice: the struct copy above
+	// still shares the caller's backing array, and appending into
+	// req.CoordinatorKeys[:0] would overwrite the caller's request slice
+	// with deduplicated, map-order-shuffled keys.
+	req.CoordinatorKeys = make([]string, 0, len(uniq))
 	for key := range uniq {
 		req.CoordinatorKeys = append(req.CoordinatorKeys, key)
 	}
