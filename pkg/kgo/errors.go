@@ -244,6 +244,8 @@ var (
 	// broker misbehavior surfaces in polls; the load is still retried.
 	errNegativeListedOffset = errors.New("broker replied to a ListOffsets request with an invalid negative offset")
 
+	errFetchNoProgress = errors.New("fetch response contained record batches but none contained or exceeded the requested offset")
+
 	// Injected as a fake errored fetch when an OffsetFetch response
 	// repeatedly omits a partition we requested; the group coordinator
 	// answers every requested partition, so an omission is a broker bug

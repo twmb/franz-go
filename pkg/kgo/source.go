@@ -1278,6 +1278,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				continue
 			}
 
+			priorOffset := partOffset.offset
 			fp := partOffset.processRespPartition(br, rp, s.cl.cfg.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
 				if moving := kmove.maybeAddFetchPartition(resp, rp, c); moving {
@@ -1285,6 +1286,25 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					continue
 				}
 				updateWhy.add(topic, partition, fp.Err)
+			}
+
+			// A response can carry batch data for a partition yet
+			// advance nothing: every batch's last offset below our
+			// requested offset (a broker violating "return the batch
+			// containing the fetch offset"). Nothing buffers, no error
+			// is set, and the cursor re-enables at the same offset --
+			// without intervention the next fetch re-requests
+			// immediately and the loop runs hot at round-trip pace,
+			// silently, forever. Strip the partition: if the WHOLE
+			// response is such non-progress, the allErrsStripped
+			// backoff below paces us like any other all-stripped
+			// response. Legitimate empties are excluded: a caught-up
+			// partition has no batch bytes, control/aborted records
+			// advance the offset even when not kept, and a compacted
+			// empty batch advances via its preserved last offset.
+			if fp.Err == nil && len(fp.Records) == 0 && partOffset.offset == priorOffset && len(rp.RecordBatches) > 0 {
+				strip(topic, partition, errFetchNoProgress)
+				continue
 			}
 
 			// We only keep the partition if it has no error, or an
