@@ -18,7 +18,7 @@ import (
 // * v3: TotalBytes, UsableBytes
 // * v4: No changes
 
-func init() { regKey(35, 0, 4) }
+func init() { regKey(35, 0, 5) }
 
 func (c *Cluster) handleDescribeLogDirs(creq *clientReq) (kmsg.Response, error) {
 	var (
