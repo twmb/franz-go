@@ -128,18 +128,51 @@ func (vs *Versions) versionGuess2(cmp *release, opts ...VersionGuessOpt) guess {
 		opt.apply(&cfg)
 	}
 
+	skip := make(map[int16]bool, len(cfg.skipKeys))
+	for _, k := range cfg.skipKeys {
+		skip[k] = true
+	}
+
+	// Keys that exist nowhere in this comparison chain carry no signal for
+	// it. A merged Versions -- Stable unions broker, controller, and zk
+	// keys -- would otherwise register as "over" at every release of this
+	// chain merely for holding another kind's keys, and as soon as the
+	// chain's tip also carries something the merge lacks (an unreleased
+	// addkey at tip), every release judges under-and-over and the guess
+	// collapses to custom-unknown. Ignore keys outside the chain's key
+	// space entirely; a key the chain knows but a given release lacks
+	// still counts as over below.
+	chainKeys := make(map[int16]bool)
+	for r := cmp; r != nil; r = r.prior {
+		for k := range r.reqs {
+			chainKeys[k] = true
+		}
+	}
+
+	// Work on a copy: vs.reqs is the caller's map (we used to delete the
+	// skip keys from it, mutating the caller's Versions).
+	ours := make(map[int16]req, len(vs.reqs))
+	for k, r := range vs.reqs {
+		if skip[k] || !chainKeys[k] {
+			continue
+		}
+		ours[k] = r
+	}
+
 	// For comparison checking, we only check the max key version.
 	var higher *release
 	for {
-		for _, k := range cfg.skipKeys {
-			delete(cmp.reqs, k)
-			delete(vs.reqs, k)
+		cmpreqs := make(map[int16]req, len(cmp.reqs))
+		for k, r := range cmp.reqs {
+			if !skip[k] {
+				cmpreqs[k] = r
+			}
 		}
 
 		var under, equal, over bool
 
-		for k, req := range vs.reqs {
-			cmpreq, ok := cmp.reqs[k]
+		for k, req := range ours {
+			cmpreq, ok := cmpreqs[k]
 			if ok {
 				if req.vmax < cmpreq.vmax {
 					under = true
@@ -148,15 +181,15 @@ func (vs *Versions) versionGuess2(cmp *release, opts ...VersionGuessOpt) guess {
 				} else {
 					equal = true
 				}
-				delete(cmp.reqs, k)
+				delete(cmpreqs, k)
 			} else {
-				over = true // key we do not recognize: by definition the broker is higher than this cmp version
+				over = true // key this release predates: the broker is higher than this cmp version
 			}
 		}
 
 		// If our versions did not clear out what we are comparing against, we
 		// do not have all keys that we need for this version.
-		if len(cmp.reqs) > 0 {
+		if len(cmpreqs) > 0 {
 			under = true
 		}
 
