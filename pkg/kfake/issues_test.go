@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
+	"github.com/twmb/franz-go/pkg/sasl/plain"
 )
 
 func TestIssue885(t *testing.T) {
@@ -4013,5 +4014,246 @@ func TestShareGroupIDNotFoundRejoin(t *testing.T) {
 		if ctx.Err() != nil {
 			t.Fatal("share consumer did not resume consuming after rejoining")
 		}
+	}
+}
+
+// reentrantFetchHook re-enters the client from OnFetchRecordUnbuffered.
+// Pre-fix, the hook fired while the poll path held c.mu (and the discard
+// path held c.mu+sessionChangeMu), so a hook calling anything that needs
+// c.mu deadlocked the poll permanently and wedged rebalances and Close
+// behind it. Post-fix, polled-record hooks fire after the locks release.
+type reentrantFetchHook struct {
+	cl    atomic.Pointer[kgo.Client]
+	fired atomic.Int32
+}
+
+func (h *reentrantFetchHook) OnFetchRecordUnbuffered(r *kgo.Record, polled bool) {
+	if !polled {
+		return
+	}
+	if cl := h.cl.Load(); cl != nil {
+		cl.AddConsumeTopics("fetch-hook-reentry-extra") // needs c.mu
+		h.fired.Add(1)
+	}
+}
+
+func TestFetchUnbufferedHookReentrancy(t *testing.T) {
+	t.Parallel()
+	const testTopic = "fetch-hook-reentry"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	producer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
+	if err := producer.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	hook := new(reentrantFetchHook)
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithHooks(hook),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	hook.cl.Store(cl)
+
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		for {
+			fs := cl.PollFetches(ctx)
+			if fs.NumRecords() > 0 {
+				return
+			}
+			if ctx.Err() != nil {
+				return
+			}
+		}
+	}()
+	select {
+	case <-polled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("poll deadlocked: OnFetchRecordUnbuffered re-entering the client blocked on c.mu")
+	}
+	if hook.fired.Load() == 0 {
+		t.Fatal("hook never fired; test proved nothing")
+	}
+}
+
+// TestOnDataLossCallbackReentrancy: ProducerOnDataLossDetected used to fire
+// while the partition's recBuf.mu was held; producing to the reported
+// partition from the callback -- the natural reaction -- deadlocked that
+// partition and the sink's response processing forever. Post-fix the
+// callback dispatches on its own goroutine.
+func TestOnDataLossCallbackReentrancy(t *testing.T) {
+	t.Parallel()
+	const testTopic = "on-data-loss-reentry"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// One-shot: the first produce gets OUT_OF_ORDER_SEQUENCE_NUMBER,
+	// which for a non-transactional producer (stopOnDataLoss unset)
+	// fires the data-loss callback and reloads the producer id.
+	c.ControlKey(0, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.ProduceRequest)
+		resp := req.ResponseKind().(*kmsg.ProduceResponse)
+		for _, rt := range req.Topics {
+			respt := kmsg.NewProduceResponseTopic()
+			respt.Topic = rt.Topic
+			respt.TopicID = rt.TopicID
+			for _, rp := range rt.Partitions {
+				respp := kmsg.NewProduceResponseTopicPartition()
+				respp.Partition = rp.Partition
+				respp.ErrorCode = kerr.OutOfOrderSequenceNumber.Code
+				respt.Partitions = append(respt.Partitions, respp)
+			}
+			resp.Topics = append(resp.Topics, respt)
+		}
+		return resp, nil, true
+	})
+
+	var cl *kgo.Client
+	hookDone := make(chan error, 1)
+	var hookOnce sync.Once
+	cl, err = kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.ProducerOnDataLossDetected(func(topic string, partition int32) {
+			hookOnce.Do(func() {
+				// Produce to the very partition the callback reports.
+				hookDone <- cl.ProduceSync(ctx, kgo.StringRecord("from-hook")).FirstErr()
+			})
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+		t.Fatalf("produce after data-loss retry errored: %v", err)
+	}
+	select {
+	case err := <-hookDone:
+		if err != nil {
+			t.Fatalf("produce from data-loss callback errored: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("data-loss callback deadlocked: producing to the reported partition blocked on recBuf.mu")
+	}
+}
+
+// TestKadmACLDefaultPatternRoundTrip: kadm ACL builders that never call
+// ResourcePatternType used to send pattern UNKNOWN(0) in describe/delete
+// filters -- rejected by real brokers at request parse (kfake now models
+// that) -- and creating without a pattern failed validation despite the
+// docs calling literal the default. Builders that never call Operations
+// generated zero filters, silently doing nothing. Now: create defaults to
+// literal, filters default to any-pattern and any-operation.
+func TestKadmACLDefaultPatternRoundTrip(t *testing.T) {
+	t.Parallel()
+	const testTopic = "kadm-acl-defaults"
+
+	c, err := NewCluster(NumBrokers(1), EnableACLs(), Superuser("PLAIN", "admin", "pass"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.SASL(plain.Auth{User: "admin", Pass: "pass"}.AsMechanism()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	adm := kadm.NewClient(cl)
+
+	// Create with pattern unset: defaults to literal per the docs.
+	cb := kadm.NewACLs().Topics(testTopic).Allow("User:alice").AllowHosts().Operations(kadm.OpRead)
+	created, err := adm.CreateACLs(ctx, cb)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, cr := range created {
+		if cr.Err != nil {
+			t.Fatalf("create result errored: %v", cr.Err)
+		}
+	}
+
+	// Describe with pattern AND operations unset: matches any.
+	db := kadm.NewACLs().Topics(testTopic).Allow().AllowHosts().Deny().DenyHosts()
+	described, err := adm.DescribeACLs(ctx, db)
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	var found bool
+	for _, dr := range described {
+		if dr.Err != nil {
+			t.Fatalf("describe result errored: %v", dr.Err)
+		}
+		for _, d := range dr.Described {
+			if d.Principal == "User:alice" && d.Name == testTopic {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("created ACL not described: %v", described)
+	}
+
+	// Delete with the same fully-default filter.
+	deleted, err := adm.DeleteACLs(ctx, db)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	var ndeleted int
+	for _, dr := range deleted {
+		if dr.Err != nil {
+			t.Fatalf("delete result errored: %v", dr.Err)
+		}
+		for _, d := range dr.Deleted {
+			if d.Err == nil {
+				ndeleted++
+			}
+		}
+	}
+	if ndeleted != 1 {
+		t.Fatalf("expected exactly 1 deleted ACL, got %d", ndeleted)
 	}
 }
