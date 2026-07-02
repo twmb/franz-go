@@ -426,22 +426,13 @@ type bufferedFetch struct {
 	usedOffsets usedOffsets // what the offsets will be next if this fetch is used
 }
 
-func (s *source) hook(f *Fetch, buffered, polled bool) {
+func (s *source) hookBuffered(f *Fetch) {
 	// Collect matching hooks once, then fuse dispatch with the metrics walk
 	// so we visit each record exactly once regardless of hook count.
-	var (
-		bufH []HookFetchRecordBuffered
-		unbH []HookFetchRecordUnbuffered
-	)
+	var bufH []HookFetchRecordBuffered
 	s.cl.cfg.hooks.each(func(h Hook) {
-		if buffered {
-			if h, ok := h.(HookFetchRecordBuffered); ok {
-				bufH = append(bufH, h)
-			}
-		} else {
-			if h, ok := h.(HookFetchRecordUnbuffered); ok {
-				unbH = append(unbH, h)
-			}
+		if h, ok := h.(HookFetchRecordBuffered); ok {
+			bufH = append(bufH, h)
 		}
 	})
 
@@ -458,19 +449,91 @@ func (s *source) hook(f *Fetch, buffered, polled bool) {
 				for _, h := range bufH {
 					h.OnFetchRecordBuffered(r)
 				}
-				for _, h := range unbH {
-					h.OnFetchRecordUnbuffered(r, polled)
-				}
 			}
 		}
 	}
-	if buffered {
-		s.cl.consumer.bufferedRecords.Add(int64(nrecs))
-		s.cl.consumer.bufferedBytes.Add(nbytes)
-	} else {
-		s.cl.consumer.bufferedRecords.Add(-int64(nrecs))
-		s.cl.consumer.bufferedBytes.Add(-nbytes)
+	s.cl.consumer.bufferedRecords.Add(int64(nrecs))
+	s.cl.consumer.bufferedBytes.Add(nbytes)
+}
+
+// hookDeferUnbuffered is the unbuffered counterpart of hookBuffered, split
+// because its dispatch must NOT run at the call sites: every take/discard
+// path holds c.sourcesReadyMu, and the poll path additionally holds c.mu
+// (the invalidation path holds c.mu and sessionChangeMu too). User hook
+// code invoked there can re-enter the client -- the hook docs bless
+// interceptor usage and warn only about slowness -- and a re-entrant call
+// that needs c.mu (polling, AddConsumeTopics, ...) would park forever with
+// c.mu held, wedging every future poll, every rebalance's assign, and
+// Close. So this captures what dispatch needs NOW and queues the user-code
+// dispatch on the consumer, to run once the locks release.
+//
+// The capture must be eager for a second reason: callers compact the
+// fetch's Topics/Partitions slices in place after this returns (pause
+// stripping reuses the same backing arrays), so a closure over f would
+// observe a corrupted view. Records themselves are never mutated; we
+// flatten the record pointers. Gauge accounting is atomic and happens
+// immediately -- only user code is deferred, and only when an unbuffered
+// hook is actually registered.
+//
+// Must be called with c.sourcesReadyMu held.
+func (s *source) hookDeferUnbuffered(f *Fetch, polled bool) {
+	var unbH []HookFetchRecordUnbuffered
+	s.cl.cfg.hooks.each(func(h Hook) {
+		if h, ok := h.(HookFetchRecordUnbuffered); ok {
+			unbH = append(unbH, h)
+		}
+	})
+
+	c := &s.cl.consumer
+	var nrecs int
+	var nbytes int64
+	if len(unbH) == 0 {
+		// No hook to dispatch. The gauges still need the walk (bytes
+		// are per-record), but nothing is captured and nothing is
+		// allocated.
+		for i := range f.Topics {
+			t := &f.Topics[i]
+			for j := range t.Partitions {
+				p := &t.Partitions[j]
+				nrecs += len(p.Records)
+				for k := range p.Records {
+					nbytes += p.Records[k].userSize()
+				}
+			}
+		}
+		c.bufferedRecords.Add(-int64(nrecs))
+		c.bufferedBytes.Add(-nbytes)
+		return
 	}
+
+	var recs []*Record
+	for i := range f.Topics {
+		t := &f.Topics[i]
+		for j := range t.Partitions {
+			p := &t.Partitions[j]
+			nrecs += len(p.Records)
+			for k := range p.Records {
+				r := p.Records[k]
+				nbytes += r.userSize()
+				recs = append(recs, r)
+			}
+		}
+	}
+	c.bufferedRecords.Add(-int64(nrecs))
+	c.bufferedBytes.Add(-nbytes)
+
+	if len(recs) == 0 {
+		return
+	}
+	c.deferredFetchHooks = append(c.deferredFetchHooks, func() {
+		// unbH is almost always length one; keeping it outermost keeps
+		// the per-record loop free of the hook-slice ranging.
+		for _, h := range unbH {
+			for _, r := range recs {
+				h.OnFetchRecordUnbuffered(r, polled)
+			}
+		}
+	})
 }
 
 // takeBuffered drains a buffered fetch and updates offsets.
@@ -658,9 +721,9 @@ func (s *source) takeNBuffered(paused pausedTopics, n int) (Fetch, int, bool) {
 	}
 
 	if len(rstrip.Topics) > 0 {
-		s.hook(&rstrip, false, true)
+		s.hookDeferUnbuffered(&rstrip, true)
 	}
-	s.hook(&r, false, true) // unbuffered, polled
+	s.hookDeferUnbuffered(&r, true) // unbuffered, polled
 
 	drained := len(bf.Topics) == 0
 	if drained {
@@ -676,7 +739,7 @@ func (s *source) takeBufferedFn(polled bool, offsetFn func(usedOffsets)) Fetch {
 	r.doneFetch <- true
 	close(s.sem)
 
-	s.hook(&r.fetch, false, polled) // unbuffered, potentially polled
+	s.hookDeferUnbuffered(&r.fetch, polled) // unbuffered, potentially polled
 
 	return r.fetch
 }
@@ -1102,7 +1165,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 			usedOffsets: req.usedOffsets,
 		}
 		s.sem = make(chan struct{})
-		s.hook(&fetch, true, false) // buffered, not polled
+		s.hookBuffered(&fetch) // buffered, not polled
 		s.cl.consumer.addSourceReadyForDraining(s)
 	} else if allErrsStripped {
 		// If we stripped all errors from the response, we are likely

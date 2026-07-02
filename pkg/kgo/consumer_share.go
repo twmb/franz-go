@@ -433,6 +433,7 @@ func (sc *shareConsumer) poll(ctx context.Context, maxPollRecords int) Fetches {
 
 	fill()
 	sc.c.mu.Unlock()
+	sc.c.runDeferredFetchHooks()
 	if len(fetches) > 0 || ctx == nil {
 		return fetches
 	}
@@ -466,6 +467,7 @@ func (sc *shareConsumer) poll(ctx context.Context, maxPollRecords int) Fetches {
 		sc.c.mu.Lock()
 		fill()
 		sc.c.mu.Unlock()
+		sc.c.runDeferredFetchHooks()
 	}
 
 	return fetches
@@ -1601,7 +1603,7 @@ func (s *sourceShare) takeBuffered(paused pausedTopics) Fetch {
 	close(s.s.sem)
 
 	f := b.fetch
-	s.s.hook(&f, false, true) // unbuffered, polled
+	s.s.hookDeferUnbuffered(&f, true) // unbuffered, polled; capture precedes the strip below
 
 	// Strip paused partitions from the returned fetch and release
 	// their records back to the broker for redelivery.
@@ -1707,9 +1709,9 @@ func (s *sourceShare) takeNBuffered(paused pausedTopics, n int) (Fetch, int, boo
 	}
 
 	if len(rstrip.Topics) > 0 {
-		s.s.hook(&rstrip, false, true)
+		s.s.hookDeferUnbuffered(&rstrip, true)
 	}
-	s.s.hook(&r, false, true) // unbuffered, polled
+	s.s.hookDeferUnbuffered(&r, true) // unbuffered, polled
 
 	drained := len(bf.Topics) == 0
 	if drained {
@@ -2534,7 +2536,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 			doneFetch: doneFetch,
 		}
 		s.sem = make(chan struct{})
-		s.hook(&res.fetch, true, false)
+		s.hookBuffered(&res.fetch)
 		sc.c.addSourceReadyForDraining(s)
 	} else if res.allErrsStripped {
 		backoff("empty share fetch response due to all partitions having retryable errors")

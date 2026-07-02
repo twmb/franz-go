@@ -392,6 +392,11 @@ type HookFetchRecordUnbuffered interface {
 	// OnFetchRecordUnbuffered is passed a record that is being
 	// "unbuffered" within the client, and whether the record is being
 	// returned from polling.
+	//
+	// For polled records, this fires on the polling goroutine before the
+	// poll returns. For records discarded internally (an assignment
+	// invalidation dropping a buffered fetch), this fires asynchronously
+	// on a separate goroutine.
 	OnFetchRecordUnbuffered(r *Record, polled bool)
 }
 
