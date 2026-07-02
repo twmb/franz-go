@@ -305,8 +305,17 @@ func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) 
 	}
 	sort.Slice(m.Brokers, func(i, j int) bool { return m.Brokers[i].NodeID < m.Brokers[j].NodeID })
 
-	if len(topics) > 0 && len(m.Topics) != len(topics) {
-		return Metadata{}, fmt.Errorf("metadata returned only %d topics of %d requested", len(m.Topics), len(topics))
+	// Compare against the UNIQUE requested names: m.Topics is a map, so
+	// duplicate requested topics previously tripped this as a spurious
+	// "returned only N of M" error.
+	if len(topics) > 0 {
+		uniq := make(map[string]struct{}, len(topics))
+		for _, t := range topics {
+			uniq[t] = struct{}{}
+		}
+		if len(m.Topics) != len(uniq) {
+			return Metadata{}, fmt.Errorf("metadata returned only %d topics of %d requested", len(m.Topics), len(uniq))
+		}
 	}
 
 	return m, nil

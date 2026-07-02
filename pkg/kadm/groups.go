@@ -1060,7 +1060,9 @@ func (cl *Client) FetchOffsetsForTopics(ctx context.Context, group string, topic
 	os := make(Offsets)
 
 	var all bool
-	keept := topics[:0]
+	// Filter into a fresh slice: topics is the caller's variadic slice and
+	// filtering into topics[:0] would rewrite the caller's backing array.
+	keept := make([]string, 0, len(topics))
 	for _, topic := range topics {
 		if topic == FetchAllGroupTopics {
 			all = true
@@ -2619,8 +2621,16 @@ func (cl *Client) CommitOffsetsByID(ctx context.Context, group string, os Offset
 		if topic == "" {
 			topic = id2name[id]
 		}
-		rt := make(map[int32]OffsetResponse)
-		rs[id] = rt
+		// Merge rather than overwrite: if the broker returns a topic we
+		// cannot resolve to an ID (absent from our request mapping), id
+		// stays the zero value; two such topics previously collided on
+		// the zero key and only the last survived. Per-partition Offset
+		// values still carry their topic names.
+		rt := rs[id]
+		if rt == nil {
+			rt = make(map[int32]OffsetResponse)
+			rs[id] = rt
+		}
 		for _, p := range t.Partitions {
 			o, ok := Offset{}, false
 			if ops := os[id]; ops != nil {
@@ -2736,28 +2746,14 @@ func (cl *Client) FetchOffsetsByID(ctx context.Context, group string) (OffsetRes
 		return rs, nil
 	}
 
-	// v0-v7 fallback: resp.Topics only. Convert to group format
-	// for the shared buildPartitions helper.
-	rs := make(OffsetResponsesByID)
-	for _, t := range resp.Topics {
-		gp := make([]kmsg.OffsetFetchResponseGroupTopicPartition, len(t.Partitions))
-		for i, p := range t.Partitions {
-			gp[i] = kmsg.OffsetFetchResponseGroupTopicPartition{
-				Partition:   p.Partition,
-				Offset:      p.Offset,
-				LeaderEpoch: p.LeaderEpoch,
-				Metadata:    p.Metadata,
-				ErrorCode:   p.ErrorCode,
-			}
-		}
-		// v0-v7 has no TopicID; use zero value.
-		rt, err := buildPartitions(t.Topic, TopicID{}, gp)
-		if err != nil {
-			return nil, err
-		}
-		rs[TopicID{}] = rt
-	}
-	return rs, nil
+	// Unreachable defensively: kgo's OffsetFetch sharder synthesizes
+	// resp.Groups from the top-level Topics for v0-v7 responses, so the
+	// group loop above always runs. If we ever do land here, the response
+	// carries topic NAMES only -- there is no ID to key the by-ID result
+	// type with, and the prior code funneled every topic onto the zero
+	// TopicID key, keeping only the last. Fail loudly instead of
+	// returning silently collapsed data.
+	return nil, errors.New("offset fetch response contained no groups and cannot be keyed by topic ID; use FetchOffsets against brokers this old")
 }
 
 ///////////////////

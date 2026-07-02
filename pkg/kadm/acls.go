@@ -699,11 +699,15 @@ func (cl *Client) CreateACLs(ctx context.Context, b *ACLBuilder) (CreateACLsResu
 	if pattern == ACLPatternUnknown {
 		pattern = ACLPatternLiteral
 	}
-	if len(b.allow) != 0 && len(b.allowHosts) == 0 {
-		b.allowHosts = []string{"*"}
+	// Default unset hosts to the wildcard in LOCALS: writing the default
+	// back into the builder is an observable side effect on reuse (a later
+	// AllowHosts-less filter call would inherit the create's wildcard).
+	allowHosts, denyHosts := b.allowHosts, b.denyHosts
+	if len(b.allow) != 0 && len(allowHosts) == 0 {
+		allowHosts = []string{"*"}
 	}
-	if len(b.deny) != 0 && len(b.denyHosts) == 0 {
-		b.denyHosts = []string{"*"}
+	if len(b.deny) != 0 && len(denyHosts) == 0 {
+		denyHosts = []string{"*"}
 	}
 
 	var clusters []string
@@ -729,8 +733,8 @@ func (cl *Client) CreateACLs(ctx context.Context, b *ACLBuilder) (CreateACLsResu
 					hosts      []string
 					permType   kmsg.ACLPermissionType
 				}{
-					{b.allow, b.allowHosts, kmsg.ACLPermissionTypeAllow},
-					{b.deny, b.denyHosts, kmsg.ACLPermissionTypeDeny},
+					{b.allow, allowHosts, kmsg.ACLPermissionTypeAllow},
+					{b.deny, denyHosts, kmsg.ACLPermissionTypeDeny},
 				} {
 					for _, principal := range perm.principals {
 						for _, host := range perm.hosts {

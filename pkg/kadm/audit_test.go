@@ -1,6 +1,7 @@
 package kadm
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -132,5 +133,34 @@ func TestMergeShardErrs(t *testing.T) {
 	var mse *ShardErrors
 	if !errors.As(merged, &mse) || len(mse.Errs) != 2 {
 		t.Errorf("merge(se, se) = %v, want two merged shard errors", merged)
+	}
+}
+
+// Duplicate requested types must not duplicate results (the inner loop
+// previously continued instead of breaking).
+func TestFilterTypesNoDuplicates(t *testing.T) {
+	l := ListedConfigResources{Resources: []ConfigResource{{Type: kmsg.ConfigResourceTypeTopic, Name: "a"}}}
+	got := l.FilterTypes(kmsg.ConfigResourceTypeTopic, kmsg.ConfigResourceTypeTopic)
+	if len(got) != 1 {
+		t.Errorf("got %d results, want 1", len(got))
+	}
+}
+
+// FetchOffsetsForTopics previously filtered the caller's variadic slice in
+// place, rewriting its backing array.
+func TestFetchOffsetsForTopicsDoesNotMutateInput(t *testing.T) {
+	cl, err := kgo.NewClient(kgo.SeedBrokers("localhost:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	adm := NewClient(cl)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	topics := []string{FetchAllGroupTopics, "a", "b"}
+	adm.FetchOffsetsForTopics(ctx, "g", topics...) //nolint:errcheck // the canceled ctx fails the call; we assert only non-mutation
+	if topics[0] != FetchAllGroupTopics || topics[1] != "a" || topics[2] != "b" {
+		t.Errorf("caller slice was mutated: %v", topics)
 	}
 }
