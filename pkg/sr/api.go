@@ -98,6 +98,9 @@ type (
 		// ID is the globally unique ID of the schema.
 		ID int `json:"id,omitempty"`
 
+		// GUID is the globally unique ID of the schema used in Kafka header.
+		GUID string `json:"guid,omitempty"`
+
 		Schema
 	}
 )
@@ -120,6 +123,7 @@ func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSch
 		s  string
 		v  int
 		id int
+		g  string
 	}
 	m := make(map[svid]SubjectSchema)
 
@@ -128,6 +132,7 @@ func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSch
 			sl.Subject,
 			sl.Version,
 			sl.ID,
+			sl.GUID,
 		}] = sl
 	}
 	for _, sr := range r {
@@ -135,6 +140,7 @@ func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSch
 			sr.Subject,
 			sr.Version,
 			sr.ID,
+			sr.GUID,
 		}
 		switch _, exists := m[k]; exists {
 		case false:
@@ -196,6 +202,14 @@ func (cl *Client) SchemaByID(ctx context.Context, id int) (Schema, error) {
 	// GET /schemas/ids/{id}
 	var s Schema
 	err := cl.get(ctx, fmt.Sprintf("/schemas/ids/%d", id), &s)
+	return s, err
+}
+
+// SchemaByGUID returns the schema for a given schema GUID.
+func (cl *Client) SchemaByGUID(ctx context.Context, guid string) (SubjectSchema, error) {
+	// GET /schemas/guids/{guid}
+	var s SubjectSchema
+	err := cl.get(ctx, fmt.Sprintf("/schemas/guids/%s", url.PathEscape(guid)), &s)
 	return s, err
 }
 
@@ -579,6 +593,7 @@ func (cl *Client) SchemaUsagesByID(ctx context.Context, id int) ([]SubjectSchema
 		subject string
 		version int
 		id      int
+		guid    string
 	}
 
 	uniq := make(map[ssi]SubjectSchema)
@@ -587,6 +602,7 @@ func (cl *Client) SchemaUsagesByID(ctx context.Context, id int) ([]SubjectSchema
 			subject: s.Subject,
 			version: s.Version,
 			id:      s.ID,
+			guid:    s.GUID,
 		}] = s
 	}
 	schemas = nil

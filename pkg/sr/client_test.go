@@ -16,12 +16,14 @@ func TestSchemaRegistryAPI(t *testing.T) {
 		Subject: "foo",
 		Version: 1,
 		ID:      1,
+		GUID:    "11111111-2222-4333-8444-555555555555",
 		Schema:  Schema{Schema: `{"name":"foo", "type": "record", "fields":[{"name":"str", "type": "string"}]}`},
 	}
 	dummySchemaWithRef := SubjectSchema{
 		Subject: "bar",
 		Version: 1,
 		ID:      2,
+		GUID:    "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
 		Schema: Schema{
 			Schema:     `{"name":"bar",  "type": "record", "fields":[{"name":"data", "type": "foo"}]}}`,
 			References: []SchemaReference{{Name: "foo", Subject: "foo", Version: 1}},
@@ -96,6 +98,8 @@ func TestSchemaRegistryAPI(t *testing.T) {
 				output = []map[string]any{{"subject": dummySchema.Subject, "version": dummySchema.Version}}
 			case "/schemas/ids/2/versions":
 				output = []map[string]any{{"subject": dummySchemaWithRef.Subject, "version": dummySchemaWithRef.Version}}
+			case "/schemas/guids/11111111-2222-4333-8444-555555555555":
+				output = dummySchema
 			case "/schemas/types":
 				output = []string{"AVRO", "JSON"}
 			case "/contexts":
@@ -198,7 +202,7 @@ func TestSchemaRegistryAPI(t *testing.T) {
 		{
 			name:     "get schema by version",
 			fn:       func() (any, error) { return c.SchemaByVersion(ctx, dummySchema.Subject, dummySchema.Version) },
-			expected: `{"subject":"foo","version":1,"id":1,"schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
+			expected: `{"subject":"foo","version":1,"id":1,"guid":"11111111-2222-4333-8444-555555555555","schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
 		},
 		{
 			name:     "get schema text by ID",
@@ -208,12 +212,12 @@ func TestSchemaRegistryAPI(t *testing.T) {
 		{
 			name:     "get all schemas",
 			fn:       func() (any, error) { return c.AllSchemas(ctx) },
-			expected: `[{"subject":"foo","version":1,"id":1,"schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"},{"subject":"bar","version":1,"id":2,"schema":"{\"name\":\"bar\",  \"type\": \"record\", \"fields\":[{\"name\":\"data\", \"type\": \"foo\"}]}}","references":[{"name":"foo","subject":"foo","version":1}]}]`,
+			expected: `[{"subject":"foo","version":1,"id":1,"guid":"11111111-2222-4333-8444-555555555555","schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"},{"subject":"bar","version":1,"id":2,"guid":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","schema":"{\"name\":\"bar\",  \"type\": \"record\", \"fields\":[{\"name\":\"data\", \"type\": \"foo\"}]}}","references":[{"name":"foo","subject":"foo","version":1}]}]`,
 		},
 		{
 			name:     "get all schemas for subject",
 			fn:       func() (any, error) { return c.Schemas(ctx, dummySchema.Subject) },
-			expected: `[{"subject":"foo","version":1,"id":1,"schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}]`,
+			expected: `[{"subject":"foo","version":1,"id":1,"guid":"11111111-2222-4333-8444-555555555555","schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}]`,
 		},
 		{
 			name:     "register schema",
@@ -230,19 +234,19 @@ func TestSchemaRegistryAPI(t *testing.T) {
 		{
 			name:     "create schema",
 			fn:       func() (any, error) { return c.CreateSchema(ctx, dummySchema.Subject, dummySchema.Schema) },
-			expected: `{"subject":"foo","version":1,"id":1,"schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
+			expected: `{"subject":"foo","version":1,"id":1,"guid":"11111111-2222-4333-8444-555555555555","schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
 		},
 		{
 			name: "create schema with ID and version",
 			fn: func() (any, error) {
 				return c.CreateSchemaWithIDAndVersion(ctx, dummySchema.Subject, dummySchema.Schema, dummySchema.ID, dummySchema.Version)
 			},
-			expected: `{"subject":"foo","version":1,"id":1,"schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
+			expected: `{"subject":"foo","version":1,"id":1,"guid":"11111111-2222-4333-8444-555555555555","schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
 		},
 		{
 			name:     "lookup schema",
 			fn:       func() (any, error) { return c.LookupSchema(ctx, dummySchema.Subject, dummySchema.Schema) },
-			expected: `{"subject":"foo","version":1,"id":1,"schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
+			expected: `{"subject":"foo","version":1,"id":1,"guid":"11111111-2222-4333-8444-555555555555","schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
 		},
 		{
 			name:     "delete subject",
@@ -259,12 +263,17 @@ func TestSchemaRegistryAPI(t *testing.T) {
 		{
 			name:     "get schema references",
 			fn:       func() (any, error) { return c.SchemaReferences(ctx, dummySchema.Subject, dummySchema.Version) },
-			expected: `[{"subject":"bar","version":1,"id":2,"schema":"{\"name\":\"bar\",  \"type\": \"record\", \"fields\":[{\"name\":\"data\", \"type\": \"foo\"}]}}","references":[{"name":"foo","subject":"foo","version":1}]}]`,
+			expected: `[{"subject":"bar","version":1,"id":2,"guid":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","schema":"{\"name\":\"bar\",  \"type\": \"record\", \"fields\":[{\"name\":\"data\", \"type\": \"foo\"}]}}","references":[{"name":"foo","subject":"foo","version":1}]}]`,
 		},
 		{
 			name:     "get schema usages by ID",
 			fn:       func() (any, error) { return c.SchemaUsagesByID(ctx, dummySchema.ID) },
-			expected: `[{"subject":"foo","version":1,"id":1,"schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}]`,
+			expected: `[{"subject":"foo","version":1,"id":1,"guid":"11111111-2222-4333-8444-555555555555","schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}]`,
+		},
+		{
+			name:     "get schema by guid",
+			fn:       func() (any, error) { return c.SchemaByGUID(ctx, "11111111-2222-4333-8444-555555555555") },
+			expected: `{"subject":"foo","version":1,"id":1,"guid":"11111111-2222-4333-8444-555555555555","schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
 		},
 		{
 			name:     "get subject compatibility",
