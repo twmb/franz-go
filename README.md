@@ -439,6 +439,8 @@ generation.
 | [KIP-1227](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1227%3A+Expose+Rack+ID+in+MemberDescription+and+ShareMemberDescription) — Rack ID in (Share)MemberDescription | 4.2 | Supported (kadm) |
 | [KIP-1228](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1228%3A+Add+Transaction+Version+to+WriteTxnMarkersRequest) — WriteTxnMarkers TransactionVersion | 4.2 | Supported |
 | [KIP-1258](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1258%3A+Add+Support+for+OAuth+Client+Assertion+to+client_credentials+Grant+Type) — OAuth client assertion in client_credentials grant | 4.3 | Supported (user callback) |
+| [KIP-1319](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1319%3A+Align+TxnOffsetCommit+API+with+OffsetCommit+API) — TxnOffsetCommit by topic ID | 4.4 | Supported |
+| [KIP-1331](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1331%3A+Streams+Group+Topology+Description+Plugin) — Streams group topology descriptions | 4.4 | Supported (proto) |
 
 KIPs intentionally not implemented (with rationale):
 
