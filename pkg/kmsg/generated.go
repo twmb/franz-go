@@ -31334,7 +31334,7 @@ type DeleteGroupsRequest struct {
 }
 
 func (*DeleteGroupsRequest) Key() int16                   { return 42 }
-func (*DeleteGroupsRequest) MaxVersion() int16            { return 2 }
+func (*DeleteGroupsRequest) MaxVersion() int16            { return 3 }
 func (v *DeleteGroupsRequest) SetVersion(version int16)   { v.Version = version }
 func (v *DeleteGroupsRequest) GetVersion() int16          { return v.Version }
 func (v *DeleteGroupsRequest) IsFlexible() bool           { return v.Version >= 2 }
@@ -31478,6 +31478,9 @@ type DeleteGroupsResponseGroup struct {
 	// not in the empty state.
 	ErrorCode int16
 
+	// ErrorMessage is the error message, or null if there was no error.
+	ErrorMessage *string // v3+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
 
@@ -31518,7 +31521,7 @@ type DeleteGroupsResponse struct {
 }
 
 func (*DeleteGroupsResponse) Key() int16                         { return 42 }
-func (*DeleteGroupsResponse) MaxVersion() int16                  { return 2 }
+func (*DeleteGroupsResponse) MaxVersion() int16                  { return 3 }
 func (v *DeleteGroupsResponse) SetVersion(version int16)         { v.Version = version }
 func (v *DeleteGroupsResponse) GetVersion() int16                { return v.Version }
 func (v *DeleteGroupsResponse) IsFlexible() bool                 { return v.Version >= 2 }
@@ -31555,6 +31558,14 @@ func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 			{
 				v := v.ErrorCode
 				dst = kbin.AppendInt16(dst, v)
+			}
+			if version >= 3 {
+				v := v.ErrorMessage
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -31626,6 +31637,23 @@ func (v *DeleteGroupsResponse) readFrom(src []byte, unsafe bool) error {
 			{
 				v := b.Int16()
 				s.ErrorCode = v
+			}
+			if version >= 3 {
+				var v *string
+				if isFlexible {
+					if unsafe {
+						v = b.UnsafeCompactNullableString()
+					} else {
+						v = b.CompactNullableString()
+					}
+				} else {
+					if unsafe {
+						v = b.UnsafeNullableString()
+					} else {
+						v = b.NullableString()
+					}
+				}
+				s.ErrorMessage = v
 			}
 			if isFlexible {
 				s.UnknownTags = internalReadTags(&b)
