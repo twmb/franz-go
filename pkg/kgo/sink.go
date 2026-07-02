@@ -2491,6 +2491,16 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 			if batch.records == nil || batch.isFailingFromLoadErr { // concurrent failAllRecords OR concurrent bumpRepeatedLoadErr
 				if flexible {
 					dst = kbin.AppendCompactNullableBytes(dst, nil)
+					// Flexible versions terminate EVERY partition
+					// element with a tagged-field count; the healthy
+					// arm appends it after the batch bytes below.
+					// Skipping it here left the request one byte
+					// short per failed batch, desyncing the broker's
+					// parse of every following partition: the whole
+					// request was corrupt, the broker killed the
+					// connection, and every healthy batch in the
+					// request rode the connection-death path.
+					dst = append(dst, 0)
 				} else {
 					dst = kbin.AppendNullableBytes(dst, nil)
 				}
