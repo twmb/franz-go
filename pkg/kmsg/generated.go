@@ -23339,7 +23339,10 @@ func NewTxnOffsetCommitRequestTopicPartition() TxnOffsetCommitRequestTopicPartit
 
 type TxnOffsetCommitRequestTopic struct {
 	// Topic is a topic to add for a pending commit.
-	Topic string
+	Topic string // v0-v5
+
+	// TopicID is the topic ID of this topic.
+	TopicID [16]byte // v6+
 
 	// Partitions are partitions to add for pending commits.
 	Partitions []TxnOffsetCommitRequestTopicPartition
@@ -23404,7 +23407,7 @@ type TxnOffsetCommitRequest struct {
 }
 
 func (*TxnOffsetCommitRequest) Key() int16                   { return 28 }
-func (*TxnOffsetCommitRequest) MaxVersion() int16            { return 5 }
+func (*TxnOffsetCommitRequest) MaxVersion() int16            { return 6 }
 func (v *TxnOffsetCommitRequest) SetVersion(version int16)   { v.Version = version }
 func (v *TxnOffsetCommitRequest) GetVersion() int16          { return v.Version }
 func (v *TxnOffsetCommitRequest) IsFlexible() bool           { return v.Version >= 3 }
@@ -23482,13 +23485,17 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 0 && version <= 5 {
 				v := v.Topic
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
 				} else {
 					dst = kbin.AppendString(dst, v)
 				}
+			}
+			if version >= 6 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			{
 				v := v.Partitions
@@ -23651,7 +23658,7 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 			v := &a[i]
 			v.Default()
 			s := v
-			{
+			if version >= 0 && version <= 5 {
 				var v string
 				if unsafe {
 					if isFlexible {
@@ -23667,6 +23674,10 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 					}
 				}
 				s.Topic = v
+			}
+			if version >= 6 {
+				v := b.Uuid()
+				s.TopicID = v
 			}
 			{
 				v := s.Partitions
@@ -23824,7 +23835,10 @@ func NewTxnOffsetCommitResponseTopicPartition() TxnOffsetCommitResponseTopicPart
 
 type TxnOffsetCommitResponseTopic struct {
 	// Topic is the topic this response is for.
-	Topic string
+	Topic string // v0-v5
+
+	// TopicID is the topic ID of this topic.
+	TopicID [16]byte // v6+
 
 	// Partitions contains responses to the partitions in this topic.
 	Partitions []TxnOffsetCommitResponseTopicPartition
@@ -23869,7 +23883,7 @@ type TxnOffsetCommitResponse struct {
 }
 
 func (*TxnOffsetCommitResponse) Key() int16                 { return 28 }
-func (*TxnOffsetCommitResponse) MaxVersion() int16          { return 5 }
+func (*TxnOffsetCommitResponse) MaxVersion() int16          { return 6 }
 func (v *TxnOffsetCommitResponse) SetVersion(version int16) { v.Version = version }
 func (v *TxnOffsetCommitResponse) GetVersion() int16        { return v.Version }
 func (v *TxnOffsetCommitResponse) IsFlexible() bool         { return v.Version >= 3 }
@@ -23899,13 +23913,17 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 0 && version <= 5 {
 				v := v.Topic
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
 				} else {
 					dst = kbin.AppendString(dst, v)
 				}
+			}
+			if version >= 6 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			{
 				v := v.Partitions
@@ -23980,7 +23998,7 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 			v := &a[i]
 			v.Default()
 			s := v
-			{
+			if version >= 0 && version <= 5 {
 				var v string
 				if unsafe {
 					if isFlexible {
@@ -23996,6 +24014,10 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 					}
 				}
 				s.Topic = v
+			}
+			if version >= 6 {
+				v := b.Uuid()
+				s.TopicID = v
 			}
 			{
 				v := s.Partitions
