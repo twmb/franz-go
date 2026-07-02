@@ -1,7 +1,7 @@
 // DeleteGroupsRequest deletes consumer groups. This request was added for
 // Kafka 1.1.0 corresponding to the removal of RetentionTimeMillis from
 // OffsetCommitRequest. See KIP-229 for more details.
-DeleteGroupsRequest => key 42, max version 2, flexible v2+, group coordinator
+DeleteGroupsRequest => key 42, max version 3, flexible v2+, group coordinator
   // Groups is a list of groups to delete.
   Groups: [string]
 
@@ -27,3 +27,5 @@ DeleteGroupsResponse =>
     // NON_EMPTY_GROUP is returned if attempting to delete a group that is
     // not in the empty state.
     ErrorCode: int16
+    // ErrorMessage is the error message, or null if there was no error.
+    ErrorMessage: nullable-string // v3+
