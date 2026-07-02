@@ -2008,18 +2008,53 @@ out:
 		return 0, uncompressedBytes
 	}
 
-	firstOffset := message.Offset - int64(len(innerMessages)) + 1
+	// Inner offsets: the log cleaner preserves each retained inner
+	// message's original offset, so a compacted compressed message set
+	// legally contains offset gaps. For a v1 wrapper, inner offsets are
+	// stored relative to the set's first offset and the wrapper carries
+	// the absolute offset of the LAST inner message, so absolute =
+	// (wrapper - lastInner) + inner. We previously relabeled inner
+	// messages contiguously counting back from the wrapper offset, which
+	// mislabels every record before a gap; a commit taken mid-set then
+	// names an offset that skips real records for any other client
+	// reading the log honestly. Kafka and librdkafka both honor the
+	// stored offsets; downstream we already handle gapped offsets (see
+	// maybeKeepRecord's compaction comment).
+	//
+	// Two wrapper quirks, matching Kafka's own consumer: a wrapper
+	// offset of 0 means the inner offsets are used as-is (certain
+	// versions of librdkafka produced wrapper offset 0), and a wrapper
+	// offset below the last inner offset is an invalid set that we
+	// surface rather than guess at.
+	innerOffset := func(m readerFrom) int64 {
+		switch m := m.(type) {
+		case *kmsg.MessageV0:
+			return m.Offset
+		case *kmsg.MessageV1:
+			return m.Offset
+		}
+		return 0
+	}
+	var base int64
+	if message.Offset != 0 {
+		lastInner := innerOffset(innerMessages[len(innerMessages)-1])
+		if message.Offset < lastInner {
+			fp.Err = fmt.Errorf("invalid compressed message set: wrapper offset %d is less than the last inner offset %d", message.Offset, lastInner)
+			return 0, uncompressedBytes
+		}
+		base = message.Offset - lastInner
+	}
 	for i := range innerMessages {
 		innerMessage := innerMessages[i]
 		switch innerMessage := innerMessage.(type) {
 		case *kmsg.MessageV0:
-			innerMessage.Offset = firstOffset + int64(i)
+			innerMessage.Offset += base
 			innerMessage.Attributes |= int8(compression)
 			if !o.processV0Message(fp, innerMessage) {
 				return i, uncompressedBytes
 			}
 		case *kmsg.MessageV1:
-			innerMessage.Offset = firstOffset + int64(i)
+			innerMessage.Offset += base
 			innerMessage.Attributes |= int8(compression)
 			if !o.processV1Message(fp, innerMessage) {
 				return i, uncompressedBytes
@@ -2099,11 +2134,16 @@ func (o *ProcessFetchPartitionOpts) processV0OuterMessage(
 		return 0, uncompressedBytes
 	}
 
-	firstOffset := message.Offset - int64(len(innerMessages)) + 1
+	// For a v0 wrapper, inner offsets are stored ABSOLUTE (magic-0-era
+	// brokers rewrote compressed sets server-side on append), so we use
+	// them as-is; Kafka's own consumer does the same. The log cleaner
+	// preserves retained messages' offsets, so gaps from compaction are
+	// legal and handled downstream (see maybeKeepRecord). We previously
+	// relabeled contiguously counting back from the wrapper offset,
+	// mislabeling every record before a gap.
 	for i := range innerMessages {
 		innerMessage := &innerMessages[i]
 		innerMessage.Attributes |= int8(compression)
-		innerMessage.Offset = firstOffset + int64(i)
 		if !o.processV0Message(fp, innerMessage) {
 			return i, uncompressedBytes
 		}
