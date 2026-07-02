@@ -28106,7 +28106,7 @@ type DescribeLogDirsRequest struct {
 }
 
 func (*DescribeLogDirsRequest) Key() int16                 { return 35 }
-func (*DescribeLogDirsRequest) MaxVersion() int16          { return 4 }
+func (*DescribeLogDirsRequest) MaxVersion() int16          { return 5 }
 func (v *DescribeLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeLogDirsRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -28374,6 +28374,9 @@ type DescribeLogDirsResponseDir struct {
 	// This field has a default of -1.
 	UsableBytes int64 // v4+
 
+	// IsCordoned is true if this log directory is cordoned.
+	IsCordoned bool // v5+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
 
@@ -28420,7 +28423,7 @@ type DescribeLogDirsResponse struct {
 }
 
 func (*DescribeLogDirsResponse) Key() int16                 { return 35 }
-func (*DescribeLogDirsResponse) MaxVersion() int16          { return 4 }
+func (*DescribeLogDirsResponse) MaxVersion() int16          { return 5 }
 func (v *DescribeLogDirsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeLogDirsResponse) IsFlexible() bool         { return v.Version >= 2 }
@@ -28527,6 +28530,10 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 			if version >= 4 {
 				v := v.UsableBytes
 				dst = kbin.AppendInt64(dst, v)
+			}
+			if version >= 5 {
+				v := v.IsCordoned
+				dst = kbin.AppendBool(dst, v)
 			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -28697,6 +28704,10 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 			if version >= 4 {
 				v := b.Int64()
 				s.UsableBytes = v
+			}
+			if version >= 5 {
+				v := b.Bool()
+				s.IsCordoned = v
 			}
 			if isFlexible {
 				s.UnknownTags = internalReadTags(&b)
@@ -44988,12 +44999,16 @@ type BrokerHeartbeatRequest struct {
 	// Log directories that failed and went offline.
 	OfflineLogDirs [][16]byte // tag 0
 
+	// Log directories that are cordoned. This is null before the broker
+	// reaches the RECOVERY state.
+	CordonedLogDirs [][16]byte // tag 1
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
 
 func (*BrokerHeartbeatRequest) Key() int16                 { return 63 }
-func (*BrokerHeartbeatRequest) MaxVersion() int16          { return 1 }
+func (*BrokerHeartbeatRequest) MaxVersion() int16          { return 2 }
 func (v *BrokerHeartbeatRequest) SetVersion(version int16) { v.Version = version }
 func (v *BrokerHeartbeatRequest) GetVersion() int16        { return v.Version }
 func (v *BrokerHeartbeatRequest) IsFlexible() bool         { return v.Version >= 0 }
@@ -45042,6 +45057,9 @@ func (v *BrokerHeartbeatRequest) AppendTo(dst []byte) []byte {
 		if len(v.OfflineLogDirs) > 0 {
 			toEncode = append(toEncode, 0)
 		}
+		if version < 0 && len(v.CordonedLogDirs) > 0 || version >= 0 && v.CordonedLogDirs != nil {
+			toEncode = append(toEncode, 1)
+		}
 		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
 		for _, tag := range toEncode {
 			switch tag {
@@ -45065,6 +45083,28 @@ func (v *BrokerHeartbeatRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 						sized = true
 						goto fOfflineLogDirs
+					}
+				}
+			case 1:
+				{
+					v := v.CordonedLogDirs
+					dst = kbin.AppendUvarint(dst, 1)
+					sized := false
+					lenAt := len(dst)
+				fCordonedLogDirs:
+					if isFlexible {
+						dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
+					} else {
+						dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+					}
+					for i := range v {
+						v := v[i]
+						dst = kbin.AppendUuid(dst, v)
+					}
+					if !sized {
+						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+						sized = true
+						goto fCordonedLogDirs
 					}
 				}
 			}
@@ -45138,6 +45178,35 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				if err := b.Complete(); err != nil {
 					return err
 				}
+			case 1:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+				v := s.CordonedLogDirs
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if version < 0 || l == 0 {
+					a = [][16]byte{}
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				a = a[:0]
+				if l > 0 {
+					a = append(a, make([][16]byte, l)...)
+				}
+				for i := int32(0); i < l; i++ {
+					v := b.Uuid()
+					a[i] = v
+				}
+				v = a
+				s.CordonedLogDirs = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -45194,7 +45263,7 @@ type BrokerHeartbeatResponse struct {
 }
 
 func (*BrokerHeartbeatResponse) Key() int16                 { return 63 }
-func (*BrokerHeartbeatResponse) MaxVersion() int16          { return 1 }
+func (*BrokerHeartbeatResponse) MaxVersion() int16          { return 2 }
 func (v *BrokerHeartbeatResponse) SetVersion(version int16) { v.Version = version }
 func (v *BrokerHeartbeatResponse) GetVersion() int16        { return v.Version }
 func (v *BrokerHeartbeatResponse) IsFlexible() bool         { return v.Version >= 0 }
