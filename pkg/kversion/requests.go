@@ -1138,7 +1138,19 @@ func b43() *release {
 }
 
 func btip() *release {
-	return b43()
+	// Unreleased changes in Kafka trunk (4.4.0-SNAPSHOT), held until 4.4
+	// releases in case the APIs change; re-verify against the 4.4 release
+	// branch before promoting this block.
+	now := b43().clone(4, 4)
+
+	now.incmax(28, 6) // 6 txn offset commit KAFKA-20444 7562044781 KIP-1319
+	now.incmax(42, 3) // 3 delete groups KAFKA-20620 7997c9ebe0 KIP-1331
+	now.incmax(88, 1) // 1 streams group heartbeat KAFKA-20620 7997c9ebe0 KIP-1331
+	now.incmax(89, 1) // 1 streams group describe KAFKA-20620 7997c9ebe0 KIP-1331
+
+	now.addkey(93) // 0 streams group topology description update KAFKA-20620 7997c9ebe0 KIP-1331
+
+	return now
 }
 
 ///////////////////////////////
