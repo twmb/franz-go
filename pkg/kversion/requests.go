@@ -1143,8 +1143,23 @@ func b43() *release {
 	return now
 }
 
+func b44() *release {
+	now := b43().clone(4, 4)
+
+	now.incmax(18, 5) // 5 api versions KAFKA-20246 0ef4a4c80e KIP-1242
+	now.incmax(28, 6) // 6 txn offset commit KAFKA-20444 7562044781 KIP-1319
+	now.incmax(42, 3) // 3 delete groups KAFKA-20620 7997c9ebe0 KIP-1331
+	now.incmax(88, 1) // 1 streams group heartbeat KAFKA-20620 7997c9ebe0 KIP-1331
+	now.incmax(89, 1) // 1 streams group describe KAFKA-20620 7997c9ebe0 KIP-1331
+
+	now.addkey(93) // 0 streams group topology description update KAFKA-20620 7997c9ebe0 KIP-1331
+	now.addkey(94) // 0 unregister controller KAFKA-20395 c274a7348f
+
+	return now
+}
+
 func btip() *release {
-	return b43()
+	return b44()
 }
 
 ///////////////////////////////
@@ -1359,6 +1374,16 @@ func c43() *release {
 	return now
 }
 
+func c44() *release {
+	now := c43().clone(4, 4)
+
+	now.incmax(18, 5) // 5 api versions KAFKA-20246 0ef4a4c80e KIP-1242
+
+	now.addkey(94) // 0 unregister controller KAFKA-20395 c274a7348f
+
+	return now
+}
+
 func ctip() *release {
-	return c43()
+	return c44()
 }
