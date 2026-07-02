@@ -986,9 +986,18 @@ func (sc *shareConsumer) manage() {
 			return
 
 		case errors.Is(err, kerr.UnknownMemberID),
-			errors.Is(err, kerr.FencedMemberEpoch):
+			errors.Is(err, kerr.FencedMemberEpoch),
+			errors.Is(err, kerr.GroupIDNotFound):
 			// Keep the same UUID (matches the Java client) and reset
 			// to epoch 0 so the next heartbeat re-joins.
+			//
+			// GroupIDNotFound resets for liveness: the broker creates a
+			// share group only on a memberEpoch 0 heartbeat, so if group
+			// state vanished under a live member (coordinator state
+			// loss), retrying at our current epoch returns
+			// GROUP_ID_NOT_FOUND forever; only rejoining at epoch 0
+			// recreates the group. Classic and 848 groups self-heal the
+			// same way via their rejoin paths.
 			member, gen := sc.memberGen.load()
 			sc.memberGen.storeGeneration(0)
 			sc.cfg.logger.Log(LogLevelInfo, "share group heartbeat lost membership, resetting epoch",
