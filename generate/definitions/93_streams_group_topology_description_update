@@ -1,0 +1,29 @@
+// TopologyDescription is a full streams topology description, sent by a
+// client when the broker requests it via TopologyDescriptionRequired in a
+// StreamsGroupHeartbeatResponse.
+TopologyDescription => not top level, no encoding, flexible v0+
+  // Subtopologies are the subtopologies that make up this topology.
+  Subtopologies: [TopologyDescriptionSubtopology]
+  // GlobalStores are the global stores of this topology.
+  GlobalStores: [TopologyDescriptionGlobalStore]
+
+// StreamsGroupTopologyDescriptionUpdateRequest sends a group's topology
+// description to the broker; part of KIP-1331.
+StreamsGroupTopologyDescriptionUpdateRequest => key 93, max version 0, flexible v0+, group coordinator
+  // Group is the group identifier.
+  Group: string
+  // MemberID is the member ID.
+  MemberID: string
+  // TopologyEpoch is the epoch of the topology this description describes.
+  TopologyEpoch: int32
+  // TopologyDescription is the full topology description.
+  TopologyDescription: TopologyDescription
+
+// StreamsGroupTopologyDescriptionUpdateResponse is returned from a
+// StreamsGroupTopologyDescriptionUpdateRequest.
+StreamsGroupTopologyDescriptionUpdateResponse =>
+  ThrottleMillis
+  // ErrorCode is the error code, or 0 if there was no error.
+  ErrorCode: int16
+  // ErrorMessage is the error message, or null if there was no error.
+  ErrorMessage: nullable-string

@@ -1,3 +1,35 @@
+// TopologyDescriptionNode is a processor node within a streams topology
+// description.
+TopologyDescriptionNode => not top level, no encoding, flexible v0+
+  // Name is the name of this node.
+  Name: string
+  // NodeType is the type of this node.
+  NodeType: int8
+  // SourceTopics are the source topics this node reads from.
+  SourceTopics: [string]
+  // SinkTopic is the sink topic this node writes to, or null.
+  SinkTopic: nullable-string
+  // Stores are the state stores connected to this node.
+  Stores: [string]
+  // Successors are the names of this node's successor nodes.
+  Successors: [string]
+
+// TopologyDescriptionSubtopology is a subtopology within a streams topology
+// description.
+TopologyDescriptionSubtopology => not top level, no encoding, flexible v0+
+  // SubtopologyID uniquely identifies the subtopology.
+  SubtopologyID: string
+  // Nodes are the processor nodes of the subtopology.
+  Nodes: [TopologyDescriptionNode]
+
+// TopologyDescriptionGlobalStore is a global store within a streams topology
+// description.
+TopologyDescriptionGlobalStore => not top level, no encoding, flexible v0+
+  // Source is the source node of the global store.
+  Source: TopologyDescriptionNode
+  // Processor is the processor node of the global store.
+  Processor: TopologyDescriptionNode
+
 // StreamsAssignment contains streams group task assignments.
 StreamsAssignment => not top level, no encoding, flexible v0+
   // ActiveTasks are active tasks for this client.
@@ -9,12 +41,15 @@ StreamsAssignment => not top level, no encoding, flexible v0+
 
 // StreamsGroupDescribeRequest describes one or more streams groups. This is
 // part of KIP-1071.
-StreamsGroupDescribeRequest => key 89, max version 0, flexible v0+
+StreamsGroupDescribeRequest => key 89, max version 1, flexible v0+
   // Groups are the IDs of the groups to describe.
   Groups: [string]
   // IncludeAuthorizedOperations controls whether to include authorized
   // operations.
   IncludeAuthorizedOperations: bool
+  // IncludeTopologyDescription controls whether to include the full
+  // topology description in the response.
+  IncludeTopologyDescription: bool // v1+
 
 // StreamsGroupDescribeResponse is returned from a StreamsGroupDescribeRequest.
 StreamsGroupDescribeResponse =>
@@ -101,3 +136,13 @@ StreamsGroupDescribeResponse =>
     // AuthorizedOperations is a 32-bit bitfield representing authorized
     // operations for the group.
     AuthorizedOperations: int32(-2147483648)
+    // TopologyDescription is the full topology description for this group;
+    // non-null if and only if TopologyDescriptionStatus is AVAILABLE (3).
+    TopologyDescription: nullable=> // v1+
+      // Subtopologies are the subtopologies that make up this topology.
+      Subtopologies: [TopologyDescriptionSubtopology]
+      // GlobalStores are the global stores of this topology.
+      GlobalStores: [TopologyDescriptionGlobalStore]
+    // TopologyDescriptionStatus is the status of the topology description:
+    // 0=NOT_REQUESTED, 1=NOT_STORED, 2=ERROR, 3=AVAILABLE.
+    TopologyDescriptionStatus: int8 // v1+
