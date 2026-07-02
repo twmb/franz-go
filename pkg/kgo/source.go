@@ -426,22 +426,13 @@ type bufferedFetch struct {
 	usedOffsets usedOffsets // what the offsets will be next if this fetch is used
 }
 
-func (s *source) hook(f *Fetch, buffered, polled bool) {
+func (s *source) hookBuffered(f *Fetch) {
 	// Collect matching hooks once, then fuse dispatch with the metrics walk
 	// so we visit each record exactly once regardless of hook count.
-	var (
-		bufH []HookFetchRecordBuffered
-		unbH []HookFetchRecordUnbuffered
-	)
+	var bufH []HookFetchRecordBuffered
 	s.cl.cfg.hooks.each(func(h Hook) {
-		if buffered {
-			if h, ok := h.(HookFetchRecordBuffered); ok {
-				bufH = append(bufH, h)
-			}
-		} else {
-			if h, ok := h.(HookFetchRecordUnbuffered); ok {
-				unbH = append(unbH, h)
-			}
+		if h, ok := h.(HookFetchRecordBuffered); ok {
+			bufH = append(bufH, h)
 		}
 	})
 
@@ -458,19 +449,91 @@ func (s *source) hook(f *Fetch, buffered, polled bool) {
 				for _, h := range bufH {
 					h.OnFetchRecordBuffered(r)
 				}
-				for _, h := range unbH {
-					h.OnFetchRecordUnbuffered(r, polled)
-				}
 			}
 		}
 	}
-	if buffered {
-		s.cl.consumer.bufferedRecords.Add(int64(nrecs))
-		s.cl.consumer.bufferedBytes.Add(nbytes)
-	} else {
-		s.cl.consumer.bufferedRecords.Add(-int64(nrecs))
-		s.cl.consumer.bufferedBytes.Add(-nbytes)
+	s.cl.consumer.bufferedRecords.Add(int64(nrecs))
+	s.cl.consumer.bufferedBytes.Add(nbytes)
+}
+
+// hookDeferUnbuffered is the unbuffered counterpart of hookBuffered, split
+// because its dispatch must NOT run at the call sites: every take/discard
+// path holds c.sourcesReadyMu, and the poll path additionally holds c.mu
+// (the invalidation path holds c.mu and sessionChangeMu too). User hook
+// code invoked there can re-enter the client -- the hook docs bless
+// interceptor usage and warn only about slowness -- and a re-entrant call
+// that needs c.mu (polling, AddConsumeTopics, ...) would park forever with
+// c.mu held, wedging every future poll, every rebalance's assign, and
+// Close. So this captures what dispatch needs NOW and queues the user-code
+// dispatch on the consumer, to run once the locks release.
+//
+// The capture must be eager for a second reason: callers compact the
+// fetch's Topics/Partitions slices in place after this returns (pause
+// stripping reuses the same backing arrays), so a closure over f would
+// observe a corrupted view. Records themselves are never mutated; we
+// flatten the record pointers. Gauge accounting is atomic and happens
+// immediately -- only user code is deferred, and only when an unbuffered
+// hook is actually registered.
+//
+// Must be called with c.sourcesReadyMu held.
+func (s *source) hookDeferUnbuffered(f *Fetch, polled bool) {
+	var unbH []HookFetchRecordUnbuffered
+	s.cl.cfg.hooks.each(func(h Hook) {
+		if h, ok := h.(HookFetchRecordUnbuffered); ok {
+			unbH = append(unbH, h)
+		}
+	})
+
+	c := &s.cl.consumer
+	var nrecs int
+	var nbytes int64
+	if len(unbH) == 0 {
+		// No hook to dispatch. The gauges still need the walk (bytes
+		// are per-record), but nothing is captured and nothing is
+		// allocated.
+		for i := range f.Topics {
+			t := &f.Topics[i]
+			for j := range t.Partitions {
+				p := &t.Partitions[j]
+				nrecs += len(p.Records)
+				for k := range p.Records {
+					nbytes += p.Records[k].userSize()
+				}
+			}
+		}
+		c.bufferedRecords.Add(-int64(nrecs))
+		c.bufferedBytes.Add(-nbytes)
+		return
 	}
+
+	var recs []*Record
+	for i := range f.Topics {
+		t := &f.Topics[i]
+		for j := range t.Partitions {
+			p := &t.Partitions[j]
+			nrecs += len(p.Records)
+			for k := range p.Records {
+				r := p.Records[k]
+				nbytes += r.userSize()
+				recs = append(recs, r)
+			}
+		}
+	}
+	c.bufferedRecords.Add(-int64(nrecs))
+	c.bufferedBytes.Add(-nbytes)
+
+	if len(recs) == 0 {
+		return
+	}
+	c.deferredFetchHooks = append(c.deferredFetchHooks, func() {
+		// unbH is almost always length one; keeping it outermost keeps
+		// the per-record loop free of the hook-slice ranging.
+		for _, h := range unbH {
+			for _, r := range recs {
+				h.OnFetchRecordUnbuffered(r, polled)
+			}
+		}
+	})
 }
 
 // takeBuffered drains a buffered fetch and updates offsets.
@@ -658,9 +721,9 @@ func (s *source) takeNBuffered(paused pausedTopics, n int) (Fetch, int, bool) {
 	}
 
 	if len(rstrip.Topics) > 0 {
-		s.hook(&rstrip, false, true)
+		s.hookDeferUnbuffered(&rstrip, true)
 	}
-	s.hook(&r, false, true) // unbuffered, polled
+	s.hookDeferUnbuffered(&r, true) // unbuffered, polled
 
 	drained := len(bf.Topics) == 0
 	if drained {
@@ -676,7 +739,7 @@ func (s *source) takeBufferedFn(polled bool, offsetFn func(usedOffsets)) Fetch {
 	r.doneFetch <- true
 	close(s.sem)
 
-	s.hook(&r.fetch, false, polled) // unbuffered, potentially polled
+	s.hookDeferUnbuffered(&r.fetch, polled) // unbuffered, potentially polled
 
 	return r.fetch
 }
@@ -1102,7 +1165,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 			usedOffsets: req.usedOffsets,
 		}
 		s.sem = make(chan struct{})
-		s.hook(&fetch, true, false) // buffered, not polled
+		s.hookBuffered(&fetch) // buffered, not polled
 		s.cl.consumer.addSourceReadyForDraining(s)
 	} else if allErrsStripped {
 		// If we stripped all errors from the response, we are likely
@@ -1215,6 +1278,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				continue
 			}
 
+			priorOffset := partOffset.offset
 			fp := partOffset.processRespPartition(br, rp, s.cl.cfg.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
 				if moving := kmove.maybeAddFetchPartition(resp, rp, c); moving {
@@ -1222,6 +1286,25 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					continue
 				}
 				updateWhy.add(topic, partition, fp.Err)
+			}
+
+			// A response can carry batch data for a partition yet
+			// advance nothing: every batch's last offset below our
+			// requested offset (a broker violating "return the batch
+			// containing the fetch offset"). Nothing buffers, no error
+			// is set, and the cursor re-enables at the same offset --
+			// without intervention the next fetch re-requests
+			// immediately and the loop runs hot at round-trip pace,
+			// silently, forever. Strip the partition: if the WHOLE
+			// response is such non-progress, the allErrsStripped
+			// backoff below paces us like any other all-stripped
+			// response. Legitimate empties are excluded: a caught-up
+			// partition has no batch bytes, control/aborted records
+			// advance the offset even when not kept, and a compacted
+			// empty batch advances via its preserved last offset.
+			if fp.Err == nil && len(fp.Records) == 0 && partOffset.offset == priorOffset && len(rp.RecordBatches) > 0 {
+				strip(topic, partition, errFetchNoProgress)
+				continue
 			}
 
 			// We only keep the partition if it has no error, or an
@@ -1798,6 +1881,19 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 		return 0, 0
 	}
 	if numRecords > len(rawRecords) {
+		// A batch claiming records with ZERO record bytes deserves a
+		// special word: the clamp below would make it decode zero
+		// records "successfully", and the KAFKA-5443 defer would then
+		// advance the offset past the batch's whole claimed range -- a
+		// silent skip of offsets the broker asserts hold records. The
+		// legitimate compacted-empty batch (KAFKA-5443) claims ZERO
+		// records, so claiming more with no bytes is corruption; error
+		// loudly like the Java client's InvalidRecordException instead
+		// of silently skipping.
+		if len(rawRecords) == 0 {
+			fp.Err = fmt.Errorf("invalid record batch: %d claimed records with no record bytes", numRecords)
+			return 0, uncompressedBytes
+		}
 		numRecords = len(rawRecords)
 	}
 	var krecords []kmsg.Record
@@ -2008,18 +2104,53 @@ out:
 		return 0, uncompressedBytes
 	}
 
-	firstOffset := message.Offset - int64(len(innerMessages)) + 1
+	// Inner offsets: the log cleaner preserves each retained inner
+	// message's original offset, so a compacted compressed message set
+	// legally contains offset gaps. For a v1 wrapper, inner offsets are
+	// stored relative to the set's first offset and the wrapper carries
+	// the absolute offset of the LAST inner message, so absolute =
+	// (wrapper - lastInner) + inner. We previously relabeled inner
+	// messages contiguously counting back from the wrapper offset, which
+	// mislabels every record before a gap; a commit taken mid-set then
+	// names an offset that skips real records for any other client
+	// reading the log honestly. Kafka and librdkafka both honor the
+	// stored offsets; downstream we already handle gapped offsets (see
+	// maybeKeepRecord's compaction comment).
+	//
+	// Two wrapper quirks, matching Kafka's own consumer: a wrapper
+	// offset of 0 means the inner offsets are used as-is (certain
+	// versions of librdkafka produced wrapper offset 0), and a wrapper
+	// offset below the last inner offset is an invalid set that we
+	// surface rather than guess at.
+	innerOffset := func(m readerFrom) int64 {
+		switch m := m.(type) {
+		case *kmsg.MessageV0:
+			return m.Offset
+		case *kmsg.MessageV1:
+			return m.Offset
+		}
+		return 0
+	}
+	var base int64
+	if message.Offset != 0 {
+		lastInner := innerOffset(innerMessages[len(innerMessages)-1])
+		if message.Offset < lastInner {
+			fp.Err = fmt.Errorf("invalid compressed message set: wrapper offset %d is less than the last inner offset %d", message.Offset, lastInner)
+			return 0, uncompressedBytes
+		}
+		base = message.Offset - lastInner
+	}
 	for i := range innerMessages {
 		innerMessage := innerMessages[i]
 		switch innerMessage := innerMessage.(type) {
 		case *kmsg.MessageV0:
-			innerMessage.Offset = firstOffset + int64(i)
+			innerMessage.Offset += base
 			innerMessage.Attributes |= int8(compression)
 			if !o.processV0Message(fp, innerMessage) {
 				return i, uncompressedBytes
 			}
 		case *kmsg.MessageV1:
-			innerMessage.Offset = firstOffset + int64(i)
+			innerMessage.Offset += base
 			innerMessage.Attributes |= int8(compression)
 			if !o.processV1Message(fp, innerMessage) {
 				return i, uncompressedBytes
@@ -2099,11 +2230,16 @@ func (o *ProcessFetchPartitionOpts) processV0OuterMessage(
 		return 0, uncompressedBytes
 	}
 
-	firstOffset := message.Offset - int64(len(innerMessages)) + 1
+	// For a v0 wrapper, inner offsets are stored ABSOLUTE (magic-0-era
+	// brokers rewrote compressed sets server-side on append), so we use
+	// them as-is; Kafka's own consumer does the same. The log cleaner
+	// preserves retained messages' offsets, so gaps from compaction are
+	// legal and handled downstream (see maybeKeepRecord). We previously
+	// relabeled contiguously counting back from the wrapper offset,
+	// mislabeling every record before a gap.
 	for i := range innerMessages {
 		innerMessage := &innerMessages[i]
 		innerMessage.Attributes |= int8(compression)
-		innerMessage.Offset = firstOffset + int64(i)
 		if !o.processV0Message(fp, innerMessage) {
 			return i, uncompressedBytes
 		}

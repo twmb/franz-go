@@ -9,6 +9,12 @@ on:
     branches: ["*"]
     paths:
       - 'generate/**'
+  # A new Kafka release moves the latest-tag checkout, so run on a schedule
+  # too: without this, a release that adds request versions produces no
+  # signal until someone happens to touch generate/ (Kafka 4.3 went
+  # unnoticed exactly this way).
+  schedule:
+    - cron: '0 8 * * 1'
 
 concurrency:
   group: validate-definitions-${{ github.ref }}

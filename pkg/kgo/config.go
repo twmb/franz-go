@@ -284,6 +284,26 @@ func (cfg *cfg) validate() error {
 		}
 	}
 
+	// The broker validates the ApiVersions software name and version
+	// against [a-zA-Z0-9](?:[a-zA-Z0-9\-.]*[a-zA-Z0-9])? and rejects the
+	// whole request with INVALID_REQUEST otherwise. ApiVersions is the
+	// first request on every connection, so an invalid value bricks the
+	// client with an opaque error; fail loudly here instead.
+	for _, sw := range []struct{ name, v string }{
+		{"software name", cfg.softwareName},
+		{"software version", cfg.softwareVersion},
+	} {
+		if !validSoftwareNameVersion(sw.v) {
+			return fmt.Errorf("invalid %s %q: brokers require a non-empty alphanumeric string that may contain '-' or '.' internally", sw.name, sw.v)
+		}
+	}
+
+	// Brokers reject an empty transactional id with INVALID_REQUEST at
+	// InitProducerID; catch it here where the error can say why.
+	if cfg.txnID != nil && *cfg.txnID == "" {
+		return errors.New("invalid empty transactional id")
+	}
+
 	i64lt := func(l, r int64) (bool, string) { return l < r, "less" }
 	i64gt := func(l, r int64) (bool, string) { return l > r, "larger" }
 
@@ -2275,3 +2295,21 @@ func AutoCommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.Offset
 //  	return groupOpt{func(cfg *cfg) { cfg.disableNextGenBalancer = true }}
 //  }
 //
+
+// validSoftwareNameVersion mirrors the broker's ApiVersions validation
+// pattern, [a-zA-Z0-9](?:[a-zA-Z0-9\-.]*[a-zA-Z0-9])?: non-empty
+// alphanumeric ends with dashes and dots allowed internally.
+func validSoftwareNameVersion(s string) bool {
+	alnum := func(c byte) bool {
+		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+	}
+	if len(s) == 0 || !alnum(s[0]) || !alnum(s[len(s)-1]) {
+		return false
+	}
+	for i := 1; i < len(s)-1; i++ {
+		if c := s[i]; !alnum(c) && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return true
+}

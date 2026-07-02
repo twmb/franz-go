@@ -1172,7 +1172,15 @@ func (s *sink) handleReqRespBatch(
 			return false, false
 		}
 		if s.cl.cfg.onDataLoss != nil {
-			s.cl.cfg.onDataLoss(topic, rp.Partition)
+			// Dispatch on a fresh goroutine: we hold this partition's
+			// recBuf.mu here, and the natural reaction to "data loss
+			// on (topic, partition)" is to produce to that partition
+			// -- which re-enters recBuf.mu on this goroutine and
+			// deadlocks it forever, wedging the partition and this
+			// sink's response processing. The callback is an
+			// informational notification with no ordering contract
+			// (same dispatch style as HookProduceBatchWritten).
+			go s.cl.cfg.onDataLoss(topic, rp.Partition)
 		}
 
 		// For OOOSN, and UnknownProducerID
@@ -2483,6 +2491,16 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 			if batch.records == nil || batch.isFailingFromLoadErr { // concurrent failAllRecords OR concurrent bumpRepeatedLoadErr
 				if flexible {
 					dst = kbin.AppendCompactNullableBytes(dst, nil)
+					// Flexible versions terminate EVERY partition
+					// element with a tagged-field count; the healthy
+					// arm appends it after the batch bytes below.
+					// Skipping it here left the request one byte
+					// short per failed batch, desyncing the broker's
+					// parse of every following partition: the whole
+					// request was corrupt, the broker killed the
+					// connection, and every healthy batch in the
+					// request rode the connection-death path.
+					dst = append(dst, 0)
 				} else {
 					dst = kbin.AppendNullableBytes(dst, nil)
 				}

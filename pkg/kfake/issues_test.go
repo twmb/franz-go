@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
+	"github.com/twmb/franz-go/pkg/sasl/plain"
 )
 
 func TestIssue885(t *testing.T) {
@@ -818,6 +820,70 @@ func TestTransactionCommit(t *testing.T) {
 
 	if consumed != 3 {
 		t.Errorf("expected 3 committed messages, got %d", consumed)
+	}
+}
+
+// TestTransactSessionEndNeverJoined ensures GroupTransactSession.End returns
+// when the group has never joined. The session consumes a topic that does not
+// exist, so the group manage loop never starts and nothing runs a heartbeat
+// loop. A produce-only End(TryCommit) then commits no offsets; End used to
+// force a heartbeat regardless, blocking forever on a channel with no
+// receiver and no possible revoke/lost escape.
+func TestTransactSessionEndNeverJoined(t *testing.T) {
+	t.Parallel()
+	const produceTopic = "txn-end-never-joined"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, produceTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	sess, err := kgo.NewGroupTransactSession(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(produceTopic),
+		kgo.TransactionalID("txn-end-never-joined"),
+		kgo.ConsumerGroup("g-txn-end-never-joined"),
+		kgo.ConsumeTopics("topic-that-never-exists"),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := sess.Begin(); err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := sess.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+		t.Fatalf("failed to produce: %v", err)
+	}
+
+	type endRes struct {
+		committed bool
+		err       error
+	}
+	done := make(chan endRes, 1)
+	go func() {
+		committed, err := sess.End(ctx, kgo.TryCommit)
+		done <- endRes{committed, err}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("End errored: %v", res.err)
+		}
+		if !res.committed {
+			t.Error("expected the produce-only transaction to commit")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("End did not return; the pre-EndTxn heartbeat force hung with no group joined")
 	}
 }
 
@@ -3456,5 +3522,953 @@ func TestProduceUnknownFailLimitNotResetByOtherErrors(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("produce did not fail within 10s; interleaved errors are resetting the unknown-topic fail limit")
+	}
+}
+
+// TestEndTxnUnconfirmedErrorNoSilentJoin: an EndTxn(commit) that fails with
+// an unconfirmed outcome (here UNKNOWN_SERVER_ERROR intercepting the request
+// before the broker processes it) must not leave the client able to silently
+// join the still-ongoing broker transaction. Pre-fix, EndTransaction consumed
+// the client txn state without failing the producer ID: the documented
+// TryAbort retry no-op'd at the !inTxn guard, the next transaction produced
+// at the same pid/epoch into the ongoing transaction, and its commit
+// committed BOTH transactions' records. Post-fix, the producer ID is flagged
+// for reload; the next BeginTransaction re-inits (KIP-360), which bumps the
+// epoch and fence-aborts the ongoing transaction, so a read_committed
+// consumer sees only the second transaction's record.
+func TestEndTxnUnconfirmedErrorNoSilentJoin(t *testing.T) {
+	t.Parallel()
+	const testTopic = "txn-unconfirmed-endtxn"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// One-shot control: fail the FIRST EndTxn with UNKNOWN_SERVER_ERROR
+	// without kfake ever processing it, leaving the broker-side
+	// transaction ongoing.
+	c.ControlKey(int16(kmsg.EndTxn), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.EndTxnRequest)
+		resp := req.ResponseKind().(*kmsg.EndTxnResponse)
+		resp.ErrorCode = kerr.UnknownServerError.Code
+		return resp, nil, true
+	})
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.TransactionalID("txn-unconfirmed"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("txn1")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.EndTransaction(ctx, kgo.TryCommit); err == nil {
+		t.Fatal("expected EndTransaction to fail from the controlled UNKNOWN_SERVER_ERROR")
+	}
+	// The documented recovery: retry as an abort. This is a client-side
+	// no-op (state was consumed), but the producer ID is now flagged for
+	// reload.
+	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("abort retry errored: %v", err)
+	}
+
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatalf("begin after unconfirmed end errored: %v", err)
+	}
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("txn2")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatalf("second commit errored: %v", err)
+	}
+
+	consumer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+
+	// The topic has one partition: if txn1's record were committed it
+	// would arrive before txn2's. Seeing txn2 first proves txn1 aborted.
+	for {
+		fs := consumer.PollFetches(ctx)
+		if errs := fs.Errors(); len(errs) > 0 {
+			t.Fatalf("fetch errors: %v", errs)
+		}
+		var done bool
+		fs.EachRecord(func(r *kgo.Record) {
+			switch string(r.Value) {
+			case "txn1":
+				t.Error("read_committed consumer saw txn1's record; the unconfirmed transaction was silently committed by txn2")
+			case "txn2":
+				done = true
+			}
+		})
+		if done || t.Failed() {
+			break
+		}
+	}
+}
+
+// reentrantDisconnectHook re-enters the client from OnBrokerDisconnect.
+// Hooks are not documented as forbidden from doing this; pre-fix, brokers
+// were stopped while holding the brokersMu write lock, so the re-entry
+// (which read-locks brokersMu) deadlocked Close and every request path.
+type reentrantDisconnectHook struct {
+	cl    atomic.Pointer[kgo.Client]
+	fired atomic.Int32
+}
+
+func (h *reentrantDisconnectHook) OnBrokerDisconnect(kgo.BrokerMetadata, net.Conn) {
+	if cl := h.cl.Load(); cl != nil {
+		cl.DiscoveredBrokers()
+		h.fired.Add(1)
+	}
+}
+
+func TestOnBrokerDisconnectReentrantHook(t *testing.T) {
+	t.Parallel()
+	const testTopic = "hook-reentry"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	hook := new(reentrantDisconnectHook)
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.WithHooks(hook),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook.cl.Store(cl)
+
+	// Establish a live connection so Close has something to disconnect.
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("x")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cl.Close()
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close deadlocked: OnBrokerDisconnect hook re-entering the client blocked on brokersMu")
+	}
+	if hook.fired.Load() == 0 {
+		t.Fatal("hook never fired; test proved nothing")
+	}
+}
+
+// TestMetadataZeroPartitionsNoFakeSuccess: a buggy broker or proxy can reply
+// to metadata for an unknown topic with ErrorCode 0 and an empty partition
+// array. Pre-fix, storePartitionsUpdate promised every buffered record for
+// that topic with a NIL error: user promises fired as successes (offset
+// 0..n, producer id 0) for records that were never sent anywhere. Post-fix,
+// the client treats the reply as a retryable unknown-topic failure, bounded
+// by UnknownTopicRetries.
+func TestMetadataZeroPartitionsNoFakeSuccess(t *testing.T) {
+	t.Parallel()
+	const testTopic = "zero-partitions"
+
+	c, err := NewCluster(NumBrokers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	addr := c.ListenAddrs()[0]
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Every metadata response reports requested topics as existing with
+	// no error and zero partitions.
+	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.MetadataRequest)
+		resp := req.ResponseKind().(*kmsg.MetadataResponse)
+		b := kmsg.NewMetadataResponseBroker()
+		b.NodeID = 0
+		b.Host = host
+		b.Port = int32(port)
+		resp.Brokers = append(resp.Brokers, b)
+		resp.ControllerID = 0
+		for _, rt := range req.Topics {
+			mt := kmsg.NewMetadataResponseTopic()
+			mt.Topic = rt.Topic
+			mt.ErrorCode = 0
+			resp.Topics = append(resp.Topics, mt)
+		}
+		return resp, nil, true
+	})
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.UnknownTopicRetries(1),
+		kgo.MetadataMinAge(10*time.Millisecond),
+		kgo.MetadataMaxAge(50*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	promised := make(chan error, 1)
+	cl.Produce(context.Background(), kgo.StringRecord("v"), func(_ *kgo.Record, err error) {
+		promised <- err
+	})
+
+	select {
+	case err := <-promised:
+		if err == nil {
+			t.Fatal("record promised with nil error: fabricated success for a record that was never produced")
+		}
+		if !errors.Is(err, kerr.UnknownTopicOrPartition) {
+			t.Fatalf("got %v, want UnknownTopicOrPartition", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("promise did not fire within 10s")
+	}
+}
+
+// TestOffsetFetchTopicIDOldWire: an OffsetFetch built with only TopicIDs,
+// issued by a client that neither produces nor consumes the topic, against
+// a wire version below v10 (no TopicID field on the wire). The sharder must
+// resolve the ID to a name via the metadata cache it just populated;
+// pre-fix it read the unrelated cl.id2t map (only written for
+// produced/consumed topics), sent an empty topic name, and the broker could
+// not match the topic.
+func TestOffsetFetchTopicIDOldWire(t *testing.T) {
+	t.Parallel()
+	const (
+		testTopic = "offset-fetch-by-id"
+		group     = "offset-fetch-by-id-group"
+	)
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	setup, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer setup.Close()
+
+	// Learn the topic's ID.
+	mreq := kmsg.NewPtrMetadataRequest()
+	mt := kmsg.NewMetadataRequestTopic()
+	mt.Topic = kmsg.StringPtr(testTopic)
+	mreq.Topics = append(mreq.Topics, mt)
+	mresp, err := mreq.RequestWith(ctx, setup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mresp.Topics) != 1 || mresp.Topics[0].ErrorCode != 0 {
+		t.Fatalf("bad metadata response: %v", mresp)
+	}
+	topicID := mresp.Topics[0].TopicID
+
+	// Commit an offset for the group (simple, generation-less commit).
+	oreq := kmsg.NewPtrOffsetCommitRequest()
+	oreq.Group = group
+	ot := kmsg.NewOffsetCommitRequestTopic()
+	ot.Topic = testTopic
+	ot.TopicID = topicID // v10+ matches by TopicID
+	op := kmsg.NewOffsetCommitRequestTopicPartition()
+	op.Partition = 0
+	op.Offset = 3
+	ot.Partitions = append(ot.Partitions, op)
+	oreq.Topics = append(oreq.Topics, ot)
+	oresp, err := oreq.RequestWith(ctx, setup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ec := oresp.Topics[0].Partitions[0].ErrorCode; ec != 0 {
+		t.Fatalf("offset commit failed with code %d", ec)
+	}
+
+	// A fresh client (empty id2t: it produces and consumes nothing),
+	// pinned below OffsetFetch v10 so the topic NAME is what matters on
+	// the wire.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.MaxVersions(kversion.V3_5_0()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	freq := kmsg.NewPtrOffsetFetchRequest()
+	fg := kmsg.NewOffsetFetchRequestGroup()
+	fg.Group = group
+	ft := kmsg.NewOffsetFetchRequestGroupTopic()
+	ft.TopicID = topicID
+	ft.Partitions = []int32{0}
+	fg.Topics = append(fg.Topics, ft)
+	freq.Groups = append(freq.Groups, fg)
+
+	fresp, err := freq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, g := range fresp.Groups {
+		for _, rt := range g.Topics {
+			for _, rp := range rt.Partitions {
+				if rt.Topic == testTopic && rp.Partition == 0 && rp.Offset == 3 {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("committed offset not returned; the request went out without a resolved topic name: %v", fresp)
+	}
+}
+
+// TestShareGroupIDNotFoundRejoin: if share group state vanishes under a live
+// member (coordinator state loss), every heartbeat at the member's current
+// epoch returns GROUP_ID_NOT_FOUND, and the broker only recreates a share
+// group on a member-epoch 0 heartbeat. The client must reset to epoch 0 and
+// rejoin; pre-fix it retried the same epoch forever and never healed.
+func TestShareGroupIDNotFoundRejoin(t *testing.T) {
+	t.Parallel()
+	const (
+		testTopic = "share-gid-not-found"
+		group     = "share-gid-not-found-group"
+	)
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	producer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
+
+	// Share groups default share.auto.offset.reset to latest; set earliest
+	// so the consumer sees the record produced before it joined.
+	acreq := kmsg.NewPtrIncrementalAlterConfigsRequest()
+	acres := kmsg.NewIncrementalAlterConfigsRequestResource()
+	acres.ResourceType = kmsg.ConfigResourceTypeGroupConfig
+	acres.ResourceName = group
+	accfg := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+	accfg.Name = "share.auto.offset.reset"
+	accfg.Op = 0
+	accfg.Value = kmsg.StringPtr("earliest")
+	acres.Configs = append(acres.Configs, accfg)
+	acreq.Resources = append(acreq.Resources, acres)
+	acresp, err := acreq.RequestWith(ctx, producer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ec := acresp.Resources[0].ErrorCode; ec != 0 {
+		t.Fatalf("alter group config failed with code %d", ec)
+	}
+
+	if err := producer.ProduceSync(ctx, kgo.StringRecord("r1")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.ShareGroup(group),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	// Wait until the member is established (it received a record).
+	for {
+		fs := cl.PollFetches(ctx)
+		if fs.NumRecords() > 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("share consumer never received the first record")
+		}
+	}
+
+	// Simulate group state loss: every heartbeat at a live epoch gets
+	// GROUP_ID_NOT_FOUND until an epoch-0 (re)join arrives; the join
+	// passes through to kfake (which still has the group and re-admits
+	// the member) and ends the fencing, modeling the broker recreating
+	// the group.
+	rejoined := make(chan struct{})
+	var healed atomic.Bool
+	c.ControlKey(int16(kmsg.ShareGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		if healed.Load() {
+			return nil, nil, false
+		}
+		req := kreq.(*kmsg.ShareGroupHeartbeatRequest)
+		if req.MemberEpoch > 0 {
+			resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
+			resp.ErrorCode = kerr.GroupIDNotFound.Code
+			return resp, nil, true
+		}
+		if req.MemberEpoch == 0 && healed.CompareAndSwap(false, true) {
+			close(rejoined)
+		}
+		return nil, nil, false
+	})
+
+	select {
+	case <-rejoined:
+	case <-time.After(10 * time.Second):
+		t.Fatal("share consumer never reset to epoch 0 after GROUP_ID_NOT_FOUND; it cannot heal")
+	}
+
+	// Let the pre-reset in-flight ShareFetch drain before producing:
+	// that fetch was sent on the OLD (reset) session and can park
+	// broker-side for up to FetchMaxWait; if r2 lands in that window,
+	// the broker delivers it on the stale fetch, the client's
+	// mid-flight-reset guard discards the data (by design: its acks
+	// could not ride the new session), and r2 sits acquisition-locked
+	// for the full lock duration -- an unrelated, deliberate behavior
+	// that would mask what this test asserts. Two FetchMaxWaits bounds
+	// the drain deterministically.
+	time.Sleep(500 * time.Millisecond)
+
+	// The member rejoined; prove the group is functional again.
+	if err := producer.ProduceSync(ctx, kgo.StringRecord("r2")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		fs := cl.PollFetches(ctx)
+		var got bool
+		fs.EachRecord(func(r *kgo.Record) {
+			if string(r.Value) == "r2" {
+				got = true
+			}
+		})
+		if got {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("share consumer did not resume consuming after rejoining")
+		}
+	}
+}
+
+// reentrantFetchHook re-enters the client from OnFetchRecordUnbuffered.
+// Pre-fix, the hook fired while the poll path held c.mu (and the discard
+// path held c.mu+sessionChangeMu), so a hook calling anything that needs
+// c.mu deadlocked the poll permanently and wedged rebalances and Close
+// behind it. Post-fix, polled-record hooks fire after the locks release.
+type reentrantFetchHook struct {
+	cl    atomic.Pointer[kgo.Client]
+	fired atomic.Int32
+}
+
+func (h *reentrantFetchHook) OnFetchRecordUnbuffered(r *kgo.Record, polled bool) {
+	if !polled {
+		return
+	}
+	if cl := h.cl.Load(); cl != nil {
+		cl.AddConsumeTopics("fetch-hook-reentry-extra") // needs c.mu
+		h.fired.Add(1)
+	}
+}
+
+func TestFetchUnbufferedHookReentrancy(t *testing.T) {
+	t.Parallel()
+	const testTopic = "fetch-hook-reentry"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	producer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
+	if err := producer.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	hook := new(reentrantFetchHook)
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithHooks(hook),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	hook.cl.Store(cl)
+
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		for {
+			fs := cl.PollFetches(ctx)
+			if fs.NumRecords() > 0 {
+				return
+			}
+			if ctx.Err() != nil {
+				return
+			}
+		}
+	}()
+	select {
+	case <-polled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("poll deadlocked: OnFetchRecordUnbuffered re-entering the client blocked on c.mu")
+	}
+	if hook.fired.Load() == 0 {
+		t.Fatal("hook never fired; test proved nothing")
+	}
+}
+
+// TestOnDataLossCallbackReentrancy: ProducerOnDataLossDetected used to fire
+// while the partition's recBuf.mu was held; producing to the reported
+// partition from the callback -- the natural reaction -- deadlocked that
+// partition and the sink's response processing forever. Post-fix the
+// callback dispatches on its own goroutine.
+func TestOnDataLossCallbackReentrancy(t *testing.T) {
+	t.Parallel()
+	const testTopic = "on-data-loss-reentry"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// One-shot: the first produce gets OUT_OF_ORDER_SEQUENCE_NUMBER,
+	// which for a non-transactional producer (stopOnDataLoss unset)
+	// fires the data-loss callback and reloads the producer id.
+	c.ControlKey(0, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.ProduceRequest)
+		resp := req.ResponseKind().(*kmsg.ProduceResponse)
+		for _, rt := range req.Topics {
+			respt := kmsg.NewProduceResponseTopic()
+			respt.Topic = rt.Topic
+			respt.TopicID = rt.TopicID
+			for _, rp := range rt.Partitions {
+				respp := kmsg.NewProduceResponseTopicPartition()
+				respp.Partition = rp.Partition
+				respp.ErrorCode = kerr.OutOfOrderSequenceNumber.Code
+				respt.Partitions = append(respt.Partitions, respp)
+			}
+			resp.Topics = append(resp.Topics, respt)
+		}
+		return resp, nil, true
+	})
+
+	var cl *kgo.Client
+	hookDone := make(chan error, 1)
+	var hookOnce sync.Once
+	cl, err = kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.DefaultProduceTopic(testTopic),
+		kgo.ProducerOnDataLossDetected(func(topic string, partition int32) {
+			hookOnce.Do(func() {
+				// Produce to the very partition the callback reports.
+				hookDone <- cl.ProduceSync(ctx, kgo.StringRecord("from-hook")).FirstErr()
+			})
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+		t.Fatalf("produce after data-loss retry errored: %v", err)
+	}
+	select {
+	case err := <-hookDone:
+		if err != nil {
+			t.Fatalf("produce from data-loss callback errored: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("data-loss callback deadlocked: producing to the reported partition blocked on recBuf.mu")
+	}
+}
+
+// TestKadmACLDefaultPatternRoundTrip: kadm ACL builders that never call
+// ResourcePatternType used to send pattern UNKNOWN(0) in describe/delete
+// filters -- rejected by real brokers at request parse (kfake now models
+// that) -- and creating without a pattern failed validation despite the
+// docs calling literal the default. Builders that never call Operations
+// generated zero filters, silently doing nothing. Now: create defaults to
+// literal, filters default to any-pattern and any-operation.
+func TestKadmACLDefaultPatternRoundTrip(t *testing.T) {
+	t.Parallel()
+	const testTopic = "kadm-acl-defaults"
+
+	c, err := NewCluster(NumBrokers(1), EnableACLs(), Superuser("PLAIN", "admin", "pass"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.SASL(plain.Auth{User: "admin", Pass: "pass"}.AsMechanism()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	adm := kadm.NewClient(cl)
+
+	// Create with pattern unset: defaults to literal per the docs.
+	cb := kadm.NewACLs().Topics(testTopic).Allow("User:alice").AllowHosts().Operations(kadm.OpRead)
+	created, err := adm.CreateACLs(ctx, cb)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, cr := range created {
+		if cr.Err != nil {
+			t.Fatalf("create result errored: %v", cr.Err)
+		}
+	}
+
+	// Describe with pattern AND operations unset: matches any.
+	db := kadm.NewACLs().Topics(testTopic).Allow().AllowHosts().Deny().DenyHosts()
+	described, err := adm.DescribeACLs(ctx, db)
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	var found bool
+	for _, dr := range described {
+		if dr.Err != nil {
+			t.Fatalf("describe result errored: %v", dr.Err)
+		}
+		for _, d := range dr.Described {
+			if d.Principal == "User:alice" && d.Name == testTopic {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("created ACL not described: %v", described)
+	}
+
+	// Delete with the same fully-default filter.
+	deleted, err := adm.DeleteACLs(ctx, db)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	var ndeleted int
+	for _, dr := range deleted {
+		if dr.Err != nil {
+			t.Fatalf("delete result errored: %v", dr.Err)
+		}
+		for _, d := range dr.Deleted {
+			if d.Err == nil {
+				ndeleted++
+			}
+		}
+	}
+	if ndeleted != 1 {
+		t.Fatalf("expected exactly 1 deleted ACL, got %d", ndeleted)
+	}
+}
+
+// A real broker validates the ApiVersions v3+ client software name/version
+// and answers INVALID_REQUEST on a mismatch; kfake accepting anything made
+// franz-go's tests blind to clients sending invalid values.
+func TestApiVersionsSoftwareNameValidation(t *testing.T) {
+	t.Parallel()
+
+	c, err := NewCluster(NumBrokers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	req := kmsg.NewPtrApiVersionsRequest()
+	req.ClientSoftwareName = "bad name" // space: invalid
+	req.ClientSoftwareVersion = "1.0.0"
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != kerr.InvalidRequest.Code {
+		t.Errorf("got error code %d, want INVALID_REQUEST", resp.ErrorCode)
+	}
+
+	req.ClientSoftwareName = "good-name"
+	resp, err = req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Errorf("got error code %d for a valid name, want 0", resp.ErrorCode)
+	}
+}
+
+// An EndTxn whose outcome is unconfirmed (transport error, retries exhausted,
+// or UNKNOWN_SERVER_ERROR) restores the client's transaction state so the
+// documented retry with TryAbort heals immediately: the retry reloads the
+// producer ID, whose epoch bump fence-aborts anything still ongoing broker
+// side, and sends no second EndTxn. Previously the retry was a silent no-op
+// and the broker transaction lingered until the next transaction began (or
+// the transaction timeout fired), stalling read_committed consumers.
+func TestEndTxnUnconfirmedAbortRetry(t *testing.T) {
+	t.Parallel()
+	const topic = "txn-unconfirmed-abort"
+
+	c, err := NewCluster(NumBrokers(1), SeedTopics(1, topic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	var endTxns, initPIDs atomic.Int32
+	c.ControlKey(int16(kmsg.EndTxn), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		if endTxns.Add(1) == 1 {
+			resp := kreq.ResponseKind().(*kmsg.EndTxnResponse)
+			resp.ErrorCode = kerr.UnknownServerError.Code
+			return resp, nil, true
+		}
+		return nil, nil, false
+	})
+	c.ControlKey(int16(kmsg.InitProducerID), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		initPIDs.Add(1)
+		return nil, nil, false
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.TransactionalID("txn-unconfirmed-abort"),
+		kgo.DefaultProduceTopic(topic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("first")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.EndTransaction(ctx, kgo.TryCommit); err == nil {
+		t.Fatal("expected an error from the hijacked EndTxn commit")
+	}
+
+	preInits := initPIDs.Load()
+	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("abort retry after unconfirmed commit errored: %v", err)
+	}
+	if got := endTxns.Load(); got != 1 {
+		t.Errorf("abort retry sent an EndTxn (saw %d total); the producer id reload is the abort", got)
+	}
+	if got := initPIDs.Load(); got != preInits+1 {
+		t.Errorf("abort retry did not reload the producer id (%d inits before, %d after)", preInits, got)
+	}
+
+	// The next transaction runs cleanly at the bumped epoch.
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatalf("begin after healed abort: %v", err)
+	}
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("second")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatalf("commit after healed abort: %v", err)
+	}
+
+	// read_committed sees only the second transaction: the first was
+	// fence-aborted by the reload.
+	consumer, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(topic),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+
+	var vals []string
+	for len(vals) == 0 {
+		fs := consumer.PollFetches(ctx)
+		if err := fs.Err0(); err != nil {
+			t.Fatalf("consume: %v", err)
+		}
+		fs.EachRecord(func(r *kgo.Record) { vals = append(vals, string(r.Value)) })
+	}
+	if len(vals) != 1 || vals[0] != "second" {
+		t.Errorf("read_committed consumed %v, want only [second]", vals)
+	}
+}
+
+// Retrying a commit whose outcome is unconfirmed is refused: the prior
+// outcome is unknowable, and the retry's producer id reload may have just
+// fence-aborted it, so returning success would lie. The caller must retry
+// with TryAbort, per EndTransaction's docs.
+func TestEndTxnUnconfirmedCommitRetryRefused(t *testing.T) {
+	t.Parallel()
+	const topic = "txn-unconfirmed-commit"
+
+	c, err := NewCluster(NumBrokers(1), SeedTopics(1, topic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	var endTxns atomic.Int32
+	c.ControlKey(int16(kmsg.EndTxn), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		if endTxns.Add(1) == 1 {
+			resp := kreq.ResponseKind().(*kmsg.EndTxnResponse)
+			resp.ErrorCode = kerr.UnknownServerError.Code
+			return resp, nil, true
+		}
+		return nil, nil, false
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.TransactionalID("txn-unconfirmed-commit"),
+		kgo.DefaultProduceTopic(topic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.EndTransaction(ctx, kgo.TryCommit); err == nil {
+		t.Fatal("expected an error from the hijacked EndTxn commit")
+	}
+	err = cl.EndTransaction(ctx, kgo.TryCommit)
+	if err == nil || !strings.Contains(err.Error(), "unconfirmed") {
+		t.Fatalf("commit retry: got %v, want an unconfirmed-refusal error", err)
+	}
+
+	// The refusal's reload already aborted everything; a follow-up abort
+	// is a truthful no-op, and the next transaction runs cleanly.
+	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("abort after refused commit retry: %v", err)
+	}
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("v2")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatalf("commit after heal: %v", err)
 	}
 }

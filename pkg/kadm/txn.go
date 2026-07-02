@@ -490,6 +490,9 @@ func (ls ListedTransactions) TransactionalIDs() []string {
 // producer.
 //
 // This may return *ShardErrors or *AuthError.
+// Note that filterStates requires brokers to support ListTransactions v1+
+// (Kafka 3.0+): against older brokers the field is not on the wire and the
+// listing is silently UNFILTERED, over-returning transactions.
 func (cl *Client) ListTransactions(ctx context.Context, producerIDs []int64, filterStates []string) (ListedTransactions, error) {
 	return cl.ListTransactionsByTxPattern(ctx, producerIDs, filterStates, "")
 }
@@ -502,6 +505,10 @@ func (cl *Client) ListTransactions(ctx context.Context, producerIDs []int64, fil
 // by transactional ID. This requires Kafka 4.1+.
 //
 // This may return *ShardErrors or *AuthError.
+// The pattern requires ListTransactions v2+ (Kafka 4.1+, KIP-1152) and
+// filterStates requires v1+: against older brokers the fields are not on the
+// wire and the listing is silently UNFILTERED for that dimension,
+// over-returning transactions.
 func (cl *Client) ListTransactionsByTxPattern(ctx context.Context, producerIDs []int64, filterStates []string, txIDPattern string) (ListedTransactions, error) {
 	req := kmsg.NewPtrListTransactionsRequest()
 	req.ProducerIDFilters = producerIDs

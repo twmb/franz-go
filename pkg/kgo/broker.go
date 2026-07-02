@@ -1855,7 +1855,12 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 				cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "req", kmsg.Key(pr.resp.Key()).Name(), "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "successful_reads", cxn.successes, "err", err)
 			} else {
 				cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is SASL missing?)", "req", kmsg.Key(pr.resp.Key()).Name(), "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
-				if err == io.EOF { // specifically avoid checking errors.Is to ensure this is not already wrapped
+				if err == io.EOF || err == io.ErrUnexpectedEOF { // specifically avoid checking errors.Is to ensure this is not already wrapped
+					// ErrUnexpectedEOF gets the same first-read
+					// pessimism: now that it is retryable in
+					// isRetryableBrokerErr, a mid-frame close on
+					// the very first read (bad SASL cutting us off
+					// mid-response) must not retry forever either.
 					err = &ErrFirstReadEOF{kind: firstReadSASL, err: err, retry: cxn.b.cl.cfg.alwaysRetryEOF}
 				}
 			}
