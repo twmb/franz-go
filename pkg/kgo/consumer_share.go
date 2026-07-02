@@ -210,6 +210,21 @@ type (
 	// offset; duplicates would be rejected with INVALID_RECORD_STATE.
 	// The sc.pendingAcks counter still increments once per appended
 	// entry; subtraction at callback time uses the entry count.
+	//
+	// KNOWN WINDOW (2026-07 audit, deliberately unfixed): the
+	// offset-dedupe only covers duplicates within one build. If a
+	// drain snapshots a renew entry and the user's terminal ack
+	// lands between the drain and the build's status read, the CAS
+	// re-appends the pointer to the (new) pending list while the
+	// drained copy also reads the terminal status: two requests
+	// carry the same terminal ack, and the broker rejects the
+	// second with INVALID_RECORD_STATE at partition granularity,
+	// erroring innocent co-batched acks (they redeliver via the
+	// acquisition-lock timeout; at-least-once holds and the error
+	// is surfaced via the ack callback). Closing this needs
+	// per-state sent tracking (+8 bytes per acquired record) or a
+	// synchronized consume point; the microsecond window and
+	// loud+recoverable outcome did not justify either.
 	shareAckState struct {
 		status        atomic.Int32  // CAS target for ack transitions
 		deliveryCount int32         // broker's delivery count for this record (>= 1)

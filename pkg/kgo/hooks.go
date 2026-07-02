@@ -55,6 +55,9 @@ type HookClientClosed interface {
 //////////////////
 
 // HookBrokerConnect is called after a connection to a broker is opened.
+// This fires once per connection ATTEMPT, including internal retries: a
+// broker that refuses connections produces repeated calls (with err set),
+// not one.
 type HookBrokerConnect interface {
 	// OnBrokerConnect is passed the broker metadata, how long it took to
 	// dial and initialize the connection (issue ApiVersions and run through

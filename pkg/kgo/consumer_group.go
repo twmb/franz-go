@@ -264,6 +264,11 @@ func (cl *Client) LeaveGroup() {
 //
 // LeaveGroupContext is a no-op for direct (non-group) consumers.
 //
+// Leaving does not wake a concurrent PollFetches or PollRecords parked on
+// another goroutine: a parked poll returns only for buffered data, its own
+// context, or client close. To unblock a poll loop when leaving, cancel the
+// context you poll with (or Close the client).
+//
 // Do not call this function with a non-nil context synchronously from
 // within an OnPartitions callback: the leave waits for the group
 // management loop to finish, and the loop is waiting for your callback to

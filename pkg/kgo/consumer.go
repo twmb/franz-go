@@ -1203,6 +1203,15 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			// a partition that never finished loading; SetOffsets
 			// documents those are skipped, so we keep their loads
 			// untouched.
+			//
+			// NOTE: the direct consumer's applySetOffsets translates
+			// ALL user input blindly (unlike the group path, which
+			// filters to g.uncommitted); the "extra partitions are
+			// skipped" contract holds only because this arm touches
+			// nothing beyond usingCursors and returns before the
+			// offset-loading section below. If setMatching ever gains
+			// load handling, filter never-consumed direct partitions
+			// first or they will silently start loading.
 		case assignInvalidateMatching:
 			loadOffsets.keepFilter(func(t string, p int32) bool {
 				if assignTopic, ok := assignments[t]; ok {
