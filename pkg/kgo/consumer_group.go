@@ -775,8 +775,26 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		// which causes a new metadata request -- in short, this could
 		// be concurrent with a metadata findNewAssignments, so we
 		// lock.
+		//
+		// For 848 the server owns assignment: nowAssigned only holds
+		// what the server currently wants us to own (handleResp already
+		// dropped anything the server revoked), while g.using is filled
+		// asynchronously by the metadata regex evaluation. When a new
+		// regex-matched topic is created, the server can assign it via
+		// heartbeat before our metadata loop has added it to g.using:
+		// the heartbeat exits this session with the topic in nowAssigned
+		// but the metadata goroutine has not yet run findNewAssignments.
+		// Self-revoking on (nowAssigned - g.using) here would then drop
+		// that just-assigned topic, and because the server still
+		// believes we own it (we echoed its topic id), it never re-sends
+		// -- stranding the topic permanently. Skip the self-revoke for
+		// 848 and let the server drive all revocation through heartbeats.
 		g.nowAssigned.write(func(nowAssigned map[string][]int32) {
 			g.mu.Lock()
+			defer g.mu.Unlock()
+			if g.is848 {
+				return
+			}
 			for topic, partitions := range nowAssigned {
 				if _, exists := g.using[topic]; !exists {
 					if lost == nil {
@@ -786,7 +804,6 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 					delete(nowAssigned, topic)
 				}
 			}
-			g.mu.Unlock()
 		})
 	}
 
@@ -2141,8 +2158,48 @@ start:
 	// groupTopics was already loaded above to populate reqTopic.TopicID;
 	// reuse that snapshot so we validate against the same view that
 	// built the request.
+	//
+	// wanted reports whether a topic in the response is one we actually
+	// want to assign. Normally this is our subscription snapshot
+	// (groupTopics). `added` (what we built the request from) can diverge
+	// from that snapshot, but the meaning of the divergence differs by
+	// protocol, so we only trust `added` for 848:
+	//
+	//   - Classic: the client drives its own subscription (g.using feeds
+	//     JoinGroup, and g.using never leads g.tps because g.tps is stored
+	//     before findNewAssignments runs), so an assigned topic stays in
+	//     g.tps -- unless it is purged after assignment. That purge is
+	//     either an explicit PurgeTopicsFromConsuming/PurgeTopicsFromClient
+	//     call (e.g. #1355, where it overlapped AddConsumeTopics) or the
+	//     automatic regex missing-topic purge. In every case the topic is
+	//     being removed, so dropping it is correct; the nil guard above
+	//     just stops #1355's crash, and the drop here is the right result.
+	//
+	//   - 848: the server resolves the regex itself and can assign a live,
+	//     newly-created topic via heartbeat before our metadata loop has
+	//     added it to g.tps. Dropping it leaves the partition without a
+	//     cursor while the server believes we own it (we echoed its id
+	//     back), so it never re-sends -- stranding the topic. It is in
+	//     `added` (we requested it), so we keep it.
+	//
+	// `added` is precisely "what we requested", so a topic a buggy broker
+	// invents (neither subscribed nor requested) is still dropped -- the
+	// #1271 protection.
+	g.mu.Lock()
+	is848 := g.is848
+	g.mu.Unlock()
+	wanted := func(topic string) bool {
+		if groupTopics.hasTopic(topic) {
+			return true
+		}
+		if is848 {
+			_, ok := added[topic]
+			return ok
+		}
+		return false
+	}
 	for fetchedTopic, topicOffsets := range offsets {
-		if !groupTopics.hasTopic(fetchedTopic) {
+		if !wanted(fetchedTopic) {
 			delete(offsets, fetchedTopic)
 			g.cfg.logger.Log(LogLevelWarn, "member was assigned topic that we did not ask for in ConsumeTopics! skipping assigning this topic!", "group", g.cfg.group, "topic", fetchedTopic)
 			continue
@@ -2181,7 +2238,7 @@ start:
 	// above.
 	var omitted mtmps
 	for topic, partitions := range added {
-		if !groupTopics.hasTopic(topic) {
+		if !wanted(topic) {
 			continue // already warned and skipped above
 		}
 		topicOffsets := offsets[topic]

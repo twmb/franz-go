@@ -1,14 +1,36 @@
+v1.21.6
+===
+
+One bug fix:
+
+* Fixed a KIP-848 consumer stranding a regex-matched topic that was created
+  after the member joined. With server-side regex, the broker resolves the
+  pattern itself and can assign a newly-created topic via heartbeat before the
+  client's metadata loop has evaluated the regex and added the topic to its own
+  subscription. Two client paths then dropped the just-assigned topic -- the
+  end-of-session self-revoke and the `OffsetFetch` response validation. Because
+  the broker believed the client owned the topic, it never re-sent the
+  assignment, so the partition sat without a cursor and was never consumed. The
+  client now trusts the server's assignment for 848 in both paths. Classic and
+  share groups drive their own subscription, so the broker never assigns them a
+  live topic they have not subscribed to; they are unaffected.
+
+## Relevant commits
+
+- [`9b92299f`](https://github.com/twmb/franz-go/commit/9b92299f) **bugfix** kgo: fix 848 stranding a regex topic assigned before metadata catches up
+
 v1.21.5
 ===
 
 Three bug fixes:
 
 * Fixed a nil-pointer panic when building a group `OffsetFetch`: if the group
-  was assigned a topic the client was not itself tracking -- reachable when
-  regex consuming, or when the group hands the client a topic it did not ask
-  for (unlikely) -- `loadTopic` returned nil and dereferencing it for the topic
-  ID crashed the client. The topic ID is now only set when the topic is known.
-  Thanks [@iwittkau](https://github.com/iwittkau)!
+  was assigned a topic that was no longer in the client's tracked set --
+  reachable when a topic is purged from consuming while still assigned, for
+  example `PurgeTopicsFromConsuming` overlapping `AddConsumeTopics`, or the
+  automatic regex missing-topic purge -- `loadTopic` returned nil and
+  dereferencing it for the topic ID crashed the client. The topic ID is now
+  only set when the topic is known. Thanks [@iwittkau](https://github.com/iwittkau)!
 
 * Fixed a data race on a coordinator's cached node ID. When a broker
   disconnected while a `FindCoordinator` load for that broker was still in
