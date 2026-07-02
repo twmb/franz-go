@@ -1172,7 +1172,15 @@ func (s *sink) handleReqRespBatch(
 			return false, false
 		}
 		if s.cl.cfg.onDataLoss != nil {
-			s.cl.cfg.onDataLoss(topic, rp.Partition)
+			// Dispatch on a fresh goroutine: we hold this partition's
+			// recBuf.mu here, and the natural reaction to "data loss
+			// on (topic, partition)" is to produce to that partition
+			// -- which re-enters recBuf.mu on this goroutine and
+			// deadlocks it forever, wedging the partition and this
+			// sink's response processing. The callback is an
+			// informational notification with no ordering contract
+			// (same dispatch style as HookProduceBatchWritten).
+			go s.cl.cfg.onDataLoss(topic, rp.Partition)
 		}
 
 		// For OOOSN, and UnknownProducerID
