@@ -4257,3 +4257,45 @@ func TestKadmACLDefaultPatternRoundTrip(t *testing.T) {
 		t.Fatalf("expected exactly 1 deleted ACL, got %d", ndeleted)
 	}
 }
+
+// A real broker validates the ApiVersions v3+ client software name/version
+// and answers INVALID_REQUEST on a mismatch; kfake accepting anything made
+// franz-go's tests blind to clients sending invalid values.
+func TestApiVersionsSoftwareNameValidation(t *testing.T) {
+	t.Parallel()
+
+	c, err := NewCluster(NumBrokers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	req := kmsg.NewPtrApiVersionsRequest()
+	req.ClientSoftwareName = "bad name" // space: invalid
+	req.ClientSoftwareVersion = "1.0.0"
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != kerr.InvalidRequest.Code {
+		t.Errorf("got error code %d, want INVALID_REQUEST", resp.ErrorCode)
+	}
+
+	req.ClientSoftwareName = "good-name"
+	resp, err = req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Errorf("got error code %d for a valid name, want 0", resp.ErrorCode)
+	}
+}

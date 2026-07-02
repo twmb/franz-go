@@ -32,6 +32,17 @@ func (c *Cluster) handleApiVersions(kreq kmsg.Request) (kmsg.Response, error) {
 		resp.ErrorCode = kerr.UnsupportedVersion.Code
 	}
 
+	// v3+ carries the client software name and version; a real broker
+	// validates both against [a-zA-Z0-9](?:[a-zA-Z0-9\-.]*[a-zA-Z0-9])?
+	// and answers INVALID_REQUEST on a mismatch. kgo validates at
+	// NewClient, but raw kmsg users may not; without this, kfake accepted
+	// values every real broker rejects.
+	if resp.ErrorCode == 0 && req.Version >= 3 &&
+		(!validSoftwareNameVersion(req.ClientSoftwareName) || !validSoftwareNameVersion(req.ClientSoftwareVersion)) {
+		resp.ErrorCode = kerr.InvalidRequest.Code
+		return resp, nil
+	}
+
 	// We do not checkReqVersion for ApiVersions; if the client uses a
 	// version larger than we support, we auto-downgrade.
 
@@ -163,4 +174,22 @@ func regKey(key, min, max int16) {
 		MinVersion: min,
 		MaxVersion: max,
 	}
+}
+
+// validSoftwareNameVersion mirrors the broker's ApiVersions validation
+// pattern: non-empty alphanumeric ends with dashes and dots allowed
+// internally.
+func validSoftwareNameVersion(s string) bool {
+	alnum := func(c byte) bool {
+		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+	}
+	if len(s) == 0 || !alnum(s[0]) || !alnum(s[len(s)-1]) {
+		return false
+	}
+	for i := 1; i < len(s)-1; i++ {
+		if c := s[i]; !alnum(c) && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return true
 }
