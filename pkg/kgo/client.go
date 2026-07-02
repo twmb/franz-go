@@ -3579,21 +3579,39 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 		nameMeta, _ = cl.resolveTopicMeta(ctx, unresolvedNames, true, 0)
 	}
 	if resolving {
+		// Fill from metaCache, which the resolve calls above populated:
+		// resolveTopicMetaByID stores into metaCache.byID (and returns
+		// nil when everything was already cached), while cl.id2t only
+		// ever holds topics this client produces or consumes -- an
+		// admin-style client fetching offsets by TopicID has the mapping
+		// ONLY in the cache. This mirrors the response-side resolution
+		// in the onResp below, which reads the cache for the same
+		// reason. id2t and the resolveTopicMeta return value remain as
+		// fallbacks. Names matter most below v10, where TopicID is
+		// structurally absent from the wire and an empty name is
+		// unmatchable by the broker (see #1312).
 		id2t := cl.id2tMap()
+		cl.metaCache.mu.Lock()
 		for i := range req.Groups {
 			g := &req.Groups[i]
 			for j := range g.Topics {
 				t := &g.Topics[j]
 				if t.Topic == "" && t.TopicID != ([16]byte{}) {
-					t.Topic = id2t[t.TopicID]
+					t.Topic = cl.metaCache.byID[t.TopicID]
+					if t.Topic == "" {
+						t.Topic = id2t[t.TopicID]
+					}
 				}
 				if t.TopicID == ([16]byte{}) && t.Topic != "" {
-					if ct, ok := nameMeta[t.Topic]; ok {
+					if ct, ok := cl.metaCache.topics[t.Topic]; ok {
+						t.TopicID = ct.id
+					} else if ct, ok := nameMeta[t.Topic]; ok {
 						t.TopicID = ct.id
 					}
 				}
 			}
 		}
+		cl.metaCache.mu.Unlock()
 	}
 
 	groups := make([]string, 0, len(req.Groups))
