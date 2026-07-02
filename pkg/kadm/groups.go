@@ -431,8 +431,9 @@ func (cl *Client) DescribeGroups(ctx context.Context, groups ...string) (Describ
 
 // DeleteGroupResponse contains the response for an individual deleted group.
 type DeleteGroupResponse struct {
-	Group string // Group is the group this response is for.
-	Err   error  // Err is non-nil if the group failed to be deleted.
+	Group      string // Group is the group this response is for.
+	Err        error  // Err is non-nil if the group failed to be deleted.
+	ErrMessage string // ErrMessage a potential extra message describing any error; requires Kafka 4.4+ (KIP-1331).
 }
 
 // DeleteGroupResponses contains per-group responses to deleted groups.
@@ -515,8 +516,9 @@ func (cl *Client) DeleteGroups(ctx context.Context, groups ...string) (DeleteGro
 		resp := kr.(*kmsg.DeleteGroupsResponse)
 		for _, g := range resp.Groups {
 			rs[g.Group] = DeleteGroupResponse{ // group is always on one broker, no need to exist-check
-				Group: g.Group,
-				Err:   kerr.ErrorForCode(g.ErrorCode),
+				Group:      g.Group,
+				Err:        kerr.ErrorForCode(g.ErrorCode),
+				ErrMessage: unptrStr(g.ErrorMessage),
 			}
 		}
 		return nil
