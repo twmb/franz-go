@@ -51084,7 +51084,7 @@ type DescribeTopicPartitionsRequest struct {
 
 	// The maximum nuber of partitions included in the response.
 	//
-	// This field has a default of 200.
+	// This field has a default of 2000.
 	ResponsePartitionLimit int32
 
 	// If non-nil, cursor is the first topic and partition to fetch details for.
@@ -51290,7 +51290,7 @@ func NewPtrDescribeTopicPartitionsRequest() *DescribeTopicPartitionsRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DescribeTopicPartitionsRequest.
 func (v *DescribeTopicPartitionsRequest) Default() {
-	v.ResponsePartitionLimit = 200
+	v.ResponsePartitionLimit = 2000
 	{
 		v := &v.Cursor
 		_ = v
