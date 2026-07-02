@@ -538,7 +538,15 @@ func (cl *Client) listOffsets(ctx context.Context, isolation int8, timestamp int
 					LeaderEpoch: p.LeaderEpoch,
 					Err:         kerr.ErrorForCode(p.ErrorCode),
 				}
-				if timestamp != -1 && p.Offset == -1 && p.ErrorCode == 0 {
+				// Rerequest only for real by-time listings (their -1 means
+				// "no offset at or after this timestamp"; we return end
+				// offsets, the documented ListOffsetsAfterMilli fallback).
+				// The special negative listings must NOT rerequest: -1 is
+				// their honest answer (an empty partition has no max
+				// timestamp offset; an untiered partition has no remote
+				// offset), and rewriting it with the end offset invents an
+				// answer the broker never gave.
+				if timestamp >= 0 && p.Offset == -1 && p.ErrorCode == 0 {
 					rerequest[t.Topic] = append(rerequest[t.Topic], p.Partition)
 				}
 			}
