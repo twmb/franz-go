@@ -1738,8 +1738,27 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 	nAcks, nStaleAcks, staleResults := filterStaleEntries(s, epoch, drains)
 
 	sc.enqueueCallback(staleResults, nStaleAcks)
+	// nAcks counts only user ack entries; gap/release ranges are filtered
+	// separately and can survive as live with zero live user entries (a
+	// partition whose acquired ranges covered only compaction holes, or
+	// whose batch failed decode and was released, buffers no records for
+	// the user to ack). The drain above already removed those gaps from
+	// the cursors, so returning here would drop them permanently: never
+	// sent, never requeued, no callback -- the broker's acquisition locks
+	// for those offsets then sit occupied until the lock timeout, which
+	// is exactly what immediate gap acking exists to avoid. Return only
+	// when nothing live at all survived the stale filter.
 	if nAcks == 0 {
-		return // everything was stale
+		var liveGaps bool
+		for i := range drains {
+			if len(drains[i].gaps) > 0 {
+				liveGaps = true
+				break
+			}
+		}
+		if !liveGaps {
+			return // everything was stale
+		}
 	}
 
 	if epoch == 0 {
