@@ -731,7 +731,19 @@ func (as AlteredUserSCRAMs) Ok() bool {
 // and deletes. This modifies elements of the upsert slice that need to have a
 // salted password generated.
 func (cl *Client) AlterUserSCRAMs(ctx context.Context, del []DeleteSCRAM, upsert []UpsertSCRAM) (AlteredUserSCRAMs, error) {
+	// Validate mechanisms up front for every input: the zero value would
+	// go on the wire as UNKNOWN, which the broker rejects per-user with
+	// UNSUPPORTED_SASL_MECHANISM. The password-generating path below has
+	// always validated; deletions and salt-based upsertions did not.
+	for _, d := range del {
+		if d.Mechanism != ScramSha256 && d.Mechanism != ScramSha512 {
+			return nil, fmt.Errorf("user %s: unknown deletion mechanism", d.User)
+		}
+	}
 	for i, u := range upsert {
+		if u.Mechanism != ScramSha256 && u.Mechanism != ScramSha512 {
+			return nil, fmt.Errorf("user %s: unknown mechanism", u.User)
+		}
 		if u.Password != "" {
 			if len(u.Salt) > 0 || len(u.SaltedPassword) > 0 {
 				return nil, fmt.Errorf("user %s: cannot specify both a password and a salt / salted password", u.User)
