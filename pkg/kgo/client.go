@@ -1188,6 +1188,27 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	sort.Slice(brokers, func(i, j int) bool { return brokers[i].NodeID < brokers[j].NodeID })
 	newBrokers := make([]*broker, 0, len(brokers))
 
+	// Removed or replaced brokers are stopped AFTER brokersMu is released:
+	// stopForever dies each connection, which synchronously fires the
+	// user's OnBrokerDisconnect hook, and a hook that re-enters the client
+	// (issuing a request, DiscoveredBrokers, anything needing brokersMu)
+	// would deadlock this goroutine -- the metadata loop -- under the
+	// write lock, wedging every request path client-wide. Walkthrough: a
+	// rolling restart removes node 5 from metadata; we take brokersMu and
+	// stopForever(node 5) inline; the hook calls cl.Broker(5).Request;
+	// brokerOrErr blocks on brokersMu.RLock behind our write lock forever.
+	// Same hazard reapMu had (see stopForever), one lock up. Stopping
+	// late is safe: requests racing a removed broker already contend with
+	// stopForever via b.dead / errChosenBrokerDead, and the broker is out
+	// of cl.brokers the moment we unlock (UpdateSeedBrokers already stops
+	// its old seeds this way).
+	var stopped []*broker
+	defer func() {
+		for _, b := range stopped {
+			b.stopForever()
+		}
+	}()
+
 	cl.brokersMu.Lock()
 	defer cl.brokersMu.Unlock()
 
@@ -1201,12 +1222,12 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 
 		switch {
 		case ob.meta.NodeID < nb.NodeID:
-			ob.stopForever()
+			stopped = append(stopped, ob)
 			cl.brokers = cl.brokers[1:]
 
 		case ob.meta.NodeID == nb.NodeID:
 			if !ob.meta.equals(nb) {
-				ob.stopForever()
+				stopped = append(stopped, ob)
 				ob = cl.newBroker(nb.NodeID, nb.Host, nb.Port, nb.Rack)
 			}
 			newBrokers = append(newBrokers, ob)
@@ -1221,7 +1242,7 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 
 	for len(cl.brokers) > 0 {
 		ob := cl.brokers[0]
-		ob.stopForever()
+		stopped = append(stopped, ob)
 		cl.brokers = cl.brokers[1:]
 	}
 
@@ -1355,12 +1376,16 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 	// stop the metadata loop and metrics loop.
 	cl.ctxCancel()
 
+	// Stop brokers outside brokersMu: stopForever fires the user's
+	// OnBrokerDisconnect hook synchronously, and a hook re-entering the
+	// client would deadlock on the held write lock (see updateBrokers).
 	cl.brokersMu.Lock()
 	cl.stopBrokers = true
-	for _, broker := range cl.brokers {
+	stopBrokers := slices.Clone(cl.brokers)
+	cl.brokersMu.Unlock()
+	for _, broker := range stopBrokers {
 		broker.stopForever()
 	}
-	cl.brokersMu.Unlock()
 	for _, broker := range cl.loadSeeds() {
 		broker.stopForever()
 	}

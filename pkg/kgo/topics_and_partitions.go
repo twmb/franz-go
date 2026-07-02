@@ -834,6 +834,17 @@ func (k *kip951move) ensureBrokers(cl *Client) {
 	// new objects with new connections, which breaks the single-
 	// connection-per-broker ordering guarantee that Kafka requires
 	// for idempotent/transactional produce.
+	// Replaced brokers are stopped after brokersMu is released: stopForever
+	// fires the user's OnBrokerDisconnect hook synchronously, and a hook
+	// re-entering the client would deadlock on the held write lock (see
+	// updateBrokers for the walkthrough).
+	var stopped []*broker
+	defer func() {
+		for _, b := range stopped {
+			b.stopForever()
+		}
+	}()
+
 	cl.brokersMu.Lock()
 	defer cl.brokersMu.Unlock()
 
@@ -856,7 +867,7 @@ func (k *kip951move) ensureBrokers(cl *Client) {
 			}
 			found = true
 			if !existing.meta.equals(nb) {
-				existing.stopForever()
+				stopped = append(stopped, existing)
 				cl.brokers[i] = cl.newBroker(b.NodeID, b.Host, b.Port, b.Rack)
 				changed = true
 			}
