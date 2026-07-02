@@ -1861,6 +1861,19 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 		return 0, 0
 	}
 	if numRecords > len(rawRecords) {
+		// A batch claiming records with ZERO record bytes deserves a
+		// special word: the clamp below would make it decode zero
+		// records "successfully", and the KAFKA-5443 defer would then
+		// advance the offset past the batch's whole claimed range -- a
+		// silent skip of offsets the broker asserts hold records. The
+		// legitimate compacted-empty batch (KAFKA-5443) claims ZERO
+		// records, so claiming more with no bytes is corruption; error
+		// loudly like the Java client's InvalidRecordException instead
+		// of silently skipping.
+		if len(rawRecords) == 0 {
+			fp.Err = fmt.Errorf("invalid record batch: %d claimed records with no record bytes", numRecords)
+			return 0, uncompressedBytes
+		}
 		numRecords = len(rawRecords)
 	}
 	var krecords []kmsg.Record

@@ -3,6 +3,7 @@ package kgo
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
 	"hash/crc32"
 	"testing"
 
@@ -176,5 +177,69 @@ func TestLegacyMessageSetInnerOffsets(t *testing.T) {
 				t.Errorf("got next offset %d, want %d", next, wantNext)
 			}
 		})
+	}
+}
+
+// encodeV2Batch builds a v2 RecordBatch frame with a correct CRC. records is
+// the raw records section; numRecords is what the batch header CLAIMS.
+func encodeV2Batch(firstOffset int64, lastOffsetDelta, numRecords int32, records []byte) []byte {
+	b := kmsg.RecordBatch{
+		FirstOffset:          firstOffset,
+		PartitionLeaderEpoch: 0,
+		Magic:                2,
+		LastOffsetDelta:      lastOffsetDelta,
+		FirstTimestamp:       0,
+		MaxTimestamp:         0,
+		ProducerID:           -1,
+		ProducerEpoch:        -1,
+		FirstSequence:        -1,
+		NumRecords:           numRecords,
+		Records:              records,
+	}
+	raw := b.AppendTo(nil)
+	// Fix up Length (bytes after offset+length fields) and CRC (crc32c
+	// over the bytes after the CRC field, i.e. from attributes onward,
+	// which is byte 21).
+	binary.BigEndian.PutUint32(raw[8:], uint32(len(raw)-12))
+	crc := crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli))
+	binary.BigEndian.PutUint32(raw[17:], crc)
+	return raw
+}
+
+// A CRC-valid v2 batch claiming records with ZERO record bytes is corrupt:
+// the record-count clamp used to make it decode zero records "successfully"
+// and the KAFKA-5443 defer then advanced the offset past the batch's whole
+// claimed range, silently skipping offsets the broker asserts hold records.
+// The legitimate compacted-empty batch claims zero records and must still
+// advance.
+func TestEmptyBatchClaimingRecords(t *testing.T) {
+	t.Parallel()
+
+	process := func(set []byte, ask int64) (FetchPartition, int64) {
+		rp := &kmsg.FetchResponseTopicPartition{
+			Partition:     0,
+			HighWatermark: 1000,
+			RecordBatches: set,
+		}
+		opts := ProcessFetchPartitionOpts{Offset: ask, Topic: "t", Partition: 0}
+		return ProcessFetchPartition(opts, rp, DefaultDecompressor(), nil)
+	}
+
+	// Corrupt: claims 5 records, zero record bytes.
+	fp, next := process(encodeV2Batch(10, 4, 5, nil), 10)
+	if fp.Err == nil {
+		t.Error("corrupt batch (claimed records, no bytes) produced no error")
+	}
+	if next != 10 {
+		t.Errorf("corrupt batch advanced the offset to %d; want unmoved at 10", next)
+	}
+
+	// Legitimate KAFKA-5443 compacted-empty batch: claims zero, advances.
+	fp, next = process(encodeV2Batch(10, 4, 0, nil), 10)
+	if fp.Err != nil {
+		t.Errorf("compacted-empty batch errored: %v", fp.Err)
+	}
+	if next != 15 {
+		t.Errorf("compacted-empty batch advanced to %d; want 15 (past the preserved last offset)", next)
 	}
 }
