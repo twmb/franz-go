@@ -1245,7 +1245,7 @@ func TestKIP447RequireStable(t *testing.T) {
 	txnCommitReq.ProducerEpoch = epoch
 	txnCommitReq.Generation = -1
 	topic := kmsg.NewTxnOffsetCommitRequestTopic()
-	topic.Topic = testTopic
+	topic.Topic, topic.TopicID = testTopic, c.TopicInfo(testTopic).TopicID
 	part := kmsg.NewTxnOffsetCommitRequestTopicPartition()
 	part.Partition = 0
 	part.Offset = 5

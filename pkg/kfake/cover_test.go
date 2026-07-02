@@ -1852,7 +1852,7 @@ func TestTxnAbortDiscardsOffsets(t *testing.T) {
 	commitReq.ProducerEpoch = epoch
 	commitReq.Generation = -1
 	ct := kmsg.NewTxnOffsetCommitRequestTopic()
-	ct.Topic = topic
+	ct.Topic, ct.TopicID = topic, c.TopicInfo(topic).TopicID
 	cp := kmsg.NewTxnOffsetCommitRequestTopicPartition()
 	cp.Partition = 0
 	cp.Offset = 5

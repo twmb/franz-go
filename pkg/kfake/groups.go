@@ -3371,7 +3371,9 @@ func (g *group) removePartitionEpochs(a map[uuid][]int32, memberID string) {
 
 // validateMemberGeneration checks that the memberID and generation are
 // valid for this group. Must be called from Cluster.run(). Returns 0 on
-// success or an error code.
+// success or an error code. A consumer protocol member whose epoch does not
+// match gets STALE_MEMBER_EPOCH; callers serving request versions that
+// predate that error map it to ILLEGAL_GENERATION.
 func (g *group) validateMemberGeneration(memberID string, generation int32) int16 {
 	if g.typ == "consumer" {
 		if memberID != "" {
@@ -3380,10 +3382,10 @@ func (g *group) validateMemberGeneration(memberID string, generation int32) int1
 				return kerr.UnknownMemberID.Code
 			}
 			if generation != -1 && generation != m.memberEpoch {
-				return kerr.IllegalGeneration.Code
+				return kerr.StaleMemberEpoch.Code
 			}
 		} else if generation != -1 && generation != g.groupEpoch {
-			return kerr.IllegalGeneration.Code
+			return kerr.StaleMemberEpoch.Code
 		}
 	} else {
 		if memberID != "" {

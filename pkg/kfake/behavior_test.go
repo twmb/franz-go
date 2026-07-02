@@ -1197,7 +1197,9 @@ func TestTxnAddOffsetsWithoutGroup(t *testing.T) {
 	}
 
 	// TxnOffsetCommit with a non-existent topic/partition should return
-	// UNKNOWN_TOPIC_OR_PARTITION for that partition only.
+	// an error for that partition only: UNKNOWN_TOPIC_OR_PARTITION by
+	// name below v6, UNKNOWN_TOPIC_ID from v6, where the topic is sent
+	// by id and a topic that does not exist has none.
 	ocReq := kmsg.NewTxnOffsetCommitRequest()
 	ocReq.TransactionalID = "txid-no-group"
 	ocReq.Group = "nonexistent-group"
@@ -1218,8 +1220,12 @@ func TestTxnAddOffsetsWithoutGroup(t *testing.T) {
 	if len(ocResp.Topics) != 1 || len(ocResp.Topics[0].Partitions) != 1 {
 		t.Fatalf("expected 1 topic/1 partition in response, got %d topics", len(ocResp.Topics))
 	}
-	if ec := ocResp.Topics[0].Partitions[0].ErrorCode; ec != kerr.UnknownTopicOrPartition.Code {
-		t.Fatalf("expected UNKNOWN_TOPIC_OR_PARTITION, got: %v", kerr.ErrorForCode(ec))
+	want := kerr.UnknownTopicOrPartition
+	if ocResp.Version >= 6 {
+		want = kerr.UnknownTopicID
+	}
+	if ec := ocResp.Topics[0].Partitions[0].ErrorCode; ec != want.Code {
+		t.Fatalf("expected %s, got: %v", want.Message, kerr.ErrorForCode(ec))
 	}
 }
 
