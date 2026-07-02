@@ -2920,6 +2920,10 @@ var txnCommitContextFn = func() *string { s := "txn_commit_ctx"; return &s }()
 // default internal metadata is the client's current member ID). If fn returns
 // an error, the commit is not attempted. This context can be used in either
 // GroupTransactSession.End or in Client.EndTransaction.
+//
+// fn runs while the client's internal transaction lock is held: it must not
+// block and must not re-enter transaction functions (Begin/End/Abort), which
+// would self-deadlock. Its purpose is pure request mutation.
 func PreTxnCommitFnContext(ctx context.Context, fn func(*kmsg.TxnOffsetCommitRequest) error) context.Context {
 	return context.WithValue(ctx, txnCommitContextFn, fn)
 }
@@ -3300,6 +3304,11 @@ func (g *groupConsumer) commitOffsetsSync(
 // CommitOffsetsSync. If you commit async, the rebalance will proceed before
 // this function executes, and you will commit offsets for partitions that have
 // moved to a different consumer.
+//
+// Do not commit from within onDone: onDone runs while this commit is still
+// ordered against all other commits, so a commit issued inside onDone can
+// deadlock permanently (it always does if any sync commit is waiting). To
+// retry a failed commit, signal out of onDone and commit after it returns.
 func (cl *Client) CommitOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,

@@ -56,6 +56,11 @@ type GroupTransactSession struct {
 // occurs at any time before ending a transaction with a commit, this will
 // abort the transaction.
 //
+// Do not call End synchronously from within an OnPartitionsRevoked or
+// OnPartitionsLost callback: the session's internal callback wrappers hold
+// the same lock End needs, deadlocking permanently. (The plain client's
+// documented Close/LeaveGroup-from-callback restriction applies here too.)
+//
 // This leaves the risk that ending the transaction itself exceeds the
 // rebalance timeout, but this is just one request with no cpu logic. With a
 // proper rebalance timeout, this single request will not fail and the commit
