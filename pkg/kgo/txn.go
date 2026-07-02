@@ -300,6 +300,13 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 			case errors.Is(err, kerr.IllegalGeneration),
 				errors.Is(err, kerr.UnknownMemberID),
 				errors.Is(err, kerr.StaleMemberEpoch),
+				// GROUP_ID_NOT_FOUND: TxnOffsetCommit v6+ (KIP-1319)
+				// returns this directly where older versions mapped it
+				// to ILLEGAL_GENERATION (already abortable above). The
+				// group state vanished; the manage loop recreates it
+				// by rejoining, so abort and let the caller retry on a
+				// fresh session.
+				errors.Is(err, kerr.GroupIDNotFound),
 				errors.Is(err, kerr.RebalanceInProgress),
 				errors.Is(err, kerr.CoordinatorNotAvailable),
 				errors.Is(err, kerr.CoordinatorLoadInProgress),
@@ -1321,11 +1328,52 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 		ctx := ctx
 		if !tx890p2 {
 			ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4}) // v5 is only supported with KIP-890 part 2
+		} else {
+			// TxnOffsetCommit v6 switched Topic to TopicID (KIP-1319),
+			// like OffsetCommit v10. If any topic in the request has no
+			// TopicID, pin to v5 so the broker matches by name; a zero
+			// TopicID on a v6+ wire would commit to no topic. This is
+			// computed HERE, at send time, and not in
+			// prepareTxnOffsetCommit: the PreTxnCommitFnContext fn runs
+			// after the topic build and may add topics (with or without
+			// ids), and this commit is transactional -- an unnoticed
+			// id-less topic on a v6 wire is offset loss inside an
+			// otherwise-committed transaction. The pin is per-request
+			// and never recomputed lower mid-flight: both Topic and
+			// TopicID are always populated in the request, so whatever
+			// version an individual retry negotiates serializes
+			// correctly. Missing ids are near-unreachable against v6
+			// brokers (their metadata always supplies ids; see the
+			// OffsetCommit pinV9 precedent and #1312 for the class of
+			// broker that omits them, none of which serve v6), so this
+			// pin is expected to be dead safety.
+			for i := range req.Topics {
+				if req.Topics[i].TopicID == ([16]byte{}) {
+					ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 5})
+					break
+				}
+			}
 		}
 		resp, err := req.RequestWith(ctx, g.cl)
 		if err != nil {
 			onDone(req, nil, err)
 			return
+		}
+
+		// v6 responses carry TopicID with no topic name. Resolve names
+		// from the request (which always carries both) so the response
+		// handed to onDone -- and the per-partition error messages End
+		// builds from it -- name the topics.
+		if resp.Version >= 6 {
+			id2t := make(map[[16]byte]string, len(req.Topics))
+			for i := range req.Topics {
+				id2t[req.Topics[i].TopicID] = req.Topics[i].Topic
+			}
+			for i := range resp.Topics {
+				if resp.Topics[i].Topic == "" {
+					resp.Topics[i].Topic = id2t[resp.Topics[i].TopicID]
+				}
+			}
 		}
 		g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
 
@@ -1352,9 +1400,13 @@ func (g *groupConsumer) prepareTxnOffsetCommit(ctx context.Context, uncommitted 
 	req.MemberID = memberID
 	req.InstanceID = g.cfg.instanceID
 
+	groupTopics := g.tps.load()
 	for topic, partitions := range uncommitted {
 		reqTopic := kmsg.NewTxnOffsetCommitRequestTopic()
 		reqTopic.Topic = topic
+		if td := groupTopics.loadTopic(topic); td != nil {
+			reqTopic.TopicID = td.id
+		}
 		for partition, eo := range partitions {
 			reqPartition := kmsg.NewTxnOffsetCommitRequestTopicPartition()
 			reqPartition.Partition = partition
