@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"maps"
 	"sync/atomic"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -26,6 +27,58 @@ import (
 // first connect, before any fetch to that broker can be sent.
 type recreationGate struct {
 	armed atomic.Bool
+}
+
+// cleanStaleID2T drops id2t entries of prior topic incarnations once nothing
+// references them. When the recreation gate is armed, the metadata merge adds
+// a recreated topic's new ID alongside the old entry: the old one must
+// survive while any cursor or recBuf still carries the old ID (their
+// in-flight and retried requests are still keyed by it), and becomes garbage
+// once every holder has swapped or been purged.
+func (cl *Client) cleanStaleID2T(latest map[string]*metadataTopic, tpsProducer, tpsConsumer topicsPartitionsData) {
+	m := cl.id2tMap()
+	var stale [][16]byte
+	for id, name := range m {
+		mt, ok := latest[name]
+		if !ok || mt.id == id || mt.id == ([16]byte{}) {
+			continue // name not in this response, entry current, or response ID-less: not provably stale
+		}
+		if topicIDReferenced(tpsProducer, name, id) || topicIDReferenced(tpsConsumer, name, id) {
+			continue
+		}
+		stale = append(stale, id)
+	}
+	if len(stale) == 0 {
+		return
+	}
+	merged := make(map[[16]byte]string, len(m))
+	maps.Copy(merged, m)
+	for _, id := range stale {
+		delete(merged, id)
+	}
+	cl.id2t.Store(merged)
+}
+
+// topicIDReferenced returns whether any partition of the topic still carries
+// the given topic ID on its recBuf, cursor, or shareCursor. topicID fields
+// are written only at partition creation or by the metadata merge itself
+// (single goroutine), so reading them here is race-free.
+func topicIDReferenced(tps topicsPartitionsData, name string, id [16]byte) bool {
+	td := tps.loadTopic(name)
+	if td == nil {
+		return false
+	}
+	for _, tp := range td.partitions {
+		switch {
+		case tp.records != nil && tp.records.topicID == id:
+			return true
+		case tp.cursor != nil && tp.cursor.topicID == id:
+			return true
+		case tp.shareCursor != nil && tp.shareCursor.topicID == id:
+			return true
+		}
+	}
+	return false
 }
 
 // evalRecreationGate re-evaluates the recreation gate against the current

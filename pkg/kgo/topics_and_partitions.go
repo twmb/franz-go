@@ -699,6 +699,53 @@ func (old *topicPartition) migrateCursorTo( //nolint:revive // old/new naming ma
 	new.cursor = old.cursor
 }
 
+// swapRecreatedCursorTo migrates a cursor across topic incarnations: the
+// topic was deleted and recreated with the same name, and metadata now
+// reports a new topic ID. The cursor's position and consumed epoch belong to
+// the dead incarnation, so unlike migrateCursorTo, there is no
+// OffsetForLeaderEpoch validation (it is name-only and meaningless across
+// incarnations, #908): the cursor adopts the new ID and reset (if non-nil)
+// re-resolves the position against the new incarnation. With a nil reset
+// (NoResetOffset), the cursor stays frozen at no position; the caller
+// surfaces the error and the user resumes via SetOffsets.
+func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new naming makes this clearer
+	new *topicPartition,
+	css *consumerSessionStopper,
+	reset *Offset,
+) {
+	css.stop()
+
+	c := old.cursor
+	c.source.removeCursor(c)
+
+	// With the session stopped, we can update cursor fields freely. The
+	// stop also buys the rest of the swap's safety: buffered old-incarnation
+	// fetches are discarded unpolled, and every source's fetch session
+	// resets, forgetting the (old ID, partition) entries.
+	c.source = new.cursor.source
+	c.topicID = new.cursor.topicID
+	c.topicPartitionData = new.topicPartitionData
+	c.unknownIDFails.Store(0)
+
+	// No old-incarnation state may leak into the new incarnation: clear
+	// the position and epoch (also hwm and the consumed-time OOOR
+	// fallback), and freeze the cursor so nothing fetches it. Loads
+	// pending from before the swap are dropped: a list would re-resolve
+	// old intent, and an epoch load is a cross-incarnation validation.
+	// Only the reset list below (or a user SetOffsets) re-enables.
+	c.unset()
+	css.reloadOffsets.removeLoad(c.topic, c.partition)
+	if reset != nil {
+		css.reloadOffsets.addLoad(c.topic, c.partition, loadTypeList, offsetLoad{
+			replica: -1,
+			Offset:  *reset,
+		})
+	}
+
+	c.source.addCursor(c)
+	new.cursor = c
+}
+
 func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) {
 	c := tp.shareCursor
 	new.shareCursor = c

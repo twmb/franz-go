@@ -414,10 +414,14 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	// retain their ID mapping from prior responses.
 	//
 	// If a topic was deleted and recreated, the broker returns a new
-	// ID for the same name. We do NOT add the new ID if the old ID
-	// is still present - the old mapping is preserved until the user
-	// explicitly purges via PurgeTopicsFromClient. This avoids having
-	// two IDs for the same topic name.
+	// ID for the same name. When the recreation gate is armed we adopt
+	// the new ID (this is what resolves KIP-848 assignments of the new
+	// incarnation), keeping the old entry alongside until nothing
+	// references it (see cleanStaleID2T below). Disarmed, we do NOT add
+	// the new ID while the old is present - the old mapping is preserved
+	// until the user explicitly purges via PurgeTopicsFromClient. This
+	// avoids having two IDs for the same topic name.
+	armed := cl.recreation.armed.Load()
 	{
 		old := cl.id2tMap()
 		merged := make(map[[16]byte]string, len(old)+len(latest))
@@ -435,10 +439,9 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 			}
 			if _, exists := knownNames[mt.topic]; exists {
 				// This name already has an ID in the map.
-				// Only update if it's the same ID (normal
-				// case), skip if it's a different ID
-				// (recreated topic).
-				if _, sameID := merged[mt.id]; sameID {
+				// Update if it's the same ID (normal case) or
+				// if we can adopt recreations; skip otherwise.
+				if _, sameID := merged[mt.id]; sameID || armed {
 					merged[mt.id] = mt.topic
 				}
 				continue
@@ -563,6 +566,8 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 			)
 		}
 	}
+
+	cl.cleanStaleID2T(latest, tpsProducerLoad, tpsConsumerLoad)
 
 	return retryWhy, nil
 }
@@ -900,6 +905,65 @@ func (cl *Client) mergeTopicPartitions(
 			continue
 		}
 
+		// Topic ID checks, before the epoch-rewind guard below: a
+		// recreated topic's ID change overrides epoch comparisons
+		// entirely (the new incarnation legitimately restarts at epoch
+		// 0, which is not a stale broker).
+		if !isProduce {
+			var noID [16]byte
+			var newID, oldID [16]byte
+			if isShare {
+				newID = newTP.shareCursor.topicID
+				oldID = oldTP.shareCursor.topicID
+			} else {
+				newID = newTP.cursor.topicID
+				oldID = oldTP.cursor.topicID
+			}
+			if newID == noID && oldID != noID {
+				cl.cfg.logger.Log(LogLevelWarn, "metadata update is missing the topic ID when we previously had one, ignoring update",
+					"topic", topic,
+					"partition", part,
+				)
+				*newTP = *oldTP
+				retryWhy.add(topic, int32(part), errMissingTopicID)
+				continue
+			}
+			// An ID change is a topic recreation (or, rarely, an ID
+			// flap from stale metadata or a cross-cluster failover).
+			// When the gate is armed we act only on corroboration: a
+			// fetch the current leader rejected by ID. Without it we
+			// keep everything as is and let the stale-ID fetch
+			// corroborate; the rejection also urgently re-triggers
+			// metadata, so the swap lands one update later. Share
+			// cursors do not swap yet. Disarmed, behavior is
+			// unchanged: the cursor never re-adopts and fetches stall
+			// loudly (see the cursor.topicID comment).
+			if !isShare && newID != noID && oldID != noID && newID != oldID && cl.recreation.armed.Load() {
+				if oldTP.cursor.unknownIDFails.Load() == 0 {
+					*newTP = *oldTP
+					retryWhy.add(topic, int32(part), errRecreationPending)
+					continue
+				}
+				reset := &cl.cfg.resetOffset
+				if reset.noReset {
+					reset = nil
+					cl.consumer.addFakeReadyForDraining(topic, int32(part),
+						fmt.Errorf("topic was deleted and recreated (position reset requires ConsumeResetOffset, which is disabled; resume via SetOffsets): %w", kerr.UnknownTopicID),
+						"metadata refresh detected topic recreation with resets disabled")
+				}
+				cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID and resetting per the configured ConsumeResetOffset",
+					"topic", topic,
+					"partition", part,
+					"old_id", topicID(oldID),
+					"new_id", topicID(newID),
+					"new_leader", newTP.leader,
+					"new_leader_epoch", newTP.leaderEpoch,
+				)
+				oldTP.swapRecreatedCursorTo(newTP, css, reset)
+				continue
+			}
+		}
+
 		// If the new partition has an older leader epoch, then we
 		// fetched from an out of date broker. We just keep the old
 		// information.
@@ -971,27 +1035,6 @@ func (cl *Client) mergeTopicPartitions(
 				"old_leader_epoch", oldTP.leaderEpoch,
 				"new_leader_epoch", newTP.leaderEpoch,
 			)
-		}
-
-		if !isProduce {
-			var noID [16]byte
-			var newID, oldID [16]byte
-			if isShare {
-				newID = newTP.shareCursor.topicID
-				oldID = oldTP.shareCursor.topicID
-			} else {
-				newID = newTP.cursor.topicID
-				oldID = oldTP.cursor.topicID
-			}
-			if newID == noID && oldID != noID {
-				cl.cfg.logger.Log(LogLevelWarn, "metadata update is missing the topic ID when we previously had one, ignoring update",
-					"topic", topic,
-					"partition", part,
-				)
-				*newTP = *oldTP
-				retryWhy.add(topic, int32(part), errMissingTopicID)
-				continue
-			}
 		}
 
 		// If the tp data is the same, we simply copy over the records
@@ -1091,9 +1134,10 @@ func (cl *Client) mergeTopicPartitions(
 }
 
 var (
-	errEpochRewind    = errors.New("epoch rewind")
-	errMissingTopicID = errors.New("missing topic ID")
-	errNoLeaderEpoch  = errors.New("no leader epoch")
+	errEpochRewind       = errors.New("epoch rewind")
+	errMissingTopicID    = errors.New("missing topic ID")
+	errNoLeaderEpoch     = errors.New("no leader epoch")
+	errRecreationPending = errors.New("topic recreation pending corroboration")
 )
 
 type multiUpdateWhy map[kerrOrString]map[string]map[int32]struct{}

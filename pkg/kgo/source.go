@@ -1148,8 +1148,16 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		// loadWithSessionNow triggers a metadata update IF there are
 		// offsets to reload. If there are no offsets to reload, we
 		// trigger one here.
+		//
+		// UnknownTopicID is normally lazy like UnknownTopicOrPartition
+		// (likely a deleted topic; reloading is wasteful) -- but with
+		// the recreation gate armed, the rejection is the corroboration
+		// the metadata merge is waiting on to adopt a recreated topic's
+		// new ID, so we refresh urgently to close that window.
 		if !reloadOffsets.loadWithSessionNow(consumerSession, why) {
-			if updateWhy.isOnly(kerr.UnknownTopicOrPartition) || updateWhy.isOnly(kerr.UnknownTopicID) {
+			lazy := updateWhy.isOnly(kerr.UnknownTopicOrPartition) ||
+				updateWhy.isOnly(kerr.UnknownTopicID) && !s.cl.recreation.armed.Load()
+			if lazy {
 				s.cl.triggerUpdateMetadata(false, why)
 			} else {
 				s.cl.triggerUpdateMetadataNow(why)
