@@ -63,7 +63,12 @@ func TestAuditProduceAfterCloseFailsKnownTopic(t *testing.T) {
 
 	// With the record failed, the buffer count returns to zero, so a Flush
 	// does not hang (pre-fix the orphan pinned BufferedProduceRecords above
-	// zero forever).
+	// zero forever). The count decrements AFTER the promise fires, so poll
+	// briefly rather than racing that bookkeeping.
+	deadline := time.Now().Add(2 * time.Second)
+	for cl.BufferedProduceRecords() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 	if n := cl.BufferedProduceRecords(); n != 0 {
 		t.Errorf("BufferedProduceRecords = %d after the failed promise, want 0", n)
 	}
