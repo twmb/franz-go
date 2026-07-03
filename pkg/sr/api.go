@@ -95,10 +95,12 @@ type (
 		// Version is the version of this subject.
 		Version int `json:"version,omitempty"`
 
-		// ID is the globally unique ID of the schema.
+		// ID is the unique numeric identifier of the schema.
 		ID int `json:"id,omitempty"`
 
-		// GUID is the globally unique ID of the schema used in Kafka header.
+		// GUID is the globally unique string identifier of the schema,
+		// carried in the Kafka record header rather than the payload
+		// prefix. Introduced in Confluent Platform 8.x.
 		GUID string `json:"guid,omitempty"`
 
 		Schema
