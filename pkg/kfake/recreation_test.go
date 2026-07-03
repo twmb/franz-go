@@ -419,6 +419,41 @@ func TestRecreationConsumerSwapRegex(t *testing.T) {
 	collectVals(t, cl, "n0")
 }
 
+// A recreated topic restarts consumption from ITS beginning, regardless of
+// ConsumeResetOffset: a subscription is a point in time and everything
+// after, and everything in the replacement topic arrived after that point.
+// An at-end reset policy must not skip the new topic's records.
+func TestRecreationResetsToStart(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	// The at-end policy applies to the initial subscription: records
+	// produced after it are consumed.
+	verifyZeroRecords(t, cl, 300*time.Millisecond)
+	produceVals(t, c, topic, 0, "v0", "v1")
+	collectVals(t, cl, "v0", "v1")
+
+	// Recreate and produce into the new incarnation BEFORE the client
+	// swaps: an at-end reset would skip n0/n1; starting from the new
+	// topic's beginning delivers them.
+	recreateTopic(t, admin, topic, 1)
+	produceVals(t, c, topic, 0, "n0", "n1")
+	collectVals(t, cl, "n0", "n1")
+	if lg.count(logSwap) == 0 {
+		t.Error("expected a recreation swap log line")
+	}
+}
+
 // A paused partition generates no fetches and thus no corroboration: the
 // swap must defer until unpause (the position is frozen meanwhile, so this
 // is safe), then complete.

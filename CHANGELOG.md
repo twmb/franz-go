@@ -25,9 +25,12 @@ resets, probing `OffsetForLeaderEpoch` when metadata corroborates nothing
 ending below the consumed position is named honestly as substantial
 truncation or a recreation, and group commits fence + reseed either way).
 
-On detection: consumers reset per `ConsumeResetOffset` (group commits of the
-dead incarnation are fenced and the reset position is committed promptly, so
-a stored stale offset cannot misposition the next member); idempotent
+On detection: consumers restart from the new topic's beginning -- a
+subscription is a point in time and everything after, and everything in a
+replacement topic arrived after that point (group commits of the dead
+incarnation are fenced and the restart position is committed promptly, so a
+stored stale offset cannot misposition the next member; `NoResetOffset`
+instead surfaces an error and waits for `SetOffsets`); idempotent
 producers adopt and restart their sequence chain with no sequence error
 surfaced and no duplicate possible (a by-name batch whose outcome is
 unknowable fails loudly rather than risk a duplicate); transactions FAIL

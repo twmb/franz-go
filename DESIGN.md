@@ -998,9 +998,11 @@ Detection tiers, strongest signal first:
 The swaps (`swapRecreatedCursorTo`, `swapRecreatedRecBufTo`,
 `swapRecreatedShareCursorTo` in topics_and_partitions.go) stop the consumer
 session (discarding buffered old-incarnation fetches), adopt the new ID and
-partition data, reset the position per `ConsumeResetOffset` via a
+partition data, restart at the new incarnation's beginning
+(`recreationResetOffset`; ConsumeResetOffset governs within-incarnation
+positions, and NoResetOffset freezes for SetOffsets) via a
 `recreationSeed`-marked list load (which also fences group commits and seeds
-the reset position for a prompt recommit, see `fenceRecreated` /
+the restart position for a prompt recommit, see `fenceRecreated` /
 `maybeSeedRecreated`), restart produce sequences (`needSeqReset`, skipped
 when a by-name write already re-established the chain), bump a per-object
 incarnation `generation` (requests and share slabs stamp it; response

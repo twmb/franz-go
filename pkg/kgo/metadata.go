@@ -1077,14 +1077,14 @@ func (cl *Client) mergeTopicPartitions(
 					retryWhy.add(topic, int32(part), errRecreationPending)
 					continue
 				}
-				reset := &cl.cfg.resetOffset
-				if reset.noReset {
+				reset := &recreationResetOffset
+				if cl.cfg.resetOffset.noReset {
 					reset = nil
 					cl.consumer.addFakeReadyForDraining(topic, int32(part),
-						fmt.Errorf("topic was deleted and recreated (position reset requires ConsumeResetOffset, which is disabled; resume via SetOffsets): %w", kerr.UnknownTopicID),
+						fmt.Errorf("topic was deleted and recreated (automatic resets are disabled via NoResetOffset; resume via SetOffsets): %w", kerr.UnknownTopicID),
 						"metadata refresh detected topic recreation with resets disabled")
 				}
-				cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID and resetting per the configured ConsumeResetOffset",
+				cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID and restarting from the new topic's beginning",
 					"topic", topic,
 					"partition", part,
 					"old_id", topicID(oldID),
@@ -1203,14 +1203,14 @@ func (cl *Client) mergeTopicPartitions(
 				oldTP.swapRecreatedRecBufTo(newTP)
 				continue
 			case !isProduce && !isShare && oldTP.cursor.topicID == noID:
-				reset := &cl.cfg.resetOffset
-				if reset.noReset {
+				reset := &recreationResetOffset
+				if cl.cfg.resetOffset.noReset {
 					reset = nil
 					cl.consumer.addFakeReadyForDraining(topic, int32(part),
-						fmt.Errorf("topic recreation inferred from a persistent leader epoch rewind (position reset requires ConsumeResetOffset, which is disabled; resume via SetOffsets): %w", kerr.UnknownTopicID),
+						fmt.Errorf("topic recreation inferred from a persistent leader epoch rewind (automatic resets are disabled via NoResetOffset; resume via SetOffsets): %w", kerr.UnknownTopicID),
 						"metadata refresh inferred topic recreation from a leader epoch rewind with resets disabled")
 				}
-				cl.cfg.logger.Log(LogLevelWarn, "topic recreation inferred from a persistent leader epoch rewind; resetting per the configured ConsumeResetOffset",
+				cl.cfg.logger.Log(LogLevelWarn, "topic recreation inferred from a persistent leader epoch rewind; restarting from the new topic's beginning",
 					"topic", topic,
 					"partition", part,
 					"old_leader_epoch", oldTP.leaderEpoch,

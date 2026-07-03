@@ -2209,8 +2209,8 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 					"epoch_now_ends_at", pedl.ResetTo,
 				)
 			case load.err == nil && load.offset < 0:
-				reset = s.c.cl.cfg.resetOffset // a proven recreation resets per policy, like every classified recreation
-				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the broker has no history of the epoch we consumed; the topic was almost certainly deleted and recreated; resetting per ConsumeResetOffset",
+				reset = recreationResetOffset // a proven recreation restarts from the new topic's beginning, like every classified recreation
+				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the broker has no history of the epoch we consumed; the topic was almost certainly deleted and recreated; restarting from the new topic's beginning",
 					"topic", load.topic,
 					"partition", load.partition,
 					"consumed_epoch", load.request.epoch,

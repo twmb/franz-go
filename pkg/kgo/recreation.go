@@ -28,6 +28,16 @@ func idStableLongEnough(agreedAt time.Time) bool {
 	return !agreedAt.IsZero() && time.Since(agreedAt) >= recreationStableIDAge
 }
 
+// recreationResetOffset is where consumption restarts on a classified topic
+// recreation: the BEGINNING of the new incarnation, deliberately not
+// ConsumeResetOffset. A subscription is a point in time and everything
+// after, and everything in a replacement topic arrived after that point;
+// ConsumeResetOffset governs positions within one topic's lifetime (e.g.
+// where a brand-new subscription starts), not what a replacement topic
+// starts at. NoResetOffset still opts out entirely (frozen + surfaced
+// error + SetOffsets).
+var recreationResetOffset = NewOffset().AtStart()
+
 // errRecreationUnsureBatch fails buffered records whose produce outcome
 // cannot be known across a topic recreation. Produced records carry it in
 // their promise error.

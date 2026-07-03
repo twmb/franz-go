@@ -18,9 +18,12 @@
 // making detection self-closing; at 2.8-3.0 (IDs in metadata only) via two
 // consecutive metadata updates agreeing; at 2.1-2.7 a persistent
 // leader-epoch rewind is treated as a recreation opportunistically; below
-// 2.1 no signal exists and behavior is unchanged. On detection, consumers reset per
-// ConsumeResetOffset (group commits of the dead incarnation are fenced and
-// the reset position committed promptly), idempotent producers restart
+// 2.1 no signal exists and behavior is unchanged. On detection, consumers
+// restart from the new topic's beginning -- a subscription is a point in
+// time and everything after, and everything in a replacement topic arrived
+// after that point (group commits of the dead incarnation are fenced and
+// the restart position committed promptly; NoResetOffset instead surfaces
+// an error and waits for SetOffsets), idempotent producers restart
 // their sequence chain with no sequence error surfaced and no duplicate
 // possible (a by-name batch with an unknowable outcome fails loudly
 // instead), transactions fail with an error wrapping TRANSACTION_ABORTABLE
