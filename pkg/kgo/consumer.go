@@ -1465,6 +1465,13 @@ type offsetLoadMap map[string]map[int32]offsetLoad
 // to directly use if a cursor had a preferred replica.
 type offsetLoad struct {
 	replica int32 // -1 means leader
+
+	// recreationSeed marks the reset load added when a cursor swaps
+	// across topic incarnations: the resolved position additionally seeds
+	// the group's uncommitted entry (lifting the recreation commit fence)
+	// and is committed promptly. Reload retries preserve the mark.
+	recreationSeed bool
+
 	Offset
 }
 
@@ -2182,6 +2189,19 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 			})
 			load.cursor.allowUsable()
 			s.c.usingCursors.use(load.cursor)
+
+			// A recreation reset resolved: seed the group's uncommitted
+			// entry with the resolved position and commit it promptly.
+			// Dispatched async because we hold listOrEpochMu here, and
+			// the g.mu => listOrEpochMu order is already taken (the
+			// fetch-offsets assign path); taking g.mu inline would
+			// invert it.
+			if load.request.recreationSeed {
+				if g := s.c.g; g != nil {
+					seed := EpochOffset{load.leaderEpoch, load.offset}
+					go g.maybeSeedRecreated(load.topic, load.partition, seed)
+				}
+			}
 		}
 
 		var edl *ErrDataLoss

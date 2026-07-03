@@ -737,10 +737,12 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	css.reloadOffsets.removeLoad(c.topic, c.partition)
 	if reset != nil {
 		css.reloadOffsets.addLoad(c.topic, c.partition, loadTypeList, offsetLoad{
-			replica: -1,
-			Offset:  *reset,
+			replica:        -1,
+			recreationSeed: true,
+			Offset:         *reset,
 		})
 	}
+	css.recreated.add(c.topic, c.partition)
 
 	c.source.addCursor(c)
 	new.cursor = c
@@ -1143,6 +1145,7 @@ type consumerSessionStopper struct {
 	stopped       bool
 	reloadOffsets listOrEpochLoads
 	tpsPrior      *topicsPartitions
+	recreated     mtmps // partitions swapped across topic incarnations this merge
 }
 
 func (css *consumerSessionStopper) stop() {
@@ -1156,6 +1159,14 @@ func (css *consumerSessionStopper) stop() {
 }
 
 func (css *consumerSessionStopper) maybeRestart() {
+	// Before restarting (and thus before any reset list can resolve), fence
+	// group commits for partitions that swapped incarnations: their
+	// committable state is old-incarnation truth.
+	if len(css.recreated) > 0 {
+		if g := css.cl.consumer.g; g != nil {
+			g.fenceRecreated(css.recreated)
+		}
+	}
 	if !css.stopped {
 		return
 	}

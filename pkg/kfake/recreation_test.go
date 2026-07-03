@@ -512,3 +512,194 @@ func TestRecreationDisarmedUnchanged(t *testing.T) {
 		t.Errorf("swap happened %d times below the gate; want unchanged behavior", n)
 	}
 }
+
+// newOffsetAdmin returns a client for observing stored commits. OffsetFetch
+// is pinned to v9: the by-name wire reads what is stored under the name
+// regardless of incarnation (the v10+ wire carries topic IDs, which the
+// admin's own cache may hold stale across a recreation).
+func newOffsetAdmin(t *testing.T, c *Cluster) *kgo.Client {
+	t.Helper()
+	maxv := kversion.Stable()
+	maxv.SetMaxKeyVersion(9, 9) // 9 == offset fetch
+	return newPlainClient(t, c, kgo.MaxVersions(maxv))
+}
+
+// fetchCommitted returns the committed offset for a group's topic partition,
+// or -1 if none.
+func fetchCommitted(t *testing.T, cl *kgo.Client, group, topic string, partition int32) int64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req := kmsg.NewPtrOffsetFetchRequest()
+	req.Group = group
+	rt := kmsg.NewOffsetFetchRequestTopic()
+	rt.Topic = topic
+	rt.Partitions = []int32{partition}
+	req.Topics = append(req.Topics, rt)
+	rg := kmsg.NewOffsetFetchRequestGroup()
+	rg.Group = group
+	rgt := kmsg.NewOffsetFetchRequestGroupTopic()
+	rgt.Topic = topic
+	rgt.Partitions = []int32{partition}
+	rg.Topics = append(rg.Topics, rgt)
+	req.Groups = append(req.Groups, rg)
+
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("offset fetch: %v", err)
+	}
+	if len(resp.Groups) > 0 {
+		for _, rt := range resp.Groups[0].Topics {
+			if rt.Topic != topic {
+				continue
+			}
+			for _, rp := range rt.Partitions {
+				if rp.Partition == partition {
+					return rp.Offset
+				}
+			}
+		}
+		return -1
+	}
+	for _, rt := range resp.Topics {
+		if rt.Topic != topic {
+			continue
+		}
+		for _, rp := range rt.Partitions {
+			if rp.Partition == partition {
+				return rp.Offset
+			}
+		}
+	}
+	return -1
+}
+
+// waitCommitted polls until the group's committed offset equals want.
+func waitCommitted(t *testing.T, cl *kgo.Client, group, topic string, partition int32, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var got int64 = -2
+	for time.Now().Before(deadline) {
+		if got = fetchCommitted(t, cl, group, topic, partition); got == want {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for committed offset %d, last saw %d", want, got)
+}
+
+const logSeedCommit = "committing the reset position for a recreated topic partition"
+
+// The <=v9 poison: a commit stored under a recreated name silently
+// mispositions the next member to fetch it, and on a quiet topic nothing
+// would ever overwrite it (nothing is committable until records are polled).
+// The commit fence + seeded recommit must promptly overwrite the stored
+// commit with the recreation reset position.
+func TestRecreationCommitFenceSeed(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "t", "g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.MaxVersions(kversion.V3_7_0()),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.AutoCommitInterval(100*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newOffsetAdmin(t, c)
+
+	produceVals(t, c, topic, 0, "v0", "v1")
+	collectVals(t, cl, "v0", "v1")
+	// Promote head (default autocommit lags one poll) and wait for the
+	// pre-recreation commit to land: this is the future poison.
+	pollCtx, pollCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	cl.PollFetches(pollCtx)
+	pollCancel()
+	waitCommitted(t, admin, group, topic, 0, 2)
+
+	// Recreate and produce NOTHING: the new incarnation is quiet, so
+	// nothing will ever be polled and re-committed. Only the seeded
+	// recommit can overwrite the stored 2 with the reset position 0.
+	recreateTopic(t, admin, topic, 1)
+	waitCommitted(t, admin, group, topic, 0, 0)
+	if lg.count(logSeedCommit) == 0 {
+		t.Error("expected a seeded recommit log line")
+	}
+
+	// The live consumer then consumes the new incarnation from the reset
+	// position: nothing lost, nothing duplicated.
+	produceVals(t, c, topic, 0, "n0", "n1", "n2")
+	collectVals(t, cl, "n0", "n1", "n2")
+	pollCtx, pollCancel = context.WithTimeout(context.Background(), 300*time.Millisecond)
+	cl.PollFetches(pollCtx)
+	pollCancel()
+	waitCommitted(t, admin, group, topic, 0, 3)
+	cl.Close()
+
+	// A next member inherits the seeded lineage (3), not the poison (2):
+	// at 2 it would re-consume n2; at the pre-seed poison it would skip
+	// n0/n1 for a fresh group. It must consume nothing.
+	cl2 := newPlainClient(t, c,
+		kgo.MaxVersions(kversion.V3_7_0()),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	verifyZeroRecords(t, cl2, 500*time.Millisecond)
+}
+
+// With autocommit disabled, the swap seeds the reset position but does NOT
+// commit: the user's next commit carries it.
+func TestRecreationCommitFenceSeedManual(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "t", "gm"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	cl := newPlainClient(t, c,
+		kgo.MaxVersions(kversion.V3_7_0()),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.DisableAutoCommit(),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	admin := newOffsetAdmin(t, c)
+
+	produceVals(t, c, topic, 0, "v0", "v1")
+	collectVals(t, cl, "v0", "v1")
+	if err := cl.CommitUncommittedOffsets(context.Background()); err != nil {
+		t.Fatalf("manual commit: %v", err)
+	}
+	waitCommitted(t, admin, group, topic, 0, 2)
+
+	recreateTopic(t, admin, topic, 1)
+
+	// The seed lands without a commit; wait for it via the uncommitted
+	// view flipping to the reset position (the fence hides the stale 2,
+	// the seed then exposes 0).
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if un := cl.UncommittedOffsets(); un != nil {
+			if ps, ok := un[topic]; ok {
+				if eo, ok := ps[0]; ok && eo.Offset == 0 {
+					break
+				}
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// Broker still stores the stale 2 until the user commits.
+	if got := fetchCommitted(t, admin, group, topic, 0); got != 2 {
+		t.Fatalf("stored commit changed to %d without a user commit; want the stale 2", got)
+	}
+	if err := cl.CommitUncommittedOffsets(context.Background()); err != nil {
+		t.Fatalf("manual commit: %v", err)
+	}
+	waitCommitted(t, admin, group, topic, 0, 0)
+}
