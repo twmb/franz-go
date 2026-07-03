@@ -96,6 +96,15 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 			for _, pidinf := range c.pids.ids {
 				delete(pidinf.windows, td.topic)
 			}
+			// Share-partition state is topic-ID-keyed on a real broker
+			// and dies with the topic; kfake keys by name, so clear it
+			// explicitly: a recreated topic starts share consumption
+			// fresh (SPSO per group config, no acquired records).
+			for _, sg := range c.shareGroups.gs {
+				sg.mu.Lock()
+				delete(sg.partitions, td.topic)
+				sg.mu.Unlock()
+			}
 		}
 	}()
 	for _, rt := range req.Topics {
