@@ -1045,10 +1045,30 @@ func (cl *Client) verifyTxnTopicsForCommit(ctx context.Context, added []*recBuf)
 		return nil
 	}
 
+	// Any metadata pass within the last MetadataMinAge is as good as a
+	// fetch of our own: the metadata merge poisons an exposed transaction
+	// on the FIRST observation of a recreated produced-to topic, and
+	// reaching here means the producer ID is healthy. Prior verification
+	// fetches count the same way. This amortizes the commit-time cost to
+	// at most one metadata fetch per MetadataMinAge across all commits;
+	// the residual is recreations inside that window, which the next pass
+	// (or the produce wire) catches, failing the FOLLOWING transaction --
+	// the same admin-deletion residue as a topic deleted right after a
+	// successful commit.
+	now := time.Now()
+	cl.metawait.mu.Lock()
+	lastMeta := cl.metawait.lastUpdate
+	cl.metawait.mu.Unlock()
+	if now.Sub(lastMeta) < cl.cfg.metadataMinAge ||
+		now.Sub(time.Unix(0, cl.producer.lastTxnVerify.Load())) < cl.cfg.metadataMinAge {
+		return nil
+	}
+
 	_, meta, err := cl.fetchMetadataByName(ctx, false, names, nil)
 	if err != nil {
 		return fmt.Errorf("unable to verify transaction topics before committing: %w", err)
 	}
+	cl.producer.lastTxnVerify.Store(now.UnixNano())
 
 	poison := func(topic string, why error) error {
 		cur := cl.producer.id.Load().(*producerID)

@@ -950,6 +950,28 @@ func (cl *Client) mergeTopicPartitions(
 			// reaches here (IDs are zero) and produce behavior is
 			// unchanged.
 			if newID != noID && oldID != newID {
+				// Transactions FAIL on recreated topics, on the FIRST
+				// observation: when the partition has transactional
+				// state tied to the old incarnation (added to the
+				// transaction, or batches buffered or in flight), the
+				// producer ID is poisoned immediately. A spurious
+				// abort on a metadata flap is loud and recoverable;
+				// waiting for corroboration would let a commit racing
+				// the evidence cover evaporated writes. This is also
+				// what lets commit-time verification trust any recent
+				// metadata pass instead of fetching its own. The swap
+				// below still waits for the adoption rules.
+				if cl.cfg.txnID != nil && exposed {
+					if cur := cl.producer.id.Load().(*producerID); cur.err == nil {
+						cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
+						cl.cfg.logger.Log(LogLevelWarn, "topic recreation observed with an active transaction exposed to it; failing the transaction",
+							"topic", topic,
+							"partition", part,
+							"old_id", topicID(oldID),
+							"new_id", topicID(newID),
+						)
+					}
+				}
 				// An ID held for a long time is trusted outright: a
 				// change against a minute-old ID is a recreation, not
 				// a stale broker (metadata staleness is seconds).
@@ -972,34 +994,13 @@ func (cl *Client) mergeTopicPartitions(
 					retryWhy.add(topic, int32(part), errRecreationPending)
 					continue
 				}
-				if cl.cfg.txnID != nil && exposed {
-					// Transactions FAIL on recreated topics: when the
-					// partition has transactional state tied to the
-					// old incarnation (added to the transaction, or
-					// batches buffered or in flight), poison the
-					// producer ID so this transaction aborts
-					// (recovery lifts the poison). The swap below
-					// still lands, so the next transaction produces
-					// to the new incarnation. With nothing exposed
-					// (e.g. between transactions), the swap alone
-					// suffices.
-					cur := cl.producer.id.Load().(*producerID)
-					cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
-					cl.cfg.logger.Log(LogLevelWarn, "topic recreation detected for a transactional producer; failing any active transaction and adopting the new topic ID",
-						"topic", topic,
-						"partition", part,
-						"old_id", topicID(oldID),
-						"new_id", topicID(newID),
-					)
-				} else {
-					cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID for producing",
-						"topic", topic,
-						"partition", part,
-						"old_id", topicID(oldID),
-						"new_id", topicID(newID),
-						"restarting_sequences", !regressed,
-					)
-				}
+				cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID for producing",
+					"topic", topic,
+					"partition", part,
+					"old_id", topicID(oldID),
+					"new_id", topicID(newID),
+					"restarting_sequences", !regressed,
+				)
 				oldTP.swapRecreatedRecBufTo(newTP)
 				continue
 			} else if newID != noID {

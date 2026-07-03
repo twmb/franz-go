@@ -252,14 +252,16 @@ What the handling does, at any tier that detects:
   produced by name whose outcome was never resolved may already exist in the
   new incarnation, so it (and the partition's buffered records) fail loudly
   with an error saying exactly that, rather than risk a duplicate.
-* Transactions FAIL on recreated topics, always loudly: detection poisons the
-  transaction with an error wrapping `TRANSACTION_ABORTABLE`; aborting
-  recovers on every broker version. Committing additionally verifies, with
-  one extra metadata round trip per transactional commit that produced, that
-  no produced-to topic was recreated -- the only possible closure for writes
-  that leave no response to inspect. The instant between that verification
-  and the commit, and group offsets in transactions (the commit protocol
-  carries no topic IDs), remain unclosable by any client.
+* Transactions FAIL on recreated topics, always loudly: any observation of a
+  recreated produced-to topic poisons the transaction with an error wrapping
+  `TRANSACTION_ABORTABLE`; aborting recovers on every broker version.
+  Committing additionally verifies that no produced-to topic was recreated,
+  amortized to at most one metadata fetch per `MetadataMinAge` (default 5s)
+  across all commits -- recent metadata passes count, since they poison on
+  sight. The residual (a recreation within that window of a commit) is the
+  same class as a topic deleted right after a successful commit, which no
+  client can close; group offsets in transactions (the commit protocol
+  carries no topic IDs) are likewise unclosable today.
 * Share consumers (4.0+) continue on the new incarnation's fresh share state;
   acknowledgments of records acquired from the old incarnation are failed
   with an error rather than misapplied.

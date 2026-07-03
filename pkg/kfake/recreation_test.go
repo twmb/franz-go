@@ -1703,6 +1703,9 @@ func TestRecreationTxnShape2(t *testing.T) {
 	txcl := newPlainClient(t, c,
 		kgo.TransactionalID("tx-shape2"),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		// The commit-time verification amortizes against recent metadata
+		// passes; the smallest min age keeps this test on the fetch path.
+		kgo.MetadataMinAge(10*time.Millisecond),
 		kgo.WithLogger(lg),
 	)
 	admin := newPlainClient(t, c)
@@ -1757,6 +1760,72 @@ func TestRecreationTxnShape2(t *testing.T) {
 
 	consumeCommitted(t, c, foo, "f1")
 	consumeCommitted(t, c, bar, "r1")
+}
+
+const logTxnObserved = "topic recreation observed with an active transaction exposed to it"
+
+// The metadata merge fails an exposed transaction on the FIRST observation
+// of a recreated produced-to topic - no corroboration wait - which is what
+// lets commit-time verification trust recent metadata passes instead of
+// fetching per commit. The commit here is refused via the poisoned producer
+// ID with no verification fetch of its own (the forced refresh is fresh).
+func TestRecreationTxnPoisonOnObservation(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	lg := new(capLogger)
+	txcl := newPlainClient(t, c,
+		kgo.TransactionalID("tx-observe"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "a0"); err != nil {
+		t.Fatal(err)
+	}
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, txcl, lg, logTxnObserved, 1)
+
+	err := txcl.EndTransaction(ctx, kgo.TryCommit)
+	if !errors.Is(err, kerr.OperationNotAttempted) || !errors.Is(err, kerr.TransactionAbortable) {
+		t.Fatalf("commit got %v; want a refusal carrying the abortable recreation poison", err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("abort after observation poison: %v", err)
+	}
+
+	// The next transaction's produce is addressed to the dead incarnation
+	// (the swap waits for wire corroboration), fails abortable, and the
+	// corroborating rejection lands the swap; the transaction after that
+	// is clean.
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "b0"); !errors.Is(err, kerr.TransactionAbortable) {
+		t.Fatalf("produce against the stale incarnation got %v; want the abortable poison", err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatal(err)
+	}
+	waitForLog(t, txcl, lg, logSwap, 1)
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "c0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	consumeCommitted(t, c, topic, "c0")
 }
 
 // A recreation that lands inside the unconfirmed-EndTxn window: the

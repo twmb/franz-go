@@ -34,10 +34,11 @@ instead surfaces an error and waits for `SetOffsets`); idempotent
 producers adopt and restart their sequence chain with no sequence error
 surfaced and no duplicate possible (a by-name batch whose outcome is
 unknowable fails loudly rather than risk a duplicate); transactions FAIL
-with an error wrapping `TRANSACTION_ABORTABLE` (aborting recovers on every
-cluster version), and commits verify produced-to topics with one extra
-metadata round trip -- the only closure for writes that leave no response to
-inspect; share consumers continue on fresh state with acknowledgments of the
+with an error wrapping `TRANSACTION_ABORTABLE` on the first observation of
+a recreated produced-to topic (aborting recovers on every cluster version),
+and commits verify produced-to topics -- amortized to at most one metadata
+fetch per `MetadataMinAge` across all commits, since recent metadata passes
+poison on sight; share consumers continue on fresh state with acknowledgments of the
 dead incarnation failed rather than misapplied. See the new "Topic
 recreation" section in the README for the full per-version matrix and the
 documented residues.
