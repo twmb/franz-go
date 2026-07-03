@@ -590,6 +590,173 @@ func TestRecreationTierCProducer(t *testing.T) {
 	consumeExactly(t, c, topic, "p1")
 }
 
+// A churn test: recreate the topic many times under continuous produce and
+// group-consume load, then assert the recreation invariants end to end: the
+// client never wedges, no surfaced sequence errors, produce failures are
+// only the honest unknown-topic classes, and no value is ever delivered
+// twice (dup-impossibility under churn; values lost to a deletion are
+// definitional, so at-most-once is the assertable half).
+func TestRecreationChurn(t *testing.T) {
+	t.Parallel()
+
+	const (
+		topic     = "t"
+		group     = "gchurn"
+		recreates = 8
+		waveSize  = 10
+	)
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	prod := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	cons := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.AutoCommitInterval(100*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	admin := newPlainClient(t, c)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Producer: waves of async produces; every promise outcome recorded.
+	// Failures are tolerated only for the honest unknown-topic classes a
+	// recreation can surface; anything else (a sequence error especially)
+	// fails the test.
+	allowedProduceErr := func(err error) bool {
+		return errors.Is(err, kerr.UnknownTopicID) ||
+			errors.Is(err, kerr.UnknownTopicOrPartition) ||
+			strings.Contains(err.Error(), "metadata update is missing a partition")
+	}
+	var (
+		produceMu   sync.Mutex
+		produced    = make(map[string]bool) // value => promise succeeded
+		badProduce  []error
+		stopProduce = make(chan struct{})
+		produceDone = make(chan struct{})
+	)
+	go func() {
+		defer close(produceDone)
+		var i int
+		for {
+			select {
+			case <-stopProduce:
+				return
+			default:
+			}
+			var wg sync.WaitGroup
+			for range waveSize {
+				v := fmt.Sprintf("v%05d", i)
+				i++
+				wg.Add(1)
+				prod.Produce(ctx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte(v)}, func(r *kgo.Record, err error) {
+					defer wg.Done()
+					produceMu.Lock()
+					defer produceMu.Unlock()
+					if err == nil {
+						produced[string(r.Value)] = true
+					} else if !allowedProduceErr(err) && ctx.Err() == nil {
+						badProduce = append(badProduce, fmt.Errorf("%s: %w", r.Value, err))
+					}
+				})
+			}
+			wg.Wait()
+		}
+	}()
+
+	// Consumer: count every delivered value.
+	var (
+		consumeMu   sync.Mutex
+		consumed    = make(map[string]int)
+		badConsume  []error
+		consumeDone = make(chan struct{})
+	)
+	go func() {
+		defer close(consumeDone)
+		for ctx.Err() == nil {
+			fetches := cons.PollFetches(ctx)
+			fetches.EachRecord(func(r *kgo.Record) {
+				consumeMu.Lock()
+				consumed[string(r.Value)]++
+				consumeMu.Unlock()
+			})
+			fetches.EachError(func(_ string, _ int32, err error) {
+				switch {
+				case errors.Is(err, kerr.UnknownTopicID),
+					errors.Is(err, kerr.UnknownTopicOrPartition),
+					errors.Is(err, context.Canceled),
+					errors.Is(err, context.DeadlineExceeded):
+				default:
+					consumeMu.Lock()
+					badConsume = append(badConsume, err)
+					consumeMu.Unlock()
+				}
+			})
+			consumeMu.Lock()
+			done := consumed["terminal"] > 0
+			consumeMu.Unlock()
+			if done {
+				return
+			}
+		}
+	}()
+
+	// Churn.
+	for range recreates {
+		time.Sleep(200 * time.Millisecond)
+		recreateTopic(t, admin, topic, 1)
+	}
+	close(stopProduce)
+	<-produceDone
+
+	// Liveness: a terminal produce after the final recreation must heal
+	// and be consumed.
+	termCtx, termCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer termCancel()
+	if err := prod.ProduceSync(termCtx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte("terminal")}).FirstErr(); err != nil {
+		t.Fatalf("terminal produce did not heal after churn: %v", err)
+	}
+	select {
+	case <-consumeDone:
+	case <-ctx.Done():
+		t.Fatal("consumer did not reach the terminal value after churn")
+	}
+
+	produceMu.Lock()
+	defer produceMu.Unlock()
+	consumeMu.Lock()
+	defer consumeMu.Unlock()
+
+	for _, err := range badProduce {
+		t.Errorf("disallowed produce error under churn: %v", err)
+	}
+	for _, err := range badConsume {
+		t.Errorf("disallowed consume error under churn: %v", err)
+	}
+	if got := consumed["terminal"]; got != 1 {
+		t.Errorf("terminal value consumed %d times; want exactly 1", got)
+	}
+	var totalConsumed int
+	for v, n := range consumed {
+		totalConsumed += n
+		if n > 1 {
+			t.Errorf("value %q delivered %d times; recreation handling may never duplicate", v, n)
+		}
+		if v != "terminal" && !produced[v] {
+			// Consumed but its promise failed or never fired: possible
+			// only for a value whose ack raced the deletion; it must
+			// still be at-most-once (checked above), and it must at
+			// least be OURS.
+			if !strings.HasPrefix(v, "v") {
+				t.Errorf("consumed a value we never produced: %q", v)
+			}
+		}
+	}
+	if len(produced) == 0 || totalConsumed == 0 {
+		t.Errorf("churn produced/consumed nothing (produced %d, consumed %d); the test exercised nothing", len(produced), totalConsumed)
+	}
+}
+
 const logEpochGuard = "fetched records carry a leader epoch below what we already consumed"
 
 // The record-batch epoch guard closes Tier B/C's bounded silent window: a
