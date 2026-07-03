@@ -132,12 +132,26 @@ type cursor struct {
 
 	unknownIDFails atomic.Int32
 
-	// pendingRecreateID is the below-the-gate (by-name fetch) recreation
-	// corroboration: the new topic ID the previous metadata update
-	// reported. The merge swaps only once two consecutive updates agree
-	// on the same new ID, absorbing single stale-broker flaps. Only the
-	// metadata-update goroutine reads or writes this.
+	// pendingRecreateID is the by-name-fetch recreation corroboration:
+	// the new topic ID the previous metadata update reported. When the
+	// held ID is young, the merge swaps only once two consecutive updates
+	// agree on the same new ID, absorbing single stale-broker flaps. Only
+	// the metadata-update goroutine reads or writes this.
 	pendingRecreateID [16]byte
+
+	// idAgreedAt is when topicID became our held truth (cursor creation,
+	// or a recreation swap). Once the ID has been held for
+	// recreationStableIDAge, a metadata response reporting a different ID
+	// is believed outright. Only the metadata-update goroutine reads or
+	// writes this.
+	idAgreedAt time.Time
+
+	// positioned mirrors whether the cursor currently has a real offset
+	// (setOffset with offset >= 0). The metadata merge reads it: a cursor
+	// with no position yet always waits for a broker rejection before
+	// swapping incarnations, because an early swap loses the stale-ID
+	// tripwire against a racing old-incarnation committed offset.
+	positioned atomic.Bool
 
 	// oorPending defers an OFFSET_OUT_OF_RANGE policy reset below the
 	// gate until one metadata classification round has run: a recreation
@@ -274,6 +288,7 @@ func (c *cursor) allowUsable() {
 // after.
 func (c *cursor) setOffset(o cursorOffset) {
 	c.cursorOffset = o
+	c.positioned.Store(o.offset >= 0)
 }
 
 // cursorOffsetNext is updated while processing a fetch response.

@@ -5,10 +5,28 @@ import (
 	"fmt"
 	"maps"
 	"sync/atomic"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+// recreationStableIDAge is how long a topic ID must have been our
+// consistently-held truth before a metadata response reporting a DIFFERENT
+// ID is believed outright, with no further corroboration: metadata
+// staleness is a seconds-scale phenomenon (propagation skew, one behind
+// broker), so a change against a minute-old ID is a recreation, not a stale
+// broker resurfacing a prior view. Below this age the change could still be
+// propagation skew from our own recent adoption, and the corroboration
+// rules apply (a broker rejection, or two consecutive metadata responses
+// agreeing). A var only so tests can shorten it.
+var recreationStableIDAge = time.Minute
+
+// idStableLongEnough reports whether an ID adopted at the given time has
+// been held long enough that a change to it is trusted outright.
+func idStableLongEnough(agreedAt time.Time) bool {
+	return !agreedAt.IsZero() && time.Since(agreedAt) >= recreationStableIDAge
+}
 
 // errRecreationUnsureBatch fails buffered records whose produce outcome
 // cannot be known across a topic recreation. Produced records carry it in

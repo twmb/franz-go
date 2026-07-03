@@ -122,6 +122,13 @@ type (
 		// the new incarnation's ID (see filterStaleEntries).
 		generation atomic.Int32
 
+		// idAgreedAt is when topicID became our held truth (creation,
+		// or a recreation swap). Once the ID has been held for
+		// recreationStableIDAge, a metadata response reporting a
+		// different ID is believed outright. Only the metadata-update
+		// goroutine reads or writes this.
+		idAgreedAt time.Time
+
 		cursorsIdx int
 
 		// assigned is true when the cursor's partition is currently

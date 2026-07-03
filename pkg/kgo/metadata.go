@@ -641,6 +641,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 			sink:                mp.sns.sink,
 			topicPartitionData:  td,
 			lastAckedOffset:     -1,
+			idAgreedAt:          time.Now(),
 		}
 		r.lingerFn = r.unlingerAndManuallyDrain
 		p.records = r
@@ -650,6 +651,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 			topicID:    mp.topicID,
 			partition:  mp.partition,
 			cursorsIdx: -1, // sentinel: not yet added to a source
+			idAgreedAt: time.Now(),
 		}
 		p.shareCursor.source.Store(mp.sns.source)
 	default:
@@ -661,6 +663,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 			cursorsIdx:         -1,
 			source:             mp.sns.source,
 			topicPartitionData: td,
+			idAgreedAt:         time.Now(),
 			cursorOffset: cursorOffset{
 				offset:            -1, // required to not consume until needed
 				lastConsumedEpoch: -1, // required sentinel
@@ -946,13 +949,15 @@ func (cl *Client) mergeTopicPartitions(
 			// reaches here (IDs are zero) and produce behavior is
 			// unchanged.
 			if newID != noID && oldID != newID {
-				// Armed, only the produce wire corroborates (a
-				// stale-incarnation rejection, an acked offset
-				// regression, or commit-time verification). Below the
-				// gate those still count when they exist, and two
-				// consecutive metadata updates agreeing on the new ID
-				// otherwise adopt on the metadata fact alone.
-				adopt := corroborated
+				// An ID held for a long time is trusted outright: a
+				// change against a minute-old ID is a recreation, not
+				// a stale broker (metadata staleness is seconds).
+				// Younger, we need corroboration: produce-wire
+				// evidence (a stale-incarnation rejection, an acked
+				// offset regression, or commit-time verification), or,
+				// where the wire fetches by name and can never reject,
+				// two consecutive metadata updates agreeing.
+				adopt := corroborated || idStableLongEnough(rb.idAgreedAt)
 				if !adopt && !cl.recreation.armed.Load() {
 					adopt = rb.pendingRecreateID == newID
 				}
@@ -1033,7 +1038,8 @@ func (cl *Client) mergeTopicPartitions(
 			// version, so shares swap on wire corroboration regardless
 			// of the fetch gate.
 			if isShare && newID != noID && oldID != noID && newID != oldID {
-				if oldTP.shareCursor.unknownIDFails.Load() == 0 {
+				if oldTP.shareCursor.unknownIDFails.Load() == 0 &&
+					!idStableLongEnough(oldTP.shareCursor.idAgreedAt) {
 					*newTP = *oldTP
 					retryWhy.add(topic, int32(part), errRecreationPending)
 					continue
@@ -1050,9 +1056,18 @@ func (cl *Client) mergeTopicPartitions(
 			if !isShare && newID != noID && oldID != noID && newID != oldID {
 				c := oldTP.cursor
 				var adopt bool
-				if cl.recreation.armed.Load() {
+				switch {
+				case idStableLongEnough(c.idAgreedAt) && c.positioned.Load():
+					// The old ID was the cluster's agreed truth for a
+					// long time: the change is a recreation, not a
+					// stale broker. A cursor with no position yet
+					// still waits for a broker rejection: swapped
+					// early, it loses the stale-ID tripwire against a
+					// racing old-incarnation committed offset.
+					adopt = true
+				case cl.recreation.armed.Load():
 					adopt = c.unknownIDFails.Load() > 0
-				} else {
+				default:
 					adopt = c.pendingRecreateID == newID
 				}
 				if !adopt {

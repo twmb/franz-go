@@ -222,12 +222,17 @@ happens to share the name: positions, produce sequences, transaction state,
 and share state from the old incarnation are meaningless against the new one.
 Clients that silently carry them across incarnations lose or misread data.
 franz-go handles recreation by default at every broker version, acting on the
-strongest signal each version provides:
+strongest signal each version provides. One rule applies everywhere: if the
+client has held the same topic ID for a minute, a metadata response showing a
+different ID is believed outright and acted on immediately -- metadata
+staleness is a seconds-scale phenomenon, so a change against a minute-old ID
+is a recreation, not a stale broker. The per-version corroboration below
+applies to younger IDs (e.g. just after the client itself adopted one):
 
 | Brokers | Detection | Behavior |
 | ------- | --------- | -------- |
 | 3.1+ | Topic IDs on the fetch wire (and on the produce wire at 4.1+) | Self-closing: a stale fetch or produce is rejected by ID and can never touch the new incarnation. The client adopts the new ID, resets consumption per `ConsumeResetOffset`, and restarts produce sequences, healing with no surfaced sequence errors. At 3.1-4.0 the produce wire is still by name; producing has the next row's bounded window. |
-| 2.8-3.0 | Topic IDs in metadata only | The client adopts once two consecutive metadata updates agree on the new ID (or sooner, on produce evidence such as an acked-offset regression). Between the recreation and that adoption there is a bounded window, at most about one metadata interval, in which by-name fetches and produces can touch the new incarnation; two hardening nets shrink it: fetched records carrying a leader epoch below what was already consumed are withheld and classified, and `OFFSET_OUT_OF_RANGE` is classified before it resets. |
+| 2.8-3.0 | Topic IDs in metadata only | For a recently-adopted ID, the client adopts once two consecutive metadata updates agree on the new ID (or sooner, on produce evidence such as an acked-offset regression). Between the recreation and that adoption there is a bounded window, at most about one metadata interval, in which by-name fetches and produces can touch the new incarnation; two hardening nets shrink it: fetched records carrying a leader epoch below what was already consumed are withheld and classified, and `OFFSET_OUT_OF_RANGE` is classified before it resets. |
 | 2.1-2.7 | Leader epochs in metadata | A persistent leader-epoch rewind (epochs only ever rise within one topic incarnation) is treated as a recreation, with an honestly-worded log line. Detection is opportunistic: a recreation from and to epoch 0, or one whose new epoch catches up between refreshes, is invisible. |
 | Below 2.1 | None | Unchanged: an out-of-range position resets per `ConsumeResetOffset`; a position still in range silently reads the new incarnation. Every Kafka client is blind here. |
 

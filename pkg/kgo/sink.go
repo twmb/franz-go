@@ -1618,12 +1618,20 @@ type recBuf struct {
 	// like a wire rejection (two independent fresh fetches agreeing is
 	// not a flap). Cleared at the swap.
 	idMismatched bool
-	// pendingRecreateID is the below-the-gate recreation corroboration:
-	// the new topic ID the previous metadata update reported. The merge
-	// swaps only once two consecutive updates agree on the same new ID
-	// (or the produce wire corroborates), absorbing single stale-broker
-	// flaps. Only the metadata-update goroutine reads or writes this.
+	// pendingRecreateID is the by-name recreation corroboration: the new
+	// topic ID the previous metadata update reported. When the held ID is
+	// young, the merge swaps only once two consecutive updates agree on
+	// the same new ID (or the produce wire corroborates), absorbing
+	// single stale-broker flaps. Only the metadata-update goroutine reads
+	// or writes this.
 	pendingRecreateID [16]byte
+
+	// idAgreedAt is when topicID became our held truth (recBuf creation,
+	// or a recreation swap). Once the ID has been held for
+	// recreationStableIDAge, a metadata response reporting a different ID
+	// is believed outright. Only the metadata-update goroutine reads or
+	// writes this.
+	idAgreedAt time.Time
 
 	// sink is who is currently draining us. This can be modified
 	// concurrently during a metadata update.

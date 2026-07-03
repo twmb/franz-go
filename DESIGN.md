@@ -969,6 +969,16 @@ topic deleted and recreated under the same name, yielding a new topic ID).
 Recreation checks run BEFORE the epoch-rewind guard: a new incarnation
 legitimately restarts at epoch 0, which is not a stale broker.
 
+One rule precedes the tiers: an ID held for `recreationStableIDAge` (a
+minute) whose metadata reports a different ID is believed outright
+(`idAgreedAt`, stamped at creation and at each swap) -- staleness is a
+seconds-scale phenomenon, so a change against a minute-old ID cannot be a
+stale broker. A cursor with no position yet is the one exception: it always
+waits for a broker rejection, because swapping early loses the stale-ID
+tripwire against a racing old-incarnation committed offset
+(`cursor.positioned` mirrors this for the merge). Younger IDs corroborate
+per tier:
+
 Detection tiers, strongest signal first:
 
 - Gate armed (`recreationGate`, all connected brokers speak fetch v13): the

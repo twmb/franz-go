@@ -11,12 +11,14 @@
 // A topic deleted and recreated under the same name is a new topic that
 // happens to share the name; nothing from the old incarnation is ever
 // silently reused against the new one. Handling is on by default at every
-// broker version, acting on the strongest signal each version provides: at
-// 3.1+ (topic IDs on the fetch wire) detection is immediate and
-// self-closing; at 2.8-3.0 (IDs in metadata only) the client adopts within
-// about one metadata interval; at 2.1-2.7 a persistent leader-epoch rewind
-// is treated as a recreation opportunistically; below 2.1 no signal exists
-// and behavior is unchanged. On detection, consumers reset per
+// broker version, acting on the strongest signal each version provides: a
+// topic ID held for a minute that changes is believed outright (metadata
+// staleness is a seconds-scale phenomenon); younger changes corroborate --
+// at 3.1+ (topic IDs on the fetch wire) via the broker's own rejection,
+// making detection self-closing; at 2.8-3.0 (IDs in metadata only) via two
+// consecutive metadata updates agreeing; at 2.1-2.7 a persistent
+// leader-epoch rewind is treated as a recreation opportunistically; below
+// 2.1 no signal exists and behavior is unchanged. On detection, consumers reset per
 // ConsumeResetOffset (group commits of the dead incarnation are fenced and
 // the reset position committed promptly), idempotent producers restart
 // their sequence chain with no sequence error surfaced and no duplicate

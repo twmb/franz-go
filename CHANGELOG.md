@@ -8,11 +8,15 @@ share a name: nothing from the old incarnation -- consume positions, produce
 sequences, transaction membership, share acquisition state -- is ever
 silently reused against the new one.
 
-Detection acts on the strongest signal each broker version provides: topic
-IDs on the fetch wire at 3.1+ (self-closing, zero silent window), topic IDs
-in metadata at 2.8-3.0 (adoption within about one metadata interval, on two
-consecutive updates agreeing), persistent leader-epoch rewinds at 2.1-2.7
-(opportunistic), and no change below 2.1 where no signal exists. Two
+Detection acts on the strongest signal each broker version provides. A
+topic ID the client has held for a minute that changes is believed outright
+(metadata staleness is a seconds-scale phenomenon; a change against a
+minute-old ID is a recreation, not a stale broker). Younger IDs
+corroborate: topic IDs on the fetch wire at 3.1+ (self-closing, zero silent
+window), topic IDs in metadata at 2.8-3.0 (adoption within about one
+metadata interval, on two consecutive updates agreeing), persistent
+leader-epoch rewinds at 2.1-2.7 (opportunistic), and no change below 2.1
+where no signal exists. Two
 hardening nets shrink the by-name window further: fetched records carrying a
 leader epoch below what was already consumed are withheld and classified,
 and `OFFSET_OUT_OF_RANGE` is classified against fresh metadata before it

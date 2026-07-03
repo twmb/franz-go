@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
@@ -727,6 +728,7 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	c.topicPartitionData = new.topicPartitionData
 	c.unknownIDFails.Store(0)
 	c.pendingRecreateID = [16]byte{}
+	c.idAgreedAt = time.Now()
 	c.oorPending.Store(false) // the swap's reset supersedes a deferred out-of-range reset
 	c.guardFails = 0
 
@@ -783,6 +785,7 @@ func (old *topicPartition) swapRecreatedRecBufTo(new *topicPartition) { //nolint
 	rb.offsetRegressed = false
 	rb.idMismatched = false
 	rb.pendingRecreateID = [16]byte{}
+	rb.idAgreedAt = time.Now()
 	rb.unknownFailures = 0 // stale-incarnation failures corroborated this swap; they must not trip the fail limit
 	rb.lastAckedOffset = -1
 
@@ -839,6 +842,7 @@ func (tp *topicPartition) swapRecreatedShareCursorTo(cl *Client, new *topicParti
 	c.topicID = newID
 	c.generation.Add(1)
 	c.unknownIDFails.Store(0)
+	c.idAgreedAt = time.Now()
 	if oldSource != nil {
 		oldSource.resetShareSession()
 	}
