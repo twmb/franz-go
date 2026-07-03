@@ -394,6 +394,10 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	}
 	groupExternal.updateLatest(latest)
 
+	// The fetch above refreshed the broker list; re-evaluate the
+	// recreation gate before any merge below consults it.
+	cl.evalRecreationGate()
+
 	// If regex consuming AND we issued a metadata request to forcefully
 	// create topics, we merge any topics missing into the all-request from
 	// the create-request. It is possible we want to keep failed creation

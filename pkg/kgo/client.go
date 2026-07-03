@@ -80,9 +80,10 @@ type Client struct {
 		err  error
 	}
 
-	producer producer
-	consumer consumer
-	id2t     atomic.Value // map[[16]byte]string
+	producer   producer
+	consumer   consumer
+	id2t       atomic.Value // map[[16]byte]string
+	recreation recreationGate
 
 	metrics metrics
 
