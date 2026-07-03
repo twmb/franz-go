@@ -139,6 +139,21 @@ type cursor struct {
 	// metadata-update goroutine reads or writes this.
 	pendingRecreateID [16]byte
 
+	// oorPending defers an OFFSET_OUT_OF_RANGE policy reset below the
+	// gate until one metadata classification round has run: a recreation
+	// then takes the labeled swap (fence, seeded recommit, ONE reset)
+	// instead of a plain reset that the later swap would repeat,
+	// re-delivering records. Set on the fetch path, resolved by the
+	// metadata merge (swap, or plain reset when nothing corroborates).
+	oorPending atomic.Bool
+
+	// guardFails counts consecutive record-batch epoch guard withholds
+	// (see the fetch handling). If repeated classification finds no
+	// recreation, delivery resumes rather than stalling forever (e.g. a
+	// broker whose ListOffsets returns the current epoch for historical
+	// offsets). Only fetch response handling touches this.
+	guardFails int32
+
 	keepControl bool // whether to keep control records
 
 	cursorsIdx int // updated under source mutex
@@ -1292,6 +1307,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				continue
 			}
 
+			priorState := partOffset.cursorOffset
 			priorOffset := partOffset.offset
 			fp := partOffset.processRespPartition(br, rp, s.cl.cfg.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
@@ -1343,6 +1359,45 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 			case nil:
 				c.unknownIDFails.Store(0)
+				// Below the gate, records whose leader epoch is below
+				// what we already consumed are a discontinuity: this
+				// by-name position now points into a recreated topic's
+				// new incarnation (or a rolled-back log). Withhold
+				// delivery (restoring our pre-response position) and
+				// classify via metadata: the merge swaps or infers,
+				// and fetches simply retry meanwhile. Within one
+				// incarnation, epochs never decrease along the log,
+				// so normal consumption can never trip this.
+				if !s.cl.recreation.armed.Load() &&
+					priorState.lastConsumedEpoch >= 0 && len(fp.Records) > 0 &&
+					fp.Records[0].LeaderEpoch >= 0 && fp.Records[0].LeaderEpoch < priorState.lastConsumedEpoch {
+					c.guardFails++
+					if c.guardFails <= 5 {
+						s.cl.cfg.logger.Log(LogLevelWarn, "fetched records carry a leader epoch below what we already consumed; withholding them and classifying (topic recreation, or a rolled back log)",
+							"broker", logID(s.nodeID),
+							"topic", topic,
+							"partition", partition,
+							"records_epoch", fp.Records[0].LeaderEpoch,
+							"last_consumed_epoch", priorState.lastConsumedEpoch,
+						)
+						partOffset.cursorOffset = priorState
+						strip(topic, partition, errRecreationEpochGuard)
+						s.cl.triggerUpdateMetadataNow("fetched records regressed the leader epoch below the recreation gate")
+						break
+					}
+					// Repeated classification found no recreation:
+					// deliver rather than stall forever. Never worse
+					// than the pre-guard behavior, which always
+					// delivered.
+					c.guardFails = 0
+					s.cl.cfg.logger.Log(LogLevelWarn, "delivering records whose leader epoch regressed below what we already consumed; repeated classification found no topic recreation",
+						"broker", logID(s.nodeID),
+						"topic", topic,
+						"partition", partition,
+					)
+				} else if len(fp.Records) > 0 {
+					c.guardFails = 0
+				}
 				keep = true
 
 			case kerr.UnknownTopicID:
@@ -1430,6 +1485,20 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 				switch {
 				case s.nodeID == c.leader: // non KIP-392 case
+					// Below the gate, out of range is the one loud
+					// signal a recreation emits on old versions:
+					// classify against fresh metadata BEFORE
+					// resetting, so a recreation takes the labeled
+					// swap (fence, seeded recommit, one reset)
+					// rather than a plain reset that the later swap
+					// would repeat, re-delivering records. The merge
+					// resolves the deferral either way.
+					if !s.cl.recreation.armed.Load() && !s.cl.cfg.resetOffset.noReset {
+						c.oorPending.Store(true)
+						strip(topic, partition, fp.Err)
+						s.cl.triggerUpdateMetadataNow("classifying OFFSET_OUT_OF_RANGE below the recreation gate")
+						break
+					}
 					addList(-1, true)
 
 				case partOffset.offset < fp.LogStartOffset: // KIP-392 case 3

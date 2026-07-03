@@ -880,6 +880,17 @@ func (cl *Client) mergeTopicPartitions(
 			)
 			if isProduce {
 				oldTP.records.bumpRepeatedLoadErr(errMissingMetadataPartition)
+			} else if !isShare && oldTP.cursor.oorPending.CompareAndSwap(true, false) {
+				// The topic vanished while an out-of-range reset was
+				// deferred for classification: reset per policy; the
+				// load retries against the missing topic exactly as
+				// an undeferred reset would have.
+				css.stop()
+				oldTP.cursor.unset()
+				css.reloadOffsets.addLoad(topic, int32(part), loadTypeList, offsetLoad{
+					replica: -1,
+					Offset:  cl.cfg.resetOffset,
+				})
 			}
 			retryWhy.add(topic, int32(part), errMissingMetadataPartition)
 			continue
@@ -1192,6 +1203,20 @@ func (cl *Client) mergeTopicPartitions(
 				oldTP.swapRecreatedCursorTo(newTP, css, reset)
 				continue
 			}
+		}
+
+		// An OFFSET_OUT_OF_RANGE below the gate deferred its policy reset
+		// for one classification round (see the fetch handling). Reaching
+		// here means nothing above corroborated a recreation, so this is
+		// a genuine out of range: reset per policy, exactly as the fetch
+		// would have without the deferral.
+		if !isProduce && !isShare && oldTP.cursor.oorPending.CompareAndSwap(true, false) {
+			css.stop()
+			oldTP.cursor.unset()
+			css.reloadOffsets.addLoad(topic, int32(part), loadTypeList, offsetLoad{
+				replica: -1,
+				Offset:  cl.cfg.resetOffset,
+			})
 		}
 
 		// If the tp data is the same, we simply copy over the records

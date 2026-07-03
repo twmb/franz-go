@@ -590,6 +590,132 @@ func TestRecreationTierCProducer(t *testing.T) {
 	consumeExactly(t, c, topic, "p1")
 }
 
+const logEpochGuard = "fetched records carry a leader epoch below what we already consumed"
+
+// The record-batch epoch guard closes Tier B/C's bounded silent window: a
+// by-name fetch that lands inside a recreated topic's new incarnation
+// carries batch epochs below what we already consumed, and delivery is
+// withheld until the merge classifies. Without it, the fetch would silently
+// misread records at the stale position (skipping the new incarnation's
+// earlier records).
+func TestRecreationTierBEpochGuard(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic), MaxVersions(kversion.V3_0_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	// Two moves: consumed records carry leader epoch 2.
+	oldLeader := c.LeaderFor(topic, 0)
+	if err := c.MoveTopicPartition(topic, 0, 1-oldLeader); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.MoveTopicPartition(topic, 0, oldLeader); err != nil {
+		t.Fatal(err)
+	}
+	produceVals(t, c, topic, 0, "v0", "v1", "v2")
+	collectVals(t, cl, "v0", "v1", "v2")
+
+	// Recreate so the next by-name fetch reads new-incarnation records at
+	// the stale position: same final leader and same leader epoch as the
+	// consumer knows (so nothing fences the fetch), with the records
+	// appended while the epoch was still lower.
+	cl.PauseFetchTopics(topic)
+	time.Sleep(300 * time.Millisecond)
+	recreateTopic(t, admin, topic, 1)
+	if err := c.MoveTopicPartition(topic, 0, oldLeader); err != nil { // epoch 1
+		t.Fatal(err)
+	}
+	produceVals(t, c, topic, 0, "n0", "n1", "n2", "n3", "n4")         // batches at epoch 1
+	if err := c.MoveTopicPartition(topic, 0, oldLeader); err != nil { // self-move: epoch 2, fence passes
+		t.Fatal(err)
+	}
+	cl.ResumeFetchTopics(topic)
+
+	// Every new-incarnation record arrives exactly once: the guard
+	// withheld the misread and the swap reset to the start.
+	waitForLog(t, cl, lg, logEpochGuard, 1)
+	waitForLog(t, cl, lg, logSwap, 1)
+	collectVals(t, cl, "n0", "n1", "n2", "n3", "n4")
+}
+
+// OFFSET_OUT_OF_RANGE below the gate defers its reset for one metadata
+// classification round: a recreation takes the labeled swap with a SINGLE
+// reset, rather than a plain reset that the later swap would repeat,
+// re-delivering records.
+func TestRecreationTierBOORClassified(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V3_0_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	produceVals(t, c, topic, 0, "v0", "v1", "v2", "v3", "v4")
+	collectVals(t, cl, "v0", "v1", "v2", "v3", "v4")
+
+	// The new incarnation's log is shorter than the stale position: the
+	// next by-name fetch is out of range.
+	cl.PauseFetchTopics(topic)
+	time.Sleep(300 * time.Millisecond)
+	recreateTopic(t, admin, topic, 1)
+	produceVals(t, c, topic, 0, "n0", "n1")
+	cl.ResumeFetchTopics(topic)
+
+	// Exactly once: a doubled reset would deliver n0/n1 twice and fail
+	// collectVals on the duplicate.
+	collectVals(t, cl, "n0", "n1")
+	verifyZeroRecords(t, cl, 500*time.Millisecond)
+	if lg.count(logSwap) == 0 {
+		t.Error("expected the out-of-range classification to land the labeled swap")
+	}
+}
+
+// The same out-of-range deferral where nothing corroborates a recreation
+// (no IDs, no epoch evidence) resolves to today's plain policy reset.
+func TestRecreationTierDOORPlainReset(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V2_7_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	produceVals(t, c, topic, 0, "v0", "v1", "v2", "v3", "v4")
+	collectVals(t, cl, "v0", "v1", "v2", "v3", "v4")
+
+	cl.PauseFetchTopics(topic)
+	time.Sleep(300 * time.Millisecond)
+	recreateTopic(t, admin, topic, 1)
+	produceVals(t, c, topic, 0, "n0", "n1")
+	cl.ResumeFetchTopics(topic)
+
+	collectVals(t, cl, "n0", "n1")
+	verifyZeroRecords(t, cl, 500*time.Millisecond)
+	if n := lg.count(logSwap) + lg.count(logTierC); n != 0 {
+		t.Errorf("saw %d recreation classifications; want a plain policy reset (nothing corroborates)", n)
+	}
+}
+
 // Below ID-ful metadata (2.7 and earlier: no topic IDs anywhere), no signal
 // exists and recreation behavior is UNCHANGED: no adoption, no reset. In
 // this offset geometry (old position == new log end) the consumer silently

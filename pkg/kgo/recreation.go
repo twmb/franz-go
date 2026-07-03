@@ -27,6 +27,13 @@ var errRecreationUnsureBatch = errors.New("topic was deleted and recreated: a pr
 // producer ID after the abort is always safe.
 var errRecreationAbortTxn = fmt.Errorf("topic was deleted and recreated during the transaction; the transaction cannot commit safely across topic incarnations: %w", kerr.TransactionAbortable)
 
+// errRecreationEpochGuard strips fetched records whose leader epoch
+// regressed below what we already consumed: by name, the position points
+// into a recreated topic's new incarnation (or a rolled-back log). Within
+// one incarnation, epochs never decrease along the log, so this cannot fire
+// on normal consumption.
+var errRecreationEpochGuard = errors.New("fetched records regressed the leader epoch: topic recreation, or a rolled back log")
+
 // errRecreationShareAck reports acknowledgments invalidated at a topic
 // recreation swap: the records were acquired from an incarnation whose
 // broker-side acquisition state died with it. Wraps the error the wire
