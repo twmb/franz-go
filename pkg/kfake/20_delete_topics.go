@@ -87,6 +87,12 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 			delete(c.data.treplicas, td.topic)
 			delete(c.data.tcfgs, td.topic)
 			delete(c.data.tnorms, normalizeTopicName(td.topic))
+			// Producer state is per-log and dies with the topic: a
+			// recreated topic rehydrates empty state, accepting any
+			// first sequence (the 2.5+ broker semantics we model).
+			for _, pidinf := range c.pids.ids {
+				delete(pidinf.windows, td.topic)
+			}
 		}
 	}()
 	for _, rt := range req.Topics {
