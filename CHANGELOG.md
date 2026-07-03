@@ -1,3 +1,29 @@
+v1.22.0 (unreleased)
+===
+
+This minor release adds rack-aware producer partitioning.
+
+One feature:
+
+* Added `RackAwarePartitioning`, an opt-in producer option implementing
+  KIP-1123. When enabled and a rack is set via `Rack`, the producer prefers
+  partition leaders in the client's rack for records that do not require
+  consistency (keyless or otherwise auto-partitioned records), cutting
+  cross-rack -- often cross datacenter -- produce traffic and cost. Records
+  with a key are never affected, and the client falls back to all partitions
+  whenever no same-rack leader is available, so nothing is stranded during a
+  leader outage. The rack filter runs before the partitioner picks, so it
+  composes with any configured partitioner -- the default uniform partitioner,
+  round-robin, least-backup, or a custom one -- going beyond the Java client,
+  which only makes its built-in partitioner rack-aware. Preferring same-rack
+  leaders can skew partition distribution if producers are not spread across
+  racks in proportion to leader placement; this is why the behavior is opt-in.
+  See KIP-1123.
+
+## Relevant commits
+
+- [`17d4daaf`](https://github.com/twmb/franz-go/commit/17d4daaf) **feature** kgo: add rack-aware producer partitioning (KIP-1123)
+
 v1.21.6
 ===
 
