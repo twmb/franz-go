@@ -1006,10 +1006,24 @@ func (cl *Client) mergeTopicPartitions(
 			// fetch the current leader rejected by ID. Without it we
 			// keep everything as is and let the stale-ID fetch
 			// corroborate; the rejection also urgently re-triggers
-			// metadata, so the swap lands one update later. Share
-			// cursors do not swap yet. Disarmed, behavior is
-			// unchanged: the cursor never re-adopts and fetches stall
-			// loudly (see the cursor.topicID comment).
+			// metadata, so the swap lands one update later. Disarmed,
+			// behavior is unchanged: the cursor never re-adopts and
+			// fetches stall loudly (see the cursor.topicID comment).
+			if isShare && newID != noID && oldID != noID && newID != oldID && cl.recreation.armed.Load() {
+				if oldTP.shareCursor.unknownIDFails.Load() == 0 {
+					*newTP = *oldTP
+					retryWhy.add(topic, int32(part), errRecreationPending)
+					continue
+				}
+				cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID for share consuming and invalidating acknowledgments of the prior incarnation",
+					"topic", topic,
+					"partition", part,
+					"old_id", topicID(oldID),
+					"new_id", topicID(newID),
+				)
+				oldTP.swapRecreatedShareCursorTo(cl, newTP)
+				continue
+			}
 			if !isShare && newID != noID && oldID != noID && newID != oldID && cl.recreation.armed.Load() {
 				if oldTP.cursor.unknownIDFails.Load() == 0 {
 					*newTP = *oldTP

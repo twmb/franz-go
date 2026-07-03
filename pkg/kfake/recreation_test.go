@@ -1265,6 +1265,70 @@ func TestRecreationTxnUnconfirmedInterplay(t *testing.T) {
 	consumeCommitted(t, c, topic, "c0")
 }
 
+const logShareSwap = "topic recreation detected, adopting the new topic ID for share consuming"
+
+// A share consumer swaps across a recreation: consumption continues on the
+// new incarnation (fresh broker-side share state), and acknowledgments of
+// records acquired from the dead incarnation are invalidated loudly rather
+// than re-addressed -- an ack under the new topic ID could acknowledge an
+// unrelated record at the same offset.
+func TestRecreationShareSwap(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "t", "sg"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	admin := newPlainClient(t, c)
+	setShareAutoOffsetReset(t, admin, group)
+
+	var ackMu sync.Mutex
+	var ackErrs []error
+	lg := new(capLogger)
+	cl := newShareConsumer(t, c, topic, group,
+		kgo.ShareAckCallback(func(_ *kgo.Client, results kgo.ShareAckResults) {
+			ackMu.Lock()
+			defer ackMu.Unlock()
+			for _, r := range results {
+				if r.Err != nil {
+					ackErrs = append(ackErrs, r.Err)
+				}
+			}
+		}),
+		kgo.WithLogger(lg),
+	)
+
+	// Acquire the old incarnation's records without acknowledging them
+	// (they all arrive in one poll, and we do not poll again until after
+	// the swap, so the implicit ack never fires for them).
+	produceVals(t, c, topic, 0, "v0", "v1", "v2")
+	rs := collectRecords(t, cl, 3, 5*time.Second)
+
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, cl, lg, logShareSwap, 1)
+
+	// Acknowledging the dead incarnation's records is invalidated loudly.
+	cl.MarkAcks(kgo.AckAccept, rs...)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := cl.FlushAcks(ctx); err != nil {
+		t.Fatalf("flush acks: %v", err)
+	}
+	ackMu.Lock()
+	var sawRecreation bool
+	for _, err := range ackErrs {
+		if errors.Is(err, kerr.UnknownTopicID) && strings.Contains(err.Error(), "recreated") {
+			sawRecreation = true
+		}
+	}
+	ackMu.Unlock()
+	if !sawRecreation {
+		t.Fatalf("acks of prior-incarnation records were not invalidated with the recreation error; callback errors: %v", ackErrs)
+	}
+
+	// The new incarnation starts fresh share state: consumption continues.
+	produceVals(t, c, topic, 0, "n0", "n1")
+	collectVals(t, cl, "n0", "n1")
+}
+
 // Below the gate, produce behavior across a recreation is unchanged (by-name
 // produce continues into the new incarnation): default-on handling must not
 // change what old clusters see.

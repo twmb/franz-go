@@ -27,6 +27,12 @@ var errRecreationUnsureBatch = errors.New("topic was deleted and recreated: a pr
 // producer ID after the abort is always safe.
 var errRecreationAbortTxn = fmt.Errorf("topic was deleted and recreated during the transaction; the transaction cannot commit safely across topic incarnations: %w", kerr.TransactionAbortable)
 
+// errRecreationShareAck reports acknowledgments invalidated at a topic
+// recreation swap: the records were acquired from an incarnation whose
+// broker-side acquisition state died with it. Wraps the error the wire
+// would have returned for an ack addressed to the dead incarnation's ID.
+var errRecreationShareAck = fmt.Errorf("topic was deleted and recreated; these records were acquired from the prior incarnation, whose share state is gone: %w", kerr.UnknownTopicID)
+
 // recreationGate arms client-wide handling of topic recreation (a topic
 // deleted and recreated with the same name, yielding a new topic ID).
 //
