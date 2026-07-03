@@ -90,6 +90,9 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 			// Producer state is per-log and dies with the topic: a
 			// recreated topic rehydrates empty state, accepting any
 			// first sequence (the 2.5+ broker semantics we model).
+			// Transactional REGISTRATIONS survive (the coordinator is
+			// name-keyed on a real broker); endTx re-resolves current
+			// partition data when writing markers.
 			for _, pidinf := range c.pids.ids {
 				delete(pidinf.windows, td.topic)
 			}
