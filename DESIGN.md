@@ -1015,7 +1015,14 @@ Two fetch-side nets close the by-name window between recreation and merge:
 records whose leader epoch is below `lastConsumedEpoch` are withheld while
 metadata classifies (bounded, `guardFails`), and a below-the-gate
 `OFFSET_OUT_OF_RANGE` defers its policy reset one classification round
-(`oorPending`) so a recreation takes the labeled swap with a single reset.
+(`oorPending`, which records whether the log SHRANK) so a recreation takes
+the labeled swap with a single reset. When the merge corroborates nothing
+and the log shrank, an `OffsetForLeaderEpoch` probe (`oorClassify`)
+classifies the reset: UNDEFINED (no history of our epoch) is near-certain
+recreation, an epoch ending below our position is truncation-or-recreation
+named honestly, and every probe outcome resets per policy (never the
+divergence point, which is meaningless across incarnations) with group
+commits fenced and reseeded.
 
 ### Cached metadata
 

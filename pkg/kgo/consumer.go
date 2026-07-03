@@ -1472,6 +1472,15 @@ type offsetLoad struct {
 	// and is committed promptly. Reload retries preserve the mark.
 	recreationSeed bool
 
+	// oorClassify marks an OffsetForLeaderEpoch probe issued to classify
+	// an out-of-range position whose log shrank, below the recreation
+	// gate: the answer only decides how honestly the outcome is named
+	// (recreation vs truncation); the position always then resets per
+	// policy, never to the "divergence point" (across a recreation that
+	// is a meaningless spot in the new topic). Reload retries preserve
+	// the mark.
+	oorClassify bool
+
 	Offset
 }
 
@@ -2163,6 +2172,50 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 
 	for _, load := range loaded.loaded {
 		s.listOrEpochLoadsLoading.removeLoad(load.topic, load.partition) // remove the tracking of this load from our session
+
+		// An out-of-range classification probe resolves to a policy
+		// reset on every conclusive answer; the OffsetForLeaderEpoch
+		// result only decides how honestly we can name what happened.
+		// The merge fenced group commits when it issued the probe, and
+		// the chained reset carries recreationSeed so the fence lifts
+		// and the reset position commits promptly. Unresolved (error)
+		// probes fall through to the normal retry arm below, flags
+		// intact.
+		if load.request.oorClassify {
+			var pedl *ErrDataLoss
+			classified := true
+			switch {
+			case errors.As(load.err, &pedl):
+				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the log now ends below our consumed position; either substantial truncation, or the topic was deleted and recreated; resetting per ConsumeResetOffset",
+					"topic", load.topic,
+					"partition", load.partition,
+					"consumed_to", pedl.ConsumedTo,
+					"consumed_epoch", pedl.ConsumedToEpoch,
+					"epoch_now_ends_at", pedl.ResetTo,
+				)
+			case load.err == nil && load.offset < 0:
+				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the broker has no history of the epoch we consumed; the topic was almost certainly deleted and recreated; resetting per ConsumeResetOffset",
+					"topic", load.topic,
+					"partition", load.partition,
+					"consumed_epoch", load.request.epoch,
+				)
+			case load.err == nil:
+				s.c.cl.cfg.logger.Log(LogLevelInfo, "out-of-range classification found our consumed epoch intact; resetting per ConsumeResetOffset",
+					"topic", load.topic,
+					"partition", load.partition,
+				)
+			default:
+				classified = false
+			}
+			if classified {
+				reloads.addLoad(load.topic, load.partition, loadTypeList, offsetLoad{
+					replica:        -1,
+					recreationSeed: true,
+					Offset:         s.c.cl.cfg.resetOffset,
+				})
+				continue
+			}
+		}
 
 		use := func() {
 			if debug {

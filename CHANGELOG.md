@@ -19,8 +19,11 @@ leader-epoch rewinds at 2.1-2.7 (opportunistic), and no change below 2.1
 where no signal exists. Two
 hardening nets shrink the by-name window further: fetched records carrying a
 leader epoch below what was already consumed are withheld and classified,
-and `OFFSET_OUT_OF_RANGE` is classified against fresh metadata before it
-resets.
+and `OFFSET_OUT_OF_RANGE` against a shrunken log is classified before it
+resets, probing `OffsetForLeaderEpoch` when metadata corroborates nothing
+(no history of the consumed epoch is near-certain recreation; an epoch
+ending below the consumed position is named honestly as substantial
+truncation or a recreation, and group commits fence + reseed either way).
 
 On detection: consumers reset per `ConsumeResetOffset` (group commits of the
 dead incarnation are fenced and the reset position is committed promptly, so

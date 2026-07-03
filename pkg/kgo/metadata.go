@@ -883,7 +883,7 @@ func (cl *Client) mergeTopicPartitions(
 			)
 			if isProduce {
 				oldTP.records.bumpRepeatedLoadErr(errMissingMetadataPartition)
-			} else if !isShare && oldTP.cursor.oorPending.CompareAndSwap(true, false) {
+			} else if !isShare && oldTP.cursor.oorPending.Swap(oorNone) != oorNone {
 				// The topic vanished while an out-of-range reset was
 				// deferred for classification: reset per policy; the
 				// load retries against the missing topic exactly as
@@ -1222,16 +1222,36 @@ func (cl *Client) mergeTopicPartitions(
 
 		// An OFFSET_OUT_OF_RANGE below the gate deferred its policy reset
 		// for one classification round (see the fetch handling). Reaching
-		// here means nothing above corroborated a recreation, so this is
-		// a genuine out of range: reset per policy, exactly as the fetch
-		// would have without the deferral.
-		if !isProduce && !isShare && oldTP.cursor.oorPending.CompareAndSwap(true, false) {
-			css.stop()
-			oldTP.cursor.unset()
-			css.reloadOffsets.addLoad(topic, int32(part), loadTypeList, offsetLoad{
-				replica: -1,
-				Offset:  cl.cfg.resetOffset,
-			})
+		// here means metadata corroborated nothing. If the log SHRANK
+		// (position above the end) and we have a consumed epoch, one
+		// OffsetForLeaderEpoch probe classifies the reset as honestly as
+		// the wire allows: no history of our epoch is almost certainly a
+		// recreation, our epoch ending below our position is substantial
+		// truncation or a recreation, and group commits fence + reseed
+		// either way. Otherwise this is a plain policy reset, exactly as
+		// the fetch would have done without the deferral.
+		if !isProduce && !isShare {
+			if shape := oldTP.cursor.oorPending.Swap(oorNone); shape != oorNone {
+				css.stop()
+				c := oldTP.cursor
+				// With the session stopped, cursor fields are safely
+				// readable and writable.
+				pos, epoch := c.offset, c.lastConsumedEpoch
+				c.unset()
+				if shape == oorAboveEnd && epoch >= 0 && cl.supportsOffsetForLeaderEpoch() {
+					css.recreated.add(topic, int32(part))
+					css.reloadOffsets.addLoad(topic, int32(part), loadTypeEpoch, offsetLoad{
+						replica:     -1,
+						oorClassify: true,
+						Offset:      Offset{at: pos, epoch: epoch},
+					})
+				} else {
+					css.reloadOffsets.addLoad(topic, int32(part), loadTypeList, offsetLoad{
+						replica: -1,
+						Offset:  cl.cfg.resetOffset,
+					})
+				}
+			}
 		}
 
 		// If the tp data is the same, we simply copy over the records

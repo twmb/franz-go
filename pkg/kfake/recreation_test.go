@@ -851,8 +851,83 @@ func TestRecreationTierBOORClassified(t *testing.T) {
 	}
 }
 
+const logOORAmbiguous = "out-of-range classification: the log now ends below our consumed position"
+
+// The masked case below topic IDs: the new incarnation's leader epoch caught
+// up to the old one, so metadata never shows a rewind and nothing can prove
+// a recreation. The out-of-range deferral then probes OffsetForLeaderEpoch:
+// our consumed epoch now ends below our position, which is named honestly
+// (substantial truncation, or a recreation - indistinguishable without
+// topic IDs), and group commits are fenced and reseeded either way, closing
+// the stale-commit window on this path too.
+func TestRecreationOORProbeMaskedShrink(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "t", "goor"
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic), MaxVersions(kversion.V2_7_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.MaxVersions(kversion.V2_7_0()),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.AutoCommitInterval(100*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	// Old incarnation at epoch 2, position 5.
+	leader := c.LeaderFor(topic, 0)
+	if err := c.MoveTopicPartition(topic, 0, leader); err != nil { // self-move: epoch 1
+		t.Fatal(err)
+	}
+	if err := c.MoveTopicPartition(topic, 0, leader); err != nil { // self-move: epoch 2
+		t.Fatal(err)
+	}
+	produceVals(t, c, topic, 0, "v0", "v1", "v2", "v3", "v4")
+	collectVals(t, cl, "v0", "v1", "v2", "v3", "v4")
+	pollCtx, pollCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	cl.PollFetches(pollCtx)
+	pollCancel()
+	waitCommitted(t, admin, group, topic, 0, 5)
+
+	// Recreate with the SAME leader and the SAME epoch (two self-moves),
+	// but a shorter log: metadata shows nothing unusual, and the next
+	// fetch is out of range above the log end.
+	cl.PauseFetchTopics(topic)
+	time.Sleep(300 * time.Millisecond)
+	recreateTopic(t, admin, topic, 1)
+	if err := c.MoveTopicPartition(topic, 0, leader); err != nil { // epoch 1
+		t.Fatal(err)
+	}
+	if err := c.MoveTopicPartition(topic, 0, leader); err != nil { // epoch 2
+		t.Fatal(err)
+	}
+	produceVals(t, c, topic, 0, "n0", "n1")
+	cl.ResumeFetchTopics(topic)
+
+	// The probe names the ambiguity honestly and the reset seeds a prompt
+	// recommit over the stale stored offset 5.
+	collectVals(t, cl, "n0", "n1")
+	verifyZeroRecords(t, cl, 500*time.Millisecond)
+	if lg.count(logOORAmbiguous) == 0 {
+		t.Error("expected the out-of-range probe's honest truncation-or-recreation classification")
+	}
+	if lg.count(logSeedCommit) == 0 {
+		t.Error("expected the probe's reset to seed a prompt recommit")
+	}
+	pollCtx, pollCancel = context.WithTimeout(context.Background(), 300*time.Millisecond)
+	cl.PollFetches(pollCtx)
+	pollCancel()
+	waitCommitted(t, admin, group, topic, 0, 2)
+}
+
 // The same out-of-range deferral where nothing corroborates a recreation
-// (no IDs, no epoch evidence) resolves to today's plain policy reset.
+// (no IDs, and epoch 0 => epoch 0 so no rewind and no conclusive probe
+// answer) resolves to the policy reset with no recreation claim: the probe
+// may name the truncation-or-recreation ambiguity, but never fabricates a
+// recreation classification.
 func TestRecreationTierDOORPlainReset(t *testing.T) {
 	t.Parallel()
 

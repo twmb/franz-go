@@ -115,6 +115,13 @@ func (s *source) removeCursor(rm *cursor) {
 	}
 }
 
+// Out-of-range deferral shapes (cursor.oorPending).
+const (
+	oorNone     int32 = iota
+	oorReset          // plain policy-reset shape (e.g. position below the log start: retention)
+	oorAboveEnd       // position above the log end: the log shrank (recreation, or truncation)
+)
+
 // cursor is where we are consuming from for an individual partition.
 type cursor struct {
 	topic string
@@ -157,9 +164,12 @@ type cursor struct {
 	// gate until one metadata classification round has run: a recreation
 	// then takes the labeled swap (fence, seeded recommit, ONE reset)
 	// instead of a plain reset that the later swap would repeat,
-	// re-delivering records. Set on the fetch path, resolved by the
-	// metadata merge (swap, or plain reset when nothing corroborates).
-	oorPending atomic.Bool
+	// re-delivering records. The value records the out-of-range shape:
+	// a position above the log end (the log shrank: recreation, or
+	// truncation) is worth an OffsetForLeaderEpoch probe when metadata
+	// corroborates nothing. Set on the fetch path, resolved by the
+	// metadata merge.
+	oorPending atomic.Int32
 
 	// guardFails counts consecutive record-batch epoch guard withholds
 	// (see the fetch handling). If repeated classification finds no
@@ -1509,7 +1519,11 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					// would repeat, re-delivering records. The merge
 					// resolves the deferral either way.
 					if !s.cl.recreation.armed.Load() && !s.cl.cfg.resetOffset.noReset {
-						c.oorPending.Store(true)
+						shape := oorReset
+						if fp.HighWatermark >= 0 && partOffset.offset > fp.HighWatermark {
+							shape = oorAboveEnd
+						}
+						c.oorPending.Store(shape)
 						strip(topic, partition, fp.Err)
 						s.cl.triggerUpdateMetadataNow("classifying OFFSET_OUT_OF_RANGE below the recreation gate")
 						break
