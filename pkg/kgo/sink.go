@@ -1347,9 +1347,7 @@ func (s *sink) handleReqRespBatch(
 					"base_offset", rp.BaseOffset,
 					"last_acked_offset", prior,
 				)
-				if s.cl.recreation.armed.Load() {
-					s.cl.triggerUpdateMetadataNow("produce offsets regressed, checking whether the topic was recreated")
-				}
+				s.cl.triggerUpdateMetadataNow("produce offsets regressed, checking whether the topic was recreated")
 				// Mid-transaction, earlier acked writes of this
 				// transaction evaporated with the log that acked
 				// them: committing would silently cover a partial

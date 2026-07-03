@@ -509,6 +509,87 @@ func TestRecreationGroup848(t *testing.T) {
 	collectVals(t, cl, "n0", "n1", "n2")
 }
 
+const logTierC = "topic recreation inferred from a persistent leader epoch rewind"
+
+// Tier C (2.1-2.7: leader epochs in metadata, no topic IDs): a recreation
+// whose old incarnation had epoch > 0 shows as a persistent epoch rewind,
+// which the merge treats as a recreation once it survives the consecutive
+// rewind bound: the consumer resets per policy with an honest notification.
+func TestRecreationTierCConsumer(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic), MaxVersions(kversion.V2_7_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+
+	// Bump the live incarnation's epoch above zero so its replacement is
+	// visible as a rewind (epoch-0 recreations are invisible in this tier).
+	oldLeader := c.LeaderFor(topic, 0)
+	if err := c.MoveTopicPartition(topic, 0, 1-oldLeader); err != nil {
+		t.Fatal(err)
+	}
+
+	produceVals(t, c, topic, 0, "v0", "v1", "v2")
+	collectVals(t, cl, "v0", "v1", "v2")
+
+	recreateTopic(t, cl, topic, 1)
+	waitForLog(t, cl, lg, logTierC, 1)
+
+	produceVals(t, c, topic, 0, "n0", "n1", "n2")
+	collectVals(t, cl, "n0", "n1", "n2")
+}
+
+// Tier C producer: the persistent rewind restarts produce sequences, and
+// buffered records ride onto the new incarnation.
+func TestRecreationTierCProducer(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic), MaxVersions(kversion.V2_7_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	// Two moves: the old incarnation ends at epoch 2, so the new
+	// incarnation stays visibly below it even after its own move.
+	oldLeader := c.LeaderFor(topic, 0)
+	if err := c.MoveTopicPartition(topic, 0, 1-oldLeader); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.MoveTopicPartition(topic, 0, oldLeader); err != nil {
+		t.Fatal(err)
+	}
+
+	produceSync(t, cl, topic, "p0")
+	recreateTopic(t, admin, topic, 1)
+	// Force the new incarnation's leader away from where the client
+	// believes the partition lives: produce attempts fail NOT_LEADER
+	// until the rewind bound trips and the swap adopts the new state.
+	if err := c.MoveTopicPartition(topic, 0, 1-oldLeader); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	cl.Produce(context.Background(), &kgo.Record{Topic: topic, Partition: 0, Value: []byte("p1")}, func(_ *kgo.Record, err error) {
+		done <- err
+	})
+	waitForLog(t, cl, lg, logTierC, 1)
+	if err := <-done; err != nil {
+		t.Fatalf("produce across the inferred recreation did not heal: %v", err)
+	}
+
+	consumeExactly(t, c, topic, "p1")
+}
+
 // Below ID-ful metadata (2.7 and earlier: no topic IDs anywhere), no signal
 // exists and recreation behavior is UNCHANGED: no adoption, no reset. In
 // this offset geometry (old position == new log end) the consumer silently

@@ -1144,6 +1144,54 @@ func (cl *Client) mergeTopicPartitions(
 				"old_leader_epoch", oldTP.leaderEpoch,
 				"new_leader_epoch", newTP.leaderEpoch,
 			)
+
+			// Below ID-ful metadata, a persistent epoch rewind is the only
+			// recreation signal there is: leader epochs are monotonic for
+			// a partition's lifetime (every election bumps, none lowers),
+			// so a rewind that survives maxEpochRewinds consecutive
+			// updates is a recreation, or a rolled-back unclean election;
+			// positions and sequences are unsafe to keep either way.
+			// Detection is opportunistic: an epoch-0 recreation, or one
+			// whose new epoch catches up between refreshes, is invisible.
+			// With IDs present the ID logic above owns recreation, and a
+			// persistent same-ID rewind keeps today's silent acceptance.
+			// Shares cannot exist below ID-ful metadata.
+			var noID [16]byte
+			switch {
+			case isProduce && oldTP.records.topicID == noID:
+				rb := oldTP.records
+				rb.mu.Lock()
+				exposed := rb.addedToTxn.Load() || len(rb.batches) > 0 || rb.inflight != 0
+				rb.mu.Unlock()
+				if cl.cfg.txnID != nil && exposed {
+					cur := cl.producer.id.Load().(*producerID)
+					cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
+				}
+				cl.cfg.logger.Log(LogLevelWarn, "topic recreation inferred from a persistent leader epoch rewind; restarting produce sequences",
+					"topic", topic,
+					"partition", part,
+					"old_leader_epoch", oldTP.leaderEpoch,
+					"new_leader_epoch", newTP.leaderEpoch,
+				)
+				oldTP.swapRecreatedRecBufTo(newTP)
+				continue
+			case !isProduce && !isShare && oldTP.cursor.topicID == noID:
+				reset := &cl.cfg.resetOffset
+				if reset.noReset {
+					reset = nil
+					cl.consumer.addFakeReadyForDraining(topic, int32(part),
+						fmt.Errorf("topic recreation inferred from a persistent leader epoch rewind (position reset requires ConsumeResetOffset, which is disabled; resume via SetOffsets): %w", kerr.UnknownTopicID),
+						"metadata refresh inferred topic recreation from a leader epoch rewind with resets disabled")
+				}
+				cl.cfg.logger.Log(LogLevelWarn, "topic recreation inferred from a persistent leader epoch rewind; resetting per the configured ConsumeResetOffset",
+					"topic", topic,
+					"partition", part,
+					"old_leader_epoch", oldTP.leaderEpoch,
+					"new_leader_epoch", newTP.leaderEpoch,
+				)
+				oldTP.swapRecreatedCursorTo(newTP, css, reset)
+				continue
+			}
 		}
 
 		// If the tp data is the same, we simply copy over the records
