@@ -426,6 +426,15 @@ func TestModeGlobal(t *testing.T) {
 	if got = cl.Mode(ctx); got[0].Mode != sr.ModeReadOnly {
 		t.Fatalf("global mode after set = %v, want READONLY", got[0].Mode)
 	}
+
+	// Reset with no subjects reverts the global mode to the default.
+	rst := cl.ResetMode(ctx)
+	if len(rst) != 1 || rst[0].Err != nil {
+		t.Fatalf("reset global mode: %+v", rst)
+	}
+	if got = cl.Mode(ctx); got[0].Mode != sr.ModeReadWrite {
+		t.Fatalf("global mode after reset = %v, want READWRITE", got[0].Mode)
+	}
 }
 
 func TestModeSubject(t *testing.T) {

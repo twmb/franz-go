@@ -891,11 +891,14 @@ func (cl *Client) SetMode(ctx context.Context, mode Mode, subjects ...string) []
 	return results
 }
 
-// ResetMode deletes any subject modes and reverts to the global default.
+// ResetMode deletes any subject modes and reverts them to the global default.
+// The global mode can be reset by either using an empty subject or by
+// specifying no subjects.
 func (cl *Client) ResetMode(ctx context.Context, subjects ...string) []ModeResult {
 	// DELETE /mode/{subject}
+	// DELETE /mode
 	if len(subjects) == 0 {
-		return nil
+		subjects = append(subjects, GlobalSubject)
 	}
 	var (
 		wg      sync.WaitGroup

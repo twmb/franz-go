@@ -829,6 +829,16 @@ func (r *Registry) handlePutSubjectMode(w http.ResponseWriter, req *http.Request
 	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": body.Mode})
 }
 
+// handleDeleteMode emulates DELETE /mode, resetting the global mode to the
+// default (READWRITE) and returning the mode that was in effect.
+func (r *Registry) handleDeleteMode(w http.ResponseWriter, _ *http.Request) {
+	r.mu.Lock()
+	deleted := r.globalMode
+	r.globalMode = sr.ModeReadWrite
+	r.mu.Unlock()
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": deleted})
+}
+
 // handleDeleteSubjectMode emulates DELETE /mode/{subject}, removing a
 // per-subject mode override and returning the mode that was removed.
 func (r *Registry) handleDeleteSubjectMode(w http.ResponseWriter, req *http.Request) {

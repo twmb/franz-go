@@ -162,6 +162,7 @@ func NewRegistry(opts ...Option) *Registry {
 	// mode routes (global and per-subject)
 	mux.HandleFunc("GET /mode", r.handleGetMode)
 	mux.HandleFunc("PUT /mode", r.handlePutMode)
+	mux.HandleFunc("DELETE /mode", r.handleDeleteMode)
 	mux.HandleFunc("GET /mode/{subject}", r.handleGetSubjectMode)
 	mux.HandleFunc("PUT /mode/{subject}", r.handlePutSubjectMode)
 	mux.HandleFunc("DELETE /mode/{subject}", r.handleDeleteSubjectMode)
