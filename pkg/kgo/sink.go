@@ -1088,8 +1088,10 @@ func (s *sink) handleReqRespBatch(
 	// errored attempt did not resolve that. Re-producing it under the new
 	// incarnation's reset sequences could not be deduplicated, so fail
 	// everything buffered loudly instead (order cannot be preserved past
-	// a failed batch).
-	if err != nil && batch.unsureByName && req.batches.t2gen[topic] != batch.owner.generation {
+	// a failed batch). Transactions are excluded: their swap poisoned the
+	// producer ID, which fails everything buffered with the abort
+	// sentinel and blocks any resend.
+	if err != nil && s.cl.cfg.txnID == nil && batch.unsureByName && req.batches.t2gen[topic] != batch.owner.generation {
 		s.cl.cfg.logger.Log(LogLevelError, "topic was recreated while a batch produced by name had no conclusive outcome; failing all buffered records for this partition rather than risking duplicates",
 			"broker", logID(s.nodeID),
 			"topic", topic,
@@ -1222,17 +1224,27 @@ func (s *sink) handleReqRespBatch(
 		}
 
 		if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
+			failErr := err
+			if s.cl.cfg.txnID != nil && req.batches.t2gen[topic] != batch.owner.generation {
+				// The topic was recreated mid-transaction (the merge
+				// swapped incarnations after this request was built):
+				// poison with the recreation sentinel, which recovery
+				// recognizes in both modes, rather than the raw
+				// sequence error, which pre-KIP-890p2 recovery
+				// classifies as fatal.
+				failErr = errRecreationAbortTxn
+			}
 			s.cl.cfg.logger.Log(LogLevelInfo, "batch errored, failing the producer ID",
 				"broker", logID(s.nodeID),
 				"topic", topic,
 				"partition", rp.Partition,
 				"producer_id", producerID,
 				"producer_epoch", producerEpoch,
-				"err", err,
+				"err", failErr,
 			)
-			s.cl.failProducerID(producerID, producerEpoch, err)
+			s.cl.failProducerID(producerID, producerEpoch, failErr)
 
-			s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.BaseOffset, err)
+			s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.BaseOffset, failErr)
 			if debug {
 				fmt.Fprintf(b, "fatal@%d,%d(%s)}, ", rp.BaseOffset, nrec, err)
 			}
@@ -1337,6 +1349,13 @@ func (s *sink) handleReqRespBatch(
 				)
 				if s.cl.recreation.armed.Load() {
 					s.cl.triggerUpdateMetadataNow("produce offsets regressed, checking whether the topic was recreated")
+				}
+				// Mid-transaction, earlier acked writes of this
+				// transaction evaporated with the log that acked
+				// them: committing would silently cover a partial
+				// transaction. Poison; aborting recovers.
+				if s.cl.cfg.txnID != nil {
+					s.cl.failProducerID(producerID, producerEpoch, errRecreationAbortTxn)
 				}
 			}
 			batch.owner.lastAckedOffset = rp.BaseOffset + int64(len(batch.records))
@@ -1595,6 +1614,12 @@ type recBuf struct {
 	// accepted our sequence chain into the new log, so the swap must NOT
 	// restart sequences at zero. Cleared at the swap.
 	offsetRegressed bool
+	// idMismatched is set when commit-time verification observed fresh
+	// metadata reporting a different ID for this topic than the one we
+	// produced to: corroboration for the metadata merge's swap, exactly
+	// like a wire rejection (two independent fresh fetches agreeing is
+	// not a flap). Cleared at the swap.
+	idMismatched bool
 
 	// sink is who is currently draining us. This can be modified
 	// concurrently during a metadata update.

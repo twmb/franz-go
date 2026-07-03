@@ -21,9 +21,15 @@ import (
 type capLogger struct {
 	mu  sync.Mutex
 	buf strings.Builder
+	lvl kgo.LogLevel // defaults to info
 }
 
-func (*capLogger) Level() kgo.LogLevel { return kgo.LogLevelInfo }
+func (lg *capLogger) Level() kgo.LogLevel {
+	if lg.lvl == kgo.LogLevelNone {
+		return kgo.LogLevelInfo
+	}
+	return lg.lvl
+}
 
 func (lg *capLogger) Log(_ kgo.LogLevel, msg string, keyvals ...any) {
 	lg.mu.Lock()
@@ -973,6 +979,290 @@ wait:
 	// cleanly on the new incarnation.
 	produceSync(t, cl, topic, "p1")
 	consumeExactly(t, c, topic, "p1")
+}
+
+// consumeCommitted asserts a topic's full read-committed contents are
+// exactly the wanted values.
+func consumeCommitted(t *testing.T, c *Cluster, topic string, want ...string) {
+	t.Helper()
+	cons := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	if len(want) > 0 {
+		collectVals(t, cons, want...)
+	}
+	verifyZeroRecords(t, cons, 300*time.Millisecond)
+}
+
+// txnProduceSync produces one record inside the current transaction and
+// returns the promise error.
+func txnProduceSync(t *testing.T, cl *kgo.Client, topic, val string) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r := &kgo.Record{Topic: topic, Partition: 0, Value: []byte(val)}
+	return cl.ProduceSync(ctx, r).FirstErr()
+}
+
+// A transaction whose topic is recreated mid-transaction fails with an
+// abortable error (never a silent partial commit); aborting recovers, and
+// the next transaction produces cleanly to the new incarnation. Modern path:
+// KIP-890p2, produce v13 by ID.
+func TestRecreationTxnAborts(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	txcl := newPlainClient(t, c,
+		kgo.TransactionalID("tx-recreate"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	)
+	admin := newPlainClient(t, c)
+
+	// A first transaction commits normally.
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "a0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	// The second transaction spans the recreation: its produce fails
+	// abortable, commit is refused, abort recovers.
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "b0"); err != nil {
+		t.Fatal(err)
+	}
+	recreateTopic(t, admin, topic, 1)
+	if err := txnProduceSync(t, txcl, topic, "b1"); !errors.Is(err, kerr.TransactionAbortable) {
+		t.Fatalf("produce across recreation got %v; want an abortable transaction error", err)
+	}
+	err := txcl.EndTransaction(ctx, kgo.TryCommit)
+	if !errors.Is(err, kerr.OperationNotAttempted) {
+		t.Fatalf("commit got %v; want a refusal wrapping OperationNotAttempted", err)
+	}
+	if !errors.Is(err, kerr.TransactionAbortable) {
+		t.Fatalf("commit refusal %v does not carry the abortable recreation reason", err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("abort after recreation: %v", err)
+	}
+
+	// The next transaction is clean on the new incarnation.
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "c0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	consumeCommitted(t, c, topic, "c0")
+}
+
+// Same shape, pre-KIP-890p2 (produce v11 by name, EndTxn v4): the
+// post-recreation write lands silently in the new incarnation, the acked
+// offset regression poisons the transaction, and recovery works because the
+// recreation sentinel is recognized in the pre-890p2 recovery arm (raw
+// TransactionAbortable is not recoverable there).
+func TestRecreationTxnAbortsPre890p2(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	txcl := newPlainClient(t, c,
+		kgo.MaxVersions(kversion.V3_7_0()),
+		kgo.TransactionalID("tx-recreate-pre890p2"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	)
+	admin := newPlainClient(t, c)
+
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "b0"); err != nil {
+		t.Fatal(err)
+	}
+	recreateTopic(t, admin, topic, 1)
+	// By-name produce silently lands in the new incarnation; the accepted
+	// offset regression is what poisons the transaction. The promise
+	// itself is not an error (the write was accepted).
+	if err := txnProduceSync(t, txcl, topic, "b1"); err != nil && !errors.Is(err, kerr.TransactionAbortable) {
+		t.Fatalf("produce across recreation got %v; want success (silent by-name landing) or the abortable poison", err)
+	}
+	err := txcl.EndTransaction(ctx, kgo.TryCommit)
+	if err == nil {
+		t.Fatal("commit across a recreation succeeded; want a refusal")
+	}
+	if !errors.Is(err, kerr.TransactionAbortable) {
+		t.Fatalf("commit refusal %v does not carry the abortable recreation reason", err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("abort after recreation (pre-890p2 recovery): %v", err)
+	}
+
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "c0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	consumeCommitted(t, c, topic, "c0")
+}
+
+// Shape 2: a transaction produces to a topic, the topic is recreated, and
+// the transaction never touches it again -- no response exists to inspect at
+// any produce version. Only the commit-time verification can catch it.
+func TestRecreationTxnShape2(t *testing.T) {
+	t.Parallel()
+
+	const foo, bar = "foo", "bar"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, foo, bar))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	lg := new(capLogger)
+	txcl := newPlainClient(t, c,
+		kgo.TransactionalID("tx-shape2"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, foo, "f0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, bar, "r0"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recreate foo; the transaction never touches foo again, so no
+	// response can corroborate anything before the commit.
+	recreateTopic(t, admin, foo, 1)
+
+	err := txcl.EndTransaction(ctx, kgo.TryCommit)
+	if err == nil {
+		t.Fatal("commit of a transaction that wrote to a recreated topic succeeded; want the verification refusal")
+	}
+	if !errors.Is(err, kerr.TransactionAbortable) {
+		t.Fatalf("verification refusal %v does not carry the abortable recreation reason", err)
+	}
+	if !strings.Contains(err.Error(), "deleted and recreated") {
+		t.Fatalf("verification refusal %v does not name the recreation", err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("abort after verification refusal: %v", err)
+	}
+
+	// The verification corroborated the swap; wait for it to land so the
+	// next transaction deterministically starts on the new incarnation.
+	// (Either swap wording can fire: with the restored addedToTxn still
+	// set the merge poisons the already-failed transaction, without it
+	// the swap lands alone.)
+	waitForLog(t, txcl, lg, logSwap, 1)
+
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, foo, "f1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, bar, "r1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	consumeCommitted(t, c, foo, "f1")
+	consumeCommitted(t, c, bar, "r1")
+}
+
+// A recreation that lands inside the unconfirmed-EndTxn window: the
+// documented TryAbort retry heals without any commit-time verification (the
+// prior attempt's fate is sealed), and the following transactions converge
+// onto the new incarnation with an abortable poison, never silence.
+func TestRecreationTxnUnconfirmedInterplay(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	txcl := newPlainClient(t, c,
+		kgo.TransactionalID("tx-unconfirmed-recreate"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	)
+	admin := newPlainClient(t, c)
+
+	// One-shot control: the first EndTxn fails with UNKNOWN_SERVER_ERROR
+	// without kfake processing it -- the commit outcome is unconfirmed.
+	c.ControlKey(int16(kmsg.EndTxn), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.EndTxnRequest)
+		resp := req.ResponseKind().(*kmsg.EndTxnResponse)
+		resp.ErrorCode = kerr.UnknownServerError.Code
+		return resp, nil, true
+	})
+
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "a0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryCommit); err == nil {
+		t.Fatal("expected the controlled EndTxn to leave the commit unconfirmed")
+	}
+
+	// The topic is recreated inside the unconfirmed window; the abort
+	// retry must still heal.
+	recreateTopic(t, admin, topic, 1)
+	if err := txcl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("unconfirmed abort retry: %v", err)
+	}
+
+	// The next transaction produces against the stale incarnation and is
+	// poisoned abortable; the one after that is clean.
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "b0"); !errors.Is(err, kerr.TransactionAbortable) {
+		t.Fatalf("produce against the stale incarnation got %v; want the abortable poison", err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatal(err)
+	}
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "c0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	consumeCommitted(t, c, topic, "c0")
 }
 
 // Below the gate, produce behavior across a recreation is unchanged (by-name

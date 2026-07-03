@@ -2,9 +2,11 @@ package kgo
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"sync/atomic"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -12,6 +14,18 @@ import (
 // cannot be known across a topic recreation. Produced records carry it in
 // their promise error.
 var errRecreationUnsureBatch = errors.New("topic was deleted and recreated: a produce of this data went out addressed by topic name without a conclusive response, so it may or may not exist in the new topic; failing rather than risking a duplicate")
+
+// errRecreationAbortTxn poisons the producer ID when a topic this
+// transaction produced to was deleted and recreated: committing could
+// silently cover writes that evaporated with the old incarnation (or landed
+// in the new one out of transaction control), so the transaction must fail.
+// Wrapping kerr.TransactionAbortable makes the existing classification
+// apply: GroupTransactSession ends abort, and direct users retry
+// EndTransaction(TryAbort). maybeRecoverProducerID additionally recognizes
+// this sentinel itself, in both recovery modes: the poison is
+// client-synthesized (the broker saw nothing fatal), so recovering the
+// producer ID after the abort is always safe.
+var errRecreationAbortTxn = fmt.Errorf("topic was deleted and recreated during the transaction; the transaction cannot commit safely across topic incarnations: %w", kerr.TransactionAbortable)
 
 // recreationGate arms client-wide handling of topic recreation (a topic
 // deleted and recreated with the same name, yielding a new topic ID).

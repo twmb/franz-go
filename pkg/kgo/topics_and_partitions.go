@@ -778,6 +778,7 @@ func (old *topicPartition) swapRecreatedRecBufTo(new *topicPartition) { //nolint
 	rb.generation++
 	rb.needSeqReset = !rb.offsetRegressed
 	rb.offsetRegressed = false
+	rb.idMismatched = false
 	rb.unknownFailures = 0 // stale-incarnation failures corroborated this swap; they must not trip the fail limit
 	rb.lastAckedOffset = -1
 

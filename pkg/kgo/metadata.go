@@ -914,7 +914,7 @@ func (cl *Client) mergeTopicPartitions(
 			newID := newTP.records.topicID
 			var noID [16]byte
 			var oldID [16]byte
-			var corroborated, regressed bool
+			var corroborated, regressed, exposed bool
 			if newID != noID {
 				rb.mu.Lock()
 				oldID = rb.topicID
@@ -926,7 +926,8 @@ func (cl *Client) mergeTopicPartitions(
 					oldID = newID
 				}
 				regressed = rb.offsetRegressed
-				corroborated = rb.unknownFailures > 0 || regressed
+				corroborated = rb.unknownFailures > 0 || regressed || rb.idMismatched
+				exposed = rb.addedToTxn.Load() || len(rb.batches) > 0 || rb.inflight != 0
 				rb.mu.Unlock()
 			}
 			// An ID change is a topic recreation (or, rarely, an ID
@@ -934,11 +935,11 @@ func (cl *Client) mergeTopicPartitions(
 			// corroboration from the produce wire: a stale-incarnation
 			// rejection, or an acked offset regression. Without it we
 			// keep the old ID and let the responses corroborate (their
-			// failure paths urgently re-trigger metadata). Disarmed or
-			// transactional, behavior is unchanged: at v13 the stale-ID
-			// produce fails loudly at the unknown-topic bound, below
-			// v13 by-name produce cannot address incarnations at all.
-			if newID != noID && oldID != newID && cl.cfg.txnID == nil && cl.recreation.armed.Load() {
+			// failure paths urgently re-trigger metadata). Disarmed,
+			// behavior is unchanged: at v13 the stale-ID produce fails
+			// loudly at the unknown-topic bound, below v13 by-name
+			// produce cannot address incarnations at all.
+			if newID != noID && oldID != newID && cl.recreation.armed.Load() {
 				if !corroborated {
 					*newTP = *oldTP
 					// Keep draining: the produce wire is what
@@ -949,13 +950,34 @@ func (cl *Client) mergeTopicPartitions(
 					retryWhy.add(topic, int32(part), errRecreationPending)
 					continue
 				}
-				cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID for producing",
-					"topic", topic,
-					"partition", part,
-					"old_id", topicID(oldID),
-					"new_id", topicID(newID),
-					"restarting_sequences", !regressed,
-				)
+				if cl.cfg.txnID != nil && exposed {
+					// Transactions FAIL on recreated topics: when the
+					// partition has transactional state tied to the
+					// old incarnation (added to the transaction, or
+					// batches buffered or in flight), poison the
+					// producer ID so this transaction aborts
+					// (recovery lifts the poison). The swap below
+					// still lands, so the next transaction produces
+					// to the new incarnation. With nothing exposed
+					// (e.g. between transactions), the swap alone
+					// suffices.
+					cur := cl.producer.id.Load().(*producerID)
+					cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
+					cl.cfg.logger.Log(LogLevelWarn, "topic recreation detected for a transactional producer; failing any active transaction and adopting the new topic ID",
+						"topic", topic,
+						"partition", part,
+						"old_id", topicID(oldID),
+						"new_id", topicID(newID),
+					)
+				} else {
+					cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID for producing",
+						"topic", topic,
+						"partition", part,
+						"old_id", topicID(oldID),
+						"new_id", topicID(newID),
+						"restarting_sequences", !regressed,
+					)
+				}
 				oldTP.swapRecreatedRecBufTo(newTP)
 				continue
 			}
