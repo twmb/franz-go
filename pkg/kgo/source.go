@@ -160,6 +160,17 @@ type cursor struct {
 	// tripwire against a racing old-incarnation committed offset.
 	positioned atomic.Bool
 
+	// recreationRestart is set when the cursor's position comes from a
+	// recreation restart (the new topic's earliest offset). Until the
+	// cursor consumes something, an out-of-range re-resolves to the
+	// earliest offset again -- e.g. the new topic truncated between our
+	// restart resolving 0 and our first fetch -- keeping the
+	// point-in-time-and-everything-after contract rather than falling
+	// back to ConsumeResetOffset. First consumption hands out-of-range
+	// handling over to the nearest-timestamp reset, which neutralizes
+	// this flag (see oorResetOffset), so it needs no explicit clearing.
+	recreationRestart atomic.Bool
+
 	// oorPending defers an OFFSET_OUT_OF_RANGE policy reset below the
 	// gate until one metadata classification round has run: a recreation
 	// then takes the labeled swap (fence, seeded recommit, ONE reset)
@@ -1483,19 +1494,27 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					}
 					reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
 						replica: replica,
-						Offset:  s.cl.oorResetOffset(c.lastConsumedTime),
+						Offset:  s.cl.oorResetOffset(c),
 					})
 					if !log {
 						return
 					}
-					if !c.lastConsumedTime.IsZero() {
+					switch {
+					case !c.lastConsumedTime.IsZero():
 						s.cl.cfg.logger.Log(LogLevelWarn, "received OFFSET_OUT_OF_RANGE, resetting to the nearest offset; either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming, or the broker has lost data and has not yet transferred leadership",
 							"broker", logID(s.nodeID),
 							"topic", topic,
 							"partition", partition,
 							"prior_offset", partOffset.offset,
 						)
-					} else {
+					case c.recreationRestart.Load():
+						s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE on an unconsumed recreation restart, re-resolving the topic's earliest offset",
+							"broker", logID(s.nodeID),
+							"topic", topic,
+							"partition", partition,
+							"prior_offset", partOffset.offset,
+						)
+					default:
 						s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE on the first fetch, resetting to the configured ConsumeResetOffset",
 							"broker", logID(s.nodeID),
 							"topic", topic,

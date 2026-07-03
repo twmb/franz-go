@@ -741,6 +741,7 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	c.unset()
 	css.reloadOffsets.removeLoad(c.topic, c.partition)
 	if reset != nil {
+		c.recreationRestart.Store(true)
 		css.reloadOffsets.addLoad(c.topic, c.partition, loadTypeList, offsetLoad{
 			replica:        -1,
 			recreationSeed: true,

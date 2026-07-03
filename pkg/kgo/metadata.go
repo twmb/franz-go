@@ -889,7 +889,7 @@ func (cl *Client) mergeTopicPartitions(
 				// undeferred out-of-range would have; the load retries
 				// against the missing topic the same way.
 				css.stop()
-				reset := cl.oorResetOffset(oldTP.cursor.lastConsumedTime)
+				reset := cl.oorResetOffset(oldTP.cursor)
 				oldTP.cursor.unset()
 				css.reloadOffsets.addLoad(topic, int32(part), loadTypeList, offsetLoad{
 					replica: -1,
@@ -1238,7 +1238,7 @@ func (cl *Client) mergeTopicPartitions(
 				// With the session stopped, cursor fields are safely
 				// readable and writable.
 				pos, epoch := c.offset, c.lastConsumedEpoch
-				reset := cl.oorResetOffset(c.lastConsumedTime)
+				reset := cl.oorResetOffset(c)
 				c.unset()
 				if shape == oorAboveEnd && epoch >= 0 && cl.supportsOffsetForLeaderEpoch() {
 					css.recreated.add(topic, int32(part))

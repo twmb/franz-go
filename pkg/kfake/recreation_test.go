@@ -454,6 +454,74 @@ func TestRecreationResetsToStart(t *testing.T) {
 	}
 }
 
+// deleteRecordsTo advances a partition's log start offset.
+func deleteRecordsTo(t *testing.T, cl *kgo.Client, topic string, partition int32, offset int64) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req := kmsg.NewPtrDeleteRecordsRequest()
+	rt := kmsg.NewDeleteRecordsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewDeleteRecordsRequestTopicPartition()
+	rp.Partition = partition
+	rp.Offset = offset
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("delete records: %v", err)
+	}
+	if ec := resp.Topics[0].Partitions[0].ErrorCode; ec != 0 {
+		t.Fatalf("delete records: %v", kerr.ErrorForCode(ec))
+	}
+}
+
+// A recreation restart that has not consumed yet stays pinned to the
+// topic's earliest offset: if the new topic truncates between the restart
+// resolving and the first fetch, the resulting out-of-range re-resolves the
+// earliest offset (here 5) rather than falling back to ConsumeResetOffset
+// (at-end here, which would skip the topic's whole remainder).
+func TestRecreationRestartThenTruncate(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V3_0_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	verifyZeroRecords(t, cl, 300*time.Millisecond)
+	produceVals(t, c, topic, 0, "v0", "v1")
+	collectVals(t, cl, "v0", "v1")
+
+	// Recreate; the below-the-gate adoption works from metadata alone, so
+	// the swap lands while paused.
+	cl.PauseFetchTopics(topic)
+	time.Sleep(300 * time.Millisecond)
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, cl, lg, logSwap, 1)
+
+	// Position the restart at offset 0 of the empty new topic.
+	cl.ResumeFetchTopics(topic)
+	verifyZeroRecords(t, cl, 300*time.Millisecond)
+
+	// Truncate under the unconsumed restart, then resume: the fetch at 0
+	// is out of range and must re-resolve to the earliest offset (5).
+	cl.PauseFetchTopics(topic)
+	time.Sleep(300 * time.Millisecond)
+	produceVals(t, c, topic, 0, "n0", "n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "n9")
+	deleteRecordsTo(t, admin, topic, 0, 5)
+	cl.ResumeFetchTopics(topic)
+
+	collectVals(t, cl, "n5", "n6", "n7", "n8", "n9")
+	verifyZeroRecords(t, cl, 300*time.Millisecond)
+}
+
 // A paused partition generates no fetches and thus no corroboration: the
 // swap must defer until unpause (the position is frozen meanwhile, so this
 // is safe), then complete.

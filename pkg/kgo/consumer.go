@@ -101,13 +101,23 @@ func NoResetOffset() Offset {
 // OffsetOutOfRange error, consuming will reset to the first offset after this
 // timestamp. You can use NoResetOffset().AfterMilli(...) to instead switch the
 // client to a fatal state (for the affected partition).
-// oorResetOffset is what an out-of-range position resets to: once the
-// cursor has consumed anything, the nearest offset at or after the last
-// consumed record's timestamp (losing or re-reading the minimum), and only
-// on a never-consumed cursor the configured ConsumeResetOffset.
-func (cl *Client) oorResetOffset(lastConsumedTime time.Time) Offset {
-	if !lastConsumedTime.IsZero() {
-		return NewOffset().AfterMilli(lastConsumedTime.UnixMilli())
+// oorResetOffset is what an out-of-range position resets to. The rule for
+// every reset in the client: ConsumeResetOffset is the LAST resort, used
+// only when nothing better is detectable; any better-informed position wins
+// (a proven truncation resets to the exact divergence offset elsewhere, a
+// classified recreation restarts at the new topic's earliest offset, and
+// NoResetOffset never moves automatically). Here: once the cursor has
+// consumed anything, the nearest offset at or after the last consumed
+// record's timestamp (losing or re-reading the minimum); on a cursor whose
+// position is an unconsumed recreation restart, the topic's earliest offset
+// again (the new topic may have truncated under us); and only otherwise the
+// configured ConsumeResetOffset.
+func (cl *Client) oorResetOffset(c *cursor) Offset {
+	if lct := c.lastConsumedTime; !lct.IsZero() {
+		return NewOffset().AfterMilli(lct.UnixMilli())
+	}
+	if c.recreationRestart.Load() {
+		return recreationResetOffset
 	}
 	return cl.cfg.resetOffset
 }
@@ -2210,6 +2220,9 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 				)
 			case load.err == nil && load.offset < 0:
 				reset = recreationResetOffset // a proven recreation restarts from the new topic's beginning, like every classified recreation
+				if load.cursor != nil {
+					load.cursor.recreationRestart.Store(true)
+				}
 				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the broker has no history of the epoch we consumed; the topic was almost certainly deleted and recreated; restarting from the new topic's beginning",
 					"topic", load.topic,
 					"partition", load.partition,
