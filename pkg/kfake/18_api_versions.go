@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 
@@ -73,7 +74,11 @@ func (c *Cluster) handleApiVersions(kreq kmsg.Request) (kmsg.Response, error) {
 		}
 		resp.ApiKeys = capped
 	} else {
-		resp.ApiKeys = apiVersionsSorted
+		// Clone: the response is handed to ControlKey interceptors,
+		// which may mutate it. Handing out the shared package-global
+		// slice would let one interceptor corrupt every later
+		// ApiVersions response process-wide.
+		resp.ApiKeys = slices.Clone(apiVersionsSorted)
 	}
 
 	// Build SupportedFeatures (what we can support) and FinalizedFeatures
