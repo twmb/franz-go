@@ -101,6 +101,17 @@ func NoResetOffset() Offset {
 // OffsetOutOfRange error, consuming will reset to the first offset after this
 // timestamp. You can use NoResetOffset().AfterMilli(...) to instead switch the
 // client to a fatal state (for the affected partition).
+// oorResetOffset is what an out-of-range position resets to: once the
+// cursor has consumed anything, the nearest offset at or after the last
+// consumed record's timestamp (losing or re-reading the minimum), and only
+// on a never-consumed cursor the configured ConsumeResetOffset.
+func (cl *Client) oorResetOffset(lastConsumedTime time.Time) Offset {
+	if !lastConsumedTime.IsZero() {
+		return NewOffset().AfterMilli(lastConsumedTime.UnixMilli())
+	}
+	return cl.cfg.resetOffset
+}
+
 func (o Offset) AfterMilli(millisec int64) Offset {
 	o.at = millisec
 	o.relative = 0
@@ -1475,11 +1486,14 @@ type offsetLoad struct {
 	// oorClassify marks an OffsetForLeaderEpoch probe issued to classify
 	// an out-of-range position whose log shrank, below the recreation
 	// gate: the answer only decides how honestly the outcome is named
-	// (recreation vs truncation); the position always then resets per
-	// policy, never to the "divergence point" (across a recreation that
-	// is a meaningless spot in the new topic). Reload retries preserve
-	// the mark.
+	// (recreation vs truncation) and which reset follows -- oorReset
+	// (the nearest-timestamp reset the plain out-of-range path would
+	// have used) unless the answer proves a recreation, which resets per
+	// ConsumeResetOffset like every classified recreation. Never the
+	// "divergence point": across a recreation that is a meaningless spot
+	// in the new topic. Reload retries preserve both fields.
 	oorClassify bool
+	oorReset    Offset
 
 	Offset
 }
@@ -2184,9 +2198,10 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 		if load.request.oorClassify {
 			var pedl *ErrDataLoss
 			classified := true
+			reset := load.request.oorReset // the nearest-timestamp reset the plain out-of-range path would use
 			switch {
 			case errors.As(load.err, &pedl):
-				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the log now ends below our consumed position; either substantial truncation, or the topic was deleted and recreated; resetting per ConsumeResetOffset",
+				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the log now ends below our consumed position; either substantial truncation, or the topic was deleted and recreated; resetting",
 					"topic", load.topic,
 					"partition", load.partition,
 					"consumed_to", pedl.ConsumedTo,
@@ -2194,13 +2209,14 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 					"epoch_now_ends_at", pedl.ResetTo,
 				)
 			case load.err == nil && load.offset < 0:
+				reset = s.c.cl.cfg.resetOffset // a proven recreation resets per policy, like every classified recreation
 				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the broker has no history of the epoch we consumed; the topic was almost certainly deleted and recreated; resetting per ConsumeResetOffset",
 					"topic", load.topic,
 					"partition", load.partition,
 					"consumed_epoch", load.request.epoch,
 				)
 			case load.err == nil:
-				s.c.cl.cfg.logger.Log(LogLevelInfo, "out-of-range classification found our consumed epoch intact; resetting per ConsumeResetOffset",
+				s.c.cl.cfg.logger.Log(LogLevelInfo, "out-of-range classification found our consumed epoch intact; resetting",
 					"topic", load.topic,
 					"partition", load.partition,
 				)
@@ -2211,7 +2227,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 				reloads.addLoad(load.topic, load.partition, loadTypeList, offsetLoad{
 					replica:        -1,
 					recreationSeed: true,
-					Offset:         s.c.cl.cfg.resetOffset,
+					Offset:         reset,
 				})
 				continue
 			}

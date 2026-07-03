@@ -885,14 +885,15 @@ func (cl *Client) mergeTopicPartitions(
 				oldTP.records.bumpRepeatedLoadErr(errMissingMetadataPartition)
 			} else if !isShare && oldTP.cursor.oorPending.Swap(oorNone) != oorNone {
 				// The topic vanished while an out-of-range reset was
-				// deferred for classification: reset per policy; the
-				// load retries against the missing topic exactly as
-				// an undeferred reset would have.
+				// deferred for classification: reset exactly as an
+				// undeferred out-of-range would have; the load retries
+				// against the missing topic the same way.
 				css.stop()
+				reset := cl.oorResetOffset(oldTP.cursor.lastConsumedTime)
 				oldTP.cursor.unset()
 				css.reloadOffsets.addLoad(topic, int32(part), loadTypeList, offsetLoad{
 					replica: -1,
-					Offset:  cl.cfg.resetOffset,
+					Offset:  reset,
 				})
 			}
 			retryWhy.add(topic, int32(part), errMissingMetadataPartition)
@@ -1237,18 +1238,20 @@ func (cl *Client) mergeTopicPartitions(
 				// With the session stopped, cursor fields are safely
 				// readable and writable.
 				pos, epoch := c.offset, c.lastConsumedEpoch
+				reset := cl.oorResetOffset(c.lastConsumedTime)
 				c.unset()
 				if shape == oorAboveEnd && epoch >= 0 && cl.supportsOffsetForLeaderEpoch() {
 					css.recreated.add(topic, int32(part))
 					css.reloadOffsets.addLoad(topic, int32(part), loadTypeEpoch, offsetLoad{
 						replica:     -1,
 						oorClassify: true,
+						oorReset:    reset,
 						Offset:      Offset{at: pos, epoch: epoch},
 					})
 				} else {
 					css.reloadOffsets.addLoad(topic, int32(part), loadTypeList, offsetLoad{
 						replica: -1,
-						Offset:  cl.cfg.resetOffset,
+						Offset:  reset,
 					})
 				}
 			}
