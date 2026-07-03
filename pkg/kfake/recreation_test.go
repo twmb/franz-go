@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -174,6 +175,12 @@ const logSwap = "topic recreation detected"
 // incarnation has a fresh topic ID.
 func recreateTopic(t *testing.T, cl *kgo.Client, topic string, partitions int32) {
 	t.Helper()
+	deleteTopic(t, cl, topic)
+	createTopic(t, cl, topic, partitions)
+}
+
+func deleteTopic(t *testing.T, cl *kgo.Client, topic string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -189,6 +196,12 @@ func recreateTopic(t *testing.T, cl *kgo.Client, topic string, partitions int32)
 	if ec := delResp.Topics[0].ErrorCode; ec != 0 {
 		t.Fatalf("delete topic: %v", kerr.ErrorForCode(ec))
 	}
+}
+
+func createTopic(t *testing.T, cl *kgo.Client, topic string, partitions int32) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	create := kmsg.NewPtrCreateTopicsRequest()
 	ct := kmsg.NewCreateTopicsRequestTopic()
@@ -420,6 +433,11 @@ func TestRecreationConsumerSwapPaused(t *testing.T) {
 	collectVals(t, cl, "v0")
 
 	cl.PauseFetchTopics(topic)
+	// Pausing does not stop a fetch already in flight; the deletion wakes
+	// it and its UNKNOWN_TOPIC_ID rejection would corroborate an early
+	// (safe, but not deferred) swap. Let it resolve before recreating so
+	// the pause deterministically accrues no corroboration.
+	time.Sleep(300 * time.Millisecond)
 	recreateTopic(t, cl, topic, 1)
 	produceVals(t, c, topic, 0, "n0")
 
@@ -702,4 +720,282 @@ func TestRecreationCommitFenceSeedManual(t *testing.T) {
 		t.Fatalf("manual commit: %v", err)
 	}
 	waitCommitted(t, admin, group, topic, 0, 0)
+}
+
+const logProduceSwap = "topic recreation detected, adopting the new topic ID for producing"
+
+// produceSync produces one record on the given client and requires success.
+func produceSync(t *testing.T, cl *kgo.Client, topic, val string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r := &kgo.Record{Topic: topic, Partition: 0, Value: []byte(val)}
+	if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+		t.Fatalf("produce %q: %v", val, err)
+	}
+}
+
+// consumeExactly asserts the topic's full contents (from the start) are
+// exactly the wanted values: nothing lost, nothing duplicated.
+func consumeExactly(t *testing.T, c *Cluster, topic string, want ...string) {
+	t.Helper()
+	cons := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	collectVals(t, cons, want...)
+	verifyZeroRecords(t, cons, 300*time.Millisecond)
+}
+
+// An idempotent producer heals across a recreation with no surfaced error,
+// no producer ID or epoch change, and a sequence chain restarted at zero:
+// dup-impossible at v13, no OOOSN surfaced.
+func TestRecreationProduceHeal(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	// Record every produce attempt's epoch and first sequence as written
+	// on the wire.
+	type attempt struct {
+		epoch int16
+		seq   int32
+	}
+	var attemptsMu sync.Mutex
+	var attempts []attempt
+	c.ControlKey(0, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		preq := kreq.(*kmsg.ProduceRequest)
+		attemptsMu.Lock()
+		defer attemptsMu.Unlock()
+		for i := range preq.Topics {
+			for j := range preq.Topics[i].Partitions {
+				var b kmsg.RecordBatch
+				if err := b.ReadFrom(preq.Topics[i].Partitions[j].Records); err == nil {
+					attempts = append(attempts, attempt{b.ProducerEpoch, b.FirstSequence})
+				}
+			}
+		}
+		return nil, nil, false
+	})
+
+	for _, v := range []string{"v0", "v1", "v2"} {
+		produceSync(t, cl, topic, v)
+	}
+	recreateTopic(t, admin, topic, 1)
+	for _, v := range []string{"n0", "n1", "n2"} {
+		produceSync(t, cl, topic, v)
+	}
+
+	if n := lg.count("failing the producer ID"); n != 0 {
+		t.Errorf("producer ID was failed %d times; want a heal with no ID reload", n)
+	}
+	if n := lg.count(logProduceSwap); n == 0 {
+		t.Error("expected a produce swap log line")
+	}
+
+	// The last three attempts are the healed chain: sequences restart at
+	// zero, epoch unchanged from the very first attempt.
+	attemptsMu.Lock()
+	defer attemptsMu.Unlock()
+	if len(attempts) < 6 {
+		t.Fatalf("saw %d produce attempts, want at least 6", len(attempts))
+	}
+	epoch := attempts[0].epoch
+	for i, a := range attempts {
+		if a.epoch != epoch {
+			t.Errorf("attempt %d used epoch %d; want the initial epoch %d for every attempt", i, a.epoch, epoch)
+		}
+	}
+	last3 := attempts[len(attempts)-3:]
+	for i, want := range []int32{0, 1, 2} {
+		if last3[i].seq != want {
+			t.Errorf("healed attempt %d has sequence %d; want %d (chain restarted at zero)", i, last3[i].seq, want)
+		}
+	}
+
+	consumeExactly(t, c, topic, "n0", "n1", "n2")
+}
+
+// A recreation that lands while a produce request is in flight cannot
+// duplicate: the in-flight request addressed the dead incarnation's ID and
+// is rejected before reaching any log, and the retry heals into the new
+// incarnation exactly once.
+func TestRecreationProduceInflight(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	cl := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	admin := newPlainClient(t, c)
+
+	produceSync(t, cl, topic, "v0")
+
+	// Hold the next produce in flight while the topic is recreated under
+	// it, then let the broker process it against the post-recreation state.
+	recreated := make(chan struct{})
+	var held bool
+	c.ControlKey(0, func(kmsg.Request) (kmsg.Response, error, bool) {
+		if held {
+			return nil, nil, false
+		}
+		held = true
+		c.SleepControl(func() { <-recreated })
+		return nil, nil, false
+	})
+
+	done := make(chan error, 1)
+	cl.Produce(context.Background(), &kgo.Record{Topic: topic, Partition: 0, Value: []byte("h0")}, func(_ *kgo.Record, err error) {
+		done <- err
+	})
+	recreateTopic(t, admin, topic, 1)
+	close(recreated)
+
+	if err := <-done; err != nil {
+		t.Fatalf("in-flight produce did not heal: %v", err)
+	}
+	produceSync(t, cl, topic, "n1")
+
+	consumeExactly(t, c, topic, "h0", "n1")
+}
+
+// Below v13 the produce wire addresses topics by name, and a batch whose
+// by-name outcome was never resolved may already sit in a recreated topic's
+// new incarnation: re-producing it could not be deduplicated, so the swap
+// must fail the partition's buffered records loudly, then continue cleanly.
+func TestRecreationProduceUnsureByName(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	maxv := kversion.Stable()
+	maxv.SetMaxKeyVersion(0, 12) // produce by name; fetch stays v13+ so the gate arms
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.MaxVersions(maxv),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	produceSync(t, cl, topic, "p0")
+
+	// Time out every produce until the topic is deleted: the outcome of
+	// anything in flight becomes unknowable. After deletion, attempts flow
+	// to the broker again (and fail as unknown, corroborating the swap).
+	var timeouts atomic.Int32
+	var deleted atomic.Bool
+	c.ControlKey(0, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		if deleted.Load() {
+			return nil, nil, false
+		}
+		preq := kreq.(*kmsg.ProduceRequest)
+		resp := preq.ResponseKind().(*kmsg.ProduceResponse)
+		for i := range preq.Topics {
+			rt := &preq.Topics[i]
+			st := kmsg.NewProduceResponseTopic()
+			st.Topic = rt.Topic
+			st.TopicID = rt.TopicID
+			for _, rp := range rt.Partitions {
+				sp := kmsg.NewProduceResponseTopicPartition()
+				sp.Partition = rp.Partition
+				sp.ErrorCode = kerr.RequestTimedOut.Code
+				st.Partitions = append(st.Partitions, sp)
+			}
+			resp.Topics = append(resp.Topics, st)
+		}
+		timeouts.Add(1)
+		return resp, nil, true
+	})
+
+	done := make(chan error, 1)
+	cl.Produce(context.Background(), &kgo.Record{Topic: topic, Partition: 0, Value: []byte("u0")}, func(_ *kgo.Record, err error) {
+		done <- err
+	})
+
+	// At least one attempt must have received the timed-out response
+	// before the recreation, marking its by-name outcome unknowable.
+	deadline := time.Now().Add(5 * time.Second)
+	for timeouts.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if timeouts.Load() == 0 {
+		t.Fatal("no produce attempt was timed out")
+	}
+
+	deleteTopic(t, admin, topic)
+	deleted.Store(true)
+	// A couple of merges during the deletion gap corroborate via the
+	// missing-partition load error (kept under the unknown-fail limit).
+	for range 2 {
+		cl.ForceMetadataRefresh()
+		time.Sleep(25 * time.Millisecond)
+	}
+	createTopic(t, admin, topic, 1)
+
+	// The swap lands on the next metadata update; force them rather than
+	// waiting out the client's min-age cadence.
+	var err error
+	failDeadline := time.Now().Add(5 * time.Second)
+wait:
+	for {
+		select {
+		case err = <-done:
+			break wait
+		default:
+			if time.Now().After(failDeadline) {
+				t.Fatal("timed out waiting for the unsure by-name batch to fail")
+			}
+			cl.ForceMetadataRefresh()
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+	if err == nil {
+		t.Fatal("unsure by-name batch was produced across the recreation; want a loud failure")
+	}
+	if !strings.Contains(err.Error(), "deleted and recreated") {
+		t.Fatalf("unsure by-name batch failed with %v; want the recreation unsure-batch error", err)
+	}
+	if n := lg.count(logProduceSwap); n == 0 {
+		t.Error("expected a produce swap log line")
+	}
+
+	// The failure is scoped to what was buffered: new produces continue
+	// cleanly on the new incarnation.
+	produceSync(t, cl, topic, "p1")
+	consumeExactly(t, c, topic, "p1")
+}
+
+// Below the gate, produce behavior across a recreation is unchanged (by-name
+// produce continues into the new incarnation): default-on handling must not
+// change what old clusters see.
+func TestRecreationProduceDisarmedUnchanged(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V3_0_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	produceSync(t, cl, topic, "v0")
+	recreateTopic(t, admin, topic, 1)
+	produceSync(t, cl, topic, "n0")
+
+	if n := lg.count(logProduceSwap); n != 0 {
+		t.Errorf("swap happened %d times below the gate; want unchanged behavior", n)
+	}
+	consumeExactly(t, c, topic, "n0")
 }

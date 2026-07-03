@@ -748,6 +748,52 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	new.cursor = c
 }
 
+// swapRecreatedRecBufTo migrates production across topic incarnations: the
+// topic was deleted and recreated with the same name, and metadata now
+// reports a new topic ID. Producer state is per-log and died with the old
+// incarnation; the new incarnation rehydrates it empty. The recBuf adopts
+// the new ID and, unless a produce response proved the broker already
+// accepted our chain into the new log (offsetRegressed), restarts its
+// sequence chain at zero, which every broker accepts against empty state.
+//
+// Batches whose by-name produce outcome is unknowable (unsureByName) may
+// already sit in the new incarnation and can never be safely re-produced:
+// everything buffered fails loudly instead, since order cannot be preserved
+// past a failed batch. Requests still in flight resolve safely after the
+// swap: a v13 request addressed the dead ID and is rejected before reaching
+// any log, a by-name request that resolves unsure is failed by the response
+// handling (generation mismatch), and okOnSink=false holds new sends until
+// every in-flight response resolves, so the fresh sequence chain starts only
+// once the old chain's fate is settled.
+func (old *topicPartition) swapRecreatedRecBufTo(new *topicPartition) { //nolint:revive // old/new naming makes this clearer
+	rb := old.records
+	rb.sink.removeRecBuf(rb)
+
+	rb.mu.Lock()
+	rb.sink = new.records.sink
+	rb.topicPartitionData = new.topicPartitionData
+	rb.okOnSink = false
+
+	rb.topicID = new.records.topicID
+	rb.generation++
+	rb.needSeqReset = !rb.offsetRegressed
+	rb.offsetRegressed = false
+	rb.unknownFailures = 0 // stale-incarnation failures corroborated this swap; they must not trip the fail limit
+	rb.lastAckedOffset = -1
+
+	var unsure bool
+	for _, batch := range rb.batches {
+		unsure = unsure || batch.unsureByName
+	}
+	if unsure {
+		rb.failAllRecords(errRecreationUnsureBatch)
+	}
+	rb.mu.Unlock()
+
+	rb.sink.addRecBuf(rb) // clears failing, triggers draining
+	new.records = rb
+}
+
 func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) {
 	c := tp.shareCursor
 	new.shareCursor = c

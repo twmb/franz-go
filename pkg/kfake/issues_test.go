@@ -3381,13 +3381,18 @@ func TestIssue1328(t *testing.T) {
 // UNKNOWN_TOPIC_ID once the unknown-topic fail limit (UnknownTopicRetries)
 // is reached, rather than retrying forever.
 //
-// Produce v13+ addresses topics by ID (KIP-516). The client deliberately
-// never adopts a recreated topic's new ID, so every produce after recreation
-// is answered with UNKNOWN_TOPIC_ID. That error is retriable and the default
-// produce limits are unbounded (RecordRetries is effectively infinite and
-// RecordDeliveryTimeout is disabled), so the unknown-topic fail limit is the
-// only bound: UNKNOWN_TOPIC_ID must count toward it. It used to reset the
-// count instead, leaving records buffered and retrying silently forever.
+// Produce v13+ addresses topics by ID (KIP-516). Below the recreation gate
+// the client never adopts a recreated topic's new ID, so every produce after
+// recreation is answered with UNKNOWN_TOPIC_ID. That error is retriable and
+// the default produce limits are unbounded (RecordRetries is effectively
+// infinite and RecordDeliveryTimeout is disabled), so the unknown-topic fail
+// limit is the only bound: UNKNOWN_TOPIC_ID must count toward it. It used to
+// reset the count instead, leaving records buffered and retrying silently
+// forever.
+//
+// The client caps fetch below v13 to keep the recreation gate disarmed while
+// produce still negotiates v13: with the gate armed, the merge instead
+// adopts the new ID and the produce heals (TestRecreationProduceHeal).
 func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
 	t.Parallel()
 	const testTopic = "foo"
@@ -3405,9 +3410,12 @@ func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
 	// sub-millisecond delete/create window below and fail the topic's
 	// load with UNKNOWN_TOPIC_OR_PARTITION; we want the produce failures
 	// alone (always UNKNOWN_TOPIC_ID) to drive the test.
+	maxv := kversion.Stable()
+	maxv.SetMaxKeyVersion(1, 12) // fetch v12: the recreation gate never arms
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
 		kgo.DefaultProduceTopic(testTopic),
+		kgo.MaxVersions(maxv),
 		kgo.UnknownTopicRetries(2),
 		kgo.RetryBackoffFn(func(int) time.Duration { return time.Millisecond }),
 		kgo.MetadataMinAge(10*time.Millisecond),

@@ -1,11 +1,17 @@
 package kgo
 
 import (
+	"errors"
 	"maps"
 	"sync/atomic"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+// errRecreationUnsureBatch fails buffered records whose produce outcome
+// cannot be known across a topic recreation. Produced records carry it in
+// their promise error.
+var errRecreationUnsureBatch = errors.New("topic was deleted and recreated: a produce of this data went out addressed by topic name without a conclusive response, so it may or may not exist in the new topic; failing rather than risking a duplicate")
 
 // recreationGate arms client-wide handling of topic recreation (a topic
 // deleted and recreated with the same name, yielding a new topic ID).
@@ -61,8 +67,9 @@ func (cl *Client) cleanStaleID2T(latest map[string]*metadataTopic, tpsProducer, 
 
 // topicIDReferenced returns whether any partition of the topic still carries
 // the given topic ID on its recBuf, cursor, or shareCursor. topicID fields
-// are written only at partition creation or by the metadata merge itself
-// (single goroutine), so reading them here is race-free.
+// are written only at partition creation or by the metadata merge itself,
+// and this runs on that same metadata-update goroutine, so reading them here
+// without locks is race-free.
 func topicIDReferenced(tps topicsPartitionsData, name string, id [16]byte) bool {
 	td := tps.loadTopic(name)
 	if td == nil {

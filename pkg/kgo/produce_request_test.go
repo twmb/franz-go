@@ -468,7 +468,7 @@ func TestRecBatchAppendTo(t *testing.T) {
 			producerEpoch: 11,
 			compressor:    compressor,
 		}
-		ourReq.batches.addSeqBatch("topic", [16]byte{1: 1, 4: 4, 15: 15}, 1, ourBatch)
+		ourReq.batches.addSeqBatch("topic", [16]byte{1: 1, 4: 4, 15: 15}, 0, 1, ourBatch)
 
 		exp := kmsgReq.AppendTo(nil)
 		got := ourReq.AppendTo(nil)
@@ -626,7 +626,7 @@ func TestMessageSetAppendTo(t *testing.T) {
 		timeout:    1000,
 		compressor: compressor,
 	}
-	ourReq.batches.addSeqBatch("topic", [16]byte{}, 1, ourBatch)
+	ourReq.batches.addSeqBatch("topic", [16]byte{}, 0, 1, ourBatch)
 
 	exp := kmsgReq.AppendTo(nil)
 	got := ourReq.AppendTo(nil)
@@ -676,12 +676,12 @@ func BenchmarkAppendBatch(b *testing.B) {
 			},
 		},
 	}
-	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 1, ourBatch)
-	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 2, ourBatch)
-	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 3, ourBatch)
-	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 4, ourBatch)
-	ourReq.batches.addSeqBatch("topic 2", [16]byte{}, 1, ourBatch)
-	ourReq.batches.addSeqBatch("topic 2", [16]byte{}, 2, ourBatch)
+	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 0, 1, ourBatch)
+	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 0, 2, ourBatch)
+	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 0, 3, ourBatch)
+	ourReq.batches.addSeqBatch("topic 1", [16]byte{}, 0, 4, ourBatch)
+	ourReq.batches.addSeqBatch("topic 2", [16]byte{}, 0, 1, ourBatch)
+	ourReq.batches.addSeqBatch("topic 2", [16]byte{}, 0, 2, ourBatch)
 
 	buf := make([]byte, 10<<10) // broker's reuse input buffers, so we do so here as well
 	for _, pair := range []struct {

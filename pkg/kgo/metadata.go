@@ -909,7 +909,57 @@ func (cl *Client) mergeTopicPartitions(
 		// recreated topic's ID change overrides epoch comparisons
 		// entirely (the new incarnation legitimately restarts at epoch
 		// 0, which is not a stale broker).
-		if !isProduce {
+		if isProduce {
+			rb := oldTP.records
+			newID := newTP.records.topicID
+			var noID [16]byte
+			var oldID [16]byte
+			var corroborated, regressed bool
+			if newID != noID {
+				rb.mu.Lock()
+				oldID = rb.topicID
+				if oldID == noID {
+					// First sight of an ID for this topic (e.g. a
+					// broker upgrade brought ID-ful metadata):
+					// nothing is keyed to the zero ID, adopt freely.
+					rb.topicID = newID
+					oldID = newID
+				}
+				regressed = rb.offsetRegressed
+				corroborated = rb.unknownFailures > 0 || regressed
+				rb.mu.Unlock()
+			}
+			// An ID change is a topic recreation (or, rarely, an ID
+			// flap from stale metadata). When armed we act only on
+			// corroboration from the produce wire: a stale-incarnation
+			// rejection, or an acked offset regression. Without it we
+			// keep the old ID and let the responses corroborate (their
+			// failure paths urgently re-trigger metadata). Disarmed or
+			// transactional, behavior is unchanged: at v13 the stale-ID
+			// produce fails loudly at the unknown-topic bound, below
+			// v13 by-name produce cannot address incarnations at all.
+			if newID != noID && oldID != newID && cl.cfg.txnID == nil && cl.recreation.armed.Load() {
+				if !corroborated {
+					*newTP = *oldTP
+					// Keep draining: the produce wire is what
+					// corroborates (a stale-incarnation rejection
+					// bumps unknownFailures), so attempts must not
+					// stay parked on the failing flag.
+					newTP.records.clearFailing()
+					retryWhy.add(topic, int32(part), errRecreationPending)
+					continue
+				}
+				cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID for producing",
+					"topic", topic,
+					"partition", part,
+					"old_id", topicID(oldID),
+					"new_id", topicID(newID),
+					"restarting_sequences", !regressed,
+				)
+				oldTP.swapRecreatedRecBufTo(newTP)
+				continue
+			}
+		} else {
 			var noID [16]byte
 			var newID, oldID [16]byte
 			if isShare {
