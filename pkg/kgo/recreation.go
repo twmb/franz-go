@@ -40,18 +40,22 @@ var errRecreationEpochGuard = errors.New("fetched records regressed the leader e
 // would have returned for an ack addressed to the dead incarnation's ID.
 var errRecreationShareAck = fmt.Errorf("topic was deleted and recreated; these records were acquired from the prior incarnation, whose share state is gone: %w", kerr.UnknownTopicID)
 
-// recreationGate arms client-wide handling of topic recreation (a topic
-// deleted and recreated with the same name, yielding a new topic ID).
+// recreationGate arms the strongest tier of topic recreation handling (a
+// topic deleted and recreated with the same name, yielding a new topic ID).
 //
-// When armed, the metadata merge is allowed to adopt a recreated topic's new
-// ID and reset consumption per the configured policy. Arming requires every
-// broker we have negotiated ApiVersions with to support fetch v13, which
-// puts topic IDs on the fetch wire: a stale-ID fetch of a recreated topic
-// fails with UNKNOWN_TOPIC_ID and can never silently read records from the
-// new incarnation. Below v13, fetches go by name and cannot distinguish
-// incarnations, so adopting a new ID while holding a live position risks
-// silently misreading the new incarnation; the gate stays disarmed and
-// recreation behavior is unchanged (fetches stall loudly).
+// When armed, the metadata merge adopts a recreated topic's new ID on a
+// single wire corroboration. Arming requires every broker we have negotiated
+// ApiVersions with to support fetch v13, which puts topic IDs on the fetch
+// wire: a stale-ID fetch of a recreated topic fails with UNKNOWN_TOPIC_ID
+// (the corroboration) and can never silently read records from the new
+// incarnation. Below v13, fetches go by name and cannot corroborate, so the
+// merge instead adopts once two consecutive metadata updates agree on the
+// new ID (or immediately on produce-wire evidence), accepting a bounded
+// by-name window that the fetch-side epoch guard and out-of-range
+// classification shrink; with no IDs anywhere, a persistent leader epoch
+// rewind is the remaining, opportunistic, signal. Share sessions are
+// ID-addressed at every version and swap on wire corroboration regardless
+// of the gate.
 //
 // The gate is re-evaluated on every metadata update: a broker negotiating
 // below fetch v13 (e.g. mid rolling upgrade) disarms it, and it re-arms when

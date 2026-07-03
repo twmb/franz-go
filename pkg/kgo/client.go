@@ -5,6 +5,28 @@
 // This client aims to be simple to use while still interacting with Kafka in a
 // near ideal way. For more overview of the entire client itself, please see
 // the README on the project's Github page.
+//
+// # Topic recreation
+//
+// A topic deleted and recreated under the same name is a new topic that
+// happens to share the name; nothing from the old incarnation is ever
+// silently reused against the new one. Handling is on by default at every
+// broker version, acting on the strongest signal each version provides: at
+// 3.1+ (topic IDs on the fetch wire) detection is immediate and
+// self-closing; at 2.8-3.0 (IDs in metadata only) the client adopts within
+// about one metadata interval; at 2.1-2.7 a persistent leader-epoch rewind
+// is treated as a recreation opportunistically; below 2.1 no signal exists
+// and behavior is unchanged. On detection, consumers reset per
+// ConsumeResetOffset (group commits of the dead incarnation are fenced and
+// the reset position committed promptly), idempotent producers restart
+// their sequence chain with no sequence error surfaced and no duplicate
+// possible (a by-name batch with an unknowable outcome fails loudly
+// instead), transactions fail with an error wrapping TRANSACTION_ABORTABLE
+// and verify produced-to topics before committing (one extra metadata round
+// trip per transactional commit that produced), and share consumers
+// invalidate acknowledgments of the dead incarnation. The README's "Topic
+// recreation" section has the full per-version matrix and the residues no
+// client can close.
 package kgo
 
 import (

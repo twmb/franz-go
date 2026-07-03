@@ -1,3 +1,52 @@
+Unreleased
+===
+
+This release handles topic recreation (a topic deleted and recreated under
+the same name, yielding a new topic ID) across the whole client, by default,
+at every broker version. A recreated topic is a NEW topic that happens to
+share a name: nothing from the old incarnation -- consume positions, produce
+sequences, transaction membership, share acquisition state -- is ever
+silently reused against the new one.
+
+Detection acts on the strongest signal each broker version provides: topic
+IDs on the fetch wire at 3.1+ (self-closing, zero silent window), topic IDs
+in metadata at 2.8-3.0 (adoption within about one metadata interval, on two
+consecutive updates agreeing), persistent leader-epoch rewinds at 2.1-2.7
+(opportunistic), and no change below 2.1 where no signal exists. Two
+hardening nets shrink the by-name window further: fetched records carrying a
+leader epoch below what was already consumed are withheld and classified,
+and `OFFSET_OUT_OF_RANGE` is classified against fresh metadata before it
+resets.
+
+On detection: consumers reset per `ConsumeResetOffset` (group commits of the
+dead incarnation are fenced and the reset position is committed promptly, so
+a stored stale offset cannot misposition the next member); idempotent
+producers adopt and restart their sequence chain with no sequence error
+surfaced and no duplicate possible (a by-name batch whose outcome is
+unknowable fails loudly rather than risk a duplicate); transactions FAIL
+with an error wrapping `TRANSACTION_ABORTABLE` (aborting recovers on every
+cluster version), and commits verify produced-to topics with one extra
+metadata round trip -- the only closure for writes that leave no response to
+inspect; share consumers continue on fresh state with acknowledgments of the
+dead incarnation failed rather than misapplied. See the new "Topic
+recreation" section in the README for the full per-version matrix and the
+documented residues.
+
+## Relevant commits
+
+- [`fed3b3f9`](https://github.com/twmb/franz-go/commit/fed3b3f9) kgo: stage 2d, harden the below-the-gate recreation window
+- [`1f764665`](https://github.com/twmb/franz-go/commit/1f764665) kgo: stages 2c/4c, infer recreation from persistent leader epoch rewinds
+- [`2461ea97`](https://github.com/twmb/franz-go/commit/2461ea97) kgo: stages 2b/4b, adopt recreations below the gate on the metadata ID fact
+- [`9a6ea9aa`](https://github.com/twmb/franz-go/commit/9a6ea9aa) kgo: stage 6, swap share consumers across topic recreation
+- [`b212d447`](https://github.com/twmb/franz-go/commit/b212d447) kgo: stage 5, fail transactions across topic recreation
+- [`f879b16d`](https://github.com/twmb/franz-go/commit/f879b16d) kfake: write transaction markers into current partition data by name
+- [`e65aeb73`](https://github.com/twmb/franz-go/commit/e65aeb73) kgo: stage 4, heal the idempotent producer across topic recreation
+- [`161a31a0`](https://github.com/twmb/franz-go/commit/161a31a0) kfake: drop producer-state windows when a topic is deleted
+- [`af64008e`](https://github.com/twmb/franz-go/commit/af64008e) kgo: stage 3, commit fence + seeded recommit
+- [`38d8423c`](https://github.com/twmb/franz-go/commit/38d8423c) kgo: stage 2, the consumer swap at the merge
+- [`cdba9379`](https://github.com/twmb/franz-go/commit/cdba9379) kfake: address v13 fetch-session entries by topic ID
+- [`891e6056`](https://github.com/twmb/franz-go/commit/891e6056) kgo: stage 1, the recreation gate
+
 v1.21.6
 ===
 
