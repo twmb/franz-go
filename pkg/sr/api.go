@@ -215,6 +215,25 @@ func (cl *Client) SchemaByGUID(ctx context.Context, guid string) (SubjectSchema,
 	return s, err
 }
 
+// ContextID is a (context, schema ID) pair. A schema GUID is globally unique,
+// but the numeric schema ID it maps to is scoped to a context; this pairs the
+// two.
+type ContextID struct {
+	// Context is the schema registry context the ID belongs to.
+	Context string `json:"context"`
+	// ID is the numeric schema identifier within the context.
+	ID int `json:"id"`
+}
+
+// SchemaIDsByGUID returns the context/ID pairs that the given schema GUID
+// resolves to.
+func (cl *Client) SchemaIDsByGUID(ctx context.Context, guid string) ([]ContextID, error) {
+	// GET /schemas/guids/{guid}/ids
+	var ids []ContextID
+	err := cl.get(ctx, fmt.Sprintf("/schemas/guids/%s/ids", url.PathEscape(guid)), &ids)
+	return ids, err
+}
+
 // SchemaTextByID returns the actual text of a schema.
 //
 // For example, if the schema for an ID is

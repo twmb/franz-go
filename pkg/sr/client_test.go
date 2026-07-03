@@ -100,6 +100,8 @@ func TestSchemaRegistryAPI(t *testing.T) {
 				output = []map[string]any{{"subject": dummySchemaWithRef.Subject, "version": dummySchemaWithRef.Version}}
 			case "/schemas/guids/11111111-2222-4333-8444-555555555555":
 				output = dummySchema
+			case "/schemas/guids/11111111-2222-4333-8444-555555555555/ids":
+				output = []map[string]any{{"context": ".", "id": dummySchema.ID}}
 			case "/schemas/types":
 				output = []string{"AVRO", "JSON"}
 			case "/contexts":
@@ -274,6 +276,11 @@ func TestSchemaRegistryAPI(t *testing.T) {
 			name:     "get schema by guid",
 			fn:       func() (any, error) { return c.SchemaByGUID(ctx, "11111111-2222-4333-8444-555555555555") },
 			expected: `{"subject":"foo","version":1,"id":1,"guid":"11111111-2222-4333-8444-555555555555","schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
+		},
+		{
+			name:     "get schema ids by guid",
+			fn:       func() (any, error) { return c.SchemaIDsByGUID(ctx, "11111111-2222-4333-8444-555555555555") },
+			expected: `[{"context":".","id":1}]`,
 		},
 		{
 			name:     "get subject compatibility",
