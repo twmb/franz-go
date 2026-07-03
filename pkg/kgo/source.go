@@ -118,20 +118,26 @@ func (s *source) removeCursor(rm *cursor) {
 // cursor is where we are consuming from for an individual partition.
 type cursor struct {
 	topic string
-	// topicID is written once at cursor creation and is deliberately
-	// never re-adopted if a delete+recreate hands back a new ID for the
-	// same name: a recreated topic stalls loudly (UNKNOWN_TOPIC_ID, see
-	// the UnknownTopicID arm below) and the user must purge+re-add. This
-	// is the principled alternative to librdkafka/Java's adopt-and-gamble;
-	// issue #908 records why auto-adoption was backed out (PR #391/#377:
-	// OffsetForLeaderEpoch has no TopicID field, so an adopted ID cannot
-	// be validated against truncation). The metadata merge copies this
-	// pointer over rather than swapping the ID; do not "fix" the stall
-	// into an adopt without solving #908.
+	// topicID is written at cursor creation and re-adopted across a
+	// delete+recreate ONLY by the metadata merge's deliberate recreation
+	// swap (swapRecreatedCursorTo): the position resets per policy, the
+	// consumed epoch clears, and cross-incarnation OffsetForLeaderEpoch
+	// is suppressed (OFLE has no TopicID field, issue #908 -- which is
+	// why a bare adopt-and-keep-position gamble, librdkafka/Java style,
+	// was rejected in PR #391/#377). Where the swap cannot act (no
+	// signal, or pending corroboration), a recreated topic stalls loudly
+	// (UNKNOWN_TOPIC_ID, see the UnknownTopicID arm below).
 	topicID   [16]byte
 	partition int32
 
 	unknownIDFails atomic.Int32
+
+	// pendingRecreateID is the below-the-gate (by-name fetch) recreation
+	// corroboration: the new topic ID the previous metadata update
+	// reported. The merge swaps only once two consecutive updates agree
+	// on the same new ID, absorbing single stale-broker flaps. Only the
+	// metadata-update goroutine reads or writes this.
+	pendingRecreateID [16]byte
 
 	keepControl bool // whether to keep control records
 

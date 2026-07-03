@@ -726,6 +726,7 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	c.topicID = new.cursor.topicID
 	c.topicPartitionData = new.topicPartitionData
 	c.unknownIDFails.Store(0)
+	c.pendingRecreateID = [16]byte{}
 
 	// No old-incarnation state may leak into the new incarnation: clear
 	// the position and epoch (also hwm and the consumed-time OOOR
@@ -779,6 +780,7 @@ func (old *topicPartition) swapRecreatedRecBufTo(new *topicPartition) { //nolint
 	rb.needSeqReset = !rb.offsetRegressed
 	rb.offsetRegressed = false
 	rb.idMismatched = false
+	rb.pendingRecreateID = [16]byte{}
 	rb.unknownFailures = 0 // stale-incarnation failures corroborated this swap; they must not trip the fail limit
 	rb.lastAckedOffset = -1
 

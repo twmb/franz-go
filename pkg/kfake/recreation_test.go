@@ -509,14 +509,15 @@ func TestRecreationGroup848(t *testing.T) {
 	collectVals(t, cl, "n0", "n1", "n2")
 }
 
-// Below the gate (by-name fetch), recreation behavior is UNCHANGED: no
-// adoption, no reset. In this offset geometry (old position == new log end)
-// the consumer silently sees nothing, which is today's documented stall.
+// Below ID-ful metadata (2.7 and earlier: no topic IDs anywhere), no signal
+// exists and recreation behavior is UNCHANGED: no adoption, no reset. In
+// this offset geometry (old position == new log end) the consumer silently
+// sees nothing, which is today's documented behavior.
 func TestRecreationDisarmedUnchanged(t *testing.T) {
 	t.Parallel()
 
 	const topic = "t"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V3_0_0()))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V2_7_0()))
 	lg := new(capLogger)
 	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
@@ -1329,14 +1330,116 @@ func TestRecreationShareSwap(t *testing.T) {
 	collectVals(t, cl, "n0", "n1")
 }
 
-// Below the gate, produce behavior across a recreation is unchanged (by-name
-// produce continues into the new incarnation): default-on handling must not
-// change what old clusters see.
-func TestRecreationProduceDisarmedUnchanged(t *testing.T) {
+// Tier B (IDs in metadata, by-name fetch wire, e.g. 2.8-3.0): nothing on the
+// wire can corroborate, so the consumer adopts a recreation once two
+// consecutive metadata updates agree on the new ID, then resets per policy.
+func TestRecreationTierBConsumer(t *testing.T) {
 	t.Parallel()
 
 	const topic = "t"
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V3_0_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+
+	produceVals(t, c, topic, 0, "v0", "v1", "v2")
+	collectVals(t, cl, "v0", "v1", "v2")
+
+	recreateTopic(t, cl, topic, 1)
+	// The first forced update observes the new ID (pending); the retry
+	// loop drives the second consecutive observation, which adopts.
+	waitForLog(t, cl, lg, logSwap, 1)
+
+	produceVals(t, c, topic, 0, "n0", "n1", "n2")
+	collectVals(t, cl, "n0", "n1", "n2")
+}
+
+// Tier B producer: with nothing buffered or in flight, the swap adopts on
+// two consecutive metadata updates and the next produce continues on the
+// new incarnation with a fresh sequence chain.
+func TestRecreationTierBProducer(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V3_0_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	produceSync(t, cl, topic, "p0")
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, cl, lg, logProduceSwap, 1)
+	produceSync(t, cl, topic, "p1")
+
+	consumeExactly(t, c, topic, "p1")
+}
+
+// Tier B transactional: the metadata-fact adoption poisons a transaction
+// with state tied to the dead incarnation, abort recovers (pre-890p2
+// recovery arm), and the next transaction commits cleanly.
+func TestRecreationTierBTxn(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V3_0_0()))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	lg := new(capLogger)
+	txcl := newPlainClient(t, c,
+		kgo.TransactionalID("tx-tierb"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "a0"); err != nil {
+		t.Fatal(err)
+	}
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, txcl, lg, logSwap, 1)
+
+	err := txcl.EndTransaction(ctx, kgo.TryCommit)
+	if err == nil {
+		t.Fatal("commit across a recreation succeeded; want a refusal")
+	}
+	if !errors.Is(err, kerr.TransactionAbortable) {
+		t.Fatalf("commit refusal %v does not carry the abortable recreation reason", err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("abort after recreation: %v", err)
+	}
+
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txnProduceSync(t, txcl, topic, "c0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	consumeCommitted(t, c, topic, "c0")
+}
+
+// Below ID-ful metadata, produce behavior across a recreation is unchanged
+// (by-name produce continues into the new incarnation): default-on handling
+// must not change what old clusters see.
+func TestRecreationProduceDisarmedUnchanged(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V2_7_0()))
 	lg := new(capLogger)
 	cl := newPlainClient(t, c,
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),

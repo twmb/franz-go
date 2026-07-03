@@ -931,21 +931,26 @@ func (cl *Client) mergeTopicPartitions(
 				rb.mu.Unlock()
 			}
 			// An ID change is a topic recreation (or, rarely, an ID
-			// flap from stale metadata). When armed we act only on
-			// corroboration from the produce wire: a stale-incarnation
-			// rejection, or an acked offset regression. Without it we
-			// keep the old ID and let the responses corroborate (their
-			// failure paths urgently re-trigger metadata). Disarmed,
-			// behavior is unchanged: at v13 the stale-ID produce fails
-			// loudly at the unknown-topic bound, below v13 by-name
-			// produce cannot address incarnations at all.
-			if newID != noID && oldID != newID && cl.recreation.armed.Load() {
-				if !corroborated {
+			// flap from stale metadata). Below ID-ful metadata nothing
+			// reaches here (IDs are zero) and produce behavior is
+			// unchanged.
+			if newID != noID && oldID != newID {
+				// Armed, only the produce wire corroborates (a
+				// stale-incarnation rejection, an acked offset
+				// regression, or commit-time verification). Below the
+				// gate those still count when they exist, and two
+				// consecutive metadata updates agreeing on the new ID
+				// otherwise adopt on the metadata fact alone.
+				adopt := corroborated
+				if !adopt && !cl.recreation.armed.Load() {
+					adopt = rb.pendingRecreateID == newID
+				}
+				if !adopt {
+					rb.pendingRecreateID = newID
 					*newTP = *oldTP
-					// Keep draining: the produce wire is what
-					// corroborates (a stale-incarnation rejection
-					// bumps unknownFailures), so attempts must not
-					// stay parked on the failing flag.
+					// Keep draining: produce attempts must not stay
+					// parked on the failing flag while corroboration
+					// is pending.
 					newTP.records.clearFailing()
 					retryWhy.add(topic, int32(part), errRecreationPending)
 					continue
@@ -980,6 +985,8 @@ func (cl *Client) mergeTopicPartitions(
 				}
 				oldTP.swapRecreatedRecBufTo(newTP)
 				continue
+			} else if newID != noID {
+				rb.pendingRecreateID = noID // metadata agrees with us again; any flap healed
 			}
 		} else {
 			var noID [16]byte
@@ -1006,10 +1013,15 @@ func (cl *Client) mergeTopicPartitions(
 			// fetch the current leader rejected by ID. Without it we
 			// keep everything as is and let the stale-ID fetch
 			// corroborate; the rejection also urgently re-triggers
-			// metadata, so the swap lands one update later. Disarmed,
-			// behavior is unchanged: the cursor never re-adopts and
-			// fetches stall loudly (see the cursor.topicID comment).
-			if isShare && newID != noID && oldID != noID && newID != oldID && cl.recreation.armed.Load() {
+			// metadata, so the swap lands one update later. Below the
+			// gate the by-name fetch wire can never corroborate, so we
+			// adopt on the metadata ID fact once two consecutive
+			// updates agree on the same new ID (absorbing single
+			// stale-broker flaps); the retryWhy loop drives the second
+			// observation. Share sessions are ID-addressed at every
+			// version, so shares swap on wire corroboration regardless
+			// of the fetch gate.
+			if isShare && newID != noID && oldID != noID && newID != oldID {
 				if oldTP.shareCursor.unknownIDFails.Load() == 0 {
 					*newTP = *oldTP
 					retryWhy.add(topic, int32(part), errRecreationPending)
@@ -1024,8 +1036,16 @@ func (cl *Client) mergeTopicPartitions(
 				oldTP.swapRecreatedShareCursorTo(cl, newTP)
 				continue
 			}
-			if !isShare && newID != noID && oldID != noID && newID != oldID && cl.recreation.armed.Load() {
-				if oldTP.cursor.unknownIDFails.Load() == 0 {
+			if !isShare && newID != noID && oldID != noID && newID != oldID {
+				c := oldTP.cursor
+				var adopt bool
+				if cl.recreation.armed.Load() {
+					adopt = c.unknownIDFails.Load() > 0
+				} else {
+					adopt = c.pendingRecreateID == newID
+				}
+				if !adopt {
+					c.pendingRecreateID = newID
 					*newTP = *oldTP
 					retryWhy.add(topic, int32(part), errRecreationPending)
 					continue
@@ -1047,6 +1067,9 @@ func (cl *Client) mergeTopicPartitions(
 				)
 				oldTP.swapRecreatedCursorTo(newTP, css, reset)
 				continue
+			}
+			if !isShare && newID != noID && newID == oldID {
+				oldTP.cursor.pendingRecreateID = noID // metadata agrees with us again; any flap healed
 			}
 		}
 
