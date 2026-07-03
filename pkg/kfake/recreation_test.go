@@ -1569,10 +1569,12 @@ func TestRecreationTxnAbortsPre890p2(t *testing.T) {
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	lg := new(capLogger)
 	txcl := newPlainClient(t, c,
 		kgo.MaxVersions(kversion.V3_7_0()),
 		kgo.TransactionalID("tx-recreate-pre890p2"),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.WithLogger(lg),
 	)
 	admin := newPlainClient(t, c)
 
@@ -1599,6 +1601,12 @@ func TestRecreationTxnAbortsPre890p2(t *testing.T) {
 	if err := txcl.EndTransaction(ctx, kgo.TryAbort); err != nil {
 		t.Fatalf("abort after recreation (pre-890p2 recovery): %v", err)
 	}
+
+	// The offset-regression refresh drives the swap asynchronously; wait
+	// for it so the next transaction deterministically starts on the new
+	// incarnation (a swap landing mid-transaction poisons that
+	// transaction too, by design).
+	waitForLog(t, txcl, lg, logSwap, 1)
 
 	if err := txcl.BeginTransaction(); err != nil {
 		t.Fatal(err)
