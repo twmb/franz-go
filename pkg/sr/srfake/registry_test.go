@@ -192,7 +192,7 @@ func TestSubjectHandlers(t *testing.T) {
 				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
 			},
 			wantStatus: http.StatusOK,
-			wantBody:   `{"subject":"user-topic-value","version":2,"id":2,"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"},{\"name\":\"email\",\"type\":\"string\",\"default\":\"\"}]}"}`,
+			wantBody:   `{"subject":"user-topic-value","version":2,"id":2,"guid":"2d51477a-8eaa-8a8d-b0a6-a102a0e75476","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"},{\"name\":\"email\",\"type\":\"string\",\"default\":\"\"}]}"}`,
 		},
 		{
 			name:   "GET /subjects/{s}/versions/{v} - by 'latest'",
@@ -203,7 +203,7 @@ func TestSubjectHandlers(t *testing.T) {
 				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
 			},
 			wantStatus: http.StatusOK,
-			wantBody:   `{"subject":"user-topic-value","version":2,"id":2,"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"},{\"name\":\"email\",\"type\":\"string\",\"default\":\"\"}]}"}`,
+			wantBody:   `{"subject":"user-topic-value","version":2,"id":2,"guid":"2d51477a-8eaa-8a8d-b0a6-a102a0e75476","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"},{\"name\":\"email\",\"type\":\"string\",\"default\":\"\"}]}"}`,
 		},
 		{
 			name:   "GET /subjects/{s}/versions/{v} - latest with no active versions",
@@ -279,7 +279,7 @@ func TestSubjectHandlers(t *testing.T) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 			},
 			wantStatus: http.StatusOK,
-			wantBody:   `{"subject":"user-topic-value","version":1,"id":1,"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			wantBody:   `{"subject":"user-topic-value","version":1,"id":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
 		},
 		{
 			name:   "POST /subjects/{s} - schema not found",
@@ -599,6 +599,146 @@ func TestSchemaHandlers(t *testing.T) {
 	}
 }
 
+func TestSchemaByGUIDHandlers(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	client := &http.Client{}
+	reg.SeedSchema("user-topic", 1, 123, userSchema)
+
+	const guid = "5e7f40ce-ba13-8394-ab4a-c4e82c0ededd" // deterministic GUID of userSchema
+	const missing = "00000000-0000-0000-0000-000000000000"
+
+	testCases := []struct {
+		name       string
+		path       string
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "GET /schemas/guids/{guid} - found",
+			path:       "/schemas/guids/" + guid,
+			wantStatus: http.StatusOK,
+			wantBody:   `{"subject":"user-topic","version":1,"id":123,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
+		{
+			name:       "GET /schemas/guids/{guid} - not found",
+			path:       "/schemas/guids/" + missing,
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40403, "message": "schema not found"}`,
+		},
+		{
+			name:       "GET /schemas/guids/{guid}/ids - found",
+			path:       "/schemas/guids/" + guid + "/ids",
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"context":".","id":123}]`,
+		},
+		{
+			name:       "GET /schemas/guids/{guid}/ids - not found",
+			path:       "/schemas/guids/" + missing + "/ids",
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40403, "message": "schema not found"}`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodGet, reg.URL()+tc.path, http.NoBody)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("HTTP request failed: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("got status %d, want %d", resp.StatusCode, tc.wantStatus)
+			}
+
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			if !jsonEqual(string(bodyBytes), tc.wantBody) {
+				t.Errorf("body mismatch:\ngot:  %s\nwant: %s", string(bodyBytes), tc.wantBody)
+			}
+		})
+	}
+}
+
+// TestSchemaGUIDClient exercises the sr client's GUID methods against the mock
+// end to end: register a schema, discover its GUID, then look it back up.
+func TestSchemaGUIDClient(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	reg.SeedSchema("user-value", 1, 7, userSchema)
+
+	// Discover the GUID via an endpoint that returns it.
+	got, err := cl.SchemaByVersion(ctx, "user-value", 1)
+	if err != nil {
+		t.Fatalf("SchemaByVersion: %v", err)
+	}
+	if got.GUID == "" {
+		t.Fatal("SchemaByVersion returned an empty GUID")
+	}
+
+	byGUID, err := cl.SchemaByGUID(ctx, got.GUID)
+	if err != nil {
+		t.Fatalf("SchemaByGUID: %v", err)
+	}
+	if byGUID.Subject != "user-value" || byGUID.Version != 1 || byGUID.ID != 7 || byGUID.GUID != got.GUID {
+		t.Errorf("SchemaByGUID = %+v, want subject=user-value version=1 id=7 guid=%s", byGUID, got.GUID)
+	}
+
+	ids, err := cl.SchemaIDsByGUID(ctx, got.GUID)
+	if err != nil {
+		t.Fatalf("SchemaIDsByGUID: %v", err)
+	}
+	if len(ids) != 1 || ids[0].Context != "." || ids[0].ID != 7 {
+		t.Errorf("SchemaIDsByGUID = %+v, want [{Context:. ID:7}]", ids)
+	}
+}
+
+// TestSchemaGUIDCrossContext verifies that a GUID is global: the same schema
+// content registered in multiple contexts shares one GUID but keeps a distinct
+// ID per context, and the /ids endpoint enumerates all of them.
+func TestSchemaGUIDCrossContext(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	client := &http.Client{}
+
+	reg.SeedSchema("user-topic", 1, 1, userSchema)
+	reg.SeedSchema(":.myctx:user-topic", 1, 2, userSchema)
+
+	const guid = "5e7f40ce-ba13-8394-ab4a-c4e82c0ededd"
+
+	do := func(path string) string {
+		req, _ := http.NewRequest(http.MethodGet, reg.URL()+path, http.NoBody)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: got status %d, want 200", path, resp.StatusCode)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		return string(body)
+	}
+
+	// /ids enumerates every context, each with its own ID.
+	if got, want := do("/schemas/guids/"+guid+"/ids"), `[{"context":".","id":1},{"context":".myctx","id":2}]`; !jsonEqual(got, want) {
+		t.Errorf("ids mismatch:\ngot:  %s\nwant: %s", got, want)
+	}
+
+	// get-by-guid is global and prefers the default-context representative.
+	if got, want := do("/schemas/guids/"+guid), `{"subject":"user-topic","version":1,"id":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`; !jsonEqual(got, want) {
+		t.Errorf("schema mismatch:\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
 func TestConfigHandlers(t *testing.T) {
 	reg := srfake.New()
 	t.Cleanup(reg.Close)
@@ -756,6 +896,7 @@ func TestClientIntegration(t *testing.T) {
 				Subject: subject,
 				Version: 1,
 				ID:      1,
+				GUID:    "5e7f40ce-ba13-8394-ab4a-c4e82c0ededd",
 				Schema:  userSchema,
 			},
 		},
@@ -771,6 +912,7 @@ func TestClientIntegration(t *testing.T) {
 				Subject: subject,
 				Version: 1,
 				ID:      1,
+				GUID:    "5e7f40ce-ba13-8394-ab4a-c4e82c0ededd",
 				Schema:  userSchema,
 			},
 		},
@@ -786,6 +928,7 @@ func TestClientIntegration(t *testing.T) {
 				Subject: subject,
 				Version: 2,
 				ID:      2,
+				GUID:    "2d51477a-8eaa-8a8d-b0a6-a102a0e75476",
 				Schema:  userSchemaV2,
 			},
 		},
@@ -801,6 +944,7 @@ func TestClientIntegration(t *testing.T) {
 				Subject: "new-subject-for-product",
 				Version: 1,
 				ID:      99,
+				GUID:    "3e3328fa-a65f-8325-b14d-93ec4ea81772",
 				Schema:  productSchema,
 			},
 		},
@@ -829,6 +973,7 @@ func TestClientIntegration(t *testing.T) {
 				Subject: subject,
 				Version: 2,
 				ID:      2,
+				GUID:    "2d51477a-8eaa-8a8d-b0a6-a102a0e75476",
 				Schema:  userSchemaV2,
 			},
 		},
@@ -845,6 +990,7 @@ func TestClientIntegration(t *testing.T) {
 				Subject: subject,
 				Version: 2,
 				ID:      2,
+				GUID:    "2d51477a-8eaa-8a8d-b0a6-a102a0e75476",
 				Schema:  userSchemaV2,
 			},
 		},
@@ -1192,6 +1338,7 @@ func TestClientIntegration(t *testing.T) {
 				Subject: "derived-schema",
 				Version: 1,
 				ID:      2,
+				GUID:    "325f2d0d-a439-8003-ba82-5f0b32f0751d",
 				Schema: sr.Schema{
 					Schema: `{"type":"record","name":"Derived","fields":[{"name":"id","type":"string"}]}`,
 					Type:   sr.TypeAvro,
@@ -1480,6 +1627,7 @@ func TestClientIntegration(t *testing.T) {
 				Subject: ":.myctx:topic-value",
 				Version: 1,
 				ID:      1,
+				GUID:    "5e7f40ce-ba13-8394-ab4a-c4e82c0ededd",
 				Schema:  userSchema,
 			},
 		},
@@ -2108,7 +2256,7 @@ func TestContextHandlers(t *testing.T) {
 				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
 			},
 			wantStatus: http.StatusOK,
-			wantBody:   `{"subject":":.myctx:topic-value","version":1,"id":1,"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			wantBody:   `{"subject":":.myctx:topic-value","version":1,"id":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
 		},
 		{
 			name:   "DELETE /contexts/.myctx/subjects/{s} - delete subject in context",

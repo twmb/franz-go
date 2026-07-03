@@ -138,7 +138,7 @@ reg.ClearInterceptors()
 
 The mock implements the core Schema Registry endpoints:
 
-- **Schemas**: `GET /schemas/ids/{id}`, `GET /schemas/ids/{id}/schema`, `GET /schemas/ids/{id}/versions`
+- **Schemas**: `GET /schemas/ids/{id}`, `GET /schemas/ids/{id}/schema`, `GET /schemas/ids/{id}/versions`, `GET /schemas/guids/{guid}`, `GET /schemas/guids/{guid}/ids`
 - **Subjects**: `GET /subjects`, `GET /subjects/{subject}/versions`, `POST /subjects/{subject}/versions`
 - **Versions**: `GET /subjects/{subject}/versions/{version}`, `DELETE /subjects/{subject}/versions/{version}`
 - **Config**: `GET /config`, `PUT /config`, `GET /config/{subject}`, `PUT /config/{subject}`

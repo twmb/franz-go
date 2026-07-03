@@ -268,6 +268,57 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 	respondJSON(w, http.StatusOK, subjects)
 }
 
+// handleGetSchemaByGUID emulates GET /schemas/guids/{guid} to retrieve a schema
+// by its globally unique GUID. The GUID identifies a schema across all contexts,
+// so the lookup is not scoped to the request context.
+func (r *Registry) handleGetSchemaByGUID(w http.ResponseWriter, req *http.Request) {
+	guid := req.PathValue("guid")
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	ss, ok := r.subjectSchemaByGUIDLocked(guid)
+	if !ok {
+		r.handleAPIError(w, errSchemaNotFound())
+		return
+	}
+	respondJSON(w, http.StatusOK, ss)
+}
+
+// handleGetSchemaIDsByGUID emulates GET /schemas/guids/{guid}/ids to retrieve the
+// (context, schema ID) pairs that the GUID resolves to. A GUID is global, so
+// every context is searched; each context that contains the schema contributes
+// its own ID.
+func (r *Registry) handleGetSchemaIDsByGUID(w http.ResponseWriter, req *http.Request) {
+	guid := req.PathValue("guid")
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	byContext := make(map[string]int)
+	for subject, subj := range r.subjects {
+		if subj.isDeleted {
+			continue
+		}
+		for _, vd := range subj.versions {
+			if !vd.isDeleted && vd.schema.GUID == guid {
+				byContext[subjectContext(subject)] = vd.schema.ID
+				break
+			}
+		}
+	}
+	if len(byContext) == 0 {
+		r.handleAPIError(w, errSchemaNotFound())
+		return
+	}
+	ids := make([]sr.ContextID, 0, len(byContext))
+	for c, id := range byContext {
+		ids = append(ids, sr.ContextID{Context: c, ID: id})
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].Context < ids[j].Context })
+	respondJSON(w, http.StatusOK, ids)
+}
+
 /* -------------------------------------------------------------------------
    Handlers – Subjects
    ------------------------------------------------------------------------- */
@@ -600,6 +651,7 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 			"subject": subject,
 			"version": v,
 			"id":      versionData.schema.ID,
+			"guid":    versionData.schema.GUID,
 			"schema":  versionData.schema.Schema.Schema,
 		}
 		if versionData.schema.Type != sr.TypeAvro {
