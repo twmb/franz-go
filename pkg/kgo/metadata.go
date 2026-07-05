@@ -883,18 +883,11 @@ func (cl *Client) mergeTopicPartitions(
 			)
 			if isProduce {
 				oldTP.records.bumpRepeatedLoadErr(errMissingMetadataPartition)
-			} else if !isShare && oldTP.cursor.oorPending.Swap(oorNone) != oorNone {
+			} else if !isShare {
 				// The topic vanished while an out-of-range reset was
-				// deferred for classification: reset exactly as an
-				// undeferred out-of-range would have; the load retries
-				// against the missing topic the same way.
-				css.stop()
-				reset := cl.oorResetOffset(oldTP.cursor)
-				oldTP.cursor.unset()
-				css.reloadOffsets.addLoad(topic, int32(part), loadTypeList, offsetLoad{
-					replica: -1,
-					Offset:  reset,
-				})
+				// deferred for classification; no probe against a
+				// missing topic.
+				cl.resolveDeferredOOR(css, oldTP.cursor, topic, int32(part), false)
 			}
 			retryWhy.add(topic, int32(part), errMissingMetadataPartition)
 			continue
@@ -1078,22 +1071,14 @@ func (cl *Client) mergeTopicPartitions(
 					retryWhy.add(topic, int32(part), errRecreationPending)
 					continue
 				}
-				reset := &recreationResetOffset
-				if cl.cfg.resetOffset.noReset {
-					reset = nil
-					cl.consumer.addFakeReadyForDraining(topic, int32(part),
-						fmt.Errorf("topic was deleted and recreated (automatic resets are disabled via NoResetOffset; resume via SetOffsets): %w", kerr.UnknownTopicID),
-						"metadata refresh detected topic recreation with resets disabled")
-				}
-				cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID and restarting from the new topic's beginning",
-					"topic", topic,
-					"partition", part,
+				cl.swapRecreatedConsumer(topic, part, oldTP, newTP, css,
+					"topic was deleted and recreated",
+					LogLevelInfo, "topic recreation detected, adopting the new topic ID and restarting from the new topic's beginning",
 					"old_id", topicID(oldID),
 					"new_id", topicID(newID),
 					"new_leader", newTP.leader,
 					"new_leader_epoch", newTP.leaderEpoch,
 				)
-				oldTP.swapRecreatedCursorTo(newTP, css, reset)
 				continue
 			}
 			if !isShare && newID != noID && newID == oldID {
@@ -1204,58 +1189,20 @@ func (cl *Client) mergeTopicPartitions(
 				oldTP.swapRecreatedRecBufTo(newTP)
 				continue
 			case !isProduce && !isShare && oldTP.cursor.topicID == noID:
-				reset := &recreationResetOffset
-				if cl.cfg.resetOffset.noReset {
-					reset = nil
-					cl.consumer.addFakeReadyForDraining(topic, int32(part),
-						fmt.Errorf("topic recreation inferred from a persistent leader epoch rewind (automatic resets are disabled via NoResetOffset; resume via SetOffsets): %w", kerr.UnknownTopicID),
-						"metadata refresh inferred topic recreation from a leader epoch rewind with resets disabled")
-				}
-				cl.cfg.logger.Log(LogLevelWarn, "topic recreation inferred from a persistent leader epoch rewind; restarting from the new topic's beginning",
-					"topic", topic,
-					"partition", part,
+				cl.swapRecreatedConsumer(topic, part, oldTP, newTP, css,
+					"topic recreation inferred from a persistent leader epoch rewind",
+					LogLevelWarn, "topic recreation inferred from a persistent leader epoch rewind; restarting from the new topic's beginning",
 					"old_leader_epoch", oldTP.leaderEpoch,
 					"new_leader_epoch", newTP.leaderEpoch,
 				)
-				oldTP.swapRecreatedCursorTo(newTP, css, reset)
 				continue
 			}
 		}
 
-		// An OFFSET_OUT_OF_RANGE below the gate deferred its policy reset
-		// for one classification round (see the fetch handling). Reaching
-		// here means metadata corroborated nothing. If the log SHRANK
-		// (position above the end) and we have a consumed epoch, one
-		// OffsetForLeaderEpoch probe classifies the reset as honestly as
-		// the wire allows: no history of our epoch is almost certainly a
-		// recreation, our epoch ending below our position is substantial
-		// truncation or a recreation, and group commits fence + reseed
-		// either way. Otherwise this is a plain policy reset, exactly as
-		// the fetch would have done without the deferral.
+		// An out-of-range reset deferred by the fetch path resolves now,
+		// probing where the wire allows (see resolveDeferredOOR).
 		if !isProduce && !isShare {
-			if shape := oldTP.cursor.oorPending.Swap(oorNone); shape != oorNone {
-				css.stop()
-				c := oldTP.cursor
-				// With the session stopped, cursor fields are safely
-				// readable and writable.
-				pos, epoch := c.offset, c.lastConsumedEpoch
-				reset := cl.oorResetOffset(c)
-				c.unset()
-				if shape == oorAboveEnd && epoch >= 0 && cl.supportsOffsetForLeaderEpoch() {
-					css.recreated.add(topic, int32(part))
-					css.reloadOffsets.addLoad(topic, int32(part), loadTypeEpoch, offsetLoad{
-						replica:     -1,
-						oorClassify: true,
-						oorReset:    reset,
-						Offset:      Offset{at: pos, epoch: epoch},
-					})
-				} else {
-					css.reloadOffsets.addLoad(topic, int32(part), loadTypeList, offsetLoad{
-						replica: -1,
-						Offset:  reset,
-					})
-				}
-			}
+			cl.resolveDeferredOOR(css, oldTP.cursor, topic, int32(part), true)
 		}
 
 		// If the tp data is the same, we simply copy over the records

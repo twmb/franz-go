@@ -934,7 +934,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 				continue
 			}
 		} else {
-			tid = req.batches.t2id[topic]
+			tid = req.batches.t2info[topic].id
 		}
 		partitions, ok := req.batches.bs[topic]
 		if !ok {
@@ -968,7 +968,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 				tmetrics[partition],
 			)
 			if retry {
-				reqRetry.addSeqBatch(topic, tid, req.batches.t2gen[topic], partition, batch)
+				reqRetry.addSeqBatch(topic, tid, req.batches.t2info[topic].gen, partition, batch)
 			}
 			if !didProduce {
 				delete(tmetrics, partition)
@@ -1091,7 +1091,7 @@ func (s *sink) handleReqRespBatch(
 	// a failed batch). Transactions are excluded: their swap poisoned the
 	// producer ID, which fails everything buffered with the abort
 	// sentinel and blocks any resend.
-	if err != nil && s.cl.cfg.txnID == nil && batch.unsureByName && req.batches.t2gen[topic] != batch.owner.generation {
+	if err != nil && s.cl.cfg.txnID == nil && batch.unsureByName && req.batches.t2info[topic].gen != batch.owner.generation {
 		s.cl.cfg.logger.Log(LogLevelError, "topic was recreated while a batch produced by name had no conclusive outcome; failing all buffered records for this partition rather than risking duplicates",
 			"broker", logID(s.nodeID),
 			"topic", topic,
@@ -1203,7 +1203,7 @@ func (s *sink) handleReqRespBatch(
 		// Requeue: the batch re-drains against the new incarnation on the
 		// reset sequence chain. A genuine sequence error re-arrives with
 		// generations equal and takes the paths below.
-		if s.cl.cfg.txnID == nil && req.batches.t2gen[topic] != batch.owner.generation {
+		if s.cl.cfg.txnID == nil && req.batches.t2info[topic].gen != batch.owner.generation {
 			s.cl.cfg.logger.Log(LogLevelInfo, "batch sequence-style error was caused by the topic being recreated; retrying against the new incarnation",
 				"broker", logID(s.nodeID),
 				"topic", topic,
@@ -1225,7 +1225,7 @@ func (s *sink) handleReqRespBatch(
 
 		if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
 			failErr := err
-			if s.cl.cfg.txnID != nil && req.batches.t2gen[topic] != batch.owner.generation {
+			if s.cl.cfg.txnID != nil && req.batches.t2info[topic].gen != batch.owner.generation {
 				// The topic was recreated mid-transaction (the merge
 				// swapped incarnations after this request was built):
 				// poison with the recreation sentinel, which recovery
@@ -1600,7 +1600,7 @@ type recBuf struct {
 	// generation counts the topic incarnations this recBuf has produced
 	// against; the metadata merge bumps it when swapping across a topic
 	// recreation. Produce requests stamp the generation at build time
-	// (seqRecBatches.t2gen): a response whose stamp is behind the current
+	// (seqRecBatches.t2info): a response whose stamp is behind the current
 	// generation was addressed to a dead incarnation and is classified
 	// accordingly when handled.
 	generation int32
@@ -2339,11 +2339,19 @@ type seqRecBatch struct {
 	*recBatch
 }
 
+// produceTopicInfo is what a produce request remembers per topic: the topic
+// ID it was addressed with, and the recBuf incarnation generation at request
+// build -- a swap while the request is out means responses address a dead
+// incarnation.
+type produceTopicInfo struct {
+	id  [16]byte
+	gen int32
+}
+
 type seqRecBatches struct {
-	bs    map[string]map[int32]seqRecBatch
-	t2id  map[string][16]byte
-	id2t  map[[16]byte]string
-	t2gen map[string]int32 // recBuf.generation at request build; a swap while this request is out means responses address a dead incarnation
+	bs     map[string]map[int32]seqRecBatch
+	t2info map[string]produceTopicInfo
+	id2t   map[[16]byte]string
 }
 
 func (rbs *seqRecBatches) addBatch(recBuf *recBuf, batch *recBatch) { // called under recBuf.mu
@@ -2357,17 +2365,15 @@ func (rbs *seqRecBatches) addSeqBatch(topic string, topicID [16]byte, gen, part 
 func (rbs *seqRecBatches) add(topic string, topicID [16]byte, gen, part int32, batch seqRecBatch) {
 	if rbs.bs == nil {
 		rbs.bs = make(map[string]map[int32]seqRecBatch)
-		rbs.t2id = make(map[string][16]byte)
+		rbs.t2info = make(map[string]produceTopicInfo)
 		rbs.id2t = make(map[[16]byte]string)
-		rbs.t2gen = make(map[string]int32)
 	}
 	topicBatches, exists := rbs.bs[topic]
 	if !exists {
 		topicBatches = make(map[int32]seqRecBatch, 1)
 		rbs.bs[topic] = topicBatches
-		rbs.t2id[topic] = topicID
+		rbs.t2info[topic] = produceTopicInfo{topicID, gen}
 		rbs.id2t[topicID] = topic
-		rbs.t2gen[topic] = gen
 	}
 	topicBatches[part] = batch
 }
@@ -2631,7 +2637,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 
 	for topic, partitions := range p.batches.bs {
 		if p.version >= 13 {
-			id := p.batches.t2id[topic]
+			id := p.batches.t2info[topic].id
 			dst = append(dst, id[:]...)
 			dst = kbin.AppendCompactArrayLen(dst, len(partitions))
 		} else if flexible {

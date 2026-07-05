@@ -28,6 +28,60 @@ func idStableLongEnough(agreedAt time.Time) bool {
 	return !agreedAt.IsZero() && time.Since(agreedAt) >= recreationStableIDAge
 }
 
+// swapRecreatedConsumer is the consumer side of adopting a recreated topic:
+// restart at the new topic's beginning, or, under NoResetOffset, freeze the
+// partition with a surfaced error (SetOffsets resumes). The why clause
+// names the evidence in the surfaced error; kvs extend the swap log line.
+func (cl *Client) swapRecreatedConsumer(topic string, part int, oldTP, newTP *topicPartition, css *consumerSessionStopper, why string, lvl LogLevel, msg string, kvs ...any) {
+	reset := &recreationResetOffset
+	if cl.cfg.resetOffset.noReset {
+		reset = nil
+		cl.consumer.addFakeReadyForDraining(topic, int32(part),
+			fmt.Errorf("%s (automatic resets are disabled via NoResetOffset; resume via SetOffsets): %w", why, kerr.UnknownTopicID),
+			"metadata refresh sees topic recreation with resets disabled")
+	}
+	cl.cfg.logger.Log(lvl, msg, append([]any{"topic", topic, "partition", part}, kvs...)...)
+	oldTP.swapRecreatedCursorTo(newTP, css, reset)
+}
+
+// resolveDeferredOOR resolves an out-of-range reset the fetch path deferred
+// for one classification round (cursor.oorPending); reaching here means the
+// metadata merge corroborated no recreation. When probing is allowed and
+// the log SHRANK below a consumed epoch, one OffsetForLeaderEpoch probe
+// classifies the reset as honestly as the wire allows: no history of our
+// epoch is almost certainly a recreation, our epoch ending below our
+// position is substantial truncation or a recreation, and group commits
+// fence + reseed either way. Otherwise this is the plain reset the fetch
+// would have done without the deferral (probing is skipped when the topic
+// vanished from metadata: the load simply retries against the missing
+// topic, exactly as an undeferred reset would).
+func (cl *Client) resolveDeferredOOR(css *consumerSessionStopper, c *cursor, topic string, part int32, probe bool) {
+	shape := c.oorPending.Swap(oorNone)
+	if shape == oorNone {
+		return
+	}
+	css.stop()
+	// With the session stopped, cursor fields are safely readable and
+	// writable; capture them before unset wipes them.
+	pos, epoch := c.offset, c.lastConsumedEpoch
+	reset := cl.oorResetOffset(c)
+	c.unset()
+	if probe && shape == oorAboveEnd && epoch >= 0 && cl.supportsOffsetForLeaderEpoch() {
+		css.recreated.add(topic, part)
+		css.reloadOffsets.addLoad(topic, part, loadTypeEpoch, offsetLoad{
+			replica:     -1,
+			oorClassify: true,
+			oorReset:    reset,
+			Offset:      Offset{at: pos, epoch: epoch},
+		})
+		return
+	}
+	css.reloadOffsets.addLoad(topic, part, loadTypeList, offsetLoad{
+		replica: -1,
+		Offset:  reset,
+	})
+}
+
 // recreationResetOffset is where consumption restarts on a classified topic
 // recreation: the BEGINNING of the new incarnation, deliberately not
 // ConsumeResetOffset. A subscription is a point in time and everything
