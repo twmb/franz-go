@@ -161,6 +161,12 @@ var errRecreationShareAck = fmt.Errorf("topic was deleted and recreated; these r
 // first connect, before any fetch to that broker can be sent.
 type recreationGate struct {
 	armed atomic.Bool
+
+	// confirmNow asks the metadata loop for one quick confirmation round:
+	// a fresh suspected recreation was just observed (pendingRecreateID
+	// newly set), and the second, confirming update should follow in the
+	// quick-retry cadence rather than waiting out a full MetadataMinAge.
+	confirmNow atomic.Bool
 }
 
 // cleanStaleID2T drops id2t entries of prior topic incarnations once nothing

@@ -260,6 +260,13 @@ loop:
 			// looping+waiting (250ms per wait, 8x), and if things
 			// still fail we will fall into the slower update below
 			// which waits (default) 5s between tries.
+			// A fresh suspected recreation wants its confirming update
+			// in the quick cadence below, however this update was
+			// triggered (the periodic refresh is the discovery path for
+			// a quiet recreation that produces no wire errors).
+			if err == nil && cl.recreation.confirmNow.Swap(false) {
+				now = true
+			}
 			if now && err == nil && nowTries < 8 {
 				wait := min(cl.cfg.metadataMinAge, 250*time.Millisecond)
 				cl.cfg.logger.Log(LogLevelDebug, "immediate metadata update had inner errors, re-updating",
@@ -986,6 +993,9 @@ func (cl *Client) mergeTopicPartitions(
 					}
 				}
 				if !adopt {
+					if rb.pendingRecreateID != newID && !previouslyHeld(&rb.priorIDs, newID) {
+						cl.recreation.confirmNow.Store(true)
+					}
 					rb.pendingRecreateID = newID
 					*newTP = *oldTP
 					// Keep draining: produce attempts must not stay
@@ -1087,6 +1097,9 @@ func (cl *Client) mergeTopicPartitions(
 					adopt = c.pendingRecreateID == newID
 				}
 				if !adopt {
+					if c.pendingRecreateID != newID && !previouslyHeld(&c.priorIDs, newID) {
+						cl.recreation.confirmNow.Store(true)
+					}
 					c.pendingRecreateID = newID
 					*newTP = *oldTP
 					retryWhy.add(topic, int32(part), errRecreationPending)

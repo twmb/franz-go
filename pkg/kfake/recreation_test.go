@@ -916,6 +916,53 @@ func TestRecreationTierBEpochGuard(t *testing.T) {
 	collectVals(t, cl, "n0", "n1", "n2", "n3", "n4")
 }
 
+// A suspected recreation's confirming metadata update follows in the quick
+// cadence rather than waiting out a full MetadataMinAge. The quiet shape: a
+// paused consumer produces no fetch errors and nothing corroborates, so the
+// periodic refresh is the discovery, and the confirmation used to sit out a
+// whole min age behind it.
+func TestRecreationConfirmQuickly(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V3_0_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.MetadataMaxAge(2*time.Second),
+		kgo.MetadataMinAge(2*time.Second),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	produceVals(t, c, topic, 0, "v0", "v1")
+	collectVals(t, cl, "v0", "v1")
+
+	cl.PauseFetchTopics(topic)
+	time.Sleep(300 * time.Millisecond)
+	recreateTopic(t, admin, topic, 1)
+	start := time.Now()
+
+	// Passive wait: the periodic refresh discovers, the quick round
+	// confirms. No forced refreshes; forcing would mask what is measured.
+	deadline := time.Now().Add(8 * time.Second)
+	for lg.count(logSwap) == 0 && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if lg.count(logSwap) == 0 {
+		t.Fatal("the periodic refresh never confirmed the recreation")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("swap took %v; want one periodic discovery (<=2s) plus one quick confirmation round, not a full extra min age", elapsed)
+	}
+
+	cl.ResumeFetchTopics(topic)
+	produceVals(t, c, topic, 0, "n0", "n1")
+	collectVals(t, cl, "n0", "n1")
+}
+
 // A change BACK to a previously held topic ID is never a fresh recreation
 // (IDs are random and never reused): it is stale metadata or split brain.
 // Below the fetch-by-ID gate, the two-consecutive-updates rule would
