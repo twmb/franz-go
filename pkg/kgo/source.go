@@ -182,6 +182,14 @@ type cursor struct {
 	// metadata merge.
 	oorPending atomic.Int32
 
+	// guardBackoffUntil (unix nanos) pauses fetching this cursor after a
+	// record-batch epoch guard withhold. The strip leaves the cursor at
+	// the same offset, so nothing else paces the refetch: an app polling
+	// quickly (records from co-partitions buffered) or back-to-back
+	// metadata wakeups would burn the withhold bound at round-trip speed,
+	// faster than the classifying metadata update can possibly land.
+	guardBackoffUntil atomic.Int64
+
 	// guardFails counts consecutive record-batch epoch guard withholds
 	// (see the fetch handling). If repeated classification finds no
 	// recreation, delivery resumes rather than stalling forever (e.g. a
@@ -850,6 +858,9 @@ func (s *source) createReq() *fetchRequest {
 		if !c.usable() {
 			continue
 		}
+		if time.Now().UnixNano() < c.guardBackoffUntil.Load() {
+			continue
+		}
 		if s.nodeID != c.leader && c.moveAt > 0 && time.Since(time.Unix(0, c.moveAt)) > s.cl.cfg.recheckPreferredReplicaInterval {
 			rechecks = append(rechecks, cursorOffsetPreferred{
 				cursorOffsetNext: *c.use(),
@@ -1419,6 +1430,12 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 						partOffset.cursorOffset = priorState
 						strip(topic, partition, errRecreationEpochGuard)
 						s.cl.triggerUpdateMetadataNow("fetched records regressed the leader epoch below the recreation gate")
+						// Pace the refetch of the withheld records, and
+						// re-poke the source once the pause lapses (the
+						// wake from the classifying metadata update
+						// usually arrives while still paused).
+						c.guardBackoffUntil.Store(time.Now().Add(250 * time.Millisecond).UnixNano())
+						time.AfterFunc(300*time.Millisecond, s.maybeConsume)
 						break
 					}
 					// Repeated classification found no recreation:

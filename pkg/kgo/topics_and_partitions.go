@@ -731,6 +731,7 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	c.idAgreedAt = time.Now()
 	c.oorPending.Store(oorNone) // the swap's reset supersedes a deferred out-of-range reset
 	c.guardFails = 0
+	c.guardBackoffUntil.Store(0)
 
 	// No old-incarnation state may leak into the new incarnation: clear
 	// the position and epoch (also hwm and the consumed-time OOOR

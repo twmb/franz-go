@@ -916,6 +916,80 @@ func TestRecreationTierBEpochGuard(t *testing.T) {
 	collectVals(t, cl, "n0", "n1", "n2", "n3", "n4")
 }
 
+const logGuardDeliver = "delivering records whose leader epoch regressed below what we already consumed"
+
+// The epoch guard's escape hatch, and its pacing. Below 2.8 a recreation
+// whose new incarnation catches up to the consumed epoch is invisible to
+// metadata (same name, no IDs, no rewind): classification never answers,
+// and after five paced withholds the records are delivered loudly rather
+// than stalling forever. The withholds are paced by a per-cursor backoff -
+// unpaced, the bound would burn out at round-trip speed, long before any
+// classifying metadata update could land.
+func TestRecreationEpochGuardBound(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic), MaxVersions(kversion.V2_7_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	// Two moves: consumed records carry leader epoch 2.
+	oldLeader := c.LeaderFor(topic, 0)
+	if err := c.MoveTopicPartition(topic, 0, 1-oldLeader); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.MoveTopicPartition(topic, 0, oldLeader); err != nil {
+		t.Fatal(err)
+	}
+	produceVals(t, c, topic, 0, "v0", "v1", "v2")
+	collectVals(t, cl, "v0", "v1", "v2")
+
+	// Recreate masked: records below the consumed epoch at the stale
+	// position, but the partition's final epoch and leader match what the
+	// consumer knows, so metadata never shows anything actionable.
+	cl.PauseFetchTopics(topic)
+	time.Sleep(300 * time.Millisecond)
+	recreateTopic(t, admin, topic, 1)
+	if err := c.MoveTopicPartition(topic, 0, oldLeader); err != nil { // epoch 1
+		t.Fatal(err)
+	}
+	produceVals(t, c, topic, 0, "n0", "n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "n9")
+	if err := c.MoveTopicPartition(topic, 0, oldLeader); err != nil { // epoch 2: no rewind visible
+		t.Fatal(err)
+	}
+	start := time.Now()
+	cl.ResumeFetchTopics(topic)
+
+	// Passively wait for the loud delivery (no forced refreshes: the
+	// pacing under test must not be masked by extra metadata traffic).
+	deadline := time.Now().Add(15 * time.Second)
+	for lg.count(logGuardDeliver) == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if lg.count(logGuardDeliver) != 1 {
+		t.Fatalf("got %d loud deliveries, want 1", lg.count(logGuardDeliver))
+	}
+	if got := lg.count(logEpochGuard); got != 5 {
+		t.Errorf("got %d withholds before the loud delivery, want 5", got)
+	}
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Errorf("withhold bound burned out in %v; want >= 1s of pacing", elapsed)
+	}
+	if lg.count(logSwap) != 0 || lg.count(logTierC) != 0 {
+		t.Error("nothing should have classified this masked recreation")
+	}
+
+	// The records at and past the stale position deliver exactly once.
+	collectVals(t, cl, "n3", "n4", "n5", "n6", "n7", "n8", "n9")
+	verifyZeroRecords(t, cl, 300*time.Millisecond)
+}
+
 // OFFSET_OUT_OF_RANGE below the gate defers its reset for one metadata
 // classification round: a recreation takes the labeled swap with a SINGLE
 // reset, rather than a plain reset that the later swap would repeat,
