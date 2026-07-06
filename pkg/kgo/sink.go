@@ -1618,6 +1618,10 @@ type recBuf struct {
 	// like a wire rejection (two independent fresh fetches agreeing is
 	// not a flap). Cleared at the swap.
 	idMismatched bool
+	// priorIDs holds the last two topic IDs this recBuf previously held
+	// (see previouslyHeld). Guarded by mu, like topicID.
+	priorIDs [2][16]byte
+
 	// pendingRecreateID is the by-name recreation corroboration: the new
 	// topic ID the previous metadata update reported. When the held ID is
 	// young, the merge swaps only once two consecutive updates agree on

@@ -28,6 +28,21 @@ func idStableLongEnough(agreedAt time.Time) bool {
 	return !agreedAt.IsZero() && time.Since(agreedAt) >= recreationStableIDAge
 }
 
+// previouslyHeld reports whether id is one this partition already held.
+// Topic IDs are random and never reused, so a change BACK to a prior ID is
+// never a fresh recreation: it is stale metadata or split brain, and only
+// wire evidence (a broker rejecting the id we currently hold) may adopt it.
+// Both trust shortcuts - an aged ID and two consecutive metadata updates -
+// are stale-servable and yield to this check.
+func previouslyHeld(prior *[2][16]byte, id [16]byte) bool {
+	return prior[0] == id || prior[1] == id
+}
+
+// holdPriorID records id as previously held, ahead of adopting a new one.
+func holdPriorID(prior *[2][16]byte, id [16]byte) {
+	prior[1], prior[0] = prior[0], id
+}
+
 // swapRecreatedConsumer is the consumer side of adopting a recreated topic:
 // restart at the new topic's beginning, or, under NoResetOffset, freeze the
 // partition with a surfaced error (SetOffsets resumes). The why clause

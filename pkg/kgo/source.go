@@ -160,6 +160,11 @@ type cursor struct {
 	// tripwire against a racing old-incarnation committed offset.
 	positioned atomic.Bool
 
+	// priorIDs holds the last two topic IDs this cursor previously held
+	// (see previouslyHeld). Written at swap (session stopped) and read at
+	// the metadata merge, like pendingRecreateID.
+	priorIDs [2][16]byte
+
 	// recreationRestart is set when the cursor's position comes from a
 	// recreation restart (the new topic's earliest offset). Until the
 	// cursor consumes something, an out-of-range re-resolves to the

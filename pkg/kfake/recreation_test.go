@@ -916,6 +916,65 @@ func TestRecreationTierBEpochGuard(t *testing.T) {
 	collectVals(t, cl, "n0", "n1", "n2", "n3", "n4")
 }
 
+// A change BACK to a previously held topic ID is never a fresh recreation
+// (IDs are random and never reused): it is stale metadata or split brain.
+// Below the fetch-by-ID gate, the two-consecutive-updates rule would
+// otherwise adopt a persistently stale broker's view and churn the
+// position; a prior ID instead requires a broker to reject the ID we
+// currently hold, which a by-name fetch never produces - so the client
+// stays on the incarnation it already adopted.
+func TestRecreationPriorIDNeedsEvidence(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(kversion.V3_0_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	// Capture a full pre-recreation metadata response, to replay later as
+	// a stale broker's view reporting the topic's original ID.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	metaReq := kmsg.NewPtrMetadataRequest()
+	mt := kmsg.NewMetadataRequestTopic()
+	mt.Topic = kmsg.StringPtr(topic)
+	metaReq.Topics = append(metaReq.Topics, mt)
+	stale, err := metaReq.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	produceVals(t, c, topic, 0, "v0", "v1")
+	collectVals(t, cl, "v0", "v1")
+
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, cl, lg, logSwap, 1)
+
+	// Every metadata answer now replays the pre-recreation view: two
+	// consecutive agreeing updates, which would adopt any fresh ID.
+	c.ControlKey(3, func(kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		return stale, nil, true
+	})
+	for range 4 {
+		cl.ForceMetadataRefresh()
+		time.Sleep(150 * time.Millisecond)
+	}
+	if got := lg.count(logSwap); got != 1 {
+		t.Fatalf("stale replays swapped the consumer back: %d swaps, want 1", got)
+	}
+
+	// Still consuming the real, current incarnation.
+	produceVals(t, c, topic, 0, "n0", "n1")
+	collectVals(t, cl, "n0", "n1")
+}
+
 const logGuardDeliver = "delivering records whose leader epoch regressed below what we already consumed"
 
 // The epoch guard's escape hatch, and its pacing. Below 2.8 a recreation

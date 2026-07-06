@@ -724,6 +724,7 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	// fetches are discarded unpolled, and every source's fetch session
 	// resets, forgetting the (old ID, partition) entries.
 	c.source = new.cursor.source
+	holdPriorID(&c.priorIDs, c.topicID)
 	c.topicID = new.cursor.topicID
 	c.topicPartitionData = new.topicPartitionData
 	c.unknownIDFails.Store(0)
@@ -781,6 +782,7 @@ func (old *topicPartition) swapRecreatedRecBufTo(new *topicPartition) { //nolint
 	rb.topicPartitionData = new.topicPartitionData
 	rb.okOnSink = false
 
+	holdPriorID(&rb.priorIDs, rb.topicID)
 	rb.topicID = new.records.topicID
 	rb.generation++
 	rb.needSeqReset = !rb.offsetRegressed
@@ -841,6 +843,7 @@ func (tp *topicPartition) swapRecreatedShareCursorTo(cl *Client, new *topicParti
 	}
 	// With the cursor on no source, nothing concurrently reads topicID
 	// (request building and ack flushing run on the owning source's loop).
+	holdPriorID(&c.priorIDs, c.topicID)
 	c.topicID = newID
 	c.generation.Add(1)
 	c.unknownIDFails.Store(0)

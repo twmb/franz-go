@@ -127,6 +127,10 @@ type (
 		// recreationStableIDAge, a metadata response reporting a
 		// different ID is believed outright. Only the metadata-update
 		// goroutine reads or writes this.
+		// priorIDs holds the last two topic IDs this share cursor previously
+		// held (see previouslyHeld). Written at swap, read at the merge.
+		priorIDs [2][16]byte
+
 		idAgreedAt time.Time
 
 		cursorsIdx int

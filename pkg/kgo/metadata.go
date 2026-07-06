@@ -973,9 +973,17 @@ func (cl *Client) mergeTopicPartitions(
 				// offset regression, or commit-time verification), or,
 				// where the wire fetches by name and can never reject,
 				// two consecutive metadata updates agreeing.
-				adopt := corroborated || idStableLongEnough(rb.idAgreedAt)
-				if !adopt && !cl.recreation.armed.Load() {
-					adopt = rb.pendingRecreateID == newID
+				var adopt bool
+				if previouslyHeld(&rb.priorIDs, newID) {
+					// Never a fresh recreation (IDs are never
+					// reused): stale metadata or split brain, and
+					// only produce-wire evidence may adopt it.
+					adopt = corroborated
+				} else {
+					adopt = corroborated || idStableLongEnough(rb.idAgreedAt)
+					if !adopt && !cl.recreation.armed.Load() {
+						adopt = rb.pendingRecreateID == newID
+					}
 				}
 				if !adopt {
 					rb.pendingRecreateID = newID
@@ -1033,8 +1041,15 @@ func (cl *Client) mergeTopicPartitions(
 			// version, so shares swap on wire corroboration regardless
 			// of the fetch gate.
 			if isShare && newID != noID && oldID != noID && newID != oldID {
-				if oldTP.shareCursor.unknownIDFails.Load() == 0 &&
-					!idStableLongEnough(oldTP.shareCursor.idAgreedAt) {
+				sc := oldTP.shareCursor
+				adopt := sc.unknownIDFails.Load() > 0
+				if !adopt && !previouslyHeld(&sc.priorIDs, newID) {
+					// A previously held ID is never a fresh
+					// recreation (IDs are never reused); it does not
+					// get the aged-trust shortcut.
+					adopt = idStableLongEnough(sc.idAgreedAt)
+				}
+				if !adopt {
 					*newTP = *oldTP
 					retryWhy.add(topic, int32(part), errRecreationPending)
 					continue
@@ -1052,6 +1067,12 @@ func (cl *Client) mergeTopicPartitions(
 				c := oldTP.cursor
 				var adopt bool
 				switch {
+				case previouslyHeld(&c.priorIDs, newID):
+					// Never a fresh recreation (IDs are never
+					// reused): stale metadata or split brain, and
+					// only a broker rejecting the ID we currently
+					// hold may adopt it.
+					adopt = c.unknownIDFails.Load() > 0
 				case idStableLongEnough(c.idAgreedAt) && c.positioned.Load():
 					// The old ID was the cluster's agreed truth for a
 					// long time: the change is a recreation, not a
