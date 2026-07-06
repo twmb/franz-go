@@ -643,9 +643,68 @@ func TestRecreationTierCConsumer(t *testing.T) {
 
 	recreateTopic(t, cl, topic, 1)
 	waitForLog(t, cl, lg, logTierC, 1)
+	if lg.count(logTierCAmbiguous) == 0 {
+		t.Error("a small rewind is ambiguous (recreation or lost epoch history) and must say so")
+	}
 
 	produceVals(t, c, topic, 0, "n0", "n1", "n2")
 	collectVals(t, cl, "n0", "n1", "n2")
+}
+
+const (
+	logTierCAmbiguous = "or epoch history was lost after unclean elections"
+	logTierCFresh     = "persistent leader epoch rewind onto a fresh lineage"
+)
+
+// A persistent rewind from well above onto a nearly virgin lineage (new
+// epoch <= 2, consumed >= 3 higher) is treated as a certain recreation and
+// restarts from the new topic's beginning. The discriminator here is
+// event-time stamping: the new incarnation's records carry timestamps far
+// older than anything consumed, so the ambiguous nearest-timestamp reset
+// would resolve past them to the log end and never deliver them.
+func TestRecreationTierCFreshLineage(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic), MaxVersions(kversion.V2_7_0()))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	// Three moves: consumed records carry leader epoch 3, so the rewind
+	// onto the new incarnation's epoch 0 lands >= 3 below what we consumed.
+	cur := c.LeaderFor(topic, 0)
+	for range 3 {
+		cur = 1 - cur
+		if err := c.MoveTopicPartition(topic, 0, cur); err != nil {
+			t.Fatal(err)
+		}
+	}
+	produceVals(t, c, topic, 0, "v0", "v1")
+	collectVals(t, cl, "v0", "v1")
+
+	recreateTopic(t, admin, topic, 1)
+
+	// Republish history into the new incarnation: event-time stamps far
+	// before anything the consumer saw.
+	pcl := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	old := time.Now().Add(-24 * time.Hour)
+	for _, v := range []string{"h0", "h1"} {
+		r := &kgo.Record{Topic: topic, Partition: 0, Value: []byte(v), Timestamp: old}
+		if err := pcl.ProduceSync(ctx, r).FirstErr(); err != nil {
+			t.Fatalf("produce %q: %v", v, err)
+		}
+	}
+
+	waitForLog(t, cl, lg, logTierCFresh, 1)
+	collectVals(t, cl, "h0", "h1")
 }
 
 // Tier C producer: the persistent rewind restarts produce sequences, and

@@ -15,7 +15,9 @@ minute-old ID is a recreation, not a stale broker). Younger IDs
 corroborate: topic IDs on the fetch wire at 3.1+ (self-closing, zero silent
 window), topic IDs in metadata at 2.8-3.0 (adoption within about one
 metadata interval, on two consecutive updates agreeing), persistent
-leader-epoch rewinds at 2.1-2.7 (opportunistic), and no change below 2.1
+leader-epoch rewinds at 2.1-2.7 (opportunistic; ambiguous against lost
+epoch history, so those resets follow the nearest-timestamp loss rules
+unless the rewind shape proves a recreation), and no change below 2.1
 where no signal exists. Two
 hardening nets shrink the by-name window further: fetched records carrying a
 leader epoch below what was already consumed are withheld and classified,

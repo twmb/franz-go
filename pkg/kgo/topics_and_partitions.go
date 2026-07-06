@@ -743,7 +743,13 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	c.unset()
 	css.reloadOffsets.removeLoad(c.topic, c.partition)
 	if reset != nil {
-		c.recreationRestart.Store(true)
+		// Only an earliest-offset restart stays pinned to earliest
+		// through further out-of-range; a nearest-timestamp reset (an
+		// inferred recreation where loss remains a hypothesis) keeps
+		// the ordinary out-of-range behavior.
+		if *reset == recreationResetOffset {
+			c.recreationRestart.Store(true)
+		}
 		css.reloadOffsets.addLoad(c.topic, c.partition, loadTypeList, offsetLoad{
 			replica:        -1,
 			recreationSeed: true,

@@ -1106,6 +1106,7 @@ func (cl *Client) mergeTopicPartitions(
 					continue
 				}
 				cl.swapRecreatedConsumer(topic, part, oldTP, newTP, css,
+					recreationResetOffset,
 					"topic was deleted and recreated",
 					LogLevelInfo, "topic recreation detected, adopting the new topic ID and restarting from the new topic's beginning",
 					"old_id", topicID(oldID),
@@ -1223,11 +1224,37 @@ func (cl *Client) mergeTopicPartitions(
 				oldTP.swapRecreatedRecBufTo(newTP)
 				continue
 			case !isProduce && !isShare && oldTP.cursor.topicID == noID:
+				// A persistent rewind has two hypotheses: recreation,
+				// or an unclean election whose epochs died with the
+				// broker that served them (#119: a doomed broker
+				// briefly surfaced a higher epoch, and the survivors'
+				// real lineage is lower). Indistinguishable by name
+				// alone, so the reset follows the loss rules (nearest
+				// timestamp; on a real recreation with wall-clock
+				// timestamps it lands at the new topic's start
+				// anyway). One exception is treated as certain: a
+				// rewind from well above onto a nearly virgin lineage
+				// (epoch <= 2, ours >= 3 higher). A revert to truth
+				// lands at the last REAL epoch, so this shape requires
+				// every epoch we consumed to have been phantom -
+				// recreation in all but pathological flap storms - and
+				// restarts from the new topic's beginning, immune to
+				// event-time timestamps.
+				css.stop()
+				c := oldTP.cursor
+				reset, msg := cl.oorResetOffset(c),
+					"topic recreation inferred from a persistent leader epoch rewind, or epoch history was lost after unclean elections; resetting to the nearest timestamp"
+				if newTP.leaderEpoch >= 0 && newTP.leaderEpoch <= 2 && c.lastConsumedEpoch-newTP.leaderEpoch >= 3 {
+					reset, msg = recreationResetOffset,
+						"topic recreation inferred from a persistent leader epoch rewind onto a fresh lineage; restarting from the new topic's beginning"
+				}
 				cl.swapRecreatedConsumer(topic, part, oldTP, newTP, css,
+					reset,
 					"topic recreation inferred from a persistent leader epoch rewind",
-					LogLevelWarn, "topic recreation inferred from a persistent leader epoch rewind; restarting from the new topic's beginning",
+					LogLevelWarn, msg,
 					"old_leader_epoch", oldTP.leaderEpoch,
 					"new_leader_epoch", newTP.leaderEpoch,
+					"last_consumed_epoch", c.lastConsumedEpoch,
 				)
 				continue
 			}

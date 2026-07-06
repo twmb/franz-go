@@ -17,7 +17,10 @@
 // at 3.1+ (topic IDs on the fetch wire) via the broker's own rejection,
 // making detection self-closing; at 2.8-3.0 (IDs in metadata only) via two
 // consecutive metadata updates agreeing; at 2.1-2.7 a persistent
-// leader-epoch rewind is treated as a recreation opportunistically; below
+// leader-epoch rewind is treated as a recreation opportunistically (a
+// rewind is also what lost epoch history after unclean elections looks
+// like, so those resets follow the nearest-timestamp loss rules unless the
+// rewind shape proves a recreation); below
 // 2.1 no signal exists and behavior is unchanged. On detection, consumers
 // restart from the new topic's beginning -- a subscription is a point in
 // time and everything after, and everything in a replacement topic arrived

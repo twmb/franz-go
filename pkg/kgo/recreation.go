@@ -44,19 +44,21 @@ func holdPriorID(prior *[2][16]byte, id [16]byte) {
 }
 
 // swapRecreatedConsumer is the consumer side of adopting a recreated topic:
-// restart at the new topic's beginning, or, under NoResetOffset, freeze the
-// partition with a surfaced error (SetOffsets resumes). The why clause
-// names the evidence in the surfaced error; kvs extend the swap log line.
-func (cl *Client) swapRecreatedConsumer(topic string, part int, oldTP, newTP *topicPartition, css *consumerSessionStopper, why string, lvl LogLevel, msg string, kvs ...any) {
-	reset := &recreationResetOffset
+// reposition per reset (the new topic's beginning when the recreation is
+// certain; the nearest-timestamp loss reset when it is inferred and loss
+// remains a hypothesis), or, under NoResetOffset, freeze the partition with
+// a surfaced error (SetOffsets resumes). The why clause names the evidence
+// in the surfaced error; kvs extend the swap log line.
+func (cl *Client) swapRecreatedConsumer(topic string, part int, oldTP, newTP *topicPartition, css *consumerSessionStopper, reset Offset, why string, lvl LogLevel, msg string, kvs ...any) {
+	rp := &reset
 	if cl.cfg.resetOffset.noReset {
-		reset = nil
+		rp = nil
 		cl.consumer.addFakeReadyForDraining(topic, int32(part),
 			fmt.Errorf("%s (automatic resets are disabled via NoResetOffset; resume via SetOffsets): %w", why, kerr.UnknownTopicID),
 			"metadata refresh sees topic recreation with resets disabled")
 	}
 	cl.cfg.logger.Log(lvl, msg, append([]any{"topic", topic, "partition", part}, kvs...)...)
-	oldTP.swapRecreatedCursorTo(newTP, css, reset)
+	oldTP.swapRecreatedCursorTo(newTP, css, rp)
 }
 
 // resolveDeferredOOR resolves an out-of-range reset the fetch path deferred

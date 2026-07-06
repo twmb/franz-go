@@ -993,14 +993,19 @@ Detection tiers, strongest signal first:
   stale-broker flaps; produce-wire evidence still adopts immediately.
 - No IDs, leader epochs only: at the point the epoch-rewind guard would
   accept a persistently lower epoch, treat it as a recreation (epochs are
-  monotonic within one incarnation).
+  monotonic within one incarnation). A rewind is also what epoch history
+  lost to unclean elections looks like (#119), so the consumer reset
+  follows the nearest-timestamp loss rules -- unless the rewind lands from
+  >= 3 above onto a nearly virgin lineage (epoch <= 2), a shape only a
+  recreation produces, which restarts from the beginning.
 
 The swaps (`swapRecreatedCursorTo`, `swapRecreatedRecBufTo`,
 `swapRecreatedShareCursorTo` in topics_and_partitions.go) stop the consumer
 session (discarding buffered old-incarnation fetches), adopt the new ID and
 partition data, restart at the new incarnation's beginning
 (`recreationResetOffset`; ConsumeResetOffset governs within-incarnation
-positions, and NoResetOffset freezes for SetOffsets) via a
+positions, NoResetOffset freezes for SetOffsets, and an INFERRED recreation
+whose loss hypothesis survives resets nearest-timestamp instead) via a
 `recreationSeed`-marked list load (which also fences group commits and seeds
 the restart position for a prompt recommit, see `fenceRecreated` /
 `maybeSeedRecreated`), restart produce sequences (`needSeqReset`, skipped
