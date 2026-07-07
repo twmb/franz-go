@@ -791,7 +791,14 @@ func (old *topicPartition) swapRecreatedRecBufTo(new *topicPartition) { //nolint
 	holdPriorID(&rb.priorIDs, rb.topicID)
 	rb.topicID = new.records.topicID
 	rb.generation++
-	rb.needSeqReset = !rb.offsetRegressed
+	// The swap itself needs no sequence reset when the produce chain
+	// provably landed in the new incarnation (offsetRegressed) -- but a
+	// reset another mechanism already demanded must survive: transaction
+	// recovery bumps the producer epoch and marks every recBuf for a
+	// sequence reset, and this swap can land after that mark. Clobbering
+	// it would continue the old sequence chain under the new epoch:
+	// OUT_OF_ORDER_SEQUENCE_NUMBER, or a fatal fence on a real broker.
+	rb.needSeqReset = rb.needSeqReset || !rb.offsetRegressed
 	rb.offsetRegressed = false
 	rb.idMismatched = false
 	rb.pendingRecreateID = [16]byte{}

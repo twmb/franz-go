@@ -26,9 +26,26 @@ func TestIDStableLongEnough(t *testing.T) {
 
 // recreateTestTopic deletes and recreates topic against the real test
 // broker. Deletion propagates asynchronously, so the create retries while
-// the broker still answers TopicAlreadyExists.
+// the broker still answers TopicAlreadyExists -- and the broker's metadata
+// view lags the controller, so this also waits until metadata reports a
+// topic ID different from the old incarnation's before returning: a client
+// starting during the gap would briefly (and legitimately) consume the
+// dying incarnation.
 func recreateTestTopic(tb testing.TB, topic string) {
 	tb.Helper()
+
+	metaID := func() [16]byte {
+		req := kmsg.NewPtrMetadataRequest()
+		mt := kmsg.NewMetadataRequestTopic()
+		mt.Topic = kmsg.StringPtr(topic)
+		req.Topics = append(req.Topics, mt)
+		resp, err := req.RequestWith(context.Background(), adm())
+		if err != nil || len(resp.Topics) != 1 {
+			return [16]byte{}
+		}
+		return resp.Topics[0].TopicID
+	}
+	oldID := metaID()
 
 	delReq := kmsg.NewPtrDeleteTopicsRequest()
 	delReq.TopicNames = []string{topic}
@@ -56,18 +73,25 @@ func recreateTestTopic(tb testing.TB, topic string) {
 			err = kerr.ErrorForCode(resp.Topics[0].ErrorCode)
 		}
 		if err == nil {
-			return
+			break
 		}
 		if !errors.Is(err, kerr.TopicAlreadyExists) || time.Now().After(deadline) {
 			tb.Fatalf("unable to recreate %q: %v", topic, err)
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+
+	for {
+		if id := metaID(); id != oldID && id != ([16]byte{}) || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // collectRecreationVals polls until every wanted value arrived, failing on
 // any unexpected value: an old-incarnation record or a duplicate delivery.
-func collectRecreationVals(t *testing.T, ctx context.Context, cl *Client, want ...string) {
+func collectRecreationVals(ctx context.Context, t *testing.T, cl *Client, want ...string) {
 	t.Helper()
 	wanted := make(map[string]bool, len(want))
 	for _, w := range want {
@@ -83,7 +107,7 @@ func collectRecreationVals(t *testing.T, ctx context.Context, cl *Client, want .
 			v := string(r.Value)
 			had, ok := wanted[v]
 			if !ok || had {
-				t.Errorf("unexpected or duplicate value %q", v)
+				t.Errorf("unexpected or duplicate value %q (offset %d, leader epoch %d)", v, r.Offset, r.LeaderEpoch)
 				return
 			}
 			wanted[v] = true
@@ -127,7 +151,7 @@ func TestTopicRecreation(t *testing.T) {
 			t.Fatalf("produce before recreation: %v", err)
 		}
 	}
-	collectRecreationVals(t, ctx, consumer, a...)
+	collectRecreationVals(ctx, t, consumer, a...)
 
 	// Fewer records than the consumed position: every detection tier
 	// converges (worst case via out-of-range classification).
@@ -137,13 +161,13 @@ func TestTopicRecreation(t *testing.T) {
 			t.Fatalf("produce across recreation did not heal: %v", err)
 		}
 	}
-	collectRecreationVals(t, ctx, consumer, "b0", "b1")
+	collectRecreationVals(ctx, t, consumer, "b0", "b1")
 
 	// Liveness after the heal, both sides.
 	if err := producer.ProduceSync(ctx, StringRecord("c0")).FirstErr(); err != nil {
 		t.Fatalf("produce after heal: %v", err)
 	}
-	collectRecreationVals(t, ctx, consumer, "c0")
+	collectRecreationVals(ctx, t, consumer, "c0")
 }
 
 // TestTopicRecreationTransactions runs the transactional recreation
@@ -199,6 +223,7 @@ func TestTopicRecreationTransactions(t *testing.T) {
 		if perr == nil {
 			cerr = cl.EndTransaction(ctx, TryCommit)
 		}
+		t.Logf("round %d: produce err %v; commit err %v", round, perr, cerr)
 		if perr == nil && cerr == nil {
 			committed = val
 			break
@@ -224,5 +249,5 @@ func TestTopicRecreationTransactions(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer consumer.Close()
-	collectRecreationVals(t, ctx, consumer, committed)
+	collectRecreationVals(ctx, t, consumer, committed)
 }

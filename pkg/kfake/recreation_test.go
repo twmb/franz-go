@@ -2133,6 +2133,98 @@ func TestRecreationTxnPoisonOnObservation(t *testing.T) {
 	consumeCommitted(t, c, topic, "c0")
 }
 
+// The integration-suite transaction shape, run at pinned broker versions: a
+// committed transaction, a recreate, then bounded abort-retry rounds until
+// a transaction commits into the new incarnation, with read-committed
+// consumption seeing exactly the committed value. This shape caught two
+// real bugs the targeted tests missed: a recreation swap clobbering the
+// pending epoch-bump sequence reset (OUT_OF_ORDER_SEQUENCE_NUMBER, or a
+// fatal fence on a real broker), and kfake's transactional-id re-init not
+// aborting the open transaction (a later commit swallowed the prior
+// epoch's writes into its range).
+func testShapeAt(t *testing.T, name string, vs *kversion.Versions) {
+	t.Run(name, func(t *testing.T) {
+		t.Parallel()
+		const topic = "t"
+		opts := []Opt{NumBrokers(1), SeedTopics(1, topic)}
+		if vs != nil {
+			opts = append(opts, MaxVersions(vs))
+		}
+		c := newCluster(t, opts...)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		lg := &capLogger{lvl: kgo.LogLevelDebug}
+		cl := newPlainClient(t, c,
+			kgo.DefaultProduceTopic(topic),
+			kgo.TransactionalID("tx-shape"),
+			kgo.WithLogger(lg),
+		)
+		defer func() {
+			if t.Failed() {
+				lg.mu.Lock()
+				s := lg.buf.String()
+				lg.mu.Unlock()
+				t.Logf("client log:\n%s", s)
+			}
+		}()
+		admin := newPlainClient(t, c)
+
+		if err := cl.BeginTransaction(); err != nil {
+			t.Fatal(err)
+		}
+		if err := cl.ProduceSync(ctx, kgo.StringRecord("t0")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+		if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+			t.Fatal(err)
+		}
+
+		recreateTopic(t, admin, topic, 1)
+
+		loud := func(err error) bool {
+			return errors.Is(err, kerr.TransactionAbortable) || errors.Is(err, kerr.OperationNotAttempted)
+		}
+		var committed string
+		for round := 0; ; round++ {
+			if round > 8 || ctx.Err() != nil {
+				t.Fatal("no commit within budget")
+			}
+			if err := cl.BeginTransaction(); err != nil {
+				t.Fatalf("begin round %d: %v", round, err)
+			}
+			val := fmt.Sprintf("post%d", round)
+			perr := cl.ProduceSync(ctx, kgo.StringRecord(val)).FirstErr()
+			var cerr error
+			if perr == nil {
+				cerr = cl.EndTransaction(ctx, kgo.TryCommit)
+			}
+			if perr == nil && cerr == nil {
+				committed = val
+				break
+			}
+			for _, err := range []error{perr, cerr} {
+				if err != nil && !loud(err) {
+					t.Fatalf("round %d failed outside loud classes: %v", round, err)
+				}
+			}
+			if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+				t.Fatalf("abort round %d: %v", round, err)
+			}
+		}
+		t.Logf("committed %q", committed)
+		consumeCommitted(t, c, topic, committed)
+	})
+}
+
+func TestRecreationTxnFreshStartShape(t *testing.T) {
+	t.Parallel()
+	testShapeAt(t, "latest", nil)
+	testShapeAt(t, "v3_8", kversion.V3_8_0())
+	testShapeAt(t, "v3_0", kversion.V3_0_0())
+	testShapeAt(t, "v0_11", kversion.V0_11_0())
+}
+
 // A recreation that lands inside the unconfirmed-EndTxn window: the
 // documented TryAbort retry heals without any commit-time verification (the
 // prior attempt's fate is sealed), and the following transactions converge
