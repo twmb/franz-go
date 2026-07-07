@@ -143,6 +143,8 @@ type cfg struct {
 	partitioner Partitioner
 	compressor  Compressor
 
+	streamCompression bool
+
 	stopOnDataLoss bool
 	onDataLoss     func(string, int32)
 
@@ -1429,6 +1431,39 @@ func ProducerLinger(linger time.Duration) ProducerOpt {
 // have already been produced and not flushed will return ErrMaxBuffered.
 func ManualFlushing() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.manualFlushing = true }}
+}
+
+// StreamingCompression opts the producer into compressed-size-bound batch
+// coalescing: whenever a partition has a backlog of two or more unsent
+// batches and the compression codec supports streaming (gzip or zstd), the
+// backlog is merged at drain time into batches bounded by their COMPRESSED
+// wire size rather than their uncompressed size.
+//
+// Batches are normally bounded by ProducerBatchMaxBytes measured on the
+// UNCOMPRESSED records, so with a compression ratio R, batches arrive at the
+// broker ~R times smaller than the broker's max.message.bytes allows. With
+// this option, a backlog drains in ~R times fewer batches and therefore ~R
+// times fewer produce round trips per partition, which raises per-partition
+// throughput whenever round trips are the bottleneck (real network RTT,
+// bounded in-flight requests). The merged batch never exceeds
+// ProducerBatchMaxBytes compressed - membership is decided against the actual
+// compressed size before each record is committed to the batch, so this
+// cannot cause MESSAGE_TOO_LARGE (unlike manually over-provisioning
+// ProducerBatchMaxBytes against an assumed ratio). Merged batches also cache
+// their compressed bytes, so retries do not recompress.
+//
+// Merging only engages on a backlog; with an idle or keeping-up partition,
+// producing and draining behave exactly as without this option. Compression
+// of merged batches happens on the sink goroutine outside the buffering lock,
+// so producing is never stalled behind compression. Records are merged only
+// from batches that have never been attempted on the wire, preserving
+// idempotent and transactional sequence semantics exactly.
+//
+// This option has no effect with snappy (a block codec that cannot be sized
+// incrementally), with a custom Compressor, or against brokers older than
+// 0.11 (message sets).
+func StreamingCompression() ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.streamCompression = true }}
 }
 
 // RecordDeliveryTimeout sets a rough time of how long a record can sit around
