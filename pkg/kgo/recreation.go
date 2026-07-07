@@ -11,6 +11,26 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// Recreation tunables, gathered here so the whole knob surface is visible
+// in one place. Everything else recreation-related keys off broker facts
+// (wire rejections, ID equality, epoch shapes), not numbers. Two counts
+// live elsewhere by design: the 5-round epoch-rewind acceptance
+// (maxEpochRewinds, predates this work and is the #119 fix), and the
+// two-consecutive-updates rule, which is structural (pendingRecreateID
+// equality), not a counter.
+const (
+	// recreationGuardWithholds bounds consecutive record-batch epoch
+	// guard withholds before delivering loudly (see source.go): five
+	// classification opportunities, then never worse than the pre-guard
+	// behavior, which always delivered.
+	recreationGuardWithholds = 5
+
+	// recreationGuardBackoff paces refetches of withheld records, so the
+	// bound above counts classification opportunities rather than round
+	// trips.
+	recreationGuardBackoff = 250 * time.Millisecond
+)
+
 // recreationStableIDAge is how long a topic ID must have been our
 // consistently-held truth before a metadata response reporting a DIFFERENT
 // ID is believed outright, with no further corroboration: metadata

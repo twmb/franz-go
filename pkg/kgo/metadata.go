@@ -949,6 +949,14 @@ func (cl *Client) mergeTopicPartitions(
 			// flap from stale metadata). Below ID-ful metadata nothing
 			// reaches here (IDs are zero) and produce behavior is
 			// unchanged.
+			//
+			// The three partition kinds (produce here; consume and
+			// share below) handle an ID change with the same skeleton;
+			// a new kind needs all of it: a previouslyHeld check, an
+			// adopt gate on that kind's wire evidence, a pending arm
+			// (with confirmNow on first observation), and a swap
+			// function that records the prior ID and clears the
+			// kind's recreation state.
 			if newID != noID && oldID != newID {
 				// Transactions FAIL on recreated topics, on the FIRST
 				// observation: when the partition has transactional

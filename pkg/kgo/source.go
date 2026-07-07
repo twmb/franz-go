@@ -1424,7 +1424,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					priorState.lastConsumedEpoch >= 0 && len(fp.Records) > 0 &&
 					fp.Records[0].LeaderEpoch >= 0 && fp.Records[0].LeaderEpoch < priorState.lastConsumedEpoch {
 					c.guardFails++
-					if c.guardFails <= 5 {
+					if c.guardFails <= recreationGuardWithholds {
 						s.cl.cfg.logger.Log(LogLevelWarn, "fetched records carry a leader epoch below what we already consumed; withholding them and classifying (topic recreation, or a rolled back log)",
 							"broker", logID(s.nodeID),
 							"topic", topic,
@@ -1439,8 +1439,8 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 						// re-poke the source once the pause lapses (the
 						// wake from the classifying metadata update
 						// usually arrives while still paused).
-						c.guardBackoffUntil.Store(time.Now().Add(250 * time.Millisecond).UnixNano())
-						time.AfterFunc(300*time.Millisecond, s.maybeConsume)
+						c.guardBackoffUntil.Store(time.Now().Add(recreationGuardBackoff).UnixNano())
+						time.AfterFunc(recreationGuardBackoff+50*time.Millisecond, s.maybeConsume)
 						break
 					}
 					// Repeated classification found no recreation:

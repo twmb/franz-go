@@ -975,6 +975,70 @@ func TestRecreationTierBEpochGuard(t *testing.T) {
 	collectVals(t, cl, "n0", "n1", "n2", "n3", "n4")
 }
 
+// A partition that never located a first offset never switches
+// incarnations on metadata alone - an early switch would let a racing
+// old-incarnation committed offset be applied to a partition whose fetches
+// then succeed under the new, valid ID. Offset resolution is blocked here
+// so the cursor stays unpositioned: with no position there are no fetches,
+// so no rejection, and the swap waits. Unblocking positions the cursor, the
+// first fetch goes out against the dead ID, and that rejection lands the
+// swap.
+func TestRecreationUnpositionedWaitsForRejection(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	admin := newPlainClient(t, c)
+	produceVals(t, c, topic, 0, "v0", "v1")
+
+	// Answer every offset list with retriable NOT_LEADER until unblocked.
+	var blocking atomic.Bool
+	blocking.Store(true)
+	c.ControlKey(2, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		if !blocking.Load() {
+			return nil, nil, false
+		}
+		req := kreq.(*kmsg.ListOffsetsRequest)
+		resp := req.ResponseKind().(*kmsg.ListOffsetsResponse)
+		for _, rt := range req.Topics {
+			st := kmsg.NewListOffsetsResponseTopic()
+			st.Topic = rt.Topic
+			for _, rp := range rt.Partitions {
+				sp := kmsg.NewListOffsetsResponseTopicPartition()
+				sp.Partition = rp.Partition
+				sp.ErrorCode = kerr.NotLeaderForPartition.Code
+				st.Partitions = append(st.Partitions, sp)
+			}
+			resp.Topics = append(resp.Topics, st)
+		}
+		return resp, nil, true
+	})
+
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	time.Sleep(300 * time.Millisecond) // let the blocked load attempts begin
+
+	recreateTopic(t, admin, topic, 1)
+	for range 4 {
+		cl.ForceMetadataRefresh()
+		time.Sleep(150 * time.Millisecond)
+	}
+	if got := lg.count(logSwap); got != 0 {
+		t.Fatalf("an unpositioned partition swapped on metadata alone: %d swaps", got)
+	}
+
+	produceVals(t, c, topic, 0, "n0", "n1")
+	blocking.Store(false)
+	waitForLog(t, cl, lg, logSwap, 1)
+	collectVals(t, cl, "n0", "n1")
+}
+
 // A suspected recreation's confirming metadata update follows in the quick
 // cadence rather than waiting out a full MetadataMinAge. The quiet shape: a
 // paused consumer produces no fetch errors and nothing corroborates, so the
@@ -990,8 +1054,8 @@ func TestRecreationConfirmQuickly(t *testing.T) {
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchMaxWait(250*time.Millisecond),
-		kgo.MetadataMaxAge(2*time.Second),
-		kgo.MetadataMinAge(2*time.Second),
+		kgo.MetadataMaxAge(4*time.Second),
+		kgo.MetadataMinAge(4*time.Second),
 		kgo.WithLogger(lg),
 	)
 	admin := newPlainClient(t, c)
@@ -1006,15 +1070,17 @@ func TestRecreationConfirmQuickly(t *testing.T) {
 
 	// Passive wait: the periodic refresh discovers, the quick round
 	// confirms. No forced refreshes; forcing would mask what is measured.
-	deadline := time.Now().Add(8 * time.Second)
+	deadline := time.Now().Add(12 * time.Second)
 	for lg.count(logSwap) == 0 && time.Now().Before(deadline) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	if lg.count(logSwap) == 0 {
 		t.Fatal("the periodic refresh never confirmed the recreation")
 	}
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Fatalf("swap took %v; want one periodic discovery (<=2s) plus one quick confirmation round, not a full extra min age", elapsed)
+	// Discovery <= one max age (4s) + a quick round (~250ms); without
+	// the quick cadence, confirmation adds a full extra min age (4s).
+	if elapsed := time.Since(start); elapsed > 5500*time.Millisecond {
+		t.Fatalf("swap took %v; want one periodic discovery plus one quick confirmation round, not a full extra min age", elapsed)
 	}
 
 	cl.ResumeFetchTopics(topic)
