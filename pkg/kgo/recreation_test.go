@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -256,4 +258,101 @@ func TestTopicRecreationTransactions(t *testing.T) {
 	}
 	defer consumer.Close()
 	collectRecreationVals(ctx, t, consumer, committed)
+}
+
+// logCapture is a minimal capturing logger for asserting that a specific
+// log line fired.
+type logCapture struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (*logCapture) Level() LogLevel { return LogLevelInfo }
+func (l *logCapture) Log(_ LogLevel, msg string, _ ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.b.WriteString(msg)
+	l.b.WriteByte('\n')
+}
+
+func (l *logCapture) contains(substr string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Contains(l.b.String(), substr)
+}
+
+// TestTopicRecreationAgedTrust pins the minute rule end to end against a
+// real broker: an ID the client has known for recreationStableIDAge is
+// trusted outright, so a PAUSED consumer - no fetches, hence no possible
+// broker rejection - adopts a recreation on a single metadata observation.
+// The pause is the discriminator, and it is only airtight where brokers
+// fetch by topic ID (3.1+): below that, the two-consecutive-updates rule
+// could also legitimately swap, so the test skips. The minute of wall
+// clock overlaps the rest of the suite via t.Parallel.
+func TestTopicRecreationAgedTrust(t *testing.T) {
+	t.Parallel()
+
+	topic, cleanup := tmpTopicPartitions(t, 1)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	producer, err := newTestClient(DefaultProduceTopic(topic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
+	var lc logCapture
+	consumer, err := newTestClient(
+		ConsumeTopics(topic),
+		ConsumeResetOffset(NewOffset().AtStart()),
+		FetchMaxWait(time.Second),
+		WithLogger(&lc),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+
+	for _, v := range []string{"a0", "a1"} {
+		if err := producer.ProduceSync(ctx, StringRecord(v)).FirstErr(); err != nil {
+			t.Fatalf("produce before recreation: %v", err)
+		}
+	}
+	collectRecreationVals(ctx, t, consumer, "a0", "a1")
+
+	if !consumer.recreation.armed.Load() {
+		t.Skip("aged-trust discriminator needs fetch-by-ID brokers (3.1+); below, two consecutive updates would also swap")
+	}
+
+	// No fetches while paused: nothing can produce wire evidence, so the
+	// only path to a swap is the aged rule.
+	consumer.PauseFetchTopics(topic)
+	time.Sleep(2 * time.Second) // drain in-flight fetches
+
+	// Age the ID. The client has held it since its first metadata load,
+	// so sleeping the full stable age from here is strictly enough.
+	time.Sleep(recreationStableIDAge + 2*time.Second)
+
+	recreateTestTopic(t, topic)
+	consumer.ForceMetadataRefresh()
+
+	swapMsg := "topic recreation detected, adopting the new topic ID and restarting from the new topic's beginning"
+	deadline := time.Now().Add(10 * time.Second)
+	for !lc.contains(swapMsg) && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !lc.contains(swapMsg) {
+		t.Fatal("paused consumer did not adopt the recreation from a single aged-ID metadata observation")
+	}
+
+	// Functional half: the new incarnation reads from its beginning.
+	for _, v := range []string{"b0", "b1"} {
+		if err := producer.ProduceSync(ctx, StringRecord(v)).FirstErr(); err != nil {
+			t.Fatalf("produce across recreation did not heal: %v", err)
+		}
+	}
+	consumer.ResumeFetchTopics(topic)
+	collectRecreationVals(ctx, t, consumer, "b0", "b1")
 }
