@@ -81,6 +81,9 @@ func recreateTestTopic(tb testing.TB, topic string) {
 		time.Sleep(250 * time.Millisecond)
 	}
 
+	if oldID == ([16]byte{}) {
+		return // broker predates metadata topic IDs; nothing to confirm
+	}
 	for {
 		if id := metaID(); id != oldID && id != ([16]byte{}) || time.Now().After(deadline) {
 			return
