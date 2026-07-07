@@ -832,6 +832,41 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 			return fmt.Errorf("%w; the producer id error requiring the abort: %w", kerr.OperationNotAttempted, err)
 		}
 
+		// The recreation poison is client-synthesized: the broker-side
+		// transaction is open and HEALTHY at our current epoch, so
+		// below KIP-890p2 we abort it on the wire BEFORE recovering.
+		// Recovering first leaves the transaction ongoing, and the
+		// recovery's re-init on an ongoing transaction makes the
+		// broker abort it itself with an epoch bump; the re-init retry
+		// then arrives with the stale epoch and PRODUCER_FENCED
+		// permanently wedges the producer (observed on a real 3.8
+		// broker). Under 890p2 a re-init on an ongoing transaction is
+		// handled cleanly and the reload alone remains correct.
+		if errors.Is(err, errRecreationAbortTxn) && !cl.producer.tx890p2.Load() {
+			aerr := cl.doWithConcurrentTransactions(ctx, "EndTxn", func() error {
+				req := kmsg.NewPtrEndTxnRequest()
+				req.TransactionalID = *cl.cfg.txnID
+				req.ProducerID = id
+				req.ProducerEpoch = epoch
+				req.Commit = false
+				resp, err := req.RequestWith(context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4}), cl)
+				if err != nil {
+					return err
+				}
+				return kerr.ErrorForCode(resp.ErrorCode)
+			})
+			// INVALID_TXN_STATE: nothing was ongoing broker-side (every
+			// write was rejected before registering); the abort is a
+			// no-op. Any other failure degrades to the reload path,
+			// where the broker aborts the transaction itself.
+			if aerr != nil && !errors.Is(aerr, kerr.InvalidTxnState) {
+				cl.cfg.logger.Log(LogLevelWarn, "wire abort of the recreation-poisoned transaction failed; relying on the producer id reload to abort it",
+					"transactional_id", *cl.cfg.txnID,
+					"err", aerr,
+				)
+			}
+		}
+
 		// If we recovered the producer ID, we return early, since
 		// there is no reason to issue an abort now that the id is
 		// different. Otherwise, we issue our EndTxn which will likely
