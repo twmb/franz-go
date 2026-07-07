@@ -1232,7 +1232,19 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 	} else {
 		kip360 := cl.producer.idVersion >= 3 && (errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.InvalidProducerIDMapping))
 		kip588 := cl.producer.idVersion >= 4 && errors.Is(ke, kerr.InvalidProducerEpoch /* || err == kerr.TransactionTimedOut when implemented in Kafka */)
-		recoverable = kip360 || kip588
+		// Below KIP-360 (InitProducerID v<3, brokers <2.5), a plain
+		// re-init on the transactional ID still recovers: the
+		// coordinator bumps the epoch and aborts anything ongoing --
+		// producer-takeover semantics as old as transactions -- and a
+		// plain re-init carries no epoch to be fenced on.
+		// UNKNOWN_PRODUCER_ID there means the broker lost or never had
+		// our per-log state: retention expired it, or the append hit a
+		// topic whose log never saw us (deleted and recreated; below
+		// 2.5 an unknown producer's first append must start at
+		// sequence 0, so a continued chain is rejected with this
+		// error rather than accepted).
+		pre360 := cl.producer.idVersion < 3 && errors.Is(ke, kerr.UnknownProducerID)
+		recoverable = kip360 || kip588 || pre360
 	}
 
 	if !recoverable {

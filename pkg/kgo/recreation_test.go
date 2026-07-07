@@ -210,7 +210,10 @@ func TestTopicRecreationTransactions(t *testing.T) {
 	recreateTestTopic(t, topic)
 
 	loud := func(err error) bool {
-		return errors.Is(err, kerr.TransactionAbortable) || errors.Is(err, kerr.OperationNotAttempted)
+		// UNKNOWN_PRODUCER_ID: below 2.5, a recreated topic's log never
+		// saw this producer and rejects a continued sequence chain.
+		return errors.Is(err, kerr.TransactionAbortable) || errors.Is(err, kerr.OperationNotAttempted) ||
+			errors.Is(err, kerr.UnknownProducerID)
 	}
 	var committed string
 	for round := 0; ; round++ {

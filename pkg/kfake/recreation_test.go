@@ -2183,7 +2183,10 @@ func testShapeAt(t *testing.T, name string, vs *kversion.Versions) {
 		recreateTopic(t, admin, topic, 1)
 
 		loud := func(err error) bool {
-			return errors.Is(err, kerr.TransactionAbortable) || errors.Is(err, kerr.OperationNotAttempted)
+			// UNKNOWN_PRODUCER_ID: below 2.5, a recreated topic's log
+			// never saw this producer and rejects a continued chain.
+			return errors.Is(err, kerr.TransactionAbortable) || errors.Is(err, kerr.OperationNotAttempted) ||
+				errors.Is(err, kerr.UnknownProducerID)
 		}
 		var committed string
 		for round := 0; ; round++ {
@@ -2203,6 +2206,7 @@ func testShapeAt(t *testing.T, name string, vs *kversion.Versions) {
 				committed = val
 				break
 			}
+			t.Logf("round %d: produce err %v; commit err %v", round, perr, cerr)
 			for _, err := range []error{perr, cerr} {
 				if err != nil && !loud(err) {
 					t.Fatalf("round %d failed outside loud classes: %v", round, err)
@@ -2222,6 +2226,7 @@ func TestRecreationTxnFreshStartShape(t *testing.T) {
 	testShapeAt(t, "latest", nil)
 	testShapeAt(t, "v3_8", kversion.V3_8_0())
 	testShapeAt(t, "v3_0", kversion.V3_0_0())
+	testShapeAt(t, "v2_1", kversion.V2_1_0())
 	testShapeAt(t, "v0_11", kversion.V0_11_0())
 }
 
