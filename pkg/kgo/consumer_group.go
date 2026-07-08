@@ -65,6 +65,10 @@ type groupConsumer struct {
 	lastAssigned map[string][]int32
 	nowAssigned  amtps
 
+	// Set when a join downgrades the group from cooperative to eager;
+	// the next session revokes everything before consuming.
+	protocolDowngraded bool
+
 	// Fetching ensures we continue fetching offsets across cooperative
 	// rebalance if an offset fetch returns early due to an immediate
 	// rebalance. See the large comment on adjustCooperativeFetchOffsets
@@ -1031,6 +1035,33 @@ func (s *assignRevokeSession) revoke(g *groupConsumer, leaving bool) <-chan stru
 //   - fetching is complete
 //   - heartbeating is complete
 func (g *groupConsumer) setupAssignedAndHeartbeat(initialHb time.Duration, hbfn func() (time.Duration, error)) (string, error) {
+	if g.protocolDowngraded {
+		g.protocolDowngraded = false
+		// Our prior cooperative session ended without revoking
+		// anything, but diffAssigned below short-circuits for eager
+		// consumers and returns the entire assignment as newly added.
+		// fetchOffsets would then set offsets on cursors that are
+		// still actively fetching, and the offset load's completion
+		// races any concurrent poll's cursor update (#1365). Instead,
+		// first revoke everything, as an eager session would have
+		// before rejoining: stop fetching everything, let the user
+		// commit final work in onRevoked, and clear commit state
+		// before everything is re-fetched from committed offsets.
+		g.c.waitAndAddRebalance()
+		prior := g.lastAssigned
+		g.c.mu.Lock()
+		g.c.assignPartitions(nil, assignInvalidateAll, nil, "revoking all assignments; group protocol downgraded from cooperative to eager")
+		g.c.mu.Unlock()
+		if len(prior) > 0 {
+			g.cfg.onRevoked(g.cl.ctx, g.cl, prior)
+		}
+		g.mu.Lock()
+		g.uncommitted = nil
+		g.mu.Unlock()
+		g.fetching = nil
+		g.c.unaddRebalance()
+	}
+
 	type hbquit struct {
 		rejoinWhy string
 		err       error
@@ -1567,7 +1598,14 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 		if protocol == balancer.ProtocolName() {
 			cooperative := balancer.IsCooperative()
 			if !cooperative && g.cooperative.Load() {
-				g.cfg.logger.Log(LogLevelWarn, "downgrading from cooperative group to eager group, this is not supported per KIP-429!")
+				g.cfg.logger.Log(LogLevelInfo, "group protocol downgraded from cooperative to eager; all partitions will be revoked before consuming resumes from committed offsets")
+				g.protocolDowngraded = true
+			} else if cooperative {
+				// A join can restart (e.g. MemberIDRequired) or an
+				// earlier downgrade join's sync can fail; if the
+				// group is (back) on cooperative by the time a join
+				// succeeds, no downgrade materialized.
+				g.protocolDowngraded = false
 			}
 			g.cooperative.Store(cooperative)
 			break

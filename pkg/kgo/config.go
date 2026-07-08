@@ -1946,6 +1946,13 @@ func ShareAckCallback(fn func(*Client, ShareAckResults)) GroupOpt {
 // Note that if you opt into cooperative-sticky rebalancing, cooperative group
 // balancing is incompatible with eager (classical) rebalancing and requires a
 // careful rollout strategy (see KIP-429).
+//
+// If you use both cooperative and eager balancers, the group runs
+// cooperatively only if all members support cooperative balancing: an
+// eager-only member joining downgrades the whole group to eager. On
+// downgrade, the client revokes all partitions and re-consumes from
+// committed offsets, which can result in duplicates. It is not recommended
+// to downgrade once a group is cooperative.
 func Balancers(balancers ...GroupBalancer) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.balancers = balancers }}
 }
