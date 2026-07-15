@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"golang.org/x/crypto/pbkdf2"
+	"crypto/pbkdf2"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -762,13 +762,17 @@ func (cl *Client) AlterUserSCRAMs(ctx context.Context, del []DeleteSCRAM, upsert
 			if _, err := rand.Read(u.Salt); err != nil {
 				return nil, fmt.Errorf("user %s: unable to generate salt: %v", u.User, err)
 			}
+			var kdfErr error
 			switch u.Mechanism {
 			case ScramSha256:
-				u.SaltedPassword = pbkdf2.Key([]byte(u.Password), u.Salt, int(u.Iterations), sha256.Size, sha256.New)
+				u.SaltedPassword, kdfErr = pbkdf2.Key(sha256.New, u.Password, u.Salt, int(u.Iterations), sha256.Size)
 			case ScramSha512:
-				u.SaltedPassword = pbkdf2.Key([]byte(u.Password), u.Salt, int(u.Iterations), sha512.Size, sha512.New)
+				u.SaltedPassword, kdfErr = pbkdf2.Key(sha512.New, u.Password, u.Salt, int(u.Iterations), sha512.Size)
 			default:
 				return nil, fmt.Errorf("user %s: unknown mechanism, unable to generate password", u.User)
+			}
+			if kdfErr != nil {
+				return nil, fmt.Errorf("user %s: pbkdf2 err: %v", u.User, kdfErr)
 			}
 			upsert[i] = u
 		} else if len(u.Salt) == 0 || len(u.SaltedPassword) == 0 {
