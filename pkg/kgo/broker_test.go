@@ -3,6 +3,7 @@ package kgo
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -12,6 +13,182 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+type readSignalConn struct {
+	net.Conn
+	readStarted chan struct{}
+	once        sync.Once
+}
+
+type brokerReadHook func()
+
+func (h brokerReadHook) OnBrokerRead(BrokerMetadata, int16, int, time.Duration, time.Duration, error) {
+	h()
+}
+
+func (c *readSignalConn) Read(p []byte) (int, error) {
+	c.once.Do(func() { close(c.readStarted) })
+	return c.Conn.Read(p)
+}
+
+func TestRetiredBrokerConnectionClassifiedAsDead(t *testing.T) {
+	t.Parallel()
+
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() { serverConn.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	logger := newRingLogger(new(nopLogger), 10)
+	cfg := defaultCfg()
+	cfg.logger = logger
+	cl := &Client{cfg: cfg, ctx: ctx}
+	b := cl.newBroker(1, "127.0.0.1", 9092, nil)
+	cxn := &brokerCxn{
+		conn: &readSignalConn{
+			Conn:        clientConn,
+			readStarted: make(chan struct{}),
+		},
+		cl:     cl,
+		b:      b,
+		addr:   b.addr,
+		deadCh: make(chan struct{}),
+	}
+	b.cxnFetch = cxn
+
+	errCh := make(chan error, 1)
+	go cxn.handleResp(promisedResp{
+		ctx:         ctx,
+		resp:        kmsg.NewPtrFetchResponse(),
+		readEnqueue: time.Now(),
+		promise: func(_ kmsg.Response, err error) {
+			errCh <- err
+		},
+	})
+
+	<-cxn.conn.(*readSignalConn).readStarted
+	b.stopForever()
+
+	if err := <-errCh; !errors.Is(err, errChosenBrokerDead) {
+		t.Fatalf("retired broker request error = %v, want %v", err, errChosenBrokerDead)
+	}
+	for _, entry := range logger.buf {
+		if entry.level == LogLevelWarn {
+			t.Fatalf("retired broker logged warning %q", entry.msg)
+		}
+		if entry.msg == "read from broker canceled, closing connection and killing any other in-flight requests on this connection" {
+			t.Fatalf("retired broker logged misleading cancellation message")
+		}
+	}
+}
+
+func TestRetiredBrokerDoesNotMaskResponseError(t *testing.T) {
+	t.Parallel()
+
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() { serverConn.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	cfg := defaultCfg()
+	cl := &Client{cfg: cfg, ctx: ctx}
+	b := cl.newBroker(1, "127.0.0.1", 9092, nil)
+	cxn := &brokerCxn{
+		conn:   clientConn,
+		cl:     cl,
+		b:      b,
+		addr:   b.addr,
+		deadCh: make(chan struct{}),
+	}
+	cl.cfg.hooks = hooks{brokerReadHook(cxn.die)}
+
+	writeErrCh := make(chan error, 1)
+	go func() {
+		response := make([]byte, 8)
+		binary.BigEndian.PutUint32(response, 4)
+		binary.BigEndian.PutUint32(response[4:], 2)
+		_, err := serverConn.Write(response)
+		writeErrCh <- err
+	}()
+
+	var (
+		promiseErr    error
+		deadAtPromise bool
+	)
+	cxn.handleResp(promisedResp{
+		ctx:         ctx,
+		resp:        kmsg.NewPtrMetadataResponse(),
+		corrID:      1,
+		readEnqueue: time.Now(),
+		promise: func(_ kmsg.Response, err error) {
+			promiseErr = err
+			deadAtPromise = cxn.dead.Load()
+		},
+	})
+
+	if writeErr := <-writeErrCh; writeErr != nil {
+		t.Fatalf("write response: %v", writeErr)
+	}
+	if !deadAtPromise {
+		t.Fatal("broker read hook did not retire connection")
+	}
+	if !errors.Is(promiseErr, errCorrelationIDMismatch) {
+		t.Fatalf("retired broker response error = %v, want %v", promiseErr, errCorrelationIDMismatch)
+	}
+}
+
+func TestUnexpectedFirstReadStillWarns(t *testing.T) {
+	t.Parallel()
+
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() { serverConn.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	logger := newRingLogger(new(nopLogger), 10)
+	cfg := defaultCfg()
+	cfg.logger = logger
+	cl := &Client{cfg: cfg, ctx: ctx}
+	b := cl.newBroker(1, "127.0.0.1", 9092, nil)
+	cxn := &brokerCxn{
+		conn: &readSignalConn{
+			Conn:        clientConn,
+			readStarted: make(chan struct{}),
+		},
+		cl:     cl,
+		b:      b,
+		addr:   b.addr,
+		deadCh: make(chan struct{}),
+	}
+
+	errCh := make(chan error, 1)
+	go cxn.handleResp(promisedResp{
+		ctx:         ctx,
+		resp:        kmsg.NewPtrFetchResponse(),
+		readEnqueue: time.Now(),
+		promise: func(_ kmsg.Response, err error) {
+			errCh <- err
+		},
+	})
+
+	<-cxn.conn.(*readSignalConn).readStarted
+	serverConn.Close()
+
+	err := <-errCh
+	var firstReadErr *ErrFirstReadEOF
+	if !errors.As(err, &firstReadErr) {
+		t.Fatalf("unexpected first read error = %v, want *ErrFirstReadEOF", err)
+	}
+	for _, entry := range logger.buf {
+		if entry.level == LogLevelWarn && entry.msg == "read from broker errored, killing connection after 0 successful responses (is SASL missing?)" {
+			return
+		}
+	}
+	t.Fatal("unexpected first read did not log the SASL warning")
+}
 
 // resetThenServeListener implements just enough of the wire protocol to
 // exercise loadConnection's ApiVersions-reset retry: it RSTs (SO_LINGER 0)
