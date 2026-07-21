@@ -399,9 +399,9 @@ func (c *consumer) initGroup() {
 			default:
 			}
 			if ctxExpired {
-				cl.cfg.logger.Log(LogLevelDebug, "entering "+name, "with", m, "context_expired", ctxExpired)
+				cl.cfg.logger.Log(LogLevelDebug, "entering "+name, "with", mtps(m), "context_expired", ctxExpired)
 			} else {
-				cl.cfg.logger.Log(LogLevelDebug, "entering "+name, "with", m)
+				cl.cfg.logger.Log(LogLevelDebug, "entering "+name, "with", mtps(m))
 			}
 			if user != nil {
 				dup := make(map[string][]int32)
@@ -747,9 +747,9 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		g.c.mu.Unlock()
 
 		if !g.cooperative.Load() {
-			g.cfg.logger.Log(LogLevelInfo, "eager consumer revoking prior assigned partitions", "group", g.cfg.group, "revoking", g.nowAssigned.read())
+			g.cfg.logger.Log(LogLevelInfo, "eager consumer revoking prior assigned partitions", "group", g.cfg.group, "revoking", mtps(g.nowAssigned.read()))
 		} else {
-			g.cfg.logger.Log(LogLevelInfo, "cooperative consumer revoking prior assigned partitions because leaving group", "group", g.cfg.group, "revoking", g.nowAssigned.read())
+			g.cfg.logger.Log(LogLevelInfo, "cooperative consumer revoking prior assigned partitions because leaving group", "group", g.cfg.group, "revoking", mtps(g.nowAssigned.read()))
 		}
 		g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned.read())
 		g.nowAssigned.store(nil)
@@ -843,7 +843,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		if len(lost) == 0 {
 			g.cfg.logger.Log(LogLevelInfo, "consumer calling onRevoke at the end of a session; consumer did not change any client-side subscription", "group", g.cfg.group)
 		} else {
-			g.cfg.logger.Log(LogLevelInfo, "calling onRevoke at the end of a session", "group", g.cfg.group, "lost", lost, "stage", stage)
+			g.cfg.logger.Log(LogLevelInfo, "calling onRevoke at the end of a session", "group", g.cfg.group, "lost", mtps(lost), "stage", stage)
 		}
 		g.cfg.onRevoked(g.cl.ctx, g.cl, lost)
 	}
