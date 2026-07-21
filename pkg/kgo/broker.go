@@ -1571,6 +1571,14 @@ func (cxn *brokerCxn) readResponse(
 	}
 
 	if readErr != nil {
+		// A metadata update can retire this broker while a response read is
+		// blocked. stopForever calls die, which marks the connection dead
+		// before closing it; the read then wakes with a platform-specific
+		// socket error. Return the same retryable error as requests queued
+		// behind this read, unless the client or request itself was canceled.
+		if cxn.dead.Load() && cxn.cl.ctx.Err() == nil && !isContextErr(readErr) {
+			return nil, errChosenBrokerDead
+		}
 		return nil, readErr
 	}
 	if len(buf) < 4 {
@@ -1850,22 +1858,24 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 		pr.readEnqueue,
 	)
 	if err != nil {
-		if !errors.Is(err, ErrClientClosed) && !errors.Is(err, context.Canceled) {
-			if cxn.successes > 0 || len(cxn.b.cl.cfg.sasls) > 0 {
-				cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "req", kmsg.Key(pr.resp.Key()).Name(), "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "successful_reads", cxn.successes, "err", err)
-			} else {
-				cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is SASL missing?)", "req", kmsg.Key(pr.resp.Key()).Name(), "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
-				if err == io.EOF || err == io.ErrUnexpectedEOF { // specifically avoid checking errors.Is to ensure this is not already wrapped
-					// ErrUnexpectedEOF gets the same first-read
-					// pessimism: now that it is retryable in
-					// isRetryableBrokerErr, a mid-frame close on
-					// the very first read (bad SASL cutting us off
-					// mid-response) must not retry forever either.
-					err = &ErrFirstReadEOF{kind: firstReadSASL, err: err, retry: cxn.b.cl.cfg.alwaysRetryEOF}
+		if !errors.Is(err, errChosenBrokerDead) {
+			if !errors.Is(err, ErrClientClosed) && !errors.Is(err, context.Canceled) {
+				if cxn.successes > 0 || len(cxn.b.cl.cfg.sasls) > 0 {
+					cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "req", kmsg.Key(pr.resp.Key()).Name(), "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "successful_reads", cxn.successes, "err", err)
+				} else {
+					cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is SASL missing?)", "req", kmsg.Key(pr.resp.Key()).Name(), "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
+					if err == io.EOF || err == io.ErrUnexpectedEOF { // specifically avoid checking errors.Is to ensure this is not already wrapped
+						// ErrUnexpectedEOF gets the same first-read
+						// pessimism: now that it is retryable in
+						// isRetryableBrokerErr, a mid-frame close on
+						// the very first read (bad SASL cutting us off
+						// mid-response) must not retry forever either.
+						err = &ErrFirstReadEOF{kind: firstReadSASL, err: err, retry: cxn.b.cl.cfg.alwaysRetryEOF}
+					}
 				}
+			} else {
+				cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker canceled, closing connection and killing any other in-flight requests on this connection", "req", kmsg.Key(pr.resp.Key()).Name(), "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
 			}
-		} else {
-			cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker canceled, closing connection and killing any other in-flight requests on this connection", "req", kmsg.Key(pr.resp.Key()).Name(), "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
 		}
 		pr.promise(nil, err)
 		cxn.die()
