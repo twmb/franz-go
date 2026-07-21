@@ -95,8 +95,13 @@ type (
 		// Version is the version of this subject.
 		Version int `json:"version,omitempty"`
 
-		// ID is the globally unique ID of the schema.
+		// ID is the unique numeric identifier of the schema.
 		ID int `json:"id,omitempty"`
+
+		// GUID is the globally unique string identifier of the schema,
+		// carried in the Kafka record header rather than the payload
+		// prefix. Introduced in Confluent Platform 8.x.
+		GUID string `json:"guid,omitempty"`
 
 		Schema
 	}
@@ -120,6 +125,7 @@ func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSch
 		s  string
 		v  int
 		id int
+		g  string
 	}
 	m := make(map[svid]SubjectSchema)
 
@@ -128,6 +134,7 @@ func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSch
 			sl.Subject,
 			sl.Version,
 			sl.ID,
+			sl.GUID,
 		}] = sl
 	}
 	for _, sr := range r {
@@ -135,6 +142,7 @@ func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSch
 			sr.Subject,
 			sr.Version,
 			sr.ID,
+			sr.GUID,
 		}
 		switch _, exists := m[k]; exists {
 		case false:
@@ -197,6 +205,33 @@ func (cl *Client) SchemaByID(ctx context.Context, id int) (Schema, error) {
 	var s Schema
 	err := cl.get(ctx, fmt.Sprintf("/schemas/ids/%d", id), &s)
 	return s, err
+}
+
+// SchemaByGUID returns the schema for a given schema GUID.
+func (cl *Client) SchemaByGUID(ctx context.Context, guid string) (SubjectSchema, error) {
+	// GET /schemas/guids/{guid}
+	var s SubjectSchema
+	err := cl.get(ctx, fmt.Sprintf("/schemas/guids/%s", url.PathEscape(guid)), &s)
+	return s, err
+}
+
+// ContextID is a (context, schema ID) pair. A schema GUID is globally unique,
+// but the numeric schema ID it maps to is scoped to a context; this pairs the
+// two.
+type ContextID struct {
+	// Context is the schema registry context the ID belongs to.
+	Context string `json:"context"`
+	// ID is the numeric schema identifier within the context.
+	ID int `json:"id"`
+}
+
+// SchemaIDsByGUID returns the context/ID pairs that the given schema GUID
+// resolves to.
+func (cl *Client) SchemaIDsByGUID(ctx context.Context, guid string) ([]ContextID, error) {
+	// GET /schemas/guids/{guid}/ids
+	var ids []ContextID
+	err := cl.get(ctx, fmt.Sprintf("/schemas/guids/%s/ids", url.PathEscape(guid)), &ids)
+	return ids, err
 }
 
 // SchemaTextByID returns the actual text of a schema.
@@ -579,6 +614,7 @@ func (cl *Client) SchemaUsagesByID(ctx context.Context, id int) ([]SubjectSchema
 		subject string
 		version int
 		id      int
+		guid    string
 	}
 
 	uniq := make(map[ssi]SubjectSchema)
@@ -587,6 +623,7 @@ func (cl *Client) SchemaUsagesByID(ctx context.Context, id int) ([]SubjectSchema
 			subject: s.Subject,
 			version: s.Version,
 			id:      s.ID,
+			guid:    s.GUID,
 		}] = s
 	}
 	schemas = nil
@@ -854,11 +891,14 @@ func (cl *Client) SetMode(ctx context.Context, mode Mode, subjects ...string) []
 	return results
 }
 
-// ResetMode deletes any subject modes and reverts to the global default.
+// ResetMode deletes any subject modes and reverts them to the global default.
+// The global mode can be reset by either using an empty subject or by
+// specifying no subjects.
 func (cl *Client) ResetMode(ctx context.Context, subjects ...string) []ModeResult {
 	// DELETE /mode/{subject}
+	// DELETE /mode
 	if len(subjects) == 0 {
-		return nil
+		subjects = append(subjects, GlobalSubject)
 	}
 	var (
 		wg      sync.WaitGroup

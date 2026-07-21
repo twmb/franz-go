@@ -12,6 +12,7 @@ package srfake
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -129,6 +130,8 @@ func NewRegistry(opts ...Option) *Registry {
 	mux.HandleFunc("GET /schemas/ids/{id}/schema", r.handleGetRawSchemaByID)
 	mux.HandleFunc("GET /schemas/ids/{id}/versions", r.handleGetSchemaVersionsByID)
 	mux.HandleFunc("GET /schemas/ids/{id}/subjects", r.handleGetSubjectsByID)
+	mux.HandleFunc("GET /schemas/guids/{guid}", r.handleGetSchemaByGUID)
+	mux.HandleFunc("GET /schemas/guids/{guid}/ids", r.handleGetSchemaIDsByGUID)
 
 	// subject routes
 	mux.HandleFunc("GET /subjects", r.handleGetSubjects)
@@ -159,6 +162,7 @@ func NewRegistry(opts ...Option) *Registry {
 	// mode routes (global and per-subject)
 	mux.HandleFunc("GET /mode", r.handleGetMode)
 	mux.HandleFunc("PUT /mode", r.handlePutMode)
+	mux.HandleFunc("DELETE /mode", r.handleDeleteMode)
 	mux.HandleFunc("GET /mode/{subject}", r.handleGetSubjectMode)
 	mux.HandleFunc("PUT /mode/{subject}", r.handlePutSubjectMode)
 	mux.HandleFunc("DELETE /mode/{subject}", r.handleDeleteSubjectMode)
@@ -237,6 +241,7 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 
 	// Store schema globally
 	r.schemasByID[id] = sch
+	guid := schemaGUID(sch)
 
 	// Store schema version data
 	subj.versions[version] = &versionData{
@@ -244,6 +249,7 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 			Subject: subject,
 			Version: version,
 			ID:      id,
+			GUID:    guid,
 			Schema:  sch,
 		},
 		isDeleted: false,
@@ -313,6 +319,7 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 				Subject: subject,
 				Version: version,
 				ID:      existingID,
+				GUID:    schemaGUID(schema),
 				Schema:  schema,
 			},
 			isDeleted: false,
@@ -334,6 +341,7 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 
 	// Store schema globally
 	r.schemasByID[id] = schema
+	guid := schemaGUID(schema)
 
 	// Store schema version data
 	subj.versions[version] = &versionData{
@@ -341,6 +349,7 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 			Subject: subject,
 			Version: version,
 			ID:      id,
+			GUID:    guid,
 			Schema:  schema,
 		},
 		isDeleted: false,
@@ -721,6 +730,72 @@ func subjectContext(subject string) string {
 		}
 	}
 	return "."
+}
+
+// schemaGUID deterministically derives a schema's GUID from its canonical
+// content, mirroring a real registry where identical schema content always maps
+// to the same GUID regardless of the subject it is registered under.
+func schemaGUID(s sr.Schema) string {
+	t := s.Type
+	if t == 0 {
+		t = sr.TypeAvro
+	}
+	norm, err := normalizeSchema(s.Schema, t)
+	if err != nil {
+		norm = s.Schema
+	}
+	refs := append([]sr.SchemaReference(nil), s.References...)
+	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+
+	h := fnv.New128a()
+	fmt.Fprintf(h, "%d\x00%s", t, norm)
+	for _, ref := range refs {
+		fmt.Fprintf(h, "\x00%s\x00%s\x00%d", ref.Name, ref.Subject, ref.Version)
+	}
+	var b [16]byte
+	copy(b[:], h.Sum(nil))
+	b[6] = (b[6] & 0x0f) | 0x80 // version 8 (custom, non-namespace)
+	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// subjectSchemaByGUIDLocked returns a representative active SubjectSchema for the
+// given GUID. A GUID identifies a schema globally, so all contexts are searched;
+// a default-context match is preferred, otherwise the lowest-sorted subject and
+// version wins. The caller must hold the lock.
+func (r *Registry) subjectSchemaByGUIDLocked(guid string) (sr.SubjectSchema, bool) {
+	subjects := make([]string, 0, len(r.subjects))
+	for s := range r.subjects {
+		subjects = append(subjects, s)
+	}
+	sort.Strings(subjects)
+
+	var fallback sr.SubjectSchema
+	haveFallback := false
+	for _, s := range subjects {
+		subj := r.subjects[s]
+		if subj.isDeleted {
+			continue
+		}
+		versions := make([]int, 0, len(subj.versions))
+		for v := range subj.versions {
+			versions = append(versions, v)
+		}
+		sort.Ints(versions)
+		for _, v := range versions {
+			vd := subj.versions[v]
+			if vd.isDeleted || vd.schema.GUID != guid {
+				continue
+			}
+			if subjectContext(s) == "." {
+				return vd.schema, true
+			}
+			if !haveFallback {
+				fallback, haveFallback = vd.schema, true
+			}
+		}
+	}
+	return fallback, haveFallback
 }
 
 func normalizeSchema(raw string, t sr.SchemaType) (string, error) {
