@@ -260,6 +260,13 @@ loop:
 			// looping+waiting (250ms per wait, 8x), and if things
 			// still fail we will fall into the slower update below
 			// which waits (default) 5s between tries.
+			// A fresh suspected recreation wants its confirming update
+			// in the quick cadence below, however this update was
+			// triggered (the periodic refresh is the discovery path for
+			// a quiet recreation that produces no wire errors).
+			if err == nil && cl.recreation.confirmNow.Swap(false) {
+				now = true
+			}
 			if now && err == nil && nowTries < 8 {
 				wait := min(cl.cfg.metadataMinAge, 250*time.Millisecond)
 				cl.cfg.logger.Log(LogLevelDebug, "immediate metadata update had inner errors, re-updating",
@@ -394,6 +401,10 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	}
 	groupExternal.updateLatest(latest)
 
+	// The fetch above refreshed the broker list; re-evaluate the
+	// recreation gate before any merge below consults it.
+	cl.evalRecreationGate()
+
 	// If regex consuming AND we issued a metadata request to forcefully
 	// create topics, we merge any topics missing into the all-request from
 	// the create-request. It is possible we want to keep failed creation
@@ -410,10 +421,14 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	// retain their ID mapping from prior responses.
 	//
 	// If a topic was deleted and recreated, the broker returns a new
-	// ID for the same name. We do NOT add the new ID if the old ID
-	// is still present - the old mapping is preserved until the user
-	// explicitly purges via PurgeTopicsFromClient. This avoids having
-	// two IDs for the same topic name.
+	// ID for the same name. When the recreation gate is armed we adopt
+	// the new ID (this is what resolves KIP-848 assignments of the new
+	// incarnation), keeping the old entry alongside until nothing
+	// references it (see cleanStaleID2T below). Disarmed, we do NOT add
+	// the new ID while the old is present - the old mapping is preserved
+	// until the user explicitly purges via PurgeTopicsFromClient. This
+	// avoids having two IDs for the same topic name.
+	armed := cl.recreation.armed.Load()
 	{
 		old := cl.id2tMap()
 		merged := make(map[[16]byte]string, len(old)+len(latest))
@@ -431,10 +446,9 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 			}
 			if _, exists := knownNames[mt.topic]; exists {
 				// This name already has an ID in the map.
-				// Only update if it's the same ID (normal
-				// case), skip if it's a different ID
-				// (recreated topic).
-				if _, sameID := merged[mt.id]; sameID {
+				// Update if it's the same ID (normal case) or
+				// if we can adopt recreations; skip otherwise.
+				if _, sameID := merged[mt.id]; sameID || armed {
 					merged[mt.id] = mt.topic
 				}
 				continue
@@ -560,6 +574,8 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		}
 	}
 
+	cl.cleanStaleID2T(latest, tpsProducerLoad, tpsConsumerLoad)
+
 	return retryWhy, nil
 }
 
@@ -632,6 +648,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 			sink:                mp.sns.sink,
 			topicPartitionData:  td,
 			lastAckedOffset:     -1,
+			idAgreedAt:          time.Now(),
 		}
 		r.lingerFn = r.unlingerAndManuallyDrain
 		p.records = r
@@ -641,6 +658,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 			topicID:    mp.topicID,
 			partition:  mp.partition,
 			cursorsIdx: -1, // sentinel: not yet added to a source
+			idAgreedAt: time.Now(),
 		}
 		p.shareCursor.source.Store(mp.sns.source)
 	default:
@@ -652,6 +670,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 			cursorsIdx:         -1,
 			source:             mp.sns.source,
 			topicPartitionData: td,
+			idAgreedAt:         time.Now(),
 			cursorOffset: cursorOffset{
 				offset:            -1, // required to not consume until needed
 				lastConsumedEpoch: -1, // required sentinel
@@ -871,6 +890,11 @@ func (cl *Client) mergeTopicPartitions(
 			)
 			if isProduce {
 				oldTP.records.bumpRepeatedLoadErr(errMissingMetadataPartition)
+			} else if !isShare {
+				// The topic vanished while an out-of-range reset was
+				// deferred for classification; no probe against a
+				// missing topic.
+				cl.resolveDeferredOOR(css, oldTP.cursor, topic, int32(part), false)
 			}
 			retryWhy.add(topic, int32(part), errMissingMetadataPartition)
 			continue
@@ -894,6 +918,215 @@ func (cl *Client) mergeTopicPartitions(
 			}
 			retryWhy.add(topic, int32(part), newTP.loadErr)
 			continue
+		}
+
+		// Topic ID checks, before the epoch-rewind guard below: a
+		// recreated topic's ID change overrides epoch comparisons
+		// entirely (the new incarnation legitimately restarts at epoch
+		// 0, which is not a stale broker).
+		if isProduce {
+			rb := oldTP.records
+			newID := newTP.records.topicID
+			var noID [16]byte
+			var oldID [16]byte
+			var corroborated, regressed, exposed bool
+			if newID != noID {
+				rb.mu.Lock()
+				oldID = rb.topicID
+				if oldID == noID {
+					// First sight of an ID for this topic (e.g. a
+					// broker upgrade brought ID-ful metadata):
+					// nothing is keyed to the zero ID, adopt freely.
+					rb.topicID = newID
+					oldID = newID
+				}
+				regressed = rb.offsetRegressed
+				corroborated = rb.unknownFailures > 0 || regressed || rb.idMismatched
+				exposed = rb.addedToTxn.Load() || len(rb.batches) > 0 || rb.inflight != 0
+				rb.mu.Unlock()
+			}
+			// An ID change is a topic recreation (or, rarely, an ID
+			// flap from stale metadata). Below ID-ful metadata nothing
+			// reaches here (IDs are zero) and produce behavior is
+			// unchanged.
+			//
+			// The three partition kinds (produce here; consume and
+			// share below) handle an ID change with the same skeleton;
+			// a new kind needs all of it: a previouslyHeld check, an
+			// adopt gate on that kind's wire evidence, a pending arm
+			// (with confirmNow on first observation), and a swap
+			// function that records the prior ID and clears the
+			// kind's recreation state.
+			if newID != noID && oldID != newID {
+				// Transactions FAIL on recreated topics, on the FIRST
+				// observation: when the partition has transactional
+				// state tied to the old incarnation (added to the
+				// transaction, or batches buffered or in flight), the
+				// producer ID is poisoned immediately. A spurious
+				// abort on a metadata flap is loud and recoverable;
+				// waiting for corroboration would let a commit racing
+				// the evidence cover evaporated writes. This is also
+				// what lets commit-time verification trust any recent
+				// metadata pass instead of fetching its own. The swap
+				// below still waits for the adoption rules.
+				if cl.cfg.txnID != nil && exposed {
+					if cur := cl.producer.id.Load().(*producerID); cur.err == nil {
+						cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
+						cl.cfg.logger.Log(LogLevelWarn, "topic recreation observed with an active transaction exposed to it; failing the transaction",
+							"topic", topic,
+							"partition", part,
+							"old_id", topicID(oldID),
+							"new_id", topicID(newID),
+						)
+					}
+				}
+				// An ID held for a long time is trusted outright: a
+				// change against a minute-old ID is a recreation, not
+				// a stale broker (metadata staleness is seconds).
+				// Younger, we need corroboration: produce-wire
+				// evidence (a stale-incarnation rejection, an acked
+				// offset regression, or commit-time verification), or,
+				// where the wire fetches by name and can never reject,
+				// two consecutive metadata updates agreeing.
+				var adopt bool
+				if previouslyHeld(&rb.priorIDs, newID) {
+					// Never a fresh recreation (IDs are never
+					// reused): stale metadata or split brain, and
+					// only produce-wire evidence may adopt it.
+					adopt = corroborated
+				} else {
+					adopt = corroborated || idStableLongEnough(rb.idAgreedAt)
+					if !adopt && !cl.recreation.armed.Load() {
+						adopt = rb.pendingRecreateID == newID
+					}
+				}
+				if !adopt {
+					if rb.pendingRecreateID != newID && !previouslyHeld(&rb.priorIDs, newID) {
+						cl.recreation.confirmNow.Store(true)
+					}
+					rb.pendingRecreateID = newID
+					*newTP = *oldTP
+					// Keep draining: produce attempts must not stay
+					// parked on the failing flag while corroboration
+					// is pending.
+					newTP.records.clearFailing()
+					retryWhy.add(topic, int32(part), errRecreationPending)
+					continue
+				}
+				cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID for producing",
+					"topic", topic,
+					"partition", part,
+					"old_id", topicID(oldID),
+					"new_id", topicID(newID),
+					"restarting_sequences", !regressed,
+				)
+				oldTP.swapRecreatedRecBufTo(newTP)
+				continue
+			} else if newID != noID {
+				rb.pendingRecreateID = noID // metadata agrees with us again; any flap healed
+			}
+		} else {
+			var noID [16]byte
+			var newID, oldID [16]byte
+			if isShare {
+				newID = newTP.shareCursor.topicID
+				oldID = oldTP.shareCursor.topicID
+			} else {
+				newID = newTP.cursor.topicID
+				oldID = oldTP.cursor.topicID
+			}
+			if newID == noID && oldID != noID {
+				cl.cfg.logger.Log(LogLevelWarn, "metadata update is missing the topic ID when we previously had one, ignoring update",
+					"topic", topic,
+					"partition", part,
+				)
+				*newTP = *oldTP
+				retryWhy.add(topic, int32(part), errMissingTopicID)
+				continue
+			}
+			// An ID change is a topic recreation (or, rarely, an ID
+			// flap from stale metadata or a cross-cluster failover).
+			// When the gate is armed we act only on corroboration: a
+			// fetch the current leader rejected by ID. Without it we
+			// keep everything as is and let the stale-ID fetch
+			// corroborate; the rejection also urgently re-triggers
+			// metadata, so the swap lands one update later. Below the
+			// gate the by-name fetch wire can never corroborate, so we
+			// adopt on the metadata ID fact once two consecutive
+			// updates agree on the same new ID (absorbing single
+			// stale-broker flaps); the retryWhy loop drives the second
+			// observation. Share sessions are ID-addressed at every
+			// version, so shares swap on wire corroboration regardless
+			// of the fetch gate.
+			if isShare && newID != noID && oldID != noID && newID != oldID {
+				sc := oldTP.shareCursor
+				adopt := sc.unknownIDFails.Load() > 0
+				if !adopt && !previouslyHeld(&sc.priorIDs, newID) {
+					// A previously held ID is never a fresh
+					// recreation (IDs are never reused); it does not
+					// get the aged-trust shortcut.
+					adopt = idStableLongEnough(sc.idAgreedAt)
+				}
+				if !adopt {
+					*newTP = *oldTP
+					retryWhy.add(topic, int32(part), errRecreationPending)
+					continue
+				}
+				cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID for share consuming and invalidating acknowledgments of the prior incarnation",
+					"topic", topic,
+					"partition", part,
+					"old_id", topicID(oldID),
+					"new_id", topicID(newID),
+				)
+				oldTP.swapRecreatedShareCursorTo(cl, newTP)
+				continue
+			}
+			if !isShare && newID != noID && oldID != noID && newID != oldID {
+				c := oldTP.cursor
+				var adopt bool
+				switch {
+				case previouslyHeld(&c.priorIDs, newID):
+					// Never a fresh recreation (IDs are never
+					// reused): stale metadata or split brain, and
+					// only a broker rejecting the ID we currently
+					// hold may adopt it.
+					adopt = c.unknownIDFails.Load() > 0
+				case idStableLongEnough(c.idAgreedAt) && c.positioned.Load():
+					// The old ID was the cluster's agreed truth for a
+					// long time: the change is a recreation, not a
+					// stale broker. A cursor with no position yet
+					// still waits for a broker rejection: swapped
+					// early, it loses the stale-ID tripwire against a
+					// racing old-incarnation committed offset.
+					adopt = true
+				case cl.recreation.armed.Load():
+					adopt = c.unknownIDFails.Load() > 0
+				default:
+					adopt = c.pendingRecreateID == newID
+				}
+				if !adopt {
+					if c.pendingRecreateID != newID && !previouslyHeld(&c.priorIDs, newID) {
+						cl.recreation.confirmNow.Store(true)
+					}
+					c.pendingRecreateID = newID
+					*newTP = *oldTP
+					retryWhy.add(topic, int32(part), errRecreationPending)
+					continue
+				}
+				cl.swapRecreatedConsumer(topic, part, oldTP, newTP, css,
+					recreationResetOffset,
+					"topic was deleted and recreated",
+					LogLevelInfo, "topic recreation detected, adopting the new topic ID and restarting from the new topic's beginning",
+					"old_id", topicID(oldID),
+					"new_id", topicID(newID),
+					"new_leader", newTP.leader,
+					"new_leader_epoch", newTP.leaderEpoch,
+				)
+				continue
+			}
+			if !isShare && newID != noID && newID == oldID {
+				oldTP.cursor.pendingRecreateID = noID // metadata agrees with us again; any flap healed
+			}
 		}
 
 		// If the new partition has an older leader epoch, then we
@@ -967,27 +1200,78 @@ func (cl *Client) mergeTopicPartitions(
 				"old_leader_epoch", oldTP.leaderEpoch,
 				"new_leader_epoch", newTP.leaderEpoch,
 			)
-		}
 
-		if !isProduce {
+			// Below ID-ful metadata, a persistent epoch rewind is the only
+			// recreation signal there is: leader epochs are monotonic for
+			// a partition's lifetime (every election bumps, none lowers),
+			// so a rewind that survives maxEpochRewinds consecutive
+			// updates is a recreation, or a rolled-back unclean election;
+			// positions and sequences are unsafe to keep either way.
+			// Detection is opportunistic: an epoch-0 recreation, or one
+			// whose new epoch catches up between refreshes, is invisible.
+			// With IDs present the ID logic above owns recreation, and a
+			// persistent same-ID rewind keeps today's silent acceptance.
+			// Shares cannot exist below ID-ful metadata.
 			var noID [16]byte
-			var newID, oldID [16]byte
-			if isShare {
-				newID = newTP.shareCursor.topicID
-				oldID = oldTP.shareCursor.topicID
-			} else {
-				newID = newTP.cursor.topicID
-				oldID = oldTP.cursor.topicID
-			}
-			if newID == noID && oldID != noID {
-				cl.cfg.logger.Log(LogLevelWarn, "metadata update is missing the topic ID when we previously had one, ignoring update",
+			switch {
+			case isProduce && oldTP.records.topicID == noID:
+				rb := oldTP.records
+				rb.mu.Lock()
+				exposed := rb.addedToTxn.Load() || len(rb.batches) > 0 || rb.inflight != 0
+				rb.mu.Unlock()
+				if cl.cfg.txnID != nil && exposed {
+					cur := cl.producer.id.Load().(*producerID)
+					cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
+				}
+				cl.cfg.logger.Log(LogLevelWarn, "topic recreation inferred from a persistent leader epoch rewind; restarting produce sequences",
 					"topic", topic,
 					"partition", part,
+					"old_leader_epoch", oldTP.leaderEpoch,
+					"new_leader_epoch", newTP.leaderEpoch,
 				)
-				*newTP = *oldTP
-				retryWhy.add(topic, int32(part), errMissingTopicID)
+				oldTP.swapRecreatedRecBufTo(newTP)
+				continue
+			case !isProduce && !isShare && oldTP.cursor.topicID == noID:
+				// A persistent rewind has two hypotheses: recreation,
+				// or an unclean election whose epochs died with the
+				// broker that served them (#119: a doomed broker
+				// briefly surfaced a higher epoch, and the survivors'
+				// real lineage is lower). Indistinguishable by name
+				// alone, so the reset follows the loss rules (nearest
+				// timestamp; on a real recreation with wall-clock
+				// timestamps it lands at the new topic's start
+				// anyway). One exception is treated as certain: a
+				// rewind from well above onto a nearly virgin lineage
+				// (epoch <= 2, ours >= 3 higher). A revert to truth
+				// lands at the last REAL epoch, so this shape requires
+				// every epoch we consumed to have been phantom -
+				// recreation in all but pathological flap storms - and
+				// restarts from the new topic's beginning, immune to
+				// event-time timestamps.
+				css.stop()
+				c := oldTP.cursor
+				reset, msg := cl.oorResetOffset(c),
+					"topic recreation inferred from a persistent leader epoch rewind, or epoch history was lost after unclean elections; resetting to the nearest timestamp"
+				if newTP.leaderEpoch >= 0 && newTP.leaderEpoch <= 2 && c.lastConsumedEpoch-newTP.leaderEpoch >= 3 {
+					reset, msg = recreationResetOffset,
+						"topic recreation inferred from a persistent leader epoch rewind onto a fresh lineage; restarting from the new topic's beginning"
+				}
+				cl.swapRecreatedConsumer(topic, part, oldTP, newTP, css,
+					reset,
+					"topic recreation inferred from a persistent leader epoch rewind",
+					LogLevelWarn, msg,
+					"old_leader_epoch", oldTP.leaderEpoch,
+					"new_leader_epoch", newTP.leaderEpoch,
+					"last_consumed_epoch", c.lastConsumedEpoch,
+				)
 				continue
 			}
+		}
+
+		// An out-of-range reset deferred by the fetch path resolves now,
+		// probing where the wire allows (see resolveDeferredOOR).
+		if !isProduce && !isShare {
+			cl.resolveDeferredOOR(css, oldTP.cursor, topic, int32(part), true)
 		}
 
 		// If the tp data is the same, we simply copy over the records
@@ -1087,9 +1371,10 @@ func (cl *Client) mergeTopicPartitions(
 }
 
 var (
-	errEpochRewind    = errors.New("epoch rewind")
-	errMissingTopicID = errors.New("missing topic ID")
-	errNoLeaderEpoch  = errors.New("no leader epoch")
+	errEpochRewind       = errors.New("epoch rewind")
+	errMissingTopicID    = errors.New("missing topic ID")
+	errNoLeaderEpoch     = errors.New("no leader epoch")
+	errRecreationPending = errors.New("topic recreation pending corroboration")
 )
 
 type multiUpdateWhy map[kerrOrString]map[string]map[int32]struct{}

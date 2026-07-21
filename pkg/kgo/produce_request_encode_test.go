@@ -22,8 +22,8 @@ func TestProduceRequestNullBatchEncoding(t *testing.T) {
 			acks:    -1,
 			timeout: 1000,
 		}
-		req.batches.addBatch("t", [16]byte{1}, 0, 0, &recBatch{}) // records nil: the null placeholder arm
-		req.batches.addBatch("t", [16]byte{1}, 1, 0, &recBatch{})
+		req.batches.add("t", [16]byte{1}, 0, 0, seqRecBatch{0, &recBatch{}}) // records nil: the null placeholder arm
+		req.batches.add("t", [16]byte{1}, 0, 1, seqRecBatch{0, &recBatch{}})
 
 		raw := req.AppendTo(nil)
 

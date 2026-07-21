@@ -3376,19 +3376,20 @@ func TestIssue1328(t *testing.T) {
 	wg.Wait()
 }
 
-// TestProduceUnknownFailLimitRecreatedTopic verifies that a producer whose
-// topic is deleted and recreated fails its buffered records with
+// TestProduceUnknownFailLimitDeletedTopic verifies that a producer whose
+// topic is deleted (and never recreated) fails its buffered records with
 // UNKNOWN_TOPIC_ID once the unknown-topic fail limit (UnknownTopicRetries)
 // is reached, rather than retrying forever.
 //
-// Produce v13+ addresses topics by ID (KIP-516). The client deliberately
-// never adopts a recreated topic's new ID, so every produce after recreation
-// is answered with UNKNOWN_TOPIC_ID. That error is retriable and the default
-// produce limits are unbounded (RecordRetries is effectively infinite and
-// RecordDeliveryTimeout is disabled), so the unknown-topic fail limit is the
-// only bound: UNKNOWN_TOPIC_ID must count toward it. It used to reset the
-// count instead, leaving records buffered and retrying silently forever.
-func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
+// Produce v13+ addresses topics by ID (KIP-516). A deleted topic answers
+// every produce with UNKNOWN_TOPIC_ID. That error is retriable and the
+// default produce limits are unbounded (RecordRetries is effectively
+// infinite and RecordDeliveryTimeout is disabled), so the unknown-topic fail
+// limit is the only bound: UNKNOWN_TOPIC_ID must count toward it. It used to
+// reset the count instead, leaving records buffered and retrying silently
+// forever. (A topic deleted and RECREATED instead heals via the recreation
+// swap, TestRecreationProduceHeal.)
+func TestProduceUnknownFailLimitDeletedTopic(t *testing.T) {
 	t.Parallel()
 	const testTopic = "foo"
 
@@ -3427,13 +3428,10 @@ func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Recreate the topic: the new incarnation gets a new topic ID, and
-	// the client keeps producing with the old one.
+	// Delete the topic: the client keeps producing with the dead ID, and
+	// no new incarnation ever exists to heal onto.
 	adm := kadm.NewClient(cl)
 	if _, err := adm.DeleteTopics(ctx, testTopic); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := adm.CreateTopics(ctx, 1, 1, nil, testTopic); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3443,11 +3441,15 @@ func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
 	}()
 	select {
 	case err := <-done:
-		if !errors.Is(err, kerr.UnknownTopicID) {
-			t.Fatalf("got %v, want UnknownTopicID", err)
+		// The bound can trip from the produce response (UNKNOWN_TOPIC_ID,
+		// the dead ID) or from the metadata merge's missing-topic path
+		// (UNKNOWN_TOPIC_OR_PARTITION); both are the loud unknown-topic
+		// failure the limit exists to force.
+		if !errors.Is(err, kerr.UnknownTopicID) && !errors.Is(err, kerr.UnknownTopicOrPartition) {
+			t.Fatalf("got %v, want an unknown-topic error", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("produce to a recreated topic did not fail within 10s; UNKNOWN_TOPIC_ID is defeating the unknown-topic fail limit")
+		t.Fatal("produce to a deleted topic did not fail within 10s; unknown-topic errors are defeating the fail limit")
 	}
 }
 

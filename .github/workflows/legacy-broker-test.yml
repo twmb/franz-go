@@ -1,0 +1,76 @@
+# Temporary: runs the topic-recreation contract against real legacy brokers,
+# one per detection tier (3.0: topic IDs in metadata only; 2.8: the floor of
+# that tier; 2.7: leader epochs only; 2.1: the floor of the epoch tier).
+# The apache/kafka image only exists for 3.7+, so these run Confluent
+# Platform images with ZooKeeper (CP 7.0=Kafka 3.0, 6.2=2.8, 6.1=2.7,
+# 5.1=2.1). This file exists only on the topic-recreation branch and is
+# meant to be dropped rather than merged as standing CI.
+name: legacy broker recreation tests
+
+on:
+  pull_request:
+    branches: ["*"]
+
+concurrency:
+  group: legacy-brokers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  legacy:
+    if: github.repository == 'twmb/franz-go'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kafka: "3.0"
+            cp: "7.0.1"
+          - kafka: "2.8"
+            cp: "6.2.1"
+          - kafka: "2.7"
+            cp: "6.1.1"
+          - kafka: "2.1"
+            cp: "5.1.2"
+    name: "recreation test kafka ${{ matrix.kafka }}"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+      - name: Start kafka ${{ matrix.kafka }}
+        run: |
+          cat > docker-compose.yml << 'EOF'
+          services:
+            zookeeper:
+              image: confluentinc/cp-zookeeper:CPTAG
+              environment:
+                ZOOKEEPER_CLIENT_PORT: 2181
+            kafka:
+              image: confluentinc/cp-kafka:CPTAG
+              ports:
+                - "9092:9092"
+              depends_on:
+                - zookeeper
+              environment:
+                KAFKA_BROKER_ID: 1
+                KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+                KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+                KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092
+                KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+                KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+                KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+                KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+          EOF
+          sed -i "s/CPTAG/${{ matrix.cp }}/g" docker-compose.yml
+          docker compose up -d
+      - name: Run recreation tests
+        run: go test -timeout 5m -run 'TestTopicRecreation' -v ./pkg/kgo/
+        env:
+          KGO_TEST_RF: 1
+          KGO_SEEDS: 127.0.0.1:9092
+      - name: Broker logs on failure
+        if: failure()
+        run: docker compose logs kafka 2>&1 | tail -80
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v

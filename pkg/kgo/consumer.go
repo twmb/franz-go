@@ -101,6 +101,27 @@ func NoResetOffset() Offset {
 // OffsetOutOfRange error, consuming will reset to the first offset after this
 // timestamp. You can use NoResetOffset().AfterMilli(...) to instead switch the
 // client to a fatal state (for the affected partition).
+// oorResetOffset is what an out-of-range position resets to. The rule for
+// every reset in the client: ConsumeResetOffset is the LAST resort, used
+// only when nothing better is detectable; any better-informed position wins
+// (a proven truncation resets to the exact divergence offset elsewhere, a
+// classified recreation restarts at the new topic's earliest offset, and
+// NoResetOffset never moves automatically). Here: once the cursor has
+// consumed anything, the nearest offset at or after the last consumed
+// record's timestamp (losing or re-reading the minimum); on a cursor whose
+// position is an unconsumed recreation restart, the topic's earliest offset
+// again (the new topic may have truncated under us); and only otherwise the
+// configured ConsumeResetOffset.
+func (cl *Client) oorResetOffset(c *cursor) Offset {
+	if lct := c.lastConsumedTime; !lct.IsZero() {
+		return NewOffset().AfterMilli(lct.UnixMilli())
+	}
+	if c.recreationRestart.Load() {
+		return recreationResetOffset
+	}
+	return cl.cfg.resetOffset
+}
+
 func (o Offset) AfterMilli(millisec int64) Offset {
 	o.at = millisec
 	o.relative = 0
@@ -1465,6 +1486,25 @@ type offsetLoadMap map[string]map[int32]offsetLoad
 // to directly use if a cursor had a preferred replica.
 type offsetLoad struct {
 	replica int32 // -1 means leader
+
+	// recreationSeed marks the reset load added when a cursor swaps
+	// across topic incarnations: the resolved position additionally seeds
+	// the group's uncommitted entry (lifting the recreation commit fence)
+	// and is committed promptly. Reload retries preserve the mark.
+	recreationSeed bool
+
+	// oorClassify marks an OffsetForLeaderEpoch probe issued to classify
+	// an out-of-range position whose log shrank, below the recreation
+	// gate: the answer only decides how honestly the outcome is named
+	// (recreation vs truncation) and which reset follows -- oorReset
+	// (the nearest-timestamp reset the plain out-of-range path would
+	// have used) unless the answer proves a recreation, which resets per
+	// ConsumeResetOffset like every classified recreation. Never the
+	// "divergence point": across a recreation that is a meaningless spot
+	// in the new topic. Reload retries preserve both fields.
+	oorClassify bool
+	oorReset    Offset
+
 	Offset
 }
 
@@ -2157,6 +2197,55 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 	for _, load := range loaded.loaded {
 		s.listOrEpochLoadsLoading.removeLoad(load.topic, load.partition) // remove the tracking of this load from our session
 
+		// An out-of-range classification probe resolves to a policy
+		// reset on every conclusive answer; the OffsetForLeaderEpoch
+		// result only decides how honestly we can name what happened.
+		// The merge fenced group commits when it issued the probe, and
+		// the chained reset carries recreationSeed so the fence lifts
+		// and the reset position commits promptly. Unresolved (error)
+		// probes fall through to the normal retry arm below, flags
+		// intact.
+		if load.request.oorClassify {
+			var pedl *ErrDataLoss
+			classified := true
+			reset := load.request.oorReset // the nearest-timestamp reset the plain out-of-range path would use
+			switch {
+			case errors.As(load.err, &pedl):
+				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the log now ends below our consumed position; either substantial truncation, or the topic was deleted and recreated; resetting",
+					"topic", load.topic,
+					"partition", load.partition,
+					"consumed_to", pedl.ConsumedTo,
+					"consumed_epoch", pedl.ConsumedToEpoch,
+					"epoch_now_ends_at", pedl.ResetTo,
+				)
+			case load.err == nil && load.offset < 0:
+				reset = recreationResetOffset // a proven recreation restarts from the new topic's beginning, like every classified recreation
+				if load.cursor != nil {
+					load.cursor.recreationRestart.Store(true)
+				}
+				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the broker has no history of the epoch we consumed; the topic was almost certainly deleted and recreated; restarting from the new topic's beginning",
+					"topic", load.topic,
+					"partition", load.partition,
+					"consumed_epoch", load.request.epoch,
+				)
+			case load.err == nil:
+				s.c.cl.cfg.logger.Log(LogLevelInfo, "out-of-range classification found our consumed epoch intact; resetting",
+					"topic", load.topic,
+					"partition", load.partition,
+				)
+			default:
+				classified = false
+			}
+			if classified {
+				reloads.addLoad(load.topic, load.partition, loadTypeList, offsetLoad{
+					replica:        -1,
+					recreationSeed: true,
+					Offset:         reset,
+				})
+				continue
+			}
+		}
+
 		use := func() {
 			if debug {
 				tusing := using[load.topic]
@@ -2182,6 +2271,19 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 			})
 			load.cursor.allowUsable()
 			s.c.usingCursors.use(load.cursor)
+
+			// A recreation reset resolved: seed the group's uncommitted
+			// entry with the resolved position and commit it promptly.
+			// Dispatched async because we hold listOrEpochMu here, and
+			// the g.mu => listOrEpochMu order is already taken (the
+			// fetch-offsets assign path); taking g.mu inline would
+			// invert it.
+			if load.request.recreationSeed {
+				if g := s.c.g; g != nil {
+					seed := EpochOffset{load.leaderEpoch, load.offset}
+					go g.maybeSeedRecreated(load.topic, load.partition, seed)
+				}
+			}
 		}
 
 		var edl *ErrDataLoss

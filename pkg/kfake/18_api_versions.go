@@ -130,6 +130,17 @@ func (c *Cluster) handleApiVersions(kreq kmsg.Request) (kmsg.Response, error) {
 
 // Called at the beginning of every request, this validates that the client
 // is sending requests within version ranges we can handle.
+// pre360 reports whether this cluster's advertised versions predate
+// KIP-360 (InitProducerID v3, Kafka 2.5): the era before empty producer
+// state accepted any first sequence.
+func (c *Cluster) pre360() bool {
+	if c.cfg.maxVersions == nil {
+		return false
+	}
+	cfgMax, ok := c.cfg.maxVersions.LookupMaxKeyVersion(22)
+	return ok && cfgMax < 3
+}
+
 func (c *Cluster) checkReqVersion(key, version int16) error {
 	v, exists := apiVersionsKeys[key]
 	if !exists {

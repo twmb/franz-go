@@ -215,6 +215,60 @@ Kafka 0.10.0 introduced the ApiVersions request; if you are working with
 brokers older than that, you must use the kversions package. Use the
 MaxVersions option for the client if you do so.
 
+## Topic recreation
+
+A topic that is deleted and recreated under the same name is a NEW topic that
+happens to share the name: positions, produce sequences, transaction state,
+and share state from the old incarnation are meaningless against the new one.
+Clients that silently carry them across incarnations lose or misread data.
+franz-go handles recreation by default at every broker version, acting on the
+strongest signal each version provides. One rule applies everywhere: if the
+client has held the same topic ID for a minute, a metadata response showing a
+different ID is believed outright and acted on immediately -- metadata
+staleness is a seconds-scale phenomenon, so a change against a minute-old ID
+is a recreation, not a stale broker. The per-version corroboration below
+applies to younger IDs (e.g. just after the client itself adopted one):
+
+| Brokers | Detection | Behavior |
+| ------- | --------- | -------- |
+| 3.1+ | Topic IDs on the fetch wire (and on the produce wire at 4.1+) | Self-closing: a stale fetch or produce is rejected by ID and can never touch the new incarnation. The client adopts the new ID, restarts consumption from the new topic's beginning, and restarts produce sequences, healing with no surfaced sequence errors. At 3.1-4.0 the produce wire is still by name; producing has the next row's bounded window. |
+| 2.8-3.0 | Topic IDs in metadata only | For a recently-adopted ID, the client adopts once two consecutive metadata updates agree on the new ID (or sooner, on produce evidence such as an acked-offset regression). Between the recreation and that adoption there is a bounded window, at most about one metadata interval, in which by-name fetches and produces can touch the new incarnation; two hardening nets shrink it: fetched records carrying a leader epoch below what was already consumed are withheld and classified, and `OFFSET_OUT_OF_RANGE` against a shrunken log is classified before it resets, probing `OffsetForLeaderEpoch` when nothing else corroborates -- no history of the consumed epoch is near-certain recreation, and an epoch ending below the consumed position is named honestly as substantial truncation or a recreation (indistinguishable without topic IDs). |
+| 2.1-2.7 | Leader epochs in metadata | A persistent leader-epoch rewind (epochs only ever rise within one topic incarnation) is treated as a recreation, with an honestly-worded log line. A rewind cannot be told apart from epoch history lost after unclean elections, so the consumer resets by the loss rules (nearest timestamp) -- except a rewind from epoch >= 3 above onto a nearly virgin lineage (epoch <= 2), which only a recreation produces and which restarts from the new topic's beginning. Detection is opportunistic: a recreation from and to epoch 0, or one whose new epoch catches up between refreshes, is invisible. |
+| Below 2.1 | None | Unchanged: an out-of-range position resets per `ConsumeResetOffset`; a position still in range silently reads the new incarnation. Every Kafka client is blind here. |
+
+What the handling does, at any tier that detects:
+
+* Consumers restart from the BEGINNING of the new topic: a subscription is
+  a point in time and everything after, and everything in the replacement
+  topic arrived after that point. (`ConsumeResetOffset` governs positions
+  within one topic's lifetime, such as where a brand-new subscription
+  starts; under `NoResetOffset` nothing moves automatically -- the partition
+  surfaces an error and waits for `SetOffsets`.) Group consumers
+  additionally fence commits of old-incarnation offsets and promptly commit
+  the restart position, so a stored stale offset cannot misposition the
+  next group member.
+* Idempotent producers adopt the new incarnation and restart their sequence
+  chain, with no sequence error surfaced and no duplicate possible: a batch
+  produced by name whose outcome was never resolved may already exist in the
+  new incarnation, so it (and the partition's buffered records) fail loudly
+  with an error saying exactly that, rather than risk a duplicate.
+* Transactions FAIL on recreated topics, always loudly: any observation of a
+  recreated produced-to topic poisons the transaction with an error wrapping
+  `TRANSACTION_ABORTABLE`; aborting recovers on every broker version.
+  Committing additionally verifies that no produced-to topic was recreated,
+  amortized to at most one metadata fetch per `MetadataMinAge` (default 5s)
+  across all commits -- recent metadata passes count, since they poison on
+  sight. The residual (a recreation within that window of a commit) is the
+  same class as a topic deleted right after a successful commit, which no
+  client can close; group offsets in transactions (the commit protocol
+  carries no topic IDs) are likewise unclosable today.
+* Share consumers (4.0+) continue on the new incarnation's fresh share state;
+  acknowledgments of records acquired from the old incarnation are failed
+  with an error rather than misapplied.
+
+There is no configuration: handling is on at every version, and behavior
+below a tier's signal is exactly what the client did before this existed.
+
 ## Metrics & logging
 
 **Note** there exists plug-in packages that allow you to easily add prometheus

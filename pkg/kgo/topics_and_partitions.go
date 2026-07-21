@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
@@ -699,6 +700,174 @@ func (old *topicPartition) migrateCursorTo( //nolint:revive // old/new naming ma
 	new.cursor = old.cursor
 }
 
+// swapRecreatedCursorTo migrates a cursor across topic incarnations: the
+// topic was deleted and recreated with the same name, and metadata now
+// reports a new topic ID. The cursor's position and consumed epoch belong to
+// the dead incarnation, so unlike migrateCursorTo, there is no
+// OffsetForLeaderEpoch validation (it is name-only and meaningless across
+// incarnations, #908): the cursor adopts the new ID and reset (if non-nil)
+// re-resolves the position against the new incarnation. With a nil reset
+// (NoResetOffset), the cursor stays frozen at no position; the caller
+// surfaces the error and the user resumes via SetOffsets.
+func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new naming makes this clearer
+	new *topicPartition,
+	css *consumerSessionStopper,
+	reset *Offset,
+) {
+	css.stop()
+
+	c := old.cursor
+	c.source.removeCursor(c)
+
+	// With the session stopped, we can update cursor fields freely. The
+	// stop also buys the rest of the swap's safety: buffered old-incarnation
+	// fetches are discarded unpolled, and every source's fetch session
+	// resets, forgetting the (old ID, partition) entries.
+	c.source = new.cursor.source
+	holdPriorID(&c.priorIDs, c.topicID)
+	c.topicID = new.cursor.topicID
+	c.topicPartitionData = new.topicPartitionData
+	c.unknownIDFails.Store(0)
+	c.pendingRecreateID = [16]byte{}
+	c.idAgreedAt = time.Now()
+	c.oorPending.Store(oorNone) // the swap's reset supersedes a deferred out-of-range reset
+	c.guardFails = 0
+	c.guardBackoffUntil.Store(0)
+
+	// No old-incarnation state may leak into the new incarnation: clear
+	// the position and epoch (also hwm and the consumed-time OOOR
+	// fallback), and freeze the cursor so nothing fetches it. Loads
+	// pending from before the swap are dropped: a list would re-resolve
+	// old intent, and an epoch load is a cross-incarnation validation.
+	// Only the reset list below (or a user SetOffsets) re-enables.
+	c.unset()
+	css.reloadOffsets.removeLoad(c.topic, c.partition)
+	if reset != nil {
+		// Only an earliest-offset restart stays pinned to earliest
+		// through further out-of-range; a nearest-timestamp reset (an
+		// inferred recreation where loss remains a hypothesis) keeps
+		// the ordinary out-of-range behavior.
+		if *reset == recreationResetOffset {
+			c.recreationRestart.Store(true)
+		}
+		css.reloadOffsets.addLoad(c.topic, c.partition, loadTypeList, offsetLoad{
+			replica:        -1,
+			recreationSeed: true,
+			Offset:         *reset,
+		})
+	}
+	css.recreated.add(c.topic, c.partition)
+
+	c.source.addCursor(c)
+	new.cursor = c
+}
+
+// swapRecreatedRecBufTo migrates production across topic incarnations: the
+// topic was deleted and recreated with the same name, and metadata now
+// reports a new topic ID. Producer state is per-log and died with the old
+// incarnation; the new incarnation rehydrates it empty. The recBuf adopts
+// the new ID and, unless a produce response proved the broker already
+// accepted our chain into the new log (offsetRegressed), restarts its
+// sequence chain at zero, which every broker accepts against empty state.
+//
+// Batches whose by-name produce outcome is unknowable (unsureByName) may
+// already sit in the new incarnation and can never be safely re-produced:
+// everything buffered fails loudly instead, since order cannot be preserved
+// past a failed batch. Requests still in flight resolve safely after the
+// swap: a v13 request addressed the dead ID and is rejected before reaching
+// any log, a by-name request that resolves unsure is failed by the response
+// handling (generation mismatch), and okOnSink=false holds new sends until
+// every in-flight response resolves, so the fresh sequence chain starts only
+// once the old chain's fate is settled.
+func (old *topicPartition) swapRecreatedRecBufTo(new *topicPartition) { //nolint:revive // old/new naming makes this clearer
+	rb := old.records
+	rb.sink.removeRecBuf(rb)
+
+	rb.mu.Lock()
+	rb.sink = new.records.sink
+	rb.topicPartitionData = new.topicPartitionData
+	rb.okOnSink = false
+
+	holdPriorID(&rb.priorIDs, rb.topicID)
+	rb.topicID = new.records.topicID
+	rb.generation++
+	// The swap itself needs no sequence reset when the produce chain
+	// provably landed in the new incarnation (offsetRegressed) -- but a
+	// reset another mechanism already demanded must survive: transaction
+	// recovery bumps the producer epoch and marks every recBuf for a
+	// sequence reset, and this swap can land after that mark. Clobbering
+	// it would continue the old sequence chain under the new epoch:
+	// OUT_OF_ORDER_SEQUENCE_NUMBER, or a fatal fence on a real broker.
+	rb.needSeqReset = rb.needSeqReset || !rb.offsetRegressed
+	rb.offsetRegressed = false
+	rb.idMismatched = false
+	rb.pendingRecreateID = [16]byte{}
+	rb.idAgreedAt = time.Now()
+	rb.unknownFailures = 0 // stale-incarnation failures corroborated this swap; they must not trip the fail limit
+	rb.lastAckedOffset = -1
+
+	var unsure bool
+	for _, batch := range rb.batches {
+		unsure = unsure || batch.unsureByName
+	}
+	if unsure {
+		rb.failAllRecords(errRecreationUnsureBatch)
+	}
+	rb.mu.Unlock()
+
+	rb.sink.addRecBuf(rb) // clears failing, triggers draining
+	new.records = rb
+}
+
+// swapRecreatedShareCursorTo migrates share consumption across topic
+// incarnations. Share positions and acquisition state live broker-side and
+// died with the old incarnation; the new one initializes fresh per group
+// config. Client-side, the cursor adopts the new ID and bumps its
+// generation: pending and future acknowledgments of old-incarnation records
+// are invalidated at flush (filterStaleEntries) rather than re-addressed --
+// an ack under the new ID could acknowledge an unrelated record at the same
+// offset. Redelivery never happens (the records are gone by definition);
+// this is the share flavor of at-least-once across an admin deletion.
+//
+// The old source's share session is reset: its (old ID, partition) entry
+// addresses a dead share-partition, and a fresh session re-establishes
+// exactly what the swapped cursors now hold.
+func (tp *topicPartition) swapRecreatedShareCursorTo(cl *Client, new *topicPartition) {
+	c := tp.shareCursor
+	newID := new.shareCursor.topicID
+	new.shareCursor = c
+
+	// Same leave-race consideration as migrateShareCursorTo: register as
+	// a share worker so leave's barrier waits for us; if the consumer is
+	// dying, skip the swap entirely (the stall it leaves is moot).
+	sc := cl.consumer.s
+	if !sc.incWorker() {
+		return
+	}
+	defer sc.decWorker()
+
+	cl.sinksAndSourcesMu.Lock()
+	sns := cl.sinksAndSources[new.leader]
+	cl.sinksAndSourcesMu.Unlock()
+
+	oldSource := c.source.Load()
+	if oldSource != nil {
+		oldSource.removeShareCursor(c)
+	}
+	// With the cursor on no source, nothing concurrently reads topicID
+	// (request building and ack flushing run on the owning source's loop).
+	holdPriorID(&c.priorIDs, c.topicID)
+	c.topicID = newID
+	c.generation.Add(1)
+	c.unknownIDFails.Store(0)
+	c.idAgreedAt = time.Now()
+	if oldSource != nil {
+		oldSource.resetShareSession()
+	}
+	c.source.Store(sns.source)
+	sns.source.addShareCursor(c)
+}
+
 func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) {
 	c := tp.shareCursor
 	new.shareCursor = c
@@ -1096,6 +1265,7 @@ type consumerSessionStopper struct {
 	stopped       bool
 	reloadOffsets listOrEpochLoads
 	tpsPrior      *topicsPartitions
+	recreated     mtmps // partitions swapped across topic incarnations this merge
 }
 
 func (css *consumerSessionStopper) stop() {
@@ -1109,6 +1279,14 @@ func (css *consumerSessionStopper) stop() {
 }
 
 func (css *consumerSessionStopper) maybeRestart() {
+	// Before restarting (and thus before any reset list can resolve), fence
+	// group commits for partitions that swapped incarnations: their
+	// committable state is old-incarnation truth.
+	if len(css.recreated) > 0 {
+		if g := css.cl.consumer.g; g != nil {
+			g.fenceRecreated(css.recreated)
+		}
+	}
 	if !css.stopped {
 		return
 	}

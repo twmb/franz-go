@@ -826,6 +826,13 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 	case errors.Is(err, errUnknownBroker),
 		isDialNonTimeoutErr(err),
 		isRetryableBrokerErr(err):
+		// Unless we know no bytes reached a broker (no broker, or the
+		// dial itself failed), the request may have been written before
+		// the error: by-name batches now have an unknowable outcome that
+		// recreation handling must remember.
+		if !errors.Is(err, errUnknownBroker) && !isDialNonTimeoutErr(err) {
+			req.markUnsureByName()
+		}
 		updateMeta := !isRetryableBrokerErr(err)
 		if updateMeta {
 			s.cl.cfg.logger.Log(LogLevelInfo, "produce request failed, triggering metadata update", "broker", logID(s.nodeID), "err", err)
@@ -927,7 +934,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 				continue
 			}
 		} else {
-			tid = req.batches.t2id[topic]
+			tid = req.batches.t2info[topic].id
 		}
 		partitions, ok := req.batches.bs[topic]
 		if !ok {
@@ -953,16 +960,15 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 			retry, didProduce := s.handleReqRespBatch(
 				b,
 				&kmove,
+				req,
 				kresp,
 				topic,
 				rp,
 				batch,
-				req.producerID,
-				req.producerEpoch,
 				tmetrics[partition],
 			)
 			if retry {
-				reqRetry.addSeqBatch(topic, tid, partition, batch)
+				reqRetry.addSeqBatch(topic, tid, req.batches.t2info[topic].gen, partition, batch)
 			}
 			if !didProduce {
 				delete(tmetrics, partition)
@@ -983,6 +989,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 
 	if len(req.batches.bs) > 0 {
 		s.cl.cfg.logger.Log(LogLevelError, "broker did not reply to all topics / partitions in the produce request! reenqueuing missing partitions", "broker", logID(s.nodeID))
+		req.markUnsureByName() // no per-batch outcome exists for these
 		s.handleRetryBatches(req.batches, nil, 0, true, false, "broker did not reply to all topics in produce request")
 	}
 	if len(reqRetry.bs) > 0 {
@@ -993,14 +1000,15 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 func (s *sink) handleReqRespBatch(
 	b *bytes.Buffer,
 	kmove *kip951move,
+	req *produceRequest,
 	resp *kmsg.ProduceResponse,
 	topic string,
 	rp *kmsg.ProduceResponseTopicPartition,
 	batch seqRecBatch,
-	producerID int64,
-	producerEpoch int16,
 	batchMetrics ProduceBatchMetrics,
 ) (retry, didProduce bool) {
+	producerID, producerEpoch := req.producerID, req.producerEpoch
+
 	batch.owner.mu.Lock()
 	defer batch.owner.mu.Unlock()
 
@@ -1051,6 +1059,9 @@ func (s *sink) handleReqRespBatch(
 	// the final state, and we need to block canceling producing.
 	if rp.ErrorCode == kerr.RequestTimedOut.Code || rp.ErrorCode == kerr.NotEnoughReplicasAfterAppend.Code {
 		batch.unsureIfProduced = true
+		if req.idempotent() && req.version < 13 {
+			batch.unsureByName = true
+		}
 	}
 
 	// By default, we assume we errored. Non-error updates this back
@@ -1070,6 +1081,30 @@ func (s *sink) handleReqRespBatch(
 		err = fmt.Errorf("%w (uncompressed_bytes=%d, compressed_bytes=%d)", err, batchMetrics.UncompressedBytes, batchMetrics.CompressedBytes)
 	}
 	failUnknown := batch.owner.checkUnknownFailLimit(err)
+
+	// A batch that may sit, unacknowledged, in a dead incarnation's
+	// successor can never be safely retried: an earlier by-name attempt
+	// may have followed the name into the new incarnation, and this
+	// errored attempt did not resolve that. Re-producing it under the new
+	// incarnation's reset sequences could not be deduplicated, so fail
+	// everything buffered loudly instead (order cannot be preserved past
+	// a failed batch). Transactions are excluded: their swap poisoned the
+	// producer ID, which fails everything buffered with the abort
+	// sentinel and blocks any resend.
+	if err != nil && s.cl.cfg.txnID == nil && batch.unsureByName && req.batches.t2info[topic].gen != batch.owner.generation {
+		s.cl.cfg.logger.Log(LogLevelError, "topic was recreated while a batch produced by name had no conclusive outcome; failing all buffered records for this partition rather than risking duplicates",
+			"broker", logID(s.nodeID),
+			"topic", topic,
+			"partition", rp.Partition,
+			"err", err,
+		)
+		s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.BaseOffset, errRecreationUnsureBatch)
+		if debug {
+			fmt.Fprintf(b, "unsurefail@%d,%d(%s)}, ", rp.BaseOffset, nrec, err)
+		}
+		return false, false
+	}
+
 	switch {
 	case err == kerr.ConcurrentTransactions:
 		// Occasionally this is bubbled back to the producer as of
@@ -1080,6 +1115,13 @@ func (s *sink) handleReqRespBatch(
 		!failUnknown &&
 		err != kerr.CorruptMessage &&
 		(batch.tries.Load() <= s.cl.cfg.recordRetries || batch.unsureIfProduced): // we need to bypass the retry limit if we are not sure of the state
+		// With recreation handling armed, an unknown-topic rejection is
+		// (or corroborates) a topic recreation: refresh urgently so the
+		// merge can swap, rather than waiting out the metadata min age.
+		// Same urgency as the consumer's UnknownTopicID handling.
+		if (errors.Is(err, kerr.UnknownTopicID) || errors.Is(err, kerr.UnknownTopicOrPartition)) && s.cl.recreation.armed.Load() {
+			s.cl.triggerUpdateMetadataNow("produce saw an unknown-topic error while topic recreation handling is armed")
+		}
 		if debug {
 			fmt.Fprintf(b, "retrying@%d,%d(%s)}, ", rp.BaseOffset, nrec, err)
 		}
@@ -1154,18 +1196,55 @@ func (s *sink) handleReqRespBatch(
 			return true, false
 		}
 
+		// Topic recreation reclassification: if this topic's incarnation
+		// changed after the request was built (the metadata merge swapped
+		// the recBuf and reset its sequences), the sequence-style error
+		// came from producing across incarnations, not from data loss.
+		// Requeue: the batch re-drains against the new incarnation on the
+		// reset sequence chain. A genuine sequence error re-arrives with
+		// generations equal and takes the paths below.
+		if s.cl.cfg.txnID == nil && req.batches.t2info[topic].gen != batch.owner.generation {
+			s.cl.cfg.logger.Log(LogLevelInfo, "batch sequence-style error was caused by the topic being recreated; retrying against the new incarnation",
+				"broker", logID(s.nodeID),
+				"topic", topic,
+				"partition", rp.Partition,
+				"err", err,
+			)
+			if debug {
+				fmt.Fprintf(b, "recreated@%d,%d(%s)}, ", rp.BaseOffset, nrec, err)
+			}
+			return true, false
+		}
+		// Classifying a sequence error as recreation vs. genuine requires
+		// fresh metadata (stale request ID vs. stale metadata ID compares
+		// equal): refresh urgently when armed so a pending incarnation
+		// swap lands and the next attempt classifies correctly.
+		if s.cl.recreation.armed.Load() {
+			s.cl.triggerUpdateMetadataNow("sequence-style produce error while topic recreation handling is armed")
+		}
+
 		if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
+			failErr := err
+			if s.cl.cfg.txnID != nil && req.batches.t2info[topic].gen != batch.owner.generation {
+				// The topic was recreated mid-transaction (the merge
+				// swapped incarnations after this request was built):
+				// poison with the recreation sentinel, which recovery
+				// recognizes in both modes, rather than the raw
+				// sequence error, which pre-KIP-890p2 recovery
+				// classifies as fatal.
+				failErr = errRecreationAbortTxn
+			}
 			s.cl.cfg.logger.Log(LogLevelInfo, "batch errored, failing the producer ID",
 				"broker", logID(s.nodeID),
 				"topic", topic,
 				"partition", rp.Partition,
 				"producer_id", producerID,
 				"producer_epoch", producerEpoch,
-				"err", err,
+				"err", failErr,
 			)
-			s.cl.failProducerID(producerID, producerEpoch, err)
+			s.cl.failProducerID(producerID, producerEpoch, failErr)
 
-			s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.BaseOffset, err)
+			s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.BaseOffset, failErr)
 			if debug {
 				fmt.Fprintf(b, "fatal@%d,%d(%s)}, ", rp.BaseOffset, nrec, err)
 			}
@@ -1250,6 +1329,32 @@ func (s *sink) handleReqRespBatch(
 			// side facts and remain unconditional.
 			if batch.owner.sink == s {
 				batch.owner.okOnSink = true
+			}
+			// A successful append below our last acked offset means the
+			// log that took this write is not the log that acked us: the
+			// topic was deleted and recreated (a by-name write follows
+			// the name into the new incarnation) or an unclean election
+			// truncated the log. Either way the broker accepted the
+			// batch, so the sequence chain is coherent where it landed:
+			// this is corroboration and bookkeeping only, never a
+			// sequence reset.
+			if prior := batch.owner.lastAckedOffset; prior >= 0 && rp.BaseOffset >= 0 && rp.BaseOffset < prior {
+				batch.owner.offsetRegressed = true
+				s.cl.cfg.logger.Log(LogLevelWarn, "produced batch was accepted below our last acked offset; the partition log was replaced (topic recreation) or truncated (unclean leader election) since our last produce",
+					"broker", logID(s.nodeID),
+					"topic", topic,
+					"partition", rp.Partition,
+					"base_offset", rp.BaseOffset,
+					"last_acked_offset", prior,
+				)
+				s.cl.triggerUpdateMetadataNow("produce offsets regressed, checking whether the topic was recreated")
+				// Mid-transaction, earlier acked writes of this
+				// transaction evaporated with the log that acked
+				// them: committing would silently cover a partial
+				// transaction. Poison; aborting recovers.
+				if s.cl.cfg.txnID != nil {
+					s.cl.failProducerID(producerID, producerEpoch, errRecreationAbortTxn)
+				}
 			}
 			batch.owner.lastAckedOffset = rp.BaseOffset + int64(len(batch.records))
 			if resp.Version >= 12 && s.cl.cfg.txnID != nil {
@@ -1469,7 +1574,6 @@ type recBuf struct {
 	cl *Client // for cfg, record finishing
 
 	topic     string
-	topicID   [16]byte
 	partition int32
 
 	// The number of bytes we can buffer in a batch for this particular
@@ -1486,6 +1590,52 @@ type recBuf struct {
 	buffered atomic.Int64
 
 	mu xsync.Mutex // guards r/w access to all fields below
+
+	// topicID is the incarnation of the topic this recBuf produces to.
+	// After creation it is written only by the metadata-update goroutine,
+	// under mu (learning a first ID, or swapping across a topic
+	// recreation), so that goroutine can also read it without the mu (see
+	// topicIDReferenced).
+	topicID [16]byte
+	// generation counts the topic incarnations this recBuf has produced
+	// against; the metadata merge bumps it when swapping across a topic
+	// recreation. Produce requests stamp the generation at build time
+	// (seqRecBatches.t2info): a response whose stamp is behind the current
+	// generation was addressed to a dead incarnation and is classified
+	// accordingly when handled.
+	generation int32
+	// offsetRegressed is set when a successful produce response has a
+	// BaseOffset below lastAckedOffset: the partition's log was replaced
+	// (topic recreation) or truncated (unclean election) between acks. For
+	// the metadata merge, this corroborates a topic ID change just like a
+	// stale-ID produce rejection does, and additionally means the broker
+	// accepted our sequence chain into the new log, so the swap must NOT
+	// restart sequences at zero. Cleared at the swap.
+	offsetRegressed bool
+	// idMismatched is set when commit-time verification observed fresh
+	// metadata reporting a different ID for this topic than the one we
+	// produced to: corroboration for the metadata merge's swap, exactly
+	// like a wire rejection (two independent fresh fetches agreeing is
+	// not a flap). Cleared at the swap.
+	idMismatched bool
+	// priorIDs holds the last two topic IDs this recBuf previously held
+	// (see previouslyHeld). Guarded by mu, like topicID.
+	priorIDs [2][16]byte
+
+	// pendingRecreateID is the by-name recreation corroboration: the new
+	// topic ID the previous metadata update reported. When the held ID is
+	// young, the merge swaps only once two consecutive updates agree on
+	// the same new ID (or the produce wire corroborates), absorbing
+	// single stale-broker flaps. Only the metadata-update goroutine reads
+	// or writes this.
+	pendingRecreateID [16]byte
+
+	// idAgreedAt is when topicID became our held truth (recBuf creation,
+	// or a recreation swap). Once the ID has been held for
+	// recreationStableIDAge, a metadata response reporting a different ID
+	// is believed outright. Only the metadata-update goroutine reads or
+	// writes this.
+	idAgreedAt time.Time
 
 	// sink is who is currently draining us. This can be modified
 	// concurrently during a metadata update.
@@ -1901,6 +2051,18 @@ type recBatch struct {
 	// *then*. Once we do not know the state, we need to block cancelation
 	// until we definitively produce or definitively fail.
 	unsureIfProduced bool
+	// unsureByName is set when an attempt of this batch went out in a
+	// produce request that addresses topics by NAME (v12 or below) and the
+	// attempt's outcome is unknowable: the request died after it may have
+	// been written, or the response was one of the unsure codes above. If
+	// the topic is then recreated, this batch may already sit in the new
+	// incarnation -- a by-name write follows the name across incarnations,
+	// where a v13+ write of a dead topic ID is rejected before reaching
+	// any log -- and it can never be safely re-produced: a resend under
+	// reset sequences cannot be deduplicated. Recreation handling fails
+	// such batches loudly instead. Sticky: a later resolved attempt cannot
+	// unknow an earlier unresolved one.
+	unsureByName bool
 	// If we are going to fail the batch in bumpRepeatedLoadErr, we need to
 	// set this bool to true. There could be a concurrent request about to
 	// be written. See more comments below where this is used.
@@ -2107,6 +2269,19 @@ func (p produceMetrics) hook(cfg *cfg, br *broker) {
 
 func (p *produceRequest) idempotent() bool { return p.producerID >= 0 }
 
+// markUnsureByName records on every batch remaining in this request that a
+// by-name produce attempt's outcome is unknowable (see recBatch.unsureByName).
+// Only meaningful below v13: a v13+ request addresses topics by ID, and a
+// write addressed to a dead incarnation's ID can never land in the new one.
+// An unset version (0, from a request that died before negotiation) is
+// conservatively treated as by-name.
+func (p *produceRequest) markUnsureByName() {
+	if !p.idempotent() || p.version >= 13 {
+		return
+	}
+	p.batches.eachOwnerLocked(func(b seqRecBatch) { b.unsureByName = true })
+}
+
 func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch *recBatch) bool {
 	batchWireLength, flexible, topicIDs := batch.wireLengthForProduceVersion(produceVersion)
 	batchWireLength += 4 // int32 partition prefix
@@ -2158,13 +2333,7 @@ func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 
 	batch.frozen = true
 	p.wireLength += batchWireLength
-	p.batches.addBatch(
-		recBuf.topic,
-		recBuf.topicID,
-		recBuf.partition,
-		recBuf.seq,
-		batch,
-	)
+	p.batches.addBatch(recBuf, batch)
 	return true
 }
 
@@ -2174,39 +2343,40 @@ type seqRecBatch struct {
 	*recBatch
 }
 
+// produceTopicInfo is what a produce request remembers per topic: the topic
+// ID it was addressed with, and the recBuf incarnation generation at request
+// build -- a swap while the request is out means responses address a dead
+// incarnation.
+type produceTopicInfo struct {
+	id  [16]byte
+	gen int32
+}
+
 type seqRecBatches struct {
-	bs   map[string]map[int32]seqRecBatch
-	t2id map[string][16]byte
-	id2t map[[16]byte]string
+	bs     map[string]map[int32]seqRecBatch
+	t2info map[string]produceTopicInfo
+	id2t   map[[16]byte]string
 }
 
-func (rbs *seqRecBatches) addBatch(topic string, topicID [16]byte, part, seq int32, batch *recBatch) {
+func (rbs *seqRecBatches) addBatch(recBuf *recBuf, batch *recBatch) { // called under recBuf.mu
+	rbs.add(recBuf.topic, recBuf.topicID, recBuf.generation, recBuf.partition, seqRecBatch{recBuf.seq, batch})
+}
+
+func (rbs *seqRecBatches) addSeqBatch(topic string, topicID [16]byte, gen, part int32, batch seqRecBatch) {
+	rbs.add(topic, topicID, gen, part, batch)
+}
+
+func (rbs *seqRecBatches) add(topic string, topicID [16]byte, gen, part int32, batch seqRecBatch) {
 	if rbs.bs == nil {
 		rbs.bs = make(map[string]map[int32]seqRecBatch)
-		rbs.t2id = make(map[string][16]byte)
+		rbs.t2info = make(map[string]produceTopicInfo)
 		rbs.id2t = make(map[[16]byte]string)
 	}
 	topicBatches, exists := rbs.bs[topic]
 	if !exists {
 		topicBatches = make(map[int32]seqRecBatch, 1)
 		rbs.bs[topic] = topicBatches
-		rbs.t2id[topic] = topicID
-		rbs.id2t[topicID] = topic
-	}
-	topicBatches[part] = seqRecBatch{seq, batch}
-}
-
-func (rbs *seqRecBatches) addSeqBatch(topic string, topicID [16]byte, part int32, batch seqRecBatch) {
-	if rbs.bs == nil {
-		rbs.bs = make(map[string]map[int32]seqRecBatch)
-		rbs.t2id = make(map[string][16]byte)
-		rbs.id2t = make(map[[16]byte]string)
-	}
-	topicBatches, exists := rbs.bs[topic]
-	if !exists {
-		topicBatches = make(map[int32]seqRecBatch, 1)
-		rbs.bs[topic] = topicBatches
-		rbs.t2id[topic] = topicID
+		rbs.t2info[topic] = produceTopicInfo{topicID, gen}
 		rbs.id2t[topicID] = topic
 	}
 	topicBatches[part] = batch
@@ -2471,7 +2641,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 
 	for topic, partitions := range p.batches.bs {
 		if p.version >= 13 {
-			id := p.batches.t2id[topic]
+			id := p.batches.t2info[topic].id
 			dst = append(dst, id[:]...)
 			dst = kbin.AppendCompactArrayLen(dst, len(partitions))
 		} else if flexible {

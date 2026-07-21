@@ -664,6 +664,14 @@ func (pids *pids) create(txidp *string, txTimeout int32) (int64, int16) {
 	// to avoid FNV-64 hash collisions between different txids.
 	if txidp != nil {
 		if pidinf, ok := pids.byTxid[*txidp]; ok {
+			// A re-init on a live transactional ID aborts any open
+			// transaction before bumping, like the KIP-360 path: a
+			// real broker never leaves the old epoch's writes
+			// pending, where a later commit on the bumped epoch
+			// would swallow them into its own range.
+			if pidinf.inTx {
+				pidinf.endTx(false)
+			}
 			pidinf = pids.bumpEpoch(pidinf)
 			pidinf.lastActive = time.Now()
 			return pidinf.id, pidinf.epoch
