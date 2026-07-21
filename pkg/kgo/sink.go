@@ -127,6 +127,15 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		}
 
 		batch := recBuf.batches[recBuf.batchDrainIdx]
+		if batch.merging {
+			// A concurrent merge (only possible from another sink's drain
+			// during a sink migration overlap) is reading this batch's
+			// records; sending it now would race the merge's splice into a
+			// duplicate. Merges are bounded; retry shortly.
+			recBuf.mu.Unlock()
+			moreToDrain = true
+			continue
+		}
 		if added := req.tryAddBatch(s.produceVersion.Load(), recBuf, batch); !added {
 			recBuf.mu.Unlock()
 			moreToDrain = true
@@ -269,6 +278,12 @@ func (s *sink) drain() {
 	again := true
 	for again {
 		s.maybeBackoff()
+
+		// Coalesce any per-partition backlog into compressed-size-bound
+		// batches before building the request. This runs outside all locks
+		// (the compression itself never blocks admission) and is a no-op
+		// unless StreamingCompression is enabled and a backlog exists.
+		s.mergeBacklogs()
 
 		sem := s.inflightSem.Load().(chan struct{})
 		select {
@@ -1297,6 +1312,7 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 	batch.mu.Lock()
 	records, attrs := batch.records, batch.attrs
 	batch.records = nil
+	batch.releaseStream()
 	batch.mu.Unlock()
 
 	cl.producer.promiseBatch(batchPromise{
@@ -1657,10 +1673,12 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 
 		switch {
 		case aborted: // not processed
+			newBatch.releaseStream()
 			recBuf.cl.prsPool.put(newBatch.records)
 			return false
 		case appended: // we return true below
 		default: // processed as failure
+			newBatch.releaseStream()
 			recBuf.cl.prsPool.put(newBatch.records)
 			recBuf.cl.producer.promiseRecord(pr,
 				fmt.Errorf("%w (uncompressed_bytes=%d)", kerr.MessageTooLarge, pr.userSize()),
@@ -1822,6 +1840,7 @@ func (recBuf *recBuf) failAllRecords(err error) {
 		batch.mu.Lock()
 		records := batch.records
 		batch.records = nil
+		batch.releaseStream()
 		batch.mu.Unlock()
 
 		recBuf.cl.producer.promiseBatch(batchPromise{
@@ -1886,6 +1905,14 @@ type recBatch struct {
 	// Once this batch is actually selected to be sent in a produce request,
 	// we freeze it. No more records can be added.
 	frozen bool
+	// merging is set (under the owner recBuf's mu) while the drain-time
+	// coalescer is reading this batch's records outside the mu to merge them
+	// into a compressed-size-bound batch. It blocks admission appends
+	// (tryBuffer) and drains (createReq skips it) without removing the batch
+	// from recBuf.batches, so a concurrent failAllRecords sweep still owns
+	// these records' promises; the coalescer detects such a sweep and
+	// discards its merge. Only never-frozen batches are ever marked.
+	merging bool
 	// We can only fail a batch if we have never issued it, or we have
 	// issued it and have received a response. If we do not receive a
 	// response, we cannot know whether we actually wrote bytes that Kafka
@@ -1915,6 +1942,14 @@ type recBatch struct {
 
 	mu      xsync.Mutex   // guards appendTo's reading of records against failAllRecords emptying it
 	records []promisedRec // record w/ length, ts calculated
+
+	// stream, if non-nil, is this batch's streaming-compression state: the
+	// batch is bounded by compressed size and drains its sealed blob rather
+	// than re-serializing+recompressing records. Nil for non-streamable
+	// codecs, unknown produce versions, custom compressors, and demoted
+	// batches. Guarded like records: recBuf.mu for buffering/sealing,
+	// batch.mu wherever a concurrent AppendTo could be reading.
+	stream *batchStream
 }
 
 // Returns an error if the batch should fail.
@@ -1963,22 +1998,26 @@ func (b *recBatch) appendRecord(pr promisedRec, nums recordNumbers) {
 	b.records = append(b.records, pr)
 }
 
+// recordBatchOverhead is the wire size of a record batch's framing plus header
+// with no records: the 4-byte NULLABLE_BYTES length prefix plus the 61-byte
+// v2 batch header.
+const recordBatchOverhead = 4 + // array len
+	8 + // firstOffset
+	4 + // batchLength
+	4 + // partitionLeaderEpoch
+	1 + // magic
+	4 + // crc
+	2 + // attributes
+	4 + // lastOffsetDelta
+	8 + // firstTimestamp
+	8 + // maxTimestamp
+	8 + // producerID
+	2 + // producerEpoch
+	4 + // seq
+	4 // record array length
+
 // newRecordBatch returns a new record batch for a topic and partition.
 func (recBuf *recBuf) newRecordBatch() *recBatch {
-	const recordBatchOverhead = 4 + // array len
-		8 + // firstOffset
-		4 + // batchLength
-		4 + // partitionLeaderEpoch
-		1 + // magic
-		4 + // crc
-		2 + // attributes
-		4 + // lastOffsetDelta
-		8 + // firstTimestamp
-		8 + // maxTimestamp
-		8 + // producerID
-		2 + // producerEpoch
-		4 + // seq
-		4 // record array length
 	return &recBatch{
 		owner:      recBuf,
 		records:    recBuf.cl.prsPool.get()[:0],
@@ -1986,6 +2025,72 @@ func (recBuf *recBuf) newRecordBatch() *recBatch {
 
 		canFailFromLoadErrs: true, // until we send this batch, we can fail it
 	}
+}
+
+// newStreamBatch returns a new record batch that compresses records
+// incrementally as they are appended, so that batch membership can be decided
+// by COMPRESSED size. Only the drain-time coalescer creates these (on the sink
+// goroutine); admission-time batches are always plain.
+func (recBuf *recBuf) newStreamBatch(cc *compressor, codec CompressionCodecType) *recBatch {
+	b := recBuf.newRecordBatch()
+	// The blob buffer is deliberately NOT pooled: the sealed blob aliases it
+	// and lives until the batch dies (possibly inside an in-flight request),
+	// so pooling would require a proven-safe put-back point; GC ownership
+	// needs none.
+	buf := new(bytes.Buffer)
+	if sc := cc.stream(codec, buf); sc != nil {
+		b.stream = &batchStream{sc: sc, buf: buf, codec: codec}
+	}
+	return b
+}
+
+// batchStream is a recBatch's streaming-compression state: records are
+// serialized and fed through the compressor as they are appended (by the
+// drain-time coalescer) so that batch membership can be decided by compressed
+// size, and the sealed compressed blob is written directly at drain (see
+// appendSealedTo), which also makes retries free of recompression.
+type batchStream struct {
+	sc    *streamCompressor
+	buf   *bytes.Buffer // sc writes here; blob aliases it once sealed
+	codec CompressionCodecType
+
+	checkpoint   int    // exact compressed length at the last flush
+	sinceFlush   int    // uncompressed record bytes written since the last flush
+	uncompressed int    // total uncompressed record bytes in the batch
+	scratch      []byte // per-record serialization scratch, reused
+
+	sealed bool
+	blob   []byte // the finished compressed records payload; GC-owned
+}
+
+// streamReserve is the worst-case wire overhead around a streaming batch's
+// compressed records: the length-prefix framing (4 bytes non-flexible, up to 5
+// flexible), the 61-byte batch header, and slack for the codec's close footer
+// after a flush (gzip final block + 8-byte trailer; zstd end block + checksum).
+const streamReserve = 96
+
+// streamMergeMaxUncompressed caps how many uncompressed record bytes one
+// merged batch may accumulate. The compressed bound alone admits up to
+// ratio-x the wire limit of uncompressed bytes, and at pathological ratios
+// (highly redundant data) that total could overflow the batch's int32
+// wireLength bookkeeping on the demote paths. 256MiB is far beyond any sane
+// batch while leaving int32 arithmetic comfortably safe.
+const streamMergeMaxUncompressed = 256 << 20
+
+// releaseStream releases streaming-compression resources when a batch dies
+// (failed, aborted, or finished). Idempotent. Callers hold batch.mu when the
+// batch could concurrently be in a produce request's AppendTo; the
+// never-escaped bufferRecord arms call it lock-free.
+func (b *recBatch) releaseStream() {
+	st := b.stream
+	if st == nil {
+		return
+	}
+	if st.sc != nil {
+		st.sc.release()
+		st.sc = nil
+	}
+	b.stream = nil
 }
 
 // prsPool is the one pool we have internally that is hard to expose an
@@ -2108,6 +2213,12 @@ func (p produceMetrics) hook(cfg *cfg, br *broker) {
 func (p *produceRequest) idempotent() bool { return p.producerID >= 0 }
 
 func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch *recBatch) bool {
+	// A streaming batch is sealed the first time it is considered for a
+	// request: the compressor closes cleanly and the batch's wire size becomes
+	// exact (compressed), so the request-size accounting below packs by real
+	// bytes. Idempotent for batches reconsidered after a full request or on
+	// retry.
+	batch.sealStream(produceVersion)
 	batchWireLength, flexible, topicIDs := batch.wireLengthForProduceVersion(produceVersion)
 	batchWireLength += 4 // int32 partition prefix
 
@@ -2348,8 +2459,14 @@ func (b *recBatch) calculateRecordNumbers(r *Record) recordNumbers {
 		tsDelta = 0
 	}
 
-	offsetDelta := int32(len(b.records)) // since called before adding record, delta is the current end
+	// Since this is called before adding the record, the delta is the current end.
+	return recordNumbersOf(r, int32(len(b.records)), tsDelta)
+}
 
+// recordNumbersOf computes a record's wire numbers for an explicit position
+// (offsetDelta) and timestamp delta; the coalescer uses it to size records
+// against a merge target without mutating anything.
+func recordNumbersOf(r *Record, offsetDelta int32, tsDelta int64) recordNumbers {
 	l := 1 + // attributes, int8 unused
 		kbin.VarlongLen(tsDelta) +
 		kbin.VarintLen(offsetDelta) +
@@ -2424,7 +2541,11 @@ func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32
 	batchWireLength, _, _ := b.wireLengthForProduceVersion(produceVersion)
 	newBatchLength := batchWireLength + nums.wireLength()
 
-	if b.frozen || newBatchLength > maxBatchBytes {
+	// A merged batch (stream != nil) has a finished compressed blob and an
+	// exact sealed wireLength; appending would grow the header fields past
+	// what the blob contains, corrupting the batch on the wire. Merged
+	// batches never accept appends.
+	if b.frozen || b.merging || b.stream != nil || newBatchLength > maxBatchBytes {
 		return false, false
 	}
 	if abortOnNewBatch {
@@ -2436,6 +2557,295 @@ func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32
 		nums.tsDelta,
 	)
 	return true, false
+}
+
+// mergeBacklogs coalesces every partition's backlog of never-sent batches
+// into compressed-size-bound batches. Admission batches are bounded by
+// uncompressed size, so for compressible data each is ~1/ratio of the wire
+// limit; merging packs ~ratio-x more records per batch - and per request
+// round trip, since a request carries one batch per partition. Called at the
+// top of each drain iteration holding no locks: the compression itself runs
+// outside recBuf.mu, so admission is never stalled behind it.
+func (s *sink) mergeBacklogs() {
+	if !s.cl.cfg.streamCompression {
+		return
+	}
+	cc, ok := s.cl.cfg.compressor.(*compressor)
+	if !ok || cc == nil {
+		return
+	}
+	produceVersion := s.produceVersion.Load()
+	if produceVersion >= 0 && produceVersion < 3 {
+		return // message sets: no record-batch compression framing
+	}
+	codec := cc.pickCodec(produceVersion)
+	if !streamableCodec(codec) {
+		return
+	}
+	s.recBufsMu.Lock()
+	recBufs := append([]*recBuf(nil), s.recBufs...)
+	s.recBufsMu.Unlock()
+	for _, recBuf := range recBufs {
+		recBuf.mergeBacklog(cc, codec)
+	}
+}
+
+// mergeBacklog merges this partition's backlog via freeze-steal-merge:
+//
+//  1. STEAL (under recBuf.mu): claim the span of consecutive never-sent
+//     batches at the drain index by marking them merging, which blocks
+//     admission appends (tryBuffer) and drains (createReq skips merging
+//     batches) WITHOUT removing them from recBuf.batches - they must stay
+//     visible to failAllRecords/purge so a concurrent failure sweep still
+//     owns their promises.
+//  2. MERGE (no recBuf.mu): stream the span's records through the compressor
+//     into one batch bounded by compressed size, reading each source under
+//     its batch.mu (aborting if a failure sweep nil'd its records). Membership
+//     is decided record by record with a worst-case bound - bytes since the
+//     last flush plus the candidate are assumed incompressible; only when
+//     that would overflow do we flush to tighten and re-check, and a final
+//     overflow cuts BEFORE writing, so the bound is never exceeded and the
+//     compressor only ever holds accepted records. A cut mid-source moves the
+//     source's remaining records into a fresh tail batch - legal because the
+//     source was never sent and has no sequence (sequences are assigned at
+//     tryAddBatch).
+//  3. SPLICE (under recBuf.mu): revalidate that the span is exactly where it
+//     was left and untouched (no failure sweep, no drain-index movement, no
+//     cross-sink drain freeze), then replace the consumed sources with the
+//     merged batch (+ tail). On any interference the merge is discarded -
+//     the records' promises belong to whoever swept them.
+//
+// Only never-frozen batches are merged. A batch is frozen exactly when first
+// selected into a produce request, so frozen means possibly-sent: its content
+// and sequence must never change (idempotence), and on retries it is resent
+// verbatim.
+func (recBuf *recBuf) mergeBacklog(cc *compressor, codec CompressionCodecType) {
+	// PHASE 1: steal.
+	recBuf.mu.Lock()
+	if recBuf.purged || recBuf.failing || len(recBuf.batches)-recBuf.batchDrainIdx < 2 {
+		recBuf.mu.Unlock()
+		return
+	}
+	stealIdx := recBuf.batchDrainIdx
+	var span []*recBatch
+	for _, b := range recBuf.batches[stealIdx:] {
+		if b.frozen || b.merging || b.stream != nil {
+			break
+		}
+		span = append(span, b)
+	}
+	if len(span) < 2 {
+		recBuf.mu.Unlock()
+		return // nothing to merge with; draining stays byte-for-byte legacy
+	}
+	for _, b := range span {
+		b.merging = true
+	}
+	recBuf.mu.Unlock()
+
+	// PHASE 2: merge, holding only the current source's batch.mu.
+	limit := int(recBuf.maxRecordBatchBytes)
+	m := recBuf.newStreamBatch(cc, codec)
+	st := m.stream
+	var (
+		consumed int       // source batches consumed (the last may be split)
+		tail     *recBatch // remainder of a split source
+		aborted  = st == nil
+	)
+merge:
+	for _, src := range span {
+		if aborted {
+			break
+		}
+		src.mu.Lock()
+		if src.records == nil {
+			// A failure sweep took the recBuf mid-merge; it owns every
+			// record's promise. Discard the merge below.
+			src.mu.Unlock()
+			aborted = true
+			break
+		}
+		for ri, pr := range src.records {
+			nums := m.calculateRecordNumbers(pr.Record)
+			recWire := int(nums.wireLength())
+
+			var fits bool
+			switch {
+			case st != nil && st.uncompressed+recWire > streamMergeMaxUncompressed:
+				fits = false // cap uncompressed accumulation; see the const doc
+			case len(m.records) == 0:
+				fits = streamReserve+recWire <= limit
+			case st == nil:
+				// Demoted mid-merge: m is legacy; bound by uncompressed size.
+				fits = int(m.wireLength)+recWire <= limit
+			case streamReserve+st.checkpoint+st.sinceFlush+recWire <= limit:
+				fits = true
+			default:
+				if st.sc.flush() != nil {
+					// Effectively impossible for in-memory writes. Everything
+					// appended so far was admitted by worst case, so m is
+					// valid uncompressed; demote it to legacy and re-check.
+					m.releaseStream()
+					st = nil
+					fits = int(m.wireLength)+recWire <= limit
+				} else {
+					st.checkpoint = st.sc.len()
+					st.sinceFlush = 0
+					fits = streamReserve+st.checkpoint+recWire <= limit
+				}
+			}
+			if !fits {
+				// Cut before this record. Records ri.. of src move to a tail
+				// batch (recomputing their offset/timestamp deltas); the tail
+				// is unfrozen and seeds the next merge.
+				if ri > 0 {
+					tail = recBuf.newRecordBatch()
+					for _, tpr := range src.records[ri:] {
+						tnums := tail.calculateRecordNumbers(tpr.Record)
+						tail.appendRecord(tpr, tnums)
+						tpr.setLengthAndTimestampDelta(tnums.lengthField, tnums.tsDelta)
+					}
+					consumed++ // src is split across m and tail
+				}
+				src.mu.Unlock()
+				break merge
+			}
+
+			m.appendRecord(pr, nums)
+			pr.setLengthAndTimestampDelta(nums.lengthField, nums.tsDelta)
+			if st != nil {
+				st.scratch = pr.appendTo(st.scratch[:0], int32(len(m.records)-1))
+				if err := st.sc.write(st.scratch); err != nil {
+					m.releaseStream() // demote; m stays valid: admitted by worst case
+					st = nil
+				} else {
+					st.sinceFlush += len(st.scratch)
+					st.uncompressed += len(st.scratch)
+				}
+			}
+		}
+		src.mu.Unlock()
+		consumed++
+	}
+
+	// PHASE 3: splice. Validation is anchored on the CURRENT drain index
+	// rather than the steal-time one: a produce response completing during
+	// the merge pops finished front batches and shifts every index left,
+	// which moves the span without touching it - the span is still valid
+	// exactly when it sits, in order and unfrozen, at the head of what is
+	// left to drain. Only a failure sweep (batches replaced/nil'd) or a
+	// retry rewind (drain head now a frozen batch) invalidates the merge.
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+	for _, b := range span {
+		b.merging = false
+	}
+	spliceIdx := recBuf.batchDrainIdx
+	valid := !aborted && consumed > 0 &&
+		!recBuf.purged &&
+		len(recBuf.batches) >= spliceIdx+len(span)
+	if valid {
+		for i, b := range span {
+			if recBuf.batches[spliceIdx+i] != b || b.frozen {
+				valid = false
+				break
+			}
+		}
+	}
+	if !valid {
+		// Phase 2 re-stamped the span records' stored length/timestamp
+		// deltas to merge-relative values as it serialized them. The merge
+		// is being discarded, so the sources will drain as-is on the legacy
+		// path, which serializes from those stored stamps: restore them to
+		// source-relative values or the wire records would desync. (A sweep
+		// nil'd the records and owns their promises; restore no-ops there.)
+		for _, src := range span {
+			src.mu.Lock()
+			src.restoreRecordStamps()
+			src.mu.Unlock()
+		}
+		m.releaseStream()
+		recBuf.cl.prsPool.put(m.records)
+		if tail != nil {
+			recBuf.cl.prsPool.put(tail.records)
+		}
+		return
+	}
+	// The consumed sources' record slices were fully copied into m (and
+	// tail); with the span validated untouched, nothing else references them.
+	for _, b := range span[:consumed] {
+		recBuf.cl.prsPool.put(b.records)
+	}
+	keep := span[consumed:]
+	rest := recBuf.batches[spliceIdx+len(span):]
+	nb := make([]*recBatch, 0, spliceIdx+2+len(keep)+len(rest))
+	nb = append(nb, recBuf.batches[:spliceIdx]...)
+	nb = append(nb, m)
+	if tail != nil {
+		nb = append(nb, tail)
+	}
+	nb = append(nb, keep...)
+	recBuf.batches = append(nb, rest...)
+}
+
+// restoreRecordStamps recomputes and re-stores every record's length and
+// timestamp-delta stamps relative to THIS batch. A discarded merge leaves
+// records stamped relative to the abandoned merged batch; the stamps must
+// match this batch's layout again before its legacy serialization runs.
+// No-op for swept batches (records nil'd; the sweep owns their promises).
+func (b *recBatch) restoreRecordStamps() {
+	for i, pr := range b.records {
+		tsDelta := pr.Timestamp.UnixNano()/1e6 - b.firstTimestamp
+		if i == 0 {
+			tsDelta = 0
+		}
+		nums := recordNumbersOf(pr.Record, int32(i), tsDelta)
+		pr.setLengthAndTimestampDelta(nums.lengthField, nums.tsDelta)
+	}
+}
+
+// sealStream finalizes a streaming batch: the compressor emits its footer and
+// is returned to its pool, the compressed blob is recorded, and b.wireLength
+// becomes the batch's EXACT wire size, which every request-sizing path
+// (wireLengthForProduceVersion and friends) then reports exactly rather than
+// as an uncompressed overestimate.
+//
+// Idempotent. Called under recBuf.mu at drain time (tryAddBatch), where the
+// batch is at batchDrainIdx and therefore not inside any in-flight request's
+// AppendTo; batch.mu is still taken for the mutations because AppendTo reads
+// wireLength/stream under it.
+func (b *recBatch) sealStream(produceVersion int32) {
+	st := b.stream
+	if st == nil || st.sealed {
+		return
+	}
+	// Ancient-broker guard: the codec was chosen against the produce version
+	// at buffer time. If the KNOWN version is below record batches entirely
+	// (v3) or below the codec's floor (zstd: v7), demote; the kept records
+	// make the legacy path fully available. An unknown version (-1, possible
+	// here when everything buffered before the first response, e.g. manual
+	// flushing) stays optimistic: appendTo re-checks against the actually
+	// negotiated version at write time and demotes there if needed, and the
+	// v<3 message-set path never consults the blob at all.
+	if produceVersion >= 0 && (produceVersion < 3 || st.codec == CodecZstd && produceVersion < 7) {
+		b.releaseStream() // demote to the legacy path; records are kept
+		return
+	}
+	blob, err := st.sc.finish()
+	st.sc.release()
+	st.sc = nil
+	if err != nil || len(blob) >= st.uncompressed {
+		// Compression errored (effectively impossible) or did not shrink:
+		// take the legacy path, which decides compression per attempt and
+		// sends uncompressed when compression does not help.
+		b.stream = nil
+		return
+	}
+	b.mu.Lock()
+	st.blob = blob
+	st.sealed = true
+	b.wireLength = recordBatchOverhead + int32(len(blob))
+	b.mu.Unlock()
 }
 
 //////////////
@@ -2558,6 +2968,21 @@ func (b seqRecBatch) appendTo(
 	transactional bool,
 	compressor Compressor,
 ) (dst []byte, m ProduceBatchMetrics) { // named return so that our defer for flexible versions can modify it
+	if st := b.stream; st != nil && st.sealed {
+		if version >= 7 || st.codec != CodecZstd {
+			return b.appendSealedTo(in, version, producerID, producerEpoch, transactional)
+		}
+		// The negotiated version regressed below the sealed codec's floor
+		// between drain and write (ancient brokers only). Restore the
+		// uncompressed wire length and fall through to the legacy path, which
+		// re-serializes from the kept records and compresses per its own
+		// version-aware codec selection. Idempotent under AppendTo's
+		// re-invocation rule: the restore is a fixed value and subsequent
+		// calls take the legacy path directly. We hold batch.mu (the caller
+		// locks around appendTo), matching sealStream's mutation locking.
+		b.wireLength = recordBatchOverhead + int32(st.uncompressed)
+		b.stream = nil
+	}
 	flexible := version >= 9
 	dst = in
 	nullableBytesLen := b.wireLength - 4 // NULLABLE_BYTES leading length, minus itself
@@ -2669,6 +3094,76 @@ func (b seqRecBatch) appendTo(
 
 	kbin.AppendInt32(dst[:crcStart], int32(crc32.Checksum(dst[crcStart+4:], crc32c)))
 
+	return dst, m
+}
+
+// appendSealedTo writes a sealed streaming batch: the framing and 61-byte
+// header are written fresh (sequence, producer id/epoch, and the transactional
+// bit can differ per attempt) followed by the already-compressed records blob,
+// then the CRC over everything after the CRC field. Because the blob is
+// cached, retries do not re-serialize or recompress. The caller holds
+// batch.mu, serializing the blob read (and the b.attrs write) against
+// failAllRecords.
+//
+// All sizes are exact up front - sealStream set b.wireLength to
+// recordBatchOverhead+len(blob) - so, unlike the legacy path, the flexible
+// length prefix needs no post-compression shifting.
+func (b seqRecBatch) appendSealedTo(
+	in []byte,
+	version int16,
+	producerID int64,
+	producerEpoch int16,
+	transactional bool,
+) (dst []byte, m ProduceBatchMetrics) {
+	st := b.stream
+	flexible := version >= 9
+	dst = in
+
+	nullableBytesLen := b.wireLength - 4 // NULLABLE_BYTES leading length, minus itself
+	if flexible {
+		dst = kbin.AppendUvarint(dst, uvar32(nullableBytesLen)) // compact array non-null prefix
+	} else {
+		dst = kbin.AppendInt32(dst, nullableBytesLen)
+	}
+
+	dst = kbin.AppendInt64(dst, 0) // firstOffset, defined as zero for producing
+
+	batchLen := nullableBytesLen - 8 - 4 // length of what follows this field (so, minus what came before and ourself)
+	dst = kbin.AppendInt32(dst, batchLen)
+
+	dst = kbin.AppendInt32(dst, -1) // partitionLeaderEpoch, unused in clients
+	dst = kbin.AppendInt8(dst, 2)   // magic, defined as 2 for records v0.11.0+
+
+	crcStart := len(dst)           // fill at end
+	dst = kbin.AppendInt32(dst, 0) // reserved crc
+
+	attrs := int16(st.codec) // compression bits (attrs 0-2)
+	if transactional {
+		attrs |= 0x0010 // bit 5 is the "is transactional" bit
+	}
+	b.attrs = attrs // read at finishBatch under batch.mu; same value every attempt
+	dst = kbin.AppendInt16(dst, attrs)
+	dst = kbin.AppendInt32(dst, int32(len(b.records)-1)) // lastOffsetDelta
+	dst = kbin.AppendInt64(dst, b.firstTimestamp)
+	dst = kbin.AppendInt64(dst, b.firstTimestamp+b.maxTimestampDelta)
+
+	seq := b.seq
+	if producerID < 0 { // a negative producer ID means we are not using idempotence
+		seq = 0
+	}
+	dst = kbin.AppendInt64(dst, producerID)
+	dst = kbin.AppendInt16(dst, producerEpoch)
+	dst = kbin.AppendInt32(dst, seq)
+
+	dst = kbin.AppendArrayLen(dst, len(b.records))
+	dst = append(dst, st.blob...)
+
+	kbin.AppendInt32(dst[:crcStart], int32(crc32.Checksum(dst[crcStart+4:], crc32c)))
+
+	m.NumRecords = len(b.records)
+	m.UncompressedBytes = st.uncompressed
+	m.CompressedBytes = len(st.blob)
+	m.CompressionType = uint8(st.codec)
 	return dst, m
 }
 

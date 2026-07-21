@@ -235,6 +235,28 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 // If transactional, the producer's PID is registered in uncommittedPIDs
 // so the LSO stays at the earliest uncommitted offset.
 func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx bool) int64 {
+	// Blackhole: advance offset/txn/lso accounting so the client sees a
+	// well-formed produce response and idempotent sequences keep flowing, but
+	// discard the records (no segment write, no index, no fetch watches). Keeps
+	// broker storage out of produce-throughput benchmarks.
+	if c.cfg.blackholeProduce {
+		firstOffset := pd.highWatermark
+		pd.highWatermark += int64(b.NumRecords)
+		if inTx {
+			if pd.uncommittedPIDs == nil {
+				pd.uncommittedPIDs = make(map[int64]int64)
+			}
+			if existing, ok := pd.uncommittedPIDs[b.ProducerID]; !ok || firstOffset < existing {
+				pd.uncommittedPIDs[b.ProducerID] = firstOffset
+			}
+		}
+		if len(pd.uncommittedPIDs) == 0 {
+			pd.lastStableOffset += int64(b.NumRecords)
+		}
+		pd.nbytes += int64(nbytes)
+		return firstOffset
+	}
+
 	maxEarlierTimestamp := b.FirstTimestamp
 	if maxEarlierTimestamp < pd.maxFirstTimestamp {
 		maxEarlierTimestamp = pd.maxFirstTimestamp
