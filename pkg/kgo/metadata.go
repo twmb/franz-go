@@ -505,6 +505,14 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	if cl.consumer.s != nil {
 		consumerKind = partitionKindShare
 	}
+	// KIP-1123: rack-aware produce partitioning precomputes the same-rack
+	// partition subset during the merge below. Build the broker rack map once
+	// per refresh (only when enabled) and feed it solely to produce merges.
+	var produceBrokerRacks map[int32]string
+	if cl.cfg.rackAwarePartitioning && cl.cfg.rack != "" {
+		produceBrokerRacks = cl.brokerRacks()
+	}
+
 	var missingProduceTopics []*topicPartitions
 	for _, m := range []struct {
 		priors map[string]*topicPartitions
@@ -513,6 +521,10 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		{tpsProducerLoad, partitionKindProduce},
 		{tpsConsumerLoad, consumerKind},
 	} {
+		var brokerRacks map[int32]string
+		if m.kind == partitionKindProduce {
+			brokerRacks = produceBrokerRacks
+		}
 		for topic, priorParts := range m.priors {
 			newParts, exists := latest[topic]
 			if !exists {
@@ -528,6 +540,7 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 				m.kind,
 				css,
 				&retryWhy,
+				brokerRacks,
 			)
 		}
 	}
@@ -778,6 +791,7 @@ func (cl *Client) mergeTopicPartitions(
 	kind partitionKind,
 	css *consumerSessionStopper,
 	retryWhy *multiUpdateWhy,
+	brokerRacks map[int32]string, // non-nil only when RackAwarePartitioning is enabled with a rack set
 ) {
 	isProduce := kind == partitionKindProduce
 	isShare := kind == partitionKindShare
@@ -825,6 +839,12 @@ func (cl *Client) mergeTopicPartitions(
 	defer func() {
 		lv.partitions = r.partitions
 		lv.writablePartitions = r.writablePartitions
+		// KIP-1123: precompute the same-rack partition subset once here so
+		// producing never allocates. brokerRacks is non-nil only for produce
+		// topics when the option is enabled with a rack set.
+		if brokerRacks != nil {
+			lv.rackEligible = rackEligiblePartitions(r.writablePartitions, brokerRacks, cl.cfg.rack)
+		}
 	}()
 
 	// We should have no deleted partitions, but there are two cases where
