@@ -105,36 +105,33 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 			info := g.b.topicInfos[topicNum]
 			firstPartNum, lastPartNum := info.partNum, info.partNum+info.partitions
 			for edge := firstPartNum; edge < lastPartNum; edge++ {
-				neighborNode := g.cxns[edge].memberNum
+				cxn := g.cxns[edge]
+				neighborNode := cxn.memberNum
 				neighbor, isNew := g.getScore(neighborNode)
 				if neighbor.done {
 					continue
 				}
 
 				distance := current.distance + 1
-
-				// The neighbor is the current node that owns this edge.
-				// If our node originally owned this partition, then it
-				// would be preferable to steal edge back.
-				srcIsOriginal := g.cxns[edge].originalNum == current.node
+				score := stealScore(cxn, current.node)
 
 				// If this is a new neighbor (our first time seeing the neighbor
 				// in our search), this is also the shortest path to reach them,
 				// where shortest defers preference to original sources THEN distance.
 				if isNew {
 					neighbor.parent = current
-					neighbor.srcIsOriginal = srcIsOriginal
+					neighbor.srcScore = score
 					neighbor.srcEdge = edge
 					neighbor.distance = distance
 					neighbor.heapIdx = len(*rem)
 					heap.Push(rem, neighbor)
-				} else if !neighbor.srcIsOriginal && srcIsOriginal {
-					// If the search path has seen this neighbor before, but
-					// we now are evaluating a partition that would increase
-					// stickiness if stolen, then fixup the neighbor's parent
-					// and srcEdge.
+				} else if score > neighbor.srcScore {
+					// We have seen this neighbor before, but this partition
+					// is a better one to take from them: either it returns
+					// home to us, or the one we had picked was one they
+					// started with and this one is not.
 					neighbor.parent = current
-					neighbor.srcIsOriginal = true
+					neighbor.srcScore = score
 					neighbor.srcEdge = edge
 					neighbor.distance = distance
 					heap.Fix(rem, neighbor.heapIdx)
@@ -161,14 +158,15 @@ type pathScore struct {
 	// nodes reach back to this one.
 	done bool
 
-	// srcIsOriginal is true if, were our parent to steal srcEdge, would
-	// that put srcEdge back on the original member. That is, if we are B
-	// and our parent is A, does our srcEdge originally belong do A?
+	// srcScore is what stealing srcEdge does to stickiness: +1 if the
+	// partition returns to the member taking it, -1 if it is taken away
+	// from the member that started with it, 0 if neither.
 	//
-	// This field exists to work around a very slim edge case where a
-	// partition is stolen by B and then needs to be stolen back by A
-	// later.
-	srcIsOriginal bool
+	// The +1 case works around a very slim edge case where a partition is
+	// stolen by B and then needs to be stolen back by A later. The -1 case
+	// is why we prefer, among the partitions we could take from a member,
+	// one that member did not start with: taking that costs nothing.
+	srcScore int8
 
 	node     uint16 // our member num
 	distance int32  // how many steals it would take to get here
@@ -176,6 +174,16 @@ type pathScore struct {
 	level    int32  // partitions owned on this segment
 	parent   *pathScore
 	heapIdx  int
+}
+
+func stealScore(cxn partitionConsumer, stealer uint16) int8 {
+	switch cxn.originalNum {
+	case stealer:
+		return 1
+	case cxn.memberNum:
+		return -1
+	}
+	return 0
 }
 
 type pathScores []pathScore
@@ -218,7 +226,8 @@ func (p *pathHeap) Swap(i, j int) {
 // just sort by node.
 func (p *pathHeap) Less(i, j int) bool {
 	l, r := (*p)[i], (*p)[j]
-	return l.srcIsOriginal && !r.srcIsOriginal || !l.srcIsOriginal && !r.srcIsOriginal &&
+	lo, ro := l.srcScore > 0, r.srcScore > 0
+	return lo && !ro || !lo && !ro &&
 		(l.level > r.level || l.level == r.level &&
 			(l.distance < r.distance || l.distance == r.distance &&
 				l.node < r.node))
