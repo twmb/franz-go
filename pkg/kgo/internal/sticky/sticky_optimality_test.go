@@ -3,7 +3,9 @@ package sticky
 import (
 	"fmt"
 	"math/rand"
+	"os"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -48,24 +50,38 @@ func bruteForceOptimum(eligible [][]int, prior []int, nmembers int) (bestLoads [
 	return bestLoads, bestSticky
 }
 
-// TestBalanceIsLoadOptimalButNotStickyOptimal brute forces small instances to
-// separate the two claims the balancer makes.
+// TestBalanceIsLoadAndStickyOptimal brute forces small instances against both
+// claims the balancer makes.
 //
-// The load claim holds: the balancer always reaches the optimal load vector,
-// because it terminates only when no cost-reducing path remains, which is
-// exactly the optimality criterion for a semi-matching.
+// The load claim holds because balancing stops only when no cost-reducing path
+// remains, which is the optimality criterion for a semi-matching.
 //
-// The stickiness claim is weaker than it looks. srcIsOriginal is a preference
-// in the path heap, not a cost being minimized, so among the many assignments
-// that achieve the optimal load vector the balancer picks a good one rather
-// than the one that keeps the most partitions where they already were.
-func TestBalanceIsLoadOptimalButNotStickyOptimal(t *testing.T) {
+// The stickiness claim used to be the weaker one: among the many assignments
+// reaching the optimal load vector, balancing picked a good one rather than
+// the one leaving the most partitions in place. Trading afterwards closed the
+// half of that gap that came from moving the wrong partitions, and pricing a
+// member's load as it changes closed the half that came from giving the wrong
+// member the larger share. Both are now exact, so the brute forced optimum is
+// reached on every instance rather than merely approached.
+func TestBalanceIsLoadAndStickyOptimal(t *testing.T) {
 	t.Parallel()
 
 	var instances, stickyShortfalls, totalShortfall, atQuota, byQuota int
 	var worst string
 
-	for seed := int64(0); seed < 6000; seed++ {
+	// Brute forcing is exponential in the partition count, so the default
+	// stays small enough to run every time. Raise it to hunt for a
+	// counterexample: STICKY_SEEDS=1000000 go test -run Optimal
+	seeds := int64(6000)
+	if env := os.Getenv("STICKY_SEEDS"); env != "" {
+		n, err := strconv.ParseInt(env, 10, 64)
+		if err != nil {
+			t.Fatalf("STICKY_SEEDS: %v", err)
+		}
+		seeds = n
+	}
+
+	for seed := int64(0); seed < seeds; seed++ {
 		rng := rand.New(rand.NewSource(seed))
 
 		ntopics := 2 + rng.Intn(2)
@@ -213,7 +229,8 @@ func TestBalanceIsLoadOptimalButNotStickyOptimal(t *testing.T) {
 	if worst != "" {
 		t.Logf("first shortfall:\n%s", worst)
 	}
-	if stickyShortfalls == 0 {
-		t.Errorf("expected to find at least one instance where stickiness is not maximal")
+	if stickyShortfalls != 0 {
+		t.Errorf("%d instances kept fewer partitions in place than the brute forced optimum, %d partitions in total",
+			stickyShortfalls, totalShortfall)
 	}
 }

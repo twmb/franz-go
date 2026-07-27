@@ -72,17 +72,22 @@ func (b *balancer) maximizeStickiness() {
 	if len(cells) == 0 {
 		return
 	}
+	loads := make([]int32, len(b.members))
+	for i := range cells {
+		loads[cells[i].member] += cells[i].x
+	}
 
 	// Cancelling one cycle can expose another, so keep going until none is
 	// left. Each cancellation strictly reduces the number of partitions
 	// that had to move, and that count cannot go below zero, so this ends.
 	for {
-		cycle := findStickyCycle(cells, len(b.topicInfos), len(b.members))
+		cycle := findStickyCycle(cells, loads, len(b.topicInfos), len(b.members))
 		if cycle == nil {
 			break
 		}
 		for _, step := range cycle {
 			cells[step.cell].x += step.delta
+			loads[cells[step.cell].member] += step.delta
 		}
 	}
 
@@ -140,21 +145,33 @@ type stickyStep struct {
 	delta int32
 }
 
-// findStickyCycle looks for a rotation through the table that leaves more
-// partitions where they were. Nodes are topics and members; an arc from a
-// topic to a member means that member takes one more of it, and back again
-// means it gives one up. A cycle alternates between the two, so every member
-// on it hands over exactly as much as it receives.
+// findStickyCycle looks for a rotation through the table that either evens the
+// load out or, failing that, leaves more partitions where they already were.
 //
-// Bellman-Ford over every node at once, which finds a negative cycle anywhere
-// in the table rather than only one reachable from some chosen start.
-func findStickyCycle(cells []stickyCell, ntopics, nmembers int) []stickyStep {
-	const (
-		unset = -1
-		inf   = 1 << 30
-	)
-	nodes := ntopics + nmembers
-	dist := make([]int32, nodes)
+// Nodes are topics, members, and one node standing for the group as a whole.
+// A topic to a member means that member takes one more of it; back again means
+// it gives one up. A member to the group node means it sheds a partition
+// outright and another picks one up, which is the only way a cycle can change
+// what anybody holds in total.
+//
+// Load is priced so that the k'th partition a member holds costs W*(2k-1),
+// making the total W*k^2. Shifting one partition from a member holding a to
+// one holding b then costs W*(2b-2a+2): negative when b is two or more below
+// a, which is exactly when balancing would have moved it anyway; zero when b
+// is one below, so two members a level apart may trade freely; and positive
+// otherwise. With W larger than any churn a cycle could save, the load vector
+// can never be worsened to keep a partition in place, and churn decides only
+// among rearrangements the load is indifferent to.
+func findStickyCycle(cells []stickyCell, loads []int32, ntopics, nmembers int) []stickyStep {
+	const unset = -1
+	nodes := ntopics + nmembers + 1
+	group := int32(ntopics + nmembers)
+
+	// Any cycle alternates, so it holds at most one step per node, and each
+	// step moves churn by at most one.
+	weight := int64(2*nodes + 2)
+
+	dist := make([]int64, nodes)
 	viaCell := make([]int32, nodes)
 	viaFrom := make([]int32, nodes)
 	for i := range viaCell {
@@ -163,9 +180,10 @@ func findStickyCycle(cells []stickyCell, ntopics, nmembers int) []stickyStep {
 	}
 
 	memberNode := func(m uint16) int32 { return int32(ntopics) + int32(m) }
+	// Taking the k+1'th partition, and giving up the k'th.
+	costToLoad := func(m uint16) int64 { return weight * int64(2*loads[m]+1) }
+	costToShed := func(m uint16) int64 { return -weight * int64(2*loads[m]-1) }
 
-	// Every node starts reachable at zero, which is the standard way to
-	// hunt a negative cycle without picking a source.
 	var last int32 = unset
 	for pass := 0; pass <= nodes; pass++ {
 		last = unset
@@ -173,26 +191,39 @@ func findStickyCycle(cells []stickyCell, ntopics, nmembers int) []stickyStep {
 			c := &cells[i]
 			t, m := int32(c.topic), memberNode(c.member)
 
-			// The member takes one more of this topic.
-			if d := dist[t] + c.costToAdd(); d < dist[m] {
+			if d := dist[t] + int64(c.costToAdd()); d < dist[m] {
 				dist[m], viaCell[m], viaFrom[m] = d, int32(i), t
 				last = m
 			}
-			// The member gives one up, which it can only do if it has one.
 			if c.x > 0 {
-				if d := dist[m] + c.costToDrop(); d < dist[t] {
+				if d := dist[m] + int64(c.costToDrop()); d < dist[t] {
 					dist[t], viaCell[t], viaFrom[t] = d, int32(i), m
 					last = t
 				}
 			}
 		}
+		// Load leaving one member and arriving at another, which is what
+		// lets two members a level apart trade their counts.
+		for m := range nmembers {
+			node := memberNode(uint16(m))
+			// Toward the group node is this member taking on one more
+			// partition overall; away from it is giving one up.
+			if d := dist[node] + costToLoad(uint16(m)); d < dist[group] {
+				dist[group], viaCell[group], viaFrom[group] = d, unset, node
+				last = group
+			}
+			if loads[m] > 0 {
+				if d := dist[group] + costToShed(uint16(m)); d < dist[node] {
+					dist[node], viaCell[node], viaFrom[node] = d, unset, group
+					last = node
+				}
+			}
+		}
 		if last == unset {
-			return nil // settled, so no cycle
+			return nil
 		}
 	}
 
-	// Still relaxing after a full pass per node means a negative cycle is
-	// reachable from here; walking back that many times lands inside it.
 	at := last
 	for range nodes {
 		at = viaFrom[at]
@@ -200,13 +231,14 @@ func findStickyCycle(cells []stickyCell, ntopics, nmembers int) []stickyStep {
 
 	var cycle []stickyStep
 	for node := at; ; {
-		cell := viaCell[node]
-		// Reaching a member means it took one more; reaching a topic
-		// means the member on the other side gave one up.
-		if node >= int32(ntopics) {
-			cycle = append(cycle, stickyStep{cell, +1})
-		} else {
-			cycle = append(cycle, stickyStep{cell, -1})
+		if cell := viaCell[node]; cell != unset {
+			// Reaching a member means it took one more of the topic;
+			// reaching a topic means the member gave one up.
+			if node >= int32(ntopics) && node != group {
+				cycle = append(cycle, stickyStep{cell, +1})
+			} else {
+				cycle = append(cycle, stickyStep{cell, -1})
+			}
 		}
 		node = viaFrom[node]
 		if node == at {
