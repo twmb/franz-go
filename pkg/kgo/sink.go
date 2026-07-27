@@ -2451,7 +2451,10 @@ func (p *produceRequest) IsFlexible() bool   { return p.version >= 9 }
 func (p *produceRequest) AppendTo(dst []byte) []byte {
 	flexible := p.IsFlexible()
 
-	p.metrics = make(map[string]map[int32]ProduceBatchMetrics)
+	// The metrics maps are rebuilt on every AppendTo and take one entry
+	// per topic and one per partition we actually write, so size them up
+	// front rather than growing our way there.
+	p.metrics = make(map[string]map[int32]ProduceBatchMetrics, len(p.batches.bs))
 
 	if p.version >= 3 {
 		if flexible {
@@ -2482,7 +2485,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendArrayLen(dst, len(partitions))
 		}
 
-		tmetrics := make(map[int32]ProduceBatchMetrics)
+		tmetrics := make(map[int32]ProduceBatchMetrics, len(partitions))
 		p.metrics[topic] = tmetrics
 
 		for partition, batch := range partitions {
