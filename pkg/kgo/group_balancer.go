@@ -457,10 +457,10 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		g.initExternal(topicPartitionCount)
 	}
 
-	// KIP-881: build partition rack info for rack-aware assignment.
-	// We use cached broker racks and partition leaders from local
-	// metadata. This requires no extra fetches.
-	if cb, ok := memberBalancer.(*ConsumerBalancer); ok {
+	// KIP-881: build partition rack info for rack-aware assignment, if
+	// the user asked for it. We use cached broker racks and partition
+	// leaders from local metadata, so this requires no extra fetches.
+	if cb, ok := memberBalancer.(*ConsumerBalancer); ok && g.cfg.balanceRacks {
 		cb.partitionRacks = g.buildPartitionRacks(cb, topicPartitionCount)
 	}
 
@@ -537,6 +537,10 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 // buildPartitionRacks builds a topic => partition => rack map for rack-aware
 // assignment (KIP-881). It uses cached broker racks and partition leader info
 // from local metadata. Returns nil if no rack info is available.
+//
+// Only called when the user opted in with BalanceRacks: a rack alone means
+// the client wants closer fetches, which is a separate thing from wanting the
+// assignment to chase rack locality.
 func (g *groupConsumer) buildPartitionRacks(b *ConsumerBalancer, topicPartitionCount map[string]int32) map[string][]string {
 	// Check if any member has a rack.
 	var hasRack bool
