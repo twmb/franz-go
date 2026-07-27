@@ -712,11 +712,11 @@ doConnect:
 		// version possible (as should be allowed). On the third try,
 		// we downgrade to v0 (see requestAPIVersions).
 		if er := (*errApiVersionsReset)(nil); errors.As(err, &er) && tries < 3 {
-			cxn.closeConn()
+			cxn.die()
 			goto doConnect
 		}
 		b.cl.cfg.logger.Log(LogLevelDebug, "connection initialization failed", "addr", b.addr, "broker", logID(b.meta.NodeID), "err", err)
-		cxn.closeConn()
+		cxn.die()
 		return nil, err
 	}
 	b.cl.cfg.logger.Log(LogLevelDebug, "connection initialized successfully", "addr", b.addr, "broker", logID(b.meta.NodeID))
@@ -740,11 +740,16 @@ doConnect:
 	// connection-per-broker ordering guarantee that Kafka requires
 	// for idempotent produce.
 	//
-	// closeConn runs the user's OnBrokerDisconnect hook, so it runs
-	// after the unlock (see stopForever for why).
+	// die runs the user's OnBrokerDisconnect hook, so it runs after the
+	// unlock (see stopForever for why). We die rather than just close the
+	// conn even though the connection was never stored: for an acks=0
+	// produce connection, init above already spawned the discard goroutine,
+	// which owns all reads. Closing the conn wakes its read with an error,
+	// and it dies the connection as it exits -- die's dead swap is what
+	// keeps the two teardowns from both closing deadCh (see #1377).
 	if b.dead.Load() {
 		b.reapMu.Unlock()
-		cxn.closeConn()
+		cxn.die()
 		return nil, errChosenBrokerDead
 	}
 
@@ -876,7 +881,7 @@ type brokerCxn struct {
 	resps ring[promisedResp]
 	// dead is an atomic so that a backed up resps cannot block cxn death.
 	dead atomic.Bool
-	// closed in closeConn; allows throttle waiting to quit
+	// closed in die; allows throttle waiting to quit
 	deadCh chan struct{}
 	// hasDiscard is set during init (before the connection is shared) if
 	// this is an acks=0 produce connection running the discard goroutine.
@@ -1598,12 +1603,17 @@ func (cxn *brokerCxn) readResponse(
 	return buf[4:], nil
 }
 
-// closeConn is the one place we close broker connections. It is reached via
-// die (callable from anywhere once the connection is live: read/write errors,
-// reaping, broker stoppage) or directly when the connection was never shared:
-// init failure, the ApiVersions-reset retry, and loadConnection's dead-broker
-// arm.
-func (cxn *brokerCxn) closeConn() {
+// die is the one place we close broker connections, and it replies to all
+// requests awaiting responses appropriately, including requests parked for a
+// pending reauthentication. It is callable from anywhere and at any point in a
+// connection's life: read/write errors, reaping, broker stoppage, init failure,
+// and loadConnection's ApiVersions-reset retry and dead-broker arm. The dead
+// swap is what makes every one of those safe -- deadCh can only be closed once,
+// no matter how many goroutines race to tear the connection down.
+func (cxn *brokerCxn) die() {
+	if cxn == nil || cxn.dead.Swap(true) {
+		return
+	}
 	cxn.cl.cfg.hooks.each(func(h Hook) {
 		if h, ok := h.(HookBrokerDisconnect); ok {
 			h.OnBrokerDisconnect(cxn.b.meta, cxn.conn)
@@ -1611,16 +1621,6 @@ func (cxn *brokerCxn) closeConn() {
 	})
 	cxn.conn.Close()
 	close(cxn.deadCh)
-}
-
-// die kills a broker connection (which could be dead already) and replies to
-// all requests awaiting responses appropriately, including requests parked
-// for a pending reauthentication.
-func (cxn *brokerCxn) die() {
-	if cxn == nil || cxn.dead.Swap(true) {
-		return
-	}
-	cxn.closeConn()
 	cxn.resps.die()
 	cxn.failParked()
 }
