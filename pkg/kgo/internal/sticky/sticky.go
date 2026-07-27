@@ -558,7 +558,16 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 			if !exists {
 				continue
 			}
-			memberSubs[memberNum*nsubWords+int(topicNum)/64] |= 1 << (topicNum % 64)
+			// Subscriptions come from other members' join metadata, so a
+			// topic can arrive twice. Appending the member twice makes
+			// this topic look like it has more interested members than
+			// the group has, which trips the check below and sends an
+			// otherwise uniform group down the complex path for nothing.
+			word, bit := memberNum*nsubWords+int(topicNum)/64, uint64(1)<<(topicNum%64)
+			if memberSubs[word]&bit != 0 {
+				continue
+			}
+			memberSubs[word] |= bit
 			memberNums := topicPotentials[topicNum]
 			if cap(memberNums) == 0 {
 				memberNums = topicPotentialsBuf[:0:perTopic]

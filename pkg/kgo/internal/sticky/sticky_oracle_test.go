@@ -142,10 +142,19 @@ func maxStickinessAt(
 	for i, member := range memberNames {
 		f.addEdge(nt+i, sink, quotas[member], 0)
 	}
+	// A member may list a topic more than once -- subscriptions arrive from
+	// other group members' metadata, so they are arbitrary input. Adding a
+	// second pair of arcs for a repeat would hand that member twice the
+	// cost-free capacity it actually has and inflate the optimum.
+	seen := make(map[[2]int]bool, len(subs))
 	for member, mine := range subs {
 		mi := memberNums[member]
 		for _, topic := range mine {
 			ti := topicNums[topic]
+			if seen[[2]int{ti, mi}] {
+				continue
+			}
+			seen[[2]int{ti, mi}] = true
 			held := len(prior[member][topic])
 			if held > 0 {
 				f.addEdge(ti, nt+mi, held, 0)
