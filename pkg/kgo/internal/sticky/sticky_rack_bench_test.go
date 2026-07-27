@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// improveRackLocality is measured directly rather than as a delta on a whole
+// repairAssignment is measured directly rather than as a delta on a whole
 // balance: a balance of this size allocates enough that its own collector
 // noise swamps a pass this small. Cost tracks how much drift there is to
 // repair, which is the point -- a group whose leaders have not moved pays
@@ -60,7 +60,7 @@ func benchRackSetup(nt, np, nm, mismatchPct int) (*balancer, [][]int32) {
 	return b, snapshot
 }
 
-func BenchmarkImproveRackLocality(b *testing.B) {
+func BenchmarkRepairPass(b *testing.B) {
 	for _, sz := range []struct{ nt, np, nm, mismatch int }{
 		{100, 250, 100, 0},  // nothing to do -- the steady state
 		{100, 250, 100, 10}, // a rolling restart's worth of drift
@@ -77,7 +77,7 @@ func BenchmarkImproveRackLocality(b *testing.B) {
 					bal.plan[i] = append(bal.plan[i][:0], snapshot[i]...)
 				}
 				b.StartTimer()
-				bal.improveRackLocality()
+				bal.repairAssignment()
 			}
 		})
 	}

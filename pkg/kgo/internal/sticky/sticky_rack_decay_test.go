@@ -14,11 +14,11 @@ import (
 // rolling restarts, preferred leader election, reassignment -- so a partition
 // that was rack-correct when assigned can silently become wrong.
 //
-// Before improveRackLocality existed, locality fell from 96% to 33% over 25
-// rebalances at 10% leadership movement -- 33% being what random assignment
+// Before the repair priced rack placement, locality fell from 96% to 33% over
+// 25 rebalances at 10% leadership movement -- 33% being what random assignment
 // gives with three racks, so it decayed the whole way to no rack awareness at
-// all. The floors below are well under what the trade pass achieves, so they
-// catch that regression without pinning exact numbers.
+// all. The floors below are well under what the repair achieves, so they catch
+// that regression without pinning exact numbers.
 
 func TestRackLocalityDecay(t *testing.T) {
 	const (

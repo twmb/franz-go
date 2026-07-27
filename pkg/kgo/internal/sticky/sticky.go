@@ -87,6 +87,12 @@ type balancer struct {
 	// a topic it does not currently hold.
 	memberSubs []uint64
 	nsubWords  int
+
+	// origOwner is who held each partition before this balance, or
+	// unassignedPart for one nobody held. The steal graph carries the same
+	// thing, but only exists for complex subscriptions, and repairing an
+	// assignment is worth doing either way.
+	origOwner []uint16
 }
 
 // topicInfo deliberately holds no topic name: it is indexed in the hottest
@@ -371,10 +377,7 @@ func BalanceWithRacks(members []GroupMember, topics map[string]int32, partitionR
 	b.assignUnassignedAndInitGraph()
 	b.initPlanByNumPartitions()
 	b.balance()
-	b.maximizeStickiness()
-	// Stickiness first, then rack: rack placement outranks it, so it gets
-	// the last word on any partition they disagree about.
-	b.improveRackLocality()
+	b.repairAssignment()
 	return b.into()
 }
 
@@ -634,6 +637,13 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 
 	b.tryRestickyStales(topicPotentials, partitionConsumers)
 
+	// After restickying, not before: giving a partition back to an older
+	// generation's claimant changes who counts as having come in with it.
+	b.origOwner = make([]uint16, len(partitionConsumers))
+	for i := range partitionConsumers {
+		b.origOwner[i] = partitionConsumers[i].originalNum
+	}
+
 	// KIP-881: rack-aware pre-assignment for the simple path. For
 	// unassigned partitions with rack info, preferentially assign to
 	// rack-matched members via per-rack heaps. Anything left unassigned
@@ -859,141 +869,6 @@ func (b *balancer) assignRackAware(
 // subscribes reports whether a member may hold partitions of a topic.
 func (b *balancer) subscribes(memberNum uint16, topicNum uint32) bool {
 	return b.memberSubs[int(memberNum)*b.nsubWords+int(topicNum)/64]&(1<<(topicNum%64)) != 0
-}
-
-// improveRackLocality trades partitions between members so that more of them
-// sit on a member in the same rack as the partition's leader, without changing
-// how many partitions anybody holds.
-//
-// Rack placement is otherwise only ever applied to partitions that arrive
-// unassigned. A partition carried over from the previous assignment keeps its
-// owner unexamined -- but leadership moves, so a partition that was rack
-// correct when it was assigned drifts to the wrong rack and nothing ever pulls
-// it back. Over successive rebalances of a cluster that restarts brokers, a
-// group's locality decays toward what random assignment would give.
-//
-// Trades are confined to one topic. Two members that each hold a partition of
-// a topic both subscribe to it, so a swap between them is always legal and
-// needs no eligibility check, and since the two swap one partition each their
-// counts do not move -- balance, which outranks rack placement, is preserved
-// exactly.
-func (b *balancer) improveRackLocality() {
-	if b.partRacks == nil || b.nRacks < 2 {
-		return
-	}
-
-	// Only a partition sitting on the wrong rack can move, and after a
-	// rack aware assignment most are already right, so gather just those
-	// rather than indexing every partition in the group.
-	type misplaced struct {
-		key    uint64 // the rack it is on, the rack it wants, then its topic
-		part   int32
-		member uint16
-		idx    int32
-		traded bool
-	}
-	var wrong []misplaced
-	for memberNum := range b.plan {
-		has := b.memberRacks[memberNum]
-		if has == noRack {
-			continue
-		}
-		for idx, partNum := range b.plan[memberNum] {
-			wants := b.partRacks[partNum]
-			if wants == noRack || wants == has {
-				continue
-			}
-			wrong = append(wrong, misplaced{
-				key:    uint64(has)<<48 | uint64(wants)<<32 | uint64(b.partOwners[partNum]),
-				part:   partNum,
-				member: uint16(memberNum),
-				idx:    int32(idx),
-			})
-		}
-	}
-	if len(wrong) < 2 {
-		return
-	}
-	slices.SortFunc(wrong, func(l, r misplaced) int {
-		switch {
-		case l.key < r.key:
-			return -1
-		case l.key > r.key:
-			return 1
-		}
-		return 0
-	})
-
-	first := make([]int32, b.nRacks*b.nRacks)
-	past := make([]int32, b.nRacks*b.nRacks)
-	for i := range first {
-		first[i] = -1
-	}
-	for k := range wrong {
-		slot := int(wrong[k].key>>48-1)*b.nRacks + int((wrong[k].key>>32)&0xffff-1)
-		if first[slot] < 0 {
-			first[slot] = int32(k)
-		}
-		past[slot] = int32(k) + 1
-	}
-
-	topicOf := func(m *misplaced) uint32 { return uint32(m.key & 0xffffffff) }
-	trade := func(l, r *misplaced) {
-		b.plan[l.member][l.idx] = r.part
-		b.plan[r.member][r.idx] = l.part
-		l.traded, r.traded = true, true
-	}
-
-	// A partition stuck on rack x wanting y trades with one on y wanting
-	// x: both end up home, and since they swap one for one nobody's count
-	// moves, so balance -- which outranks rack placement -- is untouched.
-	for x := range b.nRacks {
-		for y := x + 1; y < b.nRacks; y++ {
-			xy, yx := x*b.nRacks+y, y*b.nRacks+x
-			if first[xy] < 0 || first[yx] < 0 {
-				continue
-			}
-
-			// Same topic first. Both members hold partitions of it, so
-			// both provably subscribe and the trade needs no check. The
-			// runs are sorted by topic, so this is a merge.
-			p, q := first[xy], first[yx]
-			for p < past[xy] && q < past[yx] {
-				switch tp, tq := topicOf(&wrong[p]), topicOf(&wrong[q]); {
-				case tp < tq:
-					p++
-				case tp > tq:
-					q++
-				default:
-					trade(&wrong[p], &wrong[q])
-					p++
-					q++
-				}
-			}
-
-			// Then across topics, which needs both members to actually
-			// want the other's topic. Looking only a short way ahead
-			// keeps this from degrading into a quadratic scan when
-			// subscriptions rarely line up.
-			for p := first[xy]; p < past[xy]; p++ {
-				if wrong[p].traded {
-					continue
-				}
-				l := &wrong[p]
-				for q, tries := first[yx], 0; q < past[yx] && tries < 8; q++ {
-					r := &wrong[q]
-					if r.traded {
-						continue
-					}
-					tries++
-					if b.subscribes(l.member, topicOf(r)) && b.subscribes(r.member, topicOf(l)) {
-						trade(l, r)
-						break
-					}
-				}
-			}
-		}
-	}
 }
 
 type partitionConsumer struct {
