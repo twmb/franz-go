@@ -45,6 +45,7 @@ type balancer struct {
 
 	topicNums  map[string]uint32 // topic name => index into topicInfos
 	topicInfos []topicInfo
+	topicNames []string // topicNum => topic name
 	partOwners []uint32 // partition => owning topicNum
 
 	// Stales tracks partNums that are doubly subscribed in this join
@@ -81,10 +82,13 @@ type balancer struct {
 	nRacks      int
 }
 
+// topicInfo deliberately holds no topic name: it is indexed in the hottest
+// loops in this package, and keeping it pointer free means the garbage
+// collector never scans it and three of them fit where one used to. Names
+// live in the parallel topicNames.
 type topicInfo struct {
 	partNum    int32 // base part num
 	partitions int32 // number of partitions in the topic
-	topic      string
 }
 
 func newBalancer(members []GroupMember, topics map[string]int32, partitionRacks map[string][]string) *balancer {
@@ -92,6 +96,7 @@ func newBalancer(members []GroupMember, topics map[string]int32, partitionRacks 
 		nparts     int
 		topicNums  = make(map[string]uint32, len(topics))
 		topicInfos = make([]topicInfo, len(topics))
+		topicNames = make([]string, len(topics))
 	)
 	for topic, partitions := range topics {
 		topicNum := uint32(len(topicNums))
@@ -99,8 +104,8 @@ func newBalancer(members []GroupMember, topics map[string]int32, partitionRacks 
 		topicInfos[topicNum] = topicInfo{
 			partNum:    int32(nparts),
 			partitions: partitions,
-			topic:      topic,
 		}
+		topicNames[topicNum] = topic
 		nparts += int(partitions)
 	}
 	partOwners := make([]uint32, 0, nparts)
@@ -119,9 +124,9 @@ func newBalancer(members []GroupMember, topics map[string]int32, partitionRacks 
 		memberNums: memberNums,
 		topicNums:  topicNums,
 		topicInfos: topicInfos,
+		topicNames: topicNames,
 
 		partOwners: partOwners,
-		stales:     make(map[int32]uint16),
 		plan:       make(membersPartitions, len(members)),
 	}
 
@@ -229,7 +234,7 @@ func (b *balancer) into() Plan {
 			topicNum := b.partOwners[partNum]
 
 			if topicNum != lastTopicNum {
-				topics[lastTopicInfo.topic] = topicParts[:len(topicParts):len(topicParts)]
+				topics[b.topicNames[lastTopicNum]] = topicParts[:len(topicParts):len(topicParts)]
 				topicParts = topicParts[len(topicParts):]
 
 				lastTopicNum = topicNum
@@ -239,24 +244,9 @@ func (b *balancer) into() Plan {
 			partition := partNum - lastTopicInfo.partNum
 			topicParts = append(topicParts, partition)
 		}
-		topics[lastTopicInfo.topic] = topicParts[:len(topicParts):len(topicParts)]
+		topics[b.topicNames[lastTopicNum]] = topicParts[:len(topicParts):len(topicParts)]
 	}
 	return plan
-}
-
-func (b *balancer) partNumByTopic(topic string, partition int32) (int32, bool) {
-	topicNum, exists := b.topicNums[topic]
-	if !exists {
-		return 0, false
-	}
-	topicInfo := b.topicInfos[topicNum]
-	// Claimed partitions are arbitrary input from other group members; a
-	// negative partition would index our flat partition state at a
-	// negative offset (or alias into the preceding topic's range).
-	if partition < 0 || partition >= topicInfo.partitions {
-		return 0, false
-	}
-	return topicInfo.partNum + partition, true
 }
 
 // memberPartitions contains partitions for a member.
@@ -410,11 +400,32 @@ func (b *balancer) parseMemberMetadata() {
 		}
 		gen |= highBit
 		memberNum := b.memberNums[member.ID]
+		// Owned partitions arrive grouped by topic, from both the
+		// cooperative OwnedPartitions and the userdata wire format, so
+		// remembering the last topic keeps us from hashing a topic name
+		// once per partition a member owns.
+		var (
+			lastTopic string
+			lastInfo  topicInfo
+			lastOK    bool
+		)
 		for _, topicPartition := range memberPlan {
-			partNum, exists := b.partNumByTopic(topicPartition.topic, topicPartition.partition)
-			if !exists {
+			if topicPartition.topic != lastTopic || !lastOK {
+				lastTopic = topicPartition.topic
+				topicNum, exists := b.topicNums[lastTopic]
+				lastOK = exists
+				if exists {
+					lastInfo = b.topicInfos[topicNum]
+				}
+			}
+			// Claimed partitions are arbitrary input from other group
+			// members; a negative partition would index our flat
+			// partition state at a negative offset (or alias into the
+			// preceding topic's range).
+			if !lastOK || topicPartition.partition < 0 || topicPartition.partition >= lastInfo.partitions {
 				continue
 			}
+			partNum := lastInfo.partNum + topicPartition.partition
 
 			// We keep the highest generation, and at most two generations.
 			// If something is doubly consumed, we skip it.
@@ -434,6 +445,11 @@ func (b *balancer) parseMemberMetadata() {
 		if pcs.genNew&highBit != 0 {
 			b.plan[pcs.memberNew].add(int32(partNum))
 			if pcs.genOld&highBit != 0 {
+				// Doubly-claimed partitions are the KIP-341 edge case;
+				// the overwhelming majority of balances never see one.
+				if b.stales == nil {
+					b.stales = make(map[int32]uint16)
+				}
 				b.stales[int32(partNum)] = pcs.memberOld
 			}
 		}
@@ -488,7 +504,7 @@ func (b *balancer) sortMemberByLiteralPartNum(memberNum int) {
 	slices.SortFunc(partNums, func(lpNum, rpNum int32) int {
 		ltNum, rtNum := b.partOwners[lpNum], b.partOwners[rpNum]
 		li, ri := b.topicInfos[ltNum], b.topicInfos[rtNum]
-		lt, rt := li.topic, ri.topic
+		lt, rt := b.topicNames[ltNum], b.topicNames[rtNum]
 		lp, rp := lpNum-li.partNum, rpNum-ri.partNum
 		if lp < rp {
 			return -1
