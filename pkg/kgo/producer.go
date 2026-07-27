@@ -887,8 +887,13 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 		return
 	}
 
+	// partsMu exists only to serialize access to the topic's partitioner
+	// (and the least-backup input we feed it): it guards nothing that
+	// bufferRecord touches, and bufferRecord takes the target recBuf's own
+	// mutex. Every exit below therefore unlocks as soon as the partitioner
+	// is done being used -- see the comment above the buffering below for
+	// why the KIP-480 path is the one exception.
 	parts.partsMu.Lock()
-	defer parts.partsMu.Unlock()
 	if parts.partitioner == nil {
 		parts.partitioner = cl.cfg.partitioner.ForTopic(pr.Topic)
 	}
@@ -910,6 +915,7 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 		mapping = partsData.partitions
 	}
 	if len(mapping) == 0 {
+		parts.partsMu.Unlock()
 		cl.producer.promiseRecord(pr, errors.New("unable to partition record due to no usable partitions"))
 		return
 	}
@@ -926,16 +932,35 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 		pick = parts.partitioner.Partition(pr.Record, len(mapping))
 	}
 	if pick < 0 || pick >= len(mapping) {
+		parts.partsMu.Unlock()
 		cl.producer.promiseRecord(pr, fmt.Errorf("invalid record partitioning choice of %d from %d available", pick, len(mapping)))
 		return
 	}
 
 	partition := mapping[pick]
 
+	// A KIP-480 partitioner needs the lock held across the buffering: if
+	// the record would start a new batch, bufferRecord aborts and we must
+	// call OnNewBatch and re-pick. That trio (pick, abort, re-pick) has to
+	// be atomic against the partitioner's state -- OnNewBatch un-pins the
+	// sticky partition, so a concurrent produce landing between our abort
+	// and our re-pick would either be handed the partition we are about to
+	// abandon or would itself re-pin, and our OnNewBatch would then clobber
+	// its fresh pin.
+	//
+	// Without OnNewBatch there is no abort and nothing to keep atomic, so
+	// we are done with the partitioner the moment we have our pick. Holding
+	// the lock across bufferRecord would serialize every produce to a topic
+	// on one mutex no matter how many partitions the topic has.
 	onNewBatch, _ := parts.partitioner.(TopicPartitionerOnNewBatch)
-	abortOnNewBatch := onNewBatch != nil
-	processed := partition.records.bufferRecord(pr, abortOnNewBatch) // KIP-480
-	if !processed {
+	if onNewBatch == nil {
+		parts.partsMu.Unlock()
+		partition.records.bufferRecord(pr, false)
+		return
+	}
+	defer parts.partsMu.Unlock()
+
+	if !partition.records.bufferRecord(pr, true) { // KIP-480
 		onNewBatch.OnNewBatch()
 
 		if tlp != nil {
