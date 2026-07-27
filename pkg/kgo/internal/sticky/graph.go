@@ -38,10 +38,17 @@ func (b *balancer) newGraph(
 		scores:  make([]pathScore, len(b.members)),
 		heapBuf: make([]*pathScore, len(b.members)),
 	}
-	outBufs := make([]uint32, len(b.members)*len(topicPotentials))
+	// Same sizing argument as topicPotentials: one topic slot per member per
+	// topic is exact only when every member subscribes to everything.
+	var nsubs int
+	for _, potentials := range topicPotentials {
+		nsubs += len(potentials)
+	}
+	perMember := nsubs/len(b.members) + 1
+	outBufs := make([]uint32, perMember*len(b.members))
 	for memberNum := range b.plan {
-		out := outBufs[:0:len(topicPotentials)]
-		outBufs = outBufs[len(topicPotentials):]
+		out := outBufs[:0:perMember]
+		outBufs = outBufs[perMember:]
 		// Out edges are per topic, not per partition: in the worst
 		// case a member subscribes to every topic, so we preallocate
 		// one topic slot per member. The partition edges themselves
