@@ -178,12 +178,10 @@ type stickyShape struct {
 	subsPer    int  // if >0, each member subscribes to only this many topics
 
 	// maxGapPct is the most of the assignment this shape may leave on the
-	// table versus the true optimum. Shapes where members subscribe
-	// broadly measure zero; the small allowance absorbs the run to run
-	// variation from topic numbering, which is randomized by map order.
-	// Narrow subscriptions are the one regime that really gives anything
-	// up, and its allowance exists to catch a regression getting worse,
-	// not to bless the gap.
+	// table versus the true optimum. Every shape measures zero now that
+	// trades run after balancing; the small allowance is only slack for
+	// the run to run variation in topic numbering, which comes from map
+	// iteration order.
 	maxGapPct float64
 }
 
@@ -199,7 +197,7 @@ func TestStickinessAgainstOptimum(t *testing.T) {
 		{"subset/rejoin", 40, 40, 40, false, false, 6, 0.5},
 		{"subset/doubled", 40, 40, 20, false, true, 6, 0.5},
 		{"subset/doubled+divergent", 40, 40, 20, true, true, 6, 0.5},
-		{"subset/narrow+doubled", 60, 50, 30, false, true, 3, 4.0},
+		{"subset/narrow+doubled", 60, 50, 30, false, true, 3, 0.5},
 		{"subset/wide-overlap+doubled", 30, 60, 20, false, true, 12, 0.5},
 	}
 

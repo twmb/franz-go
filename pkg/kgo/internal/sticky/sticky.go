@@ -371,6 +371,9 @@ func BalanceWithRacks(members []GroupMember, topics map[string]int32, partitionR
 	b.assignUnassignedAndInitGraph()
 	b.initPlanByNumPartitions()
 	b.balance()
+	b.maximizeStickiness()
+	// Stickiness first, then rack: rack placement outranks it, so it gets
+	// the last word on any partition they disagree about.
 	b.improveRackLocality()
 	return b.into()
 }
