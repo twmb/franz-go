@@ -201,6 +201,12 @@ repair:
 	g.color = red
 }
 
+// delete removes n from the tree.
+//
+// Callers beware: deleting a node with two children swaps items between
+// nodes, so any *treePlanNode a caller is holding may afterwards point at a
+// different *partitionLevel than it did before. Code that captured both a
+// node and its item must keep using the item, or re-find the node.
 func (t *treePlan) delete(n *treePlanNode) {
 	t.size--
 

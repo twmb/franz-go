@@ -79,6 +79,11 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 	first, _ := g.getScore(from)
 
 	first.distance = 0
+	// Marking the origin done is not an optimization. Neighbor handling
+	// below rewrites parent and srcEdge on any node it reaches that is not
+	// done; if the origin were reachable it could be given a parent, and
+	// the path walk back from a stealable node would then never terminate
+	// at the origin.
 	first.done = true
 
 	g.heapBuf = append(g.heapBuf[:0], first)
@@ -156,6 +161,12 @@ type pathScore struct {
 	// pop a node, it means we have found a best path to that node and
 	// we do not want to revisit it for processing if any other future
 	// nodes reach back to this one.
+	//
+	// Every path out of the pop loop must either return or set this,
+	// because popping invalidates heapIdx: the node is no longer in the
+	// heap, so a later heap.Fix on its stale index would reorder some
+	// unrelated node. Today the only paths out are "return a steal" and
+	// "mark done and expand", which is why the search is safe.
 	done bool
 
 	// srcScore is what stealing srcEdge does to stickiness: +1 if the
