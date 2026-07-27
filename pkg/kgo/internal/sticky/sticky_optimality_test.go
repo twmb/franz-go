@@ -62,7 +62,7 @@ func bruteForceOptimum(eligible [][]int, prior []int, nmembers int) (bestLoads [
 func TestBalanceIsLoadOptimalButNotStickyOptimal(t *testing.T) {
 	t.Parallel()
 
-	var instances, stickyShortfalls, totalShortfall int
+	var instances, stickyShortfalls, totalShortfall, atQuota, byQuota int
 	var worst string
 
 	for seed := int64(0); seed < 6000; seed++ {
@@ -141,21 +141,48 @@ func TestBalanceIsLoadOptimalButNotStickyOptimal(t *testing.T) {
 		plan := Balance(members, topics)
 
 		gotLoads := make([]int, nmembers)
+		gotLoadsByMember := make([]int, nmembers)
 		var gotSticky int
 		for i := range nmembers {
 			id := fmt.Sprintf("m%d", i)
 			for _, partitions := range plan[id] {
 				gotLoads[i] += len(partitions)
 			}
+			gotLoadsByMember[i] = gotLoads[i]
 			gotSticky += getStickiness(id, plan[id], members)
 		}
 		slices.Sort(gotLoads)
 		slices.Reverse(gotLoads)
 
+		// The oracle maximizes stickiness at the quotas the balancer chose;
+		// the brute force may also permute quotas between members. So
+		// kept <= oracle <= bestSticky, and the two differences separate
+		// "picked the wrong partitions" from "helped the wrong member".
+		quotas := make(map[string]int, nmembers)
+		priorByID := make(map[string]map[string][]int32, nmembers)
+		subsByID := make(map[string][]string, nmembers)
+		for i := range nmembers {
+			id := fmt.Sprintf("m%d", i)
+			quotas[id] = gotLoadsByMember[i]
+			priorByID[id] = priorPlans[i]
+			subsByID[id] = subs[i]
+		}
+		oracle, _ := maxStickinessAt(topics, subsByID, priorByID, quotas)
+
 		bestLoads, bestSticky := bruteForceOptimum(eligible, prior, nmembers)
 
 		if slices.Compare(gotLoads, bestLoads) != 0 {
 			t.Fatalf("seed %d: load vector %v is not the optimum %v", seed, gotLoads, bestLoads)
+		}
+		if oracle >= 0 {
+			if oracle > bestSticky {
+				t.Fatalf("seed %d: oracle %d exceeds brute-force optimum %d", seed, oracle, bestSticky)
+			}
+			if gotSticky > oracle {
+				t.Fatalf("seed %d: kept %d exceeds oracle %d at the same quotas", seed, gotSticky, oracle)
+			}
+			atQuota += oracle - gotSticky
+			byQuota += bestSticky - oracle
 		}
 		if gotSticky < bestSticky {
 			stickyShortfalls++
@@ -181,6 +208,8 @@ func TestBalanceIsLoadOptimalButNotStickyOptimal(t *testing.T) {
 	t.Logf("%d instances; the load vector was optimal in all of them", instances)
 	t.Logf("stickiness fell short of the achievable maximum in %d (%.1f%%), by %d partitions in total",
 		stickyShortfalls, 100*float64(stickyShortfalls)/float64(instances), totalShortfall)
+	t.Logf("of that shortfall: %d from picking the wrong partitions at the chosen quotas, %d from choosing the wrong quotas",
+		atQuota, byQuota)
 	if worst != "" {
 		t.Logf("first shortfall:\n%s", worst)
 	}
