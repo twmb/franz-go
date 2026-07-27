@@ -1799,22 +1799,24 @@ func (a aborter) trackAbortedPID(producerID int64) {
 // processing records to fetch part //
 //////////////////////////////////////
 
-// readRawRecordsInto reads records from in and returns them, returning early
-// if there were partial records.
-func readRawRecordsInto(rs []kmsg.Record, in []byte) []kmsg.Record {
+// readRawRecordsInto reads records from in and returns them and the total
+// number of headers they hold, returning early if there were partial records.
+func readRawRecordsInto(rs []kmsg.Record, in []byte) ([]kmsg.Record, int) {
+	var nheaders int
 	for i := range rs {
 		length, used := kbin.Varint(in)
 		total := used + int(length)
 		if used == 0 || length < 0 || len(in) < total {
-			return rs[:i]
+			return rs[:i], nheaders
 		}
 		if err := (&rs[i]).ReadFrom(in[:total]); err != nil {
 			rs[i] = kmsg.Record{} // clear any invalid partial data
-			return rs[:i]
+			return rs[:i], nheaders
 		}
+		nheaders += len(rs[i].Headers)
 		in = in[total:]
 	}
-	return rs
+	return rs, nheaders
 }
 
 func (o *ProcessFetchPartitionOpts) processRecordBatch(
@@ -1896,6 +1898,12 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 		}
 		numRecords = len(rawRecords)
 	}
+
+	// Presize for the first batch; later batches grow the slice normally.
+	if cap(fp.Records) == 0 {
+		fp.Records = make([]*Record, 0, numRecords)
+	}
+
 	var krecords []kmsg.Record
 	var krecordsPool PoolKRecords
 	pools(o.Pools).each(func(p Pool) bool {
@@ -1913,7 +1921,7 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 		}()
 	}
 	krecords = ensureLen(krecords, numRecords)
-	krecords = readRawRecordsInto(krecords, rawRecords)
+	krecords, nheaders := readRawRecordsInto(krecords, rawRecords)
 
 	// KAFKA-5443: compacted topics preserve the last offset in a batch,
 	// even if the last record is removed, meaning that using offsets from
@@ -1943,6 +1951,8 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 		return false
 	})
 	rrecords = ensureLen(rrecords, numRecords)
+
+	hslab := make([]RecordHeader, nheaders) // headers are dropped together, same as records, with the same slab tradeoffs above
 
 	var p *recordPools
 	var poolsCtx context.Context
@@ -2002,9 +2012,15 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 			batch,
 			&krecords[i],
 			record,
+			&hslab,
 		)
-		record.Context = recordCtx  //nolint:fatcontext // not a nested context
-		krecords[i] = kmsg.Record{} // prevent the kmsg.Record from hanging onto anything
+		record.Context = recordCtx //nolint:fatcontext // not a nested context
+
+		// Prevent the kmsg.Record from hanging onto anything. The
+		// header slice is kept: the decoder reuses its capacity.
+		clear(krecords[i].Headers)
+		krecords[i] = kmsg.Record{Headers: krecords[i].Headers}
+
 		if kept := o.maybeKeepRecord(fp, record, abortBatch); kept {
 			nkept++
 		}
@@ -2305,10 +2321,11 @@ func recordToRecord(
 	batch *kmsg.RecordBatch,
 	krecord *kmsg.Record,
 	r *Record,
+	hslab *[]RecordHeader,
 ) {
 	var h []RecordHeader
-	if len(krecord.Headers) > 0 {
-		h = make([]RecordHeader, len(krecord.Headers))
+	if n := len(krecord.Headers); n > 0 {
+		h, *hslab = (*hslab)[:n:n], (*hslab)[n:]
 		for i, kv := range krecord.Headers {
 			h[i] = RecordHeader{
 				Key:   kv.Key,

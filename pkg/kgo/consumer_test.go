@@ -766,6 +766,8 @@ type testPooling struct {
 	putDecompress bool
 	putKRecs      bool
 	putRecs       bool
+
+	keptKRecHeaders bool
 }
 
 func (p *testPooling) GetDecompressBytes([]byte, CompressionCodecType) []byte {
@@ -792,6 +794,22 @@ func (p *testPooling) PutKRecords(put []kmsg.Record) {
 		p.t.Error("PutKRecords != given!")
 	}
 	p.putKRecs = true
+
+	// A put record keeps its Headers slice so that the decoder refills
+	// that capacity on the next get rather than allocating; the elements
+	// are what must be cleared, since they point into the fetch buffer.
+	for i := range put {
+		hs := put[i].Headers
+		if len(hs) == 0 {
+			continue
+		}
+		p.keptKRecHeaders = true
+		for _, h := range hs {
+			if h.Key != "" || h.Value != nil {
+				p.t.Error("PutKRecords header not cleared!")
+			}
+		}
+	}
 }
 
 func (p *testPooling) GetRecords(int) []Record {
@@ -835,7 +853,12 @@ func TestPooling(t *testing.T) {
 	var wg sync.WaitGroup
 	for range nrecs {
 		wg.Add(1)
-		cl.Produce(context.Background(), StringRecord("foobarfoobarfoobarfoobar"), func(_ *Record, err error) {
+		r := StringRecord("foobarfoobarfoobarfoobar")
+		r.Headers = []RecordHeader{
+			{Key: "h1", Value: []byte("v1")},
+			{Key: "h2", Value: []byte("v2")},
+		}
+		cl.Produce(context.Background(), r, func(_ *Record, err error) {
 			defer wg.Done()
 			if err != nil {
 				t.Fatal(err)
@@ -850,6 +873,11 @@ func TestPooling(t *testing.T) {
 		fs := cl.PollFetches(context.Background())
 		consumed += fs.NumRecords()
 		fs.EachRecord(func(r *Record) {
+			// Each record's headers are a window into one per-batch
+			// slab; a short window must not see its neighbor's.
+			if len(r.Headers) != 2 || r.Headers[0].Key != "h1" || r.Headers[1].Key != "h2" {
+				t.Errorf("got headers %v != [h1 h2]", r.Headers)
+			}
 			r.Recycle()
 		})
 	}
@@ -862,6 +890,9 @@ func TestPooling(t *testing.T) {
 	}
 	if !pool.putRecs {
 		t.Error("did not put recs!")
+	}
+	if !pool.keptKRecHeaders {
+		t.Error("krecs were put back without their header slices!")
 	}
 }
 
