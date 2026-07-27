@@ -203,6 +203,7 @@ func TestStickinessAgainstOptimum(t *testing.T) {
 		{"subset/wide-overlap+doubled", 30, 60, 20, false, true, 12, 0.5},
 	}
 
+	var certifiedShapes int
 	for _, s := range shapes {
 		rng := rand.New(rand.NewSource(1))
 
@@ -301,6 +302,15 @@ func TestStickinessAgainstOptimum(t *testing.T) {
 
 		best, _ := maxStickinessAt(topics, subs, priorPlans, quotas)
 		gap := best - kept
+
+		// The certificate must never claim optimal when the flow found
+		// room to improve. It is allowed to decline to certify an
+		// optimal plan; it is not allowed to be wrong.
+		if certified := certifiesOptimal(subs, priorPlans, plan); certified && gap > 0 {
+			t.Errorf("%s: certificate claimed optimal, flow found %d partitions of room", s.name, gap)
+		} else if certified {
+			certifiedShapes++
+		}
 		t.Logf("%-30s parts=%-6d kept=%-6d optimum=%-6d gap=%-5d (%.2f%%)  [loose ceiling=%d]",
 			s.name, total, kept, best, gap, 100*float64(gap)/float64(total), ceiling)
 		switch {
@@ -312,5 +322,154 @@ func TestStickinessAgainstOptimum(t *testing.T) {
 			t.Errorf("%s: left %d of %d partitions (%.2f%%) on the table, more than the %.1f%% this shape is allowed",
 				s.name, gap, total, 100*float64(gap)/float64(total), s.maxGapPct)
 		}
+	}
+}
+
+// certifiesOptimal reports whether the plan provably keeps as many partitions
+// in place as any assignment could at the same per-member counts, without
+// building a flow at all.
+//
+// Falling short of optimal takes one of two forms, and this rules out both.
+//
+// The counts per member and topic could be improvable. Improving them means a
+// trade: some member gives back one of a topic it has more of than it started
+// with and takes back one of a topic it has less of, so its total is unchanged
+// and balance survives. A member that did not both gain somewhere and lose
+// somewhere cannot take part in such a trade, and a cycle needs every member
+// on it to be both a giver and a taker -- so if nobody is both, there is no
+// trade of any length.
+//
+// Or the counts could be right while the wrong partitions were picked inside a
+// cell: a member allotted three of a topic it held five of should be holding
+// three it already had. That is what the second loop checks.
+//
+// One directional: true is proof, false only means go build the flow.
+func certifiesOptimal(
+	subs map[string][]string,
+	prior map[string]map[string][]int32,
+	plan map[string]map[string][]int32,
+) bool {
+	for member, held := range prior {
+		var gained, lost bool
+		got := plan[member]
+		for _, topic := range subs[member] {
+			switch n, h := len(got[topic]), len(held[topic]); {
+			case n > h:
+				gained = true
+			case n < h:
+				lost = true
+			}
+		}
+		if gained && lost {
+			return false
+		}
+		for _, topic := range subs[member] {
+			mine := make(map[int32]bool, len(held[topic]))
+			for _, p := range held[topic] {
+				mine[p] = true
+			}
+			var kept int
+			for _, p := range got[topic] {
+				if mine[p] {
+					kept++
+				}
+			}
+			if kept < min(len(got[topic]), len(held[topic])) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// TestCertificateNeverLies checks the cheap optimality proof against the flow
+// over many random instances, since a certificate that is ever wrong is worse
+// than no certificate.
+func TestCertificateNeverLies(t *testing.T) {
+	t.Parallel()
+
+	var certified, optimal int
+	for seed := int64(0); seed < 3000; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+
+		ntopics := 1 + rng.Intn(5)
+		topics := make(map[string]int32, ntopics)
+		var names []string
+		for i := range ntopics {
+			name := fmt.Sprintf("t%d", i)
+			topics[name] = int32(1 + rng.Intn(6))
+			names = append(names, name)
+		}
+		nmembers := 2 + rng.Intn(5)
+		subs := make(map[string][]string, nmembers)
+		members := make([]GroupMember, 0, nmembers)
+		priorPlans := make(map[string]map[string][]int32, nmembers)
+		for i := range nmembers {
+			id := fmt.Sprintf("m%d", i)
+			var mine []string
+			for _, name := range names {
+				if rng.Intn(2) == 0 {
+					mine = append(mine, name)
+				}
+			}
+			if len(mine) == 0 {
+				mine = []string{names[rng.Intn(len(names))]}
+			}
+			subs[id] = mine
+			priorPlans[id] = make(map[string][]int32)
+			members = append(members, GroupMember{ID: id, Topics: mine})
+		}
+
+		// A partition has one owner, so priors must be disjoint. Claiming
+		// one partition for several members would let the flow retain it
+		// more than once and report an optimum nobody can reach.
+		for _, topic := range names {
+			for p := int32(0); p < topics[topic]; p++ {
+				var eligible []string
+				for id, mine := range subs {
+					if slices.Contains(mine, topic) {
+						eligible = append(eligible, id)
+					}
+				}
+				if len(eligible) == 0 || rng.Intn(3) == 0 {
+					continue
+				}
+				slices.Sort(eligible)
+				owner := eligible[rng.Intn(len(eligible))]
+				priorPlans[owner][topic] = append(priorPlans[owner][topic], p)
+			}
+		}
+		for i := range members {
+			members[i].UserData = udEncode(1, 1, priorPlans[members[i].ID])
+		}
+
+		plan := Balance(members, topics)
+		quotas := make(map[string]int, nmembers)
+		var kept int
+		for _, m := range members {
+			n := 0
+			for _, ps := range plan[m.ID] {
+				n += len(ps)
+			}
+			quotas[m.ID] = n
+			kept += getStickiness(m.ID, plan[m.ID], members)
+		}
+		best, _ := maxStickinessAt(topics, subs, priorPlans, quotas)
+		if best < 0 {
+			continue
+		}
+		if best == kept {
+			optimal++
+		}
+		if certifiesOptimal(subs, priorPlans, plan) {
+			certified++
+			if best > kept {
+				t.Fatalf("seed %d: certificate claimed optimal, flow found %d more", seed, best-kept)
+			}
+		}
+	}
+	t.Logf("certificate proved %d of %d optimal plans outright, and was never wrong", certified, optimal)
+	if certified == 0 {
+		t.Error("the certificate never fired; it is not being exercised")
 	}
 }
