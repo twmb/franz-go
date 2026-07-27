@@ -1065,8 +1065,9 @@ func (p *BalancePlan) AdjustCooperative(b *ConsumerBalancer) {
 			for _, ppartition := range ppartitions {
 				pmap[ppartition] = struct{}{}
 			}
+			claimT := maxClaim[topic]
 			for _, opartition := range otopic.Partitions {
-				if meta.Generation >= maxClaim[topic][opartition] {
+				if meta.Generation >= claimT[opartition] {
 					delete(pmap, opartition)
 				}
 			}
@@ -1104,6 +1105,18 @@ func (p *BalancePlan) AdjustCooperative(b *ConsumerBalancer) {
 
 	// Over all revoked, if the revoked partition was added to a different
 	// member, we remove that partition from the new member.
+	//
+	// We gather what to drop and then filter each slice once. Dropping one
+	// partition at a time instead rescans the member's planned slice for
+	// every drop, and the swap-remove scatters the remaining partitions so
+	// the scans do not even shorten: that is quadratic in the partitions
+	// one member is planned of one topic, which a group with a single fat
+	// topic and few members reaches easily.
+	type memberTopic struct {
+		member string
+		topic  string
+	}
+	drops := make(map[memberTopic]map[int32]struct{})
 	for topic, rpartitions := range allRevoked {
 		atopic, exists := allAdded[topic]
 		if !exists {
@@ -1114,21 +1127,28 @@ func (p *BalancePlan) AdjustCooperative(b *ConsumerBalancer) {
 			if !exists {
 				continue
 			}
-
-			ptopics := plan[amember]
-			ppartitions := ptopics[topic]
-			for i, ppartition := range ppartitions {
-				if ppartition == rpartition {
-					ppartitions[i] = ppartitions[len(ppartitions)-1]
-					ppartitions = ppartitions[:len(ppartitions)-1]
-					break
-				}
+			mt := memberTopic{amember, topic}
+			drop := drops[mt]
+			if drop == nil {
+				drop = make(map[int32]struct{})
+				drops[mt] = drop
 			}
-			if len(ppartitions) > 0 {
-				ptopics[topic] = ppartitions
-			} else {
-				delete(ptopics, topic)
+			drop[rpartition] = struct{}{}
+		}
+	}
+	for mt, drop := range drops {
+		ptopics := plan[mt.member]
+		ppartitions := ptopics[mt.topic]
+		kept := ppartitions[:0]
+		for _, ppartition := range ppartitions {
+			if _, drop := drop[ppartition]; !drop {
+				kept = append(kept, ppartition)
 			}
+		}
+		if len(kept) > 0 {
+			ptopics[mt.topic] = kept
+		} else {
+			delete(ptopics, mt.topic)
 		}
 	}
 }
