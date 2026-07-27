@@ -1133,6 +1133,18 @@ func (b *balancer) balanceComplex() {
 		if max.level <= level.level+1 {
 			return
 		}
+		// Satisfy the members with the most subscriptions first. Which
+		// member we pick decides how it gets fed: one with many topics
+		// to draw on can usually take a partition straight from someone
+		// two levels up, while a narrowly subscribed one may only be
+		// reachable through a chain, and every extra link in that chain
+		// is another partition moved. Since satisfying anyone here can
+		// end the imbalance and leave the rest at this level for good,
+		// it is worth going after the cheap ones first.
+		slices.SortFunc(level.members, func(l, r uint16) int {
+			return len(b.members[r].Topics) - len(b.members[l].Topics)
+		})
+
 		// We continually loop over this level until every member is
 		// static (deleted) or bumped up a level.
 		for len(level.members) > 0 {
