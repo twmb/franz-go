@@ -13,6 +13,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 type metawait struct {
@@ -90,6 +91,69 @@ func (cl *Client) id2tMap() map[[16]byte]string {
 		return noid2t
 	}
 	return m
+}
+
+// mergeTopicIDs merges the topic ID mappings in a metadata response into the
+// existing id2t map. We clone rather than rebuild so that topics missing from
+// this particular metadata response (transient broker omission, non-all
+// request) retain their ID mapping from prior responses.
+//
+// If a topic was deleted and recreated, the broker returns a new ID for the
+// same name. We do NOT add the new ID if the old ID is still present - the old
+// mapping is preserved until the user explicitly purges via
+// PurgeTopicsFromClient. This avoids having two IDs for the same topic name.
+func (cl *Client) mergeTopicIDs(latest map[string]*metadataTopic) {
+	old := cl.id2tMap()
+
+	// Steady state is that every ID in the response is already mapped to
+	// the same name: IDs only change when a topic is created, deleted, or
+	// recreated. Cloning the map and building the reverse name set costs
+	// two allocations sized by the number of topics, on every refresh, so
+	// we first walk the response to see if there is anything to do. If
+	// every ID maps to the name we already have, the merge below cannot
+	// change anything: the name is necessarily in knownNames (it is a
+	// value in the map we would clone) and the map already holds the
+	// entry the merge would write.
+	var changed bool
+	for _, mt := range latest {
+		if mt.id == ([16]byte{}) {
+			continue
+		}
+		if name, ok := old[mt.id]; !ok || name != mt.topic {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return
+	}
+
+	merged := make(map[[16]byte]string, len(old)+len(latest))
+	maps.Copy(merged, old)
+
+	// Build the set of topic names that already have an ID.
+	knownNames := make(map[string]struct{}, len(merged))
+	for _, name := range merged {
+		knownNames[name] = struct{}{}
+	}
+
+	for _, mt := range latest {
+		if mt.id == ([16]byte{}) {
+			continue
+		}
+		if _, exists := knownNames[mt.topic]; exists {
+			// This name already has an ID in the map. Only update
+			// if it's the same ID (normal case), skip if it's a
+			// different ID (recreated topic).
+			if _, sameID := merged[mt.id]; sameID {
+				merged[mt.id] = mt.topic
+			}
+			continue
+		}
+		merged[mt.id] = mt.topic
+		knownNames[mt.topic] = struct{}{}
+	}
+	cl.id2t.Store(merged)
 }
 
 // waitmeta returns immediately if metadata was updated within the last second,
@@ -404,46 +468,7 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		}
 	}
 
-	// Merge topic ID mappings into the existing id2t map. We clone
-	// rather than rebuild so that topics missing from this particular
-	// metadata response (transient broker omission, non-all request)
-	// retain their ID mapping from prior responses.
-	//
-	// If a topic was deleted and recreated, the broker returns a new
-	// ID for the same name. We do NOT add the new ID if the old ID
-	// is still present - the old mapping is preserved until the user
-	// explicitly purges via PurgeTopicsFromClient. This avoids having
-	// two IDs for the same topic name.
-	{
-		old := cl.id2tMap()
-		merged := make(map[[16]byte]string, len(old)+len(latest))
-		maps.Copy(merged, old)
-
-		// Build the set of topic names that already have an ID.
-		knownNames := make(map[string]struct{}, len(merged))
-		for _, name := range merged {
-			knownNames[name] = struct{}{}
-		}
-
-		for _, mt := range latest {
-			if mt.id == ([16]byte{}) {
-				continue
-			}
-			if _, exists := knownNames[mt.topic]; exists {
-				// This name already has an ID in the map.
-				// Only update if it's the same ID (normal
-				// case), skip if it's a different ID
-				// (recreated topic).
-				if _, sameID := merged[mt.id]; sameID {
-					merged[mt.id] = mt.topic
-				}
-				continue
-			}
-			merged[mt.id] = mt.topic
-			knownNames[mt.topic] = struct{}{}
-		}
-		cl.id2t.Store(merged)
-	}
+	cl.mergeTopicIDs(latest)
 
 	// If we are consuming with regex and fetched all topics, the metadata
 	// may have returned topics the consumer is not yet tracking. We ensure
@@ -633,7 +658,6 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 			topicPartitionData:  td,
 			lastAckedOffset:     -1,
 		}
-		r.lingerFn = r.unlingerAndManuallyDrain
 		p.records = r
 	case partitionKindShare:
 		p.shareCursor = &shareCursor{
@@ -659,6 +683,36 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 		}
 	}
 	return p
+}
+
+// firstUnordered returns the index of the first partition that is not at its
+// own index, or -1 if the partitions are exactly 0..n-1.
+func firstUnordered(ps []kmsg.MetadataResponseTopicPartition) int {
+	for i := range ps {
+		if ps[i].Partition != int32(i) {
+			return i
+		}
+	}
+	return -1
+}
+
+// ensurePartitionsOrdered requires that a metadata response contains every
+// partition of a topic exactly once, and orders the response so that partition
+// N is at index N. Kafka partitions are strictly increasing from 0; if any
+// partition is missing, the caller considers the topic a load failure.
+//
+// A response where every partition already sits at its own index is by
+// definition sorted, so the completeness check doubles as the sortedness check
+// and we only pay for a sort when a broker replies out of order.
+func ensurePartitionsOrdered(ps []kmsg.MetadataResponseTopicPartition) error {
+	if firstUnordered(ps) < 0 {
+		return nil
+	}
+	sort.Slice(ps, func(i, j int) bool { return ps[i].Partition < ps[j].Partition })
+	if i := firstUnordered(ps); i >= 0 {
+		return fmt.Errorf("kafka did not reply with a comprehensive set of partitions for a topic; we expected partition %d but saw %d", i, ps[i].Partition)
+	}
+	return nil
 }
 
 // fetchTopicMetadata fetches metadata for all reqTopics and returns new
@@ -704,20 +758,8 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 			continue
 		}
 
-		// Kafka partitions are strictly increasing from 0. We enforce
-		// that here; if any partition is missing, we consider this
-		// topic a load failure.
-		sort.Slice(topicMeta.Partitions, func(i, j int) bool {
-			return topicMeta.Partitions[i].Partition < topicMeta.Partitions[j].Partition
-		})
-		for i := range topicMeta.Partitions {
-			if got := topicMeta.Partitions[i].Partition; got != int32(i) {
-				mt.loadErr = fmt.Errorf("kafka did not reply with a comprehensive set of partitions for a topic; we expected partition %d but saw %d", i, got)
-				break
-			}
-		}
-
-		if mt.loadErr != nil {
+		if err := ensurePartitionsOrdered(topicMeta.Partitions); err != nil {
+			mt.loadErr = err
 			continue
 		}
 

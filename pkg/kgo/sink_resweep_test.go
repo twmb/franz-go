@@ -56,7 +56,6 @@ func TestAuditTxnRecheckRewindUnmarksAddedToTxn(t *testing.T) {
 			lastAckedOffset:     -1,
 			sink:                s,
 		}
-		r.lingerFn = r.unlingerAndManuallyDrain // mirror metadata.go recBuf creation
 		s.addRecBuf(r)
 		r.bufferRecord(promisedRec{
 			ctx:     context.Background(),

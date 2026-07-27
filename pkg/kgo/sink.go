@@ -1581,9 +1581,13 @@ type recBuf struct {
 	// interactions of triggering the sink to loop or not. Ideally, with
 	// the sticky partition hashers, we will only have a few partitions
 	// lingering and that this is on a RecBuf should not matter.
-	lingering   *time.Timer
-	lingerFn    func() // stored once to avoid method value closure alloc per linger cycle
-	isLingering bool   // whether the linger timer is active; lingering may be non-nil but stopped
+	lingering *time.Timer
+	// lingerFn is stored to avoid a method value alloc per linger cycle,
+	// but is set on the first linger rather than at recBuf creation: a
+	// metadata refresh builds a recBuf for every partition it sees, and
+	// few of those ever linger.
+	lingerFn    func()
+	isLingering bool // whether the linger timer is active; lingering may be non-nil but stopped
 
 	// failing is set when we encounter a temporary partition error during
 	// producing, such as UnknownTopicOrPartition (signifying the partition
@@ -1709,6 +1713,9 @@ func (recBuf *recBuf) lockedMaybeLinger() bool {
 	if !recBuf.isLingering {
 		recBuf.isLingering = true
 		if recBuf.lingering == nil {
+			if recBuf.lingerFn == nil {
+				recBuf.lingerFn = recBuf.unlingerAndManuallyDrain
+			}
 			recBuf.lingering = time.AfterFunc(recBuf.cl.cfg.linger, recBuf.lingerFn)
 		} else {
 			recBuf.lingering.Reset(recBuf.cl.cfg.linger)
