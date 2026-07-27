@@ -2468,14 +2468,18 @@ func TestRackAwareMemberLeaves(t *testing.T) {
 
 	plan2 := BalanceWithRacks(members2, topics, partitionRacks)
 	testPlanUsage(t, plan2, topics, nil)
-	testEqualDivvy(t, plan2, 4, members2) // A and B each keep their 2 from round 1
 
-	matches := countRackMatches(plan2, members2, partitionRacks)
-	// In round 1, the last rackB partition goes to A (rackA) via normal
-	// fallback since B hits maxQuota first. Stickiness preserves that
-	// mismatch in round 2, limiting rack matches to 4 instead of 6.
-	if matches < 4 {
-		t.Errorf("expected at least 4 rack matches, got %d", matches)
+	// Round 1 leaves A holding one rackB partition: B fills its quota
+	// first and the leftover falls through to normal assignment. Round 2
+	// trades it back, A taking the rackA partition B held and B taking
+	// A's rackB one. That costs one partition of stickiness and buys two
+	// of locality, which is the trade we want: a misplaced partition is
+	// billed as cross-zone traffic for as long as it stays misplaced,
+	// while moving it is paid once.
+	testEqualDivvy(t, plan2, 3, members2)
+
+	if matches := countRackMatches(plan2, members2, partitionRacks); matches != 6 {
+		t.Errorf("expected every partition to be rack matched, got %d of 6", matches)
 	}
 }
 
