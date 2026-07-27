@@ -45,12 +45,18 @@ type Client struct {
 
 	rng func(func(*rand.Rand))
 
-	brokersMu    xsync.RWMutex
-	brokers      []*broker    // ordered by broker ID
-	seeds        atomic.Value // []*broker, seed brokers, also ordered by ID
-	anyBrokerOrd []int32      // shuffled brokers, for random ordering
-	anySeedIdx   int32
-	stopBrokers  bool // set to true on close to stop updateBrokers
+	brokersMu xsync.RWMutex
+	brokers   []*broker    // ordered by broker ID
+	seeds     atomic.Value // []*broker, seed brokers, also ordered by ID
+
+	// sawPreferredReplica is set the first time a broker hands back a
+	// preferred read replica, which only happens when it is configured
+	// with a rack matching replica.selector.class. Balancing by rack
+	// assumes the opposite, so this is how we notice the two disagree.
+	sawPreferredReplica atomic.Bool
+	anyBrokerOrd        []int32 // shuffled brokers, for random ordering
+	anySeedIdx          int32
+	stopBrokers         bool // set to true on close to stop updateBrokers
 
 	// A sink and a source is created once per node ID and persists
 	// forever. We expect the list to be small.

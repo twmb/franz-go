@@ -462,6 +462,17 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 	// leaders from local metadata, so this requires no extra fetches.
 	if cb, ok := memberBalancer.(*ConsumerBalancer); ok && g.cfg.balanceRacks {
 		cb.partitionRacks = g.buildPartitionRacks(cb, topicPartitionCount)
+
+		// Balancing by rack prefers partitions whose leader is local,
+		// which is what matters when every fetch goes to the leader. A
+		// preferred read replica means the brokers are instead serving
+		// fetches from whichever replica is closest, so the leader's
+		// rack no longer decides anything and this is moving partitions
+		// for nothing.
+		if g.cl.sawPreferredReplica.Load() {
+			g.cl.cfg.logger.Log(LogLevelWarn, "BalanceRacks is balancing by partition leader rack, but brokers are returning preferred read replicas: fetches are already served from the closest replica, so this is likely moving partitions without reducing cross-zone traffic",
+				"consider", "removing BalanceRacks, or unsetting replica.selector.class on the brokers")
+		}
 	}
 
 	// If the returned balancer is a ConsumerBalancer (which it likely
