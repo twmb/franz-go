@@ -5,6 +5,7 @@ import (
 	"math/bits"
 	"math/rand"
 	"testing"
+	"time"
 )
 
 // gen builds a random instance with exactly nweights distinct item weights.
@@ -366,5 +367,88 @@ func TestWhereHardnessActuallyBites(t *testing.T) {
 		f := float64(trials)
 		t.Logf("items=%d workers=2 weights<=2^%-2d | repair exact %5.1f%% | excess %+.6f%%",
 			n, nbits, 100*float64(exact)/f, 100*excess/f)
+	}
+}
+
+// TestConfigurationsBeatItemSearch runs the two formulations against each other
+// on instances far past brute-force range: few distinct weights, many items.
+func TestConfigurationsBeatItemSearch(t *testing.T) {
+	for _, tc := range []struct{ ntypes, per, workers int }{
+		{2, 6, 3}, {3, 5, 4}, {3, 6, 5}, {4, 4, 4}, {2, 10, 6},
+	} {
+		rng := rand.New(rand.NewSource(int64(tc.ntypes*100 + tc.workers)))
+		var itemExact, n int
+		var excess float64
+		for range 40 {
+			weightsOf := make([]int64, tc.ntypes)
+			for i := range weightsOf {
+				weightsOf[i] = int64(1 + rng.Intn(20))
+			}
+			var ws []int64
+			in := &Instance{Workers: tc.workers}
+			all := make([]int, tc.workers)
+			for w := range tc.workers {
+				all[w] = w
+			}
+			for _, wt := range weightsOf {
+				for range tc.per {
+					ws = append(ws, wt)
+					in.Items = append(in.Items, Item{Weight: wt, Eligible: all, Prior: -1})
+				}
+			}
+			opt := ExactByConfigurations(ws, tc.workers)
+			got := in.Eval(RepairK(in, Greedy(in), 3)).Squares
+			if got < opt {
+				t.Fatalf("item search beat the exact configuration solve: %d < %d", got, opt)
+			}
+			if got == opt {
+				itemExact++
+			}
+			excess += float64(got-opt) / float64(opt)
+			n++
+		}
+		t.Logf("types=%d items=%2d workers=%d | item-level search exact %5.1f%% | excess %+.4f%%  (configurations exact by construction)",
+			tc.ntypes, tc.ntypes*tc.per, tc.workers, 100*float64(itemExact)/float64(n), 100*excess/float64(n))
+	}
+}
+
+// TestConfigurationScaling maps the practical envelope, and it is narrow. The
+// formulation never sees an item, so the search stops depending on which item
+// is which -- but enumerating one worker's configuration costs the product of
+// the remaining type counts, so it grows with how many of each type there are
+// and explodes in how many types. Two types and two hundred items already costs
+// twelve seconds.
+//
+// So the reframing buys exactness, not scale. Getting scale out of it is what
+// column generation on the configuration LP is for -- generate configurations
+// on demand from a knapsack subproblem instead of enumerating them -- which is
+// how cutting stock is solved at industrial sizes and is the obvious next step
+// rather than a bigger DP.
+func TestConfigurationScaling(t *testing.T) {
+	for _, tc := range []struct{ ntypes, per, workers int }{
+		{2, 25, 4}, {2, 60, 6},
+		{3, 8, 4}, {3, 14, 5},
+		{4, 5, 4}, {4, 7, 4},
+		{5, 4, 4},
+	} {
+		rng := rand.New(rand.NewSource(7))
+		var ws []int64
+		for range tc.ntypes {
+			wt := int64(1 + rng.Intn(20))
+			for range tc.per {
+				ws = append(ws, wt)
+			}
+		}
+		items := tc.ntypes * tc.per
+		start := time.Now()
+		opt := ExactByConfigurations(ws, tc.workers)
+		el := time.Since(start)
+		t.Logf("types=%d items=%4d workers=%d | exact in %-10v | search space workers^items = %d^%d",
+			tc.ntypes, items, tc.workers, el.Round(time.Microsecond), tc.workers, items)
+		_ = opt
+		if el > 20*time.Second {
+			t.Logf("  (stopping the sweep here, past practical range)")
+			return
+		}
 	}
 }
