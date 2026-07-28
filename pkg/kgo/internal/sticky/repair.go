@@ -462,9 +462,13 @@ func (f *stickyFinder) find(cells []stickyCell, loads []int32, rackw, loadw int6
 		f.viaFrom[i] = stickyUnset
 	}
 
-	costToLoad := func(m uint16) int64 { return loadw * int64(2*loads[m]+1) }
-	costToShed := func(m uint16) int64 { return -loadw * int64(2*loads[m]-1) }
+	// Widen before doubling: a member can legally hold more partitions than
+	// half an int32, and 2*loads[m] would wrap to a large negative price for
+	// taking load on -- which reads as an improvement and never settles.
+	costToLoad := func(m uint16) int64 { return loadw * (2*int64(loads[m]) + 1) }
+	costToShed := func(m uint16) int64 { return -loadw * (2*int64(loads[m]) - 1) }
 
+	last := int32(stickyUnset)
 	for pass := 0; pass <= nodes; pass++ {
 		moved := false
 		for i := range cells {
@@ -472,12 +476,12 @@ func (f *stickyFinder) find(cells []stickyCell, loads []int32, rackw, loadw int6
 			r, m := c.row, f.memberNode(c.member)
 			if d := f.dist[r] + c.costToAdd(rackw); d < f.dist[m] {
 				f.dist[m], f.viaCell[m], f.viaFrom[m] = d, int32(i), r
-				moved = true
+				moved, last = true, m
 			}
 			if c.x > 0 {
 				if d := f.dist[m] + c.costToDrop(rackw); d < f.dist[r] {
 					f.dist[r], f.viaCell[r], f.viaFrom[r] = d, int32(i), m
-					moved = true
+					moved, last = true, r
 				}
 			}
 		}
@@ -487,12 +491,12 @@ func (f *stickyFinder) find(cells []stickyCell, loads []int32, rackw, loadw int6
 			// partition overall; away from it is giving one up.
 			if d := f.dist[node] + costToLoad(uint16(m)); d < f.dist[f.group] {
 				f.dist[f.group], f.viaCell[f.group], f.viaFrom[f.group] = d, stickyUnset, node
-				moved = true
+				moved, last = true, f.group
 			}
 			if loads[m] > 0 {
 				if d := f.dist[f.group] + costToShed(uint16(m)); d < f.dist[node] {
 					f.dist[node], f.viaCell[node], f.viaFrom[node] = d, stickyUnset, f.group
-					moved = true
+					moved, last = true, node
 				}
 			}
 		}
@@ -507,7 +511,21 @@ func (f *stickyFinder) find(cells []stickyCell, loads []int32, rackw, loadw int6
 			return f.cycles
 		}
 	}
-	return nil
+
+	// Still relaxing after a pass per node means a rotation exists, even
+	// though the check above has not seen one close. Walking back that many
+	// predecessors from a node just relaxed is guaranteed to land on it.
+	// The check above is a fast path; this is what makes it safe to stop
+	// early rather than an assumption that it always fires in time.
+	if last == stickyUnset {
+		return nil
+	}
+	at := last
+	for range nodes {
+		at = f.viaFrom[at]
+	}
+	f.cycles = append(f.cycles[:0], f.extract(at))
+	return f.cycles
 }
 
 func (f *stickyFinder) extract(at int32) stickyCycle {

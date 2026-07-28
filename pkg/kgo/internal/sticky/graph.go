@@ -286,16 +286,6 @@ type pathScore struct {
 	heapIdx  int
 }
 
-func stealScore(cxn partitionConsumer, stealer uint16) int8 {
-	switch cxn.originalNum {
-	case stealer:
-		return 1
-	case cxn.memberNum:
-		return -1
-	}
-	return 0
-}
-
 type pathScores []pathScore
 
 const infinityScore = 1<<31 - 1

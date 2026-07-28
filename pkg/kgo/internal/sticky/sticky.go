@@ -81,13 +81,6 @@ type balancer struct {
 	partRacks   []uint16
 	nRacks      int
 
-	// memberSubs is a per-member bitset of subscribed topicNums, built
-	// while mapping topics to interested members. Kept because trading
-	// partitions for rack locality needs to ask whether a member may take
-	// a topic it does not currently hold.
-	memberSubs []uint64
-	nsubWords  int
-
 	// origOwner is who held each partition before this balance, or
 	// unassignedPart for one nobody held. The steal graph carries the same
 	// thing, but only exists for complex subscriptions, and repairing an
@@ -566,7 +559,6 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// dominates every other cost on a rejoin.
 	nsubWords := (len(b.topicNums) + 63) / 64
 	memberSubs := make([]uint64, len(b.members)*nsubWords)
-	b.memberSubs, b.nsubWords = memberSubs, nsubWords
 	for memberNum, member := range b.members {
 		for _, topic := range member.Topics {
 			topicNum, exists := b.topicNums[topic]
@@ -864,11 +856,6 @@ func (b *balancer) assignRackAware(
 		rh.mbp.fix0()
 		partitionConsumers[partNum] = partitionConsumer{candidate, candidate}
 	}
-}
-
-// subscribes reports whether a member may hold partitions of a topic.
-func (b *balancer) subscribes(memberNum uint16, topicNum uint32) bool {
-	return b.memberSubs[int(memberNum)*b.nsubWords+int(topicNum)/64]&(1<<(topicNum%64)) != 0
 }
 
 type partitionConsumer struct {
