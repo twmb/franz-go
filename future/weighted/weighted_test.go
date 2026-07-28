@@ -2,6 +2,7 @@ package weighted
 
 import (
 	"fmt"
+	"math/bits"
 	"math/rand"
 	"testing"
 )
@@ -249,5 +250,121 @@ func TestFractionalBoundTightness(t *testing.T) {
 		f := float64(n)
 		t.Logf("weights=%d | bound is exact in %5.1f%% | bound looseness %+.3f%% | true gap %+.3f%% | provable gap %+.3f%%",
 			nweights, 100*float64(boundEqOpt)/f, 100*boundGap/f, 100*trueGap/f, 100*provenGap/f)
+	}
+}
+
+// gen3Partition builds an instance that is known to have a perfect assignment:
+// m workers, 3m items, every worker gets exactly three items summing to B.
+// Every item may go anywhere. Weights are small and bounded, so if bounded
+// weights were enough to make this tractable, it would be solved every time.
+func gen3Partition(rng *rand.Rand, m, B int) *Instance {
+	in := &Instance{Workers: m}
+	all := make([]int, m)
+	for w := range m {
+		all[w] = w
+	}
+	for range m {
+		// Three parts of B, each strictly between B/4 and B/2, which is
+		// what forces exactly three per worker.
+		lo, hi := B/4+1, B/2-1
+		a := lo + rng.Intn(hi-lo+1)
+		b := lo + rng.Intn(hi-lo+1)
+		c := B - a - b
+		if c < lo || c > hi {
+			a, b, c = B/3, B/3, B-2*(B/3)
+		}
+		for _, wt := range []int{a, b, c} {
+			in.Items = append(in.Items, Item{
+				Weight:   int64(wt),
+				Eligible: all,
+				Prior:    -1,
+			})
+		}
+	}
+	rng.Shuffle(len(in.Items), func(i, j int) { in.Items[i], in.Items[j] = in.Items[j], in.Items[i] })
+	return in
+}
+
+// TestRandomBoundedInstancesAreEasy: 3-PARTITION is strongly NP-hard, so
+// bounded weights are no guarantee of tractability in the worst case. They are
+// in the average case, and by a wide margin -- random instances of it have so
+// many perfect assignments that local improvement falls into one every time.
+// Worst-case hardness here says nothing about what a scheduler will meet.
+func TestRandomBoundedInstancesAreEasy(t *testing.T) {
+	const B, trials = 20, 400
+	for _, m := range []int{2, 3, 4, 6, 8, 12, 20} {
+		var perfect, boundTight int
+		var excess float64
+		for seed := range trials {
+			rng := rand.New(rand.NewSource(int64(seed*7919 + m)))
+			in := gen3Partition(rng, m, B)
+			ideal := int64(m) * int64(B) * int64(B) // every worker exactly B
+			at := RepairK(in, Greedy(in), 3)
+			got := in.Eval(at).Squares
+			if got == ideal {
+				perfect++
+			}
+			if FractionalBound(in) == ideal {
+				boundTight++
+			}
+			excess += float64(got-ideal) / float64(ideal)
+		}
+		f := float64(trials)
+		t.Logf("workers=%2d items=%2d weights<=%d | perfect assignment found %5.1f%% | excess %+6.3f%% | lower bound tight %5.1f%%",
+			m, 3*m, B/2-1, 100*float64(perfect)/f, 100*excess/f, 100*float64(boundTight)/f)
+	}
+}
+
+// exactTwoWorkers solves the two-worker case exactly by enumerating subsets,
+// with sums built incrementally so it costs O(2^n) overall.
+func exactTwoWorkers(in *Instance) int64 {
+	n := len(in.Items)
+	sums := make([]int64, 1<<n)
+	var total int64
+	for _, it := range in.Items {
+		total += it.Weight
+	}
+	best := int64(1) << 62
+	for mask := 1; mask < 1<<n; mask++ {
+		low := mask & -mask
+		sums[mask] = sums[mask^low] + in.Items[bits.TrailingZeros(uint(low))].Weight
+		l := sums[mask]
+		if sq := l*l + (total-l)*(total-l); sq < best {
+			best = sq
+		}
+	}
+	return best
+}
+
+// TestWhereHardnessActuallyBites separates the two regimes. PARTITION is hard
+// when the numbers are large relative to how many there are, because then
+// almost no subset hits the midpoint and finding the one that does is search,
+// not local improvement. When the numbers are small there are many perfect
+// splits and any local move stumbles into one.
+func TestWhereHardnessActuallyBites(t *testing.T) {
+	const n, trials = 16, 120
+	for _, nbits := range []int{3, 6, 10, 14, 20} {
+		var exact int
+		var excess float64
+		for seed := range trials {
+			rng := rand.New(rand.NewSource(int64(seed*104729 + nbits)))
+			in := &Instance{Workers: 2}
+			for range n {
+				in.Items = append(in.Items, Item{
+					Weight:   int64(1 + rng.Intn(1<<nbits)),
+					Eligible: []int{0, 1},
+					Prior:    -1,
+				})
+			}
+			opt := exactTwoWorkers(in)
+			got := in.Eval(RepairK(in, Greedy(in), 3)).Squares
+			if got == opt {
+				exact++
+			}
+			excess += float64(got-opt) / float64(opt)
+		}
+		f := float64(trials)
+		t.Logf("items=%d workers=2 weights<=2^%-2d | repair exact %5.1f%% | excess %+.6f%%",
+			n, nbits, 100*float64(exact)/f, 100*excess/f)
 	}
 }
