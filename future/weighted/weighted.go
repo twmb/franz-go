@@ -507,3 +507,127 @@ func BruteForce(in *Instance) []int {
 	rec(0)
 	return best
 }
+
+// crossWeightRotate takes one improving rotation of k items across k distinct
+// workers, where the items may have different weights. A same-weight rotation
+// is a cycle in the flow graph; a mixed-weight one is not, because it changes
+// each worker's load and a cycle has no edge left on which to price that. So
+// they are enumerated directly. k=2 is a swap.
+func crossWeightRotate(in *Instance, at []int, loadw int64, k int) bool {
+	scalar := func(c Cost) int64 { return loadw*c.Squares + c.Moves }
+	best := scalar(in.Eval(at))
+	var bestPick []int
+	pick := make([]int, k)
+
+	var rec func(start, depth int)
+	rec = func(start, depth int) {
+		if depth == k {
+			// Rotate: item pick[0] goes where pick[1] was, and so on.
+			was := make([]int, k)
+			for i := range k {
+				was[i] = at[pick[i]]
+			}
+			for i := range k {
+				if !in.eligible(pick[i], was[(i+1)%k]) {
+					return
+				}
+			}
+			for i := range k {
+				at[pick[i]] = was[(i+1)%k]
+			}
+			if s := scalar(in.Eval(at)); s < best {
+				best = s
+				bestPick = slices.Clone(pick)
+			}
+			for i := range k {
+				at[pick[i]] = was[i]
+			}
+			return
+		}
+		for i := start; i < len(in.Items); i++ {
+			// Distinct workers, else this is not a rotation.
+			ok := true
+			for d := range depth {
+				if at[pick[d]] == at[i] {
+					ok = false
+					break
+				}
+			}
+			if !ok {
+				continue
+			}
+			pick[depth] = i
+			rec(i+1, depth+1)
+		}
+	}
+	rec(0, 0)
+
+	if bestPick == nil {
+		return false
+	}
+	was := make([]int, k)
+	for i := range k {
+		was[i] = at[bestPick[i]]
+	}
+	for i := range k {
+		at[bestPick[i]] = was[(i+1)%k]
+	}
+	return true
+}
+
+// RepairK is Repair with cross-weight rotations up to length maxk.
+func RepairK(in *Instance, at []int, maxk int) []int {
+	t := newTable(in)
+	at = slices.Clone(at)
+	loadw := int64(len(in.Items) + 1)
+	for {
+		t.fill(at)
+		moved := false
+		for _, w := range t.weights() {
+			for t.cancelOne(w, loadw) {
+				moved = true
+			}
+		}
+		if moved {
+			at = t.realize()
+		}
+		for k := 2; k <= maxk; k++ {
+			if crossWeightRotate(in, at, loadw, k) {
+				moved = true
+				break
+			}
+		}
+		if !moved {
+			return at
+		}
+	}
+}
+
+// FractionalBound is the whole weighted problem's lower bound, computed exactly
+// by the unit-weight machinery.
+//
+// Model an item of weight w as w unit tokens sharing its eligibility, and then
+// *drop* the requirement that they stay together. That relaxation is strictly
+// more permissive, so its optimum can only be below the real one -- and it is a
+// pure unit-weight instance, which is the case we solve exactly. So the thing
+// that makes the weighted problem hard is precisely the co-location constraint,
+// and removing it hands back a bound rather than nothing.
+//
+// This is what makes the loss measurable per instance instead of merely
+// asserted: an assignment can be reported as within a proven distance of
+// optimal even where the optimum itself is out of reach.
+func FractionalBound(in *Instance) int64 {
+	tokens := &Instance{Workers: in.Workers}
+	for i := range in.Items {
+		for range in.Items[i].Weight {
+			tokens.Items = append(tokens.Items, Item{
+				Weight:   1,
+				Eligible: in.Items[i].Eligible,
+				Prior:    -1,
+			})
+		}
+	}
+	at := Greedy(tokens)
+	at = Repair(tokens, at)
+	return tokens.Eval(at).Squares
+}

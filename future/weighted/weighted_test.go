@@ -186,3 +186,68 @@ func ExampleCost() {
 	fmt.Println(Cost{10, 2})
 	// Output: squares=10 moves=2
 }
+
+// TestLongerCrossWeightRotations asks whether the gap left at multiple weights
+// is the theory or just too small a move set.
+func TestLongerCrossWeightRotations(t *testing.T) {
+	const trials = 3000
+	for _, nweights := range []int{2, 3, 5} {
+		var opt2, opt3, opt4, n int
+		var sq2, sq3, sq4 float64
+		for seed := range trials {
+			rng := rand.New(rand.NewSource(int64(seed*97 + nweights)))
+			in := gen(rng, 7, 3, nweights, true)
+			s := start(in, rng)
+			opt := in.Eval(BruteForce(in))
+			for _, tc := range []struct {
+				k   int
+				hit *int
+				sq  *float64
+			}{{2, &opt2, &sq2}, {3, &opt3, &sq3}, {4, &opt4, &sq4}} {
+				got := in.Eval(RepairK(in, s, tc.k))
+				if got == opt {
+					*tc.hit++
+				}
+				*tc.sq += float64(got.Squares-opt.Squares) / float64(opt.Squares)
+				if got.Less(opt) {
+					t.Fatalf("beat brute force, impossible")
+				}
+			}
+			n++
+		}
+		f := float64(n)
+		t.Logf("weights=%d | 2-swap %5.1f%% (+%.3f%%) | +3-rotations %5.1f%% (+%.3f%%) | +4-rotations %5.1f%% (+%.3f%%)",
+			nweights, 100*float64(opt2)/f, 100*sq2/f, 100*float64(opt3)/f, 100*sq3/f, 100*float64(opt4)/f, 100*sq4/f)
+	}
+}
+
+// TestFractionalBoundTightness asks how much a certificate is worth: the bound
+// is computable at any size, the true optimum is not.
+func TestFractionalBoundTightness(t *testing.T) {
+	const trials = 3000
+	for _, nweights := range []int{1, 2, 3, 5} {
+		var n, boundEqOpt int
+		var boundGap, trueGap, provenGap float64
+		for seed := range trials {
+			rng := rand.New(rand.NewSource(int64(seed*97 + nweights)))
+			in := gen(rng, 7, 3, nweights, true)
+			s := start(in, rng)
+			opt := in.Eval(BruteForce(in)).Squares
+			got := in.Eval(RepairK(in, s, 3)).Squares
+			lb := FractionalBound(in)
+			if lb > opt {
+				t.Fatalf("bound %d exceeds true optimum %d, not a bound", lb, opt)
+			}
+			if lb == opt {
+				boundEqOpt++
+			}
+			boundGap += float64(opt-lb) / float64(opt) // how loose the bound is
+			trueGap += float64(got-opt) / float64(opt) // how far we really are
+			provenGap += float64(got-lb) / float64(lb) // what we can prove
+			n++
+		}
+		f := float64(n)
+		t.Logf("weights=%d | bound is exact in %5.1f%% | bound looseness %+.3f%% | true gap %+.3f%% | provable gap %+.3f%%",
+			nweights, 100*float64(boundEqOpt)/f, 100*boundGap/f, 100*trueGap/f, 100*provenGap/f)
+	}
+}
