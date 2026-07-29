@@ -254,6 +254,15 @@ func (t *table) weights() []int64 {
 // moves exactly one item's weight from one worker to another and is priced for
 // it. That is what keeps the pricing exact within a class.
 func (t *table) cancelOne(weight, loadw int64) bool {
+	return t.cancelOnePow(weight, loadw, 2)
+}
+
+// cancelOnePow prices load as load^pow. Any convex power works in the same
+// search -- what changes is how hard the price rises as a worker fills, and so
+// how much the result cares about the single busiest worker rather than the
+// spread as a whole. Squares tolerate one heavy worker if several others come
+// down; steeper powers do not.
+func (t *table) cancelOnePow(weight, loadw int64, pow int) bool {
 	var rows []int
 	for r := range t.rows {
 		if t.rows[r].weight == weight {
@@ -283,8 +292,19 @@ func (t *table) cancelOne(weight, loadw int64) bool {
 	// Convex load: f(L) = L^2, so taking on weight costs f(L+w)-f(L) and
 	// shedding saves f(L-w)-f(L). The zero-cost band that tolerance ratios
 	// approximate is exactly where these two sum to zero.
-	takeOn := func(w int) int64 { return loadw * (2*loads[w]*weight + weight*weight) }
-	shed := func(w int) int64 { return loadw * (-2*loads[w]*weight + weight*weight) }
+	// Marginal price of a worker gaining or shedding this weight. Any convex
+	// power works in the same search; what changes is how sharply the price
+	// rises as a worker fills, and so whether the result minds one heavy
+	// worker or only the spread as a whole.
+	powOf := func(l int64) int64 {
+		v := int64(1)
+		for range pow {
+			v *= l
+		}
+		return v
+	}
+	takeOn := func(w int) int64 { return loadw * (powOf(loads[w]+weight) - powOf(loads[w])) }
+	shed := func(w int) int64 { return loadw * (powOf(max(0, loads[w]-weight)) - powOf(loads[w])) }
 
 	last := noCycle
 	for pass := 0; pass <= nodes; pass++ {

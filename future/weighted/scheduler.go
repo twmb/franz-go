@@ -120,14 +120,29 @@ func MovesFrom(start, end []int) int {
 // costs table cells rather than items, which is the difference between running
 // on a cluster and not.
 func FlowOnlyRepair(in *Instance, at []int) []int {
+	return FlowRepairPow(in, at, 2, 1)
+}
+
+// FlowRepairPow prices load as load^pow, in units where one unit of load is
+// `scale` of weight. Scaling keeps a steep power from running off the end of an
+// int64: a worker holding sixteen thousand costs 6.5e16 at the fourth power
+// before the weight against churn is even applied.
+func FlowRepairPow(in *Instance, at []int, pow int, scale int64) []int {
 	t := newTable(in)
 	at = slices.Clone(at)
-	loadw := int64(len(in.Items) + 1)
+	if scale > 1 {
+		for i := range t.rows {
+			t.rows[i].weight = max(1, t.rows[i].weight/scale)
+		}
+	}
+	// A rotation is at most this long, and each leg saves at most one move,
+	// so pricing load above it keeps balance ahead of churn.
+	loadw := int64(2*min(len(t.rows), in.Workers) + 3)
 	for range 200 {
 		t.fill(at)
 		moved := false
 		for _, w := range t.weights() {
-			for t.cancelOne(w, loadw) {
+			for t.cancelOnePow(w, loadw, pow) {
 				moved = true
 			}
 		}
@@ -137,4 +152,134 @@ func FlowOnlyRepair(in *Instance, at []int) []int {
 		at = t.realize()
 	}
 	return at
+}
+
+// FlowThenPolish does the two things each approach is good at, in the order
+// that lets each do it.
+//
+// The flow finds the moves that only work in combination -- give this away and
+// take that, at the same time -- which is what a scheduler considering one move
+// at a time can never accept, because neither half improves anything alone.
+// What it does not do is fine levelling: it works on groups of interchangeable
+// items and stops when no group can be rearranged, which can leave a store a
+// little heavy in a way one more single move would fix.
+//
+// Single moves are exactly that fine levelling, and they are cheap once the
+// hard part is done, because there is almost nothing left to find.
+func FlowThenPolish(in *Instance, at []int) []int {
+	at = FlowOnlyRepair(in, at)
+	singleMoveLocalSearch(in, at)
+	return at
+}
+
+// PeakShave levels heavily loaded workers against lighter ones, by a single
+// move or by trading one item for another, until neither helps.
+//
+// It exists because sum of squares and the spread between busiest and quietest
+// are not the same objective. Squares is content to leave one worker heavy if
+// several others come down, which is right for total work and wrong for the
+// worker that is actually the bottleneck.
+//
+// It supplies the move the flow structurally cannot, too: the flow rearranges
+// within a weight class, so it can never answer an imbalance of thirty by
+// trading a ninety for a sixty.
+//
+// The busiest worker is often not allowed to hand anything to the quietest, so
+// pairing only those two stalls immediately wherever placement is restricted.
+// Instead the heaviest few are each considered against the lightest several
+// they can actually exchange with, and the best of those is taken.
+func PeakShave(in *Instance, at []int, rounds int) []int {
+	at = slices.Clone(at)
+	loads := make([]int64, in.Workers)
+	live := make([]bool, in.Workers)
+	for i, w := range at {
+		loads[w] += in.Items[i].Weight
+		for _, e := range in.Items[i].Eligible {
+			live[e] = true
+		}
+	}
+
+	const heavy, light = 6, 12
+	order := make([]int, 0, in.Workers)
+	for w := range in.Workers {
+		if live[w] {
+			order = append(order, w)
+		}
+	}
+
+	for range rounds {
+		sort.Slice(order, func(a, b int) bool { return loads[order[a]] > loads[order[b]] })
+		b := make([][]int, in.Workers)
+		for i := range in.Items {
+			b[at[i]] = append(b[at[i]], i)
+		}
+
+		bestGain, bestMove := int64(0), -1
+		bestSwap := [2]int{-1, -1}
+		var bestHi, bestLo int
+		for hi := 0; hi < heavy && hi < len(order); hi++ {
+			src := order[hi]
+			for lo := 0; lo < light && lo < len(order); lo++ {
+				dst := order[len(order)-1-lo]
+				if dst == src || loads[dst] >= loads[src] {
+					continue
+				}
+				gap := loads[src] - loads[dst]
+				for _, i := range b[src] {
+					if !containsInt(in.Items[i].Eligible, dst) {
+						continue
+					}
+					w := in.Items[i].Weight
+					if g := gap - abs64(gap-2*w); g > bestGain {
+						bestGain, bestMove, bestSwap = g, i, [2]int{-1, -1}
+						bestHi, bestLo = src, dst
+					}
+					for _, j := range b[dst] {
+						if !containsInt(in.Items[j].Eligible, src) {
+							continue
+						}
+						d := w - in.Items[j].Weight
+						if d <= 0 {
+							continue
+						}
+						if g := gap - abs64(gap-2*d); g > bestGain {
+							bestGain, bestMove, bestSwap = g, -1, [2]int{i, j}
+							bestHi, bestLo = src, dst
+						}
+					}
+				}
+			}
+		}
+
+		switch {
+		case bestMove >= 0:
+			w := in.Items[bestMove].Weight
+			at[bestMove] = bestLo
+			loads[bestHi] -= w
+			loads[bestLo] += w
+		case bestSwap[0] >= 0:
+			i, j := bestSwap[0], bestSwap[1]
+			d := in.Items[i].Weight - in.Items[j].Weight
+			at[i], at[j] = bestLo, bestHi
+			loads[bestHi] -= d
+			loads[bestLo] += d
+		default:
+			return at
+		}
+	}
+	return at
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// FlowThenShave does the chains first and the peak second: the flow reaches an
+// arrangement single moves cannot, and the shave levels what the flow's weight
+// classes leave behind.
+func FlowThenShave(in *Instance, at []int) []int {
+	return PeakShave(in, FlowOnlyRepair(in, at), 20000)
 }
