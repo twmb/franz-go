@@ -80,6 +80,8 @@ func BranchAndBound(in *Instance, incumbent []int, budget int) (best []int, prov
 		suffix[i] = suffix[i+1] + in.Items[order[i]].Weight
 	}
 
+	class := workerClasses(in)
+
 	best = slices.Clone(incumbent)
 	bestVal := scalar(in.Eval(best))
 	at := make([]int, len(in.Items))
@@ -116,7 +118,21 @@ func BranchAndBound(in *Instance, incumbent []int, budget int) (best []int, prov
 			return
 		}
 		item := order[k]
+		// Workers nothing can tell apart, holding the same load, make
+		// identical subtrees; one stands for all of them.
+		var tried []int64
 		for _, w := range in.Items[item].Eligible {
+			dup := false
+			for _, seen := range tried {
+				if seen == int64(class[w])<<40|loads[w] {
+					dup = true
+					break
+				}
+			}
+			if dup {
+				continue
+			}
+			tried = append(tried, int64(class[w])<<40|loads[w])
 			at[item] = w
 			loads[w] += in.Items[item].Weight
 			add := int64(0)

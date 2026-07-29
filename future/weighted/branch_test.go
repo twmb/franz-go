@@ -100,3 +100,79 @@ func TestBranchAndBoundScale(t *testing.T) {
 			tc.items, tc.workers, proved, el.Round(time.Millisecond), nodes, improved)
 	}
 }
+
+// TestExactTwoWorkersAtScale isolates which dimension is actually the barrier.
+// Weights are unrelated and huge; only the worker count is small.
+func TestExactTwoWorkersAtScale(t *testing.T) {
+	for _, nitems := range []int{20, 100, 1000} {
+		rng := rand.New(rand.NewSource(int64(nitems)))
+		in := &Instance{Workers: 2}
+		for range nitems {
+			el := []int{0, 1}
+			if r := rng.Intn(10); r == 0 {
+				el = []int{0}
+			} else if r == 1 {
+				el = []int{1}
+			}
+			in.Items = append(in.Items, Item{Weight: int64(1 + rng.Intn(100000)), Eligible: el, Prior: -1})
+		}
+		s := make([]int, len(in.Items))
+		for i := range in.Items {
+			s[i] = in.Items[i].Eligible[0]
+		}
+		start := time.Now()
+		opt, ok := ExactTwoWorkers(in)
+		el := time.Since(start)
+		local := in.Eval(RepairX(in, s, 3, 3)).Squares
+		t.Logf("items=%4d workers=2 weights 1..100000 | exact=%v in %-10v | local search excess %+.9f%%",
+			nitems, ok, el.Round(time.Microsecond), 100*float64(local-opt)/float64(opt))
+	}
+}
+
+// TestPairwiseCertificate measures what surviving every pair is worth: how
+// often an assembly that no pair can improve is in fact globally optimal.
+func TestPairwiseCertificate(t *testing.T) {
+	const trials = 3000
+	for _, workers := range []int{3, 4, 5} {
+		var certified, certifiedAndOptimal, optimal int
+		for seed := range trials {
+			rng := rand.New(rand.NewSource(int64(seed*13 + workers)))
+			in := &Instance{Workers: workers}
+			for range 8 {
+				var el []int
+				for w := range workers {
+					if rng.Intn(100) < 70 {
+						el = append(el, w)
+					}
+				}
+				if len(el) == 0 {
+					el = append(el, rng.Intn(workers))
+				}
+				in.Items = append(in.Items, Item{Weight: int64(1 + rng.Intn(1000)), Eligible: el, Prior: -1})
+			}
+			s := make([]int, len(in.Items))
+			for i := range in.Items {
+				s[i] = in.Items[i].Eligible[rng.Intn(len(in.Items[i].Eligible))]
+			}
+			got := RepairX(in, s, 3, 3)
+			isOpt := in.Eval(got).Squares == in.Eval(BruteForce(in)).Squares
+			cert, _ := PairwiseOptimal(in, got)
+			if isOpt {
+				optimal++
+			}
+			if cert {
+				certified++
+				if isOpt {
+					certifiedAndOptimal++
+				}
+			}
+		}
+		f := float64(trials)
+		var precision float64
+		if certified > 0 {
+			precision = 100 * float64(certifiedAndOptimal) / float64(certified)
+		}
+		t.Logf("workers=%d | local search optimal %6.2f%% | pair-certified %6.2f%% | of those, actually optimal %6.2f%%",
+			workers, 100*float64(optimal)/f, 100*float64(certified)/f, precision)
+	}
+}
