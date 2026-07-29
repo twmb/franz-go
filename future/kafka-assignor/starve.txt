@@ -1,0 +1,21 @@
+I starved-newcomer-sticky sticky
+T t0 1
+T t1 1
+T t2 1
+T t3 1
+M c00 7 t0,t2 t0:0,t2:0
+M c01 7 t0,t3 t3:0
+M c02 7 t1,t2 t1:0
+M cNEW -1 t1,t3 -
+E
+I starved-newcomer-coop coop
+T t0 1
+T t1 1
+T t2 1
+T t3 1
+M c00 7 t0,t2 t0:0,t2:0
+M c01 7 t0,t3 t3:0
+M c02 7 t1,t2 t1:0
+M cNEW -1 t1,t3 -
+E
+Q
