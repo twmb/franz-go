@@ -1271,6 +1271,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			// preferred read replica. If Kafka replies with a preferred replica,
 			// it sends no records.
 			if preferred := rp.PreferredReadReplica; resp.Version >= 11 && preferred >= 0 {
+				s.cl.sawPreferredReplica.Store(true)
 				preferreds = append(preferreds, cursorOffsetPreferred{
 					cursorOffsetNext: *partOffset,
 					preferredReplica: preferred,

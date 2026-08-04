@@ -165,6 +165,7 @@ type cfg struct {
 	isolationLevel int8
 	keepControl    bool
 	rack           string
+	balanceRacks   bool
 	preferLagFn    PreferLagFn
 	decompressor   Decompressor
 
@@ -1669,14 +1670,45 @@ func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset, cfg.setResetOffset = offset, true }}
 }
 
-// Rack specifies where the client is physically located and changes fetch
-// requests to consume from the closest replica as opposed to the leader
-// replica.
+// Rack specifies where the client is physically located.
 //
-// Consuming from a preferred replica can increase latency but can decrease
-// cross datacenter costs. See KIP-392 for more information.
+// This asks brokers to serve fetches from the closest replica rather than the
+// leader, which can increase latency but can decrease cross datacenter costs.
+// Brokers only honor the request if they are configured with a rack matching
+// replica.selector.class; by default a broker serves every fetch from the
+// leader and this has no effect on where fetches go. See KIP-392 for more
+// information.
+//
+// See [BalanceRacks] to also take racks into account when assigning
+// partitions to members.
 func Rack(rack string) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.rack = rack }}
+}
+
+// BalanceRacks makes sticky balancing prefer giving a member partitions whose
+// leader is in the member's own rack, so that fetching them does not cross
+// zones. This requires [Rack] to also be specified; without a rack, there is
+// nothing to prefer and this does nothing.
+//
+// The preference is by partition leader because, by default, a broker serves
+// every fetch from the leader, so the leader's rack is what decides whether a
+// fetch crosses zones.
+//
+// If your brokers are configured with a rack matching replica.selector.class
+// (KIP-392), consumers instead fetch from a rack local replica. If your
+// replication factor is at least your rack count, every partition then already
+// has a replica local to every consumer, and balancing by rack moves
+// partitions without saving anything. Leave this off in that case.
+//
+// Kafka's Java client turns the equivalent on automatically whenever a rack is
+// configured, assuming a rack is only ever configured alongside a rack
+// matching replica selector (KIP-881). Nothing checks that assumption and it
+// does not hold for a default broker, so this client asks instead of assuming.
+//
+// Only the group leader's setting takes effect, as the leader is what computes
+// the assignment for the group.
+func BalanceRacks() ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.balanceRacks = true }}
 }
 
 // IsolationLevel controls whether uncommitted or only committed records are
@@ -1953,6 +1985,9 @@ func ShareAckCallback(fn func(*Client, ShareAckResults)) GroupOpt {
 // downgrade, the client revokes all partitions and re-consumes from
 // committed offsets, which can result in duplicates. It is not recommended
 // to downgrade once a group is cooperative.
+//
+// The sticky balancers can additionally take racks into account; see
+// [BalanceRacks].
 func Balancers(balancers ...GroupBalancer) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.balancers = balancers }}
 }

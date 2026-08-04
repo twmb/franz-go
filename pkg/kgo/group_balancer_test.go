@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -458,5 +459,44 @@ func TestNewConsumerBalancerDuplicateMemberIDs(t *testing.T) {
 	}
 	if total != 2 {
 		t.Errorf("expected 2 partitions assigned, got %d (plan %v)", total, plan)
+	}
+}
+
+// BenchmarkAdjustCooperativeFatTopic covers the shape that used to be
+// quadratic: one topic with many partitions and few consumers, where every
+// partition the plan hands to the second member is one the first member still
+// owns and so has to be dropped pending its revocation.
+func BenchmarkAdjustCooperativeFatTopic(b *testing.B) {
+	for _, nparts := range []int32{4000, 8000, 16000, 32000} {
+		b.Run(fmt.Sprintf("%dp", nparts), func(b *testing.B) {
+			owned := make([]int32, nparts)
+			for i := range owned {
+				owned[i] = int32(i)
+			}
+			cb := &ConsumerBalancer{
+				members: []kmsg.JoinGroupResponseMember{{MemberID: "a"}, {MemberID: "b"}},
+				metadatas: []kmsg.ConsumerMemberMetadata{
+					{OwnedPartitions: []kmsg.ConsumerMemberMetadataOwnedPartition{{Topic: "t", Partitions: owned}}},
+					{},
+				},
+			}
+			half := nparts / 2
+			b.ReportAllocs()
+			for b.Loop() {
+				b.StopTimer()
+				pa := make([]int32, 0, half)
+				pb := make([]int32, 0, nparts-half)
+				for i := int32(0); i < nparts; i++ {
+					if i < half {
+						pa = append(pa, i)
+					} else {
+						pb = append(pb, i)
+					}
+				}
+				plan := map[string]map[string][]int32{"a": {"t": pa}, "b": {"t": pb}}
+				b.StartTimer()
+				(&BalancePlan{plan}).AdjustCooperative(cb)
+			}
+		})
 	}
 }

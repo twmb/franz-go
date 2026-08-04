@@ -20,6 +20,26 @@ type graph struct {
 	// is reset on findSteal to infinityScore..
 	scores pathScores
 
+	// topicOwners is, per topic, the members currently holding at least
+	// one of its partitions. Expansion walks this rather than every
+	// partition of the topic: a member holding a thousand partitions of
+	// one topic is one edge to the search, not a thousand.
+	//
+	// Entries are emptied but never removed, so an owner's index is
+	// stable for the life of a balance.
+	topicOwners [][]ownerParts
+
+	// partPos is each partition's index within whichever bucket of its
+	// owner currently holds it, so moving a partition is O(1) instead of
+	// a scan. Which bucket is always recomputable from cxns.
+	partPos []int32
+
+	// origMoved is, per member, partitions it started with that someone
+	// else now holds -- the only way an edge can be worth +1 to steal.
+	// Append only; readers re-check current ownership, so duplicates and
+	// partitions that came home are harmless.
+	origMoved [][]int32
+
 	// heapBuf and pathBuf are backing buffers that are reused every
 	// findSteal; note that pathBuf must be done being used before
 	// the next find steal, but it always is.
@@ -38,10 +58,17 @@ func (b *balancer) newGraph(
 		scores:  make([]pathScore, len(b.members)),
 		heapBuf: make([]*pathScore, len(b.members)),
 	}
-	outBufs := make([]uint32, len(b.members)*len(topicPotentials))
+	// Same sizing argument as topicPotentials: one topic slot per member per
+	// topic is exact only when every member subscribes to everything.
+	var nsubs int
+	for _, potentials := range topicPotentials {
+		nsubs += len(potentials)
+	}
+	perMember := nsubs/len(b.members) + 1
+	outBufs := make([]uint32, perMember*len(b.members))
 	for memberNum := range b.plan {
-		out := outBufs[:0:len(topicPotentials)]
-		outBufs = outBufs[len(topicPotentials):]
+		out := outBufs[:0:perMember]
+		outBufs = outBufs[perMember:]
 		// Out edges are per topic, not per partition: in the worst
 		// case a member subscribes to every topic, so we preallocate
 		// one topic slot per member. The partition edges themselves
@@ -53,11 +80,73 @@ func (b *balancer) newGraph(
 			g.out[potential] = append(g.out[potential], uint32(topicNum))
 		}
 	}
+
+	g.topicOwners = make([][]ownerParts, len(b.topicInfos))
+	g.partPos = make([]int32, len(partitionConsumers))
+	g.origMoved = make([][]int32, len(b.members))
+	for edge, cxn := range partitionConsumers {
+		if cxn.memberNum == unassignedPart {
+			continue
+		}
+		g.addEdge(int32(edge), cxn.memberNum)
+	}
 	return g
 }
 
+// ownerParts is one member's holdings of one topic, split by what taking a
+// partition from them would cost: free means they did not start with it, so
+// taking it loses no stickiness.
+type ownerParts struct {
+	member uint16
+	free   []int32
+	owned  []int32
+}
+
+func (g *graph) bucket(o *ownerParts, edge int32) *[]int32 {
+	if g.cxns[edge].originalNum == o.member {
+		return &o.owned
+	}
+	return &o.free
+}
+
+func (g *graph) ownerOf(topicNum uint32, member uint16) *ownerParts {
+	owners := g.topicOwners[topicNum]
+	for i := range owners {
+		if owners[i].member == member {
+			return &g.topicOwners[topicNum][i]
+		}
+	}
+	g.topicOwners[topicNum] = append(owners, ownerParts{member: member})
+	return &g.topicOwners[topicNum][len(g.topicOwners[topicNum])-1]
+}
+
+func (g *graph) addEdge(edge int32, member uint16) {
+	o := g.ownerOf(g.b.partOwners[edge], member)
+	b := g.bucket(o, edge)
+	g.partPos[edge] = int32(len(*b))
+	*b = append(*b, edge)
+}
+
+func (g *graph) removeEdge(edge int32, member uint16) {
+	o := g.ownerOf(g.b.partOwners[edge], member)
+	b := g.bucket(o, edge)
+	s := *b
+	i, last := g.partPos[edge], int32(len(s)-1)
+	s[i] = s[last]
+	g.partPos[s[i]] = i
+	*b = s[:last]
+}
+
 func (g *graph) changeOwnership(edge int32, newDst uint16) {
+	old := g.cxns[edge].memberNum
+	// The bucket an edge lives in depends on its current owner, so it must
+	// come out of the index before cxns changes and go back in after.
+	g.removeEdge(edge, old)
+	if g.cxns[edge].originalNum == old {
+		g.origMoved[old] = append(g.origMoved[old], edge)
+	}
 	g.cxns[edge].memberNum = newDst
+	g.addEdge(edge, newDst)
 }
 
 // findSteal uses Dijkstra search to find a path from the best node it can reach.
@@ -72,6 +161,11 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 	first, _ := g.getScore(from)
 
 	first.distance = 0
+	// Marking the origin done is not an optimization. Neighbor handling
+	// below rewrites parent and srcEdge on any node it reaches that is not
+	// done; if the origin were reachable it could be given a parent, and
+	// the path walk back from a stealable node would then never terminate
+	// at the origin.
 	first.done = true
 
 	g.heapBuf = append(g.heapBuf[:0], first)
@@ -94,49 +188,63 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 
 		current.done = true
 
+		// One edge per member holding any of a topic we want, taking the
+		// cheapest partition they have of it. Walking every partition
+		// instead would rediscover the same handful of members over and
+		// over: this is the difference between the search costing the
+		// partition count and costing the member count.
 		for _, topicNum := range g.out[current.node] {
-			info := g.b.topicInfos[topicNum]
-			firstPartNum, lastPartNum := info.partNum, info.partNum+info.partitions
-			for edge := firstPartNum; edge < lastPartNum; edge++ {
-				neighborNode := g.cxns[edge].memberNum
-				neighbor, isNew := g.getScore(neighborNode)
-				if neighbor.done {
-					continue
+			for i := range g.topicOwners[topicNum] {
+				o := &g.topicOwners[topicNum][i]
+				edge, score := int32(0), int8(0)
+				switch {
+				case len(o.free) > 0:
+					edge = o.free[0]
+				case len(o.owned) > 0:
+					edge, score = o.owned[0], -1
+				default:
+					continue // emptied, but kept so indices stay stable
 				}
-
-				distance := current.distance + 1
-
-				// The neighbor is the current node that owns this edge.
-				// If our node originally owned this partition, then it
-				// would be preferable to steal edge back.
-				srcIsOriginal := g.cxns[edge].originalNum == current.node
-
-				// If this is a new neighbor (our first time seeing the neighbor
-				// in our search), this is also the shortest path to reach them,
-				// where shortest defers preference to original sources THEN distance.
-				if isNew {
-					neighbor.parent = current
-					neighbor.srcIsOriginal = srcIsOriginal
-					neighbor.srcEdge = edge
-					neighbor.distance = distance
-					neighbor.heapIdx = len(*rem)
-					heap.Push(rem, neighbor)
-				} else if !neighbor.srcIsOriginal && srcIsOriginal {
-					// If the search path has seen this neighbor before, but
-					// we now are evaluating a partition that would increase
-					// stickiness if stolen, then fixup the neighbor's parent
-					// and srcEdge.
-					neighbor.parent = current
-					neighbor.srcIsOriginal = true
-					neighbor.srcEdge = edge
-					neighbor.distance = distance
-					heap.Fix(rem, neighbor.heapIdx)
-				}
+				g.relax(rem, current, o.member, edge, score)
 			}
+		}
+
+		// A partition we started with that someone else now holds is the
+		// only edge worth +1, and there are at most as many of those as
+		// there have been moves, so they are cheap to check directly.
+		for _, edge := range g.origMoved[current.node] {
+			cxn := g.cxns[edge]
+			if cxn.originalNum != current.node || cxn.memberNum == current.node {
+				continue // stale entry: it came home, or was never ours
+			}
+			g.relax(rem, current, cxn.memberNum, edge, 1)
 		}
 	}
 
 	return nil, false
+}
+
+// relax offers current a way to reach neighborNode by stealing edge. The
+// first way we find to reach a node is the shortest, since we pop in order;
+// afterwards we only revise if the new edge is a better one to take.
+func (g *graph) relax(rem *pathHeap, current *pathScore, neighborNode uint16, edge int32, score int8) {
+	neighbor, isNew := g.getScore(neighborNode)
+	if neighbor.done {
+		return
+	}
+	if !isNew && score <= neighbor.srcScore {
+		return
+	}
+	neighbor.parent = current
+	neighbor.srcScore = score
+	neighbor.srcEdge = edge
+	neighbor.distance = current.distance + 1
+	if isNew {
+		neighbor.heapIdx = len(*rem)
+		heap.Push(rem, neighbor)
+		return
+	}
+	heap.Fix(rem, neighbor.heapIdx)
 }
 
 type stealSegment struct {
@@ -152,16 +260,23 @@ type pathScore struct {
 	// pop a node, it means we have found a best path to that node and
 	// we do not want to revisit it for processing if any other future
 	// nodes reach back to this one.
+	//
+	// Every path out of the pop loop must either return or set this,
+	// because popping invalidates heapIdx: the node is no longer in the
+	// heap, so a later heap.Fix on its stale index would reorder some
+	// unrelated node. Today the only paths out are "return a steal" and
+	// "mark done and expand", which is why the search is safe.
 	done bool
 
-	// srcIsOriginal is true if, were our parent to steal srcEdge, would
-	// that put srcEdge back on the original member. That is, if we are B
-	// and our parent is A, does our srcEdge originally belong do A?
+	// srcScore is what stealing srcEdge does to stickiness: +1 if the
+	// partition returns to the member taking it, -1 if it is taken away
+	// from the member that started with it, 0 if neither.
 	//
-	// This field exists to work around a very slim edge case where a
-	// partition is stolen by B and then needs to be stolen back by A
-	// later.
-	srcIsOriginal bool
+	// The +1 case works around a very slim edge case where a partition is
+	// stolen by B and then needs to be stolen back by A later. The -1 case
+	// is why we prefer, among the partitions we could take from a member,
+	// one that member did not start with: taking that costs nothing.
+	srcScore int8
 
 	node     uint16 // our member num
 	distance int32  // how many steals it would take to get here
@@ -211,7 +326,8 @@ func (p *pathHeap) Swap(i, j int) {
 // just sort by node.
 func (p *pathHeap) Less(i, j int) bool {
 	l, r := (*p)[i], (*p)[j]
-	return l.srcIsOriginal && !r.srcIsOriginal || !l.srcIsOriginal && !r.srcIsOriginal &&
+	lo, ro := l.srcScore > 0, r.srcScore > 0
+	return lo && !ro || !lo && !ro &&
 		(l.level > r.level || l.level == r.level &&
 			(l.distance < r.distance || l.distance == r.distance &&
 				l.node < r.node))

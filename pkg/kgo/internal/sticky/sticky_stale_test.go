@@ -124,3 +124,29 @@ func TestNegativeClaimedPartitionNoPanic(t *testing.T) {
 		t.Errorf("expected both partitions assigned exactly once, got plan %v", plan)
 	}
 }
+
+// A member's subscription list arrives in another member's join metadata, so
+// it is arbitrary input and may repeat a topic. A repeat used to make the
+// topic look like it had more interested members than the group had, which
+// tripped the uniformity check and sent an otherwise uniform group down the
+// complex balancing path for no reason.
+func TestDuplicateSubscriptionStaysUniform(t *testing.T) {
+	t.Parallel()
+
+	topics := map[string]int32{"t1": 4, "t2": 4}
+	members := []GroupMember{
+		{ID: "a", Topics: []string{"t1", "t2", "t1"}},
+		{ID: "b", Topics: []string{"t2", "t1"}},
+	}
+
+	b := newBalancer(members, topics, nil)
+	b.parseMemberMetadata()
+	b.assignUnassignedAndInitGraph()
+	if b.isComplex {
+		t.Error("a repeated topic made a uniform group look complex")
+	}
+
+	plan := Balance(members, topics)
+	testPlanUsage(t, plan, map[string]int32{"t1": 4, "t2": 4}, nil)
+	testEqualDivvy(t, plan, 0, members)
+}

@@ -457,11 +457,22 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		g.initExternal(topicPartitionCount)
 	}
 
-	// KIP-881: build partition rack info for rack-aware assignment.
-	// We use cached broker racks and partition leaders from local
-	// metadata. This requires no extra fetches.
-	if cb, ok := memberBalancer.(*ConsumerBalancer); ok {
+	// KIP-881: build partition rack info for rack-aware assignment, if
+	// the user asked for it. We use cached broker racks and partition
+	// leaders from local metadata, so this requires no extra fetches.
+	if cb, ok := memberBalancer.(*ConsumerBalancer); ok && g.cfg.balanceRacks {
 		cb.partitionRacks = g.buildPartitionRacks(cb, topicPartitionCount)
+
+		// Balancing by rack prefers partitions whose leader is local,
+		// which is what matters when every fetch goes to the leader. A
+		// preferred read replica means the brokers are instead serving
+		// fetches from whichever replica is closest, so the leader's
+		// rack no longer decides anything and this is moving partitions
+		// for nothing.
+		if g.cl.sawPreferredReplica.Load() {
+			g.cl.cfg.logger.Log(LogLevelWarn, "BalanceRacks is balancing by partition leader rack, but brokers are returning preferred read replicas: fetches are already served from the closest replica, so this is likely moving partitions without reducing cross-zone traffic",
+				"consider", "removing BalanceRacks, or unsetting replica.selector.class on the brokers")
+		}
 	}
 
 	// If the returned balancer is a ConsumerBalancer (which it likely
@@ -537,6 +548,10 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 // buildPartitionRacks builds a topic => partition => rack map for rack-aware
 // assignment (KIP-881). It uses cached broker racks and partition leader info
 // from local metadata. Returns nil if no rack info is available.
+//
+// Only called when the user opted in with BalanceRacks: a rack alone means
+// the client wants closer fetches, which is a separate thing from wanting the
+// assignment to chase rack locality.
 func (g *groupConsumer) buildPartitionRacks(b *ConsumerBalancer, topicPartitionCount map[string]int32) map[string][]string {
 	// Check if any member has a rack.
 	var hasRack bool
@@ -1065,8 +1080,9 @@ func (p *BalancePlan) AdjustCooperative(b *ConsumerBalancer) {
 			for _, ppartition := range ppartitions {
 				pmap[ppartition] = struct{}{}
 			}
+			claimT := maxClaim[topic]
 			for _, opartition := range otopic.Partitions {
-				if meta.Generation >= maxClaim[topic][opartition] {
+				if meta.Generation >= claimT[opartition] {
 					delete(pmap, opartition)
 				}
 			}
@@ -1104,6 +1120,18 @@ func (p *BalancePlan) AdjustCooperative(b *ConsumerBalancer) {
 
 	// Over all revoked, if the revoked partition was added to a different
 	// member, we remove that partition from the new member.
+	//
+	// We gather what to drop and then filter each slice once. Dropping one
+	// partition at a time instead rescans the member's planned slice for
+	// every drop, and the swap-remove scatters the remaining partitions so
+	// the scans do not even shorten: that is quadratic in the partitions
+	// one member is planned of one topic, which a group with a single fat
+	// topic and few members reaches easily.
+	type memberTopic struct {
+		member string
+		topic  string
+	}
+	drops := make(map[memberTopic]map[int32]struct{})
 	for topic, rpartitions := range allRevoked {
 		atopic, exists := allAdded[topic]
 		if !exists {
@@ -1114,21 +1142,28 @@ func (p *BalancePlan) AdjustCooperative(b *ConsumerBalancer) {
 			if !exists {
 				continue
 			}
-
-			ptopics := plan[amember]
-			ppartitions := ptopics[topic]
-			for i, ppartition := range ppartitions {
-				if ppartition == rpartition {
-					ppartitions[i] = ppartitions[len(ppartitions)-1]
-					ppartitions = ppartitions[:len(ppartitions)-1]
-					break
-				}
+			mt := memberTopic{amember, topic}
+			drop := drops[mt]
+			if drop == nil {
+				drop = make(map[int32]struct{})
+				drops[mt] = drop
 			}
-			if len(ppartitions) > 0 {
-				ptopics[topic] = ppartitions
-			} else {
-				delete(ptopics, topic)
+			drop[rpartition] = struct{}{}
+		}
+	}
+	for mt, drop := range drops {
+		ptopics := plan[mt.member]
+		ppartitions := ptopics[mt.topic]
+		kept := ppartitions[:0]
+		for _, ppartition := range ppartitions {
+			if _, drop := drop[ppartition]; !drop {
+				kept = append(kept, ppartition)
 			}
+		}
+		if len(kept) > 0 {
+			ptopics[mt.topic] = kept
+		} else {
+			delete(ptopics, mt.topic)
 		}
 	}
 }
