@@ -1039,7 +1039,9 @@ start:
 	//
 	// Pre Kafka 2.4, we have to retry the request with version 0.
 	// Post, Kafka replies with the version we should retry with (KIP-511).
+	var sawUnsupportedVersion bool
 	if rawResp[1] == 35 {
+		sawUnsupportedVersion = true
 		if maxVersion == 0 {
 			return errors.New("broker replied with UNSUPPORTED_VERSION to an ApiVersions request of version 0")
 		}
@@ -1068,7 +1070,7 @@ start:
 			}
 			return fmt.Errorf("broker replied with UNSUPPORTED_VERSION to our v%d ApiVersions request but advertised non-downgrade version %d", maxVersion, resp.ApiKeys[0].MaxVersion)
 		default:
-			// Should not hit this case, but we hope the broker replied with all keys
+			// The broker replied with all keys; nothing to downgrade to, we use them.
 		}
 		resp = req.ResponseKind().(*kmsg.ApiVersionsResponse)
 		resp.Version = 0
@@ -1076,6 +1078,12 @@ start:
 
 	if err = resp.ReadFrom(rawResp); err != nil {
 		return fmt.Errorf("unable to read ApiVersions response: %w", err)
+	}
+	// Checked before ApiKeys below: an error can come with an empty key table.
+	if !sawUnsupportedVersion {
+		if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+			return err
+		}
 	}
 	if len(resp.ApiKeys) == 0 {
 		return errors.New("ApiVersions response invalidly contained no ApiKeys")
