@@ -88,3 +88,40 @@ func TestEachTopicPreservesTopicID(t *testing.T) {
 		}
 	})
 }
+
+// TestNewRecordAttrs verifies NewRecordAttrs round-trips through the accessors.
+func TestNewRecordAttrs(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name            string
+		compressionType uint8
+		timestampType   int8
+		isTransactional bool
+		isControl       bool
+	}{
+		{"zero", 0, 0, false, false},
+		{"snappy create-time", 2, 0, false, false},
+		{"zstd log-append-time", 4, 1, false, false},
+		{"no-timestamp", 0, -1, false, false},
+		{"transactional", 1, 0, true, false},
+		{"control", 0, 0, false, true},
+		{"all set", 3, 1, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewRecordAttrs(tc.compressionType, tc.timestampType, tc.isTransactional, tc.isControl)
+			if got := a.CompressionType(); got != tc.compressionType {
+				t.Errorf("CompressionType: got %d, want %d", got, tc.compressionType)
+			}
+			if got := a.TimestampType(); got != tc.timestampType {
+				t.Errorf("TimestampType: got %d, want %d", got, tc.timestampType)
+			}
+			if got := a.IsTransactional(); got != tc.isTransactional {
+				t.Errorf("IsTransactional: got %t, want %t", got, tc.isTransactional)
+			}
+			if got := a.IsControl(); got != tc.isControl {
+				t.Errorf("IsControl: got %t, want %t", got, tc.isControl)
+			}
+		})
+	}
+}

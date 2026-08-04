@@ -67,6 +67,33 @@ func (a RecordAttrs) IsControl() bool {
 	return a.attrs&0b0010_0000 != 0
 }
 
+// NewRecordAttrs returns a RecordAttrs built from its components. It exists so
+// code outside this package can populate Record.Attrs to match what the client
+// sets: the attrs bits are otherwise unexported and only readable via the
+// accessors below.
+//
+// The arguments mirror those accessors and round-trip through them:
+// compressionType uses the CompressionType codes (0 none, 1 gzip, 2 snappy,
+// 3 lz4, 4 zstd) and timestampType uses the TimestampType convention (0 for
+// client-side CreateTime, 1 for broker-side LogAppendTime, -1 for no timestamp
+// as on v0 message sets). Both are masked to their documented bit ranges.
+func NewRecordAttrs(compressionType uint8, timestampType int8, isTransactional, isControl bool) RecordAttrs {
+	attrs := compressionType & 0b0000_0111
+	switch {
+	case timestampType < 0:
+		attrs |= 0b1000_0000 // no timestamp type
+	case timestampType > 0:
+		attrs |= 0b0000_1000 // LogAppendTime
+	}
+	if isTransactional {
+		attrs |= 0b0001_0000
+	}
+	if isControl {
+		attrs |= 0b0010_0000
+	}
+	return RecordAttrs{attrs}
+}
+
 // Record is a record to write to Kafka.
 type Record struct {
 	// Key is an optional field that can be used for partition assignment.
