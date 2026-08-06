@@ -1096,8 +1096,16 @@ func b42() *release {
 	return now
 }
 
+func b43() *release {
+	now := b42().clone(4, 3)
+
+	now.incmax(35, 5) // 5 describe log dirs KAFKA-19774 a45d36ca5d KIP-1066
+
+	return now
+}
+
 func btip() *release {
-	return b42()
+	return b43()
 }
 
 ///////////////////////////////
@@ -1304,6 +1312,14 @@ func c42() *release {
 	return now
 }
 
+func c43() *release {
+	now := c42().clone(4, 3)
+
+	now.incmax(63, 2) // 2 broker heartbeat KAFKA-19774 a45d36ca5d KIP-1066
+
+	return now
+}
+
 func ctip() *release {
-	return c42()
+	return c43()
 }
