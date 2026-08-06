@@ -1822,20 +1822,29 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 			}
 		}
 
-		// Save PID/epoch for manual EndTxn after restart.
-		initReq := kmsg.NewInitProducerIDRequest()
-		txnID := "txn-clean-restart"
-		initReq.TransactionalID = &txnID
-		initReq.TransactionTimeoutMillis = 30000
-		initReq.ProducerID = -1
-		initReq.ProducerEpoch = -1
+		// Save PID/epoch for manual EndTxn after restart. A protocol
+		// InitProducerID is NOT a read-only lookup: a fresh init on a
+		// live transactional ID aborts its open transaction and bumps
+		// the epoch, like a real broker's producer takeover. Peek the
+		// state out of band instead; controls run in the cluster's
+		// serving goroutine, where pid state is safely readable.
+		peeked := make(chan struct{})
+		c.ControlKey(3, func(kmsg.Request) (kmsg.Response, error, bool) {
+			if pidinf := c.pids.byTxid["txn-clean-restart"]; pidinf != nil {
+				savedPID, savedEpoch = pidinf.id, pidinf.epoch
+			}
+			close(peeked)
+			return nil, nil, false
+		})
 		plainCl := newPlainClient(t, c)
-		initResp, err := initReq.RequestWith(ctx, plainCl)
-		if err != nil {
+		if _, err := kmsg.NewPtrMetadataRequest().RequestWith(ctx, plainCl); err != nil {
 			t.Fatal(err)
 		}
-		savedPID = initResp.ProducerID
-		savedEpoch = initResp.ProducerEpoch
+		select {
+		case <-peeked:
+		case <-ctx.Done():
+			t.Fatal("timed out peeking pid state")
+		}
 		plainCl.Close()
 
 		cl.Close()

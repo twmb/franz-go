@@ -1,3 +1,83 @@
+Unreleased
+===
+
+This release handles topic recreation (a topic deleted and recreated under
+the same name, yielding a new topic ID) across the whole client, by default,
+at every broker version. A recreated topic is a NEW topic that happens to
+share a name: nothing from the old incarnation -- consume positions, produce
+sequences, transaction membership, share acquisition state -- is ever
+silently reused against the new one.
+
+Detection acts on the strongest signal each broker version provides. A
+topic ID the client has held for a minute that changes is believed outright
+(metadata staleness is a seconds-scale phenomenon; a change against a
+minute-old ID is a recreation, not a stale broker). Younger IDs
+corroborate: topic IDs on the fetch wire at 3.1+ (self-closing, zero silent
+window), topic IDs in metadata at 2.8-3.0 (adoption within about one
+metadata interval, on two consecutive updates agreeing), persistent
+leader-epoch rewinds at 2.1-2.7 (opportunistic; ambiguous against lost
+epoch history, so those resets follow the nearest-timestamp loss rules
+unless the rewind shape proves a recreation), and no change below 2.1
+where no signal exists. Two
+hardening nets shrink the by-name window further: fetched records carrying a
+leader epoch below what was already consumed are withheld and classified,
+and `OFFSET_OUT_OF_RANGE` against a shrunken log is classified before it
+resets, probing `OffsetForLeaderEpoch` when metadata corroborates nothing
+(no history of the consumed epoch is near-certain recreation; an epoch
+ending below the consumed position is named honestly as substantial
+truncation or a recreation, and group commits fence + reseed either way).
+
+On detection: consumers restart from the new topic's beginning -- a
+subscription is a point in time and everything after, and everything in a
+replacement topic arrived after that point (group commits of the dead
+incarnation are fenced and the restart position is committed promptly, so a
+stored stale offset cannot misposition the next member; `NoResetOffset`
+instead surfaces an error and waits for `SetOffsets`); idempotent
+producers adopt and restart their sequence chain with no sequence error
+surfaced and no duplicate possible (a by-name batch whose outcome is
+unknowable fails loudly rather than risk a duplicate); transactions FAIL
+with an error wrapping `TRANSACTION_ABORTABLE` on the first observation of
+a recreated produced-to topic (aborting recovers on every cluster version),
+and commits verify produced-to topics -- amortized to at most one metadata
+fetch per `MetadataMinAge` across all commits, since recent metadata passes
+poison on sight; share consumers continue on fresh state with acknowledgments of the
+dead incarnation failed rather than misapplied. See the new "Topic
+recreation" section in the README for the full per-version matrix and the
+documented residues.
+
+## Relevant commits
+
+- [`17844935`](https://github.com/twmb/franz-go/commit/17844935) kgo: reset inferred recreations by the loss rules unless the rewind proves fresh
+- [`673d8410`](https://github.com/twmb/franz-go/commit/673d8410) kgo: confirm a suspected recreation in the quick metadata cadence
+- [`e21d0d46`](https://github.com/twmb/franz-go/commit/e21d0d46) kgo: require wire evidence to return to a previously held topic id
+- [`834c6d31`](https://github.com/twmb/franz-go/commit/834c6d31) kgo: pace the record epoch guard's refetches
+- [`c5c6f9cd`](https://github.com/twmb/franz-go/commit/c5c6f9cd) kgo: dedup recreation swap, deferred-reset, and produce-request plumbing
+- [`27d93ebf`](https://github.com/twmb/franz-go/commit/27d93ebf) kgo: amortize commit-time recreation verification to MetadataMinAge
+- [`122f0978`](https://github.com/twmb/franz-go/commit/122f0978) kgo: keep an unconsumed recreation restart pinned to the earliest offset
+- [`38ec32d1`](https://github.com/twmb/franz-go/commit/38ec32d1) kfake: wait for the recreation swap before the pre-890p2 retry transaction
+- [`d691a04d`](https://github.com/twmb/franz-go/commit/d691a04d) kgo: restart recreated topics from their beginning, not ConsumeResetOffset
+- [`72972772`](https://github.com/twmb/franz-go/commit/72972772) kgo: preserve the nearest-timestamp out-of-range reset through classification
+- [`882a1436`](https://github.com/twmb/franz-go/commit/882a1436) kgo: probe OffsetForLeaderEpoch to classify below-the-gate out-of-range
+- [`4f9238eb`](https://github.com/twmb/franz-go/commit/4f9238eb) kgo: trust a topic ID change outright once the prior ID was long held
+- [`ac0a00c0`](https://github.com/twmb/franz-go/commit/ac0a00c0) kfake: add a topic recreation churn test
+- [`6ae00a72`](https://github.com/twmb/franz-go/commit/6ae00a72) kgo: stage 7, document topic recreation handling
+- [`f12b9229`](https://github.com/twmb/franz-go/commit/f12b9229) kgo: stage 2d, harden the below-the-gate recreation window
+- [`83125e9b`](https://github.com/twmb/franz-go/commit/83125e9b) kgo: stages 2c/4c, infer recreation from persistent leader epoch rewinds
+- [`9fc83f2b`](https://github.com/twmb/franz-go/commit/9fc83f2b) kgo: stages 2b/4b, adopt recreations below the gate on the metadata ID fact
+- [`2bc6dd1b`](https://github.com/twmb/franz-go/commit/2bc6dd1b) kgo: stage 6, swap share consumers across topic recreation
+- [`7a87ab02`](https://github.com/twmb/franz-go/commit/7a87ab02) kgo: stage 5, fail transactions across topic recreation
+- [`8561bcc0`](https://github.com/twmb/franz-go/commit/8561bcc0) kgo: stage 4, heal the idempotent producer across topic recreation
+- [`184d25ff`](https://github.com/twmb/franz-go/commit/184d25ff) kgo: fence group commits across topic recreation, seed the reset
+- [`95bf3cec`](https://github.com/twmb/franz-go/commit/95bf3cec) kgo: adopt recreated topics at the metadata merge when armed
+- [`a403a24a`](https://github.com/twmb/franz-go/commit/a403a24a) kgo: add topic recreation gate, armed on all-brokers fetch v13
+- [`06e62e6d`](https://github.com/twmb/franz-go/commit/06e62e6d) kfake: return the resolved record's epoch from ListOffsets
+- [`20a5749a`](https://github.com/twmb/franz-go/commit/20a5749a) kfake: clear share-partition state when a topic is deleted
+- [`d222eb3f`](https://github.com/twmb/franz-go/commit/d222eb3f) kfake: write transaction markers into current partition data by name
+- [`3825bbc1`](https://github.com/twmb/franz-go/commit/3825bbc1) kfake: drop producer-state windows when a topic is deleted
+- [`1ef0614b`](https://github.com/twmb/franz-go/commit/1ef0614b) kfake: address v13 fetch-session entries by topic ID
+- [`abf2091a`](https://github.com/twmb/franz-go/commit/abf2091a) kfake: fix racing buffered-count assert in shutdown audit test
+- [`1f544a2d`](https://github.com/twmb/franz-go/commit/1f544a2d) kfake: stop handing the shared ApiVersions key slice to controls
+
 v1.21.6
 ===
 

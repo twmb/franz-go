@@ -5,6 +5,36 @@
 // This client aims to be simple to use while still interacting with Kafka in a
 // near ideal way. For more overview of the entire client itself, please see
 // the README on the project's Github page.
+//
+// # Topic recreation
+//
+// A topic deleted and recreated under the same name is a new topic that
+// happens to share the name; nothing from the old incarnation is ever
+// silently reused against the new one. Handling is on by default at every
+// broker version, acting on the strongest signal each version provides: a
+// topic ID held for a minute that changes is believed outright (metadata
+// staleness is a seconds-scale phenomenon); younger changes corroborate --
+// at 3.1+ (topic IDs on the fetch wire) via the broker's own rejection,
+// making detection self-closing; at 2.8-3.0 (IDs in metadata only) via two
+// consecutive metadata updates agreeing; at 2.1-2.7 a persistent
+// leader-epoch rewind is treated as a recreation opportunistically (a
+// rewind is also what lost epoch history after unclean elections looks
+// like, so those resets follow the nearest-timestamp loss rules unless the
+// rewind shape proves a recreation); below
+// 2.1 no signal exists and behavior is unchanged. On detection, consumers
+// restart from the new topic's beginning -- a subscription is a point in
+// time and everything after, and everything in a replacement topic arrived
+// after that point (group commits of the dead incarnation are fenced and
+// the restart position committed promptly; NoResetOffset instead surfaces
+// an error and waits for SetOffsets), idempotent producers restart
+// their sequence chain with no sequence error surfaced and no duplicate
+// possible (a by-name batch with an unknowable outcome fails loudly
+// instead), transactions fail with an error wrapping TRANSACTION_ABORTABLE
+// and verify produced-to topics before committing (one extra metadata round
+// trip per transactional commit that produced), and share consumers
+// invalidate acknowledgments of the dead incarnation. The README's "Topic
+// recreation" section has the full per-version matrix and the residues no
+// client can close.
 package kgo
 
 import (
@@ -80,9 +110,10 @@ type Client struct {
 		err  error
 	}
 
-	producer producer
-	consumer consumer
-	id2t     atomic.Value // map[[16]byte]string
+	producer   producer
+	consumer   consumer
+	id2t       atomic.Value // map[[16]byte]string
+	recreation recreationGate
 
 	metrics metrics
 

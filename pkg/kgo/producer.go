@@ -28,6 +28,12 @@ type producer struct {
 	topicsMu xsync.Mutex // locked to prevent concurrent updates; reads are always atomic
 	topics   *topicsPartitions
 
+	// lastTxnVerify is the unix-nano time of the last commit-time
+	// verification metadata fetch (see verifyTxnTopicsForCommit); with
+	// the client's own metadata updates, it amortizes verification to at
+	// most one fetch per MetadataMinAge across all transactional commits.
+	lastTxnVerify atomic.Int64
+
 	// Hooks exist behind a pointer because likely they are not used.
 	// We only take up one byte vs. 6.
 	hooks *struct {
