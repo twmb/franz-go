@@ -1,23 +1,51 @@
 v1.21.6
 ===
 
-One bug fix:
+Some bug fixes (mostly minor - hence the delay for the release) found by users
+and further Claude audits. I am gearing up for a 1.22 release but some of the
+features I am planning for are more complicated to review, so it may take a bit
+of time. Anyway:
 
-* Fixed a KIP-848 consumer stranding a regex-matched topic that was created
-  after the member joined. With server-side regex, the broker resolves the
-  pattern itself and can assign a newly-created topic via heartbeat before the
-  client's metadata loop has evaluated the regex and added the topic to its own
-  subscription. Two client paths then dropped the just-assigned topic -- the
-  end-of-session self-revoke and the `OffsetFetch` response validation. Because
-  the broker believed the client owned the topic, it never re-sent the
-  assignment, so the partition sat without a cursor and was never consumed. The
-  client now trusts the server's assignment for 848 in both paths. Classic and
-  share groups drive their own subscription, so the broker never assigns them a
-  live topic they have not subscribed to; they are unaffected.
+* Previously, rollback from a cooperative group to an eager group was
+  deliberately not supported and there was a data race condition if this
+  happened. It is now _technically_ supported, although you will experience
+  duplicate data. If you want a safe non-duplicate-causing rollback, you need
+  to turn off the entire group, remove the cooperative consumer, and swap the
+  whole group to eager rebalancing.
+
+* Fixed a `panic: close of closed channel` on an `acks=0` produce connection
+  in a specific edge case (a broker connection dying before the connection
+  was fully established caused the panic).
+
+* If `EndTransaction` failed with an unconfirmed outcome (a transport error,
+  exhausted retries, or `UNKNOWN_SERVER_ERROR`), the documented abort retry
+  was a wire no-op and the next transaction could silently commit the prior
+  "failed" transaction's records under KIP-890 part 2. The producer ID is now
+  flagged for reload, which fence-aborts anything still ongoing broker-side.
+
+* `GroupTransactSession.End` could hang forever, ignoring its context, if the
+  group had never joined (e.g. the consumed topic did not exist yet) and the
+  transaction committed no offsets.
+
+* Previously, if a broker replied to ApiVersions with an error, we ignored it
+  and you would eventually see an unclear error (usually a bare io.EOF, since
+  anything that rejects ApiVersions hangs up right after replying). These
+  errors are now handled correctly.
+
+* Some niche edge case bugs that are only worth reading about if you're super
+  interested were found in repeated Claude audits and were fixed (check the PR
+  / git history). This includes further KIP-848 "next gen consumer group" fixes.
 
 ## Relevant commits
 
-- [`9b92299f`](https://github.com/twmb/franz-go/commit/9b92299f) **bugfix** kgo: fix 848 stranding a regex topic assigned before metadata catches up
+- [`582e0f21`](https://github.com/twmb/franz-go/commit/582e0f21) **bugfix** kgo: surface error codes in ApiVersions responses
+- [`67ef4c61`](https://github.com/twmb/franz-go/commit/67ef4c61) **bugfix** kgo: fix double close of a connection's deadCh on acks=0 produce
+- [`3ac2fff1`](https://github.com/twmb/franz-go/commit/3ac2fff1) **bugfix** kgo: revoke everything when the group protocol downgrades from cooperative to eager
+- [`795d5b61`](https://github.com/twmb/franz-go/commit/795d5b61) **improvement** kgo: flatten topic/partition maps in group rebalance logs (thanks [@constanca-m](https://github.com/constanca-m)!)
+- [`70addc1e`](https://github.com/twmb/franz-go/commit/70addc1e) **improvement** kgo: classify retired broker reads as broker dead (thanks [@tomplarge](https://github.com/tomplarge)!)
+- [`18f9a10f`](https://github.com/twmb/franz-go/commit/18f9a10f) **improvement** deps: replace golang.org/x/crypto/pbkdf2 with stdlib crypto/pbkdf2 (thanks [@macdewee](https://github.com/macdewee)!)
+- [`6ecd2f9f`](https://github.com/twmb/franz-go/commit/6ecd2f9f) **bugfix** kgo: recover when an attempted EndTxn outcome is unconfirmed
+- [`821f879e`](https://github.com/twmb/franz-go/commit/821f879e) **bugfix** kgo: fix GroupTransactSession.End hanging when the group never joined
 
 v1.21.5
 ===
