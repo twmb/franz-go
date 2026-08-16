@@ -16,7 +16,11 @@ import (
 // parse -- and generated ZERO filters for unset operations, silently doing
 // nothing.
 func TestACLBuilderFilterDefaults(t *testing.T) {
-	b := NewACLs().Topics("a").Allow().AllowHosts().Deny().DenyHosts()
+	if _, _, err := createDelDescACL(NewACLs().Topics("a").Allow().AllowHosts().Deny().DenyHosts()); err == nil {
+		t.Error("expected an error filtering with no operations")
+	}
+
+	b := NewACLs().Topics("a").Operations().Allow().AllowHosts().Deny().DenyHosts()
 	dels, descs, err := createDelDescACL(b)
 	if err != nil {
 		t.Fatal(err)
@@ -24,11 +28,11 @@ func TestACLBuilderFilterDefaults(t *testing.T) {
 	if len(dels) != 1 || len(descs) != 1 {
 		t.Fatalf("got %d deletions, %d describes, want 1 and 1", len(dels), len(descs))
 	}
-	if got := dels[0].ResourcePatternType; got != kmsg.ACLResourcePatternTypeAny {
-		t.Errorf("deletion pattern %v, want ANY", got)
+	if got := dels[0].ResourcePatternType; got != kmsg.ACLResourcePatternTypeLiteral {
+		t.Errorf("deletion pattern %v, want LITERAL", got)
 	}
-	if got := descs[0].ResourcePatternType; got != kmsg.ACLResourcePatternTypeAny {
-		t.Errorf("describe pattern %v, want ANY", got)
+	if got := descs[0].ResourcePatternType; got != kmsg.ACLResourcePatternTypeLiteral {
+		t.Errorf("describe pattern %v, want LITERAL", got)
 	}
 	if got := dels[0].Operation; got != kmsg.ACLOperationAny {
 		t.Errorf("deletion operation %v, want ANY", got)
@@ -42,7 +46,7 @@ func TestACLBuilderFilterDefaults(t *testing.T) {
 // a sticky any-flag that a later call with names did not clear, silently
 // broadening delete filters to ALL names of that resource type.
 func TestACLBuilderLastCallWins(t *testing.T) {
-	b := NewACLs().Topics().Topics("a").Allow().Allow("User:x").AllowHosts().Deny().DenyHosts()
+	b := NewACLs().Topics().Topics("a").Operations().Allow().Allow("User:x").AllowHosts().Deny().DenyHosts()
 	dels, _, err := createDelDescACL(b)
 	if err != nil {
 		t.Fatal(err)

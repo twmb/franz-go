@@ -4180,8 +4180,9 @@ func TestOnDataLossCallbackReentrancy(t *testing.T) {
 // filters -- rejected by real brokers at request parse (kfake now models
 // that) -- and creating without a pattern failed validation despite the
 // docs calling literal the default. Builders that never call Operations
-// generated zero filters, silently doing nothing. Now: create defaults to
-// literal, filters default to any-pattern and any-operation.
+// generated zero filters, silently doing nothing. Now: create and filters
+// both default to literal per the docs, and unset operations error rather
+// than silently matching nothing or widening to any.
 func TestKadmACLDefaultPatternRoundTrip(t *testing.T) {
 	t.Parallel()
 	const testTopic = "kadm-acl-defaults"
@@ -4217,8 +4218,14 @@ func TestKadmACLDefaultPatternRoundTrip(t *testing.T) {
 		}
 	}
 
-	// Describe with pattern AND operations unset: matches any.
-	db := kadm.NewACLs().Topics(testTopic).Allow().AllowHosts().Deny().DenyHosts()
+	// Operations unset is an error rather than a silent no-op or a widen.
+	nb := kadm.NewACLs().Topics(testTopic).Allow().AllowHosts().Deny().DenyHosts()
+	if _, err := adm.DescribeACLs(ctx, nb); err == nil {
+		t.Fatal("describe with no operations: expected an error")
+	}
+
+	// Describe with pattern unset: defaults to literal, matching the create.
+	db := kadm.NewACLs().Topics(testTopic).Operations().Allow().AllowHosts().Deny().DenyHosts()
 	described, err := adm.DescribeACLs(ctx, db)
 	if err != nil {
 		t.Fatalf("describe: %v", err)
@@ -4238,7 +4245,7 @@ func TestKadmACLDefaultPatternRoundTrip(t *testing.T) {
 		t.Fatalf("created ACL not described: %v", described)
 	}
 
-	// Delete with the same fully-default filter.
+	// Delete with the same default-pattern filter.
 	deleted, err := adm.DeleteACLs(ctx, db)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
