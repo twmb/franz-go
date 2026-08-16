@@ -2,6 +2,7 @@ package kadm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -1017,22 +1018,28 @@ func createDelDescACL(b *ACLBuilder) ([]kmsg.DeleteACLsRequestFilter, []*kmsg.De
 		return nil, nil, err
 	}
 
-	// The builder's unset-means-any philosophy applies to the pattern and
-	// the operations as well. An unset pattern was previously sent as
-	// UNKNOWN (the zero value), which conformant brokers reject when
-	// parsing the request -- every describe or delete from a builder that
-	// never called ResourcePatternType failed against a real broker
-	// (kfake historically did not validate the pattern, hiding this).
-	// Unset operations previously generated ZERO filters, silently doing
-	// nothing and returning no error.
+	// Per the ResourcePatternType docs, an unset pattern defaults to
+	// LITERAL. That default was never implemented: the zero value went out
+	// as UNKNOWN, which conformant brokers reject when parsing the request,
+	// so every describe or delete from a builder that never called
+	// ResourcePatternType failed against a real broker (kfake historically
+	// did not validate the pattern, hiding this). LITERAL is also the
+	// narrowest match, so a delete cannot silently cover prefixed or
+	// wildcard ACLs the caller did not ask for.
 	pattern := b.pattern
 	if pattern == ACLPatternUnknown {
-		pattern = ACLPatternAny
+		pattern = ACLPatternLiteral
+	}
+
+	// Unset operations generated ZERO filters, silently doing nothing and
+	// returning no error. We error rather than defaulting to OpAny:
+	// MaybeOperations documents that providing none must NOT match all
+	// operations, and a delete must never widen on its own. Operations()
+	// with no arguments remains the documented way to ask for any.
+	if len(b.ops) == 0 {
+		return nil, nil, errors.New("no operations set: call Operations with no arguments to filter on any operation")
 	}
 	ops := b.ops
-	if len(ops) == 0 {
-		ops = []ACLOperation{OpAny}
-	}
 
 	// As a special shortcut, if we have any allow and deny principals and
 	// hosts, we collapse these into one "any" group. The anyAny and
