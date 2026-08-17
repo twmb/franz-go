@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"math/rand"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -35,6 +36,63 @@ func TestStoreCachedMetaTopicIDChange(t *testing.T) {
 	}
 	if ct := cl.metaCache.topics["foo"]; ct.id != ([16]byte{2}) {
 		t.Errorf("cached topic id = %v, want the new ID", ct.id)
+	}
+}
+
+// New clients with many seeds used to always try seed_0 first because
+// anySeedIdx's zero value directly selected loadSeeds()[0]. A fleet restarting
+// at once could therefore stampede the first bootstrap broker. The starting
+// cursor is now randomized per client, distributing first bootstrap attempts
+// across the configured brokers while preserving their configured order.
+func TestSeedBrokersStartDistributedAcrossClients(t *testing.T) {
+	t.Parallel()
+
+	seeds := []hostport{
+		{host: "seed-0", port: 9092},
+		{host: "seed-1", port: 9092},
+		{host: "seed-2", port: 9092},
+		{host: "seed-3", port: 9092},
+	}
+
+	rng := rand.New(rand.NewSource(1))
+	const clients = 1000
+	counts := make([]int, len(seeds))
+	for range clients {
+		cl := &Client{
+			rng: func(fn func(*rand.Rand)) { fn(rng) },
+		}
+
+		seedBrokers := make([]*broker, 0, len(seeds))
+		for i, hp := range seeds {
+			seedBrokers = append(seedBrokers, cl.newBroker(unknownSeedID(i), hp.host, hp.port, nil))
+		}
+		cl.anySeedIdx = cl.randomSeedIdx(len(seedBrokers))
+		cl.seeds.Store(seedBrokers)
+
+		got := cl.broker().meta.NodeID
+		found := false
+		for i := range seeds {
+			if got == unknownSeedID(i) {
+				counts[i]++
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("first selected seed broker = %s, want one of the configured seeds", NodeName(got))
+		}
+	}
+
+	want := clients / len(seeds)
+	// With 1000 clients and 4 seeds, each seed should be picked about 250
+	// times. 75 allows range of accepted values while still catching the old
+	// behavior, where seed_0 would be picked 1000 times.
+	const maxSkew = 75
+	for i, got := range counts {
+		if got < want-maxSkew || got > want+maxSkew {
+			t.Fatalf("seed %s was selected first %d times out of %d clients, want roughly %d; counts=%v",
+				NodeName(unknownSeedID(i)), got, clients, want, counts)
+		}
 	}
 }
 

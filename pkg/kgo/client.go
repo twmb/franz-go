@@ -597,6 +597,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		b := cl.newBroker(unknownSeedID(i), seed.host, seed.port, nil)
 		seedBrokers = append(seedBrokers, b)
 	}
+	cl.anySeedIdx = cl.randomSeedIdx(len(seedBrokers))
 	cl.seeds.Store(seedBrokers)
 	go cl.updateMetadataLoop()
 	go cl.reapConnectionsLoop()
@@ -623,6 +624,17 @@ func (cl *Client) Context() context.Context {
 
 func (cl *Client) loadSeeds() []*broker {
 	return cl.seeds.Load().([]*broker)
+}
+
+func (cl *Client) randomSeedIdx(n int) int32 {
+	if n <= 1 {
+		return 0
+	}
+	var idx int32
+	cl.rng(func(r *rand.Rand) {
+		idx = int32(r.Intn(n))
+	})
+	return idx
 }
 
 // Ping returns whether any broker is reachable and that the client can
@@ -2602,6 +2614,7 @@ func (cl *Client) UpdateSeedBrokers(addrs ...string) error {
 	// the lock for what this usually guards.
 	cl.brokersMu.Lock()
 	old := cl.loadSeeds()
+	cl.anySeedIdx = cl.randomSeedIdx(len(seedBrokers))
 	cl.seeds.Store(seedBrokers)
 	cl.brokersMu.Unlock()
 
