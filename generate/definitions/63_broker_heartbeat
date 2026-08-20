@@ -1,6 +1,6 @@
 // For KIP-500 / KIP-631, BrokerHeartbeatRequest is an internal
 // broker-to-broker only request.
-BrokerHeartbeatRequest => key 63, max version 1, flexible v0+
+BrokerHeartbeatRequest => key 63, max version 2, flexible v0+
   // The broker ID.
   BrokerID: int32
   // The broker's epoch.
@@ -13,6 +13,9 @@ BrokerHeartbeatRequest => key 63, max version 1, flexible v0+
   WantShutdown: bool
   // Log directories that failed and went offline.
   OfflineLogDirs: [uuid] // tag 0
+  // Log directories that are cordoned. This is null before the broker
+  // reaches the RECOVERY state.
+  CordonedLogDirs: nullable[uuid] // tag 1
 
 // BrokerHeartbeatResponse is a response to a BrokerHeartbeatRequest.
 BrokerHeartbeatResponse =>
