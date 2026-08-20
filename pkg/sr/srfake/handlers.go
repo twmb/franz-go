@@ -858,7 +858,7 @@ func (r *Registry) handleDeleteSubjectMode(w http.ResponseWriter, req *http.Requ
 }
 
 /* -------------------------------------------------------------------------
-   Handlers – Contexts
+   Handlers - Contexts
    ------------------------------------------------------------------------- */
 
 // handleGetContexts emulates GET /contexts.
