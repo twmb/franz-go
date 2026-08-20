@@ -726,7 +726,7 @@ func (r *Registry) detectCycle(schema sr.Schema, subject string, version int, vi
 func subjectContext(subject string) string {
 	if strings.HasPrefix(subject, ":.") {
 		if idx := strings.Index(subject[2:], ":"); idx >= 0 {
-			return subject[1 : idx+2] // e.g. ":.myctx:topic" → ".myctx"
+			return subject[1 : idx+2] // e.g. ":.myctx:topic" -> ".myctx"
 		}
 	}
 	return "."

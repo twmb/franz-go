@@ -410,7 +410,7 @@ func TestAlterPartitionAssignments(t *testing.T) {
 	rp.Replicas = []int32{0}
 	rt.Partitions = append(rt.Partitions, rp)
 
-	// Cancel reassignment (nil replicas) — kfake has none in progress.
+	// Cancel reassignment (nil replicas): kfake has none in progress.
 	rpCancel := kmsg.NewAlterPartitionAssignmentsRequestTopicPartition()
 	rpCancel.Partition = 1
 	rpCancel.Replicas = nil
@@ -467,7 +467,7 @@ func TestAddRemoveNodeUpdatesCluster(t *testing.T) {
 		t.Fatalf("expected 2 brokers, got %d", len(c.ListenAddrs()))
 	}
 
-	// Verify we can produce — the new broker should appear in metadata.
+	// Verify we can produce: the new broker should appear in metadata.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cl := newCoverClient(t, c)
@@ -550,7 +550,7 @@ func TestMoveTopicPartitionChangesLeader(t *testing.T) {
 }
 
 // TestSCRAMCredentialLifecycle verifies the full SCRAM credential lifecycle:
-// create → describe → update → describe → delete → describe (not found).
+// create -> describe -> update -> describe -> delete -> describe (not found).
 func TestSCRAMCredentialLifecycle(t *testing.T) {
 	t.Parallel()
 	c := newCoverCluster(t, NumBrokers(1))
@@ -596,7 +596,7 @@ func TestSCRAMCredentialLifecycle(t *testing.T) {
 	upsert("alice", 1, 4096) // SCRAM-SHA-256
 	upsert("bob", 2, 8192)   // SCRAM-SHA-512
 
-	// Describe both — verify mechanism and iterations.
+	// Describe both and verify the mechanism and iterations.
 	resp := describe("alice", "bob")
 	for _, r := range resp.Results {
 		if r.ErrorCode != 0 {
@@ -618,7 +618,7 @@ func TestSCRAMCredentialLifecycle(t *testing.T) {
 		}
 	}
 
-	// Describe all (nil users) — should find both.
+	// Describe all (nil users): this should find both.
 	respAll := describe()
 	if len(respAll.Results) < 2 {
 		t.Errorf("describe-all: expected >=2 results, got %d", len(respAll.Results))
@@ -645,7 +645,7 @@ func TestSCRAMCredentialLifecycle(t *testing.T) {
 		t.Fatal(kerr.ErrorForCode(delResp.Results[0].ErrorCode))
 	}
 
-	// Describe alice after delete → ResourceNotFound.
+	// Describe alice after delete -> ResourceNotFound.
 	resp3 := describe("alice")
 	if resp3.Results[0].ErrorCode != kerr.ResourceNotFound.Code {
 		t.Errorf("alice after delete: expected ResourceNotFound, got %v",
@@ -866,7 +866,7 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 		t.Error("retention.ms=86400000 not found after AlterConfigs on topic")
 	}
 
-	// Unknown topic → error.
+	// Unknown topic -> error.
 	req3 := kmsg.NewAlterConfigsRequest()
 	rr3 := kmsg.NewAlterConfigsRequestResource()
 	rr3.ResourceType = kmsg.ConfigResourceTypeTopic
@@ -1201,7 +1201,7 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		t.Fatal(kerr.ErrorForCode(resp5.Topics[0].ErrorCode))
 	}
 
-	// ReplicaAssignment with NumPartitions != -1 → InvalidRequest.
+	// ReplicaAssignment with NumPartitions != -1 -> InvalidRequest.
 	req6 := kmsg.NewCreateTopicsRequest()
 	rt6 := kmsg.NewCreateTopicsRequestTopic()
 	rt6.Topic = "bad-assign"
@@ -1220,7 +1220,7 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		t.Errorf("expected InvalidRequest, got %v", kerr.ErrorForCode(resp6.Topics[0].ErrorCode))
 	}
 
-	// ValidateOnly — topic should not be created.
+	// ValidateOnly: the topic should not be created.
 	req7 := kmsg.NewCreateTopicsRequest()
 	req7.ValidateOnly = true
 	rt7 := kmsg.NewCreateTopicsRequestTopic()
@@ -1344,7 +1344,7 @@ func TestDescribeProducersShowsActiveTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Describe — should see active producer.
+	// Describe: we should see the active producer.
 	cl := newCoverClient(t, c)
 	req := kmsg.NewDescribeProducersRequest()
 	rt := kmsg.NewDescribeProducersRequestTopic()
@@ -1371,7 +1371,7 @@ func TestDescribeProducersShowsActiveTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Describe again — no active producers.
+	// Describe again: no active producers.
 	resp2, err := req.RequestWith(ctx, cl)
 	if err != nil {
 		t.Fatal(err)
@@ -1634,7 +1634,7 @@ func TestOffsetForLeaderEpochEmptyPartition(t *testing.T) {
 
 	// Move partition to bump epoch, but don't produce. This tests the
 	// "no batches" path (lines 97-105 in the handler).
-	c.MoveTopicPartition(topic, 0, 0) // epoch 0 → 1
+	c.MoveTopicPartition(topic, 0, 0) // epoch 0 -> 1
 	adm := kadm.NewClient(newCoverClient(t, c))
 	var req kadm.OffsetForLeaderEpochRequest
 	req.Add(topic, 0, 0) // query for old epoch 0
@@ -1857,7 +1857,7 @@ func TestTxnAbortDiscardsOffsets(t *testing.T) {
 		t.Fatal(kerr.ErrorForCode(addResp.ErrorCode))
 	}
 
-	// TxnOffsetCommit — stage offset 5 for the group.
+	// TxnOffsetCommit: stage offset 5 for the group.
 	commitReq := kmsg.NewTxnOffsetCommitRequest()
 	commitReq.TransactionalID = txnID
 	commitReq.Group = group
@@ -1895,7 +1895,7 @@ func TestTxnAbortDiscardsOffsets(t *testing.T) {
 	}
 
 	// Verify offsets were NOT committed to the group.
-	// GROUP_ID_NOT_FOUND is expected — the group was never created because
+	// GROUP_ID_NOT_FOUND is expected: the group was never created because
 	// the abort discarded the staged offsets.
 	adm := kadm.NewClient(cl)
 	offsets, err := adm.FetchOffsets(ctx, group)

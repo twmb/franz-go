@@ -2121,7 +2121,7 @@ func TestContextHandlers(t *testing.T) {
 				})
 			},
 			wantStatus: http.StatusOK,
-			wantBody:   `[".a"]`, // sorted: [".", ".a", ".b"], offset=1 limit=1 → [".a"]
+			wantBody:   `[".a"]`, // sorted: [".", ".a", ".b"], offset=1 limit=1 -> [".a"]
 		},
 
 		// DELETE /contexts/{context}

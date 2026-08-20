@@ -336,7 +336,7 @@ func TestValidateDSLAgainstKafkaJSON(t *testing.T) {
 
 	initDSL(t)
 
-	// Build a map from apiKey → DSL request and response structs.
+	// Build a map from apiKey -> DSL request and response structs.
 	type dslPair struct {
 		request  *Struct
 		response *Struct
@@ -503,7 +503,7 @@ func compareFieldsAtVersion(t *testing.T, msgName string, version, flexibleAt in
 	}
 
 	// Filter DSL fields active at this version.
-	// Tags never have version ranges — they are valid across all flexible
+	// Tags never have version ranges: they are valid across all flexible
 	// versions once introduced and can never be reused.
 	var dslNonTagged []StructField
 	dslTagged := make(map[int]StructField)
@@ -644,7 +644,7 @@ func TestValidateMiscDSLAgainstKafkaJSON(t *testing.T) {
 
 	initDSL(t)
 
-	// Build a map from name → DSL struct for non-top-level types.
+	// Build a map from name -> DSL struct for non-top-level types.
 	dslByName := make(map[string]*Struct)
 	for i := range newStructs {
 		s := &newStructs[i]
@@ -653,7 +653,7 @@ func TestValidateMiscDSLAgainstKafkaJSON(t *testing.T) {
 		}
 	}
 
-	// Misc type mappings: Kafka JSON path (relative to KAFKA_DIR) → DSL name.
+	// Misc type mappings: Kafka JSON path (relative to KAFKA_DIR) -> DSL name.
 	type miscMapping struct {
 		jsonPath string
 		dslName  string

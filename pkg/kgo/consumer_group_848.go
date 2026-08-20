@@ -41,14 +41,14 @@ func (g *groupConsumer) should848() bool {
 // manage848 drives the KIP-848 heartbeat session: it restarts the session on
 // transient errors and re-fetches outstanding partitions via g.fetching.
 //
-// Constraints any change to coordinator/leader-churn recovery (here, in
-// heartbeat, and in fetchOffsets) must preserve — established by the
-// rebalance-churn audit:
+// The rebalance-churn audit established constraints that any change to
+// coordinator/leader-churn recovery (here, in heartbeat, and in fetchOffsets)
+// must preserve:
 //
 //  1. Heartbeat-originated transport and coordinator errors retry in place
 //     (the stale-connection cycle 90bcc2bb fixed is real). Fetch errors do
-//     NOT take that arm — they propagate here so the session restarts and
-//     re-fetches; do not collapse the two error sources back together.
+//     NOT take that arm; they propagate here so the session restarts and
+//     re-fetches. Do not collapse the two error sources back together.
 //  2. Session restart is the designed heal for fetch failures: the g.fetching
 //     carryover exists precisely so a torn-down session re-fetches. Route
 //     fixes through it rather than inventing a second retry inside fetchOffsets.
@@ -56,7 +56,7 @@ func (g *groupConsumer) should848() bool {
 //     for UnknownMemberID, the SAME UUID for epoch problems (FENCED and STALE
 //     both keep it). Anything stronger strands server-side state for a full
 //     session timeout.
-//  4. Leaves (MemberEpoch -1/-2) are idempotent and stateless — safe to retry
+//  4. Leaves (MemberEpoch -1/-2) are idempotent and stateless, safe to retry
 //     anywhere. The CGHB no-retry rule applies only to reconciliation-carrying
 //     heartbeats, never to leaves.
 func (g *groupConsumer) manage848() {

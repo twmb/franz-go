@@ -2024,7 +2024,7 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 // LastHeartbeat, each restart would reset the member's timeout to "just
 // now", preventing eviction indefinitely.
 //
-// The three-phase design is critical. A single close→sleep→restart would
+// The three-phase design is critical. A single close->sleep->restart would
 // pass even without the fix because enough wall time elapses. Phase 2's
 // intermediate restart advances shutdownAt: without the fix, phase 3
 // falls back to shutdownAt (recent), thinks the member is alive, and
@@ -2134,8 +2134,8 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 	time.Sleep(600 * time.Millisecond)
 
 	// Phase 3: restart again. With the fix, LastHeartbeat is from
-	// phase 1 (~1.1s ago) → expired. Without the fix, fallback to
-	// shutdownAt from phase 2 (~600ms ago) → alive (bug).
+	// phase 1 (~1.1s ago) -> expired. Without the fix, fallback to
+	// shutdownAt from phase 2 (~600ms ago) -> alive (bug).
 	{
 		c, err := NewCluster(
 			mfs.opt(),
@@ -2293,8 +2293,8 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 	time.Sleep(600 * time.Millisecond)
 
 	// Phase 3: restart. With the fix, LastHeartbeat from phase 1
-	// (~1.1s ago) → expired. Without the fix, fallback to shutdownAt
-	// from phase 2 (~600ms ago) → alive (bug).
+	// (~1.1s ago) -> expired. Without the fix, fallback to shutdownAt
+	// from phase 2 (~600ms ago) -> alive (bug).
 	{
 		c, err := NewCluster(
 			mfs.opt(),
