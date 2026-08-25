@@ -94,33 +94,30 @@ func TestNewRecordAttrs(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name            string
-		compressionType uint8
-		timestampType   int8
-		isTransactional bool
-		isControl       bool
+		name string
+		opts RecordAttrsOpts
 	}{
-		{"zero", 0, 0, false, false},
-		{"snappy create-time", 2, 0, false, false},
-		{"zstd log-append-time", 4, 1, false, false},
-		{"no-timestamp", 0, -1, false, false},
-		{"transactional", 1, 0, true, false},
-		{"control", 0, 0, false, true},
-		{"all set", 3, 1, true, true},
+		{"zero", RecordAttrsOpts{}},
+		{"snappy create-time", RecordAttrsOpts{Codec: CodecSnappy}},
+		{"zstd log-append-time", RecordAttrsOpts{Codec: CodecZstd, TimestampType: 1}},
+		{"no-timestamp", RecordAttrsOpts{TimestampType: -1}},
+		{"transactional", RecordAttrsOpts{Codec: CodecGzip, Transactional: true}},
+		{"control", RecordAttrsOpts{Control: true}},
+		{"all set", RecordAttrsOpts{Codec: CodecLz4, TimestampType: 1, Transactional: true, Control: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := NewRecordAttrs(tc.compressionType, tc.timestampType, tc.isTransactional, tc.isControl)
-			if got := a.CompressionType(); got != tc.compressionType {
-				t.Errorf("CompressionType: got %d, want %d", got, tc.compressionType)
+			a := NewRecordAttrs(tc.opts)
+			if got := a.CompressionType(); got != uint8(tc.opts.Codec) {
+				t.Errorf("CompressionType: got %d, want %d", got, uint8(tc.opts.Codec))
 			}
-			if got := a.TimestampType(); got != tc.timestampType {
-				t.Errorf("TimestampType: got %d, want %d", got, tc.timestampType)
+			if got := a.TimestampType(); got != tc.opts.TimestampType {
+				t.Errorf("TimestampType: got %d, want %d", got, tc.opts.TimestampType)
 			}
-			if got := a.IsTransactional(); got != tc.isTransactional {
-				t.Errorf("IsTransactional: got %t, want %t", got, tc.isTransactional)
+			if got := a.IsTransactional(); got != tc.opts.Transactional {
+				t.Errorf("IsTransactional: got %t, want %t", got, tc.opts.Transactional)
 			}
-			if got := a.IsControl(); got != tc.isControl {
-				t.Errorf("IsControl: got %t, want %t", got, tc.isControl)
+			if got := a.IsControl(); got != tc.opts.Control {
+				t.Errorf("IsControl: got %t, want %t", got, tc.opts.Control)
 			}
 		})
 	}

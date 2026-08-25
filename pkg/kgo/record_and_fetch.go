@@ -67,28 +67,44 @@ func (a RecordAttrs) IsControl() bool {
 	return a.attrs&0b0010_0000 != 0
 }
 
-// NewRecordAttrs returns a RecordAttrs built from its components. It exists so
-// code outside this package can populate Record.Attrs to match what the client
-// sets: the attrs bits are otherwise unexported and only readable via the
-// accessors below.
-//
-// The arguments mirror those accessors and round-trip through them:
-// compressionType uses the CompressionType codes (0 none, 1 gzip, 2 snappy,
-// 3 lz4, 4 zstd) and timestampType uses the TimestampType convention (0 for
-// client-side CreateTime, 1 for broker-side LogAppendTime, -1 for no timestamp
-// as on v0 message sets). Both are masked to their documented bit ranges.
-func NewRecordAttrs(compressionType uint8, timestampType int8, isTransactional, isControl bool) RecordAttrs {
-	attrs := compressionType & 0b0000_0111
+// RecordAttrsOpts contains the fields of a [RecordAttrs]. The zero value is an
+// uncompressed, non-transactional, non-control record with a client-generated
+// timestamp.
+type RecordAttrsOpts struct {
+	// Codec is the codec the record was compressed with, overriding the
+	// default of no compression. The codec is stored in three bits; a
+	// codec that does not fit is ignored.
+	Codec CompressionCodecType
+
+	// TimestampType is how the record's timestamp was determined; see
+	// [RecordAttrs.TimestampType] for what the values mean.
+	TimestampType int8
+
+	// Transactional sets the record as a part of a transaction.
+	Transactional bool
+
+	// Control sets the record as a control record (ABORT or COMMIT).
+	Control bool
+}
+
+// NewRecordAttrs returns the attrs corresponding to opts. This exists so you
+// can populate [Record.Attrs] yourself; the client sets that field for you
+// when producing and consuming.
+func NewRecordAttrs(opts RecordAttrsOpts) RecordAttrs {
+	var attrs uint8
+	if c := uint8(opts.Codec); c <= 0b0000_0111 {
+		attrs |= c
+	}
 	switch {
-	case timestampType < 0:
+	case opts.TimestampType < 0:
 		attrs |= 0b1000_0000 // no timestamp type
-	case timestampType > 0:
+	case opts.TimestampType > 0:
 		attrs |= 0b0000_1000 // LogAppendTime
 	}
-	if isTransactional {
+	if opts.Transactional {
 		attrs |= 0b0001_0000
 	}
-	if isControl {
+	if opts.Control {
 		attrs |= 0b0010_0000
 	}
 	return RecordAttrs{attrs}
