@@ -263,6 +263,55 @@ cycles to minimize allocations. The `isLingering` bool tracks whether the timer
 is active (rather than checking `lingering == nil`) because the timer object
 persists even when stopped.
 
+### Streaming compression (drain-time coalescing)
+
+Batches are bounded by `ProducerBatchMaxBytes` measured on UNCOMPRESSED
+records, so with compression ratio R a backlog drains in ~R times more produce
+round trips per partition than the broker's `max.message.bytes` requires. With
+the opt-in `StreamingCompression` option (gzip/zstd/lz4 only; snappy is a
+one-shot block codec), the sink's drain loop coalesces each partition's backlog
+into batches bounded by their exact COMPRESSED size, via freeze-steal-merge
+(`sink.go:mergeBacklog`):
+
+1. **Steal** (under `recBuf.mu`): the span of consecutive never-sent batches at
+   the drain index is marked `merging`, which blocks admission appends
+   (`tryBuffer`) and drains (`createReq` skips merging batches) WITHOUT
+   removing them from `recBuf.batches` - a concurrent `failAllRecords`/purge
+   sweep must still own their promises.
+2. **Merge** (no `recBuf.mu`; compression never stalls admission): the span's
+   records stream through a pooled compressor (`compression.go:
+   streamCompressor`, bufio-staged writes) with a worst-case
+   decide-before-write bound: bytes since the last flush plus the candidate
+   record are assumed incompressible; a flush tightens the bound only when
+   that worst case would overflow, and a final overflow cuts BEFORE writing.
+   The compressed batch provably never exceeds the limit and the compressor
+   only ever holds accepted records, so sealing is always a clean close - no
+   splitting, no footer surgery. A cut mid-source moves the source's remaining
+   records into a fresh tail batch (legal: never-sent batches have no
+   sequence; sequences are assigned at `tryAddBatch`). Each source's records
+   are read under its `batch.mu`, aborting if a sweep nil'd them.
+3. **Splice** (under `recBuf.mu`): validated against the CURRENT drain index -
+   responses completing mid-merge pop finished front batches and shift
+   indices, which moves the span without touching it, so the merge survives;
+   only a sweep or a retry rewind (drain head frozen) discards it. A discarded
+   merge restores the span records' stored length/timestamp-delta stamps
+   (phase 2 re-stamped them merge-relative; the legacy path serializes from
+   those stamps, and a stale stamp whose varint width differs would desync the
+   wire). On success the consumed sources are replaced by the merged batch
+   (+ tail).
+
+Sealed merged batches cache their compressed blob: `appendSealedTo` writes a
+fresh header + CRC per attempt around the cached bytes, so retries never
+recompress, and `sealStream` overwrites `wireLength` with the exact wire size
+so request packing uses real bytes. Only never-frozen batches merge (frozen ==
+possibly sent: content and sequence are immutable), preserving idempotent and
+transactional semantics exactly. Every odd case (compressor error, produce
+version below the codec's floor) demotes the batch to the legacy
+serialize-at-drain path; records are always kept, so that fallback is always
+available. Merging requires a backlog of two or more never-sent batches - an
+idle or keeping-up partition drains byte-for-byte identically to the option
+being off.
+
 ### When can a batch fail?
 
 This is subtle and important for idempotency. The rules:
