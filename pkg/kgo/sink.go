@@ -121,7 +121,9 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		recBufsIdx = (recBufsIdx + 1) % len(s.recBufs)
 
 		recBuf.mu.Lock()
-		if recBuf.failing || len(recBuf.batches) == recBuf.batchDrainIdx || recBuf.inflightOnSink != nil && recBuf.inflightOnSink != s || recBuf.inflight != 0 && !recBuf.okOnSink {
+		// A pending seq reset applies only to the first batch: stage
+		// nothing more until everything inflight finishes.
+		if recBuf.failing || len(recBuf.batches) == recBuf.batchDrainIdx || recBuf.needSeqReset && recBuf.inflight != 0 || recBuf.inflightOnSink != nil && recBuf.inflightOnSink != s || recBuf.inflight != 0 && !recBuf.okOnSink {
 			recBuf.mu.Unlock()
 			continue
 		}
@@ -453,8 +455,8 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	//     the records permanently.
 	//
 	// We check the epoch after building the request. If it changed,
-	// we undo the drain state (resetBatchDrainIdx + decInflight) and
-	// return true so the drain loop retries with the new epoch.
+	// we undo the drain state (undoStagedBatches) and return true so
+	// the drain loop retries with the new epoch.
 	//
 	// If the epoch has NOT changed, then EndTxn has not completed,
 	// Flush has not returned, and the user has not produced any
@@ -685,31 +687,30 @@ func txnReqContains(txnReq *kmsg.AddPartitionsToTxnRequest, topic string, partit
 	return false
 }
 
-// undoStagedBatches rewinds every batch that createReq staged into this request
-// back to its pre-drain state, for the early-return arms that decide not to
-// issue the request after staging it: the producer-ID/epoch recheck in
-// produce() and doTxnReq's failure defer. It resets each recBuf's drain index
-// and decrements inflight, and -- for the partitions THIS request newly added
-// to the transaction -- clears addedToTxn so the next drain re-issues their
-// AddPartitionsToTxn.
+// undoStagedBatches rewinds every batch that createReq staged into this
+// request, for when we decide not to issue the request after building it.
+// txnReq holds exactly the partitions this request newly added to the
+// transaction; we clear addedToTxn for those (and only those) so the next
+// drain re-adds them.
 //
-// txnReq holds exactly the partitions createReq newly added: txnReqBuilder.add
-// only records a partition whose addedToTxn flipped false->true, so partitions
-// added to the transaction by an EARLIER request are deliberately absent and
-// keep their broker-acked membership. Leaving a newly-added partition's
-// addedToTxn set after rewinding would suppress its AddPartitionsToTxn on the
-// next drain (txnReqBuilder.add skips already-added partitions); the broker
-// then rejects the produce to that unverified partition with INVALID_TXN_STATE
-// (or, on a non-verifying broker, the records hang in a transaction the
-// coordinator never learned the partition belongs to). txnReq is nil for
-// non-transactional and pv12+ (KIP-890p2) producers, which never stage
-// addedToTxn in createReq, so the clear is correctly skipped for them.
+// We do not reset the drain index to zero: earlier batches can still be
+// inflight from prior requests, and finishBatch decrements the index as they
+// finish, pushing a zeroed index negative (#1385). Our batch is always the
+// last one staged, so we rewind to just before it. If the batch is gone, the
+// buffer was failed and fully rewound already.
 func (p *produceRequest) undoStagedBatches(txnReq *kmsg.AddPartitionsToTxnRequest) {
 	p.batches.eachOwnerLocked(func(batch seqRecBatch) {
-		if txnReq != nil && txnReqContains(txnReq, batch.owner.topic, batch.owner.partition) {
-			batch.owner.addedToTxn.Store(false)
+		recBuf := batch.owner
+		if txnReq != nil && txnReqContains(txnReq, recBuf.topic, recBuf.partition) {
+			recBuf.addedToTxn.Store(false)
 		}
-		batch.owner.resetBatchDrainIdx()
+		for i, b := range recBuf.batches {
+			if b == batch.recBatch {
+				recBuf.batchDrainIdx = i
+				recBuf.seq = batch.seq
+				break
+			}
+		}
 		batch.decInflight()
 	})
 }
