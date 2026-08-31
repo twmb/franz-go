@@ -1,6 +1,10 @@
 package kgo
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+)
 
 // TestEachTopicPreservesTopicID verifies that Fetches.EachTopic carries
 // FetchTopic.TopicID through its grouping.
@@ -85,6 +89,54 @@ func TestEachTopicPreservesTopicID(t *testing.T) {
 		ids, _ := collect(fs)
 		if ids["foo"] != ([16]byte{}) {
 			t.Errorf("foo TopicID: got %v, want zero", ids["foo"])
+		}
+	})
+}
+
+// TestDeleteHorizon verifies the delete horizon bit reads back off attrs and
+// that the horizon itself comes back off the record context.
+func TestDeleteHorizon(t *testing.T) {
+	t.Parallel()
+
+	t.Run("attrs bit", func(t *testing.T) {
+		t.Parallel()
+		var a RecordAttrs
+		if a.HasDeleteHorizon() {
+			t.Error("empty attrs has a delete horizon")
+		}
+		// lz4, no timestamp type, control, txnal, delete horizon.
+		a = RecordAttrs{attrs: 0b1111_0011}
+		if !a.HasDeleteHorizon() {
+			t.Error("attrs with bit 7 has no delete horizon")
+		}
+		// The horizon bit must not disturb what sits around it.
+		if got := a.CompressionType(); got != 3 {
+			t.Errorf("CompressionType: got %d, want 3", got)
+		}
+		if got := a.TimestampType(); got != -1 {
+			t.Errorf("TimestampType: got %d, want -1", got)
+		}
+		if !a.IsTransactional() {
+			t.Error("IsTransactional: got false, want true")
+		}
+		if !a.IsControl() {
+			t.Error("IsControl: got false, want true")
+		}
+	})
+
+	t.Run("horizon time", func(t *testing.T) {
+		t.Parallel()
+		var r Record
+		if got := r.DeleteHorizon(); !got.IsZero() {
+			t.Errorf("no context: got %v, want zero", got)
+		}
+		r.Context = context.Background()
+		if got := r.DeleteHorizon(); !got.IsZero() {
+			t.Errorf("no horizon in context: got %v, want zero", got)
+		}
+		r.Context = context.WithValue(context.Background(), deleteHorizonKey, int64(17000))
+		if got, want := r.DeleteHorizon(), time.Unix(17, 0); !got.Equal(want) {
+			t.Errorf("horizon: got %v, want %v", got, want)
 		}
 	})
 }
