@@ -198,6 +198,12 @@ func (f *RecordFormatter) AppendPartitionRecord(b []byte, p *FetchPartition, r *
 // Prints 1 if the record is a commit marker or 0 if it is not. Number
 // formatting can be controlled with ";number".
 //
+//	%a{delete-horizon-bit}
+//	%a{delete-horizon-bit;bool}
+//
+// Prints 1 if the record's batch has a delete horizon or 0 if it does not.
+// Number formatting can be controlled with ";number".
+//
 // # Text
 //
 // Topics, keys, and values have "base64", "base64raw", "hex", and "unpack"
@@ -508,6 +514,21 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				})
 			case strings.HasPrefix(layout, "control-bit;"):
 				if err := num("control-bit;", func(r *Record) int64 { return bi64(r.Attrs.IsControl()) }); err != nil {
+					return nil, err
+				}
+
+			case strings.HasPrefix(layout, "delete-horizon-bit}"):
+				layout = layout[len("delete-horizon-bit}"):]
+				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record) []byte {
+					return writeR(b, r, func(b []byte, r *Record) []byte {
+						if r.Attrs.HasDeleteHorizon() {
+							return append(b, '1')
+						}
+						return append(b, '0')
+					})
+				})
+			case strings.HasPrefix(layout, "delete-horizon-bit;"):
+				if err := num("delete-horizon-bit;", func(r *Record) int64 { return bi64(r.Attrs.HasDeleteHorizon()) }); err != nil {
 					return nil, err
 				}
 
