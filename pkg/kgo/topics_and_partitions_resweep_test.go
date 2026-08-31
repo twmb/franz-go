@@ -6,9 +6,8 @@ import (
 	"time"
 )
 
-// TestAuditShareMetadataMigrationWaitsForLeave is the topics_and_partitions.go
-// ledger re-sweep regression test for the metadata-merge share-cursor
-// migration vs leave race.
+// TestAuditShareMetadataMigrationWaitsForLeave is the regression test for
+// the metadata-merge share-cursor migration vs leave race.
 //
 // migrateShareCursorTo relocates a share cursor between sources when a metadata
 // refresh observes a leader change for a share partition (mergeTopicPartitions,
@@ -23,7 +22,7 @@ import (
 // closeShareSession already drained (or one created after the snapshot):
 // sc.pendingAcks never returns to 0 (FlushAcks hangs) and the held records
 // release only via the broker's acquisition-lock timeout. This is the
-// metadata-merge sibling of TestAuditShareLeaveWaitsForInflightMigration
+// metadata-merge counterpart of TestAuditShareLeaveWaitsForInflightMigration
 // (share_resweep_test.go), which covers the applyMovesBlocking path.
 //
 // The end-to-end strand is a shutdown race not deterministically reproducible,

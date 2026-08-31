@@ -852,7 +852,7 @@ func (c *consumer) purgeTopics(topics []string) {
 			delete(c.g.using, topic)
 			delete(c.g.reSeen, topic)
 		}
-		// Our subscription shrank; reconcile per protocol. This MUST NOT
+		// Our subscription shrank; reconcile per protocol. This must NOT
 		// feed rejoinCh in 848 mode (signalSubscriptionChange forces a
 		// heartbeat instead): a rejoinCh bounce there runs the session-end
 		// revoke's nowAssigned read-modify-write concurrently with live
@@ -1205,7 +1205,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			// untouched.
 			//
 			// NOTE: the direct consumer's applySetOffsets translates
-			// ALL user input blindly (unlike the group path, which
+			// all user input blindly (unlike the group path, which
 			// filters to g.uncommitted); the "extra partitions are
 			// skipped" contract holds only because this arm touches
 			// nothing beyond usingCursors and returns before the

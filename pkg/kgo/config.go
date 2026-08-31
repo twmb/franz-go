@@ -1566,7 +1566,7 @@ func FetchMaxPartitionBytes(b int32) ConsumerOpt {
 //
 // Negative values imply unlimited concurrent fetches (bounded by the number of
 // brokers in the cluster). A value of 0 means that a single fetch is allowed
-// ONLY when you poll - there is no fetch buffering.
+// only when you poll - there is no fetch buffering.
 func MaxConcurrentFetches(n int) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxConcurrentFetches = n }}
 }

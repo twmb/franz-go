@@ -13,10 +13,9 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// Round 9 audit repros (share-churn.md). These tests stage broker churn
-// against the share consumer's fetch path:
+// These tests stage broker churn against the share consumer's fetch path:
 //
-//   - TestShareFetchLeaderMoveNoHintHeals: share-churn.md 3.1 - a leader
+//   - TestShareFetchLeaderMoveNoHintHeals: a leader
 //     move whose NOT_LEADER responses carry no CurrentLeader hint (the
 //     leaderless-window shape; also every error code the broker never
 //     hints for) must not surface retriable errors to poll, and must
@@ -26,14 +25,14 @@ import (
 //   - TestShareFetchLeaderMoveHintHeals: control - the existing
 //     CurrentLeader hint path migrates without metadata; passes pre-fix
 //     and post-fix.
-//   - TestShareFetchTransportErrorTriggersMetadata: share-churn.md 3.2 -
+//   - TestShareFetchTransportErrorTriggersMetadata:
 //     a dead broker (connection killed on every ShareFetch) must trigger
 //     a metadata refresh from the fetch backoff path, like the classic
 //     consumer's source backoff does.
-//   - TestShareFetchTopLevelErrorBackoff: share-churn.md 3.3 - persistent
+//   - TestShareFetchTopLevelErrorBackoff: persistent
 //     top-level ShareFetch errors must back off rather than hot-loop at
 //     round-trip pace.
-//   - TestShareAssignmentNegativePartitionNoPanic: share-churn.md 3.4 -
+//   - TestShareAssignmentNegativePartitionNoPanic:
 //     a negative partition number in a heartbeat assignment must be
 //     skipped, not panic the manage goroutine.
 

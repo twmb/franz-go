@@ -1,8 +1,7 @@
 package kfake_test
 
-// Audit round 6 repros (848-sweep.md): the KIP-848 client state machine.
-// Written fail-pre-fix during the audit; with the fixes in, all pass and
-// serve as regressions:
+// Regression tests for the KIP-848 client state machine. Each fails before
+// its corresponding kgo fix:
 //
 // B1: stale unresolvedAssigned (topic IDs the client could not map to
 //     names) must be cleared when (re)joining: a join's owned-partitions

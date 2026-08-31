@@ -714,10 +714,9 @@ func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) 
 	// records release only via the broker's acquisition-lock timeout.
 	//
 	// Register the migration as a share worker so leave's barrier waits for an
-	// in-flight migration before it snapshots and drains. This mirrors
-	// applyMovesBlocking, the CurrentLeader-hint sibling that already does
-	// this; the metadata-merge path (this function) was the only share-cursor
-	// relocation not covered by the barrier. If the consumer is already dying,
+	// in-flight migration before it snapshots and drains, mirroring
+	// applyMovesBlocking on the CurrentLeader-hint path; the metadata-merge
+	// path here is the only other share-cursor relocation. If the consumer is already dying,
 	// incWorker returns false: skip the swap and leave the cursor on its
 	// current source, which closeShareSession then drains. new.shareCursor is
 	// assigned above either way, so the stored partition data is always valid.
@@ -925,8 +924,8 @@ func (k *kip951move) doMove(cl *Client) {
 	// topicPartitionsData struct. Moving a single partition requires some
 	// deep copying.
 
-	// oldNew pairs what NEEDS to be atomically updated (old; left value)
-	// with the value that WILL be stored (new; right value).
+	// oldNew pairs what needs to be atomically updated (old; left value)
+	// with the value that will be stored (new; right value).
 	type oldNew struct {
 		l *topicPartitions
 		r *topicPartitionsData

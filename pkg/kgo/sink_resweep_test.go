@@ -9,19 +9,19 @@ import (
 // recheck rewind in produce(): when a TV1 transactional drain stages a request
 // and then bails because the producer ID changed (a parallel sink bumped the
 // epoch on EndTxn or failed the id), undoStagedBatches must un-mark addedToTxn
-// for the partitions THIS request newly added to the transaction.
+// for the partitions this request newly added to the transaction.
 //
 // If it does not, the partition stays marked-added client-side while its
 // AddPartitionsToTxn was never sent. txnReqBuilder.add skips already-added
-// partitions, so the NEXT drain produces to that partition without ever adding
+// partitions, so the next drain produces to that partition without ever adding
 // it to the coordinator's transaction: a verifying broker rejects the produce
 // with INVALID_TXN_STATE, and a non-verifying broker leaves the records in a
 // transaction the coordinator never learned the partition belongs to.
 //
-// The companion invariant (from 07525c50, R3 sink-sweep B1): a partition added
-// to the transaction by an EARLIER request is a broker-acked fact deliberately
-// absent from this request's txnReq, and must keep its membership across the
-// rewind -- else EndTransaction's anyAdded walk skips EndTxn entirely.
+// The companion invariant: a partition added to the transaction by an earlier
+// request is a broker-acked fact deliberately absent from this request's
+// txnReq, and must keep its membership across the rewind -- else
+// EndTransaction's anyAdded walk skips EndTxn entirely.
 //
 // The full end-to-end trigger is a TOCTOU race between produce()'s producerID()
 // and createReq() that is not deterministically reproducible (the recheck's own

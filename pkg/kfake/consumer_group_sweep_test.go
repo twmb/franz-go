@@ -1,8 +1,7 @@
 package kfake_test
 
-// Audit round 12 repros (consumer-group-sweep.md): consumer_group.go classic
-// remainder + topics_and_partitions.go. Written fail-pre-fix during the
-// audit; with the fixes in, all pass and serve as regressions:
+// Regression tests for classic consumer_group.go + topics_and_partitions.go.
+// Each fails before its corresponding kgo fix:
 //
 // B1: blockAuto must count outstanding manual commits, not flag them: with
 //     two overlapping async CommitOffsets, the first completion re-enabled
@@ -413,11 +412,10 @@ func TestAuditOffsetFetchOmittedPartition(t *testing.T) {
 	}
 }
 
-// TestAuditOffsetFetchDuplicateInjectAcrossRetries reproduces the round-23
-// ledger re-sweep finding (consumer-group-resweep), an extension of B3 above.
+// TestAuditOffsetFetchDuplicateInjectAcrossRetries extends B3 above.
 // fetchOffsets surfaces a partition's non-retryable error via addFakeReady-
 // ForDraining, which is NOT idempotent. The `injected` dedup set was declared
-// AFTER the start label, so it reset on every goto-start retry: a partition
+// after the start label, so it reset on every goto-start retry: a partition
 // holding a non-retryable error was re-injected once per retry pass, emitting
 // a duplicate error fetch each time.
 //

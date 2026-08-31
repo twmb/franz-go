@@ -1,12 +1,10 @@
 package kfake
 
-// Round 15 of the FRANZ_AUDIT.md program: primitives sweep over pkg/kgo
-// ring.go / pools.go / atomic_maybe_work.go / hooks.go / errors.go /
-// compression.go (primitives-sweep.md). The test here covers the
+// Regression tests over pkg/kgo ring.go / pools.go / atomic_maybe_work.go /
+// hooks.go / errors.go / compression.go. The test here covers the
 // pools+fetch-processing seam; the compression fixes are unit-tested in
 // pkg/kgo/compression_test.go. Tests whose error message starts with BUG
-// REPRODUCED fail against the pre-fix client and flip to passing with the
-// round's fixes.
+// REPRODUCED fail against the pre-fix client.
 
 import (
 	"bytes"

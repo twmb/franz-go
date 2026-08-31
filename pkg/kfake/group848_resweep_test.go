@@ -9,8 +9,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// 848 re-sweep (consumer_group_848.go re-attack with patterns 16-49).
-//
 // PurgeTopicsFromConsuming must reconcile a next-gen group through the
 // heartbeat path, never by feeding rejoinCh. A rejoinCh bounce in 848 mode
 // runs the session-end revoke's nowAssigned read-modify-write concurrently

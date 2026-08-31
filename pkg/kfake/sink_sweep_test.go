@@ -1,10 +1,8 @@
 package kfake
 
-// Round 3 of the FRANZ_AUDIT.md program: subsystem sweep of pkg/kgo/sink.go
-// (sink-sweep.md). Tests whose fatal message starts with BUG REPRODUCED fail
-// against the pre-fix client and flip to passing with the sink-sweep fixes;
-// the control test documents neighboring behavior that already holds and
-// must keep holding.
+// Regression tests for pkg/kgo/sink.go. Tests whose fatal message starts
+// with BUG REPRODUCED fail against the pre-fix client; the control test
+// documents neighboring behavior that already holds and must keep holding.
 
 import (
 	"context"

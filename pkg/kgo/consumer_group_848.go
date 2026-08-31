@@ -41,24 +41,22 @@ func (g *groupConsumer) should848() bool {
 // manage848 drives the KIP-848 heartbeat session: it restarts the session on
 // transient errors and re-fetches outstanding partitions via g.fetching.
 //
-// The rebalance-churn audit established constraints that any change to
-// coordinator/leader-churn recovery (here, in heartbeat, and in fetchOffsets)
-// must preserve:
+// Any change to coordinator/leader-churn recovery (here, in heartbeat, and
+// in fetchOffsets) must preserve:
 //
-//  1. Heartbeat-originated transport and coordinator errors retry in place
-//     (the stale-connection cycle 90bcc2bb fixed is real). Fetch errors do
-//     NOT take that arm; they propagate here so the session restarts and
-//     re-fetches. Do not collapse the two error sources back together.
-//  2. Session restart is the designed heal for fetch failures: the g.fetching
-//     carryover exists precisely so a torn-down session re-fetches. Route
-//     fixes through it rather than inventing a second retry inside fetchOffsets.
-//  3. Member-identity resets are the minimum the error implies: a fresh UUID
-//     for UnknownMemberID, the SAME UUID for epoch problems (FENCED and STALE
-//     both keep it). Anything stronger strands server-side state for a full
-//     session timeout.
-//  4. Leaves (MemberEpoch -1/-2) are idempotent and stateless, safe to retry
-//     anywhere. The CGHB no-retry rule applies only to reconciliation-carrying
-//     heartbeats, never to leaves.
+//  1. Heartbeat-originated transport and coordinator errors retry in place.
+//     Fetch errors do not take that arm; they propagate here so the session
+//     restarts and re-fetches. Do not collapse the two error sources.
+//  2. Session restart is the designed heal for fetch failures: the
+//     g.fetching carryover exists so a torn-down session re-fetches. Route
+//     fixes through it rather than a second retry inside fetchOffsets.
+//  3. Member-identity resets are the minimum the error implies: a fresh
+//     UUID for UnknownMemberID, the same UUID for epoch problems (FENCED
+//     and STALE both keep it). Anything stronger strands server-side state
+//     for a full session timeout.
+//  4. Leaves (MemberEpoch -1/-2) are idempotent and stateless, safe to
+//     retry anywhere. The heartbeat no-retry rule applies only to
+//     reconciliation-carrying heartbeats, never to leaves.
 func (g *groupConsumer) manage848() {
 	var serverAssignor string
 	switch g.cfg.balancers[0].(type) {
@@ -152,13 +150,13 @@ outer:
 		// (connection closed, EOF) are transient, so we backoff and
 		// retry without going through manageFailWait.
 		//
-		// UnreleasedInstanceID is retryable-with-a-cap: the broker
+		// UnreleasedInstanceID is retryable a few times: the broker
 		// briefly keeps old static-instance state after
-		// FencedMemberEpoch, so an immediate rejoin can race for
-		// 1-2 cycles. Beyond 3 attempts it indicates a real
+		// FencedMemberEpoch, so an immediate rejoin can race for a
+		// cycle or two. Beyond 3 attempts it indicates a real
 		// cross-process InstanceID conflict and we fall through to
-		// manageFailWait so the user sees it (matches Java's
-		// handleFatalFailure semantics, with a small race budget).
+		// manageFailWait so the user sees it, matching the Java
+		// client.
 		retryable := err != nil && (g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err) ||
 			isRetryableBrokerErr(err) || isAnyDialErr(err) ||
 			errors.Is(err, kerr.UnreleasedInstanceID) || errors.Is(err, kerr.StaleMemberEpoch))
@@ -237,14 +235,10 @@ outer:
 				prerevoking := g848.prerevoking.Load()
 				// When the client has no partitions (Topics is empty),
 				// always send a full request rather than a keepalive.
-				// This ensures the server sees our actual empty
-				// assignment state. Without this, a lost response
-				// containing our assignment can leave the server
-				// thinking we acknowledged partitions we never
-				// received: the server marks the assignment as
-				// delivered, but we never got it. Keepalive
-				// (Topics=nil) means "no change", which doesn't
-				// correct the stale server state. Sending Topics=[]
+				// A lost response containing our assignment can leave
+				// the server thinking we acknowledged partitions we
+				// never received; keepalive (Topics=nil) means "no
+				// change" and never corrects that, while Topics=[]
 				// tells the server "I have nothing", forcing it to
 				// re-deliver.
 				topicsMatch := len(req.Topics) > 0 && reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics)
@@ -385,7 +379,7 @@ outer:
 		// The errors we have to handle are:
 		// * UnknownMemberID: abandon partitions, rejoin w/ new member id
 		// * FencedMemberEpoch / StaleMemberEpoch: abandon partitions,
-		//   rejoin with the SAME member id
+		//   rejoin with the same member id
 		// * UnreleasedInstanceID: fatal error, do not rejoin
 		// * General error: fatal error, do not rejoin
 		//
@@ -406,17 +400,14 @@ outer:
 }
 
 // shouldNotify848Restart reports whether a transient-restart count warrants
-// surfacing the "heartbeat persistently failing" notification - the only
+// surfacing the "heartbeat persistently failing" notification, the only
 // user-visible signal that an 848 group is unreachable: once we have
 // restarted at least `retries` times, on every `retries`-th restart.
 //
-// retries <= 0 means the user disabled retries (RequestRetries(0)). That also
-// disables in-session heartbeat retries - heartbeat() propagates the first
-// transient error immediately rather than retrying in place - so every
-// transient error is its own restart and each one warrants the notification.
-// We must therefore notify on every restart, NOT divide restarts by zero
-// (an integer divide-by-zero panic that would crash the manage goroutine on
-// the first transient heartbeat error).
+// retries <= 0 means the user disabled retries (RequestRetries(0)). That
+// also disables in-session heartbeat retries, so every transient error is
+// its own restart and each one warrants the notification; notifying on
+// every restart also avoids dividing by zero.
 func shouldNotify848Restart(restarts, retries int64) bool {
 	if retries < 1 {
 		return true
@@ -521,18 +512,16 @@ func (g *g848) initialJoin() (time.Duration, error) {
 	g.g.memberGen.storeGeneration(0)
 	g.lastSubscribedTopics = nil
 	g.lastTopics = nil
-	// A (re)join must carry an EMPTY owned-partitions list: the broker
-	// rejects any epoch-0 heartbeat whose Topics is non-empty (or null)
-	// with INVALID_REQUEST, "TopicPartitions must be empty when
-	// (re-)joining." unresolvedAssigned holds the OLD member's
-	// server-side assignment, and mkreq folds it into Topics - so
-	// carrying it across a member reset would poison every join, and
-	// permanently: the only other thing that clears unresolvedAssigned
-	// is a successful assignment-carrying response, which a rejected
-	// join never produces. Dropping it loses nothing - the join
-	// response always re-delivers the member's full assignment. The
-	// Java client likewise clears its unresolved-IDs cache on every
-	// transition to joining.
+	// A (re)join must carry an empty owned-partitions list: the broker
+	// rejects any epoch-0 heartbeat whose Topics is non-empty with
+	// INVALID_REQUEST. unresolvedAssigned holds the old member's
+	// server-side assignment, and mkreq folds it into Topics, so
+	// carrying it across a member reset would poison every join: the
+	// only other thing that clears unresolvedAssigned is a successful
+	// assignment-carrying response, which a rejected join never
+	// produces. Dropping it loses nothing, since the join response
+	// always re-delivers the member's full assignment; the Java client
+	// likewise clears its unresolved IDs on every rejoin.
 	g.unresolvedAssigned = nil
 	g.prerevoking.Store(false)
 	// Drain any stale rejoin signal, mirroring joinAndSync. Nothing
@@ -639,13 +628,11 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 		g.g.cl.triggerUpdateMetadataNow("consumer group heartbeat has unresolved topic IDs in assignment")
 	}
 
-	// storeMember publishes the new memberGen. We defer it so it runs AFTER
-	// any nowAssigned.store below. Atomic stores in Go are sequentially
-	// consistent, so concurrent readers (e.g. the commit() STALE retry
-	// filter at consumer_group.go) cannot observe new memberGen with
-	// stale nowAssigned: seeing the new gen happens-after seeing the new
-	// assignment. This closes the race that would otherwise leak revoked
-	// partitions into a retried commit.
+	// storeMember publishes the new memberGen. We defer it so it runs
+	// after any nowAssigned.store below: concurrent readers (e.g. the
+	// commit STALE retry filter) then cannot observe the new memberGen
+	// with stale nowAssigned, which would leak revoked partitions into
+	// a retried commit.
 	storeMember := func() {
 		if resp.MemberID != nil {
 			g.g.memberGen.store(*resp.MemberID, resp.MemberEpoch)
@@ -778,7 +765,7 @@ func (g *g848) mkreq() *kmsg.ConsumerGroupHeartbeatRequest {
 	// from tps above) signals the unsubscribe and the server revokes
 	// on the next response.
 	nowAssigned := g.g.nowAssigned.read()
-	req.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{} // ALWAYS initialize: len 0 is significantly different than nil (nil means same as last time)
+	req.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{} // always initialize: len 0 means empty assignment, nil means same as last time
 	for t, ps := range nowAssigned {
 		tp, ok := tps[t]
 		if !ok {

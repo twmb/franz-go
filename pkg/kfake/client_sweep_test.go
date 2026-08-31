@@ -11,8 +11,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// Regression tests from the client.go audit sweep (round 10). Each
-// TestAudit* below fails before its corresponding kgo fix.
+// Regression tests for client.go. Each TestAudit* below fails before its
+// corresponding kgo fix.
 
 // Seed brokers have negative internal node IDs (math.MinInt32+i). Before the
 // fix, brokerOrErr returned the not-found error for every negative ID before

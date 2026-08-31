@@ -1188,20 +1188,19 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	sort.Slice(brokers, func(i, j int) bool { return brokers[i].NodeID < brokers[j].NodeID })
 	newBrokers := make([]*broker, 0, len(brokers))
 
-	// Removed or replaced brokers are stopped AFTER brokersMu is released:
-	// stopForever dies each connection, which synchronously fires the
-	// user's OnBrokerDisconnect hook, and a hook that re-enters the client
-	// (issuing a request, DiscoveredBrokers, anything needing brokersMu)
-	// would deadlock this goroutine -- the metadata loop -- under the
-	// write lock, wedging every request path client-wide. Walkthrough: a
-	// rolling restart removes node 5 from metadata; we take brokersMu and
-	// stopForever(node 5) inline; the hook calls cl.Broker(5).Request;
-	// brokerOrErr blocks on brokersMu.RLock behind our write lock forever.
-	// Same hazard reapMu had (see stopForever), one lock up. Stopping
-	// late is safe: requests racing a removed broker already contend with
-	// stopForever via b.dead / errChosenBrokerDead, and the broker is out
-	// of cl.brokers the moment we unlock (UpdateSeedBrokers already stops
-	// its old seeds this way).
+	// Removed or replaced brokers are stopped after brokersMu is
+	// released: stopForever dies each connection, which synchronously
+	// fires the user's OnBrokerDisconnect hook, and a hook that re-enters
+	// the client (issuing a request, DiscoveredBrokers, anything needing
+	// brokersMu) would deadlock the metadata loop under the write lock,
+	// wedging every request path client-wide: a rolling restart removes
+	// node 5, we stopForever(node 5) inline, the hook calls
+	// cl.Broker(5).Request, and brokerOrErr blocks on brokersMu.RLock
+	// behind our write lock forever (the same hazard reapMu had; see
+	// stopForever). Stopping late is safe: requests racing a removed
+	// broker already contend with stopForever via b.dead /
+	// errChosenBrokerDead, and the broker is out of cl.brokers the moment
+	// we unlock (UpdateSeedBrokers already stops its old seeds this way).
 	var stopped []*broker
 	defer func() {
 		for _, b := range stopped {
@@ -3593,7 +3592,7 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 		// nil when everything was already cached), while cl.id2t only
 		// ever holds topics this client produces or consumes -- an
 		// admin-style client fetching offsets by TopicID has the mapping
-		// ONLY in the cache. This mirrors the response-side resolution
+		// only in the cache. This mirrors the response-side resolution
 		// in the onResp below, which reads the cache for the same
 		// reason. id2t and the resolveTopicMeta return value remain as
 		// fallbacks. Names matter most below v10, where TopicID is
@@ -3716,9 +3715,8 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 	req := kreq.(*kmsg.OffsetFetchRequest)
 	resp := kresp.(*kmsg.OffsetFetchResponse)
 
-	// All-topics fetches could leave topics nil, in which case we DONT
-	// bi-directionally resolve the name in shard. Thus, we have to handle
-	// here.
+	// All-topics fetches could leave topics nil, in which case we do not
+	// bi-directionally resolve the name in shard, so we handle it here.
 	//
 	// We always run the resolution from cache (it lets clients use the
 	// "by ID" APIs against v9 brokers via name -> ID fallback). What we

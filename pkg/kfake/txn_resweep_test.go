@@ -11,8 +11,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// Regression test from the txn.go ledger re-sweep (round 23, Phase 2).
-
 // TestAuditTxnEndTxnUnknownServerErrorNotFalseCommit verifies that an
 // UNKNOWN_SERVER_ERROR from EndTxn during a GroupTransactSession commit is NOT
 // reported as a successful commit.
