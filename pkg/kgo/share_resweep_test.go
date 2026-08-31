@@ -6,15 +6,14 @@ import (
 	"time"
 )
 
-// TestAuditShareLeaveWaitsForInflightMigration is the consumer_share.go
-// ledger re-sweep (patterns 16-48) regression test for the unsupervised
-// applyMoves goroutine.
+// TestAuditShareLeaveWaitsForInflightMigration is the regression test for
+// the unsupervised applyMoves goroutine.
 //
 // A CurrentLeader-hint cursor migration (applyMoves) runs on the metadata
 // loop as a detached goroutine. Before the fix, leave's worker barrier
 // (for sc.workers > 0) did not account for it: a migration racing
 // LeaveGroup/Close could relocate a cursor -- or create a brand-new source --
-// AFTER the per-source closeShareSession drained, stranding that cursor's
+// after the per-source closeShareSession drained, stranding that cursor's
 // pending acks. sc.pendingAcks then never returns to 0 (FlushAcks hangs) and
 // the held records release only via the broker's acquisition-lock timeout.
 // The fix registers the migration via sc.incWorker/decWorker -- the share
@@ -123,8 +122,8 @@ func TestAuditShareLeaveWaitsForInflightMigration(t *testing.T) {
 	t.Fatal("migration worker never unregistered after the metadata loop drained it")
 }
 
-// TestAuditShareMoveCollapseMarksCursorUnusable is the consumer_share.go
-// ledger re-sweep regression test for the leader-move ping-pong.
+// TestAuditShareMoveCollapseMarksCursorUnusable is the regression test for
+// the leader-move ping-pong.
 //
 // The classic consumer collapses a leader move: use() marks the cursor
 // unusable at request-build and the strip path never re-enables it, so the

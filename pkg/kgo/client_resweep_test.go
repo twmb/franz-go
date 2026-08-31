@@ -7,14 +7,11 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// Regression test from the client.go Phase-2 audit re-sweep.
-
 // writeTxnMarkersSharder.shard buckets each marker by a key holding every
 // per-marker field that is NOT the topic/partition list, then rebuilds the
 // marker from that key. CoordinatorEpoch - a v0+ field the broker uses to
-// fence stale transaction coordinators (KafkaApis passes it to
-// completeTransaction and embeds it into the EndTransactionMarker control
-// record written to the partition log) - was omitted from both the bucket key
+// fence stale transaction coordinators and embeds into the transaction
+// marker control record written to the partition log - was omitted from both the bucket key
 // and the rebuilt marker, so every sharded WriteTxnMarkers request went out
 // with CoordinatorEpoch=0 regardless of the user's value. It is reachable via
 // kadm.WriteTxnMarkers, which sets rm.CoordinatorEpoch and then RequestShards.

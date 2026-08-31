@@ -13,8 +13,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// Regression test from the source.go ledger re-sweep (round 23). Fails before
-// the kgo fix in loadEpochsForBrokerLoad.
+// Regression test: fails before the kgo fix in loadEpochsForBrokerLoad.
 
 // undefinedNextOFLE installs a control that answers exactly one
 // OffsetForLeaderEpoch request with the KIP-320 UNDEFINED sentinel

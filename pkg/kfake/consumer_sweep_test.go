@@ -12,8 +12,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// Regression tests from the consumer.go + consumer_direct.go audit sweep
-// (round 8). Each TestAudit* below fails before its corresponding kgo fix.
+// Regression tests for consumer.go + consumer_direct.go. Each TestAudit*
+// below fails before its corresponding kgo fix.
 
 // fenceNextFetch installs a control that answers exactly one fetch request
 // with FENCED_LEADER_EPOCH for partition 0 of the topic. The client reacts by

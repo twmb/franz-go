@@ -1,8 +1,7 @@
 package kfake_test
 
-// Audit round 2 repros (rebalance-churn.md): broker dies / leader moves
-// mid-rebalance. Written fail-pre-fix during the audit; with the fixes in,
-// all five pass and serve as regressions:
+// Regression tests for broker death / leader moves mid-rebalance. Each
+// fails before its corresponding kgo fix:
 //
 // F1: an OffsetFetch failure after internal retries must tear the 848
 //     session down (so the restart re-fetches via g.fetching), not be

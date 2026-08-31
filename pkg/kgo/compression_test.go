@@ -66,8 +66,7 @@ func TestNewCompressor(t *testing.T) {
 }
 
 // Regression test: DefaultCompressor's gzip arm adopted the user's level
-// only when the validation probe FAILED (inverted since b7a6f5a9,
-// "compression: check level errors ahead of time"). A valid custom level
+// only when the validation probe failed (an inverted check). A valid custom level
 // was silently ignored, and an invalid level was adopted, making the pool
 // hand out typed-nil *gzip.Writers that panicked on first use. This test
 // panics pre-fix on the invalid-level arm and fails pre-fix on the

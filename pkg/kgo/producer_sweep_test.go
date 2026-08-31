@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-// Regression tests from the producer.go audit sweep. These are internal
-// (package kgo) tests: they orchestrate interleavings via unexported state
-// and never need a live broker - every produced record fails before any
-// network use, or the test asserts purely structural invariants.
+// Regression tests for producer.go internals: they orchestrate
+// interleavings via unexported state and never need a live broker - every
+// produced record fails before any network use, or the test asserts purely
+// structural invariants.
 
 // batchPromisesLen returns the current number of queued promise elements.
 func batchPromisesLen(cl *Client) int {
@@ -131,11 +131,10 @@ func TestAuditFullPromiseRingBoundAndConvergence(t *testing.T) {
 }
 
 // finishPromises accumulated its cond broadcast and fired it only when the
-// worker exited, i.e. when the ring was observed empty - but ead18d3c's
-// stated batching granularity was "one broadcast at the end of a batch". As
-// long as new promise elements kept arriving, a Flush whose condition had
-// long become true (bufferedRecords hit 0) was never woken, and blocked
-// Produce calls starved the same way.
+// worker exited, i.e. when the ring was observed empty, rather than once
+// per drained batch. As long as new promise elements kept arriving, a
+// Flush whose condition had long become true (bufferedRecords hit 0) was
+// never woken, and blocked Produce calls starved the same way.
 //
 // The chain below makes the starvation causal rather than timing-dependent:
 // each chain promise pushes the next element from within the worker, so the
@@ -277,7 +276,7 @@ func TestAuditFlushNotStarvedByPromiseChain(t *testing.T) {
 }
 
 // purgeTopics deleted unknown-topic waiters and stored the cleaned topics
-// map AFTER releasing unknownTopicsMu (the store via a late defer): a
+// map after releasing unknownTopicsMu (the store via a late defer): a
 // produce racing inside that window saw the topic still present in
 // producer.topics, took the exists-path, and re-created an unknownTopics
 // waiter that the purge then orphaned by removing the topic from the map.

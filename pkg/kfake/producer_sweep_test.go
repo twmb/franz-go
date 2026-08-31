@@ -8,8 +8,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// Regression tests from the producer.go audit sweep (round 13). Each
-// TestAudit* below fails before its corresponding kgo fix.
+// Regression tests for producer.go. Each TestAudit* below fails before its
+// corresponding kgo fix.
 
 // EnsureProduceConnectionIsOpen filtered broker IDs < -1 into a kept list but
 // then dialed the unfiltered input slice, which the in-place filter had also

@@ -19,7 +19,7 @@ import (
 var byteBuffers = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 8<<10)) }}
 
 // maxDecompressedSize caps how much one batch may decompress to. Fetch
-// limits bound only the COMPRESSED bytes on the wire; nothing in the
+// limits bound only the compressed bytes on the wire; nothing in the
 // protocol bounds the decompressed size, and the whole batch is
 // materialized contiguously while decompressing. Without a cap, a few-KB
 // malicious or corrupt batch can demand tens of GiB: zstd frames declare a
@@ -28,7 +28,7 @@ var byteBuffers = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte
 // and snappy headers claim up to 4 GiB. No legitimate batch can exceed
 // math.MaxInt32 decompressed: every known producer serializes a batch's
 // records into an int32-indexed buffer before compressing (this client's
-// own appendTo, Java's MemoryRecordsBuilder over a ByteBuffer, librdkafka),
+// own appendTo, the Java client, librdkafka),
 // so a batch claiming more is corrupt or hostile and is rejected like any
 // other corrupt batch: a loud, repeated fetch error with no offset advance.
 // A var only so tests can shrink it.
@@ -376,7 +376,7 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 			// Only the slice's capacity is used: decompressed data
 			// must start at index 0, while a buffer initialized with
 			// len(s) > 0 (a pool returning make([]byte, sizeGuess))
-			// would have the copy/append based codecs write AFTER the
+			// would have the copy/append based codecs write after the
 			// existing length, prefixing the output with stale bytes.
 			out = bytes.NewBuffer(s[:0])
 			rfn = out.Bytes

@@ -1,11 +1,9 @@
 package kfake
 
-// Round 4 of the FRANZ_AUDIT.md program: transaction coordinator churn and
-// fencing during EndTransaction (txn-churn.md). Every test here asserts the
-// CORRECT behavior; tests whose fatal message starts with BUG REPRODUCED
-// fail against the pre-fix client and flip to passing with the txn-churn
-// fixes. The control tests document neighboring behavior that already holds
-// and must keep holding.
+// Regression tests for transaction coordinator churn and fencing during
+// EndTransaction. Tests whose fatal message starts with BUG REPRODUCED fail
+// against the pre-fix client; the control tests document neighboring
+// behavior that already holds and must keep holding.
 
 import (
 	"context"

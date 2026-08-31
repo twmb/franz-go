@@ -14,8 +14,8 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 )
 
-// Regression tests from the broker.go audit sweep (round 11). Each
-// TestAudit* below fails before its corresponding kgo fix.
+// Regression tests for broker.go. Each TestAudit* below fails before its
+// corresponding kgo fix.
 
 func saslPlainOpts(c *Cluster) []kgo.Opt {
 	return []kgo.Opt{

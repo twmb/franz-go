@@ -6,7 +6,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// Regression tests from the client.go audit sweep (round 10).
+// Regression tests for client.go internals.
 
 // A recreated topic comes back under a new topic ID; storing the new entry
 // must drop the old ID's byID mapping, else the cache accumulates stale IDs

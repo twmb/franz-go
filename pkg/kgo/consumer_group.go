@@ -860,16 +860,12 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		// The rejoin triggers the second join of the classic
 		// cooperative two-phase rebalance: after giving up lost
 		// partitions, the member rejoins so the group can reassign
-		// them. 848 has no second join, the server reconciles
-		// through heartbeats. There, this signal would only tear
-		// down and rebuild the heartbeat session: the session that
-		// called us already handled both our lost and added
-		// partitions, so the rebuilt session re-enters with an empty
-		// diff, and because rebuilding re-arms the heartbeat timer
-		// at a full interval, the bounce also DELAYS the heartbeat
-		// that acks our revocation to the server. For 848, prerevoke
-		// instead forces an immediate heartbeat to ack the
-		// revocation.
+		// them. 848 has no second join; the server reconciles through
+		// heartbeats, and the session that called us already handled
+		// the diff, so a bounce would rebuild an identical session
+		// and re-arm the heartbeat timer at a full interval, delaying
+		// the heartbeat that acks our revocation. For 848, prerevoke
+		// instead forces an immediate heartbeat.
 		g.mu.Lock()
 		is848 := g.is848
 		g.mu.Unlock()
@@ -945,31 +941,25 @@ func (s *assignRevokeSession) prerevoke(g *groupConsumer, lost map[string][]int3
 		// If we revoked, ack the revocation to the server right away
 		// rather than waiting out the heartbeat timer: the server
 		// cannot give the revoked partitions to other members until
-		// it sees a heartbeat without them, so an immediate full
-		// heartbeat (prerevoking was cleared above, so it will not
-		// be a keepalive) directly speeds group-wide reconciliation.
-		// The Java client acks the same way the moment revocation
-		// callbacks complete.
+		// it sees a heartbeat without them (prerevoking was cleared
+		// above, so the heartbeat will not be a keepalive). The Java
+		// client acks the same way the moment revocation callbacks
+		// complete.
 		//
-		// The send must be best effort, NOT blocking. If the
+		// The send must be best effort, not blocking. If the
 		// heartbeat loop exits on a fatal error before consuming our
-		// send (its first heartbeat can fail while we are still
-		// revoking), nothing reads heartbeatForceCh again until the
-		// next session begins, but the next session cannot begin
-		// until we return: setupAssignedAndHeartbeat waits on
-		// assignDone, which waits on prerevokeDone, which closes
-		// only when this goroutine exits. A blocking send would
-		// deadlock the manage loop. If the send is missed (loop
-		// mid-heartbeat or already gone), the regular heartbeat
-		// timer acks within one interval, which is no worse than
-		// what the session bounce this replaced provided.
+		// send, nothing reads heartbeatForceCh again until the next
+		// session begins, but the next session cannot begin until we
+		// return: setupAssignedAndHeartbeat waits on assignDone,
+		// which waits on prerevokeDone, which closes only when this
+		// goroutine exits. A blocking send would deadlock the manage
+		// loop. If the send is missed, the regular heartbeat timer
+		// acks within one interval.
 		//
 		// We force even when nothing was lost: a session (re)entry
-		// with only added partitions also owes the server an ack -
-		// the next full heartbeat's Topics is what reports the new
-		// assignment as owned. The Java client likewise heartbeats
-		// the moment reconciliation completes rather than waiting
-		// out the interval.
+		// with only added partitions also owes the server an ack,
+		// since the next full heartbeat's Topics is what reports the
+		// new assignment as owned.
 		if is848 {
 			select {
 			case g.heartbeatForceCh <- func(error) {}:
@@ -1265,31 +1255,25 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 		// session teardown/rebuild that would occur if the error
 		// propagated to the manage848 loop.
 		//
-		// We reset the counter on each success so that intermittent
-		// failures do not accumulate across the session. Without
-		// resetting, a few scattered failures per heartbeat cycle
-		// compound until the counter hits the cap, triggering an
-		// unnecessary session restart even though most heartbeats
-		// succeed and the broker-side session is healthy.
-		//
-		// If cfg.retries consecutive failures occur without any
-		// success, the error propagates to manage848 which
-		// rebuilds the session.
+		// We reset the counter on each success so intermittent
+		// failures do not compound across the session into an
+		// unnecessary restart. If cfg.retries consecutive failures
+		// occur without any success, the error propagates to
+		// manage848, which rebuilds the session.
 		//
 		// This arm must only see errors from the heartbeat itself,
 		// never from fetchErrCh, even though both feed the same err
-		// variable. Walkthrough of what would go wrong: the
-		// coordinator moves, OffsetFetch exhausts its internal
-		// retries, fetchOffsets returns the retryable error here, we
-		// "retry" by heartbeating in place, the next heartbeat
-		// succeeds and resets the counter - and the session lives on
-		// with partitions that were never handed to assignPartitions
-		// (that only happens after a successful fetch). The fetch
-		// goroutine is already gone and nothing inside a live session
-		// re-runs it, so those partitions silently never consume.
-		// Only re-entering setupAssignedAndHeartbeat re-fetches (via
-		// g.fetching), so a fetch error must propagate to manage848,
-		// whose transient arm restarts the session.
+		// variable. Otherwise: the coordinator moves, OffsetFetch
+		// exhausts its internal retries, fetchOffsets returns the
+		// retryable error here, we "retry" by heartbeating in place,
+		// the next heartbeat succeeds and resets the counter, and
+		// the session lives on with partitions that were never
+		// handed to assignPartitions: the fetch goroutine is gone
+		// and nothing inside a live session re-runs it, so those
+		// partitions silently never consume. Only re-entering
+		// setupAssignedAndHeartbeat re-fetches (via g.fetching), so
+		// a fetch error must propagate to manage848, whose transient
+		// arm restarts the session.
 		if is848 && !fetchErr && (isRetryableBrokerErr(err) || isAnyDialErr(err) || g.cl.maybeDeleteStaleCoordinator(g.cfg.group, coordinatorTypeGroup, err)) {
 			if int64(hbBrokerRetries) < g.cfg.retries {
 				hbBrokerRetries++
@@ -1412,20 +1396,19 @@ func (g *groupConsumer) rejoin(why string) {
 // shrink) and a reconcile is owed. The caller must hold g.mu (we read
 // g.is848).
 //
-// Classic and 848 reconcile differently, and routing every caller through
-// here is what keeps the difference from being re-derived (and forgotten)
-// at each site:
+// Classic and 848 reconcile subscription changes differently; every caller
+// routes through here so the difference lives in one place:
 //
 //   - Classic: bounce the heartbeat session via rejoinCh so the member
 //     re-joins and the group re-balances with the new subscription.
 //   - 848: the server reconciles through heartbeats, so feeding rejoinCh
-//     would only bounce the session pointlessly - AND that bounce runs the
+//     would only bounce the session pointlessly, and that bounce runs the
 //     session-end revoke concurrently with live heartbeats, the one
-//     interleaving where a completing heartbeat's nowAssigned store is lost
-//     to revoke's read-modify-write. Instead force an immediate heartbeat
-//     (best effort, must not block; see the walkthrough in prerevoke): the
-//     next request rebuilds the subscription from live state, and if the
-//     force is missed the heartbeat timer sends within one interval.
+//     interleaving where a completing heartbeat's nowAssigned store is
+//     lost to revoke's read-modify-write. Instead force an immediate
+//     heartbeat (best effort, must not block; see prerevoke): the next
+//     request rebuilds the subscription from live state, and if the force
+//     is missed the heartbeat timer sends within one interval.
 func (g *groupConsumer) signalSubscriptionChange(why string) {
 	if g.is848 {
 		select {
@@ -1768,7 +1751,7 @@ func (g *groupExternal) updateLatest(meta map[string]*metadataTopic) {
 	// These are topics the leader balances but does not itself consume, so
 	// there is no kept-partition floor like the leader's own topics have
 	// (metadata.go). We rewrite the cached count and trigger a rejoin on
-	// ANY change, INCLUDING a one-response stale shrink - that is one churn
+	// any change, including a one-response stale shrink - that is one churn
 	// cycle (revoke + re-assign) that self-heals on the next refresh. This
 	// is the same stale-snapshot exposure Java's leader carries; it is
 	// intentional, not a bug to silence with a shrink filter.
@@ -2183,7 +2166,7 @@ start:
 				offset.epoch = rPartition.LeaderEpoch
 			}
 			// The coordinator's "no committed offset" sentinel is -1.
-			// We treat ANY negative offset as no-commit, matching the
+			// We treat any negative offset as no-commit, matching the
 			// Java client's `offset >= 0` test: a buggy broker's -5
 			// must not flow into partition assignment as a literal
 			// negative offset.
