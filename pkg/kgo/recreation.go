@@ -1,11 +1,75 @@
 package kgo
 
 import (
+	"fmt"
 	"maps"
 	"sync/atomic"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+// holdPriorID records id as previously held, ahead of adopting a new one.
+func holdPriorID(prior *[2][16]byte, id [16]byte) {
+	prior[1], prior[0] = prior[0], id
+}
+
+// swapRecreatedConsumer adopts a recreated topic on the consumer side: we
+// reposition to reset, or, under NoResetOffset, freeze the partition and
+// surface why (you resume with SetOffsets).
+func (cl *Client) swapRecreatedConsumer(topic string, part int32, oldTP, newTP *topicPartition, css *consumerSessionStopper, reset Offset, why string) {
+	rp := &reset
+	if cl.cfg.resetOffset.noReset {
+		rp = nil
+		cl.consumer.addFakeReadyForDraining(topic, part,
+			fmt.Errorf("%s (automatic resets are disabled via NoResetOffset; resume via SetOffsets): %w", why, kerr.UnknownTopicID),
+			"metadata refresh sees topic recreation with resets disabled")
+	}
+	oldTP.swapRecreatedCursorTo(newTP, css, rp)
+}
+
+// mergeRecreatedCursor adopts a recreated topic on a consuming partition,
+// returning whether the merge is done with this partition.
+//
+// We act only on corroboration: a fetch the current leader rejected by ID.
+// Until then we keep everything as is and let the stale-ID fetch corroborate;
+// that rejection re-triggers metadata urgently, so the swap lands one update
+// later.
+func (cl *Client) mergeRecreatedCursor(topic string, part int32, oldTP, newTP *topicPartition, css *consumerSessionStopper, retryWhy *multiUpdateWhy) bool {
+	var noID [16]byte
+	c := oldTP.cursor
+	newID, oldID := newTP.cursor.topicID, c.topicID
+	if newID == noID || oldID == noID {
+		return false
+	}
+	if newID == oldID {
+		return false
+	}
+
+	if c.unknownIDFails.Load() == 0 {
+		*newTP = *oldTP
+		retryWhy.add(topic, part, errRecreationPending)
+		return true
+	}
+	cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID and restarting from the new topic's beginning",
+		"topic", topic,
+		"partition", part,
+		"old_id", topicID(oldID),
+		"new_id", topicID(newID),
+		"new_leader", newTP.leader,
+		"new_leader_epoch", newTP.leaderEpoch,
+	)
+	cl.swapRecreatedConsumer(topic, part, oldTP, newTP, css, recreationResetOffset, "topic was deleted and recreated")
+	return true
+}
+
+// recreationResetOffset is where consumption restarts on a classified
+// recreation: the beginning of the new topic, *not* ConsumeResetOffset. A
+// subscription is a point in time and everything after, and everything in a
+// replacement topic arrived after that point. ConsumeResetOffset governs
+// where you start within one topic's lifetime. NoResetOffset still opts out
+// entirely.
+var recreationResetOffset = NewOffset().AtStart()
 
 // recreationGate arms the strongest tier of topic recreation handling: a
 // topic deleted and recreated under the same name, yielding a new topic ID.

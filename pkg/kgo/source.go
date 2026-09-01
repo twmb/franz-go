@@ -118,20 +118,30 @@ func (s *source) removeCursor(rm *cursor) {
 // cursor is where we are consuming from for an individual partition.
 type cursor struct {
 	topic string
-	// topicID is written once at cursor creation and is deliberately
-	// never re-adopted if a delete+recreate hands back a new ID for the
-	// same name: a recreated topic stalls loudly (UNKNOWN_TOPIC_ID, see
-	// the UnknownTopicID arm below) and the user must purge+re-add. This
-	// is the principled alternative to librdkafka/Java's adopt-and-gamble;
-	// issue #908 records why auto-adoption was backed out (PR #391/#377:
-	// OffsetForLeaderEpoch has no TopicID field, so an adopted ID cannot
-	// be validated against truncation). The metadata merge copies this
-	// pointer over rather than swapping the ID; do not "fix" the stall
-	// into an adopt without solving #908.
+	// topicID is written at cursor creation, and across a delete+recreate
+	// only by the metadata merge's recreation swap: the position resets,
+	// the consumed epoch clears, and we suppress cross-incarnation
+	// OffsetForLeaderEpoch, which has no TopicID field (#908). That
+	// missing field is why the bare adopt-and-keep-position gamble that
+	// librdkafka and Java take was rejected in PR #391/#377. Where the
+	// swap cannot act, a recreated topic stalls loudly with
+	// UNKNOWN_TOPIC_ID; see the arm below.
 	topicID   [16]byte
 	partition int32
 
 	unknownIDFails atomic.Int32
+
+	// priorIDs holds the last two topic IDs we previously held. Written at
+	// the swap with the session stopped, read at the metadata merge.
+	priorIDs [2][16]byte
+
+	// recreationRestart is set when our position is a recreation restart,
+	// the new topic's earliest offset. Until we consume something, an out
+	// of range re-resolves to earliest again, say because the new topic
+	// truncated between our restart resolving 0 and our first fetch. Once
+	// we have consumed, oorResetOffset ignores this, so it never needs
+	// clearing.
+	recreationRestart atomic.Bool
 
 	keepControl bool // whether to keep control records
 
@@ -253,6 +263,21 @@ func (c *cursor) allowUsable() {
 // after.
 func (c *cursor) setOffset(o cursorOffset) {
 	c.cursorOffset = o
+}
+
+// oorResetOffset returns what an out of range cursor resets to.
+// ConsumeResetOffset is the last resort: if we have consumed anything, we
+// reset to the nearest offset at or after the last record's timestamp, and if
+// we are sitting on an unconsumed recreation restart, we restart at the new
+// topic's beginning again (it may have truncated under us).
+func (cl *Client) oorResetOffset(c *cursor) Offset {
+	if lct := c.lastConsumedTime; !lct.IsZero() {
+		return NewOffset().AfterMilli(lct.UnixMilli())
+	}
+	if c.recreationRestart.Load() {
+		return recreationResetOffset
+	}
+	return cl.cfg.resetOffset
 }
 
 // cursorOffsetNext is updated while processing a fetch response.
@@ -1147,8 +1172,15 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		// loadWithSessionNow triggers a metadata update IF there are
 		// offsets to reload. If there are no offsets to reload, we
 		// trigger one here.
+		//
+		// UnknownTopicID is normally lazy like UnknownTopicOrPartition,
+		// since the topic was likely deleted and reloading is wasteful.
+		// Armed, that rejection is the corroboration the merge waits on
+		// to adopt a recreated topic's new ID, so we refresh urgently.
 		if !reloadOffsets.loadWithSessionNow(consumerSession, why) {
-			if updateWhy.isOnly(kerr.UnknownTopicOrPartition) || updateWhy.isOnly(kerr.UnknownTopicID) {
+			lazy := updateWhy.isOnly(kerr.UnknownTopicOrPartition) ||
+				updateWhy.isOnly(kerr.UnknownTopicID) && !s.cl.recreation.armed.Load()
+			if lazy {
 				s.cl.triggerUpdateMetadata(false, why)
 			} else {
 				s.cl.triggerUpdateMetadataNow(why)
@@ -1384,32 +1416,37 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				addList := func(replica int32, log bool) {
 					if s.cl.cfg.resetOffset.noReset {
 						keep = true
-					} else if !c.lastConsumedTime.IsZero() {
-						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-							replica: replica,
-							Offset:  NewOffset().AfterMilli(c.lastConsumedTime.UnixMilli()),
-						})
-						if log {
-							s.cl.cfg.logger.Log(LogLevelWarn, "received OFFSET_OUT_OF_RANGE, resetting to the nearest offset; either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming, or the broker has lost data and has not yet transferred leadership",
-								"broker", logID(s.nodeID),
-								"topic", topic,
-								"partition", partition,
-								"prior_offset", partOffset.offset,
-							)
-						}
-					} else {
-						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-							replica: replica,
-							Offset:  s.cl.cfg.resetOffset,
-						})
-						if log {
-							s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE on the first fetch, resetting to the configured ConsumeResetOffset",
-								"broker", logID(s.nodeID),
-								"topic", topic,
-								"partition", partition,
-								"prior_offset", partOffset.offset,
-							)
-						}
+						return
+					}
+					reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
+						replica: replica,
+						Offset:  s.cl.oorResetOffset(c),
+					})
+					if !log {
+						return
+					}
+					switch {
+					case !c.lastConsumedTime.IsZero():
+						s.cl.cfg.logger.Log(LogLevelWarn, "received OFFSET_OUT_OF_RANGE, resetting to the nearest offset; either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming, or the broker has lost data and has not yet transferred leadership",
+							"broker", logID(s.nodeID),
+							"topic", topic,
+							"partition", partition,
+							"prior_offset", partOffset.offset,
+						)
+					case c.recreationRestart.Load():
+						s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE on an unconsumed recreation restart, re-resolving the topic's earliest offset",
+							"broker", logID(s.nodeID),
+							"topic", topic,
+							"partition", partition,
+							"prior_offset", partOffset.offset,
+						)
+					default:
+						s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE on the first fetch, resetting to the configured ConsumeResetOffset",
+							"broker", logID(s.nodeID),
+							"topic", topic,
+							"partition", partition,
+							"prior_offset", partOffset.offset,
+						)
 					}
 				}
 

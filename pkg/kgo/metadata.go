@@ -910,6 +910,31 @@ func (cl *Client) mergeTopicPartitions(
 			continue
 		}
 
+		// Topic ID checks, before the epoch rewind guard below: a
+		// recreated topic's ID change overrides epoch comparisons
+		// entirely, because the new incarnation legitimately restarts
+		// at epoch 0.
+		if !isProduce {
+			var noID, newID, oldID [16]byte
+			if isShare {
+				newID, oldID = newTP.shareCursor.topicID, oldTP.shareCursor.topicID
+			} else {
+				newID, oldID = newTP.cursor.topicID, oldTP.cursor.topicID
+			}
+			if newID == noID && oldID != noID {
+				cl.cfg.logger.Log(LogLevelWarn, "metadata update is missing the topic ID when we previously had one, ignoring update",
+					"topic", topic,
+					"partition", part,
+				)
+				*newTP = *oldTP
+				retryWhy.add(topic, int32(part), errMissingTopicID)
+				continue
+			}
+		}
+		if !isProduce && !isShare && cl.mergeRecreatedCursor(topic, int32(part), oldTP, newTP, css, retryWhy) {
+			continue
+		}
+
 		// If the new partition has an older leader epoch, then we
 		// fetched from an out of date broker. We just keep the old
 		// information.
@@ -981,27 +1006,6 @@ func (cl *Client) mergeTopicPartitions(
 				"old_leader_epoch", oldTP.leaderEpoch,
 				"new_leader_epoch", newTP.leaderEpoch,
 			)
-		}
-
-		if !isProduce {
-			var noID [16]byte
-			var newID, oldID [16]byte
-			if isShare {
-				newID = newTP.shareCursor.topicID
-				oldID = oldTP.shareCursor.topicID
-			} else {
-				newID = newTP.cursor.topicID
-				oldID = oldTP.cursor.topicID
-			}
-			if newID == noID && oldID != noID {
-				cl.cfg.logger.Log(LogLevelWarn, "metadata update is missing the topic ID when we previously had one, ignoring update",
-					"topic", topic,
-					"partition", part,
-				)
-				*newTP = *oldTP
-				retryWhy.add(topic, int32(part), errMissingTopicID)
-				continue
-			}
 		}
 
 		// If the tp data is the same, we simply copy over the records
@@ -1111,9 +1115,10 @@ func (cl *Client) mergeTopicPartitions(
 }
 
 var (
-	errEpochRewind    = errors.New("epoch rewind")
-	errMissingTopicID = errors.New("missing topic ID")
-	errNoLeaderEpoch  = errors.New("no leader epoch")
+	errEpochRewind       = errors.New("epoch rewind")
+	errMissingTopicID    = errors.New("missing topic ID")
+	errNoLeaderEpoch     = errors.New("no leader epoch")
+	errRecreationPending = errors.New("topic recreation pending corroboration")
 )
 
 type multiUpdateWhy map[kerrOrString]map[string]map[int32]struct{}
