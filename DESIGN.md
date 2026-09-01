@@ -962,6 +962,70 @@ During step 1-2, new records may still be produced to this recBuf and trigger
 drains on the old sink. That is harmless - the old sink will simply not find
 the recBuf in its list.
 
+### Topic recreation
+
+The metadata merge is also where topic recreation is handled: a topic deleted
+and recreated under the same name, which the broker reports as a new topic ID.
+These checks run before the epoch-rewind guard, because a new incarnation
+legitimately restarts at epoch 0 and must not look like a stale broker.
+
+One rule precedes the tiers. An ID we have held for `recreationStableIDAge`
+(`idAgreedAt`, stamped at creation and at each swap) whose metadata now
+differs is believed outright, because staleness is a seconds-scale phenomenon.
+A cursor with no position yet is the exception: it waits for a broker
+rejection: swapped early, a racing old-incarnation committed offset would be
+applied to the new topic rather than rejected (`cursor.positioned`). A younger ID
+corroborates per tier, strongest first:
+
+1. **Gate armed** (`recreationGate`; every connected broker speaks fetch v13).
+   The merge swaps once the wire corroborates: a stale-incarnation rejection
+   (`unknownIDFails` / `unknownFailures`), an acked offset regression
+   (`offsetRegressed`), or commit-time verification (`idMismatched`). An
+   uncorroborated ID change waits, with `errRecreationPending` driving the
+   retry loop; a paused partition simply defers to unpause.
+2. **Below the gate, IDs in metadata.** Adopt once two consecutive updates
+   agree on the same new ID (`pendingRecreateID`), which absorbs a single
+   stale broker flapping. Produce-wire evidence still adopts immediately.
+3. **No IDs, leader epochs only.** Where the epoch-rewind guard would accept a
+   persistently lower epoch, treat it as a recreation instead. A rewind is
+   also what epoch history lost to unclean elections looks like (#119), so the
+   consumer reset follows the nearest-timestamp loss rules, unless the rewind
+   lands from three or more above onto a lineage at epoch 2 or below: a shape
+   only a recreation produces, which restarts from the beginning.
+
+The swaps live in topics_and_partitions.go: `swapRecreatedCursorTo`,
+`swapRecreatedRecBufTo`, and `swapRecreatedShareCursorTo`. They stop the
+consumer session, which discards buffered old-incarnation fetches, adopt the
+new ID and partition data, and bump a per-object `generation` that requests
+and share slabs stamp so response handling can classify with it. Beyond that:
+
+- Consumers restart at `recreationResetOffset`, the new topic's beginning,
+  via a `recreationSeed`-marked list load. That load also fences group
+  commits and seeds the restart position for a prompt recommit
+  (`fenceRecreated`, `maybeSeedRecreated`). `NoResetOffset` freezes for
+  `SetOffsets`, and an inferred recreation whose loss hypothesis survives
+  resets nearest-timestamp instead.
+- Producers restart sequences (`needSeqReset`), skipped when a by-name write
+  already re-established the chain, and loud-fail what can never be safely
+  retried: `unsureByName` batches, and prior-generation share acks.
+- A transactional producer with state tied to the dead incarnation is poisoned
+  with `errRecreationAbortTxn`, recoverable in both producer ID recovery
+  modes, and `EndTransaction(TryCommit)` verifies produced-to topic IDs
+  against fresh metadata before the first EndTxn attempt.
+
+Two fetch-side nets close the by-name window between the recreation and the
+merge. Records whose leader epoch is below `lastConsumedEpoch` are withheld
+while metadata classifies, bounded by `guardFails`. A below-the-gate
+`OFFSET_OUT_OF_RANGE` defers its reset for one classification round
+(`oorPending`, which records whether the log shrank) so that a recreation
+takes the full swap with a single reset. When the merge corroborates
+nothing and the log shrank, an `OffsetForLeaderEpoch` probe (`oorClassify`)
+names the outcome: no history of our epoch is near-certain recreation, and an
+epoch ending below our position is truncation or recreation, logged as
+either. Every probe outcome resets per policy, never to the divergence
+point, which is a meaningless offset in a new topic, and group commits are
+fenced and reseeded throughout.
+
 ### Cached metadata
 
 For admin-style operations (e.g., kadm), `RequestCachedMetadata` provides a
