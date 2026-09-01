@@ -471,6 +471,13 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 	// from local metadata, which we refreshed above if we had to.
 	if cb, ok := memberBalancer.(*ConsumerBalancer); ok && g.cfg.balanceRacks {
 		cb.partitionRacks = g.buildPartitionRacks(cb, topicPartitionCount)
+
+		// A preferred read replica means the brokers run a rack aware
+		// replica selector and fetches are already rack local, so
+		// balancing by leader rack is moving partitions for nothing.
+		if g.cl.sawPreferredReplica.Load() {
+			g.cl.cfg.logger.Log(LogLevelWarn, "BalanceRacks is on but brokers are returning preferred read replicas; fetches are already rack local and rack aware balancing is likely moving partitions for nothing", "group", g.cfg.group)
+		}
 	}
 
 	// If the returned balancer is a ConsumerBalancer (which it likely

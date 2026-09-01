@@ -84,6 +84,10 @@ type Client struct {
 	consumer consumer
 	id2t     atomic.Value // map[[16]byte]string
 
+	// sawPreferredReplica is set once any broker returns a preferred read
+	// replica, which only a rack aware replica selector does; see BalanceRacks.
+	sawPreferredReplica atomic.Bool
+
 	metrics metrics
 
 	coordinatorsMu xsync.Mutex
