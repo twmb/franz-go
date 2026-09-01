@@ -1822,21 +1822,14 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 			}
 		}
 
-		// Save PID/epoch for manual EndTxn after restart.
-		initReq := kmsg.NewInitProducerIDRequest()
-		txnID := "txn-clean-restart"
-		initReq.TransactionalID = &txnID
-		initReq.TransactionTimeoutMillis = 30000
-		initReq.ProducerID = -1
-		initReq.ProducerEpoch = -1
-		plainCl := newPlainClient(t, c)
-		initResp, err := initReq.RequestWith(ctx, plainCl)
-		if err != nil {
-			t.Fatal(err)
-		}
-		savedPID = initResp.ProducerID
-		savedEpoch = initResp.ProducerEpoch
-		plainCl.Close()
+		// Save PID/epoch for manual EndTxn after restart. We cannot
+		// use InitProducerID for this: a fresh init on a live
+		// transactional ID aborts its open transaction and bumps the
+		// epoch. Read the state directly in the cluster's goroutine.
+		c.admin(func() {
+			pidinf := c.pids.byTxid["txn-clean-restart"]
+			savedPID, savedEpoch = pidinf.id, pidinf.epoch
+		})
 
 		cl.Close()
 		c.Close()

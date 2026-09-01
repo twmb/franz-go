@@ -664,6 +664,13 @@ func (pids *pids) create(txidp *string, txTimeout int32) (int64, int16) {
 	// to avoid FNV-64 hash collisions between different txids.
 	if txidp != nil {
 		if pidinf, ok := pids.byTxid[*txidp]; ok {
+			// Abort any in-flight transaction before bumping, same
+			// as the KIP-360 path above. Leaving the old epoch's
+			// writes pending lets the next commit swallow them into
+			// its own range.
+			if pidinf.inTx {
+				pidinf.endTx(false)
+			}
 			pidinf = pids.bumpEpoch(pidinf)
 			pidinf.lastActive = time.Now()
 			return pidinf.id, pidinf.epoch

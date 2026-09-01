@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -1977,6 +1978,75 @@ func TestTxnAbortRecordsInvisibleToReadCommitted(t *testing.T) {
 	fs.EachRecord(func(r *kgo.Record) { count++ })
 	if count != 5 {
 		t.Errorf("read_committed consumer saw %d records, want 5 (aborted should be invisible)", count)
+	}
+}
+
+// TestTxnReinitAbortsOpenTxn verifies that a fresh InitProducerID on a
+// transactional ID that has an open transaction aborts it. The producer ID is
+// reused across the init, so leaving the transaction open means the next
+// commit's marker covers the abandoned records and a read_committed consumer
+// sees them.
+func TestTxnReinitAbortsOpenTxn(t *testing.T) {
+	t.Parallel()
+	topic := "txn-reinit-aborts"
+	txnID := "txn-reinit-aborts-id"
+	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Produce 3 records and walk away without ending the transaction.
+	abandoned := newCoverClient(t, c,
+		kgo.DefaultProduceTopic(topic),
+		kgo.TransactionalID(txnID),
+	)
+	if err := abandoned.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := abandoned.ProduceSync(ctx, kgo.StringRecord("abandoned")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A second client on the same transactional ID inits fresh, taking
+	// the ID over, and commits 2 records of its own.
+	taker := newCoverClient(t, c,
+		kgo.DefaultProduceTopic(topic),
+		kgo.TransactionalID(txnID),
+	)
+	if err := taker.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := taker.ProduceSync(ctx, kgo.StringRecord("committed")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := taker.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	consumer := newCoverClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	var got []string
+	deadline := time.After(3 * time.Second)
+	for len(got) < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("timeout: got %v, want 2 committed records", got)
+		default:
+		}
+		consumer.PollRecords(ctx, 10).EachRecord(func(r *kgo.Record) { got = append(got, string(r.Value)) })
+	}
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer shortCancel()
+	consumer.PollRecords(shortCtx, 10).EachRecord(func(r *kgo.Record) { got = append(got, string(r.Value)) })
+	if want := []string{"committed", "committed"}; !slices.Equal(got, want) {
+		t.Errorf("read_committed consumer saw %v, want %v", got, want)
 	}
 }
 
