@@ -1,3 +1,26 @@
+v1.22.0 (unreleased)
+===
+
+This release makes rack aware balancing opt in.
+
+* Rack aware assignment (KIP-881), which v1.21.0 turned on whenever `Rack`
+  was set, now requires the new `BalanceRacks` option. A rack asks brokers to
+  serve fetches from a nearby replica, which only does anything if the
+  brokers run a rack aware replica selector; if they do and every rack has a
+  replica, balancing by the leader's rack moves partitions for nothing. The
+  two are separate decisions now, so if you were relying on rack aware
+  assignment, add `BalanceRacks()`. The client warns at balance time if
+  `BalanceRacks` is on while brokers are returning preferred read replicas.
+
+* `AdjustCooperative` was quadratic in the number of partitions one member is
+  planned of one topic. It is now linear.
+
+## Relevant commits
+
+- [`4ee307d9`](https://github.com/twmb/franz-go/commit/4ee307d9) **improvement** kgo: warn on BalanceRacks with preferred read replicas
+- [`cc640b56`](https://github.com/twmb/franz-go/commit/cc640b56) **behavior change** kgo: add BalanceRacks, gate rack aware balancing behind it
+- [`bcef560c`](https://github.com/twmb/franz-go/commit/bcef560c) **improvement** kgo: drop reassigned partitions in one pass in AdjustCooperative
+
 v1.21.6
 ===
 
