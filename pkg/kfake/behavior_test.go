@@ -2149,6 +2149,98 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	}
 }
 
+// TestTxnProduceUnknownProducerIDPre360 verifies that below KIP-360
+// (InitProducerID v3, Kafka 2.5), a transactional append continuing its
+// sequence into a log that has never seen the producer is rejected with
+// UNKNOWN_PRODUCER_ID. At 2.5 and above the broker seeds state from any
+// first sequence and the same append is accepted.
+func TestTxnProduceUnknownProducerIDPre360(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		initMax int16
+		want    int16
+	}{
+		{"pre-360", 2, kerr.UnknownProducerID.Code},
+		{"post-360", 4, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "t-unknown-pid-" + test.name
+			txid := "txid-unknown-pid-" + test.name
+
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(0, 11) // Produce v11: partitions are added explicitly
+			v.SetMaxKeyVersion(22, test.initMax)
+			c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic), kfake.MaxVersions(v))
+			cl := newPlainClient(t, c, kgo.MaxVersions(v))
+			ctx := context.Background()
+
+			initResp := initProducerID(t, cl, txid, -1, -1, 60000)
+			if initResp.ErrorCode != 0 {
+				t.Fatalf("init: %v", kerr.ErrorForCode(initResp.ErrorCode))
+			}
+
+			addReq := kmsg.NewAddPartitionsToTxnRequest()
+			addReq.TransactionalID = txid
+			addReq.ProducerID = initResp.ProducerID
+			addReq.ProducerEpoch = initResp.ProducerEpoch
+			addT := kmsg.NewAddPartitionsToTxnRequestTopic()
+			addT.Topic = topic
+			addT.Partitions = []int32{0}
+			addReq.Topics = append(addReq.Topics, addT)
+			if _, err := addReq.RequestWith(ctx, cl); err != nil {
+				t.Fatalf("add partitions: %v", err)
+			}
+
+			// Continue the sequence at 7 into a log that has never
+			// seen this producer, as a producer whose topic was
+			// deleted and recreated under it does.
+			rec := kmsg.Record{Key: []byte("k"), Value: []byte("v")}
+			rec.Length = int32(len(rec.AppendTo(nil)) - 1)
+			now := time.Now().UnixMilli()
+			batch := kmsg.RecordBatch{
+				PartitionLeaderEpoch: -1,
+				Magic:                2,
+				Attributes:           0x0010, // transactional
+				LastOffsetDelta:      0,
+				FirstTimestamp:       now,
+				MaxTimestamp:         now,
+				ProducerID:           initResp.ProducerID,
+				ProducerEpoch:        initResp.ProducerEpoch,
+				FirstSequence:        7,
+				NumRecords:           1,
+				Records:              rec.AppendTo(nil),
+			}
+			raw := batch.AppendTo(nil)
+			batch.Length = int32(len(raw) - 12)
+			raw = batch.AppendTo(nil)
+			batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+
+			produceReq := kmsg.NewProduceRequest()
+			produceReq.Version = 11
+			produceReq.Acks = -1
+			produceReq.TimeoutMillis = 5000
+			rt := kmsg.NewProduceRequestTopic()
+			rt.Topic = topic
+			rp := kmsg.NewProduceRequestTopicPartition()
+			rp.Partition = 0
+			rp.Records = batch.AppendTo(nil)
+			rt.Partitions = append(rt.Partitions, rp)
+			produceReq.Topics = append(produceReq.Topics, rt)
+
+			produceResp, err := produceReq.RequestWith(ctx, cl)
+			if err != nil {
+				t.Fatalf("produce: %v", err)
+			}
+			if got := produceResp.Topics[0].Partitions[0].ErrorCode; got != test.want {
+				t.Fatalf("got %v, want %v", kerr.ErrorForCode(got), kerr.ErrorForCode(test.want))
+			}
+		})
+	}
+}
+
 // TestClassicIncompatibleProtocolRejected verifies that a member whose
 // protocols are not supported by all existing members is rejected with
 // INCONSISTENT_GROUP_PROTOCOL.

@@ -154,6 +154,23 @@ func (c *Cluster) checkReqVersion(key, version int16) error {
 	return nil
 }
 
+// maxVersion returns the max version we advertise for a request key, or -1 if
+// we do not advertise the key at all.
+func (c *Cluster) maxVersion(key int16) int16 {
+	v, exists := apiVersionsKeys[key]
+	if !exists {
+		return -1
+	}
+	if c.cfg.maxVersions == nil {
+		return v.MaxVersion
+	}
+	cfgMax, ok := c.cfg.maxVersions.LookupMaxKeyVersion(key)
+	if !ok {
+		return -1
+	}
+	return min(cfgMax, v.MaxVersion)
+}
+
 var (
 	apiVersionsMu   sync.Mutex
 	apiVersionsKeys = make(map[int16]kmsg.ApiVersionsResponseApiKey)
