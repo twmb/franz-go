@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"sync/atomic"
@@ -26,6 +27,55 @@ func (cl *Client) swapRecreatedConsumer(topic string, part int32, oldTP, newTP *
 			"metadata refresh sees topic recreation with resets disabled")
 	}
 	oldTP.swapRecreatedCursorTo(newTP, css, rp)
+}
+
+// mergeRecreatedRecBuf adopts a recreated topic on a producing partition,
+// returning whether the merge is done with this partition. An ID change is a
+// recreation, or rarely a flap from stale metadata. Below ID-ful metadata
+// every ID is zero, nothing here fires, and producing is unchanged.
+func (cl *Client) mergeRecreatedRecBuf(topic string, part int32, oldTP, newTP *topicPartition, retryWhy *multiUpdateWhy) bool {
+	var noID [16]byte
+	rb := oldTP.records
+	newID := newTP.records.topicID
+	if newID == noID {
+		return false
+	}
+
+	rb.mu.Lock()
+	oldID := rb.topicID
+	if oldID == noID {
+		// First sight of an ID for this topic, e.g. a broker upgrade
+		// brought ID-ful metadata. Nothing is keyed to the zero ID, so
+		// we adopt freely.
+		rb.topicID, oldID = newID, newID
+	}
+	regressed := rb.offsetRegressed
+	corroborated := rb.unknownFailures > 0 || regressed || rb.idMismatched
+	rb.mu.Unlock()
+
+	if oldID == newID {
+		return false
+	}
+
+	// We adopt only on produce-wire evidence: a stale-incarnation
+	// rejection, an acked offset regression, or commit-time verification.
+	if !corroborated {
+		*newTP = *oldTP
+		// Keep draining: produce attempts must not stay parked on the
+		// failing flag while we wait for corroboration.
+		newTP.records.clearFailing()
+		retryWhy.add(topic, part, errRecreationPending)
+		return true
+	}
+	cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID for producing",
+		"topic", topic,
+		"partition", part,
+		"old_id", topicID(oldID),
+		"new_id", topicID(newID),
+		"restarting_sequences", !regressed,
+	)
+	oldTP.swapRecreatedRecBufTo(newTP)
+	return true
 }
 
 // mergeRecreatedCursor adopts a recreated topic on a consuming partition,
@@ -70,6 +120,11 @@ func (cl *Client) mergeRecreatedCursor(topic string, part int32, oldTP, newTP *t
 // where you start within one topic's lifetime. NoResetOffset still opts out
 // entirely.
 var recreationResetOffset = NewOffset().AtStart()
+
+// errRecreationUnsureBatch fails buffered records whose produce outcome
+// cannot be known across a topic recreation. Produced records carry it in
+// their promise error.
+var errRecreationUnsureBatch = errors.New("topic was deleted and recreated: a produce of this data went out addressed by topic name without a conclusive response, so it may or may not exist in the new topic; failing rather than risking a duplicate")
 
 // recreationGate arms the strongest tier of topic recreation handling: a
 // topic deleted and recreated under the same name, yielding a new topic ID.
