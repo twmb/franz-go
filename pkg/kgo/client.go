@@ -2610,8 +2610,7 @@ func (cl *Client) UpdateSeedBrokers(addrs ...string) error {
 		seedBrokers = append(seedBrokers, b)
 	}
 
-	// We lock to guard against concurrently updating seeds; we do not need
-	// the lock for what this usually guards.
+	// We lock to guard against concurrently updating seeds.
 	cl.brokersMu.Lock()
 	old := cl.loadSeeds()
 	cl.anySeedIdx = cl.randomSeedIdx(len(seedBrokers))
