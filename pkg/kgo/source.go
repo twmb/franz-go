@@ -115,6 +115,13 @@ func (s *source) removeCursor(rm *cursor) {
 	}
 }
 
+// Out-of-range deferral shapes (cursor.oorPending).
+const (
+	oorNone     int32 = iota
+	oorReset          // plain policy-reset shape (e.g. position below the log start: retention)
+	oorAboveEnd       // position above the log end: the log shrank (recreation, or truncation)
+)
+
 // cursor is where we are consuming from for an individual partition.
 type cursor struct {
 	topic string
@@ -131,8 +138,28 @@ type cursor struct {
 
 	unknownIDFails atomic.Int32
 
-	// priorIDs holds the last two topic IDs we previously held. Written at
-	// the swap with the session stopped, read at the metadata merge.
+	// pendingRecreateID is the new topic ID the previous metadata update
+	// reported. While the held ID is young, the merge swaps only once two
+	// consecutive updates agree on the same new ID, which absorbs a
+	// single stale broker flapping. Only the metadata-update goroutine
+	// touches this.
+	pendingRecreateID [16]byte
+
+	// idAgreedAt is when topicID became our held truth: cursor creation,
+	// or a recreation swap. After recreationStableIDAge, a metadata
+	// response reporting a different ID is believed outright. Only the
+	// metadata-update goroutine touches this.
+	idAgreedAt time.Time
+
+	// positioned mirrors whether we have a real offset. A cursor with no
+	// position yet always waits for a broker rejection before swapping
+	// incarnations: swapped early, a racing old-incarnation committed
+	// offset would be applied to the new topic rather than rejected.
+	positioned atomic.Bool
+
+	// priorIDs holds the last two topic IDs we previously held (see
+	// previouslyHeld). Written at the swap with the session stopped, read
+	// at the metadata merge, like pendingRecreateID.
 	priorIDs [2][16]byte
 
 	// recreationRestart is set when our position is a recreation restart,
@@ -142,6 +169,27 @@ type cursor struct {
 	// we have consumed, oorResetOffset ignores this, so it never needs
 	// clearing.
 	recreationRestart atomic.Bool
+
+	// oorPending defers an OFFSET_OUT_OF_RANGE reset below the gate for
+	// one metadata round, so that a recreation takes the full swap rather
+	// than a plain reset the later swap would repeat, re-delivering
+	// records. The value is the out of range shape: a position above the
+	// log end means the log shrank, which is worth an OffsetForLeaderEpoch
+	// probe when metadata corroborates nothing. The fetch path sets it,
+	// the metadata merge resolves it.
+	oorPending atomic.Int32
+
+	// classifyBackoffUntil (unix nanos) pauses fetching while metadata
+	// classifies a withheld fetch or a deferred out of range. The strip
+	// leaves us at the same offset, so nothing else paces the refetch:
+	// quick polling or back-to-back metadata wakeups would refetch at
+	// round-trip speed, faster than the classifying update can land.
+	classifyBackoffUntil atomic.Int64
+
+	// guardFails counts consecutive record epoch guard withholds, so that
+	// we deliver rather than stall forever when repeated classification
+	// finds no recreation. Only fetch response handling touches this.
+	guardFails int32
 
 	keepControl bool // whether to keep control records
 
@@ -263,6 +311,7 @@ func (c *cursor) allowUsable() {
 // after.
 func (c *cursor) setOffset(o cursorOffset) {
 	c.cursorOffset = o
+	c.positioned.Store(o.offset >= 0)
 }
 
 // oorResetOffset returns what an out of range cursor resets to.
@@ -278,6 +327,14 @@ func (cl *Client) oorResetOffset(c *cursor) Offset {
 		return recreationResetOffset
 	}
 	return cl.cfg.resetOffset
+}
+
+// pauseForClassification stops fetching c until the metadata update that
+// classifies it has had time to land, then re-pokes the source: the wake from
+// that update usually arrives while we are still paused.
+func (s *source) pauseForClassification(c *cursor) {
+	c.classifyBackoffUntil.Store(time.Now().Add(recreationClassifyBackoff).UnixNano())
+	time.AfterFunc(recreationClassifyBackoff+50*time.Millisecond, s.maybeConsume)
 }
 
 // cursorOffsetNext is updated while processing a fetch response.
@@ -817,6 +874,9 @@ func (s *source) createReq() *fetchRequest {
 		if !c.usable() {
 			continue
 		}
+		if time.Now().UnixNano() < c.classifyBackoffUntil.Load() {
+			continue
+		}
 		if s.nodeID != c.leader && c.moveAt > 0 && time.Since(time.Unix(0, c.moveAt)) > s.cl.cfg.recheckPreferredReplicaInterval {
 			rechecks = append(rechecks, cursorOffsetPreferred{
 				cursorOffsetNext: *c.use(),
@@ -1309,6 +1369,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				continue
 			}
 
+			priorState := partOffset.cursorOffset
 			priorOffset := partOffset.offset
 			fp := partOffset.processRespPartition(br, rp, s.cl.cfg.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
@@ -1360,6 +1421,43 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 			case nil:
 				c.unknownIDFails.Store(0)
+				// Below the gate, records whose leader epoch is
+				// below what we already consumed mean our by-name
+				// position now points into a recreated topic, or a
+				// rolled back log. We withhold them, restoring our
+				// pre-response position, and let metadata classify.
+				// Epochs never decrease along one log, so normal
+				// consumption cannot trip this.
+				if !s.cl.recreation.armed.Load() &&
+					priorState.lastConsumedEpoch >= 0 && len(fp.Records) > 0 &&
+					fp.Records[0].LeaderEpoch >= 0 && fp.Records[0].LeaderEpoch < priorState.lastConsumedEpoch {
+					c.guardFails++
+					if c.guardFails <= recreationGuardWithholds {
+						s.cl.cfg.logger.Log(LogLevelWarn, "fetched records carry a leader epoch below what we already consumed; withholding them and classifying (topic recreation, or a rolled back log)",
+							"broker", logID(s.nodeID),
+							"topic", topic,
+							"partition", partition,
+							"records_epoch", fp.Records[0].LeaderEpoch,
+							"last_consumed_epoch", priorState.lastConsumedEpoch,
+						)
+						partOffset.cursorOffset = priorState
+						strip(topic, partition, errRecreationEpochGuard)
+						s.cl.triggerUpdateMetadataNow("fetched records regressed the leader epoch below the recreation gate")
+						s.pauseForClassification(c)
+						break
+					}
+					// Repeated classification found no recreation, so
+					// we deliver rather than stall forever; the
+					// pre-guard behavior always delivered.
+					c.guardFails = 0
+					s.cl.cfg.logger.Log(LogLevelWarn, "delivering records whose leader epoch regressed below what we already consumed; repeated classification found no topic recreation",
+						"broker", logID(s.nodeID),
+						"topic", topic,
+						"partition", partition,
+					)
+				} else if len(fp.Records) > 0 {
+					c.guardFails = 0
+				}
 				keep = true
 
 			case kerr.UnknownTopicID:
@@ -1452,6 +1550,24 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 				switch {
 				case s.nodeID == c.leader: // non KIP-392 case
+					// Below the gate, out of range is the one loud
+					// signal a recreation emits on old versions. We
+					// classify against fresh metadata BEFORE
+					// resetting, so that a recreation takes the full
+					// swap rather than a plain reset the later swap
+					// would repeat, re-delivering records. The merge
+					// resolves the deferral either way.
+					if !s.cl.recreation.armed.Load() && !s.cl.cfg.resetOffset.noReset {
+						shape := oorReset
+						if fp.HighWatermark >= 0 && partOffset.offset > fp.HighWatermark {
+							shape = oorAboveEnd
+						}
+						c.oorPending.Store(shape)
+						strip(topic, partition, fp.Err)
+						s.cl.triggerUpdateMetadataNow("classifying OFFSET_OUT_OF_RANGE below the recreation gate")
+						s.pauseForClassification(c)
+						break
+					}
 					addList(-1, true)
 
 				case partOffset.offset < fp.LogStartOffset: // KIP-392 case 3

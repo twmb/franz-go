@@ -1569,6 +1569,19 @@ type recBuf struct {
 	// previouslyHeld). Only the metadata-update goroutine touches this.
 	priorIDs [2][16]byte
 
+	// pendingRecreateID is the new topic ID the previous metadata update
+	// reported. While the held ID is young, the merge swaps only once two
+	// consecutive updates agree on the same new ID, which absorbs a single
+	// stale broker flapping. Only the metadata-update goroutine touches
+	// this.
+	pendingRecreateID [16]byte
+
+	// idAgreedAt is when topicID became our held truth: recBuf creation,
+	// or a recreation swap. After recreationStableIDAge, a metadata
+	// response reporting a different ID is believed outright. Only the
+	// metadata-update goroutine touches this.
+	idAgreedAt time.Time
+
 	// sink is who is currently draining us. This can be modified
 	// concurrently during a metadata update.
 	//

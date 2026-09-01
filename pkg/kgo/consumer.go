@@ -1472,6 +1472,16 @@ type offsetLoad struct {
 	// committed promptly. Reload retries preserve the mark.
 	recreationSeed bool
 
+	// oorClassify marks an OffsetForLeaderEpoch probe issued to classify
+	// an out of range position whose log shrank, below the gate. The
+	// answer only decides how we name the outcome and which reset
+	// follows: oorReset, the reset the plain out of range path would have
+	// used, unless the answer proves a recreation. Never the divergence
+	// point, which across a recreation is a meaningless spot in the new
+	// topic. Reload retries preserve both fields.
+	oorClassify bool
+	oorReset    Offset
+
 	Offset
 }
 
@@ -2163,6 +2173,54 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 
 	for _, load := range loaded.loaded {
 		s.listOrEpochLoadsLoading.removeLoad(load.topic, load.partition) // remove the tracking of this load from our session
+
+		// A classification probe resets on every conclusive answer;
+		// the OffsetForLeaderEpoch result only decides how we name what
+		// happened. The merge fenced group commits when it issued the
+		// probe, and the chained reset carries recreationSeed so the
+		// fence lifts and the position commits promptly. An errored
+		// probe falls through to the normal retry arm below with its
+		// flags intact.
+		if load.request.oorClassify {
+			var pedl *ErrDataLoss
+			classified := true
+			reset := load.request.oorReset // what the plain out of range path would have used
+			switch {
+			case errors.As(load.err, &pedl):
+				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the log now ends below our consumed position; either substantial truncation, or the topic was deleted and recreated; resetting",
+					"topic", load.topic,
+					"partition", load.partition,
+					"consumed_to", pedl.ConsumedTo,
+					"consumed_epoch", pedl.ConsumedToEpoch,
+					"epoch_now_ends_at", pedl.ResetTo,
+				)
+			case load.err == nil && load.offset < 0:
+				reset = recreationResetOffset // a proven recreation restarts from the new topic's beginning
+				if load.cursor != nil {
+					load.cursor.recreationRestart.Store(true)
+				}
+				s.c.cl.cfg.logger.Log(LogLevelWarn, "out-of-range classification: the broker has no history of the epoch we consumed; the topic was almost certainly deleted and recreated; restarting from the new topic's beginning",
+					"topic", load.topic,
+					"partition", load.partition,
+					"consumed_epoch", load.request.epoch,
+				)
+			case load.err == nil:
+				s.c.cl.cfg.logger.Log(LogLevelInfo, "out-of-range classification found our consumed epoch intact; resetting",
+					"topic", load.topic,
+					"partition", load.partition,
+				)
+			default:
+				classified = false
+			}
+			if classified {
+				reloads.addLoad(load.topic, load.partition, loadTypeList, offsetLoad{
+					replica:        -1,
+					recreationSeed: true,
+					Offset:         reset,
+				})
+				continue
+			}
+		}
 
 		use := func() {
 			if debug {

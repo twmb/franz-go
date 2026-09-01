@@ -125,6 +125,12 @@ type (
 		// previouslyHeld). Written at the swap, read at the merge.
 		priorIDs [2][16]byte
 
+		// idAgreedAt is when topicID became our held truth: creation, or
+		// a recreation swap. After recreationStableIDAge, a metadata
+		// response reporting a different ID is believed outright. Only
+		// the metadata-update goroutine touches this.
+		idAgreedAt time.Time
+
 		cursorsIdx int
 
 		// assigned is true when the cursor's partition is currently

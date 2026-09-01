@@ -260,6 +260,13 @@ loop:
 			// looping+waiting (250ms per wait, 8x), and if things
 			// still fail we will fall into the slower update below
 			// which waits (default) 5s between tries.
+			// A fresh suspected recreation wants its confirming
+			// update in the quick cadence below, however this update
+			// was triggered: the periodic refresh is how we discover
+			// a quiet recreation that produces no wire errors.
+			if err == nil && cl.recreation.confirmNow.Swap(false) {
+				now = true
+			}
 			if now && err == nil && nowTries < 8 {
 				wait := min(cl.cfg.metadataMinAge, 250*time.Millisecond)
 				cl.cfg.logger.Log(LogLevelDebug, "immediate metadata update had inner errors, re-updating",
@@ -640,6 +647,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 			sink:                mp.sns.sink,
 			topicPartitionData:  td,
 			lastAckedOffset:     -1,
+			idAgreedAt:          time.Now(),
 		}
 		r.lingerFn = r.unlingerAndManuallyDrain
 		p.records = r
@@ -649,6 +657,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 			topicID:    mp.topicID,
 			partition:  mp.partition,
 			cursorsIdx: -1, // sentinel: not yet added to a source
+			idAgreedAt: time.Now(),
 		}
 		p.shareCursor.source.Store(mp.sns.source)
 	default:
@@ -660,6 +669,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 			cursorsIdx:         -1,
 			source:             mp.sns.source,
 			topicPartitionData: td,
+			idAgreedAt:         time.Now(),
 			cursorOffset: cursorOffset{
 				offset:            -1, // required to not consume until needed
 				lastConsumedEpoch: -1, // required sentinel
@@ -885,6 +895,11 @@ func (cl *Client) mergeTopicPartitions(
 			)
 			if isProduce {
 				oldTP.records.bumpRepeatedLoadErr(errMissingMetadataPartition)
+			} else if !isShare {
+				// The topic vanished while an out of range reset was
+				// deferred for classification; we cannot probe a
+				// missing topic.
+				cl.resolveDeferredOOR(css, oldTP.cursor, topic, int32(part), false)
 			}
 			retryWhy.add(topic, int32(part), errMissingMetadataPartition)
 			continue
@@ -1015,6 +1030,76 @@ func (cl *Client) mergeTopicPartitions(
 				"old_leader_epoch", oldTP.leaderEpoch,
 				"new_leader_epoch", newTP.leaderEpoch,
 			)
+
+			// Below ID-ful metadata, a persistent epoch rewind is the
+			// only recreation signal there is. Leader epochs never
+			// lower within one partition's lifetime, so a rewind that
+			// survives maxEpochRewinds consecutive updates is a
+			// recreation, or a rolled back unclean election; positions
+			// and sequences are unsafe to keep either way. A
+			// recreation from and to epoch 0, or one whose new epoch
+			// catches up between refreshes, is invisible. With IDs
+			// present the checks above own recreation, and shares
+			// cannot exist this far back.
+			var noID [16]byte
+			switch {
+			case isProduce && oldTP.records.topicID == noID:
+				rb := oldTP.records
+				rb.mu.Lock()
+				exposed := rb.addedToTxn.Load() || len(rb.batches) > 0 || rb.inflight != 0
+				rb.mu.Unlock()
+				if cl.cfg.txnID != nil && exposed {
+					cur := cl.producer.id.Load().(*producerID)
+					cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
+				}
+				cl.cfg.logger.Log(LogLevelWarn, "topic recreation inferred from a persistent leader epoch rewind; restarting produce sequences",
+					"topic", topic,
+					"partition", part,
+					"old_leader_epoch", oldTP.leaderEpoch,
+					"new_leader_epoch", newTP.leaderEpoch,
+				)
+				oldTP.swapRecreatedRecBufTo(newTP)
+				continue
+			case !isProduce && !isShare && oldTP.cursor.topicID == noID:
+				// A persistent rewind has two explanations:
+				// recreation, or an unclean election whose epochs died
+				// with the broker that served them (#119, where a
+				// doomed broker briefly surfaced a higher epoch and
+				// the survivors' real lineage is lower). By name we
+				// cannot tell them apart, so the reset follows the
+				// loss rules; with wall-clock timestamps a real
+				// recreation lands at the new topic's start anyway.
+				//
+				// One shape is certain: a rewind from three or more
+				// above onto a lineage at epoch 2 or below. A revert
+				// to truth lands at the last real epoch, so this needs
+				// every epoch we consumed to have been phantom. That
+				// restarts at the new topic's beginning, immune to
+				// event-time timestamps.
+				css.stop()
+				c := oldTP.cursor
+				reset, msg := cl.oorResetOffset(c),
+					"topic recreation inferred from a persistent leader epoch rewind, or epoch history was lost after unclean elections; resetting to the nearest timestamp"
+				if newTP.leaderEpoch >= 0 && newTP.leaderEpoch <= 2 && c.lastConsumedEpoch-newTP.leaderEpoch >= 3 {
+					reset, msg = recreationResetOffset,
+						"topic recreation inferred from a persistent leader epoch rewind onto a fresh lineage; restarting from the new topic's beginning"
+				}
+				cl.cfg.logger.Log(LogLevelWarn, msg,
+					"topic", topic,
+					"partition", part,
+					"old_leader_epoch", oldTP.leaderEpoch,
+					"new_leader_epoch", newTP.leaderEpoch,
+					"last_consumed_epoch", c.lastConsumedEpoch,
+				)
+				cl.swapRecreatedConsumer(topic, int32(part), oldTP, newTP, css, reset, "topic recreation inferred from a persistent leader epoch rewind")
+				continue
+			}
+		}
+
+		// An out of range reset deferred by the fetch path resolves
+		// now, probing where the wire allows.
+		if !isProduce && !isShare {
+			cl.resolveDeferredOOR(css, oldTP.cursor, topic, int32(part), true)
 		}
 
 		// If the tp data is the same, we simply copy over the records
