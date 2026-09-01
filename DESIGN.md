@@ -1,47 +1,10 @@
-# franz-go Internals
+# franz-go internals
 
-This document is your guide to working on the `kgo` package. It covers how the
-client is structured, what the main code paths do, and what you need to
-understand before changing things.
+How the kgo package is put together: what the main paths do, which goroutines
+own what, and the invariants that have bitten us before. You should know Go
+concurrency and the basics of Kafka (topics, partitions, brokers, groups).
 
-You should be comfortable with Go concurrency (goroutines, channels, mutexes,
-atomics) and the basics of Kafka - topics, partitions, brokers, and consumer
-groups.
-
-## How to Use This Document
-
-**If you are about to make your first change**, read the [Architecture
-Overview](#architecture-overview) and the section for whichever path you are
-modifying (produce, consume, metadata, etc.). Then read [Concurrency
-Patterns](#concurrency-patterns) - the client uses custom primitives that you
-will encounter everywhere.
-
-**If you are debugging a race or deadlock**, go straight to the concurrency
-rules: [cursor useState](#cursor-usestate-sourcego) for consume races, [lock
-ordering](#lock-ordering) for group consumer deadlocks, [batch failure
-rules](#when-can-a-batch-fail) for produce ordering issues.
-
-**If you are looking for a specific file**, see the [File Map](#file-map).
-
-## Table of Contents
-
-- [Architecture Overview](#architecture-overview)
-- [The Produce Path](#the-produce-path)
-- [The Consume Path](#the-consume-path)
-- [Consumer Sessions](#consumer-sessions)
-- [Group Consumers](#group-consumers)
-- [Share Groups](#share-groups)
-- [Transactions](#transactions)
-- [Metadata](#metadata)
-- [Broker Connections](#broker-connections)
-- [Concurrency Patterns](#concurrency-patterns)
-- [Client Metrics (KIP-714)](#client-metrics-kip-714)
-- [File Map](#file-map)
-- [Non-obvious](#non-obvious)
-
----
-
-## Architecture Overview
+## Architecture
 
 ```mermaid
 graph TB
@@ -70,51 +33,27 @@ graph TB
     B1 --> Cxn3[general cxn]
 ```
 
-The core abstractions:
+- `Client` (`client.go`) owns everything: the broker pool, the metadata loop,
+  and the optional producer and consumer.
+- A `sink` (`sink.go`) is the produce side of one broker. It gathers the
+  records destined for that broker and sends them in batched produce requests.
+- A `source` (`source.go`) is the consume side of one broker. It issues fetch
+  requests and buffers the results for polling.
+- A `recBuf` (`sink.go`) buffers the records of one topic partition and is
+  owned by a sink. A `cursor` (`source.go`) tracks where we are consuming one
+  topic partition and is owned by a source. When a partition's leader changes,
+  the metadata loop moves the recBuf or cursor to the new broker's sink or
+  source; this is called migration and happens under locks.
+- A `broker` (`broker.go`) manages the TCP connections to one Kafka broker,
+  up to five of them, split by usage so that one workload cannot block
+  another.
 
-- **Client** (`client.go`): the top-level owner of everything. Created by
-  `NewClient`. Holds the broker pool, the metadata loop, and the optional
-  producer/consumer.
+A share group consumer adds a parallel set of `shareCursor`s on each source.
+The share path reuses the source and broker plumbing but speaks ShareFetch and
+ShareAcknowledge and tracks per record ack state rather than an offset. See
+[Share groups](#share-groups).
 
-- **Sink** (`sink.go`): one per broker, handles the produce side. A sink
-  collects records destined for its broker and sends them in batched produce
-  requests. Think of it as "the outbox for broker N."
-
-- **Source** (`source.go`): one per broker, handles the consume side. A source
-  issues fetch requests to its broker and buffers the results for polling.
-  Think of it as "the inbox from broker N."
-
-- **recBuf** (`sink.go`): one per topic-partition, owned by a sink. This is
-  where records are buffered before being sent. When a partition's leader
-  changes, the recBuf is moved from one sink to another.
-
-- **cursor** (`source.go`): one per topic-partition, owned by a source. Tracks
-  where we are consuming from in that partition (offset, epoch). When a
-  partition's leader changes, the cursor is moved from one source to another.
-
-- **broker** (`broker.go`): represents a Kafka broker and manages its TCP
-  connections. Each broker maintains up to five connections, separated by
-  usage (produce, fetch, group, slow, general) to prevent different workloads
-  from blocking each other.
-
-When the client is configured as a **share group** consumer, sources also
-own a parallel set of `shareCursor` objects (`sourceShare` field). The
-share path piggybacks on the same source/broker plumbing but uses
-ShareFetch / ShareAcknowledge instead of Fetch, and tracks per-record ack
-state instead of an offset cursor. See [Share Groups](#share-groups).
-
-When metadata changes (e.g., partition 3 moves from broker 1 to broker 2),
-the client moves the relevant recBuf or cursor from the old sink/source to
-the new one. This is called **migration** and happens under locks.
-
----
-
-## The Produce Path
-
-### What happens when you call `Produce()`
-
-Here is the full journey of a record from user code to the Kafka broker and
-back:
+## Producing
 
 ```mermaid
 stateDiagram-v2
@@ -138,79 +77,41 @@ stateDiagram-v2
     Failed --> [*]: promise callback called with error
 ```
 
-**Step 1: Validation and backpressure** (`producer.go:Produce`)
+`Produce` (`producer.go`) checks the record has a topic and that we are in a
+valid state (in a transaction, if transactional), then blocks if we are over
+the configured maximum buffered records or bytes. That block is the only
+backpressure.
 
-The client checks that the record has a topic and that we are in a valid
-state (e.g., if transactional, we must be in a transaction). If the number of
-buffered records or bytes exceeds the configured maximum, the call blocks until
-space is available. This is the client's backpressure mechanism.
+`loadPartsAndPartition` looks up the topic's partitions. A topic we have not
+loaded yet parks the record in the unknown topics holding area and triggers a
+metadata refresh; when metadata arrives, held records are partitioned and
+buffered. Otherwise the configured partitioner picks a partition and the record
+goes to that partition's recBuf.
 
-**Step 2: Find the right partition** (`producer.go:loadPartsAndPartition`)
+`bufferRecord` (`sink.go`) appends the record to the recBuf's last batch, or
+starts a new batch when the last is over `maxRecordBatchBytes`. Then
+`checkIfShouldDrainOrStartLinger` decides: with lingering configured and
+exactly one non-full batch, start the linger timer; otherwise, or if a flush is
+in progress, drain now. The timer lives on the recBuf, not the sink, because
+partitions fill at different rates. The timer and its callback are reused
+across cycles, and `isLingering` tracks whether it is armed, since a stopped
+timer object persists.
 
-The client looks up the topic's partition metadata. If the topic hasn't been
-loaded yet (first produce to this topic), the record is buffered in an
-"unknown topics" holding area and a metadata refresh is triggered. Once
-metadata arrives, all held records are flushed to their partitions.
+The sink's `drain` loop backs off if the prior request failed, takes an
+inflight slot, ensures we have a producer id (for idempotence), builds a
+request from every recBuf's ready batches while staying under
+`maxBrokerWriteBytes`, and sends it.
 
-If the topic is known, the configured partitioner (e.g., round-robin, hash by
-key) selects a partition. The record is then handed to that partition's
-`recBuf`.
+`handleReqResp` processes responses in order (below). Per partition: success
+promises the batch's records with their offsets, a retryable error returns the
+batch to its recBuf, and a fatal error promises the records with the error.
 
-**Step 3: Buffer into a batch** (`sink.go:bufferRecord`)
+### Ordered responses
 
-The recBuf tries to append the record to the current (last) batch. A batch is
-a group of records for a single partition that will be serialized together. A
-produce request can contain batches from multiple partitions. If the current
-batch is full (exceeds `maxRecordBatchBytes`), a new batch is started.
-
-After buffering, the recBuf decides: should we drain now, or linger?
-
-**Step 4: Linger or drain** (`sink.go:checkIfShouldDrainOrStartLinger`)
-
-If lingering is configured (common for throughput optimization), and there is
-exactly one non-full batch, the recBuf starts a linger timer. The timer delays
-draining to allow more records to accumulate into the same batch, improving
-compression and reducing request overhead.
-
-If lingering is not configured, or there are multiple batches (meaning one is
-full), or a flush is in progress, draining starts immediately.
-
-**Step 5: Build and send the produce request** (`sink.go:drain`, `createReq`)
-
-The sink's drain loop:
-1. Backs off if the previous request failed
-2. Acquires an inflight semaphore slot (limiting concurrent produce requests)
-3. Ensures the client has a valid producer ID (for idempotency)
-4. Builds a produce request by iterating all recBufs owned by this sink and
-   collecting their ready batches
-5. Sends the request to the broker
-
-The produce request is built with awareness of wire-level size limits - it
-stops adding batches when approaching `maxBrokerWriteBytes`.
-
-**Step 6: Handle the response** (`sink.go:handleReqResp`)
-
-Responses are processed **in order** (see [Sequenced Response
-Handling](#sequenced-response-handling) below). For each partition in the
-response:
-
-- **Success**: the batch's records are "promised" (callbacks called with nil
-  error, offsets filled in)
-- **Retryable error** (leader changed, not enough replicas, etc.): the batch
-  is returned to the recBuf for retry
-- **Fatal error** (message too large, auth failure, etc.): the batch's records
-  are promised with the error
-
-### Sequenced response handling
-
-Kafka's idempotent producer assigns sequence numbers to each batch. The sink
-must process responses in the same order it sent requests so that it handles
-the earliest outstanding batch first. Processing out of order could cause
-incorrect retries or sequence number mismatches (OOOSN - Out Of Order
-Sequence Number).
-
-Produce responses are processed strictly in order using a ring buffer
-(`seqResp` ring on each sink):
+The idempotent producer numbers batches with sequences, so the sink must handle
+responses in the order it sent requests: out of order handling would retry the
+wrong batch and land OUT_OF_ORDER_SEQUENCE_NUMBER. Each sink keeps a `seqResp`
+ring.
 
 ```mermaid
 sequenceDiagram
@@ -233,64 +134,26 @@ sequenceDiagram
     Note over H: goroutine exits
 ```
 
-The key insight: a goroutine is started only when the first element is pushed,
-and it exits when the ring is empty. This avoids running a permanent goroutine
-per sink. This "ring pattern" is used in several places throughout the client
-(see [Concurrency Patterns](#concurrency-patterns)).
+The push of the first element starts the worker, and the worker exits when the
+ring empties, so no sink pays for a permanent goroutine. The same ring pattern
+appears throughout the client; see [Concurrency](#concurrency).
 
-### Linger timer details
+### When a batch can fail
 
-The linger timer lives on the `recBuf` (per topic-partition), not on the sink
-(per broker). This is because different partitions may fill at different rates,
-and we want each partition to independently decide when it has waited long
-enough.
+A non-idempotent client can fail any batch at any time. An idempotent client
+can fail a batch only when `canFailFromLoadErrs` is true, meaning no produce
+response is pending for it, and `unsureIfProduced` is false.
 
-```mermaid
-stateDiagram-v2
-    state "Not Lingering" as NL
-    state "Lingering (timer running)" as L
+`unsureIfProduced` is set on REQUEST_TIMED_OUT and
+NOT_ENOUGH_REPLICAS_AFTER_APPEND: the broker may or may not have persisted the
+batch, so we must retry until we get a definite answer. `canFailFromLoadErrs`
+is cleared while a request is in flight, so a metadata driven error bump cannot
+cancel a batch the broker is in the middle of writing.
 
-    NL --> L: first record in a new batch, not flushing
-    L --> NL: timer fires => drain
-    L --> NL: batch fills up => drain
-    L --> NL: Flush() called => drain
-    L --> L: more records arrive (timer keeps running)
-    NL --> NL: no batches / already draining
-```
+## Consuming
 
-Implementation detail: the timer and callback function are reused across linger
-cycles to minimize allocations. The `isLingering` bool tracks whether the timer
-is active (rather than checking `lingering == nil`) because the timer object
-persists even when stopped.
-
-### When can a batch fail?
-
-This is subtle and important for idempotency. The rules:
-
-1. **Non-idempotent client**: any batch can fail at any time
-2. **Idempotent client**: a batch can only fail if BOTH:
-   - `canFailFromLoadErrs` is true (we are not waiting for a produce response)
-   - `unsureIfProduced` is false (we haven't received an ambiguous response)
-
-Why `unsureIfProduced`? If the broker responds with `REQUEST_TIMED_OUT` or
-`NOT_ENOUGH_REPLICAS_AFTER_APPEND`, the record may or may not have been
-persisted. We cannot cancel it - we must keep retrying until we get a
-definitive success or failure.
-
-Why `canFailFromLoadErrs`? While a produce request is in flight, we do not know
-whether the broker will persist the batch. We set this to false when sending
-and back to true when the response arrives. This prevents metadata-driven error
-bumps from canceling a batch that is currently being written.
-
----
-
-## The Consume Path
-
-### What happens when you call `PollFetches()`
-
-Fetching is designed around a "double buffering" model: while the user is
-processing one set of fetched records, the source is already fetching the next
-set in the background. This keeps the pipeline full.
+Fetching is double buffered: while you process one set of records, the source
+is already fetching the next.
 
 ```mermaid
 sequenceDiagram
@@ -318,16 +181,11 @@ sequenceDiagram
     Poll-->>User: return Fetches
 ```
 
-### Cursors: tracking where we are
+### Cursors
 
-Each topic-partition the client is consuming from has a **cursor**. The cursor
-tracks:
-
-- **offset**: the next offset to fetch
-- **lastConsumedEpoch**: used for truncation detection (KIP-320)
-- **hwm**: the partition's high watermark (how far behind we are)
-
-Cursors have a state machine controlled by an atomic bool (`useState`):
+A cursor tracks the next offset to fetch, the last consumed epoch (for KIP-320
+truncation detection), and the partition's high watermark. Its `useState`
+atomic bool gates whether it can go into a fetch request:
 
 ```mermaid
 stateDiagram-v2
@@ -346,146 +204,60 @@ stateDiagram-v2
     B --> UN: session stopped, buffered data discarded
 ```
 
-**Why an atomic bool?** The state change must be a single operation that
-atomically publishes availability - a mutex would require holding the lock
-across the fetch lifecycle, which is impractical. The atomic gives us a
-lock-free transition that is checked by the fetch loop, set by the poll path,
-and cleared by session management.
-
-**Critical safety rule:** after `allowUsable()` calls `useState.Swap(true)`,
-the cursor is IMMEDIATELY eligible for use by a concurrent fetch goroutine.
-This means:
-
-- You MUST read any cursor fields you need BEFORE the Swap
-- You MUST NOT write any cursor fields AFTER the Swap
-- The pattern is always: remove from source, modify fields, Swap(true), add
-  to source
-
-Violating this rule causes data races. See the doc comment above
-`cursorOffsetPreferred.move` in source.go (the preferred-replica migration
-path) and `removeCursor` / `addCursor` for the full explanation.
+An atomic rather than a mutex because publishing availability must be one
+operation that the fetch loop can check without holding a lock across the
+fetch lifecycle. The consequence is the one rule this package's races come
+from: after `allowUsable` swaps `useState` to true, a concurrent fetch may
+already be using the cursor. Read what you need before the swap, write nothing
+after it, and always remove, modify, swap, add. See the comment on
+`cursorOffsetPreferred.move` in source.go and #1167.
 
 ### Fetch sessions (KIP-227)
 
-Without fetch sessions, every fetch request must include ALL partitions and
-their current offsets. With many partitions, this is a lot of redundant data.
-
-Fetch sessions (KIP-227) fix this: the broker remembers what the client asked
-for last time. On subsequent requests, the client only sends partitions whose
-offsets have changed. The broker only returns partitions that have new data.
-
-The session state lives on each source (`fetchSession` struct):
-- `session.used` maps topic/partition to the last-sent offset and epoch
-- Each fetch response updates this map
-- When a partition is removed from a source, it is added to "forgotten topics"
-  in the next request to tell the broker to stop tracking it
-
-If the broker evicts our session (it has a limited number of session slots),
-it responds with `FETCH_SESSION_ID_NOT_FOUND`, and we start over with a full
+Without sessions every fetch carries every partition and offset. With them the
+broker remembers what we last asked for, we send only partitions whose offsets
+changed, and the broker returns only partitions with new data. Session state is
+per source in `fetchSession`: `used` maps each partition to the last sent
+offset and epoch, every response updates it, and a partition removed from the
+source goes into the next request's forgotten topics. If the broker evicts our
+session it answers FETCH_SESSION_ID_NOT_FOUND and we start over with a full
 fetch.
 
 ### Preferred replicas (KIP-392)
 
-Normally, fetches go to the partition leader. But Kafka supports fetching from
-follower replicas that are closer to the consumer (e.g., same rack/datacenter).
-The broker indicates this by returning a "preferred replica" in the fetch
-response.
+A fetch response can name a preferred replica. We move the cursor to that
+broker's source, note the time in `moveAt`, and every
+`RecheckPreferredReplicaInterval` move back to the leader to see whether the
+preference still holds.
 
-When this happens:
-1. The cursor is moved from the leader's source to the preferred replica's
-   source
-2. The cursor tracks when it was moved (`moveAt`)
-3. Periodically (every `RecheckPreferredReplicaInterval`), the cursor moves
-   back to the leader to re-check if the preferred replica is still optimal
+## Consumer sessions
 
----
+A consumer session is what lets us stop all fetching, drop buffered data, and
+start over when the assignment changes, atomically rather than one source at a
+time. `stopSession` does, in order: cancel the session context so in-flight
+fetches return; store `noConsumerSession` so no source starts a new fetch loop;
+wait for every fetch, list offsets, and epoch load worker to exit; reset every
+fetch session; discard buffered fetches, which returns cursors to their
+pre-fetch offsets; and hand pending offset loads to the next session. Each step
+relies on the one before it. `sessionChangeMu` keeps a metadata update from
+changing assignments while a session is mid stop or start.
 
-## Consumer Sessions
+## Group consumers
 
-A **consumer session** is the coordination layer between all sources, the poll
-loop, and partition assignment changes. It exists because we need a way to
-atomically stop all fetching, discard buffered data, and start fresh when
-partitions are reassigned.
+We implement both group protocols and pick at startup (`should848` in
+`consumer_group_848.go`):
 
-```mermaid
-stateDiagram-v2
-    state "No Session" as NS
-    state "Active" as A
-    state "Stopping" as S
+- Classic (`manage` in `consumer_group.go`): JoinGroup and SyncGroup. The
+  leader runs the configured balancer and ships assignments through
+  SyncGroup; Heartbeat is its own RPC.
+- KIP-848 (`manage848`): one ConsumerGroupHeartbeat carries member info,
+  subscription, and assignment ack, and the broker assigns. We pick the
+  server side assignor (`uniform` for sticky, `range` for range) from your
+  `Balancers` option. Always cooperative.
 
-    NS --> A: partitions assigned (startNewSession)
-    A --> S: reassignment / rebalance (stopSession)
-    S --> NS: all fetches done, buffers cleared
-    NS --> A: new partitions assigned
-```
-
-### Why sessions exist
-
-Consider a consumer group rebalance: the group decides this client should stop
-consuming partitions 0-4 and start consuming 5-9. Without sessions, we would
-need to stop each fetch, discard each buffer, and start each new fetch one at
-a time. With sessions, we:
-
-1. Cancel the session context (all in-progress fetches abort)
-2. Wait for all workers (fetches, offset lookups) to finish
-3. Discard all buffered data
-4. Start a new session with the new partition set
-5. All sources restart fetching for whatever cursors they now own
-
-### Stopping a session in detail
-
-`stopSession` does this in a specific order (each step depends on the previous):
-
-1. **Cancel the session context** - all in-progress fetches see `ctx.Done()`
-   and return quickly
-2. **Store `noConsumerSession`** - prevents any new source from starting a
-   fetch loop
-3. **Wait for all workers to finish** - blocks until every fetch, list-offsets,
-   and epoch-load goroutine has exited
-4. **Reset all fetch sessions** - clears broker-side session state so we start
-   fresh
-5. **Discard all buffered fetches** - releases cursor offsets back to their
-   pre-fetch state
-6. **Return pending loads** - any offset lookups that were in progress are
-   handed to the next session to retry
-
-The `sessionChangeMu` mutex prevents a metadata update from trying to change
-assignments while a session is in the middle of stopping/starting.
-
----
-
-## Group Consumers
-
-A **consumer group** is a set of clients that cooperate to consume a topic.
-Kafka assigns each client a subset of partitions. When clients join or leave,
-the group **rebalances** to redistribute partitions.
-
-The client implements two group protocols and chooses between them at startup
-(see `should848()` in `consumer_group_848.go`):
-
-- **Classic** (`consumer_group.go`, `manage()`): JoinGroup + SyncGroup. The
-  group leader runs the configured balancer client-side and ships the
-  assignment to all members through SyncGroup. Heartbeats are a separate
-  Heartbeat RPC.
-- **Next-gen** (`consumer_group_848.go`, `manage848()`): a single
-  ConsumerGroupHeartbeat RPC carries everything (member info, subscription,
-  assignment ack). The broker runs assignment server-side - the client picks
-  a server-side assignor name (`uniform` for sticky, `range` for range)
-  matching the user's `Balancers` opt. This protocol is always cooperative.
-
-The 848 manage loop falls back to `manage()` if the broker returns
-`UnsupportedVersion` on the first heartbeat - this lets the same client
-binary talk to both old and new brokers without configuration. The fallback
-is one-way: once classic, the client stays classic for that group session.
-Most of the rest of this section describes the classic flow because the 848
-flow has a similar shape (join => assigned => heartbeat => revoke) just
-collapsed into the heartbeat RPC.
-
-### The manage loop
-
-The group consumer has a dedicated goroutine (`manage()` for classic,
-`manage848()` for next-gen) that runs for the lifetime of the group. It
-handles the full lifecycle:
+If the first heartbeat returns UnsupportedVersion, `manage848` hands off to
+`manage` for the rest of the group session. The rest of this section is the
+classic flow; 848 has the same shape collapsed into the heartbeat.
 
 ```mermaid
 stateDiagram-v2
@@ -505,94 +277,38 @@ stateDiagram-v2
     EB --> [*]: context canceled
 ```
 
-Walking through a normal lifecycle:
+`joinAndSync` joins, balances if we are the leader, and syncs.
+`setupAssignedAndHeartbeat` diffs the new assignment against the old, pre
+revokes lost partitions (cooperative only), calls `OnPartitionsAssigned`,
+fetches committed offsets, starts consuming, and enters `heartbeat`. The
+heartbeat loop also watches for fetch offset errors, forced rejoins from
+metadata changes to subscribed topics, forced heartbeats before a
+transactional commit, and cancellation. When it exits, `revoke` gives up
+partitions before rejoining: everything for eager consumers, only what moves
+for cooperative ones (`diffAssigned`), calling `OnPartitionsRevoked` so you
+can commit.
 
-**1. Join and Sync** (`joinAndSync`): the client sends JoinGroup to the broker.
-If elected leader, it runs the configured balancer to assign partitions to all
-group members, then sends the result in SyncGroup. All members receive their
-assignments from SyncGroup.
+Eager versus cooperative applies only to classic. Eager (the pre KIP-429
+default) revokes every partition from every member on every rebalance, so
+nobody consumes for a moment. Cooperative (KIP-429) revokes only the
+partitions that move.
 
-**2. Setup and heartbeat** (`setupAssignedAndHeartbeat`): after joining, the
-client:
-- Computes which partitions were added and which were lost (for cooperative
-  consumers)
-- Pre-revokes lost partitions (cooperative only)
-- Calls the user's `OnPartitionsAssigned` callback
-- Fetches committed offsets for the new partitions
-- Begins consuming from those offsets
-- Enters the heartbeat loop
+With a `Rack` configured, the sticky and range balancers prefer partitions
+whose leader is in our rack (KIP-881); `buildPartitionRacks` in
+`group_balancer.go` builds the topic, partition, rack map once per balance.
+848 forwards `RackID` and lets the broker do the same.
 
-**3. Heartbeat loop** (`heartbeat`): sends periodic HeartbeatRequest to tell
-the broker we are alive. The broker responds with errors if a rebalance is
-needed. The heartbeat loop also watches for:
-- Fetch offset errors (from step 2, which runs concurrently)
-- Forced rejoin signals (from metadata changes to subscribed topics)
-- Context cancellation (client is closing)
-- Forced heartbeats (from EOS before committing)
+Lock ordering is `consumer.mu` then `groupConsumer.mu`, never the reverse.
+`consumer.mu` guards the active cursors and session state; `groupConsumer.mu`
+guards uncommitted offsets and group state.
 
-**4. Revoke** (`revoke`): when the heartbeat loop exits, the client must
-revoke its partitions before rejoining. For eager consumers, ALL partitions
-are revoked. For cooperative consumers, only the partitions that need to move
-are revoked. The user's `OnPartitionsRevoked` callback is called, giving them
-a chance to commit offsets.
+## Share groups
 
-### Eager vs. cooperative consumers
-
-This distinction only applies to the classic protocol. The KIP-848 protocol
-is always cooperative.
-
-**Eager** (default pre-KIP-429): on every rebalance, ALL partitions are
-revoked from ALL members. Then, after rejoining, partitions are reassigned.
-This causes a brief period where no one is consuming anything.
-
-**Cooperative** (KIP-429): only the partitions that are actually moving between
-members are revoked. Everyone else keeps consuming uninterrupted. The client
-handles this with `diffAssigned()`, which computes the difference between the
-last assignment and the new one.
-
-### Rack-aware assignment (KIP-881)
-
-When a `Rack` is configured on the client, the sticky and range balancers
-prefer assigning partitions whose leader replica lives in the same rack as
-the consumer. The mapping (topic => partition => leader rack) is built once
-per balance from cached broker racks and partition leader info; see
-`buildPartitionRacks` and `PartitionRacks` in `group_balancer.go`. The 848
-path forwards `RackID` in `ShareGroupHeartbeat` / `ConsumerGroupHeartbeat`
-and lets the broker's server-side assignor do the equivalent thing.
-
-### Lock ordering
-
-The consumer and group consumer have interacting mutexes. To prevent deadlocks,
-they must always be acquired in this order:
-
-```
-consumer.mu  =>  groupConsumer.mu
-```
-
-If you need both locks, acquire `consumer.mu` first. Never acquire
-`consumer.mu` while holding `groupConsumer.mu`.
-
-What each lock protects:
-- `consumer.mu`: the set of active cursors (`usingCursors`), session state
-- `groupConsumer.mu`: uncommitted offset tracking, group state
-
----
-
-## Share Groups
-
-A **share group** (KIP-932, Kafka 4.0+) is a different consumption model from
-classic consumer groups. Instead of assigning whole partitions exclusively to
-one consumer at a time, a share group assigns each consumer a *subset of the
-partitions in the group's subscription*, but multiple consumers can be reading
-from the same partition concurrently. Each record is acquired with a
-broker-side acquisition lock, individually acknowledged, and may be redelivered
-if not acked before the lock expires.
-
-This model is well-suited to queue-style workloads where per-record latency
-matters more than per-partition ordering, and where slow records should not
-block a partition for everyone.
-
-### What is fundamentally different
+A share group (KIP-932, Kafka 4.0+) assigns each consumer a subset of the
+subscription's partitions, but many consumers can read the same partition at
+once. Each record is acquired under a broker side lock, acknowledged
+individually, and redelivered if the lock expires first. It suits queue
+workloads where one slow record should not hold a partition for everyone.
 
 ```
                  Classic consumer group       Share group
@@ -617,14 +333,10 @@ Group protocol   Classic or KIP-848.          ShareGroupHeartbeat (KIP-932),
                                               same shape as 848.
 ```
 
-Because the model is so different, the share consumer is its own type
-(`shareConsumer` in `consumer_share.go`) sitting alongside `consumer` rather
-than a mode switch inside the classic consumer. It reuses the existing
-broker pool, source per broker, fetchManager, metadata loop, and ring/workLoop
-primitives - but it does NOT use `cursor`, `consumerSession`, or any of the
-offset-commit machinery.
-
-### Architecture
+The model differs enough that `shareConsumer` (`consumer_share.go`) is its own
+type beside `consumer`. It reuses the broker pool, the source per broker, the
+fetchManager, the metadata loop, and the ring and workLoop primitives; it does
+not use `cursor`, `consumerSession`, or any offset commit machinery.
 
 ```mermaid
 graph TB
@@ -645,37 +357,20 @@ graph TB
     ShC1 --> Slab[shareAckSlab per fetched batch<br/>+ shareAckState per record]
 ```
 
-The share consumer overlay on each source (`source.share` of type
-`sourceShare`):
+Each source carries a `sourceShare`: `sessionEpoch` (0 new, incremented per
+successful response, -1 closing), `sessionParts` (what the broker thinks is in
+the session; `createShareFetchReq` diffs the wanted set against it to build the
+add and forget lists), `cursors` (the share cursors whose leader is this
+broker; they migrate between sources like classic cursors, but on a
+`CurrentLeader` hint in a ShareFetch response rather than a metadata refresh),
+and `ackCh` and `ackFlushCh`, which wake the per source `loopShareFetch` for
+"acks pending" and "flush them now".
 
-- `sessionEpoch` - broker-tracked share-fetch session epoch. 0 = new
-  session, incremented on each successful response, -1 = closing.
-- `sessionParts` - set of (topic-id, partition) the broker currently
-  considers part of the session. `createShareFetchReq` diffs the current
-  WANT (assigned + has-data) against this to compute add/forget lists.
-- `cursors` - `[]*shareCursor` for partitions whose leader currently lives
-  on this source's broker. Cursors migrate between sources just like
-  classic cursors do, but the trigger is a `CurrentLeader` hint in a
-  ShareFetch response (see [Leader hints](#leader-hints) below) rather
-  than a metadata refresh.
-- `ackCh` / `ackFlushCh` - wake signals for the per-source
-  `loopShareFetch` goroutine: "you have pending acks to drain" and "drain
-  them right now (don't wait for the timer)".
-
-Each `shareCursor` carries:
-
-- `assigned atomic.Bool` - flipped by the manage loop when the broker
-  hands us / takes away the partition. Unlike classic `useState`, this is
-  NOT toggled at request-build time; the per-source single-threaded
-  `loopShareFetch` plus the fetchManager already serialize fetches, so the
-  classic flip-and-restore dance is unnecessary and would make the code
-  worse.
-- `pendingAcks` and `pendingGaps` - outbound ack queues. User acks land
-  in `pendingAcks`; gap acks (records the broker delivered but the client
-  could not surface, or release-undeliverable on shutdown) land in
-  `pendingGaps`. Both flush on the next ShareFetch / ShareAcknowledge.
-
-### The poll / ack cycle
+Each `shareCursor` has `assigned`, flipped by the manage loop as the broker
+hands us or takes the partition, and `pendingAcks` and `pendingGaps`, the
+outbound queues. Unlike `useState`, `assigned` is not toggled around request
+build: the fetchManager plus the single threaded `loopShareFetch` already
+serialize fetches.
 
 ```mermaid
 sequenceDiagram
@@ -705,194 +400,76 @@ sequenceDiagram
     Src->>SC: enqueue ShareAckCallback, decrement pendingAcks
 ```
 
-Key per-record states (`AckStatus`):
+`AckAccept` advances the broker past the record, `AckRelease` returns it for
+redelivery, `AckReject` archives it, and `AckRenew` (KIP-1222, Kafka 4.2+)
+extends the lock without completing. A renew does not survive the next
+`PollRecords`: `finalizePreviousPoll` auto accepts anything still renewed or
+unset. On close, anything still renewed is released so another consumer gets
+it without waiting for the lock to expire.
 
-- **AckAccept** - broker advances past this record.
-- **AckRelease** - return to the broker for redelivery (delivery count++).
-- **AckReject** - permanently archive (poison-pill handling).
-- **AckRenew** (KIP-1222, Kafka 4.2+) - extend the acquisition lock
-  without completing. Renews do NOT persist across polls: any renewed
-  record not given a terminal status before the next `PollRecords` is
-  auto-accepted by `finalizePreviousPoll`.
+`r.Ack` is lock free: a CAS on the record's `shareAckState.status` (a terminal
+status overrides a renew, never another terminal; a renew needs the zero
+state), then an append to the cursor's `pendingAcks` under `ackMu`, a
+`pendingAcks++` on the consumer, and a non blocking wake of the source. When
+the source builds its next ShareFetch, or a ShareAcknowledge when nothing needs
+fetching, it drains each cursor's acks, dedupes by offset so a renew followed
+by an accept becomes one terminal range (duplicate batches at one offset are
+rejected with INVALID_RECORD_STATE), and serializes compact ranges. Each
+entry's `(source, sessionEpoch)` is a staleness filter: if the session reset or
+the cursor migrated since decode, the broker already released the lock, so the
+ack is dropped. Results land on `sc.callbackRing`, the same ring and spawn on
+empty pattern as `producer.batchPromises`; the drainer runs your
+`ShareAckCallback` and only then subtracts from `pendingAcks`, so `FlushAcks`
+waits for your callbacks, not just the broker.
 
-On client close, any record still in `AckRenew` (or unset) is converted
-to `AckRelease` so another consumer can pick it up immediately rather
-than waiting for the broker's acquisition-lock timeout.
+A ShareFetch response can carry a `CurrentLeader` per partition. `applyMoves`
+applies it under `blockingMetadataFn`, seeding the broker from the response's
+`NodeEndpoints` if we have not met it, and migrates the cursor without a
+metadata round trip.
 
-### Acks: how state lands on the wire
+The share `manage` loop mirrors `manage848`: a client generated member UUID at
+epoch 0; heartbeats at the broker's interval, sending `SubscribedTopicNames`
+and `RackID` only when they change (and again after any error); a new
+assignment flips `assigned` on the affected cursors and wakes their sources.
+UnknownMemberID or FencedMemberEpoch keeps the UUID, like the Java client, but
+rejoins at epoch 0, drops the assignment, and resets every source's session.
+Retryable errors back off; unknown errors surface a fake `ErrGroupSession` to
+the poll path and fire `HookGroupManageError` without dropping the assignment,
+since the broker may still consider us assigned and dropping it early churns.
 
-The hot path for `r.Ack()` must be lock-free. The flow:
-
-1. `r.Ack(status)` does a CAS on the per-record `shareAckState.status`
-   (one of accept/release/reject/renew). Terminal statuses override an
-   existing `AckRenew` but not another terminal; renew is rejected if the
-   record is already in any non-zero state.
-2. If the CAS wins, append a `shareAckEntry{offset, source, status,
-   sessionEpoch}` to the cursor's `pendingAcks` (under cursor `ackMu`)
-   and atomically `pendingAcks++` on the shareConsumer.
-3. Signal the source via `signalShareAcks` (non-blocking send on a 1-slot
-   channel) so its `loopShareFetch` knows there is something to send.
-
-When the source builds its next ShareFetch (or a standalone
-ShareAcknowledge if there are no partitions to fetch from), it drains
-`pendingAcks` per cursor, dedupes by offset (collapsing
-e.g. `AckRenew` => `AckAccept` into a single terminal range so the
-broker does not see duplicate `AcknowledgementBatches` at the same
-offset, which would be rejected with `INVALID_RECORD_STATE`), and
-serializes them as compact ack ranges.
-
-A **staleness filter** on each entry's `(source, sessionEpoch)` drops
-acks the broker would reject anyway: if the source's session was reset
-or the cursor has migrated since the record was decoded, there is no
-acquisition lock to release. The slab carries the same `(ackSource,
-sessionEpoch)` so individual entries do not need to repeat them.
-
-After the broker responds, a `shareCallbackEntry` is pushed onto
-`sc.callbackRing` (the same ring + spawn-on-empty pattern used by
-`producer.batchPromises`) carrying both the per-partition results and
-the count of acks completed. The drainer invokes the user's
-`ShareAckCallback`, then subtracts that count from `sc.pendingAcks`.
-This means `FlushAcks` blocks until the user's callbacks have actually
-returned, not just until the broker replied.
-
-### Leader hints
-
-Classic consumers learn about leader changes via metadata refresh.
-ShareFetch responses can include a `CurrentLeader` per partition - a
-direct hint that "this partition's leader is now node X." The share
-consumer applies these hints in `applyMoves` (under
-`blockingMetadataFn` so it serializes with metadata refresh and
-PurgeTopics), seeding the broker into `sinksAndSources` from the
-response's `NodeEndpoints` if necessary, and migrating the cursor
-between sources without waiting for a metadata round-trip.
-
-### Lifecycle (manage loop)
-
-The share consumer's `manage()` goroutine drives a
-ShareGroupHeartbeat RPC loop, structurally similar to `manage848()`:
-
-1. Generate a client-side member UUID, start at epoch 0.
-2. Heartbeat at the broker-driven interval. Send
-   `SubscribedTopicNames` / `RackID` only when they change since the
-   last successful heartbeat (re-sent on any error).
-3. The heartbeat response either renews the assignment, hands us a new
-   one, or returns nothing. On a new assignment, `assignPartitions`
-   flips `shareCursor.assigned` for added/removed partitions and wakes
-   the affected sources via `maybeShareConsume`.
-4. On `UnknownMemberID` or `FencedMemberEpoch`, keep the same UUID
-   (matches the Java client) but reset epoch to 0 to re-join. Drop the
-   current assignment and reset every source's share session.
-5. On retryable errors (broker dial / coordinator stale / retryable
-   broker errors), back off and retry. On unknown errors, surface a
-   fake `ErrGroupSession` into the poll path AND fire
-   `HookGroupManageError`, but do NOT eagerly drop the assignment
-   (the broker may still consider us assigned; clearing eagerly causes
-   churn).
-
-### Graceful shutdown
-
-`shareConsumer.leave` runs an ordered shutdown:
-
-1. Set `dying` (single-shot guard) and cancel `fm.ctx`. The manage and
-   `loopShareFetch` goroutines select on `fm.ctx.Done` and exit.
-2. Wait on `sc.cond` until `workers == 0`. After this we have
-   exclusive access to all share state.
-3. Under `c.mu`, clear the source ready queue and re-route any unacked
-   `lastPolled` records to `AckRelease` (so another consumer picks them
-   up immediately rather than waiting for the broker's
-   acquisition-lock timeout).
-4. For each source, run `closeShareSession` in parallel: release any
-   buffered-but-never-polled records, then send a FINAL_EPOCH
-   (`sessionEpoch = -1`) ShareAcknowledge with all remaining
-   per-cursor `pendingAcks` piggybacked.
-5. Send a leave heartbeat (`MemberEpoch = -1`). Failure here is
-   recorded on `sc.leaveErr` but does not block close.
-
----
+`shareConsumer.leave` sets `dying` and cancels `fm.ctx`, waits on `sc.cond`
+for `workers == 0`, releases unacked `lastPolled` records under `c.mu`, runs
+`closeShareSession` on every source in parallel (release buffered but unpolled
+records, then a final epoch ShareAcknowledge carrying the remaining
+`pendingAcks`), and sends a leave heartbeat with `MemberEpoch = -1`, recording
+any failure on `sc.leaveErr` without blocking close.
 
 ## Transactions
 
-Kafka supports exactly-once semantics (EOS) through transactions. A
-transaction groups produces and offset commits into an atomic unit: either all
-are committed or all are rolled back. The typical pattern is ETL - consume
-records, transform, produce results, commit input offsets, end transaction.
+A transaction makes produces and offset commits atomic. The common shape is
+ETL: consume, transform, produce, commit the input offsets, end the
+transaction. `GroupTransactSession` wraps the client for that shape: a
+rebalance mid transaction means another member may now own your input
+partitions, so it hooks `OnPartitionsRevoked` and `OnPartitionsLost` and turns
+`End(TryCommit)` into an abort if either fired.
 
-> Future/tabled work: KIP-939 (participation in 2-phase commit) is designed but
-> not built - it is blocked on the broker (the wire version is still marked
-> unstable and the resume path is stubbed). See
-> [`future/KIP939-2PC.md`](future/KIP939-2PC.md) before starting it.
+Every idempotent or transactional producer has a 64-bit producer id and a
+16-bit epoch from InitProducerID. The epoch bumps when a transaction starts,
+when we recover from an error (KIP-360), and on EndTxn (KIP-890). Both go on
+every produce request: the broker dedupes on (id, epoch, sequence), and a
+newer epoch under the same transactional id fences the old producer.
 
-### Transaction lifecycle
+Before produce v12 we send AddPartitionsToTxn the first time a transaction
+produces to a partition. With v12 (KIP-890 phase 2) the broker adds partitions
+itself.
 
-```mermaid
-stateDiagram-v2
-    state "No Transaction" as NT
-    state "In Transaction" as IT
-    state "Ending" as E
-
-    NT --> IT: BeginTransaction()
-    IT --> IT: Produce / Poll (normal work)
-    IT --> E: EndTransaction(TryCommit)
-    IT --> E: EndTransaction(TryAbort)
-    E --> NT: success
-    E --> NT: error (fatal)
-```
-
-### GroupTransactSession
-
-For the common ETL pattern (consume-transform-produce in a group),
-`GroupTransactSession` wraps the client with safety rails:
-
-The key problem: if a rebalance happens while you are producing inside a
-transaction, you must abort. If you commit, you might commit records that
-another group member is also producing (because the partition was reassigned).
-
-`GroupTransactSession` solves this by hooking `OnPartitionsRevoked` and
-`OnPartitionsLost`. If either fires before `End(TryCommit)`, the commit is
-automatically converted to an abort.
-
-### Producer IDs and epochs
-
-Every idempotent/transactional producer has a **producer ID** (a 64-bit int)
-and an **epoch** (a 16-bit int). These are assigned by the broker via
-`InitProducerID`. The ID is long-lived; the epoch is bumped when:
-
-- A new transaction is started (transactional)
-- The producer needs to recover from an error (KIP-360)
-- EndTxn is processed (KIP-890)
-
-The ID and epoch are sent with every produce request. The broker uses them for:
-- **Idempotent deduplication**: the broker rejects duplicate batches with the
-  same (ID, epoch, sequence number) tuple
-- **Transaction fencing**: if a new producer with the same transactional ID
-  gets a higher epoch, the old producer is fenced and can no longer produce
-
-### AddPartitionsToTxn
-
-Before produce request v12, the client must explicitly tell the broker which
-partitions are part of the current transaction via `AddPartitionsToTxn`. This
-happens automatically: the first time a partition is produced to within a
-transaction, the client sends `AddPartitionsToTxn` before (or alongside) the
-produce request.
-
-With produce v12+ (KIP-890 phase 2), this is implicit - the broker
-automatically adds partitions to the transaction when it sees a produce request
-with a transactional ID.
-
----
+KIP-939 (two phase commit participation) is designed but not built; the wire
+version is still unstable and the resume path is stubbed. See
+[`future/KIP939-2PC.md`](future/KIP939-2PC.md) before starting it.
 
 ## Metadata
 
-### Why metadata matters
-
-Every produce and consume operation needs to know which broker is the leader
-for a given partition. This mapping changes over time (brokers restart, load
-balancing, etc.). The metadata loop keeps this mapping current.
-
-### The metadata loop
-
-A single dedicated goroutine runs the metadata loop for the lifetime of the
-client:
+One goroutine runs the metadata loop for the life of the client.
 
 ```mermaid
 sequenceDiagram
@@ -916,172 +493,111 @@ sequenceDiagram
     end
 ```
 
-The metadata loop can be triggered in three ways:
+It runs every `metadataMaxAge` (default five minutes), on
+`triggerUpdateMetadata`, which respects `metadataMinAge` and is used after
+retryable errors, and on `triggerUpdateMetadataNow`, which does not wait and
+is used when we need metadata now: a first produce to a topic, a leader error.
+`blockingMetadataFn` runs a function inside the loop between refreshes, which
+is how `PurgeTopics` avoids racing an update.
 
-1. **Periodic**: every `metadataMaxAge` (default 5 minutes)
-2. **Non-urgent**: `triggerUpdateMetadata` - respects `metadataMinAge` to avoid
-   hammering the broker. Used after retryable errors.
-3. **Immediate**: `triggerUpdateMetadataNow` - bypasses the min-age check.
-   Used when the client needs metadata NOW (first produce to a new topic,
-   partition leader error, etc.)
+`mergeTopicPartitions` reconciles a response with what we hold. For every
+partition we already know, it checks whether the leader changed and migrates
+the recBuf or cursor if so, and records any load error in `retryWhy`. For
+every partition we see for the first time, it creates the recBuf or cursor on
+the right sink or source. Both loops must populate `retryWhy`: it drives up
+to eight retries at about 250ms before the loop falls back to the normal
+interval.
 
-There is also `blockingMetadataFn`, which runs a function atomically within
-the metadata loop. This is used for operations like `PurgeTopics` that need
-to happen between metadata refreshes without racing.
-
-### mergeTopicPartitions
-
-This is the core function that reconciles the metadata response with the
-client's internal state. It has two phases:
-
-**Phase 1: Existing partitions.** For each partition we already know about,
-check if the leader changed. If it did, trigger a migration (move the recBuf
-or cursor to the new leader's sink/source). If the partition has a load error
-(e.g., leader not available), record it in `retryWhy`.
-
-**Phase 2: New partitions.** For each partition we see for the first time,
-create a new recBuf (if producing) or cursor (if consuming) and assign it to
-the appropriate sink/source.
-
-On first metadata load for a topic, only phase 2 runs (there are no existing
-partitions). Both phases must populate `retryWhy` to drive the retry loop -
-if any partition has a transient error, the metadata loop will retry up to 8
-times at ~250ms intervals before falling back to the normal refresh interval.
-
-### Partition migration
-
-When a partition leader changes, the client must move the recBuf or cursor
-from the old broker's sink/source to the new broker's sink/source. For
-producing, this is `migrateProductionTo`:
-
-1. Remove the recBuf from the old sink
-2. Lock the recBuf and update its sink pointer and partition data
-3. Add the recBuf to the new sink
-
-During step 1-2, new records may still be produced to this recBuf and trigger
-drains on the old sink. That is harmless - the old sink will simply not find
-the recBuf in its list.
+Migrating production (`migrateProductionTo`) removes the recBuf from the old
+sink, updates its sink pointer and partition data under `recBuf.mu`, and adds
+it to the new sink. Records buffered in between may trigger drains on the old
+sink, which no longer lists the recBuf, so those triggers are wasted and
+harmless.
 
 ### Topic recreation
 
-The metadata merge is also where topic recreation is handled: a topic deleted
-and recreated under the same name, which the broker reports as a new topic ID.
-These checks run before the epoch-rewind guard, because a new incarnation
-legitimately restarts at epoch 0 and must not look like a stale broker.
+A topic deleted and recreated under the same name comes back with a new topic
+ID, and the merge handles it before the epoch rewind guard, since a new
+incarnation legitimately restarts at epoch 0.
 
-One rule precedes the tiers. An ID we have held for `recreationStableIDAge`
-(`idAgreedAt`, stamped at creation and at each swap) whose metadata now
-differs is believed outright, because staleness is a seconds-scale phenomenon.
-A cursor with no position yet is the exception: it waits for a broker
-rejection: swapped early, a racing old-incarnation committed offset would be
-applied to the new topic rather than rejected (`cursor.positioned`). A younger ID
-corroborates per tier, strongest first:
+An ID we have held for `recreationStableIDAge` (`idAgreedAt`) whose metadata
+now differs is believed outright: staleness is a seconds scale phenomenon. A
+cursor with no position yet is the exception and waits for a broker rejection;
+swapped early, a racing old incarnation committed offset would be applied to
+the new topic rather than rejected (`cursor.positioned`). A younger ID needs
+corroboration:
 
-1. **Gate armed** (`recreationGate`; every connected broker speaks fetch v13).
-   The merge swaps once the wire corroborates: a stale-incarnation rejection
-   (`unknownIDFails` / `unknownFailures`), an acked offset regression
-   (`offsetRegressed`), or commit-time verification (`idMismatched`). An
-   uncorroborated ID change waits, with `errRecreationPending` driving the
-   retry loop; a paused partition simply defers to unpause.
-2. **Below the gate, IDs in metadata.** Adopt once two consecutive updates
-   agree on the same new ID (`pendingRecreateID`), which absorbs a single
-   stale broker flapping. Produce-wire evidence still adopts immediately.
-3. **No IDs, leader epochs only.** Where the epoch-rewind guard would accept a
-   persistently lower epoch, treat it as a recreation instead. A rewind is
-   also what epoch history lost to unclean elections looks like (#119), so the
-   consumer reset follows the nearest-timestamp loss rules, unless the rewind
-   lands from three or more above onto a lineage at epoch 2 or below: a shape
-   only a recreation produces, which restarts from the beginning.
+1. Gate armed (`recreationGate`: every connected broker speaks fetch v13). We
+   swap once the wire corroborates: a stale incarnation rejection
+   (`unknownIDFails`, `unknownFailures`), an acked offset that went backwards
+   (`offsetRegressed`), or commit time verification (`idMismatched`). Until
+   then `errRecreationPending` drives the retry loop.
+2. Below the gate with IDs in metadata: two consecutive updates agreeing on
+   the same new ID (`pendingRecreateID`), which absorbs one stale broker.
+   Produce wire evidence still adopts at once.
+3. No IDs, only leader epochs: a persistently lower epoch, where the rewind
+   guard would otherwise accept it, is treated as a recreation. That is also
+   what lost epoch history after an unclean election looks like (#119), so
+   the consumer resets by the nearest timestamp rules, unless the rewind lands
+   from three or more above onto epoch 2 or below, a shape only a recreation
+   produces.
 
-The swaps live in topics_and_partitions.go: `swapRecreatedCursorTo`,
-`swapRecreatedRecBufTo`, and `swapRecreatedShareCursorTo`. They stop the
-consumer session, which discards buffered old-incarnation fetches, adopt the
-new ID and partition data, and bump a per-object `generation` that requests
-and share slabs stamp so response handling can classify with it. Beyond that:
+The swaps are `swapRecreatedCursorTo`, `swapRecreatedRecBufTo`, and
+`swapRecreatedShareCursorTo` in topics_and_partitions.go. They stop the
+consumer session, adopt the new ID and partition data, and bump a per object
+`generation` that requests and share slabs stamp so response handling can tell
+a dead incarnation's response from a live one. Consumers restart at
+`recreationResetOffset`, the new topic's beginning, through a
+`recreationSeed` list load that also fences group commits and seeds the
+restart position for a prompt recommit (`fenceRecreated`,
+`maybeSeedRecreated`); `NoResetOffset` freezes the partition for `SetOffsets`.
+Producers restart sequences (`needSeqReset`) unless a by-name write already
+re-established the chain, and fail what can never be safely retried
+(`unsureByName` batches, prior generation share acks). A transactional
+producer exposed to the dead incarnation is poisoned with
+`errRecreationAbortTxn`, recoverable in both recovery modes, and
+`EndTransaction(TryCommit)` verifies produced-to topic IDs against fresh
+metadata before the first EndTxn.
 
-- Consumers restart at `recreationResetOffset`, the new topic's beginning,
-  via a `recreationSeed`-marked list load. That load also fences group
-  commits and seeds the restart position for a prompt recommit
-  (`fenceRecreated`, `maybeSeedRecreated`). `NoResetOffset` freezes for
-  `SetOffsets`, and an inferred recreation whose loss hypothesis survives
-  resets nearest-timestamp instead.
-- Producers restart sequences (`needSeqReset`), skipped when a by-name write
-  already re-established the chain, and loud-fail what can never be safely
-  retried: `unsureByName` batches, and prior-generation share acks.
-- A transactional producer with state tied to the dead incarnation is poisoned
-  with `errRecreationAbortTxn`, recoverable in both producer ID recovery
-  modes, and `EndTransaction(TryCommit)` verifies produced-to topic IDs
-  against fresh metadata before the first EndTxn attempt.
-
-Two fetch-side nets close the by-name window between the recreation and the
+Two fetch side checks close the by-name window between the recreation and the
 merge. Records whose leader epoch is below `lastConsumedEpoch` are withheld
 while metadata classifies, bounded by `guardFails`. A below-the-gate
-`OFFSET_OUT_OF_RANGE` defers its reset for one classification round
-(`oorPending`, which records whether the log shrank) so that a recreation
-takes the full swap with a single reset. When the merge corroborates
-nothing and the log shrank, an `OffsetForLeaderEpoch` probe (`oorClassify`)
-names the outcome: no history of our epoch is near-certain recreation, and an
-epoch ending below our position is truncation or recreation, logged as
-either. Every probe outcome resets per policy, never to the divergence
-point, which is a meaningless offset in a new topic, and group commits are
-fenced and reseeded throughout.
+OFFSET_OUT_OF_RANGE defers its reset one metadata round (`oorPending`, which
+also records whether the log shrank) so that a recreation takes the full swap
+with a single reset; if nothing corroborates and the log shrank, an
+OffsetForLeaderEpoch probe (`oorClassify`) decides whether we call it a
+recreation or truncation. Every outcome resets by policy, never to the
+divergence point, which means nothing in a new topic. Both checks pause
+refetching with `classifyBackoffUntil` while the classifying update lands.
 
 ### Cached metadata
 
-For admin-style operations (e.g., kadm), `RequestCachedMetadata` provides a
-caching layer that avoids redundant metadata requests:
+`RequestCachedMetadata` serves kadm style callers: topics are cached with
+timestamps and evicted when stale, a topic ID to name map is kept for 3.1+
+protocols, and AuthorizedOperations is never populated, so callers that need
+it bypass the cache.
 
-- Topics are cached with timestamps and evicted when stale
-- TopicID-to-name mapping is maintained for Kafka 3.1+ (which uses topic IDs
-  in some protocols)
-- The cache does NOT populate AuthorizedOperations (admin users who need auth
-  ops bypass the cache)
-
----
-
-## Broker Connections
-
-### Connection types
-
-Each broker maintains up to five independent TCP connections:
+## Broker connections
 
 | Connection | Used for | Why separate |
 |-----------|----------|--------------|
-| `cxnProduce` | Produce requests | Avoids head-of-line blocking from other requests |
-| `cxnFetch` | Fetch and ShareFetch requests | Both long-poll for `maxWait`; must not block other RPCs |
-| `cxnGroup` | JoinGroup, SyncGroup | Can block for minutes during rebalance |
-| `cxnSlow` | Any timeout-bearing request | Long-running operations |
-| `cxnNormal` | Everything else (incl. heartbeats, ShareAcknowledge) | General purpose |
+| `cxnProduce` | Produce | Avoids head of line blocking from other requests |
+| `cxnFetch` | Fetch and ShareFetch | Both long poll for `maxWait` |
+| `cxnGroup` | JoinGroup, SyncGroup | Can block for minutes during a rebalance |
+| `cxnSlow` | Any request with a timeout field | Long running operations |
+| `cxnNormal` | Everything else, including heartbeats and ShareAcknowledge | |
 
-Without this separation, a long-running fetch (waiting for data) could block a
-produce request from being sent, or a JoinGroup that takes 30 seconds could
-block metadata requests.
+Connections are reaped after `connIdleTimeout` without reads or writes.
 
-Connections are reaped after `connIdleTimeout` of inactivity (no reads or
-writes).
+Requests pipeline on a connection: the broker answers in order and we read in
+order, tracked by the `resps` ring on each `brokerCxn`. If any request on a
+connection fails (cancellation, network error), the whole connection dies and
+every other in-flight request on it gets `errChosenBrokerDead`, which is
+retryable: it means we do not know what happened, not that the broker rejected
+anything.
 
-### Request pipelining
-
-Multiple requests can be in-flight on a single connection simultaneously. The
-broker processes them in order, and the client reads responses in order. This
-pipelining improves throughput by not waiting for each response before sending
-the next request.
-
-The `resps` ring on each `brokerCxn` manages the ordering: each request pushes
-a `promisedResp` onto the ring, and the response reader pops them in order.
-
-**Important implication for error handling:** if any request on a pipelined
-connection fails (context canceled, network error), the entire connection dies.
-All other in-flight requests on that connection receive `errChosenBrokerDead`.
-This is why the produce path must handle `errChosenBrokerDead` as a retryable
-error - it does not mean the batch was rejected, it means we do not know what
-happened.
-
-### I/O and context cancellation
-
-Both `writeConn` and `readConn` spawn a short-lived goroutine to perform
-blocking I/O, then use a `select` to race the I/O completion against context
-cancellation:
+`writeConn` and `readConn` run the blocking I/O in a short lived goroutine and
+race it against the context:
 
 ```go
 writeDone := make(chan struct{})
@@ -1091,35 +607,22 @@ go func() {
 }()
 select {
 case <-writeDone:
-    // normal completion
 case <-ctx.Done():
-    // cancel: force the connection to unblock by setting a past deadline
     cxn.conn.SetWriteDeadline(time.Now())
     <-writeDone
 }
 ```
 
-This pattern is necessary because Go's `net.Conn.Write/Read` are blocking and
-not directly cancelable by context. Setting the deadline to `time.Now()` causes
-the blocked I/O to return immediately with a deadline-exceeded error, which is
-then replaced with the context error.
+`net.Conn` is not cancelable by context; a deadline in the past unblocks it
+with a deadline error, which we replace with the context error.
 
----
-
-## Concurrency Patterns
-
-The client uses several custom concurrency primitives instead of standard
-channels or permanent goroutines. Understanding these patterns is essential
-before modifying the code.
+## Concurrency
 
 ### workLoop (`atomic_maybe_work.go`)
 
-**Problem:** many parts of the client have a "maybe do work" trigger. For
-example, "maybe start draining this sink" or "maybe start fetching from this
-source." Using channels for this requires a permanent goroutine to drain the
-channel. Using a mutex+condition requires careful signaling.
-
-**Solution:** `workLoop` is a three-state atomic state machine:
+Many places have a "maybe do work" trigger: maybe drain this sink, maybe fetch
+from this source. A channel needs a permanent goroutine to drain it. `workLoop`
+is a three state atomic instead:
 
 ```mermaid
 stateDiagram-v2
@@ -1134,30 +637,19 @@ stateDiagram-v2
     W --> U: maybeFinish(again=false) => false (exit loop)
 ```
 
-How it works:
-- `maybeBegin()` tries to transition from Unstarted to Working. If successful,
-  the caller starts a goroutine to do the work. If the state was already
-  Working, it transitions to ContinueWorking (marking that more work arrived).
-- `maybeFinish(again)` is called at the end of each work iteration. If the
-  state is ContinueWorking, it demotes to Working and returns true (keep going).
-  If the state is Working and `again` is false, it transitions to Unstarted and
-  returns false (stop).
-
-This gives us: at most one goroutine running at a time, no work is missed
-(thanks to ContinueWorking), and the goroutine exits when idle (no permanent
-goroutine cost).
-
-Used by: `sink.drainState`, `source.fetchState`,
+`maybeBegin` moves Unstarted to Working and returns true, and the caller
+starts the goroutine; if already Working it moves to ContinueWorking. At the
+end of each iteration `maybeFinish` demotes ContinueWorking to Working and
+returns true, or moves Working to Unstarted and returns false. At most one
+goroutine runs, no trigger is lost, and the goroutine exits when idle. Used by
+`sink.drainState`, `source.fetchState`, and
 `consumer.outstandingMetadataUpdates`.
 
 ### ring (`ring.go`)
 
-**Problem:** we need a queue where producers push items and a worker processes
-them in order. A channel works, but requires a permanent goroutine to drain it
-(you cannot start a goroutine on first push without racing with itself).
-
-**Solution:** a ring buffer where the pusher starts the worker goroutine when
-it pushes the first element, and the worker exits when the ring is empty.
+A queue where pushers add items and one worker processes them in order,
+without a permanent goroutine: the push of the first element starts the
+worker, and the worker exits when the ring empties.
 
 ```mermaid
 sequenceDiagram
@@ -1179,34 +671,22 @@ sequenceDiagram
     Note over W: exit goroutine
 ```
 
-The ring is a dynamically-sized circular buffer: it starts at capacity 8,
-doubles when full, and shrinks back when mostly empty. The `die()` method
-prevents further pushes, which is used when shutting down to ensure no new
-work is accepted.
+The ring starts at capacity 8, doubles when full, and shrinks when mostly
+empty. `die` refuses further pushes at shutdown. A ring may have a max length
+(`initMaxLen`), at which `push` blocks until the worker drains:
+`producer.batchPromises` uses this to backpressure a spin of failing produces
+rather than grow without bound, since a record's promise is its only
+completion and every accepted record costs memory until it runs. Internal
+pushes (sink responses, purge and fail paths, `storePartitionsUpdate`) use
+`pushForce`, which ignores the max: they are already bounded by the buffered
+records admission, and several run under client locks that your promises can
+re-enter, where a parked lock holder would deadlock against the worker, the
+ring's only drainer. The worker must never push at the bound either, which is
+why producing from inside a promise is documented as spawn a goroutine.
 
-A ring can optionally have a max length (`initMaxLen`), at which `push`
-blocks until the worker drains space - `producer.batchPromises` uses this to
-backpressure spin-loops of failing produces (blocking `Produce` and
-`TryProduce` alike) instead of growing without bound: a record's promise is
-its only completion channel, so every accepted record costs memory until the
-promise runs. Internal pushes (sink responses, purge/fail paths,
-`storePartitionsUpdate`) use `pushForce`, which ignores the max: they are
-bounded by the max-buffered-records admission already, and several run under
-client locks that user promises can re-enter - a parked lock-holder would
-deadlock against the worker, the ring's only drainer. The worker itself must
-never push at the bound either, which is why producing from within a promise
-is documented as spawn-a-goroutine: the goroutine's push parks safely while
-the worker keeps draining.
-
-Used by: `sink.seqResps` (ordered produce responses), `producer.batchPromises`
-(callback delivery), `brokerCxn.resps` (ordered response reading).
+Used by `sink.seqResps`, `producer.batchPromises`, and `brokerCxn.resps`.
 
 ### Cursor useState (`source.go`)
-
-An `atomic.Bool` that gates whether a cursor can be used in a fetch request.
-See [Cursors: tracking where we are](#cursors-tracking-where-we-are) for the
-state diagram and [the consume-side invariants](#consume-side) for the ordering
-rules. The short version:
 
 ```go
 func (c *cursor) allowUsable() {
@@ -1216,204 +696,123 @@ func (c *cursor) allowUsable() {
 }
 ```
 
-**Remove, modify, Swap(true), add.** Never modify after Swap. Never add before
-Swap.
+Remove, modify, swap, add. Never modify after the swap, never add before it.
+See [Cursors](#cursors).
 
----
+## Client metrics (KIP-714)
 
-## Client Metrics (KIP-714)
+The broker tells the client which metrics it wants and how often, and the
+client pushes them; this is the reverse of the `plugin/kprom` hook, which
+exposes metrics to you. `metrics_714.go` runs one `pushMetrics` goroutine,
+skipped when client metrics are disabled or the broker does not advertise the
+telemetry RPCs. GetTelemetrySubscriptions assigns a `ClientInstanceID` for the
+client's lifetime and returns the metric prefixes, push interval, accepted
+compression codecs, and max payload; an empty subscription means sleep the
+interval and ask again. Each interval, PushTelemetry sends the subscribed
+metrics in OpenTelemetry encoding, compressed with an accepted codec. Errors
+back off 30s. The metrics accumulate on the request hot paths and roll up at
+push time.
 
-KIP-714 lets a broker collect client-side observability without the application
-wiring anything up: the broker tells the client which metrics it wants and how
-often, and the client pushes them. This is the opposite direction from the
-`plugin/kprom` Prometheus hook (which exposes metrics to the application) -
-KIP-714 metrics flow to the broker.
-
-`metrics_714.go` runs a single `pushMetrics` goroutine. It is skipped when
-client metrics are disabled via config, or when the broker does not advertise
-the telemetry RPCs. The loop is:
-
-1. `GetTelemetrySubscriptions` - ask the broker for its subscription. The
-   broker assigns a `ClientInstanceID` (kept for the client's lifetime) and
-   returns the requested metric prefixes, a push interval, accepted compression
-   codecs, and a max payload size. An empty subscription means "nothing for
-   now" - the client sleeps the push interval and asks again.
-2. `PushTelemetry` - on each interval, serialize the subscribed metrics
-   (OpenTelemetry encoding), compress with a broker-accepted codec, and send.
-   Errors back off (30s) and retry; the loop exits on client close.
-
-The metrics themselves (request latencies, connection and throttle counts,
-etc.) are accumulated on the client's request hot paths and rolled up at push
-time.
-
----
-
-## File Map
+## File map
 
 | File | What it does | Key types/functions |
 |------|-------------|-------------------|
 | `client.go` | Client initialization, sharded request fan-out, cached metadata, coordinator discovery | `Client`, `shardedRequest`, `RequestCachedMetadata` |
-| `config.go` | All configuration options (200+ options) | `Opt`, `cfg` |
-| `broker.go` | TCP connection management, request/response I/O, SASL auth | `broker`, `brokerCxn`, `writeConn`, `readConn` |
-| `sink.go` | Produce buffering, batching, drain loop, produce request building, response handling | `sink`, `recBuf`, `recBatch`, `produceRequest` |
-| `source.go` | Fetch / ShareFetch request building, response parsing, cursor management, record decompression | `source`, `cursor`, `sourceShare`, `fetchRequest`, `fetchSession`, `loopShareFetch` |
-| `producer.go` | `Produce()` entry point, flush, backpressure, unknown topic handling, promise delivery | `producer`, `Produce`, `Flush` |
-| `consumer.go` | Consumer session management, `PollFetches`, partition assignment, offset management | `consumer`, `consumerSession`, `Offset` |
-| `consumer_group.go` | Classic group join/sync/heartbeat, rebalance, cooperative/eager, offset commits | `groupConsumer`, `manage`, `heartbeat` |
-| `consumer_group_848.go` | KIP-848 next-gen consumer group protocol (single-RPC heartbeat, server-side assignment) | `manage848`, `should848`, `g848` |
-| `consumer_share.go` | KIP-932 share groups: ShareGroupHeartbeat lifecycle, per-record ack state, ShareFetch / ShareAcknowledge driving | `shareConsumer`, `shareCursor`, `AckStatus`, `shareAckSlab`, `MarkAcks`, `FlushAcks` |
-| `consumer_direct.go` | Direct (non-group) partition assignment, including regex-based topic discovery off metadata | `directConsumer`, `findNewAssignments` |
-| `metadata.go` | Metadata loop, partition merging, topic/partition creation and migration | `updateMetadataLoop`, `mergeTopicPartitions` |
-| `txn.go` | `GroupTransactSession`, exactly-once semantics, EndTransaction | `GroupTransactSession`, `End` |
-| `record_and_fetch.go` | Public `Record`, `Fetch`, `Fetches` types, iteration helpers | `Record`, `Fetches`, `FetchesRecordIter` |
-| `topics_and_partitions.go` | Internal topic/partition tracking, migration helpers | `topicPartition`, `migrateProductionTo` |
-| `compression.go` | Compression/decompression with sync.Pool reuse | `compressor`, `decompressor` |
-| `partitioner.go` | Partitioning strategies (round-robin, hash, sticky, etc.) | `Partitioner`, `StickyKeyPartitioner` |
-| `group_balancer.go` | Classic group leader-side partition assignors (sticky, range, round-robin), plus rack-aware (KIP-881) | `GroupBalancer`, `stickyBalancer`, `rangeBalancer`, `PartitionRacks` |
-| `hooks.go` | Hook interface definitions for observability | `Hook`, `HookProduceBatchWritten`, etc. |
-| `errors.go` | Error types and helpers | `ErrDataLoss`, `ErrRecordTimeout`, etc. |
-| `atomic_maybe_work.go` | `workLoop` state machine, `lazyI32` atomic helper | `workLoop` |
-| `ring.go` | MPSC ring buffer (replaces channels) | `ring[T]` |
-| `pools.go` | Record/header allocation pool interfaces for zero-alloc consuming | `Pool`, `PoolRecords` |
+| `config.go` | All configuration options | `Opt`, `cfg` |
+| `broker.go` | TCP connection management, request/response I/O, SASL | `broker`, `brokerCxn`, `writeConn`, `readConn` |
+| `sink.go` | Produce buffering, batching, drain loop, request building, response handling | `sink`, `recBuf`, `recBatch`, `produceRequest` |
+| `source.go` | Fetch / ShareFetch request building, response parsing, cursors, decompression | `source`, `cursor`, `sourceShare`, `fetchRequest`, `fetchSession`, `loopShareFetch` |
+| `producer.go` | `Produce`, flush, backpressure, unknown topics, promise delivery | `producer`, `Produce`, `Flush` |
+| `consumer.go` | Consumer sessions, `PollFetches`, assignment, offsets | `consumer`, `consumerSession`, `Offset` |
+| `consumer_group.go` | Classic group join/sync/heartbeat, rebalance, cooperative/eager, commits | `groupConsumer`, `manage`, `heartbeat` |
+| `consumer_group_848.go` | KIP-848 group protocol | `manage848`, `should848`, `g848` |
+| `consumer_share.go` | KIP-932 share groups | `shareConsumer`, `shareCursor`, `AckStatus`, `shareAckSlab`, `MarkAcks`, `FlushAcks` |
+| `consumer_direct.go` | Direct partition assignment, regex topic discovery | `directConsumer`, `findNewAssignments` |
+| `metadata.go` | Metadata loop, partition merging, creation and migration | `updateMetadataLoop`, `mergeTopicPartitions` |
+| `recreation.go` | Topic recreation gate and per-kind merges | `recreationGate`, `mergeRecreatedCursor` |
+| `txn.go` | `GroupTransactSession`, EndTransaction | `GroupTransactSession`, `End` |
+| `record_and_fetch.go` | Public `Record`, `Fetch`, `Fetches` | `Record`, `Fetches`, `FetchesRecordIter` |
+| `topics_and_partitions.go` | Internal topic/partition tracking, migration | `topicPartition`, `migrateProductionTo` |
+| `compression.go` | Compression with sync.Pool reuse | `compressor`, `decompressor` |
+| `partitioner.go` | Partitioners | `Partitioner`, `StickyKeyPartitioner` |
+| `group_balancer.go` | Classic leader side assignors, rack awareness (KIP-881) | `GroupBalancer`, `stickyBalancer`, `rangeBalancer`, `PartitionRacks` |
+| `hooks.go` | Hook interfaces | `Hook`, `HookProduceBatchWritten` |
+| `errors.go` | Error types | `ErrDataLoss`, `ErrRecordTimeout` |
+| `atomic_maybe_work.go` | `workLoop`, `lazyI32` | `workLoop` |
+| `ring.go` | MPSC ring buffer | `ring[T]` |
+| `pools.go` | Allocation pools for zero-alloc consuming | `Pool`, `PoolRecords` |
 | `record_formatter.go` | Printf-style record formatting | `RecordFormatter` |
-| `metrics_714.go` | KIP-714 client telemetry: pushes client-side metrics to the broker on a broker-dictated subscription/interval | `pushMetrics`, `GetTelemetrySubscriptions`/`PushTelemetry` |
+| `metrics_714.go` | KIP-714 client telemetry | `pushMetrics` |
 
----
+## Invariants that have bitten us
 
-## Non-obvious
+Produce side:
 
-This section lists non-obvious invariants that have caused bugs in the past.
-If you are modifying the code, check whether your change violates any of these.
+- Sequence numbers are per partition, not per request. A batch retried on a
+  different sink after a leader move keeps its sequence; `recBuf.seq` tracks
+  the next and `batch0Seq` the sequence at the head of the buffer, so a retry
+  can reset to it.
+- `recBuf.batches[0]` is special. Response handling operates on the first
+  batch, because batches complete in order; a response naming a later batch
+  is skipped.
+- `failAllRecords` locks each batch individually. A concurrent
+  `produceRequest.AppendTo` may be serializing that batch; the recBuf mutex
+  is not enough.
+- Load the producer id BEFORE creating the request. A prior response can
+  trigger `errReloadProducerID`, `producerID()` then sets `needSeqReset`, and
+  request creation reads it. The other order sends old sequences under a new
+  id: OUT_OF_ORDER_SEQUENCE_NUMBER.
 
-### Produce side
+Consume side:
 
-- **Sequence numbers are per-partition, not per-request.** If a batch is
-  retried on a different sink (because the leader moved), it keeps its
-  original sequence number. `recBuf.seq` tracks this, and `batch0Seq` records
-  the sequence at the start of the buffer so we can reset on retry.
+- After `useState.Swap(true)` the cursor is live; any field access races a
+  fetch (#1167).
+- A live session move (`cursorOffsetPreferred.move`) is remove, modify,
+  `Swap(true)`, add: writes before the swap, the add after it. A metadata
+  driven migration stops the session first, so it is a plain remove, modify,
+  add. In both, no source holds the cursor between remove and add.
+- Fetch sessions are per source. Resetting one does not touch the others.
+- `handleReqResp` runs inside a live session and reads cursor fields that
+  metadata updates write. That is safe only because metadata stops the
+  session before writing.
 
-- **`recBuf.batches[0]` is special.** Most produce response logic only operates
-  on the first batch in a recBuf. This is because batches must complete in
-  order - you cannot finish batch 2 before batch 1. If a response references
-  a batch that is not the first, it is skipped.
+Share consumer:
 
-- **`failAllRecords` locks batches individually.** When failing all records in
-  a recBuf, each batch's mutex must be acquired separately because a
-  concurrent `produceRequest.AppendTo` might be reading the batch for
-  serialization. The recBuf mutex alone is not sufficient.
+- Per record state lives in `shareAckSlab`, reached from the record's context
+  (`shareAckFromCtx`) by pointer arithmetic from `records0`. A `Record`
+  materialized outside a fetch decode has no slab and `r.Ack` does nothing.
+- The `(source, sessionEpoch)` on every ack is a staleness filter. If you
+  change how sessions reset or cursors migrate, check the filter still drops
+  what the broker would reject with INVALID_RECORD_STATE.
+- `AckRenew` does not persist across polls; `finalizePreviousPoll` accepts it.
+- `shareCursor.assigned` is not toggled around request build.
+- `leave` must run from a fresh goroutine (`LeaveGroupContext` does). Calling
+  it while holding consumer locks deadlocks against the loops it drains.
 
-- **The producer ID must be loaded BEFORE creating the request.** If a prior
-  produce response triggered `errReloadProducerID`, then `producerID()` sets
-  `needSeqReset`, and creating the request (which reads `needSeqReset`) must
-  happen after. If you swap this order, the request will use old sequence
-  numbers with a new producer ID, causing Out Of Order Sequence Number errors.
+Group consumer:
 
-### Consume side
+- `onAssigned` and `onRevoked` never run concurrently; `assignRevokeSession`
+  guarantees it. Any new path to user callbacks goes through it.
+- The 848 to classic fallback is one way and transfers ownership of closing
+  `manageDone` through `fallbackToClassic`. A new exit from `manage848` must
+  still close `manageDone` exactly once.
+- Heartbeating starts before offsets are fetched, on purpose, so fetch offset
+  errors can arrive mid heartbeat and the loop must handle them.
+- In kfake, `group.manage()` must never call `c.admin()`: it deadlocks against
+  `Cluster.run()`.
 
-- **After `useState.Swap(true)`, the cursor is live.** Any field read or write
-  after this point races with a concurrent fetch. This has caused real bugs
-  (see #1167).
+Metadata:
 
-- **Migrating a cursor: writes before publish, add after - but the exact
-  steps depend on whether a fetch session is live.**
-  - **Live-session move** (the preferred-replica `cursorOffsetPreferred.move`
-    path) must be: remove, modify, `Swap(true)`, add. All field writes happen
-    before the Swap (which publishes availability); the add happens after it
-    (which makes the cursor fetchable). After the Swap, do not touch cursor
-    fields.
-  - **Metadata-driven migration** stops the consumer session first, so no
-    concurrent fetch can race the migration. It is a plain remove, modify, add
-    with no Swap needed (see the `handleReqResp` invariant below - the same
-    session-stop is what makes that safe too).
+- Both loops of `mergeTopicPartitions` must check `loadErr` and populate
+  `retryWhy`. Missing it in the new partitions loop was 40c144d3.
+- Migration runs under `recBuf.mu`; records buffered between remove and add
+  are safe, since the old sink no longer lists the recBuf.
 
-  In both cases, between remove and add no source has the cursor, so no
-  concurrent fetch can pick it up.
+Connections:
 
-- **Fetch sessions are per-source, not per-client.** Each broker tracks its
-  own session state. Resetting one source's session does not affect others.
-
-- **`handleReqResp` runs inside a live consumer session.** It reads cursor
-  fields that metadata updates also modify. This is safe only because metadata
-  updates stop the session before modifying cursors.
-
-### Share consumer
-
-- **Per-record state is in `shareAckSlab`, not on the `Record`.** Slabs
-  are allocated per fetched batch and pointed at from the record's
-  context (`shareAckFromCtx`). `r.Ack` does pointer arithmetic from the
-  slab's `records0` to find the per-record `shareAckState`. If you add
-  a code path that materializes a `Record` outside a fetch decode
-  (e.g. testing helpers, format conversions), do not expect `r.Ack` to
-  do anything for it.
-
-- **The `(source, sessionEpoch)` pair on every ack is a staleness
-  filter, not metadata.** The drain path drops acks whose source has
-  since been reset or whose cursor has migrated, because the broker
-  has already released the acquisition lock and would reject the ack
-  with `INVALID_RECORD_STATE`. If you change how sessions reset or how
-  cursors migrate, also consider whether the filter still does the
-  right thing.
-
-- **`AckRenew` does not persist across polls.** `finalizePreviousPoll`
-  auto-accepts any record still in `AckRenew` (or unset) at the start
-  of the next `PollRecords`. On `leave`, anything still renewed gets
-  released so another consumer can pick it up immediately.
-
-- **`shareCursor.assigned` is NOT toggled at request-build time.**
-  Unlike classic `cursor.useState`, the share path does not flip-and-
-  restore around request build. The fetchManager + per-source
-  single-threaded `loopShareFetch` already serialize fetches; copying
-  the classic dance here makes the code worse without buying anything.
-
-- **`leave` must run from a fresh goroutine.** `LeaveGroupContext`
-  spawns it that way. Calling `leave` directly from a context that
-  holds any consumer locks risks deadlock against the manage / source
-  loops it is waiting to drain.
-
-### Group consumer
-
-- **`onAssigned` and `onRevoked` never run concurrently.** The
-  `assignRevokeSession` ensures this. If you add a new path that calls user
-  callbacks, you must go through this mechanism.
-
-- **848 fallback to classic is one-way.** If `manage848`'s first
-  heartbeat returns `UnsupportedVersion`, it hands off to `manage()`
-  by spawning that goroutine and returning. It transfers ownership of
-  closing `manageDone` via the `fallbackToClassic` flag - if you add
-  another exit path in `manage848`, make sure `manageDone` is still
-  closed exactly once.
-
-- **Heartbeating starts before offsets are fetched.** This is intentional -
-  the broker needs heartbeats to know we are alive. But it means fetch offset
-  errors can arrive while heartbeating, and the heartbeat loop must handle
-  them.
-
-- **In kfake, `group.manage()` must NEVER call `c.admin()`.** This would
-  deadlock between `group.manage()` and `Cluster.run()`. This constraint
-  is kfake-specific but worth noting because kfake tests exercise these paths.
-
-### Metadata
-
-- **`mergeTopicPartitions` has two loops, both matter.** The existing-partitions
-  loop and the new-partitions loop must both check `loadErr` and populate
-  `retryWhy`. Missing this in the new-partitions loop caused a real bug
-  (40c144d3).
-
-- **Migration happens under `recBuf.mu`.** Between removing a recBuf from the
-  old sink and adding it to the new one, records can still be buffered to the
-  recBuf. This is safe - the old sink no longer has the recBuf in its list,
-  so wasted drain triggers are harmless. The new sink picks it up after add.
-
-### Connections
-
-- **Pipelined request cancellation kills the connection.** If you cancel a
-  context for one request, the connection's write/read deadline is set to
-  `time.Now()`, which kills ALL in-flight requests on that connection. Other
-  requests get `errChosenBrokerDead`, which is retryable. This is by design
-  but can cause surprising retry storms.
-
-- **`errChosenBrokerDead` does NOT mean the broker is actually dead.** It
-  means the connection died, often because another request on the same
-  connection was canceled. The broker may have processed the request
-  successfully. For produce requests, this means `unsureIfProduced` must be
-  set because we cannot know if the batch was persisted.
+- Cancelling one pipelined request sets the connection deadline to now, which
+  kills every in-flight request on it; they get the retryable
+  `errChosenBrokerDead`. Expect retry storms if you cancel casually.
+- `errChosenBrokerDead` does not mean the broker died. The broker may have
+  processed the request, which is why a produce under it sets
+  `unsureIfProduced`.
