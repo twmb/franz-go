@@ -51,10 +51,31 @@ func (cl *Client) mergeRecreatedRecBuf(topic string, part int32, oldTP, newTP *t
 	}
 	regressed := rb.offsetRegressed
 	corroborated := rb.unknownFailures > 0 || regressed || rb.idMismatched
+	exposed := rb.addedToTxn.Load() || len(rb.batches) > 0 || rb.inflight != 0
 	rb.mu.Unlock()
 
 	if oldID == newID {
 		return false
+	}
+
+	// Transactions fail on the FIRST observation, not on corroboration:
+	// if this partition is exposed to the transaction (added to it, or
+	// batches buffered or in flight), we poison the producer ID now. A
+	// spurious abort on a metadata flap is loud and recoverable, whereas
+	// waiting would let a commit racing the evidence cover writes that
+	// evaporated with the old incarnation. This is also what lets
+	// commit-time verification trust any recent metadata pass rather than
+	// fetching its own. The swap below still waits for the adopt rules.
+	if cl.cfg.txnID != nil && exposed {
+		if cur := cl.producer.id.Load().(*producerID); cur.err == nil {
+			cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
+			cl.cfg.logger.Log(LogLevelWarn, "topic recreation observed with an active transaction exposed to it; failing the transaction",
+				"topic", topic,
+				"partition", part,
+				"old_id", topicID(oldID),
+				"new_id", topicID(newID),
+			)
+		}
 	}
 
 	// We adopt only on produce-wire evidence: a stale-incarnation
@@ -125,6 +146,15 @@ var recreationResetOffset = NewOffset().AtStart()
 // cannot be known across a topic recreation. Produced records carry it in
 // their promise error.
 var errRecreationUnsureBatch = errors.New("topic was deleted and recreated: a produce of this data went out addressed by topic name without a conclusive response, so it may or may not exist in the new topic; failing rather than risking a duplicate")
+
+// errRecreationAbortTxn poisons the producer ID when a topic this
+// transaction produced to was recreated: committing could cover writes that
+// evaporated with the old incarnation. Wrapping kerr.TransactionAbortable
+// reuses the existing classification, so GroupTransactSession aborts and
+// you retry EndTransaction with TryAbort. maybeRecoverProducerID recognizes
+// the sentinel: we synthesized it and the broker saw nothing fatal, so
+// recovering after the abort is always safe.
+var errRecreationAbortTxn = fmt.Errorf("topic was deleted and recreated during the transaction; the transaction cannot commit safely across topic incarnations: %w", kerr.TransactionAbortable)
 
 // recreationGate arms the strongest tier of topic recreation handling: a
 // topic deleted and recreated under the same name, yielding a new topic ID.

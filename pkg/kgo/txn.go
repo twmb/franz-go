@@ -819,7 +819,43 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 			}
 			cl.producer.inTxn = true
 			cl.producer.endUnconfirmed = unconfirmed
-			return kerr.OperationNotAttempted
+			// Carry the producer id's own error so you can see why
+			// the commit was refused; errors.Is against
+			// OperationNotAttempted still matches.
+			return fmt.Errorf("%w; the producer id error requiring the abort: %w", kerr.OperationNotAttempted, err)
+		}
+
+		// We synthesized the recreation poison, so the broker side
+		// transaction is open and healthy at our current epoch. Below
+		// KIP-890p2 we must abort it on the wire BEFORE recovering:
+		// recovering first leaves the transaction ongoing, the re-init
+		// makes the broker abort it with an epoch bump, and the re-init
+		// retry then arrives with the stale epoch and PRODUCER_FENCED
+		// wedges the producer permanently (seen on a real 3.8 broker).
+		// Under 890p2 a re-init on an ongoing transaction is fine.
+		if errors.Is(err, errRecreationAbortTxn) && !cl.producer.tx890p2.Load() {
+			aerr := cl.doWithConcurrentTransactions(ctx, "EndTxn", func() error {
+				req := kmsg.NewPtrEndTxnRequest()
+				req.TransactionalID = *cl.cfg.txnID
+				req.ProducerID = id
+				req.ProducerEpoch = epoch
+				req.Commit = false
+				resp, err := req.RequestWith(context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4}), cl)
+				if err != nil {
+					return err
+				}
+				return kerr.ErrorForCode(resp.ErrorCode)
+			})
+			// INVALID_TXN_STATE means nothing was ongoing broker side,
+			// every write having been rejected before registering, so
+			// the abort is a no-op. Any other failure degrades to the
+			// reload path, where the broker aborts for us.
+			if aerr != nil && !errors.Is(aerr, kerr.InvalidTxnState) {
+				cl.cfg.logger.Log(LogLevelWarn, "wire abort of the recreation-poisoned transaction failed; relying on the producer id reload to abort it",
+					"transactional_id", *cl.cfg.txnID,
+					"err", aerr,
+				)
+			}
 		}
 
 		// If we recovered the producer ID, we return early, since
@@ -852,6 +888,32 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 			"epoch", epoch,
 		)
 		return nil
+	}
+
+	// Before the FIRST commit attempt only, since an unconfirmed attempt's
+	// fate is sealed and returned above, we verify that no topic this
+	// transaction produced to was deleted and recreated. This is the only
+	// closure for writes that leave no response to inspect: a by-name
+	// write a busy new incarnation silently accepted, and a topic written
+	// to early in the transaction and never touched again. The gap between
+	// the verify and the EndTxn, and TxnOffsetCommit carrying no topic
+	// IDs, are residue no client can close.
+	if commit && len(addedSwapped) > 0 {
+		if err := cl.verifyTxnTopicsForCommit(ctx, addedSwapped); err != nil {
+			// We are not attempting the commit, so we restore
+			// everything this call consumed, same as the failed
+			// producer id arm above. If the verify poisoned the
+			// producer id, your TryAbort recovers it; if the verify
+			// merely could not complete, you can retry the commit.
+			for _, rb := range addedSwapped {
+				rb.addedToTxn.Store(true)
+			}
+			if offsetsWereAdded {
+				g.offsetsAddedToTxn = true
+			}
+			cl.producer.inTxn = true
+			return err
+		}
 	}
 
 	cl.cfg.logger.Log(LogLevelInfo, "ending transaction",
@@ -967,6 +1029,108 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	return err
 }
 
+// verifyTxnTopicsForCommit fetches fresh metadata for every topic this
+// transaction produced to and refuses the commit if any was deleted, or
+// deleted and recreated under a new topic ID. Topics whose incarnation we
+// cannot know, having no ID on either side, pass. A definitive mismatch
+// poisons the producer id with the recreation sentinel so that your TryAbort
+// both aborts and recovers; a verify that could not complete refuses the
+// commit without poisoning, and you can retry it.
+func (cl *Client) verifyTxnTopicsForCommit(ctx context.Context, added []*recBuf) error {
+	// Any metadata pass within the last MetadataMinAge is as good as a
+	// fetch of our own: the merge poisons an exposed transaction on the
+	// FIRST observation of a recreated produced-to topic, and reaching
+	// here means the producer id is healthy. Our own prior verifications
+	// count the same way. This costs at most one metadata fetch per
+	// MetadataMinAge across all commits. What is left is a recreation
+	// inside that window, which the next pass or the produce wire catches,
+	// failing the following transaction: the same residue as a topic
+	// deleted right after a successful commit.
+	now := time.Now()
+	cl.metawait.mu.Lock()
+	lastMeta := cl.metawait.lastUpdate
+	cl.metawait.mu.Unlock()
+	if now.Sub(lastMeta) < cl.cfg.metadataMinAge ||
+		now.Sub(time.Unix(0, cl.producer.lastTxnVerify.Load())) < cl.cfg.metadataMinAge {
+		return nil
+	}
+
+	var noID [16]byte
+	var names []string
+	expected := make(map[string][16]byte, len(added))
+	for _, rb := range added {
+		if _, ok := expected[rb.topic]; ok {
+			continue
+		}
+		rb.mu.Lock()
+		id := rb.topicID
+		rb.mu.Unlock()
+		if id == noID {
+			continue
+		}
+		expected[rb.topic] = id
+		names = append(names, rb.topic)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+
+	_, meta, err := cl.fetchMetadataByName(ctx, false, names, nil)
+	if err != nil {
+		return fmt.Errorf("unable to verify transaction topics before committing: %w", err)
+	}
+	cl.producer.lastTxnVerify.Store(now.UnixNano())
+
+	poison := func(topic, why string) error {
+		cur := cl.producer.id.Load().(*producerID)
+		cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
+		// This fresh read also corroborates the merge, so the swap
+		// lands before the next transaction produces and that one
+		// starts clean on the new incarnation.
+		for _, rb := range added {
+			if rb.topic != topic {
+				continue
+			}
+			rb.mu.Lock()
+			rb.idMismatched = true
+			rb.mu.Unlock()
+		}
+		cl.triggerUpdateMetadataNow("commit-time verification detected a recreated topic")
+		cl.cfg.logger.Log(LogLevelWarn, "commit-time verification found a topic this transaction produced to no longer exists as written; failing the transaction",
+			"transactional_id", *cl.cfg.txnID,
+			"topic", topic,
+			"why", why,
+		)
+		return fmt.Errorf("transaction produced to topic %q, which %s: %w", topic, why, errRecreationAbortTxn)
+	}
+
+	for i := range meta.Topics {
+		mt := &meta.Topics[i]
+		if mt.Topic == nil {
+			continue
+		}
+		name := *mt.Topic
+		want, ok := expected[name]
+		if !ok {
+			continue
+		}
+		delete(expected, name)
+		if err := kerr.ErrorForCode(mt.ErrorCode); err != nil {
+			if errors.Is(err, kerr.UnknownTopicOrPartition) {
+				return poison(name, "was deleted")
+			}
+			return fmt.Errorf("unable to verify topic %q before committing: %w", name, err)
+		}
+		if mt.TopicID != noID && mt.TopicID != want {
+			return poison(name, "was deleted and recreated")
+		}
+	}
+	for name := range expected {
+		return poison(name, "is no longer known to the cluster")
+	}
+	return nil
+}
+
 // This returns if it is necessary to recover the producer ID (it has an
 // error), whether it is possible to recover, and, if not, the error.
 //
@@ -1018,7 +1182,15 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 	}
 
 	var recoverable bool
-	if cl.producer.tx890p2.Load() {
+	if errors.Is(err, errRecreationAbortTxn) {
+		// We synthesized this poison and the broker saw nothing fatal,
+		// so recovering after the abort is always safe. This is ahead
+		// of the mode split below because the sentinel wraps
+		// TransactionAbortable, which the pre-890p2 arm would classify
+		// as unrecoverable and wedge every cluster running
+		// transaction.version < 2.
+		recoverable = true
+	} else if cl.producer.tx890p2.Load() {
 		// Under KIP-890 part 2 (transaction.version=2 in effect for
 		// this client's transactions), InvalidProducerIDMapping and
 		// InvalidProducerEpoch are not recoverable; only
@@ -1035,7 +1207,17 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 	} else {
 		kip360 := cl.producer.idVersion >= 3 && (errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.InvalidProducerIDMapping))
 		kip588 := cl.producer.idVersion >= 4 && errors.Is(ke, kerr.InvalidProducerEpoch /* || err == kerr.TransactionTimedOut when implemented in Kafka */)
-		recoverable = kip360 || kip588
+		// Below KIP-360 (InitProducerID v3, brokers 2.5), a plain
+		// re-init on the transactional id still recovers: it carries no
+		// epoch to be fenced on, and the coordinator bumps the epoch
+		// and aborts anything ongoing. UNKNOWN_PRODUCER_ID there means
+		// the broker lost or never had our per-log state, either from
+		// retention or because the append hit a log that never saw us:
+		// below 2.5 an unknown producer's first append must start at
+		// sequence 0, so a chain continued into a recreated topic is
+		// rejected.
+		pre360 := cl.producer.idVersion < 3 && errors.Is(ke, kerr.UnknownProducerID)
+		recoverable = kip360 || kip588 || pre360
 	}
 
 	if !recoverable {
