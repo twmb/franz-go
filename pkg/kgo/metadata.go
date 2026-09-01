@@ -394,6 +394,10 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	}
 	groupExternal.updateLatest(latest)
 
+	// The fetch above refreshed the broker list; re-evaluate the gate
+	// before any merge below consults it.
+	cl.evalRecreationGate()
+
 	// If regex consuming AND we issued a metadata request to forcefully
 	// create topics, we merge any topics missing into the all-request from
 	// the create-request. It is possible we want to keep failed creation
@@ -410,10 +414,13 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	// retain their ID mapping from prior responses.
 	//
 	// If a topic was deleted and recreated, the broker returns a new
-	// ID for the same name. We do NOT add the new ID if the old ID
-	// is still present - the old mapping is preserved until the user
-	// explicitly purges via PurgeTopicsFromClient. This avoids having
-	// two IDs for the same topic name.
+	// ID for the same name. Armed, we adopt the new ID - this is what
+	// resolves KIP-848 assignments of the new incarnation - keeping the
+	// old entry alongside until nothing references it (cleanStaleID2T
+	// below). Disarmed, we do NOT add the new ID while the old is
+	// present; the old mapping is preserved until you explicitly purge
+	// via PurgeTopicsFromClient.
+	armed := cl.recreation.armed.Load()
 	{
 		old := cl.id2tMap()
 		merged := make(map[[16]byte]string, len(old)+len(latest))
@@ -431,10 +438,9 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 			}
 			if _, exists := knownNames[mt.topic]; exists {
 				// This name already has an ID in the map.
-				// Only update if it's the same ID (normal
-				// case), skip if it's a different ID
-				// (recreated topic).
-				if _, sameID := merged[mt.id]; sameID {
+				// Update if it's the same ID (normal case) or
+				// if we can adopt recreations; skip otherwise.
+				if _, sameID := merged[mt.id]; sameID || armed {
 					merged[mt.id] = mt.topic
 				}
 				continue
@@ -559,6 +565,8 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 			)
 		}
 	}
+
+	cl.cleanStaleID2T(latest, tpsProducerLoad, tpsConsumerLoad)
 
 	return retryWhy, nil
 }
