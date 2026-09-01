@@ -109,8 +109,21 @@ type (
 		// errors, mirroring cursor.unknownIDFails: the error is
 		// transient on a just-created topic while brokers sync, so we
 		// strip it for a few fetches, but persistent means the topic
-		// was recreated and we surface it forever (stall loudly).
+		// was recreated and we surface it forever below the recreation
+		// gate (stall loudly); armed, it corroborates the swap.
 		unknownIDFails atomic.Int32
+
+		// generation counts the topic incarnations we have consumed;
+		// the metadata merge bumps it at a recreation swap. Acquired
+		// records stamp it at decode, so acknowledgments for a prior
+		// incarnation, whose broker acquisition state died with it, are
+		// invalidated rather than re-addressed to the new ID (see
+		// filterStaleEntries).
+		generation atomic.Int32
+
+		// priorIDs holds the last two topic IDs we previously held (see
+		// previouslyHeld). Written at the swap, read at the merge.
+		priorIDs [2][16]byte
 
 		cursorsIdx int
 
@@ -192,7 +205,8 @@ type (
 		lastOffset   int64
 		source       *source
 		sessionEpoch int32
-		ackType      int8 // uniform type for the entire range
+		generation   int32 // cursor incarnation at decode; see shareCursor.generation
+		ackType      int8  // uniform type for the entire range
 	}
 
 	// shareAckState is per-record ack state (24 bytes), used as
@@ -251,6 +265,7 @@ type (
 		cursor               *shareCursor
 		acqLockDeadlineNanos int64
 		sessionEpoch         int32
+		generation           int32 // cursor incarnation at decode; see shareCursor.generation
 	}
 
 	// shareCallbackEntry is pushed onto the callbackRing. The drainer
@@ -1974,6 +1989,7 @@ func (s *source) releaseUndeliverable(cursor *shareCursor, acquired []kmsg.Share
 			lastOffset:   ar.LastOffset,
 			source:       s,
 			sessionEpoch: epoch,
+			generation:   cursor.generation.Load(),
 			ackType:      int8(AckRelease),
 		})
 	}
@@ -2249,8 +2265,19 @@ func filterStaleEntries(s *source, epoch int32, drains []cursorAckDrain) (nUserA
 		// Filter user ack entries.
 		filteredEntries := d.entries[:0]
 		var dropErr error
+		gen := d.cursor.generation.Load()
 		for _, e := range d.entries {
 			switch {
+			case e.slab.generation != gen:
+				// The record came from a prior incarnation, whose
+				// acquisition state died with it. Re-addressing the
+				// ack to the new ID could acknowledge an unrelated
+				// record at the same offset, so we drop it; the old
+				// data is gone by definition.
+				nStaleUserAcks++
+				if dropErr == nil {
+					dropErr = errRecreationShareAck
+				}
 			case e.slab.ackSource == s && e.slab.sessionEpoch > epoch:
 				nStaleUserAcks++
 				if dropErr == nil {
@@ -2268,10 +2295,12 @@ func filterStaleEntries(s *source, epoch int32, drains []cursorAckDrain) (nUserA
 		}
 		d.entries = filteredEntries
 
-		// Filter gap/release ranges (same source/epoch check).
+		// Filter gap/release ranges (same generation/source/epoch check).
 		filteredGaps := d.gaps[:0]
 		for _, g := range d.gaps {
 			switch {
+			case g.generation != gen:
+				// prior-incarnation gap; drop silently
 			case g.source == s && g.sessionEpoch > epoch:
 				// stale gap; drop silently (not counted in pendingAcks)
 			case g.source != s:
@@ -2344,6 +2373,7 @@ func buildAckRanges(entries []*shareAckState, gaps []shareAckRange) (ranges []sh
 			lastOffset:   e.offset,
 			source:       e.slab.ackSource,
 			sessionEpoch: e.slab.sessionEpoch,
+			generation:   e.slab.generation,
 			ackType:      t,
 		})
 	}
@@ -2359,7 +2389,8 @@ func coalesceAppendRange(out []shareAckRange, r shareAckRange) []shareAckRange {
 	if n := len(out); n > 0 {
 		last := &out[n-1]
 		if last.ackType == r.ackType && last.source == r.source &&
-			last.sessionEpoch == r.sessionEpoch && last.lastOffset+1 == r.firstOffset {
+			last.sessionEpoch == r.sessionEpoch && last.generation == r.generation &&
+			last.lastOffset+1 == r.firstOffset {
 			last.lastOffset = r.lastOffset
 			return out
 		}
@@ -2808,7 +2839,9 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 	// in updateWhy.
 	if updateWhy != nil {
 		why := updateWhy.reason(fmt.Sprintf("share fetch had inner topic errors from broker %d", s.nodeID))
-		if updateWhy.isOnly(kerr.UnknownTopicOrPartition) || updateWhy.isOnly(kerr.UnknownTopicID) {
+		lazy := updateWhy.isOnly(kerr.UnknownTopicOrPartition) ||
+			updateWhy.isOnly(kerr.UnknownTopicID) && !s.cl.recreation.armed.Load()
+		if lazy {
 			s.cl.triggerUpdateMetadata(false, why)
 		} else {
 			s.cl.triggerUpdateMetadataNow(why)
@@ -2871,6 +2904,7 @@ func (s *source) processSharePartition(topicName string, cursor *shareCursor, se
 				cursor:               cursor,
 				acqLockDeadlineNanos: acqLockDeadlineNanos,
 				sessionEpoch:         sessionEpoch,
+				generation:           cursor.generation.Load(),
 			}
 		},
 	}, &fakePart, sc.cfg.decompressor, nil)
@@ -2980,6 +3014,7 @@ func (s *source) processSharePartition(topicName string, cursor *shareCursor, se
 					lastOffset:   r.Offset - 1,
 					source:       s,
 					sessionEpoch: sessionEpoch,
+					generation:   cursor.generation.Load(),
 					ackType:      gapType,
 				})
 			}
@@ -3005,6 +3040,7 @@ func (s *source) processSharePartition(topicName string, cursor *shareCursor, se
 				lastOffset:   ar.LastOffset,
 				source:       s,
 				sessionEpoch: sessionEpoch,
+				generation:   cursor.generation.Load(),
 				ackType:      gapType,
 			})
 		}
