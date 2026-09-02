@@ -457,10 +457,10 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		g.initExternal(topicPartitionCount)
 	}
 
-	// KIP-881: build partition rack info for rack-aware assignment.
-	// We use cached broker racks and partition leaders from local
-	// metadata. This requires no extra fetches.
-	if cb, ok := memberBalancer.(*ConsumerBalancer); ok {
+	// KIP-881: build partition rack info for rack-aware assignment if
+	// the user opted in. We use cached broker racks and partition leaders
+	// from local metadata. This requires no extra fetches.
+	if cb, ok := memberBalancer.(*ConsumerBalancer); ok && g.cfg.balanceRacks {
 		cb.partitionRacks = g.buildPartitionRacks(cb, topicPartitionCount)
 	}
 
