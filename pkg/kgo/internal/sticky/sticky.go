@@ -43,10 +43,11 @@ type balancer struct {
 
 	memberNums map[string]uint16 // member id => index into members
 
-	topicNums  map[string]uint32 // topic name => index into topicInfos
-	topicInfos []topicInfo
-	topicNames []string // topicNum => topic name
-	partOwners []uint32 // partition => owning topicNum
+	topicNums   map[string]uint32 // topic name => index into topicInfos
+	topicInfos  []topicInfo
+	topicNames  []string   // topicNum => topic name
+	partOwners  []uint32   // partition => owning topicNum
+	subscribers [][]uint16 // topicNum => members subscribed to it
 
 	// Stales tracks partNums that are doubly subscribed in this join
 	// where one of the subscribers is on an old generation.
@@ -80,6 +81,11 @@ type balancer struct {
 	memberRacks []uint16
 	partRacks   []uint16
 	nRacks      int
+
+	// origOwner is who held each partition before this balance, or
+	// unassignedPart for one nobody held. The repair uses this to keep
+	// partitions where they were.
+	origOwner []uint16
 }
 
 // topicInfo holds no topic name: it is indexed in the hottest loops here,
@@ -347,9 +353,9 @@ func Balance(members []GroupMember, topics map[string]int32) Plan {
 
 // BalanceWithRacks performs sticky partitioning with rack-aware assignment
 // (KIP-881). partitionRacks maps topic => partition index => rack of the
-// partition leader. When non-nil and members also have racks, unassigned
-// partitions are preferentially placed on rack-matching members before
-// falling back to normal assignment.
+// partition leader. When non-nil and members also have racks, the plan
+// keeps every member's partitions in its own rack wherever balance allows,
+// ahead of keeping partitions where they were.
 func BalanceWithRacks(members []GroupMember, topics map[string]int32, partitionRacks map[string][]string) Plan {
 	if len(members) == 0 {
 		return make(Plan)
@@ -362,6 +368,7 @@ func BalanceWithRacks(members []GroupMember, topics map[string]int32, partitionR
 	b.assignUnassignedAndInitGraph()
 	b.initPlanByNumPartitions()
 	b.balance()
+	b.repairAssignment()
 	return b.into()
 }
 
@@ -518,6 +525,7 @@ func (b *balancer) sortMemberByLiteralPartNum(memberNum int) {
 // partitions from the plan that no longer exist in the client.
 func (b *balancer) assignUnassignedAndInitGraph() {
 	topicPotentials, memberSubs := b.topicPotentials()
+	b.subscribers = topicPotentials
 
 	for _, topicMembers := range topicPotentials {
 		// If the number of members interested in this topic is not the
@@ -536,6 +544,13 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	partitionConsumers := b.dropUnwantedPartitions(memberSubs)
 
 	b.tryRestickyStales(topicPotentials, partitionConsumers)
+
+	// After restickying, not before: giving a partition back to an older
+	// generation's claimant changes who counts as having come in with it.
+	b.origOwner = make([]uint16, len(partitionConsumers))
+	for i := range partitionConsumers {
+		b.origOwner[i] = partitionConsumers[i].originalNum
+	}
 
 	if !b.isComplex && len(topicPotentials) > 0 {
 		if b.partRacks != nil {
@@ -777,13 +792,15 @@ func (b *balancer) tryRestickyStales(
 
 // assignRackAware pre-assigns unassigned partitions to the least loaded
 // member in the partition's rack, up to an even share each. Only the
-// uniform path uses this; the complex path prefers a member in the
-// partition's rack while assigning.
+// uniform path uses this; the repair after balancing settles the rest.
 func (b *balancer) assignRackAware(
 	partitionConsumers []partitionConsumer,
 	topicPotentials [][]uint16,
 ) {
-	maxQuota := (cap(b.partOwners) + len(b.members) - 1) / len(b.members)
+	// Capping at the floor of an even share, not the ceiling, means the
+	// fill after this lifts everybody to within one level, so balancing
+	// has nothing to move.
+	maxQuota := cap(b.partOwners) / len(b.members)
 
 	rackHeaps := make([]membersByPartitions, b.nRacks+1) // by rack; noRack stays empty
 	for _, m := range topicPotentials[0] {
