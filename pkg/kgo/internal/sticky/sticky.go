@@ -589,7 +589,15 @@ func (b *balancer) topicPotentials() ([][]uint16, []uint64) {
 			if !exists {
 				continue
 			}
-			memberSubs[memberNum*nsubWords+int(topicNum)/64] |= 1 << (topicNum % 64)
+			// Subscriptions arrive in other members' join metadata and
+			// can repeat a topic. Counting the repeat would make the
+			// topic look like it has more subscribers than the group
+			// has members, which is the complex balancing test.
+			word, bit := memberNum*nsubWords+int(topicNum)/64, uint64(1)<<(topicNum%64)
+			if memberSubs[word]&bit != 0 {
+				continue
+			}
+			memberSubs[word] |= bit
 			memberNums := topicPotentials[topicNum]
 			if cap(memberNums) == 0 {
 				memberNums = topicPotentialsBuf[:0:perTopic]
