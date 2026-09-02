@@ -2611,3 +2611,21 @@ func TestRackAwareSparseRacksComplex(t *testing.T) {
 		t.Errorf("total partitions %d, want 8", total)
 	}
 }
+
+// Rack aware pre-assignment caps each member at the floor of an even share,
+// so that filling the rest by load leaves the plan within one level and
+// balancing has nothing to move.
+func TestRackAwareAssignStaysWithinOneLevel(t *testing.T) {
+	t.Parallel()
+
+	b := newBalancer(large.members, large.topics, large.partitionRacks)
+	b.parseMemberMetadata()
+	b.assignUnassignedAndInitGraph()
+	lo, hi := len(b.partOwners), 0
+	for m := range b.plan {
+		lo, hi = min(lo, len(b.plan[m])), max(hi, len(b.plan[m]))
+	}
+	if hi-lo > 1 {
+		t.Errorf("rack aware assignment left members between %d and %d partitions", lo, hi)
+	}
+}

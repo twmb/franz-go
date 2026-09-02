@@ -795,7 +795,10 @@ func (b *balancer) assignRackAware(
 	partitionConsumers []partitionConsumer,
 	topicPotentials [][]uint16,
 ) {
-	maxQuota := (cap(b.partOwners) + len(b.members) - 1) / len(b.members)
+	// Capping at the floor of an even share, not the ceiling, means the
+	// fill after this lifts everybody to within one level, so balancing
+	// has nothing to move.
+	maxQuota := cap(b.partOwners) / len(b.members)
 
 	rackHeaps := make([]membersByPartitions, b.nRacks+1) // by rack; noRack stays empty
 	for _, m := range topicPotentials[0] {
