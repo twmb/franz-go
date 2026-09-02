@@ -2154,16 +2154,19 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 // sequence into a log that has never seen the producer is rejected with
 // UNKNOWN_PRODUCER_ID. At 2.5 and above the broker seeds state from any
 // first sequence and the same append is accepted.
-func TestTxnProduceUnknownProducerIDPre360(t *testing.T) {
+func TestProduceUnknownProducerIDPre360(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
 		name    string
+		txn     bool
 		initMax int16
 		want    int16
 	}{
-		{"pre-360", 2, kerr.UnknownProducerID.Code},
-		{"post-360", 4, 0},
+		{"txn-pre-360", true, 2, kerr.UnknownProducerID.Code},
+		{"txn-post-360", true, 4, 0},
+		{"idempotent-pre-360", false, 2, kerr.UnknownProducerID.Code},
+		{"idempotent-post-360", false, 4, 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -2177,21 +2180,36 @@ func TestTxnProduceUnknownProducerIDPre360(t *testing.T) {
 			cl := newPlainClient(t, c, kgo.MaxVersions(v))
 			ctx := context.Background()
 
-			initResp := initProducerID(t, cl, txid, -1, -1, 60000)
+			var initResp *kmsg.InitProducerIDResponse
+			var attrs int16
+			if test.txn {
+				initResp = initProducerID(t, cl, txid, -1, -1, 60000)
+				attrs = 0x0010 // transactional
+			} else {
+				initReq := kmsg.NewPtrInitProducerIDRequest()
+				initReq.ProducerID = -1
+				initReq.ProducerEpoch = -1
+				var err error
+				if initResp, err = initReq.RequestWith(ctx, cl); err != nil {
+					t.Fatalf("init: %v", err)
+				}
+			}
 			if initResp.ErrorCode != 0 {
 				t.Fatalf("init: %v", kerr.ErrorForCode(initResp.ErrorCode))
 			}
 
-			addReq := kmsg.NewAddPartitionsToTxnRequest()
-			addReq.TransactionalID = txid
-			addReq.ProducerID = initResp.ProducerID
-			addReq.ProducerEpoch = initResp.ProducerEpoch
-			addT := kmsg.NewAddPartitionsToTxnRequestTopic()
-			addT.Topic = topic
-			addT.Partitions = []int32{0}
-			addReq.Topics = append(addReq.Topics, addT)
-			if _, err := addReq.RequestWith(ctx, cl); err != nil {
-				t.Fatalf("add partitions: %v", err)
+			if test.txn {
+				addReq := kmsg.NewAddPartitionsToTxnRequest()
+				addReq.TransactionalID = txid
+				addReq.ProducerID = initResp.ProducerID
+				addReq.ProducerEpoch = initResp.ProducerEpoch
+				addT := kmsg.NewAddPartitionsToTxnRequestTopic()
+				addT.Topic = topic
+				addT.Partitions = []int32{0}
+				addReq.Topics = append(addReq.Topics, addT)
+				if _, err := addReq.RequestWith(ctx, cl); err != nil {
+					t.Fatalf("add partitions: %v", err)
+				}
 			}
 
 			// Continue the sequence at 7 into a log that has never
@@ -2203,7 +2221,7 @@ func TestTxnProduceUnknownProducerIDPre360(t *testing.T) {
 			batch := kmsg.RecordBatch{
 				PartitionLeaderEpoch: -1,
 				Magic:                2,
-				Attributes:           0x0010, // transactional
+				Attributes:           attrs,
 				LastOffsetDelta:      0,
 				FirstTimestamp:       now,
 				MaxTimestamp:         now,

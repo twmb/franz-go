@@ -216,13 +216,11 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					errCode = kerr.InvalidTxnState.Code
 				}
 
-				// Brokers below 2.5 (KIP-360) have no
-				// accept-any-first-sequence for unknown producer
-				// state: an append continuing its sequence into a log
-				// that never saw the producer is rejected. We model
-				// this for transactional appends only, keeping the
-				// 2.5+ leniency above for idempotent-only producers.
-				if errCode == 0 && txnal && !window.seen && b.FirstSequence != 0 && c.maxVersion(int16(kmsg.InitProducerID)) < 3 {
+				// Brokers below 2.5 (KIP-360) reject an append that
+				// continues its sequence into a log that never saw
+				// the producer, transactional or not. 2.5+ accepts
+				// any first sequence for unknown producer state.
+				if errCode == 0 && window != nil && !window.seen && b.FirstSequence != 0 && c.maxVersion(int16(kmsg.InitProducerID)) < 3 {
 					errCode = kerr.UnknownProducerID.Code
 				}
 
