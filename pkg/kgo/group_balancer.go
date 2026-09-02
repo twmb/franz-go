@@ -466,10 +466,10 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		g.initExternal(topicPartitionCount)
 	}
 
-	// KIP-881: build partition rack info for rack-aware assignment.
-	// We use cached broker racks and partition leaders from local
-	// metadata, which we refreshed above if we had to.
-	if cb, ok := memberBalancer.(*ConsumerBalancer); ok {
+	// KIP-881: build partition rack info for rack-aware assignment if
+	// the user opted in. We use cached broker racks and partition leaders
+	// from local metadata, which we refreshed above if we had to.
+	if cb, ok := memberBalancer.(*ConsumerBalancer); ok && g.cfg.balanceRacks {
 		cb.partitionRacks = g.buildPartitionRacks(cb, topicPartitionCount)
 	}
 
@@ -560,6 +560,9 @@ func (b *ConsumerBalancer) anyMemberRack() bool {
 // updates keep those topics cached, since we ask for them, but a user's
 // metadata request for other topics evicts them (see storeCachedMeta).
 func (g *groupConsumer) needRackMeta(memberBalancer GroupMemberBalancer, topics map[string]struct{}) bool {
+	if !g.cfg.balanceRacks {
+		return false
+	}
 	cb, ok := memberBalancer.(*ConsumerBalancer)
 	if !ok || !cb.anyMemberRack() {
 		return false
