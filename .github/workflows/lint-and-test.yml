@@ -127,6 +127,9 @@ jobs:
                 KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
                 KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
                 KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS: 5
+                # The share ETL test releases, bails, and kills enough that
+                # a record can hit the default limit of 5 and be archived.
+                KAFKA_GROUP_SHARE_DELIVERY_COUNT_LIMIT: 10
                 KAFKA_SASL_ENABLED_MECHANISMS: SCRAM-SHA-256
                 KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/jaas.conf"
               volumes:
@@ -152,6 +155,9 @@ jobs:
           KGO_TEST_STABLE_FETCH: true
           KGO_TEST_SCRAM_SEEDS: 127.0.0.1:9094
           KGO_TEST_SCRAM: testuser:testpass
+      - name: Dump Kafka logs
+        if: failure()
+        run: docker compose logs --no-color kafka
       - name: Cleanup
         if: always()
         run: docker compose down -v

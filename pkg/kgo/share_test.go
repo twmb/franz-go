@@ -379,8 +379,10 @@ func TestShareGroupETL(t *testing.T) {
 	}
 
 	// Without -race, a 500k-record 2-hop share ETL finishes in 20-60s
-	// even when running alongside TestGroupETL / TestTxnEtl. 5m is
-	// generous slack.
+	// even when running alongside TestGroupETL / TestTxnEtl. 4m is
+	// generous slack and stays under CI's `go test -timeout 5m`, so a
+	// hang fails with the missing keys below instead of dying in the
+	// alarm's goroutine dump.
 	//
 	// Under -race the whole hot path (atomics, maps, channels) is
 	// instrumented and can slow full-suite execution ~10x on a single
@@ -388,7 +390,7 @@ func TestShareGroupETL(t *testing.T) {
 	// We use 19m there so this test doesn't fail in the 1-in-20 long-tail
 	// iteration. Outer `go test -timeout` must be >= 20m when running
 	// with -race.
-	testCtxTimeout := 5 * time.Minute
+	testCtxTimeout := 4 * time.Minute
 	if testIsRace {
 		testCtxTimeout = 19 * time.Minute
 	}
@@ -653,12 +655,14 @@ func TestShareGroupETL(t *testing.T) {
 		if ctx.Err() != nil {
 			lvl1.mu.Lock()
 			n1 := len(lvl1.accepted)
+			dc1 := lvl1.maxDC
 			// Collect up to 20 missing keys (at level 2) to aid
 			// debugging: on chaos failures, knowing which keys
 			// never propagated is far more useful than the raw
 			// accept count.
 			var missing []int
 			lvl2.mu.Lock()
+			dc2 := lvl2.maxDC
 			for i := range totalRecords {
 				if _, rej := lvl1.rejected[i]; rej && lvl1.accepted[i] == 0 {
 					continue
@@ -672,8 +676,8 @@ func TestShareGroupETL(t *testing.T) {
 			}
 			lvl2.mu.Unlock()
 			lvl1.mu.Unlock()
-			t.Fatalf("timed out: level 1 accepted %d, level 2 accepted %d, expected %d; first missing at level 2: %v",
-				n1, n, expected, missing)
+			t.Fatalf("timed out: level 1 accepted %d (max dc %d), level 2 accepted %d (max dc %d), expected %d; first missing at level 2: %v",
+				n1, dc1, n, dc2, expected, missing)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
