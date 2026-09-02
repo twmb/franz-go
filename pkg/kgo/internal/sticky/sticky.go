@@ -968,6 +968,11 @@ func (b *balancer) balanceComplex() {
 
 			// If we could not find a steal path, this
 			// member is not static (will never grow).
+			//
+			// We remove through level, not min: deleting from the tree
+			// swaps items between nodes, so min.item may by now be a
+			// different level. The delete re-finds the min for the
+			// same reason.
 			level.removeMember(memberNum)
 			if len(level.members) == 0 {
 				b.planByNumPartitions.delete(b.planByNumPartitions.min())
