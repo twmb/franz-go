@@ -1,7 +1,8 @@
 v1.22.0 (unreleased)
 ===
 
-This release makes rack aware balancing opt in.
+This release makes rack aware balancing opt in and makes the sticky balancers
+exactly optimal on balance, then rack placement, then stickiness.
 
 * Rack aware assignment (KIP-881), which v1.21.0 turned on whenever `Rack`
   was set, now requires the new `BalanceRacks` option. A rack asks brokers to
@@ -12,11 +13,38 @@ This release makes rack aware balancing opt in.
   assignment, add `BalanceRacks()`. The client warns at balance time if
   `BalanceRacks` is on while brokers are returning preferred read replicas.
 
+* The sticky balancers now keep as many partitions in place as the balance
+  allows, exactly. Balancing was already load optimal, but it moved whichever
+  partition its search found first and never revisited a partition carried
+  over from the previous assignment. With `BalanceRacks`, a partition whose
+  leader moved to another rack was also never re-examined, so rack locality
+  decayed toward what random placement gives as leadership moved. A repair
+  pass after balancing now settles all three at once by cancelling improving
+  rotations through a table of interchangeable partitions by members, which
+  is a min-cost flow. Brute force over 185k small instances and a flow oracle
+  over larger shapes agree the result is optimal. Rack placement outranks
+  stickiness, so the first rebalance after enabling `BalanceRacks` moves
+  whatever is off rack.
+
+* Sticky balancing is faster, most of all on rejoins and on groups whose
+  members subscribe to different topics. Against master, a rejoin of 100
+  members over 1600 topics of 100 partitions goes from 351ms to 24ms, a regex
+  shaped group of 500 members over 20,000 topics from 176ms and 810MB to 12ms
+  and 9MB, and 2001 members over 500 topics of 2000 partitions where one
+  member subscribes narrowly from 3.4s to 0.3s. Fresh balances with uniform
+  subscriptions are unchanged; with `BalanceRacks`, a million partitions
+  across 2000 members pay about 15% for the repair.
+
 * `AdjustCooperative` was quadratic in the number of partitions one member is
   planned of one topic. It is now linear.
 
 ## Relevant commits
 
+- [`2a4908b9`](https://github.com/twmb/franz-go/commit/2a4908b9) **improvement** kgo: cap rack aware pre-assignment at the floor of an even share
+- [`59b613bf`](https://github.com/twmb/franz-go/commit/59b613bf) **improvement** kgo: search the sticky steal graph over partition owners
+- [`09384e04`](https://github.com/twmb/franz-go/commit/09384e04) **improvement** kgo: repair the sticky plan to the best balance, rack, and stickiness
+- [`0edea6c3`](https://github.com/twmb/franz-go/commit/0edea6c3) **bugfix** kgo: ignore a repeated topic in a member's sticky subscription
+- [`a2606184`](https://github.com/twmb/franz-go/commit/a2606184) **improvement** kgo: cut per-partition work out of sticky balancing
 - [`4ee307d9`](https://github.com/twmb/franz-go/commit/4ee307d9) **improvement** kgo: warn on BalanceRacks with preferred read replicas
 - [`cc640b56`](https://github.com/twmb/franz-go/commit/cc640b56) **behavior change** kgo: add BalanceRacks, gate rack aware balancing behind it
 - [`bcef560c`](https://github.com/twmb/franz-go/commit/bcef560c) **improvement** kgo: drop reassigned partitions in one pass in AdjustCooperative
