@@ -102,9 +102,12 @@ type ConsumerBalancer struct {
 	metadatas []kmsg.ConsumerMemberMetadata
 	topics    map[string]struct{}
 
-	// partitionRacks maps topic => partition index => leader rack.
-	// nil when rack-aware assignment is not active.
+	// partitionRacks maps topic => partition index => leader rack, or is
+	// nil if no member reported a rack or no leader has one. Any balancer
+	// may read it; the built in balancers use it only if balanceRacks is
+	// set, see BalanceRacks.
 	partitionRacks map[string][]string
+	balanceRacks   bool
 
 	err error
 }
@@ -466,11 +469,19 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		g.initExternal(topicPartitionCount)
 	}
 
-	// KIP-881: build partition rack info for rack-aware assignment.
-	// We use cached broker racks and partition leaders from local
-	// metadata, which we refreshed above if we had to.
+	// KIP-881: build partition rack info from cached broker racks and
+	// partition leaders, which we refreshed above if we had to. Any balancer
+	// may read it; the built in ones use it only with BalanceRacks.
 	if cb, ok := memberBalancer.(*ConsumerBalancer); ok {
 		cb.partitionRacks = g.buildPartitionRacks(cb, topicPartitionCount)
+		cb.balanceRacks = g.cfg.balanceRacks
+
+		// A preferred read replica means the brokers run a rack aware
+		// replica selector and fetches are already rack local, so
+		// assigning partitions by leader rack gains nothing.
+		if cb.balanceRacks && g.cl.sawPreferredReplica.Load() {
+			g.cl.cfg.logger.Log(LogLevelWarn, "BalanceRacks is on but brokers are returning preferred read replicas; fetches are already rack local and rack aware balancing is assigning rack-local leader partitions for nothing", "group", g.cfg.group)
+		}
 	}
 
 	// If the returned balancer is a ConsumerBalancer (which it likely
@@ -807,9 +818,9 @@ func (*rangeBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) Into
 		assigned := make([]bool, numPartitions)
 		assignCount := make([]int, nConsumers)
 
-		// Phase 1: if rack info is available, assign rack-matching
-		// partitions first. This is a no-op when partitionRacks is nil.
-		if topicRacks := b.partitionRacks[topic]; topicRacks != nil {
+		// Phase 1: with BalanceRacks and rack info, assign rack-matching
+		// partitions first.
+		if topicRacks := b.partitionRacks[topic]; b.balanceRacks && topicRacks != nil {
 			for ci, consumer := range potentialConsumers {
 				rack := memberRack[consumer.MemberID]
 				if rack == "" {
@@ -989,7 +1000,13 @@ func (s *stickyBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) I
 		})
 	})
 
-	p := &BalancePlan{sticky.BalanceWithRacks(stickyMembers, topics, b.partitionRacks)}
+	var plan sticky.Plan
+	if b.balanceRacks {
+		plan = sticky.BalanceWithRacks(stickyMembers, topics, b.partitionRacks)
+	} else {
+		plan = sticky.Balance(stickyMembers, topics)
+	}
+	p := &BalancePlan{plan}
 	if s.cooperative {
 		p.AdjustCooperative(b)
 	}
