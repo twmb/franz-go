@@ -729,6 +729,7 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	c.topicID = new.cursor.topicID
 	c.topicPartitionData = new.topicPartitionData
 	c.unknownIDFails.Store(0)
+	c.guardFails = 0
 	c.metadataBackoffUntil.Store(0)
 
 	// Nothing from the old incarnation may leak into the new one: we clear
