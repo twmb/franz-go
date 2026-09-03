@@ -153,6 +153,11 @@ type cursor struct {
 	// faster than the update can land.
 	metadataBackoffUntil atomic.Int64
 
+	// guardFails counts consecutive record epoch guard withholds, so that
+	// we deliver rather than stall forever when repeated metadata rounds
+	// find no recreation. Only fetch response handling touches this.
+	guardFails int32
+
 	keepControl bool // whether to keep control records
 
 	cursorsIdx int // updated under source mutex
@@ -1315,7 +1320,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				continue
 			}
 
-			priorOffset := partOffset.offset
+			priorState := partOffset.cursorOffset
 			fp := partOffset.processRespPartition(br, rp, s.cl.cfg.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
 				if moving := kmove.maybeAddFetchPartition(resp, rp, c); moving {
@@ -1339,7 +1344,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			// control/aborted records advance the offset even when
 			// not kept, and a compacted empty batch advances via its
 			// preserved last offset.
-			if fp.Err == nil && len(fp.Records) == 0 && partOffset.offset == priorOffset && len(rp.RecordBatches) > 0 {
+			if fp.Err == nil && len(fp.Records) == 0 && partOffset.offset == priorState.offset && len(rp.RecordBatches) > 0 {
 				strip(topic, partition, errFetchNoProgress)
 				continue
 			}
@@ -1366,6 +1371,46 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 			case nil:
 				c.unknownIDFails.Store(0)
+				// By name (below fetch v13), records whose leader
+				// epoch is below what we already consumed mean our
+				// position now points into a recreated topic, or a
+				// rolled back log. We withhold them, restoring our
+				// pre-response position, and let the next metadata
+				// update decide. Epochs never decrease along one log,
+				// so normal consumption cannot trip this. A v13 fetch
+				// of a dead ID is rejected instead, and below 2.8
+				// metadata has no topic ID to compare, so the records
+				// deliver as they always did.
+				if resp.Version < 13 && c.topicID != ([16]byte{}) &&
+					priorState.lastConsumedEpoch >= 0 && len(fp.Records) > 0 &&
+					fp.Records[0].LeaderEpoch >= 0 && fp.Records[0].LeaderEpoch < priorState.lastConsumedEpoch {
+					c.guardFails++
+					if c.guardFails <= recreationGuardWithholds {
+						s.cl.cfg.logger.Log(LogLevelWarn, "fetched records carry a leader epoch below what we already consumed; withholding them until metadata answers (topic recreation, or a rolled back log)",
+							"broker", logID(s.nodeID),
+							"topic", topic,
+							"partition", partition,
+							"records_epoch", fp.Records[0].LeaderEpoch,
+							"last_consumed_epoch", priorState.lastConsumedEpoch,
+						)
+						partOffset.cursorOffset = priorState
+						strip(topic, partition, errRecreationEpochGuard)
+						s.cl.triggerUpdateMetadataNow("fetched records regressed the leader epoch on a by-name fetch")
+						s.pauseForMetadata(c)
+						break
+					}
+					// Repeated metadata rounds found no recreation, so
+					// we deliver rather than stall forever; the
+					// pre-guard behavior always delivered.
+					c.guardFails = 0
+					s.cl.cfg.logger.Log(LogLevelWarn, "delivering records whose leader epoch regressed below what we already consumed; repeated metadata rounds found no topic recreation",
+						"broker", logID(s.nodeID),
+						"topic", topic,
+						"partition", partition,
+					)
+				} else if len(fp.Records) > 0 {
+					c.guardFails = 0
+				}
 				keep = true
 
 			case kerr.UnknownTopicID, kerr.InconsistentTopicID:

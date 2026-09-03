@@ -26,6 +26,12 @@ const (
 	// records), so that counts of those fetches measure metadata rounds
 	// rather than round trips.
 	recreationMetadataBackoff = 250 * time.Millisecond
+
+	// recreationGuardWithholds bounds how many times in a row the record
+	// epoch guard withholds a fetch before delivering it loudly. After
+	// five metadata rounds we are never worse than the pre-guard
+	// behavior, which always delivered.
+	recreationGuardWithholds = 5
 )
 
 // mergeRecreatedRecBuf adopts a recreated topic on a producing partition,
@@ -186,6 +192,13 @@ var errRecreationUnsureBatch = errors.New("topic was deleted and recreated: a pr
 // the sentinel: we synthesized it and the broker saw nothing fatal, so
 // recovering after the abort is always safe.
 var errRecreationAbortTxn = fmt.Errorf("topic was deleted and recreated during the transaction; the transaction cannot commit safely across topic incarnations: %w", kerr.TransactionAbortable)
+
+// errRecreationEpochGuard is why we strip fetched records whose leader
+// epoch regressed below what we already consumed: epochs never decrease
+// along one log, so a by-name position that sees a lower epoch points into
+// a new incarnation, or into a rolled back log. This is a debug-only label;
+// a stripped partition surfaces nothing to you.
+var errRecreationEpochGuard = errors.New("fetched records regressed the leader epoch: topic recreation, or a rolled back log")
 
 // errRecreationShareAck reports acknowledgments invalidated at a recreation
 // swap: the records were acquired from an incarnation whose broker side
