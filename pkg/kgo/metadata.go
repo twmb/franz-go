@@ -913,7 +913,14 @@ func (cl *Client) mergeTopicPartitions(
 				continue
 			}
 		}
-		if !isProduce && !isShare && cl.mergeRecreatedCursor(topic, int32(part), oldTP, newTP, css, retryWhy) {
+		var done bool
+		switch {
+		case isProduce:
+			done = cl.mergeRecreatedRecBuf(topic, int32(part), oldTP, newTP)
+		case !isShare:
+			done = cl.mergeRecreatedCursor(topic, int32(part), oldTP, newTP, css, retryWhy)
+		}
+		if done {
 			continue
 		}
 

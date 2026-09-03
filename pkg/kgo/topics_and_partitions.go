@@ -752,6 +752,66 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	new.cursor = c
 }
 
+// swapRecreatedRecBufTo is the produce side of the swap above. Producer
+// state is per log and died with the old incarnation, and the new one
+// rehydrates it empty, so unless a produce response proved the broker already
+// accepted our chain into the new log (offsetRegressed), we restart the
+// sequence chain at zero. Every broker accepts that against empty state.
+//
+// Batches whose by-name outcome is unknowable may already sit in the new
+// incarnation and can never be safely re-produced, so we fail everything
+// buffered: order cannot be preserved past a failed batch. Requests still in
+// flight resolve safely after the swap. A v13 request addressed the dead ID
+// and is rejected before reaching any log, a by-name request that resolves
+// unsure is failed by the response handling, and okOnSink=false holds new
+// sends until every in-flight response resolves.
+func (old *topicPartition) swapRecreatedRecBufTo(new *topicPartition) { //nolint:revive // old/new naming makes this clearer
+	rb := old.records
+	rb.sink.removeRecBuf(rb)
+
+	rb.mu.Lock()
+	rb.sink = new.records.sink
+	rb.topicPartitionData = new.topicPartitionData
+	rb.okOnSink = false
+
+	flipBack := slices.Contains(rb.priorIDs, new.records.topicID)
+	rb.priorIDs = append(rb.priorIDs, rb.topicID)
+	rb.topicID = new.records.topicID
+	rb.generation++
+	// We need no sequence reset when the chain provably landed in the new
+	// incarnation (offsetRegressed), but a reset another mechanism already
+	// demanded must survive. Transaction recovery bumps the producer epoch
+	// and marks every recBuf for a sequence reset, and this swap can land
+	// after that mark; clobbering it would continue the old chain under
+	// the new epoch, which is OUT_OF_ORDER_SEQUENCE_NUMBER, or a fatal
+	// fence on a real broker.
+	rb.needSeqReset = rb.needSeqReset || !rb.offsetRegressed
+	// Going back to an ID we held before means going back to a log that
+	// remembers our chain: sequences restarted at zero would be
+	// deduplicated as repeats of what we already produced. A fresh epoch
+	// makes the restart safe, bumped locally on the next produce.
+	if flipBack {
+		if cur := rb.cl.producer.id.Load().(*producerID); cur.err == nil {
+			rb.cl.failProducerID(cur.id, cur.epoch, errReloadProducerID)
+		}
+	}
+	rb.offsetRegressed = false
+	rb.unknownFailures = 0 // rejections of the dead incarnation must not trip the fail limit
+	rb.lastAckedOffset = -1
+
+	var unsure bool
+	for _, batch := range rb.batches {
+		unsure = unsure || batch.unsureByName
+	}
+	if unsure {
+		rb.failAllRecords(errRecreationUnsureBatch)
+	}
+	rb.mu.Unlock()
+
+	rb.sink.addRecBuf(rb) // clears failing, triggers draining
+	new.records = rb
+}
+
 func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) {
 	c := tp.shareCursor
 	new.shareCursor = c
