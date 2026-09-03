@@ -118,20 +118,40 @@ func (s *source) removeCursor(rm *cursor) {
 // cursor is where we are consuming from for an individual partition.
 type cursor struct {
 	topic string
-	// topicID is written once at cursor creation and is deliberately
-	// never re-adopted if a delete+recreate hands back a new ID for the
-	// same name: a recreated topic stalls loudly (UNKNOWN_TOPIC_ID, see
-	// the UnknownTopicID arm below) and the user must purge+re-add. This
-	// is the principled alternative to librdkafka/Java's adopt-and-gamble;
-	// issue #908 records why auto-adoption was backed out (PR #391/#377:
-	// OffsetForLeaderEpoch has no TopicID field, so an adopted ID cannot
-	// be validated against truncation). The metadata merge copies this
-	// pointer over rather than swapping the ID; do not "fix" the stall
-	// into an adopt without solving #908.
+	// topicID is written at cursor creation, and across a delete+recreate
+	// only by the metadata merge's recreation swap: the position resets,
+	// the consumed epoch clears, and we suppress cross-incarnation
+	// OffsetForLeaderEpoch, which has no TopicID field (#908). That
+	// missing field is why the bare adopt-and-keep-position gamble that
+	// librdkafka and Java take was rejected in PR #391/#377.
 	topicID   [16]byte
 	partition int32
 
 	unknownIDFails atomic.Int32
+
+	// positioned mirrors whether we have a real offset. A cursor with no
+	// position yet always waits for a broker rejection before swapping
+	// incarnations: swapped early, a racing old-incarnation committed
+	// offset would be applied to the new topic rather than rejected.
+	positioned atomic.Bool
+
+	// priorIDs holds every topic ID this partition held before the
+	// current one, one per recreation observed; a report of one is a
+	// lagging broker's view (see recreationRejectionGrace). Written at
+	// the swap with the session stopped, read at the metadata merge and
+	// at an out of range: until we consume something, a swapped cursor
+	// re-resolves the new topic's earliest offset, whether its position
+	// came from the restart (the topic may have truncated under us) or
+	// from a stale commit of the dead incarnation.
+	priorIDs [][16]byte
+
+	// metadataBackoffUntil (unix nanos) pauses fetching while a metadata
+	// update this cursor's last fetch triggered lands: a rejected topic
+	// ID, or records the epoch guard withheld. The strip leaves us at the
+	// same offset, so nothing else paces the refetch: quick polling or
+	// back-to-back metadata wakeups would refetch at round-trip speed,
+	// faster than the update can land.
+	metadataBackoffUntil atomic.Int64
 
 	keepControl bool // whether to keep control records
 
@@ -253,6 +273,15 @@ func (c *cursor) allowUsable() {
 // after.
 func (c *cursor) setOffset(o cursorOffset) {
 	c.cursorOffset = o
+	c.positioned.Store(o.offset >= 0)
+}
+
+// pauseForMetadata stops fetching c until the metadata update its last
+// fetch triggered has had time to land, then re-pokes the source: the wake
+// from that update usually arrives while we are still paused.
+func (s *source) pauseForMetadata(c *cursor) {
+	c.metadataBackoffUntil.Store(time.Now().Add(recreationMetadataBackoff).UnixNano())
+	time.AfterFunc(recreationMetadataBackoff+50*time.Millisecond, s.maybeConsume)
 }
 
 // cursorOffsetNext is updated while processing a fetch response.
@@ -792,6 +821,9 @@ func (s *source) createReq() *fetchRequest {
 		if !c.usable() {
 			continue
 		}
+		if time.Now().UnixNano() < c.metadataBackoffUntil.Load() {
+			continue
+		}
 		if s.nodeID != c.leader && c.moveAt > 0 && time.Since(time.Unix(0, c.moveAt)) > s.cl.cfg.recheckPreferredReplicaInterval {
 			rechecks = append(rechecks, cursorOffsetPreferred{
 				cursorOffsetNext: *c.use(),
@@ -1147,8 +1179,14 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		// loadWithSessionNow triggers a metadata update IF there are
 		// offsets to reload. If there are no offsets to reload, we
 		// trigger one here.
+		//
+		// UnknownTopicOrPartition is lazy, since the topic was likely
+		// deleted and reloading is wasteful. UnknownTopicID is not: the
+		// fetch went by ID and that broker does not know the ID we hold,
+		// which after a recreation is how we learn of it, so we refresh
+		// urgently.
 		if !reloadOffsets.loadWithSessionNow(consumerSession, why) {
-			if updateWhy.isOnly(kerr.UnknownTopicOrPartition) || updateWhy.isOnly(kerr.UnknownTopicID) {
+			if updateWhy.isOnly(kerr.UnknownTopicOrPartition) {
 				s.cl.triggerUpdateMetadata(false, why)
 			} else {
 				s.cl.triggerUpdateMetadataNow(why)
@@ -1330,7 +1368,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				c.unknownIDFails.Store(0)
 				keep = true
 
-			case kerr.UnknownTopicID:
+			case kerr.UnknownTopicID, kerr.InconsistentTopicID:
 				// We need to keep UnknownTopicID even though it is
 				// retryable, because encountering this error means
 				// the topic has been recreated and we will never
@@ -1343,7 +1381,12 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// propagated to the leader that it is now the leader
 				// of a new partition. We need to ignore this error
 				// for a little bit.
-				if fails := c.unknownIDFails.Add(1); fails > 5 {
+				//
+				// InconsistentTopicID is the same rejection of the ID
+				// we hold, from an established fetch session whose
+				// entry a broker resolved by name to a newer
+				// incarnation; it counts the same.
+				if fails := c.unknownIDFails.Add(1); fails > recreationRejectionGrace {
 					c.unknownIDFails.Add(-1)
 					keep = true
 				} else if s.cl.cfg.keepRetryableFetchErrors {
@@ -1351,6 +1394,10 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				} else {
 					strip(topic, partition, fp.Err)
 				}
+				// The rejection triggers an urgent metadata update
+				// below; pacing the refetch until it lands makes the
+				// grace count metadata rounds.
+				s.pauseForMetadata(c)
 
 			case kerr.OffsetOutOfRange:
 				// If we are out of range, we reset to what we can.
@@ -1384,32 +1431,39 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				addList := func(replica int32, log bool) {
 					if s.cl.cfg.resetOffset.noReset {
 						keep = true
-					} else if !c.lastConsumedTime.IsZero() {
-						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-							replica: replica,
-							Offset:  NewOffset().AfterMilli(c.lastConsumedTime.UnixMilli()),
-						})
-						if log {
-							s.cl.cfg.logger.Log(LogLevelWarn, "received OFFSET_OUT_OF_RANGE, resetting to the nearest offset; either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming, or the broker has lost data and has not yet transferred leadership",
-								"broker", logID(s.nodeID),
-								"topic", topic,
-								"partition", partition,
-								"prior_offset", partOffset.offset,
-							)
-						}
-					} else {
-						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-							replica: replica,
-							Offset:  s.cl.cfg.resetOffset,
-						})
-						if log {
-							s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE on the first fetch, resetting to the configured ConsumeResetOffset",
-								"broker", logID(s.nodeID),
-								"topic", topic,
-								"partition", partition,
-								"prior_offset", partOffset.offset,
-							)
-						}
+						return
+					}
+					// ConsumeResetOffset is the last resort: having
+					// consumed, we reset to the nearest offset at or
+					// after the last record's timestamp, and a swapped
+					// cursor that has not consumed re-resolves the new
+					// topic's beginning (it may have truncated under
+					// us).
+					var (
+						at    = s.cl.cfg.resetOffset
+						level = LogLevelInfo
+						why   = "received OFFSET_OUT_OF_RANGE on the first fetch, resetting to the configured ConsumeResetOffset"
+					)
+					switch {
+					case !c.lastConsumedTime.IsZero():
+						at = NewOffset().AfterMilli(c.lastConsumedTime.UnixMilli())
+						level = LogLevelWarn
+						why = "received OFFSET_OUT_OF_RANGE, resetting to the nearest offset; either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming, or the broker has lost data and has not yet transferred leadership"
+					case len(c.priorIDs) > 0:
+						at = recreationResetOffset
+						why = "received OFFSET_OUT_OF_RANGE before consuming from a recreated topic, re-resolving its earliest offset"
+					}
+					reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
+						replica: replica,
+						Offset:  at,
+					})
+					if log {
+						s.cl.cfg.logger.Log(level, why,
+							"broker", logID(s.nodeID),
+							"topic", topic,
+							"partition", partition,
+							"prior_offset", partOffset.offset,
+						)
 					}
 				}
 
