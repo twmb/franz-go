@@ -159,18 +159,27 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		needp         tps[int]
 	)
 	if w == nil {
+		// Any partition that errors completes the fetch at once, as a
+		// real broker's fetch purgatory does; only partitions waiting
+		// on data hold the request for MaxWait.
 	out:
 		for _, fp := range toFetch {
 			t, ok := c.data.tps.gett(fp.topic)
 			if !ok {
-				continue
+				returnEarly = true // UnknownTopicID or UnknownTopicOrPartition
+				break out
 			}
 			pd, ok := t[fp.partition]
 			if !ok {
-				continue
+				returnEarly = true // UnknownTopicID or UnknownTopicOrPartition
+				break out
 			}
 			if pd.leader != creq.cc.b && !slices.Contains(pd.followers, creq.cc.b.node) {
 				returnEarly = true // NotLeaderForPartition
+				break out
+			}
+			if le := fp.currentEpoch; le != -1 && le != pd.epoch {
+				returnEarly = true // FencedLeaderEpoch or UnknownLeaderEpoch
 				break out
 			}
 			segIdx, metaIdx, ok, atEnd := pd.searchOffset(fp.fetchOffset)
