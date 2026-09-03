@@ -215,6 +215,21 @@ Kafka 0.10.0 introduced the ApiVersions request; if you are working with
 brokers older than that, you must use the kversions package. Use the
 MaxVersions option for the client if you do so.
 
+## Topic recreation
+
+A topic deleted and recreated under the same name is handled by the client as
+best it can:
+
+* Consumers restart from the new topic's beginning
+* Producers reset their sequence numbers and resume producing
+* Active transactions to the old topic fail with `TRANSACTION_ABORTABLE`
+* Brokers below 2.8 (released April 2021) are not supported: they have no
+  topic IDs, and behavior there is unchanged
+
+Recreation is handled on every broker version from 2.8 on. Older brokers
+(below 3.1, which fetch by topic name) have fewer safeguards on data loss /
+double consumption when the client auto-handles a recreated topic.
+
 ## Metrics & logging
 
 **Note** there exists plug-in packages that allow you to easily add prometheus
