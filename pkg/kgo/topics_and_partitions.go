@@ -817,6 +817,53 @@ func (old *topicPartition) swapRecreatedRecBufTo(new *topicPartition) { //nolint
 	new.records = rb
 }
 
+// swapRecreatedShareCursorTo is the share side of the swap above. Share
+// positions and acquisition state live broker side and died with the old
+// incarnation; the new one initializes fresh per group config. Here the
+// cursor adopts the new ID and bumps its generation, which invalidates
+// pending and future acknowledgments of old-incarnation records at flush
+// rather than re-addressing them: an ack under the new ID could acknowledge
+// an unrelated record at the same offset. Nothing is redelivered, because
+// the records are gone by definition.
+//
+// We also reset the old source's share session: its (old ID, partition)
+// entry addresses a dead share-partition, and a fresh session re-establishes
+// exactly what the swapped cursors now hold.
+func (tp *topicPartition) swapRecreatedShareCursorTo(cl *Client, new *topicPartition) {
+	c := tp.shareCursor
+	newID := new.shareCursor.topicID
+	new.shareCursor = c
+
+	// Same leave race as migrateShareCursorTo: we register as a share
+	// worker so leave's barrier waits for us, and if the consumer is
+	// dying we skip the swap entirely.
+	sc := cl.consumer.s
+	if !sc.incWorker() {
+		return
+	}
+	defer sc.decWorker()
+
+	cl.sinksAndSourcesMu.Lock()
+	sns := cl.sinksAndSources[new.leader]
+	cl.sinksAndSourcesMu.Unlock()
+
+	oldSource := c.source.Load()
+	if oldSource != nil {
+		oldSource.removeShareCursor(c)
+	}
+	// With the cursor on no source, nothing concurrently reads topicID:
+	// request building and ack flushing run on the owning source's loop.
+	c.priorIDs = append(c.priorIDs, c.topicID)
+	c.topicID = newID
+	c.generation.Add(1)
+	c.unknownIDFails.Store(0)
+	if oldSource != nil {
+		oldSource.resetShareSession()
+	}
+	c.source.Store(sns.source)
+	sns.source.addShareCursor(c)
+}
+
 func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) {
 	c := tp.shareCursor
 	new.shareCursor = c
