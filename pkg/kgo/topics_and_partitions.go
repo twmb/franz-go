@@ -789,10 +789,15 @@ func (old *topicPartition) swapRecreatedRecBufTo(new *topicPartition) { //nolint
 	// Going back to an ID we held before means going back to a log that
 	// remembers our chain: sequences restarted at zero would be
 	// deduplicated as repeats of what we already produced. A fresh epoch
-	// makes the restart safe, bumped locally on the next produce.
+	// makes the restart safe; idempotent producers bump it locally on the
+	// next produce, transactions abort and re-init.
 	if flipBack {
 		if cur := rb.cl.producer.id.Load().(*producerID); cur.err == nil {
-			rb.cl.failProducerID(cur.id, cur.epoch, errReloadProducerID)
+			err := errReloadProducerID
+			if rb.cl.cfg.txnID != nil {
+				err = errRecreationAbortTxn
+			}
+			rb.cl.failProducerID(cur.id, cur.epoch, err)
 		}
 	}
 	rb.offsetRegressed = false
