@@ -140,6 +140,31 @@ func (cl *Client) mergeRecreatedCursor(topic string, part int32, oldTP, newTP *t
 	return true
 }
 
+// mergeRecreatedShareCursor adopts a recreated topic on a share consuming
+// partition, returning whether the merge is done with this partition. A
+// never seen ID is adopted outright; a prior ID is a lagging broker's view,
+// refused until the ID we hold has been rejected for the whole grace.
+func (cl *Client) mergeRecreatedShareCursor(topic string, part int32, oldTP, newTP *topicPartition) bool {
+	var noID [16]byte
+	sc := oldTP.shareCursor
+	newID, oldID := newTP.shareCursor.topicID, sc.topicID
+	if newID == noID || oldID == noID || newID == oldID {
+		return false
+	}
+	if slices.Contains(sc.priorIDs, newID) && sc.unknownIDFails.Load() < recreationRejectionGrace {
+		*newTP = *oldTP
+		return true
+	}
+	cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID for share consuming and invalidating acknowledgments of the prior incarnation",
+		"topic", topic,
+		"partition", part,
+		"old_id", topicID(oldID),
+		"new_id", topicID(newID),
+	)
+	oldTP.swapRecreatedShareCursorTo(cl, newTP)
+	return true
+}
+
 // recreationResetOffset is where consumption restarts on a detected
 // recreation: the beginning of the new topic, *not* ConsumeResetOffset. A
 // subscription is a point in time and everything after, and everything in a
@@ -161,3 +186,9 @@ var errRecreationUnsureBatch = errors.New("topic was deleted and recreated: a pr
 // the sentinel: we synthesized it and the broker saw nothing fatal, so
 // recovering after the abort is always safe.
 var errRecreationAbortTxn = fmt.Errorf("topic was deleted and recreated during the transaction; the transaction cannot commit safely across topic incarnations: %w", kerr.TransactionAbortable)
+
+// errRecreationShareAck reports acknowledgments invalidated at a recreation
+// swap: the records were acquired from an incarnation whose broker side
+// acquisition state died with it. This wraps the error the wire would have
+// returned for an ack addressed to the dead incarnation's ID.
+var errRecreationShareAck = fmt.Errorf("topic was deleted and recreated; these records were acquired from the prior incarnation, whose share state is gone: %w", kerr.UnknownTopicID)

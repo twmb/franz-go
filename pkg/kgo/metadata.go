@@ -917,7 +917,9 @@ func (cl *Client) mergeTopicPartitions(
 		switch {
 		case isProduce:
 			done = cl.mergeRecreatedRecBuf(topic, int32(part), oldTP, newTP)
-		case !isShare:
+		case isShare:
+			done = cl.mergeRecreatedShareCursor(topic, int32(part), oldTP, newTP)
+		default:
 			done = cl.mergeRecreatedCursor(topic, int32(part), oldTP, newTP, css, retryWhy)
 		}
 		if done {
