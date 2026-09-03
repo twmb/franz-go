@@ -3218,7 +3218,8 @@ func (cl *Client) storeCachedMeta(meta *kmsg.MetadataResponse, all bool, results
 		}
 		// A recreated topic comes back under a new ID. Delete the old
 		// ID's mapping when overwriting the entry, else byID accumulates
-		// stale IDs forever and resolves IDs that no longer exist.
+		// stale IDs forever and resolves IDs that no longer exist. The
+		// id2t map drops it the same way at the metadata merge.
 		if old, ok := cl.metaCache.topics[topicName]; ok && old.id != topic.TopicID && old.id != zeroID {
 			delete(cl.metaCache.byID, old.id)
 		}
