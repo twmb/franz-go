@@ -699,6 +699,59 @@ func (old *topicPartition) migrateCursorTo( //nolint:revive // old/new naming ma
 	new.cursor = old.cursor
 }
 
+// swapRecreatedCursorTo is called on metadata update when the topic was
+// deleted and recreated with the same name and metadata now reports a new
+// topic ID.
+//
+// Unlike migrateCursorTo, we do not validate the leader epoch: our position
+// and consumed epoch belong to the dead incarnation, and OffsetForLeaderEpoch
+// is name-only and meaningless across incarnations (#908). The cursor adopts
+// the new ID and, if reset, re-resolves its position at the new topic's
+// beginning. Without reset (NoResetOffset) the cursor stays frozen at no
+// position; the merge surfaces the error and you resume with SetOffsets.
+func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new naming makes this clearer
+	new *topicPartition,
+	css *consumerSessionStopper,
+	reset bool,
+) {
+	css.stop()
+
+	c := old.cursor
+	c.source.removeCursor(c)
+
+	// With the session stopped, we can update cursor fields with no
+	// concurrency issue. The stop also buys the rest of the swap's
+	// safety: buffered old-incarnation fetches are discarded unpolled,
+	// and every source's fetch session resets, forgetting the (old ID,
+	// partition) entries.
+	c.source = new.cursor.source
+	c.priorIDs = append(c.priorIDs, c.topicID)
+	c.topicID = new.cursor.topicID
+	c.topicPartitionData = new.topicPartitionData
+	c.unknownIDFails.Store(0)
+	c.metadataBackoffUntil.Store(0)
+
+	// Nothing from the old incarnation may leak into the new one: we clear
+	// the position and epoch (and the hwm, and the consumed-time out of
+	// range fallback) and freeze the cursor so nothing fetches it. Loads
+	// pending from before the swap are dropped: a list would re-resolve
+	// old intent, and an epoch load is a cross-incarnation validation.
+	// Only the reset below, or your SetOffsets, re-enables us.
+	c.unset()
+	css.reloadOffsets.removeLoad(c.topic, c.partition)
+	if reset {
+		css.reloadOffsets.addLoad(c.topic, c.partition, loadTypeList, offsetLoad{
+			replica:        -1,
+			recreationSeed: true,
+			Offset:         recreationResetOffset,
+		})
+	}
+	css.recreated.add(c.topic, c.partition)
+
+	c.source.addCursor(c)
+	new.cursor = c
+}
+
 func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) {
 	c := tp.shareCursor
 	new.shareCursor = c
@@ -1095,6 +1148,7 @@ type consumerSessionStopper struct {
 	stopped       bool
 	reloadOffsets listOrEpochLoads
 	tpsPrior      *topicsPartitions
+	recreated     mtmps // partitions swapped across topic incarnations this merge
 }
 
 func (css *consumerSessionStopper) stop() {
@@ -1110,6 +1164,14 @@ func (css *consumerSessionStopper) stop() {
 func (css *consumerSessionStopper) maybeRestart() {
 	if !css.stopped {
 		return
+	}
+	// Before restarting, and thus before any reset list can resolve, we
+	// fence group commits for partitions that swapped incarnations: their
+	// committable state is old-incarnation truth.
+	if len(css.recreated) > 0 {
+		if g := css.cl.consumer.g; g != nil {
+			g.fenceRecreated(css.recreated)
+		}
 	}
 	session := css.cl.consumer.startNewSession(css.tpsPrior)
 	defer session.decWorker()
