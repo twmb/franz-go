@@ -94,6 +94,12 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		fetchOffset  int64
 		maxBytes     int32
 		currentEpoch int32
+		// staleID marks a session entry whose topic ID no longer
+		// resolves while its cached name still does: the topic was
+		// recreated under that name. Kafka resolves a session entry's
+		// name once, at insertion, so the entry reaches the log by
+		// name and fails the ID check there.
+		staleID bool
 	}
 	var toFetch []fetchPartition
 
@@ -131,14 +137,18 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		for key, sp := range session.partitions {
 			if !inRequest[key] {
 				topic := key.t
+				var staleID bool
 				if sp.topicID != (uuid{}) {
 					// v13+ entries are addressed by the ID they
-					// were added with: if it no longer resolves
-					// (deleted, or recreated with a new ID), the
-					// lookups below miss and the entry answers
-					// UNKNOWN_TOPIC_ID with the stored ID, like a
-					// real broker. It never re-addresses by name.
-					topic = c.data.id2t[sp.topicID]
+					// were added with. If it no longer resolves,
+					// the entry keeps the name it was inserted
+					// under, like a real broker: a deleted topic
+					// answers UNKNOWN_TOPIC_ID, a recreated one
+					// INCONSISTENT_TOPIC_ID from a broker hosting
+					// the new incarnation.
+					if _, ok := c.data.id2t[sp.topicID]; !ok {
+						staleID = true
+					}
 				}
 				toFetch = append(toFetch, fetchPartition{
 					topic:        topic,
@@ -147,6 +157,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 					fetchOffset:  sp.fetchOffset,
 					maxBytes:     sp.maxBytes,
 					currentEpoch: sp.currentEpoch,
+					staleID:      staleID,
 				})
 			}
 		}
@@ -159,18 +170,31 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		needp         tps[int]
 	)
 	if w == nil {
+		// Any partition that errors completes the fetch at once, as a
+		// real broker's fetch purgatory does; only partitions waiting
+		// on data hold the request for MaxWait.
 	out:
 		for _, fp := range toFetch {
+			if fp.staleID {
+				returnEarly = true // InconsistentTopicID or UnknownTopicID
+				break out
+			}
 			t, ok := c.data.tps.gett(fp.topic)
 			if !ok {
-				continue
+				returnEarly = true // UnknownTopicID or UnknownTopicOrPartition
+				break out
 			}
 			pd, ok := t[fp.partition]
 			if !ok {
-				continue
+				returnEarly = true // UnknownTopicID or UnknownTopicOrPartition
+				break out
 			}
 			if pd.leader != creq.cc.b && !slices.Contains(pd.followers, creq.cc.b.node) {
 				returnEarly = true // NotLeaderForPartition
+				break out
+			}
+			if le := fp.currentEpoch; le != -1 && le != pd.epoch {
+				returnEarly = true // FencedLeaderEpoch or UnknownLeaderEpoch
 				break out
 			}
 			segIdx, metaIdx, ok, atEnd := pd.searchOffset(fp.fetchOffset)
@@ -299,6 +323,18 @@ full:
 				donep(fp.topic, fp.topicID, fp.partition, kerr.UnknownTopicID.Code)
 			} else {
 				donep(fp.topic, fp.topicID, fp.partition, kerr.UnknownTopicOrPartition.Code)
+			}
+			continue
+		}
+		if fp.staleID {
+			// The session entry's name now belongs to a new
+			// incarnation. A broker hosting it rejects the stale ID
+			// as inconsistent; one that does not is simply not the
+			// leader.
+			if pd.leader != creq.cc.b && !slices.Contains(pd.followers, creq.cc.b.node) {
+				donep(fp.topic, fp.topicID, fp.partition, kerr.NotLeaderForPartition.Code)
+			} else {
+				donep(fp.topic, fp.topicID, fp.partition, kerr.InconsistentTopicID.Code)
 			}
 			continue
 		}
