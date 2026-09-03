@@ -1181,17 +1181,26 @@ func (s *sink) handleReqRespBatch(
 		}
 
 		if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
+			failErr := err
+			if s.cl.cfg.txnID != nil && recreated {
+				// The topic was recreated mid-transaction. We poison
+				// with the recreation sentinel, which recovery
+				// recognizes in both modes, rather than the raw
+				// sequence error, which pre-KIP-890p2 recovery
+				// classifies as fatal.
+				failErr = errRecreationAbortTxn
+			}
 			s.cl.cfg.logger.Log(LogLevelInfo, "batch errored, failing the producer ID",
 				"broker", logID(s.nodeID),
 				"topic", topic,
 				"partition", rp.Partition,
 				"producer_id", producerID,
 				"producer_epoch", producerEpoch,
-				"err", err,
+				"err", failErr,
 			)
-			s.cl.failProducerID(producerID, producerEpoch, err)
+			s.cl.failProducerID(producerID, producerEpoch, failErr)
 
-			s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.BaseOffset, err)
+			s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.BaseOffset, failErr)
 			if debug {
 				fmt.Fprintf(b, "fatal@%d,%d(%s)}, ", rp.BaseOffset, nrec, err)
 			}
@@ -1294,6 +1303,13 @@ func (s *sink) handleReqRespBatch(
 					"last_acked_offset", prior,
 				)
 				s.cl.triggerUpdateMetadataNow("produce offsets regressed, checking whether the topic was recreated")
+				// Mid-transaction, earlier acked writes evaporated
+				// with the log that acked them, and committing
+				// would cover a partial transaction. We poison;
+				// aborting recovers.
+				if s.cl.cfg.txnID != nil {
+					s.cl.failProducerID(producerID, producerEpoch, errRecreationAbortTxn)
+				}
 			}
 			batch.owner.lastAckedOffset = rp.BaseOffset + int64(len(batch.records))
 			if resp.Version >= 12 && s.cl.cfg.txnID != nil {
