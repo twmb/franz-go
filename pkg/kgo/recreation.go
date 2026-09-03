@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -26,6 +27,53 @@ const (
 	// rather than round trips.
 	recreationMetadataBackoff = 250 * time.Millisecond
 )
+
+// mergeRecreatedRecBuf adopts a recreated topic on a producing partition,
+// returning whether the merge is done with this partition. Below ID-ful
+// metadata every ID is zero, nothing here fires, and producing is unchanged.
+func (cl *Client) mergeRecreatedRecBuf(topic string, part int32, oldTP, newTP *topicPartition) bool {
+	var noID [16]byte
+	rb := oldTP.records
+	newID := newTP.records.topicID
+	if newID == noID {
+		return false
+	}
+
+	rb.mu.Lock()
+	oldID := rb.topicID
+	if oldID == noID {
+		// First sight of an ID for this topic, e.g. a broker upgrade
+		// brought ID-ful metadata. Nothing is keyed to the zero ID, so
+		// we adopt freely.
+		rb.topicID, oldID = newID, newID
+	}
+	regressed := rb.offsetRegressed
+	rejections := rb.unknownFailures
+	rb.mu.Unlock()
+
+	if oldID == newID {
+		return false
+	}
+	// A prior ID is a lagging broker's view; we ignore the update until
+	// the ID we hold has been rejected for the whole grace.
+	if slices.Contains(rb.priorIDs, newID) && rejections < recreationRejectionGrace {
+		*newTP = *oldTP
+		// Keep draining: produce attempts must not stay parked on the
+		// failing flag over an ignored update.
+		newTP.records.clearFailing()
+		return true
+	}
+
+	cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID for producing",
+		"topic", topic,
+		"partition", part,
+		"old_id", topicID(oldID),
+		"new_id", topicID(newID),
+		"restarting_sequences", !regressed,
+	)
+	oldTP.swapRecreatedRecBufTo(newTP)
+	return true
+}
 
 // mergeRecreatedCursor adopts a recreated topic on a consuming partition,
 // returning whether the merge is done with this partition.
@@ -78,3 +126,8 @@ func (cl *Client) mergeRecreatedCursor(topic string, part int32, oldTP, newTP *t
 // where you start within one topic's lifetime. NoResetOffset still opts out
 // entirely.
 var recreationResetOffset = NewOffset().AtStart()
+
+// errRecreationUnsureBatch fails buffered records whose produce outcome
+// cannot be known across a topic recreation. Produced records carry it in
+// their promise error.
+var errRecreationUnsureBatch = errors.New("topic was deleted and recreated: a produce of this data went out addressed by topic name without a conclusive response, so it may or may not exist in the new topic; failing rather than risking a duplicate")
