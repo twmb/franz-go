@@ -310,8 +310,18 @@ func (pids *pids) doAddPartitions(creq *clientReq) kmsg.Response {
 		}
 	}
 
-	// Check if all topics/partitions exist.
+	// A faulted partition is not added, and the rest of the transaction
+	// is not attempted, as with a partition that does not exist.
+	faulted := make(map[tpKey]*kerr.Error)
 	var noAttempt bool
+	for _, rt := range req.Topics {
+		for _, rp := range rt.Partitions {
+			if e := creq.faults.check(faultKey{txnID: req.TransactionalID, topic: rt.Topic}.part(rp)); e != nil {
+				faulted[tpKey{rt.Topic, rp}] = e
+				noAttempt = true
+			}
+		}
+	}
 	for _, rt := range req.Topics {
 		for _, rp := range rt.Partitions {
 			if pdMap[tpKey{rt.Topic, rp}] == nil {
@@ -326,9 +336,12 @@ func (pids *pids) doAddPartitions(creq *clientReq) kmsg.Response {
 	if noAttempt {
 		for _, rt := range req.Topics {
 			for _, rp := range rt.Partitions {
-				if pdMap[tpKey{rt.Topic, rp}] == nil {
+				switch e := faulted[tpKey{rt.Topic, rp}]; {
+				case e != nil:
+					donep(rt.Topic, rp, e.Code)
+				case pdMap[tpKey{rt.Topic, rp}] == nil:
 					donep(rt.Topic, rp, kerr.UnknownTopicOrPartition.Code)
-				} else {
+				default:
 					donep(rt.Topic, rp, kerr.OperationNotAttempted.Code)
 				}
 			}
@@ -492,9 +505,15 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 		for _, rp := range rt.Partitions {
 			sp := kmsg.NewTxnOffsetCommitResponseTopicPartition()
 			sp.Partition = rp.Partition
-			if !pids.c.data.tps.checkp(rt.Topic, rp.Partition) {
+			e := creq.faults.check(faultKey{txnID: req.TransactionalID, group: req.Group, topic: rt.Topic}.part(rp.Partition))
+			if e != nil {
+				sp.ErrorCode = e.Code
+			}
+			switch {
+			case e != nil && creq.skipsWork(e): // a timed-out commit is still stored
+			case !pids.c.data.tps.checkp(rt.Topic, rp.Partition):
 				sp.ErrorCode = kerr.UnknownTopicOrPartition.Code
-			} else {
+			default:
 				groupOffsets.set(rt.Topic, rp.Partition, offsetCommit{
 					offset:      rp.Offset,
 					leaderEpoch: rp.LeaderEpoch,
@@ -900,8 +919,8 @@ func (pids *pids) doDescribeTransactions(creq *clientReq) kmsg.Response {
 		st := kmsg.NewDescribeTransactionsResponseTransactionState()
 		st.TransactionalID = txnID
 
-		if !pids.c.allowedACL(creq, txnID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationDescribe) {
-			st.ErrorCode = kerr.TransactionalIDAuthorizationFailed.Code
+		if e := pids.c.deny(creq, txnID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationDescribe, faultKey{txnID: txnID}); e != nil {
+			st.ErrorCode = e.Code
 			resp.TransactionStates = append(resp.TransactionStates, st)
 			continue
 		}
@@ -928,7 +947,7 @@ func (pids *pids) doDescribeTransactions(creq *clientReq) kmsg.Response {
 			st.State = "Ongoing"
 			st.StartTimestamp = pidinf.txStart.UnixMilli()
 			pidinf.txParts.each(func(topic string, partition int32, _ *partData) {
-				if !pids.c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+				if e := pids.c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic}.part(partition)); e != nil {
 					return
 				}
 				var topicEntry *kmsg.DescribeTransactionsResponseTransactionStateTopic
@@ -983,7 +1002,7 @@ func (pids *pids) doListTransactions(creq *clientReq) kmsg.Response {
 		if pidinf.txid == "" {
 			continue
 		}
-		if !pids.c.allowedACL(creq, pidinf.txid, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationDescribe) {
+		if e := pids.c.deny(creq, pidinf.txid, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationDescribe, faultKey{txnID: pidinf.txid}); e != nil {
 			continue
 		}
 		state := "Empty"
@@ -1029,14 +1048,18 @@ func (pids *pids) doDescribeProducers(creq *clientReq) kmsg.Response {
 	}
 	var checks []partState
 	for _, rt := range req.Topics {
-		if !pids.c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
+		if e := pids.c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{topic: rt.Topic}); e != nil {
 			for _, p := range rt.Partitions {
-				checks = append(checks, partState{rt.Topic, p, kerr.TopicAuthorizationFailed.Code})
+				checks = append(checks, partState{rt.Topic, p, e.Code})
 			}
 			continue
 		}
 		for _, p := range rt.Partitions {
-			checks = append(checks, partState{rt.Topic, p, 0})
+			var code int16
+			if e := creq.faults.check(faultKey{topic: rt.Topic}.part(p)); e != nil {
+				code = e.Code
+			}
+			checks = append(checks, partState{rt.Topic, p, code})
 		}
 	}
 

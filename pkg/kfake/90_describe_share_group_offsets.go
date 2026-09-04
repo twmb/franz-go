@@ -44,8 +44,8 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 		}
 
 		// ACL: require GROUP DESCRIBE.
-		if !c.allowedACL(creq, rg.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
-			rsg.ErrorCode = kerr.GroupAuthorizationFailed.Code
+		if e := c.deny(creq, rg.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg.GroupID}); e != nil {
+			rsg.ErrorCode = e.Code
 			resp.Groups = append(resp.Groups, rsg)
 			continue
 		}
@@ -88,7 +88,7 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 				rst.TopicID = c.data.t2id[tr.topic]
 
 				// ACL: per-topic DESCRIBE check.
-				if !c.allowedACL(creq, tr.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+				if e := c.deny(creq, tr.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: tr.topic}); e != nil {
 					if isDescribeAll {
 						// Describe-all: silently filter unauthorized topics.
 						continue
@@ -96,7 +96,7 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 					for _, partition := range tr.partitions {
 						rsp := kmsg.NewDescribeShareGroupOffsetsResponseGroupTopicPartition()
 						rsp.Partition = partition
-						rsp.ErrorCode = kerr.TopicAuthorizationFailed.Code
+						rsp.ErrorCode = e.Code
 						rsp.StartOffset = -1
 						rsp.Lag = -1
 						rst.Partitions = append(rst.Partitions, rsp)
@@ -108,6 +108,14 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 				for _, partition := range tr.partitions {
 					rsp := kmsg.NewDescribeShareGroupOffsetsResponseGroupTopicPartition()
 					rsp.Partition = partition
+
+					if e := creq.faults.check(faultKey{group: rg.GroupID, topic: tr.topic}.part(partition)); e != nil {
+						rsp.ErrorCode = e.Code
+						rsp.StartOffset = -1
+						rsp.Lag = -1
+						rst.Partitions = append(rst.Partitions, rsp)
+						continue
+					}
 
 					pd, ok := c.data.tps.getp(tr.topic, partition)
 					if !ok {

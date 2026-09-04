@@ -31,8 +31,8 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 	}
 
 	// ACL: require GROUP DELETE.
-	if !c.allowedACL(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete) {
-		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+	if e := c.deny(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: req.GroupID}); e != nil && creq.skipsWork(e) { // a timed-out delete falls through to the per-topic checks
+		resp.ErrorCode = e.Code
 		return resp, nil
 	}
 
@@ -45,15 +45,15 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 	// Pre-lookup topic IDs and ACL results while in run() where
 	// c.data is safe.
 	type deleteTopicInfo struct {
-		id      uuid
-		exists  bool
-		aclDeny bool
+		id     uuid
+		exists bool
+		deny   *kerr.Error
 	}
 	topicInfo := make(map[string]deleteTopicInfo, len(req.Topics))
 	for _, rt := range req.Topics {
 		info := deleteTopicInfo{id: c.data.t2id[rt.Topic]}
-		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
-			info.aclDeny = true
+		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{topic: rt.Topic, topicID: info.id}); e != nil {
+			info.deny = e
 		}
 		if _, ok := c.data.tps[rt.Topic]; ok {
 			info.exists = true
@@ -75,18 +75,20 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 			info := topicInfo[rt.Topic]
 			rst.TopicID = info.id
 
-			if info.aclDeny {
-				rst.ErrorCode = kerr.TopicAuthorizationFailed.Code
-				resp.Topics = append(resp.Topics, rst)
-				continue
+			if info.deny != nil {
+				rst.ErrorCode = info.deny.Code
+				if creq.skipsWork(info.deny) { // a timed-out delete still deletes
+					resp.Topics = append(resp.Topics, rst)
+					continue
+				}
 			}
 			if !info.exists {
-				rst.ErrorCode = kerr.UnknownTopicOrPartition.Code
-				resp.Topics = append(resp.Topics, rst)
-				continue
+				if info.deny == nil {
+					rst.ErrorCode = kerr.UnknownTopicOrPartition.Code
+				}
+			} else {
+				delete(sg.partitions, rt.Topic)
 			}
-
-			delete(sg.partitions, rt.Topic)
 			resp.Topics = append(resp.Topics, rst)
 		}
 		sg.mu.Unlock() // not deferred: maybeQuit below acquires sg.mu

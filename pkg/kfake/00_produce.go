@@ -45,14 +45,21 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
+	// A fault can answer a partition before the work runs. The work's own
+	// answer for that partition must not add an entry or replace the code.
+	answered := make(map[tp]int)
 	donep := func(t kmsg.ProduceRequestTopic, p kmsg.ProduceRequestTopicPartition, errCode int16, errMsg string) *kmsg.ProduceResponseTopicPartition {
+		ps := tdone[id(t)]
+		if i, ok := answered[tp{t.Topic, p.Partition}]; ok {
+			return &ps[i]
+		}
+		answered[tp{t.Topic, p.Partition}] = len(ps)
 		sp := kmsg.NewProduceResponseTopicPartition()
 		sp.Partition = p.Partition
 		sp.ErrorCode = errCode
 		if req.Version >= 8 && errMsg != "" {
 			sp.ErrorMessage = &errMsg
 		}
-		ps := tdone[id(t)]
 		ps = append(ps, sp)
 		tdone[id(t)] = ps
 		return &ps[len(ps)-1]
@@ -105,12 +112,20 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 			}
 			rt.Topic = topic
 		}
-		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationWrite) {
-			donet(rt, kerr.TopicAuthorizationFailed.Code, kerr.TopicAuthorizationFailed.Message)
+		tk := faultKey{topic: rt.Topic, topicID: rt.TopicID}
+		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationWrite, tk); e != nil && creq.skipsWork(e) { // a timed-out append falls through to the per-partition checks
+			donet(rt, e.Code, e.Message)
 			continue
 		}
 		maxMessageBytes := c.data.maxMessageBytes(rt.Topic)
 		for _, rp := range rt.Partitions {
+			e := creq.faults.check(tk.part(rp.Partition))
+			if e != nil {
+				donep(rt, rp, e.Code, e.Message)
+				if creq.skipsWork(e) { // a timed-out append still appends
+					continue
+				}
+			}
 			pd, ok := c.data.tps.getp(rt.Topic, rp.Partition)
 			if !ok {
 				donep(rt, rp, kerr.UnknownTopicOrPartition.Code, "Unknown topic or partition.")

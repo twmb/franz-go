@@ -37,7 +37,14 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 	// Check if user has CREATE on CLUSTER (allows creating any topic)
 	clusterCreate := c.allowedClusterACL(creq, kmsg.ACLOperationCreate)
 
+	// A fault can answer a topic before the work runs. The work's own
+	// answer for that topic must not add an entry or replace the code.
+	answered := make(map[string]int)
 	donet := func(t string, errCode int16) *kmsg.CreateTopicsResponseTopic {
+		if i, ok := answered[t]; ok {
+			return &resp.Topics[i]
+		}
+		answered[t] = len(resp.Topics)
 		st := kmsg.NewCreateTopicsResponseTopic()
 		st.Topic = t
 		st.ErrorCode = errCode
@@ -72,9 +79,16 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 
 	for _, rt := range req.Topics {
 		// ACL check: cluster CREATE or topic CREATE
-		if !clusterCreate && !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationCreate) {
-			donet(rt.Topic, kerr.TopicAuthorizationFailed.Code)
-			continue
+		tk := faultKey{topic: rt.Topic}
+		e := creq.faults.check(tk)
+		if !clusterCreate {
+			e = c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationCreate, tk)
+		}
+		if e != nil {
+			donet(rt.Topic, e.Code)
+			if creq.skipsWork(e) { // a timed-out create still creates the topic
+				continue
+			}
 		}
 		if _, ok := c.data.tps.gett(rt.Topic); ok {
 			donet(rt.Topic, kerr.TopicAlreadyExists.Code)

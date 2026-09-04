@@ -25,8 +25,8 @@ func (c *Cluster) handleDescribeACLs(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	if !c.allowedClusterACL(creq, kmsg.ACLOperationDescribe) {
-		resp.ErrorCode = kerr.ClusterAuthorizationFailed.Code
+	if e := c.denyCluster(creq, kmsg.ACLOperationDescribe); e != nil {
+		resp.ErrorCode = e.Code
 		return resp, nil
 	}
 

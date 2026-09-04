@@ -40,6 +40,7 @@ type (
 		corr      int32
 		seq       uint32
 		topicMeta topicMetaSnap // snapshot for group assignment (consumer/share)
+		faults    *faultCheck   // faults that can match this request, see Fault
 
 		// Pre-validated error topics to merge into the response,
 		// used when TopicID resolution fails for some topics while

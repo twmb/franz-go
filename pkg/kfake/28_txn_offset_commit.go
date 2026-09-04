@@ -1,7 +1,6 @@
 package kfake
 
 import (
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -44,19 +43,19 @@ func (c *Cluster) handleTxnOffsetCommit(creq *clientReq) (kmsg.Response, error) 
 	}
 
 	// ACL check: WRITE on TxnID
-	if !c.allowedACL(creq, req.TransactionalID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite) {
-		return errResp(kerr.TransactionalIDAuthorizationFailed.Code), nil
+	if e := c.deny(creq, req.TransactionalID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite, faultKey{txnID: req.TransactionalID}); e != nil && creq.skipsWork(e) { // a timed-out commit falls through to the per-partition checks
+		return errResp(e.Code), nil
 	}
 
 	// ACL check: READ on Group
-	if !c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
-		return errResp(kerr.GroupAuthorizationFailed.Code), nil
+	if e := c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{txnID: req.TransactionalID, group: req.Group}); e != nil && creq.skipsWork(e) {
+		return errResp(e.Code), nil
 	}
 
 	// ACL check: READ on each Topic
 	for _, rt := range req.Topics {
-		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
-			return errResp(kerr.TopicAuthorizationFailed.Code), nil
+		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{txnID: req.TransactionalID, group: req.Group, topic: rt.Topic}); e != nil && creq.skipsWork(e) {
+			return errResp(e.Code), nil
 		}
 	}
 

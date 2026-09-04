@@ -24,8 +24,8 @@ import (
 
 func init() { regKey(18, 0, 4) }
 
-func (c *Cluster) handleApiVersions(kreq kmsg.Request) (kmsg.Response, error) {
-	req := kreq.(*kmsg.ApiVersionsRequest)
+func (c *Cluster) handleApiVersions(creq *clientReq) (kmsg.Response, error) {
+	req := creq.kreq.(*kmsg.ApiVersionsRequest)
 	resp := req.ResponseKind().(*kmsg.ApiVersionsResponse)
 
 	if resp.Version > 3 && resp.Version > apiVersionsKeys[18].MaxVersion {

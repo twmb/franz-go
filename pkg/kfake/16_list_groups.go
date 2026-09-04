@@ -31,7 +31,7 @@ func (c *Cluster) handleListGroups(creq *clientReq) (kmsg.Response, error) {
 		if c.coordinator(sg.name).node != creq.cc.b.node {
 			continue
 		}
-		if !c.allowedACL(creq, sg.name, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
+		if e := c.deny(creq, sg.name, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: sg.name}); e != nil {
 			continue
 		}
 		// Determine state. Use waitControl to safely read member count.

@@ -31,8 +31,8 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 	}
 
 	// ACL: require GROUP READ (Kafka uses READ, not ALTER).
-	if !c.allowedACL(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
-		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+	if e := c.deny(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.GroupID}); e != nil && creq.skipsWork(e) { // a timed-out reset falls through to the per-partition checks
+		resp.ErrorCode = e.Code
 		return resp, nil
 	}
 
@@ -42,16 +42,16 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 	// Pre-lookup topic IDs, valid partitions, and ACL results while
 	// in run() where c.data is safe to read.
 	type alterTopicInfo struct {
-		id      uuid
-		valid   map[int32]struct{}
-		aclDeny bool
+		id    uuid
+		valid map[int32]struct{}
+		deny  *kerr.Error
 	}
 	topicInfo := make(map[string]alterTopicInfo, len(req.Topics))
 	for _, rt := range req.Topics {
 		info := alterTopicInfo{id: c.data.t2id[rt.Topic]}
 		// ACL: per-topic READ check.
-		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
-			info.aclDeny = true
+		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{topic: rt.Topic, topicID: info.id}); e != nil && creq.skipsWork(e) { // a timed-out reset falls through to the per-partition check
+			info.deny = e
 		} else {
 			info.valid = make(map[int32]struct{})
 			for _, rp := range rt.Partitions {
@@ -80,11 +80,11 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 			info := topicInfo[rt.Topic]
 			rst.TopicID = info.id
 
-			if info.aclDeny {
+			if info.deny != nil {
 				for j := range rt.Partitions {
 					rsp := kmsg.NewAlterShareGroupOffsetsResponseTopicPartition()
 					rsp.Partition = rt.Partitions[j].Partition
-					rsp.ErrorCode = kerr.TopicAuthorizationFailed.Code
+					rsp.ErrorCode = info.deny.Code
 					rst.Partitions = append(rst.Partitions, rsp)
 				}
 				resp.Topics = append(resp.Topics, rst)
@@ -96,8 +96,18 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 				rsp := kmsg.NewAlterShareGroupOffsetsResponseTopicPartition()
 				rsp.Partition = rp.Partition
 
+				e := creq.faults.check(faultKey{group: req.GroupID, topic: rt.Topic, topicID: info.id}.part(rp.Partition))
+				if e != nil {
+					rsp.ErrorCode = e.Code
+					if creq.skipsWork(e) { // a timed-out reset still resets
+						rst.Partitions = append(rst.Partitions, rsp)
+						continue
+					}
+				}
 				if _, ok := info.valid[rp.Partition]; !ok {
-					rsp.ErrorCode = kerr.UnknownTopicOrPartition.Code
+					if e == nil {
+						rsp.ErrorCode = kerr.UnknownTopicOrPartition.Code
+					}
 					rst.Partitions = append(rst.Partitions, rsp)
 					continue
 				}

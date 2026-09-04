@@ -50,19 +50,33 @@ func (c *Cluster) handleWriteTxnMarkers(creq *clientReq) (kmsg.Response, error) 
 				respPart := kmsg.NewWriteTxnMarkersResponseMarkerTopicPartition()
 				respPart.Partition = p
 
-				switch {
-				case !clusterAuthorized:
+				// setErr sets the code unless a fault already answered.
+				setErr := func(code int16) {
+					if respPart.ErrorCode == 0 {
+						respPart.ErrorCode = code
+					}
+				}
+				if !clusterAuthorized {
 					respPart.ErrorCode = kerr.ClusterAuthorizationFailed.Code
-				case !topicExists:
-					respPart.ErrorCode = kerr.UnknownTopicOrPartition.Code
+					respTopic.Partitions = append(respTopic.Partitions, respPart)
+					continue
+				}
+				if fe := creq.faults.check(faultKey{topic: mt.Topic}.part(p)); fe != nil {
+					respPart.ErrorCode = fe.Code
+					if creq.skipsWork(fe) { // a timed-out marker is still written
+						respTopic.Partitions = append(respTopic.Partitions, respPart)
+						continue
+					}
+				}
+				pd, ok := ps[p]
+				switch {
+				case !topicExists, !ok:
+					setErr(kerr.UnknownTopicOrPartition.Code)
+				case pd.leader != creq.cc.b:
+					setErr(kerr.NotLeaderForPartition.Code)
 				default:
-					pd, ok := ps[p]
-					if !ok {
-						respPart.ErrorCode = kerr.UnknownTopicOrPartition.Code
-					} else if pd.leader != creq.cc.b {
-						respPart.ErrorCode = kerr.NotLeaderForPartition.Code
-					} else if off := c.writeTxnMarker(pd, m.ProducerID, m.ProducerEpoch, m.Committed); off < 0 {
-						respPart.ErrorCode = kerr.UnknownServerError.Code
+					if off := c.writeTxnMarker(pd, m.ProducerID, m.ProducerEpoch, m.Committed); off < 0 {
+						setErr(kerr.UnknownServerError.Code)
 					}
 				}
 				respTopic.Partitions = append(respTopic.Partitions, respPart)

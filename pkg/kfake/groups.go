@@ -402,7 +402,7 @@ func (gs *groups) handleList(creq *clientReq) *kmsg.ListGroupsResponse {
 			continue
 		}
 		// ACL check: DESCRIBE on Group - filter out groups without permission
-		if !g.c.allowedACL(creq, g.name, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
+		if e := g.c.deny(creq, g.name, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: g.name}); e != nil {
 			continue
 		}
 		g.waitControl(func() {
@@ -437,8 +437,8 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 	for _, rg := range req.Groups {
 		sg := doneg(rg)
 		// ACL check: DESCRIBE on Group
-		if !gs.c.allowedACL(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
-			sg.ErrorCode = kerr.GroupAuthorizationFailed.Code
+		if e := gs.c.deny(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg}); e != nil {
+			sg.ErrorCode = e.Code
 			continue
 		}
 		if kerr := gs.c.validateGroup(creq, rg); kerr != nil {
@@ -502,18 +502,26 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 
 	for _, rg := range req.Groups {
 		sg := doneg(rg)
+		// setErr sets the code unless a fault already answered.
+		setErr := func(code int16) {
+			if sg.ErrorCode == 0 {
+				sg.ErrorCode = code
+			}
+		}
 		// ACL check: DELETE on Group
-		if !gs.c.allowedACL(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete) {
-			sg.ErrorCode = kerr.GroupAuthorizationFailed.Code
-			continue
+		if e := gs.c.deny(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: rg}); e != nil {
+			sg.ErrorCode = e.Code
+			if creq.skipsWork(e) { // a timed-out delete still deletes
+				continue
+			}
 		}
 		if kerr := gs.c.validateGroup(creq, rg); kerr != nil {
-			sg.ErrorCode = kerr.Code
+			setErr(kerr.Code)
 			continue
 		}
 		g, ok := gs.gs[rg]
 		if !ok {
-			sg.ErrorCode = kerr.GroupIDNotFound.Code
+			setErr(kerr.GroupIDNotFound.Code)
 			continue
 		}
 		if !g.waitControl(func() {
@@ -521,20 +529,20 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 				if g.activeConsumerCount() == 0 {
 					g.quitOnce()
 				} else {
-					sg.ErrorCode = kerr.NonEmptyGroup.Code
+					setErr(kerr.NonEmptyGroup.Code)
 				}
 			} else {
 				switch g.state {
 				case groupDead:
-					sg.ErrorCode = kerr.GroupIDNotFound.Code
+					setErr(kerr.GroupIDNotFound.Code)
 				case groupEmpty:
 					g.quitOnce()
 				case groupPreparingRebalance, groupCompletingRebalance, groupStable, groupReconciling:
-					sg.ErrorCode = kerr.NonEmptyGroup.Code
+					setErr(kerr.NonEmptyGroup.Code)
 				}
 			}
 		}) {
-			sg.ErrorCode = kerr.GroupIDNotFound.Code
+			setErr(kerr.GroupIDNotFound.Code)
 		}
 		// Delete from gs.gs in the Cluster.run() goroutine, not
 		// inside the waitControl callback. The callback runs in the
@@ -599,8 +607,8 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 	for _, rg := range req.Groups {
 		sg := doneg(rg.Group)
 		// ACL check: DESCRIBE on Group
-		if !gs.c.allowedACL(creq, rg.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
-			sg.ErrorCode = kerr.GroupAuthorizationFailed.Code
+		if e := gs.c.deny(creq, rg.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg.Group}); e != nil {
+			sg.ErrorCode = e.Code
 			continue
 		}
 		if kerr := gs.c.validateGroup(creq, rg.Group); kerr != nil {
@@ -680,6 +688,13 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 					for _, p := range t.Partitions {
 						sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
 						sp.Partition = p
+						if e := creq.faults.check(faultKey{group: rg.Group, topic: t.Topic, topicID: t.TopicID}.part(p)); e != nil {
+							sp.ErrorCode = e.Code
+							sp.Offset = -1
+							sp.LeaderEpoch = -1
+							st.Partitions = append(st.Partitions, sp)
+							continue
+						}
 						if unstable {
 							sp.ErrorCode = kerr.UnstableOffsetCommit.Code
 							sp.Offset = -1
@@ -712,8 +727,8 @@ func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 	resp := req.ResponseKind().(*kmsg.OffsetDeleteResponse)
 
 	// ACL check: DELETE on Group
-	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete) {
-		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: req.Group}); e != nil {
+		resp.ErrorCode = e.Code
 		return resp
 	}
 
@@ -761,6 +776,10 @@ func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 
 	for _, t := range req.Topics {
 		for _, p := range t.Partitions {
+			if e := creq.faults.check(faultKey{group: req.Group, topic: t.Topic}.part(p.Partition)); e != nil {
+				donep(t.Topic, p.Partition, e.Code)
+				continue
+			}
 			if _, ok := subTopics[t.Topic]; ok {
 				donep(t.Topic, p.Partition, kerr.GroupSubscribedToTopic.Code)
 				continue
@@ -960,8 +979,8 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 		resp.ErrorCode = kerr.Code
 		return resp, false
 	}
-	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
-		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
+		resp.ErrorCode = e.Code
 		return resp, false
 	}
 	if st := req.SessionTimeoutMillis; st < g.c.groupMinSessionTimeoutMs() || st > g.c.groupMaxSessionTimeoutMs() {
@@ -1154,8 +1173,8 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 		resp.ErrorCode = kerr.Code
 		return resp
 	}
-	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
-		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
+		resp.ErrorCode = e.Code
 		return resp
 	}
 	if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
@@ -1210,8 +1229,8 @@ func (g *group) handleHeartbeat(creq *clientReq) kmsg.Response {
 		resp.ErrorCode = kerr.Code
 		return resp
 	}
-	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
-		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
+		resp.ErrorCode = e.Code
 		return resp
 	}
 	if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
@@ -1250,8 +1269,8 @@ func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 		resp.ErrorCode = kerr.Code
 		return resp
 	}
-	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
-		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
+		resp.ErrorCode = e.Code
 		return resp
 	}
 	if req.Version < 3 {
@@ -1268,6 +1287,11 @@ func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 		resp.Members = append(resp.Members, mresp)
 
 		r := &resp.Members[len(resp.Members)-1]
+
+		if e := creq.faults.check(faultKey{group: req.Group, resource: rm.MemberID}); e != nil {
+			r.ErrorCode = e.Code
+			continue
+		}
 
 		// Resolve memberID from instanceID for static members.
 		if rm.InstanceID != nil {
@@ -1335,11 +1359,12 @@ func (g *group) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitR
 		st := kmsg.NewOffsetCommitResponseTopic()
 		st.Topic = t.Topic
 		st.TopicID = t.TopicID
-		if !g.c.allowedACL(creq, t.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
+		tk := faultKey{group: g.name, topic: t.Topic, topicID: t.TopicID}
+		if e := g.c.deny(creq, t.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, tk); e != nil && creq.skipsWork(e) { // a timed-out commit falls through to the per-partition checks
 			for _, p := range t.Partitions {
 				sp := kmsg.NewOffsetCommitResponseTopicPartition()
 				sp.Partition = p.Partition
-				sp.ErrorCode = kerr.TopicAuthorizationFailed.Code
+				sp.ErrorCode = e.Code
 				st.Partitions = append(st.Partitions, sp)
 			}
 		} else {
@@ -1349,9 +1374,16 @@ func (g *group) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitR
 			for _, p := range t.Partitions {
 				sp := kmsg.NewOffsetCommitResponseTopicPartition()
 				sp.Partition = p.Partition
-				if creq.topicMeta != nil && (!topicExists || p.Partition < 0 || p.Partition >= meta.partitions) {
+				e := creq.faults.check(tk.part(p.Partition))
+				switch {
+				case e != nil && creq.skipsWork(e): // a timed-out commit is still stored
+					sp.ErrorCode = e.Code
+				case creq.topicMeta != nil && (!topicExists || p.Partition < 0 || p.Partition >= meta.partitions):
 					sp.ErrorCode = kerr.UnknownTopicOrPartition.Code
-				} else {
+				default:
+					if e != nil {
+						sp.ErrorCode = e.Code
+					}
 					at.Partitions = append(at.Partitions, p)
 				}
 				st.Partitions = append(st.Partitions, sp)
@@ -1376,8 +1408,8 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 	}
 
 	// ACL check: READ on GROUP (if denied, fail all topics)
-	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
-		fillOffsetCommit(req, resp, kerr.GroupAuthorizationFailed.Code)
+	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil && creq.skipsWork(e) {
+		fillOffsetCommit(req, resp, e.Code)
 		return resp, false
 	}
 
@@ -1875,8 +1907,8 @@ func (gs *groups) handleConsumerGroupDescribe(creq *clientReq) *kmsg.ConsumerGro
 
 	for _, rg := range req.Groups {
 		sg := doneg(rg)
-		if !gs.c.allowedACL(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
-			sg.ErrorCode = kerr.GroupAuthorizationFailed.Code
+		if e := gs.c.deny(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg}); e != nil {
+			sg.ErrorCode = e.Code
 			continue
 		}
 		if kerr := gs.c.validateGroup(creq, rg); kerr != nil {
@@ -1961,8 +1993,8 @@ func (g *group) handleConsumerHeartbeat(creq *clientReq) kmsg.Response {
 		resp.ErrorCode = kerr.Code
 		return resp
 	}
-	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
-		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
+		resp.ErrorCode = e.Code
 		return resp
 	}
 
@@ -3301,8 +3333,8 @@ func (g *group) handleConsumerOffsetCommit(creq *clientReq) *kmsg.OffsetCommitRe
 		fillOffsetCommit(req, resp, kerr.Code)
 		return resp
 	}
-	if !g.c.allowedACL(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
-		fillOffsetCommit(req, resp, kerr.GroupAuthorizationFailed.Code)
+	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil && creq.skipsWork(e) {
+		fillOffsetCommit(req, resp, e.Code)
 		return resp
 	}
 

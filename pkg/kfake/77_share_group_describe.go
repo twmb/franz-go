@@ -45,8 +45,8 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 		}
 
 		// ACL: require GROUP DESCRIBE.
-		if !c.allowedACL(creq, groupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe) {
-			rg.ErrorCode = kerr.GroupAuthorizationFailed.Code
+		if e := c.deny(creq, groupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: groupID}); e != nil {
+			rg.ErrorCode = e.Code
 			resp.Groups = append(resp.Groups, rg)
 			continue
 		}
@@ -91,10 +91,10 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 			// containing only the error (no state/epoch/assignor
 			// metadata leaked).
 			for topic := range allTopics {
-				if !c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
+				if e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic}); e != nil {
 					rg = kmsg.NewShareGroupDescribeResponseGroup()
 					rg.GroupID = groupID
-					rg.ErrorCode = kerr.TopicAuthorizationFailed.Code
+					rg.ErrorCode = e.Code
 					return
 				}
 			}
