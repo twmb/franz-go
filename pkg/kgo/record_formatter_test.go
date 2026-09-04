@@ -131,13 +131,13 @@ func TestRecordFormatter(t *testing.T) {
 		},
 
 		{
-			layout: "%a{compression;number} %a{transactional-bit;bool} %a{control-bit;hex8} %a{timestamp-type;hex8}",
-			expR:   "3 true 01 ff",
+			layout: "%a{compression;number} %a{transactional-bit;bool} %a{control-bit;hex8} %a{timestamp-type;hex8} %a{delete-horizon-bit;bool}",
+			expR:   "3 true 01 ff false",
 		},
 
 		{
-			layout: "%a{compression} %a{transactional-bit} %a{control-bit} %a{timestamp-type}",
-			expR:   "lz4 1 1 -1",
+			layout: "%a{compression} %a{transactional-bit} %a{control-bit} %a{timestamp-type} %a{delete-horizon-bit}",
+			expR:   "lz4 1 1 -1 0",
 		},
 
 		// %D and %A use the share group context set up on r.

@@ -29,6 +29,7 @@ type RecordAttrs struct {
 	// bit 4: timestamp type
 	// bit 5: is transactional
 	// bit 6: is control
+	// bit 7: has delete horizon
 	// bit 8: no timestamp type
 	attrs uint8
 }
@@ -65,6 +66,13 @@ func (a RecordAttrs) IsTransactional() bool {
 // These are generally not visible unless explicitly opted into.
 func (a RecordAttrs) IsControl() bool {
 	return a.attrs&0b0010_0000 != 0
+}
+
+// HasDeleteHorizon returns whether a record's batch has a delete horizon: the
+// time after which Kafka can drop the tombstones and transaction markers the
+// batch holds. Kafka sets this while compacting. See [Record.DeleteHorizon].
+func (a RecordAttrs) HasDeleteHorizon() bool {
+	return a.attrs&0b0100_0000 != 0
 }
 
 // Record is a record to write to Kafka.
@@ -184,6 +192,25 @@ func (r *Record) AppendFormat(b []byte, layout string) ([]byte, error) {
 		return b, err
 	}
 	return f.AppendRecord(b, r), nil
+}
+
+var deleteHorizonKey = strp("delete-horizon")
+
+// DeleteHorizon returns the time after which Kafka can drop the tombstones and
+// transaction markers this record's batch holds. Returns the zero time if the
+// batch has no delete horizon; see [RecordAttrs.HasDeleteHorizon].
+//
+// Kafka sets a horizon while compacting and stores it in the batch, so every
+// record from the same batch returns the same time.
+func (r *Record) DeleteHorizon() time.Time {
+	if r.Context == nil {
+		return time.Time{}
+	}
+	millis, ok := r.Context.Value(deleteHorizonKey).(int64)
+	if !ok {
+		return time.Time{}
+	}
+	return timeFromMillis(millis)
 }
 
 // DeliveryCount returns the share group delivery count for this record: 1 on
