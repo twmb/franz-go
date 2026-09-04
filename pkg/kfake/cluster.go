@@ -38,6 +38,9 @@ type (
 		sleeping       map[*clientConn]*bsleep
 		controlSleep   chan sleepChs
 
+		faultsMu sync.Mutex
+		faults   []*fault
+
 		data               data
 		pids               pids
 		groups             groups

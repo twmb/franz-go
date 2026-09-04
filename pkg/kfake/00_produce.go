@@ -95,6 +95,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 		return toresp(), nil
 	}
 
+	fc := c.faultsFor(creq)
 	now := time.Now().UnixMilli()
 	for _, rt := range req.Topics {
 		if req.Version >= 13 {
@@ -111,6 +112,10 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 		}
 		maxMessageBytes := c.data.maxMessageBytes(rt.Topic)
 		for _, rp := range rt.Partitions {
+			if e := fc.err(rt.Topic, rt.TopicID, rp.Partition); e != nil {
+				donep(rt, rp, e.Code, e.Message)
+				continue
+			}
 			pd, ok := c.data.tps.getp(rt.Topic, rp.Partition)
 			if !ok {
 				donep(rt, rp, kerr.UnknownTopicOrPartition.Code, "Unknown topic or partition.")

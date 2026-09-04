@@ -1146,6 +1146,7 @@ func validateOneAckBatch(first, last int64, ackTypes []int8, prevEnd *int64, max
 // Must be called from run() with g.mu held.
 func (g *shareGroup) processShareAcks(
 	creq *clientReq,
+	fc *faultCheck,
 	memberID string,
 	topics []ackTopic,
 	maxAckType int8,
@@ -1169,6 +1170,10 @@ func (g *shareGroup) processShareAcks(
 			continue
 		}
 		for _, ap := range at.partitions {
+			if e := fc.err(topicName, at.topicID, ap.partition); e != nil {
+				onPartition(at.topicID, ap.partition, e.Code)
+				continue
+			}
 			errCode := int16(0)
 			prevEnd := int64(-1)
 			for _, batch := range ap.batches {

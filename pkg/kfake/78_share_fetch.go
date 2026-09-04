@@ -48,6 +48,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	}
 
 	resp.AcquisitionLockTimeoutMillis = c.shareRecordLockDurationMs()
+	fc := c.faultsFor(creq)
 
 	// ACL: require GROUP READ.
 	if !c.allowedACL(creq, groupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
@@ -164,7 +165,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		if sg != nil {
 			ackTs := ackTopicsFromFetch(req.Topics)
 			sg.mu.Lock()
-			toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck, onAckNotLeader)
+			toFire := sg.processShareAcks(creq, fc, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck, onAckNotLeader)
 			released := sg.releaseRecordsForSessionLocked(memberID, session, id2t, maxDelivery)
 			sg.mu.Unlock()
 			ensureAckedParts(resp, ackTs, addTopic)
@@ -214,7 +215,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		if w == nil {
 			ackTs := ackTopicsFromFetch(req.Topics)
 			sg.mu.Lock()
-			toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck, onAckNotLeader)
+			toFire = sg.processShareAcks(creq, fc, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck, onAckNotLeader)
 			sg.mu.Unlock()
 			ensureAckedParts(resp, ackTs, addTopic)
 		}
@@ -274,7 +275,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	// Process piggybacked acks first (skipped on watcher re-invocation,
 	// since acks were already processed in the initial call).
 	if len(ackTs) > 0 {
-		toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck, onAckNotLeader)
+		toFire = sg.processShareAcks(creq, fc, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck, onAckNotLeader)
 	}
 
 	// Build target list from session partitions.
@@ -293,6 +294,10 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			continue
 		}
 		for p := range parts {
+			if e := fc.err(topicName, topicID, p); e != nil {
+				donep(topicID, p, e.Code)
+				continue
+			}
 			pd, ok := c.data.tps.getp(topicName, p)
 			if !ok {
 				donep(topicID, p, kerr.UnknownTopicOrPartition.Code)
@@ -445,7 +450,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	// fireShareWatchers fires when acks free the window, so the watcher
 	// wakes up promptly instead of the client busy-looping with empty
 	// fetches.
-	if totalRecords == 0 && w == nil {
+	if totalRecords == 0 && w == nil && !fc.fired() {
 		wait := time.Duration(req.MaxWaitMillis) * time.Millisecond
 		deadline := creq.at.Add(wait)
 		remaining := time.Until(deadline)

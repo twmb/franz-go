@@ -54,6 +54,7 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 		return &st.Partitions[len(st.Partitions)-1]
 	}
 
+	fc := c.faultsFor(creq)
 	for _, rt := range req.Topics {
 		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
 			for _, rp := range rt.Partitions {
@@ -63,6 +64,10 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 		}
 		ps, ok := c.data.tps.gett(rt.Topic)
 		for _, rp := range rt.Partitions {
+			if e := fc.err(rt.Topic, noID, rp.Partition); e != nil {
+				donep(rt.Topic, rp.Partition, e.Code)
+				continue
+			}
 			if !ok {
 				donep(rt.Topic, rp.Partition, kerr.UnknownTopicOrPartition.Code)
 				continue

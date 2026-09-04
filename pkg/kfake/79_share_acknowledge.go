@@ -30,6 +30,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 	}
 
 	resp.AcquisitionLockTimeoutMillis = c.shareRecordLockDurationMs()
+	fc := c.faultsFor(creq)
 
 	var groupID, memberID string
 	if req.GroupID != nil {
@@ -118,7 +119,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		}
 		ackTs := ackTopicsFromAcknowledge(req.Topics)
 		sg.mu.Lock()
-		toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onPartition, onNotLeader)
+		toFire := sg.processShareAcks(creq, fc, memberID, ackTs, maxAckType, id2t, maxDelivery, onPartition, onNotLeader)
 		released := sg.releaseRecordsForSessionLocked(memberID, session, id2t, maxDelivery)
 		sg.mu.Unlock()
 		fireAll(toFire)
@@ -147,7 +148,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 
 	ackTs := ackTopicsFromAcknowledge(req.Topics)
 	sg.mu.Lock()
-	toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onPartition, onNotLeader)
+	toFire := sg.processShareAcks(creq, fc, memberID, ackTs, maxAckType, id2t, maxDelivery, onPartition, onNotLeader)
 	sg.mu.Unlock()
 	fireAll(toFire)
 

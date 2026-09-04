@@ -168,6 +168,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		nbytes        int
 		returnEarly   bool
 		needp         tps[int]
+		fc            = c.faultsFor(creq)
 	)
 	if w == nil {
 		// Any partition that errors completes the fetch at once, as a
@@ -175,6 +176,10 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		// on data hold the request for MaxWait.
 	out:
 		for _, fp := range toFetch {
+			if fc.err(fp.topic, fp.topicID, fp.partition) != nil {
+				returnEarly = true // the fault's error
+				break out
+			}
 			if fp.staleID {
 				returnEarly = true // InconsistentTopicID or UnknownTopicID
 				break out
@@ -313,6 +318,10 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	nbytes = 0
 full:
 	for _, fp := range toFetch {
+		if e := fc.err(fp.topic, fp.topicID, fp.partition); e != nil {
+			donep(fp.topic, fp.topicID, fp.partition, e.Code)
+			continue
+		}
 		if !c.allowedACL(creq, fp.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
 			donep(fp.topic, fp.topicID, fp.partition, kerr.TopicAuthorizationFailed.Code)
 			continue
