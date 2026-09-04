@@ -145,17 +145,20 @@ func TestAuditFetchTopLevelErrorBackoff(t *testing.T) {
 		mu    sync.Mutex
 		times []time.Time
 	)
-	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+	// An unexpected top-level code (not a fetch-session code) routes to the
+	// default arm.
+	c.Fault(Fault{
+		Keys:     []kmsg.Key{kmsg.Fetch},
+		TopLevel: true,
+		Err:      kerr.UnknownServerError,
+		Count:    -1,
+	})
+	c.ControlKey(int16(kmsg.Fetch), func(kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
-		req := kreq.(*kmsg.FetchRequest)
 		mu.Lock()
 		times = append(times, time.Now())
 		mu.Unlock()
-		resp := req.ResponseKind().(*kmsg.FetchResponse)
-		// An unexpected top-level code (not a fetch-session code) routes to
-		// the default arm.
-		resp.ErrorCode = kerr.UnknownServerError.Code
-		return resp, nil, true
+		return nil, nil, false
 	})
 
 	cl := newPlainClient(t, c,
