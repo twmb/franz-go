@@ -15,34 +15,19 @@ import (
 // Regression tests for consumer.go + consumer_direct.go. Each TestAudit*
 // below fails before its corresponding kgo fix.
 
-// fenceNextFetch installs a control that answers exactly one fetch request
-// with FENCED_LEADER_EPOCH for partition 0 of the topic. The client reacts by
-// marking the cursor unusable and queueing an OffsetForLeaderEpoch validation
-// at the cursor's current offset - the validation load's completion is the
-// only thing that re-enables the cursor.
+// fenceNextFetch fails exactly one fetch of partition 0 of the topic with
+// FENCED_LEADER_EPOCH. The client reacts by marking the cursor unusable and
+// queueing an OffsetForLeaderEpoch validation at the cursor's current offset -
+// the validation load's completion is the only thing that re-enables the
+// cursor.
 func fenceNextFetch(c *Cluster, topic string) {
-	ti := c.TopicInfo(topic)
-	pi := c.PartitionInfo(topic, 0)
-	var fenced atomic.Bool
-	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if fenced.Swap(true) {
-			return nil, nil, false // already fenced once; serve real data
-		}
-		req := kreq.(*kmsg.FetchRequest)
-		resp := req.ResponseKind().(*kmsg.FetchResponse)
-		rt := kmsg.NewFetchResponseTopic()
-		rt.Topic = topic
-		rt.TopicID = ti.TopicID
-		rp := kmsg.NewFetchResponseTopicPartition()
-		rp.Partition = 0
-		rp.ErrorCode = kerr.FencedLeaderEpoch.Code
-		rp.HighWatermark = pi.HighWatermark
-		rp.LastStableOffset = pi.LastStableOffset
-		rp.LogStartOffset = 0
-		rt.Partitions = append(rt.Partitions, rp)
-		resp.Topics = append(resp.Topics, rt)
-		return resp, nil, true
+	c.AddFault(Fault{
+		Keys:      []int16{int16(kmsg.Fetch)},
+		Node:      -1,
+		Topic:     topic,
+		Partition: 0,
+		Err:       kerr.FencedLeaderEpoch,
+		Count:     1,
 	})
 }
 

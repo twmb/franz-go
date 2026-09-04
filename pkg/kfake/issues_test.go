@@ -2348,23 +2348,15 @@ func TestRequestCachedMetadata(t *testing.T) {
 		}
 		countAfterCache := metadataRequests.Load()
 
-		// Step 2: intercept ListOffsets to return NotLeaderForPartition,
+		// Step 2: fail one ListOffsets with NotLeaderForPartition,
 		// which triggers maybeDeleteCachedMeta for the topic.
-		c.ControlKey(int16(kmsg.ListOffsets), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-			lor := kreq.(*kmsg.ListOffsetsRequest)
-			resp := lor.ResponseKind().(*kmsg.ListOffsetsResponse)
-			for _, rt := range lor.Topics {
-				st := kmsg.NewListOffsetsResponseTopic()
-				st.Topic = rt.Topic
-				for _, rp := range rt.Partitions {
-					sp := kmsg.NewListOffsetsResponseTopicPartition()
-					sp.Partition = rp.Partition
-					sp.ErrorCode = kerr.NotLeaderForPartition.Code
-					st.Partitions = append(st.Partitions, sp)
-				}
-				resp.Topics = append(resp.Topics, st)
-			}
-			return resp, nil, true
+		c.AddFault(Fault{
+			Keys:      []int16{int16(kmsg.ListOffsets)},
+			Node:      -1,
+			Topic:     "topic1",
+			Partition: -1,
+			Err:       kerr.NotLeaderForPartition,
+			Count:     1,
 		})
 		adm.ListStartOffsets(ctx, "topic1")
 
@@ -4126,22 +4118,13 @@ func TestOnDataLossCallbackReentrancy(t *testing.T) {
 	// One-shot: the first produce gets OUT_OF_ORDER_SEQUENCE_NUMBER,
 	// which for a non-transactional producer (stopOnDataLoss unset)
 	// fires the data-loss callback and reloads the producer id.
-	c.ControlKey(0, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		req := kreq.(*kmsg.ProduceRequest)
-		resp := req.ResponseKind().(*kmsg.ProduceResponse)
-		for _, rt := range req.Topics {
-			respt := kmsg.NewProduceResponseTopic()
-			respt.Topic = rt.Topic
-			respt.TopicID = rt.TopicID
-			for _, rp := range rt.Partitions {
-				respp := kmsg.NewProduceResponseTopicPartition()
-				respp.Partition = rp.Partition
-				respp.ErrorCode = kerr.OutOfOrderSequenceNumber.Code
-				respt.Partitions = append(respt.Partitions, respp)
-			}
-			resp.Topics = append(resp.Topics, respt)
-		}
-		return resp, nil, true
+	c.AddFault(Fault{
+		Keys:      []int16{int16(kmsg.Produce)},
+		Node:      -1,
+		Topic:     testTopic,
+		Partition: -1,
+		Err:       kerr.OutOfOrderSequenceNumber,
+		Count:     1,
 	})
 
 	var cl *kgo.Client

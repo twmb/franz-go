@@ -105,30 +105,6 @@ func TestShareFetchLeaderMoveNoHintHeals(t *testing.T) {
 	oldLeader := c.LeaderFor(topic, 0)
 	newLeader := (oldLeader + 1) % 2
 
-	// Once moved is set, every ShareFetch served by the old leader gets
-	// a manual NOT_LEADER response with CurrentLeader=-1/-1 (no hint)
-	// and no NodeEndpoints. Requests to the new leader pass through.
-	var moved atomic.Bool
-	c.ControlKey(int16(kmsg.ShareFetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if !moved.Load() || c.CurrentNode() != oldLeader {
-			return nil, nil, false
-		}
-		req := kreq.(*kmsg.ShareFetchRequest)
-		resp := req.ResponseKind().(*kmsg.ShareFetchResponse)
-		resp.AcquisitionLockTimeoutMillis = 30000
-		rt := kmsg.NewShareFetchResponseTopic()
-		rt.TopicID = ti.TopicID
-		rp := kmsg.NewShareFetchResponseTopicPartition()
-		rp.Partition = 0
-		rp.ErrorCode = kerr.NotLeaderForPartition.Code
-		rp.CurrentLeader.LeaderID = -1 // leaderless window: no hint
-		rp.CurrentLeader.LeaderEpoch = -1
-		rt.Partitions = append(rt.Partitions, rp)
-		resp.Topics = append(resp.Topics, rt)
-		return resp, nil, true
-	})
-
 	cl := shareChurnConsumer(t, c, topic, group)
 
 	if got, _ := pollShareUntil(t, cl, pre, 10*time.Second, nil); got < pre {
@@ -138,7 +114,17 @@ func TestShareFetchLeaderMoveNoHintHeals(t *testing.T) {
 	if err := c.MoveTopicPartition(topic, 0, newLeader); err != nil {
 		t.Fatal(err)
 	}
-	moved.Store(true)
+	// Every ShareFetch the old leader serves now fails with NOT_LEADER and
+	// no CurrentLeader hint: kfake leaves the hint at -1/-1 unless the
+	// handler fills it, so the client has only a metadata refresh to heal
+	// with.
+	c.AddFault(Fault{
+		Keys:      []int16{int16(kmsg.ShareFetch)},
+		Node:      oldLeader,
+		TopicID:   ti.TopicID,
+		Partition: 0,
+		Err:       kerr.NotLeaderForPartition,
+	})
 	produceN(t, c, topic, post)
 
 	// Post-fix: the stripped NOT_LEADER triggers a metadata refresh, the

@@ -255,22 +255,13 @@ func TestAuditTxnAbortRetryAfterOperationNotAttempted(t *testing.T) {
 	// producers and is neither retriable nor recoverable under KIP-890p2,
 	// so the abort below cannot take the recovered-early-return and must
 	// reach the broker via EndTxn.
-	c.ControlKey(int16(kmsg.Produce), func(req kmsg.Request) (kmsg.Response, error, bool) {
-		preq := req.(*kmsg.ProduceRequest)
-		resp := preq.ResponseKind().(*kmsg.ProduceResponse)
-		for _, rt := range preq.Topics {
-			st := kmsg.NewProduceResponseTopic()
-			st.Topic = rt.Topic
-			st.TopicID = rt.TopicID
-			for _, rp := range rt.Partitions {
-				sp := kmsg.NewProduceResponseTopicPartition()
-				sp.Partition = rp.Partition
-				sp.ErrorCode = kerr.InvalidProducerIDMapping.Code
-				st.Partitions = append(st.Partitions, sp)
-			}
-			resp.Topics = append(resp.Topics, st)
-		}
-		return resp, nil, true
+	c.AddFault(Fault{
+		Keys:      []int16{int16(kmsg.Produce)},
+		Node:      -1,
+		Topic:     topic,
+		Partition: -1,
+		Err:       kerr.InvalidProducerIDMapping,
+		Count:     1,
 	})
 	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("r2")}).FirstErr(); err == nil {
 		t.Fatal("expected the injected produce failure, got success")
