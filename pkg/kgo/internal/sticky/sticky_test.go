@@ -2468,14 +2468,15 @@ func TestRackAwareMemberLeaves(t *testing.T) {
 
 	plan2 := BalanceWithRacks(members2, topics, partitionRacks)
 	testPlanUsage(t, plan2, topics, nil)
-	testEqualDivvy(t, plan2, 4, members2) // A and B each keep their 2 from round 1
 
-	matches := countRackMatches(plan2, members2, partitionRacks)
-	// In round 1, the last rackB partition goes to A (rackA) via normal
-	// fallback since B hits maxQuota first. Stickiness preserves that
-	// mismatch in round 2, limiting rack matches to 4 instead of 6.
-	if matches < 4 {
-		t.Errorf("expected at least 4 rack matches, got %d", matches)
+	// Round 1 leaves A holding one rackB partition. Round 2 trades it for
+	// the rackA partition B holds: one partition of stickiness for two of
+	// locality, since a misplaced partition costs cross zone traffic for
+	// as long as it stays misplaced while moving it is paid once.
+	testEqualDivvy(t, plan2, 3, members2)
+
+	if matches := countRackMatches(plan2, members2, partitionRacks); matches != 6 {
+		t.Errorf("expected every partition to be rack matched, got %d of 6", matches)
 	}
 }
 
@@ -2608,5 +2609,23 @@ func TestRackAwareSparseRacksComplex(t *testing.T) {
 	}
 	if total != 8 {
 		t.Errorf("total partitions %d, want 8", total)
+	}
+}
+
+// Rack aware pre-assignment caps each member at the floor of an even share,
+// so that filling the rest by load leaves the plan within one level and
+// balancing has nothing to move.
+func TestRackAwareAssignStaysWithinOneLevel(t *testing.T) {
+	t.Parallel()
+
+	b := newBalancer(large.members, large.topics, large.partitionRacks)
+	b.parseMemberMetadata()
+	b.assignUnassignedAndInitGraph()
+	lo, hi := len(b.partOwners), 0
+	for m := range b.plan {
+		lo, hi = min(lo, len(b.plan[m])), max(hi, len(b.plan[m]))
+	}
+	if hi-lo > 1 {
+		t.Errorf("rack aware assignment left members between %d and %d partitions", lo, hi)
 	}
 }
