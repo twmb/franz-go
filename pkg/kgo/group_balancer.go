@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo/internal/sticky"
@@ -84,6 +85,45 @@ type GroupMemberBalancerOrError interface {
 	BalanceOrError(topics map[string]int32) (IntoSyncAssignment, error)
 }
 
+// BalanceInfo contains information about the group being balanced and the
+// cluster it is in. We set this on balancers that implement
+// GroupMemberBalancerInfo, before we balance.
+type BalanceInfo struct {
+	// Group is the group being balanced.
+	Group string
+
+	// Generation is the generation we are balancing into. Each member's
+	// metadata contains the generation that member last knew of.
+	Generation int32
+
+	// LeaderID is the group leader's member ID, which is always you: the
+	// coordinator only asks the leader to balance. The coordinator keeps
+	// the same leader until that member leaves the group, so pinning work
+	// to the leader is stable while other members join and leave.
+	LeaderID string
+
+	// Topics returns metadata for every topic being balanced. The first
+	// call builds the result, later calls return the same map.
+	//
+	// We do not request metadata to answer this: topics we have not
+	// loaded yet are missing, and what we have can be up to MetadataMaxAge
+	// old.
+	Topics func() map[string]TopicMetadata
+
+	// Brokers returns every broker we know of, by node ID. Use this to map
+	// a partition's leader or replicas to a rack.
+	Brokers func() map[int32]BrokerMetadata
+}
+
+// GroupMemberBalancerInfo is an optional extension interface for
+// GroupMemberBalancer. If your balancer implements this, we set the info for
+// the group being balanced before balancing. ConsumerBalancer implements
+// this; see ConsumerBalancer.Info.
+type GroupMemberBalancerInfo interface {
+	GroupMemberBalancer
+	SetBalanceInfo(BalanceInfo)
+}
+
 // IntoSyncAssignment takes a balance plan and returns a list of assignments to
 // use in a kmsg.SyncGroupRequest.
 //
@@ -105,6 +145,12 @@ type ConsumerBalancer struct {
 	// partitionRacks maps topic => partition index => leader rack.
 	// nil when rack-aware assignment is not active.
 	partitionRacks map[string][]string
+
+	// info is everything we know about the group and cluster at balance
+	// time, set by the client before balancing (see balanceGroup). Zero
+	// when the balancer is constructed directly (NewConsumerBalancer) and
+	// balanced without a client.
+	info BalanceInfo
 
 	err error
 }
@@ -149,6 +195,20 @@ func (b *ConsumerBalancer) SetError(err error) {
 // if no rack info is available.
 func (b *ConsumerBalancer) PartitionRacks() map[string][]string {
 	return b.partitionRacks
+}
+
+// Info returns information about the group being balanced and the cluster it
+// is in. The client sets the info before balancing; if you construct a
+// ConsumerBalancer directly with NewConsumerBalancer and balance without a
+// client, the info is empty: LeaderID is unset and the Topics and Brokers
+// functions are nil.
+func (b *ConsumerBalancer) Info() BalanceInfo {
+	return b.info
+}
+
+// SetBalanceInfo implements GroupMemberBalancerInfo.
+func (b *ConsumerBalancer) SetBalanceInfo(info BalanceInfo) {
+	b.info = info
 }
 
 // MemberTopics returns the unique set of topics that all members are
@@ -386,7 +446,7 @@ func (g *groupConsumer) findBalancer(from, proto string) (GroupBalancer, error) 
 // returns all topics and partitions; the leader will then periodically do its
 // own metadata update to see if partition counts have changed for these random
 // topics.
-func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupResponseMember, skipBalance bool) ([]kmsg.SyncGroupRequestGroupAssignment, error) {
+func (g *groupConsumer) balanceGroup(proto string, resp *kmsg.JoinGroupResponse) ([]kmsg.SyncGroupRequestGroupAssignment, error) {
 	g.cl.cfg.logger.Log(LogLevelInfo, "balancing group as leader")
 
 	b, err := g.findBalancer("balance group", proto)
@@ -394,6 +454,7 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		return nil, err
 	}
 
+	members := resp.Members
 	sortJoinMembers(members)
 
 	memberBalancer, topics, err := b.MemberBalancer(members)
@@ -464,6 +525,33 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		cb.partitionRacks = g.buildPartitionRacks(cb, topicPartitionCount)
 	}
 
+	// Balancers that opt in receive everything we know about the group and
+	// cluster at balance time. Topics and Brokers are functions so that
+	// balancers that never read them (sticky, range, roundrobin) do not
+	// pay for building the snapshots.
+	if ib, ok := memberBalancer.(GroupMemberBalancerInfo); ok {
+		var balanceInfoTopicsBuilder, balanceInfoBrokersBuilder sync.Once
+		var balanceInfoTopics map[string]TopicMetadata
+		var balanceInfoBrokers map[int32]BrokerMetadata
+		ib.SetBalanceInfo(BalanceInfo{
+			Group:      g.cfg.group,
+			Generation: resp.Generation,
+			LeaderID:   resp.LeaderID,
+			Topics: func() map[string]TopicMetadata {
+				balanceInfoTopicsBuilder.Do(func() { // Only build the topics once
+					balanceInfoTopics = g.cl.balanceInfoTopics(topics)
+				})
+				return balanceInfoTopics
+			},
+			Brokers: func() map[int32]BrokerMetadata {
+				balanceInfoBrokersBuilder.Do(func() { // Only build the brokers once
+					balanceInfoBrokers = g.cl.balanceInfoBrokers()
+				})
+				return balanceInfoBrokers
+			},
+		})
+	}
+
 	// If the returned balancer is a ConsumerBalancer (which it likely
 	// always will be), then we can print some useful debugging information
 	// about what member interests are.
@@ -494,7 +582,7 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 	// interested in and are now tracking them for metadata updates. We
 	// have logged the current interests, we do not need to actually
 	// balance.
-	if skipBalance {
+	if resp.SkipAssignment {
 		switch proto := b.ProtocolName(); proto {
 		case RangeBalancer().ProtocolName(),
 			RoundRobinBalancer().ProtocolName(),
@@ -585,6 +673,56 @@ func (g *groupConsumer) buildPartitionRacks(b *ConsumerBalancer, topicPartitionC
 		}
 	}
 	return nil
+}
+
+// balanceInfoTopics builds the BalanceInfo.Topics map of topic metadata
+func (cl *Client) balanceInfoTopics(topics map[string]struct{}) map[string]TopicMetadata {
+	m := make(map[string]TopicMetadata, len(topics))
+	cl.metaCache.mu.Lock()
+	defer cl.metaCache.mu.Unlock()
+	for topic := range topics {
+		ct, ok := cl.metaCache.topics[topic]
+		if !ok {
+			continue
+		}
+		t := TopicMetadata{
+			Topic: topic,
+			ID:    ct.id,
+			Err:   kerr.ErrorForCode(ct.t.ErrorCode),
+		}
+		// Deep copy out of the cache
+		t.Partitions = make([]PartitionMetadata, 0, len(ct.t.Partitions))
+		for i := range ct.t.Partitions {
+			p := &ct.t.Partitions[i]
+			t.Partitions = append(t.Partitions, PartitionMetadata{
+				Topic:           topic,
+				Partition:       p.Partition,
+				Leader:          p.Leader,
+				LeaderEpoch:     p.LeaderEpoch,
+				Replicas:        slices.Clone(p.Replicas),
+				ISR:             slices.Clone(p.ISR),
+				OfflineReplicas: slices.Clone(p.OfflineReplicas),
+				Err:             kerr.ErrorForCode(p.ErrorCode),
+			})
+		}
+		// Sort by partition
+		sort.Slice(t.Partitions, func(i, j int) bool {
+			return t.Partitions[i].Partition < t.Partitions[j].Partition
+		})
+		m[topic] = t
+	}
+	return m
+}
+
+// balanceInfoBrokers builds the BalanceInfo.Brokers map of broker metadata
+func (cl *Client) balanceInfoBrokers() map[int32]BrokerMetadata {
+	cl.brokersMu.RLock()
+	defer cl.brokersMu.RUnlock()
+	m := make(map[int32]BrokerMetadata, len(cl.brokers))
+	for _, b := range cl.brokers {
+		m[b.meta.NodeID] = b.meta
+	}
+	return m
 }
 
 // helper func; range and roundrobin use v0

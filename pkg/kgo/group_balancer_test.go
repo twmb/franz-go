@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -458,5 +459,228 @@ func TestNewConsumerBalancerDuplicateMemberIDs(t *testing.T) {
 	}
 	if total != 2 {
 		t.Errorf("expected 2 partitions assigned, got %d (plan %v)", total, plan)
+	}
+}
+
+var _ GroupMemberBalancerInfo = new(ConsumerBalancer)
+
+// balanceFn adapts a func to ConsumerBalancerBalance for tests.
+type balanceFn func(*ConsumerBalancer, map[string]int32) IntoSyncAssignment
+
+func (f balanceFn) Balance(b *ConsumerBalancer, topics map[string]int32) IntoSyncAssignment {
+	return f(b, topics)
+}
+
+func TestConsumerBalancerInfo(t *testing.T) {
+	t.Parallel()
+
+	members := []kmsg.JoinGroupResponseMember{
+		{MemberID: "a", ProtocolMetadata: simpleMemberMetadata([]string{"t1"}, 0)},
+		{MemberID: "b", ProtocolMetadata: simpleMemberMetadata([]string{"t1"}, 0)},
+	}
+
+	var seen BalanceInfo
+	b, err := NewConsumerBalancer(balanceFn(func(b *ConsumerBalancer, _ map[string]int32) IntoSyncAssignment {
+		seen = b.Info()
+		return b.NewPlan()
+	}), members)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Without SetBalanceInfo -- NewConsumerBalancer without a client --
+	// Info returns the zero value.
+	if info := b.Info(); info.Group != "" || info.Generation != 0 || info.LeaderID != "" || info.Topics != nil || info.Brokers != nil {
+		t.Errorf("got non-zero info %+v before SetBalanceInfo", info)
+	}
+
+	expTopics := map[string]TopicMetadata{"t1": {Topic: "t1"}}
+	expBrokers := map[int32]BrokerMetadata{1: {NodeID: 1}}
+	b.SetBalanceInfo(BalanceInfo{
+		Group:      "g",
+		Generation: 2,
+		LeaderID:   "b",
+		Topics:     func() map[string]TopicMetadata { return expTopics },
+		Brokers:    func() map[int32]BrokerMetadata { return expBrokers },
+	})
+
+	// The info set must be exactly what Balance observes through Info.
+	if _, err := b.BalanceOrError(map[string]int32{"t1": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if seen.Group != "g" || seen.Generation != 2 || seen.LeaderID != "b" {
+		t.Errorf("got info %+v in balance, expected group g, generation 2, leader b", seen)
+	}
+	if !reflect.DeepEqual(seen.Topics(), expTopics) || !reflect.DeepEqual(seen.Brokers(), expBrokers) {
+		t.Errorf("got topics %+v brokers %+v in balance, expected %+v and %+v", seen.Topics(), seen.Brokers(), expTopics, expBrokers)
+	}
+}
+
+func TestBalanceInfoTopics(t *testing.T) {
+	t.Parallel()
+
+	cl := new(Client)
+	cl.metaCache.topics = map[string]cachedMetaTopic{
+		"t1": {
+			id: [16]byte{1},
+			t: kmsg.MetadataResponseTopic{
+				// Deliberately out of partition order: the cache
+				// keeps the broker's response order, the snapshot
+				// promises partition order.
+				Partitions: []kmsg.MetadataResponseTopicPartition{
+					{
+						Partition:       1,
+						Leader:          2,
+						LeaderEpoch:     5,
+						Replicas:        []int32{2, 3},
+						ISR:             []int32{2},
+						OfflineReplicas: []int32{3},
+					},
+					{
+						Partition:   0,
+						Leader:      3,
+						LeaderEpoch: 4,
+						Replicas:    []int32{3, 2},
+						ISR:         []int32{3, 2},
+						ErrorCode:   kerr.NotLeaderForPartition.Code,
+					},
+				},
+			},
+		},
+		"terr":   {t: kmsg.MetadataResponseTopic{ErrorCode: kerr.UnknownTopicOrPartition.Code}},
+		"tother": {}, // cached but not being balanced: must not appear
+	}
+
+	// tmissing is being balanced but is not in the cache: must be missing.
+	got := cl.balanceInfoTopics(map[string]struct{}{"t1": {}, "terr": {}, "tmissing": {}})
+	exp := map[string]TopicMetadata{
+		"t1": {
+			Topic: "t1",
+			ID:    [16]byte{1},
+			Partitions: []PartitionMetadata{
+				{Topic: "t1", Partition: 0, Leader: 3, LeaderEpoch: 4, Replicas: []int32{3, 2}, ISR: []int32{3, 2}, Err: kerr.NotLeaderForPartition},
+				{Topic: "t1", Partition: 1, Leader: 2, LeaderEpoch: 5, Replicas: []int32{2, 3}, ISR: []int32{2}, OfflineReplicas: []int32{3}},
+			},
+		},
+		"terr": {Topic: "terr", Partitions: []PartitionMetadata{}, Err: kerr.UnknownTopicOrPartition},
+	}
+	if !reflect.DeepEqual(got, exp) {
+		t.Errorf("got topics != exp\ngot: %#v\nexp: %#v\n", got, exp)
+	}
+
+	// The snapshot is deep copied: mutating it must not corrupt the cache.
+	got["t1"].Partitions[1].Replicas[0] = 99
+	if r := cl.metaCache.topics["t1"].t.Partitions[0].Replicas[0]; r != 2 {
+		t.Errorf("mutating snapshot changed cached replica to %d", r)
+	}
+}
+
+func TestBalanceInfoBrokers(t *testing.T) {
+	t.Parallel()
+
+	rack := "rack1"
+	cl := new(Client)
+	cl.brokers = []*broker{
+		{meta: BrokerMetadata{NodeID: 1, Host: "h1", Port: 9092, Rack: &rack}},
+		{meta: BrokerMetadata{NodeID: 2, Host: "h2", Port: 9092}},
+	}
+
+	got := cl.balanceInfoBrokers()
+	exp := map[int32]BrokerMetadata{
+		1: {NodeID: 1, Host: "h1", Port: 9092, Rack: &rack},
+		2: {NodeID: 2, Host: "h2", Port: 9092},
+	}
+	if !reflect.DeepEqual(got, exp) {
+		t.Errorf("got brokers != exp\ngot: %#v\nexp: %#v\n", got, exp)
+	}
+}
+
+// infoGroupBalancer is a GroupBalancer whose balance callback receives the
+// ConsumerBalancer, for testing the info that balanceGroup sets.
+type infoGroupBalancer struct {
+	onBalance func(*ConsumerBalancer)
+}
+
+func (*infoGroupBalancer) ProtocolName() string { return "test-info" }
+func (*infoGroupBalancer) IsCooperative() bool  { return false }
+func (*infoGroupBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, generation int32) []byte {
+	return simpleMemberMetadata(interests, generation)
+}
+
+func (*infoGroupBalancer) ParseSyncAssignment(assignment []byte) (map[string][]int32, error) {
+	return ParseConsumerSyncAssignment(assignment)
+}
+
+func (ib *infoGroupBalancer) MemberBalancer(members []kmsg.JoinGroupResponseMember) (GroupMemberBalancer, map[string]struct{}, error) {
+	b, err := NewConsumerBalancer(balanceFn(func(b *ConsumerBalancer, _ map[string]int32) IntoSyncAssignment {
+		ib.onBalance(b)
+		return b.NewPlan()
+	}), members)
+	return b, b.MemberTopics(), err
+}
+
+// TestBalanceGroupSetsBalanceInfo drives balanceGroup itself -- no network is
+// needed when the group's topics are already in tps -- to test the info the
+// client sets before balancing, including that the Topics and Brokers
+// snapshots are built once and memoized.
+func TestBalanceGroupSetsBalanceInfo(t *testing.T) {
+	t.Parallel()
+
+	cl := new(Client)
+	cl.cfg.logger = new(nopLogger)
+	cl.cfg.group = "g"
+	cl.metaCache.topics = map[string]cachedMetaTopic{
+		"t1": {t: kmsg.MetadataResponseTopic{
+			Partitions: []kmsg.MetadataResponseTopicPartition{{Partition: 0, Leader: 1}},
+		}},
+	}
+	cl.brokers = []*broker{{meta: BrokerMetadata{NodeID: 1, Host: "h1", Port: 9092}}}
+
+	var balanced bool
+	gb := &infoGroupBalancer{onBalance: func(b *ConsumerBalancer) {
+		balanced = true
+		info := b.Info()
+		if info.Group != "g" || info.Generation != 7 || info.LeaderID != "b" {
+			t.Errorf("got info %+v, expected group g, generation 7, leader b", info)
+		}
+
+		topics, brokers := info.Topics(), info.Brokers()
+		if len(topics) != 1 || len(topics["t1"].Partitions) != 1 || topics["t1"].Partitions[0].Leader != 1 {
+			t.Errorf("got topics %+v, expected t1 with partition 0 led by broker 1", topics)
+		}
+		if len(brokers) != 1 || brokers[1].Host != "h1" {
+			t.Errorf("got brokers %+v, expected broker 1 on h1", brokers)
+		}
+
+		// The first call builds the result, later calls return the
+		// same map: wiping what the snapshots are built from must
+		// change nothing.
+		cl.metaCache.topics = nil
+		cl.brokers = nil
+		if reflect.ValueOf(info.Topics()).Pointer() != reflect.ValueOf(topics).Pointer() {
+			t.Error("second Topics call did not return the memoized map")
+		}
+		if reflect.ValueOf(info.Brokers()).Pointer() != reflect.ValueOf(brokers).Pointer() {
+			t.Error("second Brokers call did not return the memoized map")
+		}
+	}}
+	cl.cfg.balancers = []GroupBalancer{gb}
+
+	g := &groupConsumer{cl: cl, cfg: &cl.cfg, tps: newTopicsPartitions()}
+	g.tps.storeTopics([]string{"t1"})
+
+	resp := &kmsg.JoinGroupResponse{
+		Generation: 7,
+		LeaderID:   "b",
+		Members: []kmsg.JoinGroupResponseMember{
+			{MemberID: "a", ProtocolMetadata: simpleMemberMetadata([]string{"t1"}, 0)},
+			{MemberID: "b", ProtocolMetadata: simpleMemberMetadata([]string{"t1"}, 0)},
+		},
+	}
+	if _, err := g.balanceGroup("test-info", resp); err != nil {
+		t.Fatal(err)
+	}
+	if !balanced {
+		t.Fatal("balance was never invoked")
 	}
 }
