@@ -369,7 +369,7 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 				unknownTopics = append(unknownTopics, unknown)
 			}
 			var err error
-			unknownCreateResp, err = cl.fetchTopicMetadata(false, unknownTopics)
+			unknownCreateResp, err = cl.fetchTopicMetadata(false, unknownTopics, false) // prune: no; unknown produce topics only, the fetch below covers the rest
 			if err != nil {
 				// We bump all produce topics even though we
 				// only explicitly requested unknown ones; this
@@ -384,7 +384,7 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		cl.producer.unknownTopicsMu.Unlock()
 	}
 
-	latest, err := cl.fetchTopicMetadata(all, reqTopics)
+	latest, err := cl.fetchTopicMetadata(all, reqTopics, true) // prune: yes; everything we track, so anything else is unwanted
 	if err != nil {
 		cl.bumpMetadataFailForTopics( // bump load failures for all topics
 			tpsProducerLoad,
@@ -663,8 +663,8 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 
 // fetchTopicMetadata fetches metadata for all reqTopics and returns new
 // topicPartitionsData for each topic.
-func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*metadataTopic, error) {
-	_, meta, err := cl.fetchMetadataByName(cl.ctx, all, reqTopics, nil)
+func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string, prune bool) (map[string]*metadataTopic, error) {
+	_, meta, err := cl.fetchMetadataByName(cl.ctx, all, reqTopics, prune, nil)
 	if err != nil {
 		return nil, err
 	}

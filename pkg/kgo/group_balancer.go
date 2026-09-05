@@ -437,7 +437,7 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 			metaTopics = append(metaTopics, topic)
 		}
 
-		_, resp, err := g.cl.fetchMetadataByName(g.ctx, false, metaTopics, nil)
+		_, resp, err := g.cl.fetchMetadataByName(g.ctx, false, metaTopics, false, nil) // prune: no; the group's topics are not all we cache
 		if err != nil {
 			return nil, fmt.Errorf("unable to fetch metadata for group topics: %v", err)
 		}
