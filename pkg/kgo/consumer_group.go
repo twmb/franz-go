@@ -2468,6 +2468,13 @@ type uncommit struct {
 	dirty     EpochOffset // if autocommitting, what will move to head on next Poll
 	head      EpochOffset // ready to commit
 	committed EpochOffset // what is committed
+
+	// fenced is set when the cursor swapped topic incarnations: every
+	// offset above is old-incarnation truth and must not be committed. A
+	// fenced entry is invisible to commit views and immune to stale
+	// updates. The fence lifts when the recreation reset resolves, or when
+	// you set offsets explicitly.
+	fenced bool
 }
 
 // EpochOffset combines a record offset with the leader epoch the broker
@@ -2551,9 +2558,15 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 					final.Offset + 1,
 				}
 				prior, ok := topicOffsets[partition.Partition]
+				if ok && prior.fenced {
+					// A poll raced the incarnation swap;
+					// these records must not become
+					// committable.
+					continue
+				}
 				if !ok {
 					uninit := EpochOffset{-1, 0}
-					uncommit := uncommit{uninit, uninit, uninit}
+					uncommit := uncommit{dirty: uninit, head: uninit, committed: uninit}
 					prior, topicOffsets[partition.Partition] = uncommit, uncommit
 				}
 
@@ -2700,6 +2713,11 @@ func (g *groupConsumer) updateCommitted(
 			if !exists { // just in case
 				continue
 			}
+			if uncommit.fenced {
+				// A commit raced the incarnation swap; its
+				// offsets must not resurrect head or committed.
+				continue
+			}
 			if reqPart.Partition != respPart.Partition { // bad kafka
 				g.cfg.logger.Log(LogLevelError, fmt.Sprintf("broker replied to our OffsetCommitRequest incorrectly! Topic %s partition %d != resp partition %d", reqTopic.Topic, reqPart.Partition, respPart.Partition), "group", g.cfg.group)
 				continue
@@ -2780,6 +2798,82 @@ func (g *groupConsumer) updateCommitted(
 		update := b.String()
 		update = strings.TrimSuffix(update, ", ") // trim trailing comma and space after final topic
 		g.cfg.logger.Log(LogLevelDebug, "updated committed", "group", g.cfg.group, "to", update)
+	}
+}
+
+// fenceRecreated is called by the metadata merge after cursors swapped topic
+// incarnations: whatever was committable for those partitions is
+// old-incarnation truth. We replace the entry with a sentinel that no commit
+// view returns and that no stale poll or in-flight commit response can
+// resurrect. Without the prompt recommit this enables, the old committed
+// offset stays stored under the recreated name and mispositions the next
+// member to fetch it.
+func (g *groupConsumer) fenceRecreated(recreated mtmps) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	nowAssigned := g.nowAssigned.read()
+	for topic, partitions := range recreated {
+		assignedPartitions := nowAssigned[topic]
+		for partition := range partitions {
+			topicUncommitted := g.uncommitted[topic]
+			_, exists := topicUncommitted[partition]
+			// We fence what we track or own. A swap of a
+			// partition we neither consumed nor hold has nothing
+			// to fence and nothing to seed.
+			if !exists && !slices.Contains(assignedPartitions, partition) {
+				continue
+			}
+			if g.uncommitted == nil {
+				g.uncommitted = make(uncommitted, 10)
+			}
+			if topicUncommitted == nil {
+				topicUncommitted = make(map[int32]uncommit, 20)
+				g.uncommitted[topic] = topicUncommitted
+			}
+			no := EpochOffset{-1, -1}
+			topicUncommitted[partition] = uncommit{dirty: no, head: no, committed: no, fenced: true}
+			g.cfg.logger.Log(LogLevelInfo, "fencing commits for recreated topic partition until its reset position resolves",
+				"group", g.cfg.group,
+				"topic", topic,
+				"partition", partition,
+			)
+		}
+	}
+}
+
+// maybeSeedRecreated is called async when a recreation reset resolves. The
+// resolved position becomes the partition's committable truth, lifting the
+// fence, and we commit it promptly to overwrite the old-incarnation commit
+// still stored under the recreated name. If a join or sync is in flight, or
+// you manage commits yourself, we only seed and your next commit carries the
+// position.
+func (g *groupConsumer) maybeSeedRecreated(topic string, partition int32, seed EpochOffset) {
+	canCommit := g.noCommitDuringJoinAndSync.TryRLock()
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	// A revoke drops the entry and your SetOffsets lifts the fence;
+	// either way there is nothing to seed.
+	if e, exists := g.uncommitted[topic][partition]; exists && e.fenced {
+		g.uncommitted[topic][partition] = uncommit{dirty: seed, head: seed, committed: EpochOffset{-1, -1}}
+		if canCommit && !g.cfg.autocommitDisable && g.blockAuto == 0 {
+			g.cfg.logger.Log(LogLevelInfo, "committing the reset position for a recreated topic partition",
+				"group", g.cfg.group,
+				"topic", topic,
+				"partition", partition,
+				"offset", seed.Offset,
+				"epoch", seed.Epoch,
+			)
+			g.commit(g.ctx, map[string]map[int32]EpochOffset{topic: {partition: seed}}, func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+				g.noCommitDuringJoinAndSync.RUnlock()
+				g.cfg.commitCallback(cl, req, resp, err)
+			})
+			return
+		}
+	}
+	if canCommit {
+		g.noCommitDuringJoinAndSync.RUnlock()
 	}
 }
 
@@ -2877,6 +2971,8 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 			if !exists {
 				continue // partition was not being consumed
 			}
+			// This overwrite also lifts any recreation fence: the
+			// offsets you set are the new truth.
 			topicUncommitted[partition] = uncommit{
 				dirty:     epochOffset,
 				head:      epochOffset,
@@ -2956,6 +3052,9 @@ func (g *groupConsumer) getUncommittedLocked(head, dirty bool) map[string]map[in
 	for topic, partitions := range g.uncommitted {
 		var topicUncommitted map[int32]EpochOffset
 		for partition, uncommit := range partitions {
+			if uncommit.fenced {
+				continue // nothing about a swapped-away incarnation is committable
+			}
 			if head && (dirty && uncommit.dirty == uncommit.committed || !dirty && uncommit.head == uncommit.committed) {
 				continue
 			}
@@ -3124,6 +3223,9 @@ func (cl *Client) MarkCommitRecords(rs ...*Record) {
 		}
 
 		current, ok := curPartitions[r.Partition]
+		if ok && current.fenced {
+			continue // marks of a swapped-away incarnation are not committable
+		}
 		if newHead := (EpochOffset{
 			r.LeaderEpoch,
 			r.Offset + 1,
@@ -3164,6 +3266,9 @@ func (cl *Client) MarkCommitOffsets(unmarked map[string]map[int32]EpochOffset) {
 
 		for partition, newHead := range partitions {
 			current, ok := curPartitions[partition]
+			if ok && current.fenced {
+				continue // marks of a swapped-away incarnation are not committable
+			}
 			if !ok || current.head.Less(newHead) {
 				curPartitions[partition] = uncommit{
 					dirty:     current.dirty,
