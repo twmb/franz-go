@@ -324,3 +324,39 @@ func TestAuditProduceDuplicateResponseEntryKeepsHook(t *testing.T) {
 		t.Fatalf("BUG REPRODUCED: OnProduceBatchWritten fired %d times for one successfully produced batch; a duplicated produce response topic entry deleted the batch's metrics before the deferred hook ran", got)
 	}
 }
+
+// A produce answered REQUEST_TIMED_OUT retries after the produce backoff,
+// not after the next metadata update, which MetadataMinAge holds off.
+func TestProduceTimedOutRetriesOnBackoff(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	h := c.Fault(Fault{
+		Keys:  []kmsg.Key{kmsg.Produce},
+		Topic: topic,
+		Err:   kerr.RequestTimedOut,
+	})
+	cl := newPlainClient(t, c,
+		kgo.DefaultProduceTopic(topic),
+		kgo.MetadataMinAge(30*time.Second),
+		kgo.RetryBackoffFn(func(int) time.Duration { return 50 * time.Millisecond }),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := cl.ProduceSync(ctx, kgo.StringRecord("p0")).FirstErr(); err != nil {
+		t.Fatalf("produce did not heal past the timed-out append: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("retry took %v; want the produce backoff, not a metadata update", elapsed)
+	}
+	if h.Hits() != 1 {
+		t.Fatalf("fault hit %d times; want 1", h.Hits())
+	}
+	// The timed-out append still landed, so the retry deduplicates.
+	if hwm := c.PartitionInfo(topic, 0).HighWatermark; hwm != 1 {
+		t.Fatalf("high watermark %d; want 1", hwm)
+	}
+}

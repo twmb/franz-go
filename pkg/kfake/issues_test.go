@@ -2575,19 +2575,25 @@ func TestIssue1217(t *testing.T) {
 		host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
 		port, _ := strconv.Atoi(portStr)
 
+		// The poison retries on the produce backoff without touching
+		// metadata; the NOT_LEADER on the next attempt sends the
+		// poisoned batch through metadata.
 		var produceAttempt atomic.Int32
 		c.ControlKey(int16(kmsg.Produce), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
 			c.KeepControl()
-			if produceAttempt.Add(1) == 1 {
+			switch produceAttempt.Add(1) {
+			case 1:
 				return produceErr(kreq, kerr.RequestTimedOut.Code)
+			case 2:
+				return produceErr(kreq, kerr.NotLeaderForPartition.Code)
+			default:
+				return nil, nil, false
 			}
-			return nil, nil, false
 		})
 
-		// After the poison, return LEADER_NOT_AVAILABLE on metadata
-		// to trigger bumpRepeatedLoadErr. We keep returning the error
-		// more times than RecordRetries(1) to verify the limit is
-		// bypassed.
+		// Metadata then returns LEADER_NOT_AVAILABLE to trigger
+		// bumpRepeatedLoadErr, more times than RecordRetries(1), to
+		// verify the limit is bypassed.
 		var metadataErrors atomic.Int32
 		c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
 			c.KeepControl()
