@@ -859,7 +859,8 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 	}
 
 	var kmove kip951move
-	var reqRetry seqRecBatches // handled at the end
+	var reqRetry seqRecBatches   // handled at the end
+	var reqBackoff seqRecBatches // retried after the produce backoff, no metadata update
 
 	kresp := resp.(*kmsg.ProduceResponse)
 	for i := range kresp.Topics {
@@ -916,7 +917,15 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 				tmetrics[partition],
 			)
 			if retry {
-				reqRetry.addSeqBatch(topic, tid, partition, batch)
+				// A timed-out append, or one short of replicas,
+				// comes from a leader that is still the leader:
+				// metadata has nothing to say, so we retry after
+				// the produce backoff.
+				if rp.ErrorCode == kerr.RequestTimedOut.Code || rp.ErrorCode == kerr.NotEnoughReplicasAfterAppend.Code {
+					reqBackoff.addSeqBatch(topic, tid, partition, batch)
+				} else {
+					reqRetry.addSeqBatch(topic, tid, partition, batch)
+				}
 			}
 			if !didProduce {
 				delete(tmetrics, partition)
@@ -941,6 +950,9 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 	}
 	if len(reqRetry.bs) > 0 {
 		s.handleRetryBatches(reqRetry, &kmove, 0, true, true, "produce request had retry batches")
+	}
+	if len(reqBackoff.bs) > 0 {
+		s.handleRetryBatches(reqBackoff, nil, req.backoffSeq, false, true, "produce request had timed out batches")
 	}
 }
 
