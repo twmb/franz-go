@@ -1,3 +1,63 @@
+Unreleased
+===
+
+This release handles topic recreation, a topic deleted and recreated under
+the same name, across the whole client, by default, on every broker from 2.8
+on. A recreated topic is a new topic that happens to share a name: consume
+positions, produce sequences, transaction membership, and share acquisition
+state from the old incarnation are never silently reused against the new
+one.
+
+Detection keys off topic IDs wherever the broker reports them (2.8+). A
+topic ID is random and never reused, so metadata reporting a new ID for a
+name we hold can only mean a recreation, and it is adopted at once. An ID we
+previously held is a lagging broker's view and is refused: a broker
+rejecting the ID we hold says only that its own view differs, which a leader
+that has not yet learned a recreation says about the correct ID too. Only
+once the ID we hold has been rejected for a whole grace of paced retries is
+a prior ID that metadata keeps reporting believed instead, since by then the
+lagging view was ours. At 3.1+ fetches carry the topic ID, so a fetch of the
+dead incarnation is rejected rather than misread, which closes the window
+entirely. At 2.8 through 3.0 fetches go by name and can read the new
+incarnation until the next metadata update; fetched records carrying a
+leader epoch below what was already consumed are withheld until the next
+metadata update decides. Below 2.8 metadata carries no topic IDs; recreation
+is not supported there and behavior is unchanged.
+
+On detection, consumers restart from the new topic's beginning, since a
+subscription is a point in time and everything after it. Group commits of
+the dead incarnation are fenced and the restart position is committed
+promptly, so a stale stored offset cannot misposition the next member;
+`NoResetOffset` instead surfaces an error and waits for `SetOffsets`.
+Idempotent producers adopt and restart their sequence chain with no sequence
+error surfaced and no duplicate possible: a by-name batch whose outcome is
+unknowable fails loudly instead. Transactions fail with an error wrapping
+`TRANSACTION_ABORTABLE` on the first observation of a recreated produced-to
+topic, and aborting recovers on every broker version; commits also verify
+produced-to topics, at a cost of at most one metadata fetch per
+`MetadataMinAge`. Share consumers continue on fresh state, with
+acknowledgments of the dead incarnation failed rather than misapplied.
+
+## Relevant commits
+
+- [`22965939`](https://github.com/twmb/franz-go/commit/22965939) kgo,kfake: test topic recreation
+- [`e87bc228`](https://github.com/twmb/franz-go/commit/e87bc228) kgo: withhold epoch-regressed records from by-name fetches
+- [`6ec03763`](https://github.com/twmb/franz-go/commit/6ec03763) kgo: swap share consumers across topic recreation
+- [`c8e6f11f`](https://github.com/twmb/franz-go/commit/c8e6f11f) kgo: fail transactions across topic recreation
+- [`5cd0e7bd`](https://github.com/twmb/franz-go/commit/5cd0e7bd) kgo: heal the idempotent producer across topic recreation
+- [`aba665c3`](https://github.com/twmb/franz-go/commit/aba665c3) kgo: swap consumers across topic recreation, fence group commits
+- [`7d66eae4`](https://github.com/twmb/franz-go/commit/7d66eae4) kgo: adopt a recreated topic's new ID in metadata
+- [`70e95714`](https://github.com/twmb/franz-go/commit/70e95714) kfake: reject any unknown producer's continued sequence below 2.5
+- [`9c3c8197`](https://github.com/twmb/franz-go/commit/9c3c8197) kfake: reject pre-2.5 txn appends into unseen producer state
+- [`6417a853`](https://github.com/twmb/franz-go/commit/6417a853) kfake: abort the open transaction on a transactional id re-init
+- [`06e62e6d`](https://github.com/twmb/franz-go/commit/06e62e6d) kfake: return the resolved record's epoch from ListOffsets
+- [`20a5749a`](https://github.com/twmb/franz-go/commit/20a5749a) kfake: clear share-partition state when a topic is deleted
+- [`d222eb3f`](https://github.com/twmb/franz-go/commit/d222eb3f) kfake: write transaction markers into current partition data by name
+- [`3825bbc1`](https://github.com/twmb/franz-go/commit/3825bbc1) kfake: drop producer-state windows when a topic is deleted
+- [`1ef0614b`](https://github.com/twmb/franz-go/commit/1ef0614b) kfake: address v13 fetch-session entries by topic ID
+- [`abf2091a`](https://github.com/twmb/franz-go/commit/abf2091a) kfake: fix racing buffered-count assert in shutdown audit test
+- [`1f544a2d`](https://github.com/twmb/franz-go/commit/1f544a2d) kfake: stop handing the shared ApiVersions key slice to controls
+
 v1.21.6
 ===
 
