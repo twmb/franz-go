@@ -1162,13 +1162,18 @@ func (g *shareGroup) processShareAcks(
 			}
 			continue
 		}
-		if !g.c.allowedACL(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
+		tk := faultKey{topic: topicName, topicID: at.topicID}
+		if e := g.c.deny(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, tk); e != nil {
 			for _, ap := range at.partitions {
-				onPartition(at.topicID, ap.partition, kerr.TopicAuthorizationFailed.Code)
+				onPartition(at.topicID, ap.partition, e.Code)
 			}
 			continue
 		}
 		for _, ap := range at.partitions {
+			if e := creq.faults.check(tk.part(ap.partition)); e != nil {
+				onPartition(at.topicID, ap.partition, e.Code)
+				continue
+			}
 			errCode := int16(0)
 			prevEnd := int64(-1)
 			for _, batch := range ap.batches {

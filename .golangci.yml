@@ -180,6 +180,11 @@ linters:
       - examples$
       - pkg/kmsg/generated\.go$ # generated from generate/definitions - fix typos there, not here
     rules:
+      # A kfake request handler answers the client with an error code inside
+      # the response and returns no error to the connection; nilerr reads
+      # returning that response as swallowing the error.
+      - linters: [nilerr]
+        path: ^pkg/kfake/[0-9]+_
       - linters: [noctx] # test code doesn't need request contexts
         path: _test\.go$
       - linters: [revive]

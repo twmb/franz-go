@@ -94,8 +94,8 @@ outer:
 		rr := &req.Resources[i]
 		switch rr.ResourceType {
 		case kmsg.ConfigResourceTypeBroker:
-			if !c.allowedClusterACL(creq, kmsg.ACLOperationDescribeConfigs) {
-				doner(rr.ResourceName, rr.ResourceType, kerr.ClusterAuthorizationFailed.Code)
+			if e := c.denyCluster(creq, kmsg.ACLOperationDescribeConfigs); e != nil {
+				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				continue outer
 			}
 			id := int32(-1)
@@ -107,13 +107,17 @@ outer:
 					continue outer
 				}
 			}
+			if e := creq.faults.check(faultKey{resource: rr.ResourceName}); e != nil {
+				doner(rr.ResourceName, rr.ResourceType, e.Code)
+				continue
+			}
 			r := doner(rr.ResourceName, rr.ResourceType, 0)
 			c.brokerConfigs(id, rfn(r))
 			filter(rr, r)
 
 		case kmsg.ConfigResourceTypeTopic:
-			if !c.allowedACL(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribeConfigs) {
-				doner(rr.ResourceName, rr.ResourceType, kerr.TopicAuthorizationFailed.Code)
+			if e := c.deny(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribeConfigs, faultKey{resource: rr.ResourceName}); e != nil {
+				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				continue
 			}
 			if _, ok := c.data.tps.gett(rr.ResourceName); !ok {

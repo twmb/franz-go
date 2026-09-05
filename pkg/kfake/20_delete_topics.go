@@ -31,7 +31,22 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
+	// A fault can answer a topic before the work runs. The work's own
+	// answer for that topic must not add an entry or replace the code.
+	type answerKey struct {
+		t  string
+		id uuid
+	}
+	answered := make(map[answerKey]int)
 	donet := func(t *string, id uuid, errCode int16) *kmsg.DeleteTopicsResponseTopic {
+		k := answerKey{id: id}
+		if t != nil {
+			k.t = *t
+		}
+		if i, ok := answered[k]; ok {
+			return &resp.Topics[i]
+		}
+		answered[k] = len(resp.Topics)
 		st := kmsg.NewDeleteTopicsResponseTopic()
 		st.Topic = t
 		st.TopicID = id
@@ -118,13 +133,15 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 			id = rt.TopicID
 		}
 		// ACL check: DESCRIBE first (to identify topic), then DELETE
-		if !c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe) {
-			donet(&topic, id, kerr.TopicAuthorizationFailed.Code)
-			continue
+		e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic})
+		if e == nil {
+			e = c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDelete, faultKey{topic: topic})
 		}
-		if !c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDelete) {
-			donet(&topic, id, kerr.TopicAuthorizationFailed.Code)
-			continue
+		if e != nil {
+			donet(&topic, id, e.Code)
+			if creq.skipsWork(e) { // a timed-out delete still deletes the topic
+				continue
+			}
 		}
 		t, ok := c.data.tps.gett(topic)
 		if !ok {

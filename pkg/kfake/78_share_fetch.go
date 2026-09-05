@@ -48,10 +48,11 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	}
 
 	resp.AcquisitionLockTimeoutMillis = c.shareRecordLockDurationMs()
+	fc := creq.faults
 
 	// ACL: require GROUP READ.
-	if !c.allowedACL(creq, groupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead) {
-		resp.ErrorCode = kerr.GroupAuthorizationFailed.Code
+	if e := c.deny(creq, groupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: groupID}); e != nil {
+		resp.ErrorCode = e.Code
 		return resp, nil
 	}
 
@@ -286,13 +287,18 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			}
 			continue
 		}
-		if !c.allowedACL(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
+		tk := faultKey{topic: topicName, topicID: topicID}
+		if e := c.deny(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, tk); e != nil {
 			for p := range parts {
-				donep(topicID, p, kerr.TopicAuthorizationFailed.Code)
+				donep(topicID, p, e.Code)
 			}
 			continue
 		}
 		for p := range parts {
+			if e := fc.check(tk.part(p)); e != nil {
+				donep(topicID, p, e.Code)
+				continue
+			}
 			pd, ok := c.data.tps.getp(topicName, p)
 			if !ok {
 				donep(topicID, p, kerr.UnknownTopicOrPartition.Code)
@@ -445,7 +451,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	// fireShareWatchers fires when acks free the window, so the watcher
 	// wakes up promptly instead of the client busy-looping with empty
 	// fetches.
-	if totalRecords == 0 && w == nil {
+	if totalRecords == 0 && w == nil && !fc.anyHit() { // a faulted partition completes the fetch at once
 		wait := time.Duration(req.MaxWaitMillis) * time.Millisecond
 		deadline := creq.at.Add(wait)
 		remaining := time.Until(deadline)

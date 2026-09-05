@@ -184,16 +184,19 @@ ACL support is in `acl.go`. Uses kmsg types directly (`kmsg.ACLResourceType`, `k
 
 When implementing a new Kafka protocol handler, you MUST add ACL checks. I will provide links to Kafka documentation specifying which resources and operations to check.
 
+Handlers do not call allowedACL directly: c.deny and c.denyCluster check the
+ACL and the faults for that entity together (see the section below).
+
 Common patterns:
 ```go
 // Check specific resource
-if !c.allowedACL(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead) {
-    return errResp(kerr.TopicAuthorizationFailed.Code), nil
+if e := c.deny(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{topic: topicName}); e != nil {
+    return errResp(e.Code), nil
 }
 
 // Check cluster-level operation
-if !c.allowedClusterACL(creq, kmsg.ACLOperationAlter) {
-    return errResp(kerr.ClusterAuthorizationFailed.Code), nil
+if e := c.denyCluster(creq, kmsg.ACLOperationAlter); e != nil {
+    return errResp(e.Code), nil
 }
 
 // Check if user has ANY permission on resource type (e.g., InitProducerID without txn)
@@ -211,6 +214,39 @@ if !c.anyAllowedACL(creq, kmsg.ACLResourceTypeCluster, kmsg.ACLOperationIdempote
 | Group | Read, Delete, Describe |
 | Cluster | Create, Alter, Describe, ClusterAction, AlterConfigs, DescribeConfigs, IdempotentWrite |
 | TransactionalId | Describe, Write |
+
+## Faults and authorization in handlers
+
+Adding a request:
+- `regKey(NN, min, max)` in `NN_<name>.go`, the handler in the `cluster.go` switch, `checkReqVersion` first.
+
+Authorization and faults:
+- Check every resource the request touches through `c.deny` (topic, group, transactional ID: pass the resource type and operation) or `c.denyCluster`.
+- Check beside the point the handler emits that entity's error, before any side effect.
+- A request that carries partitions also calls `creq.faults.check` inside the partition loop, with the partition in the key.
+- A request with nothing to authorize goes in the `entityless` set in `faults.go`.
+
+The fault key:
+- Name every identifier the request carries that is known at that site: topic, topicID, partition, group, txnID, resource.
+- A selector the key does not name never matches, so a missing field silently drops faults.
+
+Emission:
+- Answer first with `e.Code` (and `e.Message` where the response carries one), then:
+```go
+if creq.skipsWork(e) {
+    continue
+}
+```
+- A kind whose real broker can answer REQUEST_TIMED_OUT after applying the work goes in the `afterApply` table in `faults.go`.
+- Such a kind's emission closure keeps the first answer for an entity; see `donep` in `00_produce.go`.
+
+Tests after touching a handler:
+- `TestFaultCoverage`: every registered key answers a selector-less fault.
+- The ACL tests for that request.
+- The package with `-race`.
+
+Comments:
+- ASCII, terse, plain statements. "we" is the broker, "you" is the caller.
 
 ## Authorized Operations (KIP-430)
 

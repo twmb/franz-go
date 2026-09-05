@@ -15,68 +15,29 @@ import (
 // Regression tests for consumer.go + consumer_direct.go. Each TestAudit*
 // below fails before its corresponding kgo fix.
 
-// fenceNextFetch installs a control that answers exactly one fetch request
-// with FENCED_LEADER_EPOCH for partition 0 of the topic. The client reacts by
-// marking the cursor unusable and queueing an OffsetForLeaderEpoch validation
-// at the cursor's current offset - the validation load's completion is the
-// only thing that re-enables the cursor.
+// fenceNextFetch fails exactly one fetch of partition 0 of the topic with
+// FENCED_LEADER_EPOCH. The client marks the cursor unusable and queues an
+// OffsetForLeaderEpoch validation. Only that validation re-enables the
+// cursor.
 func fenceNextFetch(c *Cluster, topic string) {
-	ti := c.TopicInfo(topic)
-	pi := c.PartitionInfo(topic, 0)
-	var fenced atomic.Bool
-	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if fenced.Swap(true) {
-			return nil, nil, false // already fenced once; serve real data
-		}
-		req := kreq.(*kmsg.FetchRequest)
-		resp := req.ResponseKind().(*kmsg.FetchResponse)
-		rt := kmsg.NewFetchResponseTopic()
-		rt.Topic = topic
-		rt.TopicID = ti.TopicID
-		rp := kmsg.NewFetchResponseTopicPartition()
-		rp.Partition = 0
-		rp.ErrorCode = kerr.FencedLeaderEpoch.Code
-		rp.HighWatermark = pi.HighWatermark
-		rp.LastStableOffset = pi.LastStableOffset
-		rp.LogStartOffset = 0
-		rt.Partitions = append(rt.Partitions, rp)
-		resp.Topics = append(resp.Topics, rt)
-		return resp, nil, true
+	c.Fault(Fault{
+		Keys:       []kmsg.Key{kmsg.Fetch},
+		Topic:      topic,
+		Partitions: []int32{0},
+		Err:        kerr.FencedLeaderEpoch,
+		Count:      1,
 	})
 }
 
-// failNextOFLE installs a control that answers exactly one
-// OffsetForLeaderEpoch request with a retriable NOT_LEADER_FOR_PARTITION
-// error, closing entered as it does. The retriable failure makes the client
-// keep the validation load pending (it schedules a reload), opening a window
-// in which the load exists but has not completed - without ever blocking the
-// cluster's request loop.
-func failNextOFLE(c *Cluster) (entered chan struct{}) {
-	entered = make(chan struct{})
-	var once atomic.Bool
-	c.ControlKey(int16(kmsg.OffsetForLeaderEpoch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if once.Swap(true) {
-			return nil, nil, false // later validations are served for real
-		}
-		req := kreq.(*kmsg.OffsetForLeaderEpochRequest)
-		resp := req.ResponseKind().(*kmsg.OffsetForLeaderEpochResponse)
-		for _, rt := range req.Topics {
-			st := kmsg.NewOffsetForLeaderEpochResponseTopic()
-			st.Topic = rt.Topic
-			for _, rp := range rt.Partitions {
-				sp := kmsg.NewOffsetForLeaderEpochResponseTopicPartition()
-				sp.Partition = rp.Partition
-				sp.ErrorCode = kerr.NotLeaderForPartition.Code
-				st.Partitions = append(st.Partitions, sp)
-			}
-			resp.Topics = append(resp.Topics, st)
-		}
-		close(entered)
-		return resp, nil, true
+// failNextOFLE fails exactly one OffsetForLeaderEpoch request with a
+// retryable NOT_LEADER_FOR_PARTITION. The client schedules a reload and
+// keeps the validation load pending, so the load exists but has not
+// completed.
+func failNextOFLE(c *Cluster) *FaultHandle {
+	return c.Fault(Fault{
+		Keys: []kmsg.Key{kmsg.OffsetForLeaderEpoch},
+		Err:  kerr.NotLeaderForPartition,
 	})
-	return entered
 }
 
 // TestAuditSetOffsetsNotClobberedByPendingLoad verifies that SetOffsets on a
@@ -110,13 +71,13 @@ func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 
 	// Fence the next fetch so the client queues an epoch validation at
 	// offset 10, and fail that validation retriably so it stays pending.
-	ofleEntered := failNextOFLE(c)
+	ofle := failNextOFLE(c)
 	fenceNextFetch(c, topic)
 
-	select {
-	case <-ofleEntered:
-	case <-time.After(8 * time.Second):
-		t.Fatal("timed out waiting for the epoch validation load to be issued")
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer waitCancel()
+	if err := ofle.Wait(waitCtx, 1); err != nil {
+		t.Fatalf("waiting for the epoch validation load to be issued: %v", err)
 	}
 
 	// The validation load for offset 10 is now pending (its retriable
@@ -159,12 +120,12 @@ func TestAuditStopSessionPromptWhilePendingReload(t *testing.T) {
 	)
 	collectRecords(t, cl, msgs, 8*time.Second)
 
-	ofleEntered := failNextOFLE(c)
+	ofle := failNextOFLE(c)
 	fenceNextFetch(c, topic)
-	select {
-	case <-ofleEntered:
-	case <-time.After(8 * time.Second):
-		t.Fatal("timed out waiting for the epoch validation load to be issued")
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer waitCancel()
+	if err := ofle.Wait(waitCtx, 1); err != nil {
+		t.Fatalf("waiting for the epoch validation load to be issued: %v", err)
 	}
 
 	// The epoch validation is now reload-looping. Stopping the session
@@ -206,38 +167,13 @@ func TestAuditPendingReloadSurvivesPartitionRevoke(t *testing.T) {
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, kept, dropped))
 	produceN(t, c, kept, msgs)
 
-	var failKept atomic.Bool
-	failKept.Store(true)
-	var signaled atomic.Bool
-	keptFailing := make(chan struct{})
-
-	// Fail the kept topic's offset listing with a retriable error while
-	// failKept is set, keeping it in a reload loop. Everything else (the
-	// dropped topic, and the kept topic once we allow it) lists to offset 0,
-	// the log start of these freshly seeded topics.
-	c.ControlKey(int16(kmsg.ListOffsets), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		req := kreq.(*kmsg.ListOffsetsRequest)
-		resp := req.ResponseKind().(*kmsg.ListOffsetsResponse)
-		for _, rt := range req.Topics {
-			st := kmsg.NewListOffsetsResponseTopic()
-			st.Topic = rt.Topic
-			for _, rp := range rt.Partitions {
-				sp := kmsg.NewListOffsetsResponseTopicPartition()
-				sp.Partition = rp.Partition
-				if rt.Topic == kept && failKept.Load() {
-					sp.ErrorCode = kerr.NotLeaderForPartition.Code
-					if !signaled.Swap(true) {
-						close(keptFailing)
-					}
-				} else {
-					sp.Offset = 0
-				}
-				st.Partitions = append(st.Partitions, sp)
-			}
-			resp.Topics = append(resp.Topics, st)
-		}
-		return resp, nil, true
+	// Fail the kept topic's offset listing with a retryable error. It stays
+	// in a reload loop until we remove the fault.
+	failKept := c.Fault(Fault{
+		Keys:  []kmsg.Key{kmsg.ListOffsets},
+		Topic: kept,
+		Err:   kerr.NotLeaderForPartition,
+		Count: -1,
 	})
 
 	cl := newPlainClient(t, c,
@@ -263,12 +199,12 @@ func TestAuditPendingReloadSurvivesPartitionRevoke(t *testing.T) {
 		}
 	}()
 
-	// Wait for the kept partition to enter its retriable reload loop. Firing
+	// Wait for the kept partition to enter its retryable reload loop. Firing
 	// the revoke now lands while the reload is in flight or in its backoff.
-	select {
-	case <-keptFailing:
-	case <-time.After(10 * time.Second):
-		t.Fatal("kept partition never entered the offset reload loop")
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer waitCancel()
+	if err := failKept.Wait(waitCtx, 1); err != nil {
+		t.Fatalf("kept partition never entered the offset reload loop: %v", err)
 	}
 
 	// Stop the session by revoking the OTHER partition. kept is retained, so
@@ -277,7 +213,7 @@ func TestAuditPendingReloadSurvivesPartitionRevoke(t *testing.T) {
 
 	// Let kept's listing succeed. It only resumes if the reload survived the
 	// stop; if it was dropped, kept has no cursor and never lists again.
-	failKept.Store(false)
+	failKept.Remove()
 
 	got := 0
 	deadline := time.After(15 * time.Second)
@@ -362,12 +298,12 @@ func TestAuditTxnAbortRewindNotClobberedByPendingLoad(t *testing.T) {
 	}
 	pollN(msgs - committed)
 
-	ofleEntered := failNextOFLE(c)
+	ofle := failNextOFLE(c)
 	fenceNextFetch(c, topic)
-	select {
-	case <-ofleEntered:
-	case <-time.After(8 * time.Second):
-		t.Fatal("timed out waiting for the epoch validation load to be issued")
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer waitCancel()
+	if err := ofle.Wait(waitCtx, 1); err != nil {
+		t.Fatalf("waiting for the epoch validation load to be issued: %v", err)
 	}
 
 	if _, err := s.End(ctx, kgo.TryAbort); err != nil {

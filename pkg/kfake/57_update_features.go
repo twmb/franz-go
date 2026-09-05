@@ -54,9 +54,11 @@ func (c *Cluster) handleUpdateFeatures(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	if !c.allowedClusterACL(creq, kmsg.ACLOperationAlter) {
-		resp.ErrorCode = kerr.ClusterAuthorizationFailed.Code
-		return resp, nil
+	if e := c.denyCluster(creq, kmsg.ACLOperationAlter); e != nil {
+		resp.ErrorCode = e.Code
+		if creq.skipsWork(e) { // a timed-out update still updates
+			return resp, nil
+		}
 	}
 
 	// Build per-feature results, then collapse into the top-level error
@@ -65,7 +67,13 @@ func (c *Cluster) handleUpdateFeatures(creq *clientReq) (kmsg.Response, error) {
 	pending := make(map[string]int16, len(req.FeatureUpdates))
 	seen := make(map[string]bool, len(req.FeatureUpdates))
 
+	// A fault can answer a feature before the work runs. The work's own
+	// answer for that feature must not add an entry or replace the code.
+	answered := make(map[string]bool)
 	fail := func(name string, err *kerr.Error, msg string) {
+		if answered[name] {
+			return
+		}
 		r := kmsg.NewUpdateFeaturesResponseResult()
 		r.Feature = name
 		r.ErrorCode = err.Code
@@ -75,12 +83,23 @@ func (c *Cluster) handleUpdateFeatures(creq *clientReq) (kmsg.Response, error) {
 		results = append(results, r)
 	}
 	ok := func(name string) {
+		if answered[name] {
+			return
+		}
 		r := kmsg.NewUpdateFeaturesResponseResult()
 		r.Feature = name
 		results = append(results, r)
 	}
 
 	for _, fu := range req.FeatureUpdates {
+		if e := creq.faults.check(faultKey{resource: fu.Feature}); e != nil {
+			fail(fu.Feature, e, "")
+			answered[fu.Feature] = true
+			if creq.skipsWork(e) { // a timed-out update still updates the feature
+				seen[fu.Feature] = true
+				continue
+			}
+		}
 		if seen[fu.Feature] {
 			fail(fu.Feature, kerr.InvalidRequest, "duplicate feature update")
 			continue

@@ -87,26 +87,15 @@ func TestAuditTxnInitPidRetriableLoadFailure(t *testing.T) {
 	}
 }
 
-// failAllProduces installs a control that fails every partition of the next
-// produce request with MESSAGE_TOO_LARGE: terminal for the batch, but not a
-// producer-id-failing error, mirroring a broker-side append rejection.
-func failAllProduces(c *Cluster) {
-	c.ControlKey(int16(kmsg.Produce), func(req kmsg.Request) (kmsg.Response, error, bool) {
-		preq := req.(*kmsg.ProduceRequest)
-		resp := preq.ResponseKind().(*kmsg.ProduceResponse)
-		for _, rt := range preq.Topics {
-			st := kmsg.NewProduceResponseTopic()
-			st.Topic = rt.Topic
-			st.TopicID = rt.TopicID
-			for _, rp := range rt.Partitions {
-				sp := kmsg.NewProduceResponseTopicPartition()
-				sp.Partition = rp.Partition
-				sp.ErrorCode = kerr.MessageTooLarge.Code
-				st.Partitions = append(st.Partitions, sp)
-			}
-			resp.Topics = append(resp.Topics, st)
-		}
-		return resp, nil, true
+// failAllProduces fails every partition of the topic in the next produce
+// request with MESSAGE_TOO_LARGE. The batch is terminal and the producer ID
+// survives, as with a broker-side append rejection.
+func failAllProduces(c *Cluster, topic string) {
+	c.Fault(Fault{
+		Keys:  []kmsg.Key{kmsg.Produce},
+		Topic: topic,
+		Err:   kerr.MessageTooLarge,
+		Count: 1,
 	})
 }
 
@@ -135,7 +124,7 @@ func TestAuditTxnV2AbortAfterFailedProduces(t *testing.T) {
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "audit-v2-abort"))
 
 	endTxns := observeEndTxns(c)
-	failAllProduces(c)
+	failAllProduces(c, "audit-v2-abort")
 
 	cl := newPlainClient(t, c, kgo.TransactionalID("audit-v2-abort"))
 	if err := cl.BeginTransaction(); err != nil {
@@ -184,7 +173,7 @@ func TestAuditTxnV1AbortAfterFailedProducesControl(t *testing.T) {
 	}
 
 	endTxns := observeEndTxns(c)
-	failAllProduces(c)
+	failAllProduces(c, "audit-v1-abort")
 
 	cl := newPlainClient(t, c, kgo.TransactionalID("audit-v1-abort"))
 	if err := cl.BeginTransaction(); err != nil {

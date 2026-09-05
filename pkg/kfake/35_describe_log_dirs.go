@@ -1,7 +1,6 @@
 package kfake
 
 import (
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -30,8 +29,8 @@ func (c *Cluster) handleDescribeLogDirs(creq *clientReq) (kmsg.Response, error) 
 		return nil, err
 	}
 
-	if !c.allowedClusterACL(creq, kmsg.ACLOperationDescribe) {
-		resp.ErrorCode = kerr.ClusterAuthorizationFailed.Code
+	if e := c.denyCluster(creq, kmsg.ACLOperationDescribe); e != nil {
+		resp.ErrorCode = e.Code
 		return resp, nil
 	}
 
@@ -71,6 +70,11 @@ func (c *Cluster) handleDescribeLogDirs(creq *clientReq) (kmsg.Response, error) 
 	for dir, ts := range individual {
 		rd := kmsg.NewDescribeLogDirsResponseDir()
 		rd.Dir = dir
+		if e := creq.faults.check(faultKey{resource: dir}); e != nil {
+			rd.ErrorCode = e.Code
+			resp.Dirs = append(resp.Dirs, rd)
+			continue
+		}
 		rd.TotalBytes = totalSpace[dir]
 		rd.UsableBytes = 32 << 30
 		for t, ps := range ts {

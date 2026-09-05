@@ -38,6 +38,10 @@ type (
 		sleeping       map[*clientConn]*bsleep
 		controlSleep   chan sleepChs
 
+		faultsMu  sync.Mutex
+		faults    []*fault
+		faultCond *sync.Cond // broadcast on every fault hit, see FaultHandle.Wait
+
 		data               data
 		pids               pids
 		groups             groups
@@ -591,6 +595,10 @@ outer:
 		}
 
 		kreq = creq.kreq
+		creq.faults = c.faultsFor(creq)
+		if kresp = creq.faults.topLevel(kreq); kresp != nil {
+			goto afterControl
+		}
 		switch k := kmsg.Key(kreq.Key()); k {
 		case kmsg.Produce:
 			kresp, err = c.handleProduce(creq)
@@ -621,7 +629,7 @@ outer:
 		case kmsg.SASLHandshake:
 			kresp, err = c.handleSASLHandshake(creq)
 		case kmsg.ApiVersions:
-			kresp, err = c.handleApiVersions(kreq)
+			kresp, err = c.handleApiVersions(creq)
 		case kmsg.CreateTopics:
 			kresp, err = c.handleCreateTopics(creq)
 		case kmsg.DeleteTopics:
