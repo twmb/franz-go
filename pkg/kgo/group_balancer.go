@@ -430,8 +430,17 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		})
 	}
 
+	// KIP-881: we build rack info below from the metadata cache, which
+	// can evict a topic when it stores a response that is missing it.
+	rackMeta := !needMeta && g.needRackMeta(memberBalancer, topics)
+	needMeta = needMeta || rackMeta
+
 	if needMeta {
-		g.cl.cfg.logger.Log(LogLevelInfo, "group members indicated interest in topics the leader is not assigned, fetching metadata for all group topics")
+		why := "group members indicated interest in topics the leader is not assigned"
+		if rackMeta {
+			why = "our metadata cache no longer has all group topics and we balance by rack"
+		}
+		g.cl.cfg.logger.Log(LogLevelInfo, "fetching metadata for all group topics", "why", why)
 		var metaTopics []string
 		for topic := range topics {
 			metaTopics = append(metaTopics, topic)
@@ -459,7 +468,7 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 
 	// KIP-881: build partition rack info for rack-aware assignment.
 	// We use cached broker racks and partition leaders from local
-	// metadata. This requires no extra fetches.
+	// metadata, which we refreshed above if we had to.
 	if cb, ok := memberBalancer.(*ConsumerBalancer); ok {
 		cb.partitionRacks = g.buildPartitionRacks(cb, topicPartitionCount)
 	}
@@ -534,20 +543,47 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 	return into.IntoSyncAssignment(), nil
 }
 
+// anyMemberRack returns whether any member reported a rack.
+func (b *ConsumerBalancer) anyMemberRack() bool {
+	for i := range b.metadatas {
+		if b.metadatas[i].Rack != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// needRackMeta returns whether we need to load metadata before we can rack
+// balance topics that other group members consume. We always have racks for
+// the topics we consume ourselves; for the rest, we load metadata through
+// groupExternal, which populates the metadata cache. Our own metadata
+// updates keep those topics cached, since we ask for them, but a user's
+// metadata request for other topics evicts them (see storeCachedMeta).
+func (g *groupConsumer) needRackMeta(memberBalancer GroupMemberBalancer, topics map[string]struct{}) bool {
+	cb, ok := memberBalancer.(*ConsumerBalancer)
+	if !ok || !cb.anyMemberRack() {
+		return false
+	}
+	myTopics := g.tps.load()
+	g.cl.metaCache.mu.Lock()
+	defer g.cl.metaCache.mu.Unlock()
+	for topic := range topics {
+		if _, ok := myTopics[topic]; ok {
+			continue
+		}
+		if _, ok := g.cl.metaCache.topics[topic]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
 // buildPartitionRacks builds a topic => partition => rack map for rack-aware
 // assignment (KIP-881). It uses cached broker racks and partition leaders from
 // the metadata cache, falling back to our own topics. Returns nil if no rack
 // info is available.
 func (g *groupConsumer) buildPartitionRacks(b *ConsumerBalancer, topicPartitionCount map[string]int32) map[string][]string {
-	// Check if any member has a rack.
-	var hasRack bool
-	for i := range b.metadatas {
-		if b.metadatas[i].Rack != nil {
-			hasRack = true
-			break
-		}
-	}
-	if !hasRack {
+	if !b.anyMemberRack() {
 		return nil
 	}
 

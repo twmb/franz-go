@@ -513,3 +513,40 @@ func TestBuildPartitionRacks(t *testing.T) {
 		t.Errorf("got racks != exp\ngot: %#v\nexp: %#v\n", got, exp)
 	}
 }
+
+func TestNeedRackMeta(t *testing.T) {
+	t.Parallel()
+
+	rack := "rack"
+	// t1 is ours, t2 is a topic only another member consumes.
+	topics := map[string]struct{}{"t1": {}, "t2": {}}
+	rackB := &ConsumerBalancer{metadatas: []kmsg.ConsumerMemberMetadata{{Topics: []string{"t1"}, Rack: &rack}}}
+	norackB := &ConsumerBalancer{metadatas: []kmsg.ConsumerMemberMetadata{{Topics: []string{"t1"}}}}
+
+	newG := func(cached ...string) *groupConsumer {
+		cl := new(Client)
+		cl.metaCache.topics = make(map[string]cachedMetaTopic)
+		for _, topic := range cached {
+			cl.metaCache.topics[topic] = cachedMetaTopic{}
+		}
+		tps := newTopicsPartitions()
+		tps.storeTopics([]string{"t1"})
+		return &groupConsumer{cl: cl, cfg: &cl.cfg, tps: tps}
+	}
+
+	for _, test := range []struct {
+		name string
+		g    *groupConsumer
+		b    GroupMemberBalancer
+		exp  bool
+	}{
+		{"cache is missing a topic that is not ours", newG("t1"), rackB, true},
+		{"cache has every topic", newG("t1", "t2"), rackB, false},
+		{"cache is missing only our own topic", newG("t2"), rackB, false},
+		{"no member has a rack", newG("t1"), norackB, false},
+	} {
+		if got := test.g.needRackMeta(test.b, topics); got != test.exp {
+			t.Errorf("%s: got %v, expected %v", test.name, got, test.exp)
+		}
+	}
+}
