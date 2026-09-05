@@ -535,8 +535,9 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 }
 
 // buildPartitionRacks builds a topic => partition => rack map for rack-aware
-// assignment (KIP-881). It uses cached broker racks and partition leader info
-// from local metadata. Returns nil if no rack info is available.
+// assignment (KIP-881). It uses cached broker racks and partition leaders from
+// the metadata cache, falling back to our own topics. Returns nil if no rack
+// info is available.
 func (g *groupConsumer) buildPartitionRacks(b *ConsumerBalancer, topicPartitionCount map[string]int32) map[string][]string {
 	// Check if any member has a rack.
 	var hasRack bool
@@ -556,13 +557,35 @@ func (g *groupConsumer) buildPartitionRacks(b *ConsumerBalancer, topicPartitionC
 		return nil
 	}
 
-	// Build partition racks from local topic metadata. Each
-	// partition's rack is determined by its leader broker's rack.
+	// Each partition's rack is its leader broker's rack. We prefer the
+	// metadata cache: it has every topic the group is interested in,
+	// including topics we do not consume and so never have in tps. The
+	// cache prunes entries whenever a request that does not cover them
+	// stores its response, so for our own topics we fall back to tps.
+	cached := make(map[string]cachedMetaTopic, len(topicPartitionCount))
+	g.cl.metaCache.mu.Lock()
+	for topic := range topicPartitionCount {
+		if ct, ok := g.cl.metaCache.topics[topic]; ok {
+			cached[topic] = ct
+		}
+	}
+	g.cl.metaCache.mu.Unlock()
+
 	partitionRacks := make(map[string][]string, len(topicPartitionCount))
 	myTopics := g.tps.load()
 	for topic, numPartitions := range topicPartitionCount {
 		racks := make([]string, numPartitions)
-		if data, ok := myTopics[topic]; ok {
+		if ps := cached[topic].t.Partitions; len(ps) > 0 {
+			// The cache keeps the broker's partition order.
+			for _, p := range ps {
+				if p.Partition < 0 || p.Partition >= numPartitions {
+					continue
+				}
+				if rack, ok := brokerRacks[p.Leader]; ok {
+					racks[p.Partition] = rack
+				}
+			}
+		} else if data, ok := myTopics[topic]; ok {
 			tpd := data.load()
 			for i, p := range tpd.partitions {
 				if p == nil || int32(i) >= numPartitions {
