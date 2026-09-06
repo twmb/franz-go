@@ -165,6 +165,7 @@ type cfg struct {
 	isolationLevel int8
 	keepControl    bool
 	rack           string
+	balanceRacks   bool
 	preferLagFn    PreferLagFn
 	decompressor   Decompressor
 
@@ -1655,14 +1656,31 @@ func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset, cfg.setResetOffset = offset, true }}
 }
 
-// Rack specifies where the client is physically located and changes fetch
-// requests to consume from the closest replica as opposed to the leader
-// replica.
+// Rack specifies where the client is physically located. Brokers configured
+// with a rack aware replica selector use this to serve fetches from the
+// closest replica rather than the leader; by default, brokers serve every
+// fetch from the leader and this changes nothing about fetching.
 //
 // Consuming from a preferred replica can increase latency but can decrease
-// cross datacenter costs. See KIP-392 for more information.
+// cross datacenter costs. See KIP-392 for more information, and see
+// [BalanceRacks] to also take racks into account when assigning partitions.
 func Rack(rack string) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.rack = rack }}
+}
+
+// BalanceRacks makes the range and sticky balancers prefer giving a member
+// partitions whose leader is in the member's rack (KIP-881). [Rack] must also
+// be set, and only the group leader's setting matters since the leader
+// computes the assignment.
+//
+// Brokers serve every fetch from the leader by default, so the leader's rack
+// decides whether a fetch crosses zones. If your brokers instead use a rack
+// aware replica selector (KIP-392), fetches are already served from a local
+// replica where one exists and rack aware balancing likely moves partitions
+// for nothing. Kafka's Java client balances by rack whenever a rack is set;
+// this client requires opting in.
+func BalanceRacks() ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.balanceRacks = true }}
 }
 
 // IsolationLevel controls whether uncommitted or only committed records are
@@ -1939,6 +1957,9 @@ func ShareAckCallback(fn func(*Client, ShareAckResults)) GroupOpt {
 // downgrade, the client revokes all partitions and re-consumes from
 // committed offsets, which can result in duplicates. It is not recommended
 // to downgrade once a group is cooperative.
+//
+// The range and sticky balancers can additionally take racks into account;
+// see [BalanceRacks].
 func Balancers(balancers ...GroupBalancer) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.balancers = balancers }}
 }

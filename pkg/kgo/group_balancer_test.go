@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -523,8 +524,9 @@ func TestNeedRackMeta(t *testing.T) {
 	rackB := &ConsumerBalancer{metadatas: []kmsg.ConsumerMemberMetadata{{Topics: []string{"t1"}, Rack: &rack}}}
 	norackB := &ConsumerBalancer{metadatas: []kmsg.ConsumerMemberMetadata{{Topics: []string{"t1"}}}}
 
-	newG := func(cached ...string) *groupConsumer {
+	newG := func(balanceRacks bool, cached ...string) *groupConsumer {
 		cl := new(Client)
+		cl.cfg.balanceRacks = balanceRacks
 		cl.metaCache.topics = make(map[string]cachedMetaTopic)
 		for _, topic := range cached {
 			cl.metaCache.topics[topic] = cachedMetaTopic{}
@@ -540,13 +542,51 @@ func TestNeedRackMeta(t *testing.T) {
 		b    GroupMemberBalancer
 		exp  bool
 	}{
-		{"cache is missing a topic that is not ours", newG("t1"), rackB, true},
-		{"cache has every topic", newG("t1", "t2"), rackB, false},
-		{"cache is missing only our own topic", newG("t2"), rackB, false},
-		{"no member has a rack", newG("t1"), norackB, false},
+		{"cache is missing a topic that is not ours", newG(true, "t1"), rackB, true},
+		{"cache has every topic", newG(true, "t1", "t2"), rackB, false},
+		{"cache is missing only our own topic", newG(true, "t2"), rackB, false},
+		{"we do not balance by rack", newG(false, "t1"), rackB, false},
+		{"no member has a rack", newG(true, "t1"), norackB, false},
 	} {
 		if got := test.g.needRackMeta(test.b, topics); got != test.exp {
 			t.Errorf("%s: got %v, expected %v", test.name, got, test.exp)
 		}
+	}
+}
+
+// One fat topic and two members, where every partition planned for the second
+// member is one the first still owns and must be dropped pending revocation.
+func BenchmarkAdjustCooperativeFatTopic(b *testing.B) {
+	for _, nparts := range []int32{4000, 8000, 16000, 32000} {
+		b.Run(fmt.Sprintf("%dp", nparts), func(b *testing.B) {
+			owned := make([]int32, nparts)
+			for i := range owned {
+				owned[i] = int32(i)
+			}
+			cb := &ConsumerBalancer{
+				members: []kmsg.JoinGroupResponseMember{{MemberID: "a"}, {MemberID: "b"}},
+				metadatas: []kmsg.ConsumerMemberMetadata{
+					{OwnedPartitions: []kmsg.ConsumerMemberMetadataOwnedPartition{{Topic: "t", Partitions: owned}}},
+					{},
+				},
+			}
+			half := nparts / 2
+			b.ReportAllocs()
+			for b.Loop() {
+				b.StopTimer()
+				pa := make([]int32, 0, half)
+				pb := make([]int32, 0, nparts-half)
+				for i := int32(0); i < nparts; i++ {
+					if i < half {
+						pa = append(pa, i)
+					} else {
+						pb = append(pb, i)
+					}
+				}
+				plan := map[string]map[string][]int32{"a": {"t": pa}, "b": {"t": pb}}
+				b.StartTimer()
+				(&BalancePlan{plan}).AdjustCooperative(cb)
+			}
+		})
 	}
 }
