@@ -31,7 +31,7 @@ func TestAuditWriteTxnMarkersPreservesCoordinatorEpoch(t *testing.T) {
 	rp.Leader = 1
 	rt.Partitions = append(rt.Partitions, rp)
 	meta.Topics = append(meta.Topics, rt)
-	cl.storeCachedMeta(meta, false, nil)
+	cl.storeCachedMeta(mkreq("foo"), meta, true, nil)
 
 	req := kmsg.NewPtrWriteTxnMarkersRequest()
 	m := kmsg.NewWriteTxnMarkersRequestMarker()

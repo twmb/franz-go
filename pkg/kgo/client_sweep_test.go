@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"testing"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -22,8 +23,8 @@ func TestStoreCachedMetaTopicIDChange(t *testing.T) {
 		resp.Topics = append(resp.Topics, rt)
 		return resp
 	}
-	cl.storeCachedMeta(mkmeta(1), false, nil)
-	cl.storeCachedMeta(mkmeta(2), false, nil)
+	cl.storeCachedMeta(mkreq("foo"), mkmeta(1), true, nil)
+	cl.storeCachedMeta(mkreq("foo"), mkmeta(2), true, nil)
 
 	cl.metaCache.mu.Lock()
 	defer cl.metaCache.mu.Unlock()
@@ -81,5 +82,70 @@ func TestOptValuesTxnIDAndShare(t *testing.T) {
 	}
 	if vs := shcl.OptValues(ShareAckCallback); vs == nil {
 		t.Errorf("OptValues(ShareAckCallback) = nil; the option exists and must be returned")
+	}
+}
+
+// mkreq returns a metadata request for the given topics.
+func mkreq(topics ...string) *kmsg.MetadataRequest {
+	req := kmsg.NewPtrMetadataRequest()
+	req.Topics = []kmsg.MetadataRequestTopic{}
+	for _, topic := range topics {
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr(topic)
+		req.Topics = append(req.Topics, rt)
+	}
+	return req
+}
+
+// We evict cached topics only from a request that says something about what
+// we want cached. A broker only request asks for no topics, and internal
+// targeted fetches (topic IDs, unknown produce topics, the group's topics)
+// ask only about their own, so neither can drop what else we have.
+func TestStoreCachedMetaEviction(t *testing.T) {
+	t.Parallel()
+
+	foo := func() *kmsg.MetadataResponse {
+		resp := kmsg.NewPtrMetadataResponse()
+		rt := kmsg.NewMetadataResponseTopic()
+		rt.Topic = kmsg.StringPtr("foo")
+		resp.Topics = append(resp.Topics, rt)
+		return resp
+	}
+
+	for _, test := range []struct {
+		name  string
+		req   *kmsg.MetadataRequest
+		prune bool
+		exp   bool // whether foo survives
+	}{
+		{"broker only request", mkreq(), true, true},
+		{"targeted fetch of another topic", mkreq("bar"), false, true},
+		{"interested request for another topic", mkreq("bar"), true, false},
+	} {
+		cl := &Client{cfg: defaultCfg()}
+		cl.storeCachedMeta(mkreq("foo"), foo(), true, nil)
+
+		// Age the entry past metadataMinAge; a fresh entry is never
+		// pruned.
+		cl.metaCache.mu.Lock()
+		ct := cl.metaCache.topics["foo"]
+		ct.when = time.Now().Add(-time.Hour)
+		cl.metaCache.topics["foo"] = ct
+		cl.metaCache.mu.Unlock()
+
+		bar := kmsg.NewPtrMetadataResponse()
+		if len(test.req.Topics) > 0 {
+			rt := kmsg.NewMetadataResponseTopic()
+			rt.Topic = kmsg.StringPtr("bar")
+			bar.Topics = append(bar.Topics, rt)
+		}
+		cl.storeCachedMeta(test.req, bar, test.prune, nil)
+
+		cl.metaCache.mu.Lock()
+		_, got := cl.metaCache.topics["foo"]
+		cl.metaCache.mu.Unlock()
+		if got != test.exp {
+			t.Errorf("%s: foo cached = %v, expected %v", test.name, got, test.exp)
+		}
 	}
 }

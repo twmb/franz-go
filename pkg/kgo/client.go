@@ -1067,7 +1067,7 @@ func (cl *Client) fetchBrokerMetadata(ctx context.Context) error {
 			}()
 			req := kmsg.NewPtrMetadataRequest()
 			req.Topics = []kmsg.MetadataRequestTopic{}
-			_, _, wait.err = cl.fetchMetadata(cl.ctx, req, true, nil)
+			_, _, wait.err = cl.fetchMetadata(cl.ctx, req, true, false, nil) // prune: no; brokers only, no opinion on topics
 		}()
 	}
 	cl.fetchingBrokersMu.Unlock()
@@ -1080,7 +1080,7 @@ func (cl *Client) fetchBrokerMetadata(ctx context.Context) error {
 	}
 }
 
-func (cl *Client) fetchMetadataByName(ctx context.Context, all bool, topics []string, results map[string]cachedMetaTopic) (*broker, *kmsg.MetadataResponse, error) {
+func (cl *Client) fetchMetadataByName(ctx context.Context, all bool, topics []string, prune bool, results map[string]cachedMetaTopic) (*broker, *kmsg.MetadataResponse, error) {
 	req := kmsg.NewPtrMetadataRequest()
 	req.AllowAutoTopicCreation = cl.cfg.allowAutoTopicCreation
 	if all {
@@ -1094,7 +1094,7 @@ func (cl *Client) fetchMetadataByName(ctx context.Context, all bool, topics []st
 			req.Topics = append(req.Topics, reqTopic)
 		}
 	}
-	return cl.fetchMetadata(ctx, req, true, results)
+	return cl.fetchMetadata(ctx, req, true, prune, results)
 }
 
 // resolveTopicMetaByID fetches metadata by TopicID and caches the results.
@@ -1121,11 +1121,11 @@ func (cl *Client) resolveTopicMetaByID(ctx context.Context, ids [][16]byte) (map
 		req.Topics = append(req.Topics, reqTopic)
 	}
 	results := make(map[string]cachedMetaTopic)
-	_, _, err := cl.fetchMetadata(ctx, req, true, results)
+	_, _, err := cl.fetchMetadata(ctx, req, true, false, results) // prune: no; only the ids we could not resolve
 	return results, err
 }
 
-func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest, limitRetries bool, results map[string]cachedMetaTopic) (*broker, *kmsg.MetadataResponse, error) {
+func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest, limitRetries, prune bool, results map[string]cachedMetaTopic) (*broker, *kmsg.MetadataResponse, error) {
 	r := cl.retryable()
 
 	var rebootstrapped bool
@@ -1160,7 +1160,7 @@ start:
 		cl.updateMetadataBrokers(meta)
 
 		// Cache the metadata, and potentially store each topic in the results.
-		cl.storeCachedMeta(meta, req.Topics == nil, results)
+		cl.storeCachedMeta(req, meta, prune, results)
 	}
 	return r.last, meta, err
 }
@@ -1563,7 +1563,7 @@ func (cl *Client) RequestCachedMetadata(ctx context.Context, req *kmsg.MetadataR
 			rt.TopicID = id
 			idReq.Topics = append(idReq.Topics, rt)
 		}
-		_, meta, err := cl.fetchMetadata(ctx, idReq, true, nil)
+		_, meta, err := cl.fetchMetadata(ctx, idReq, true, false, nil) // prune: no; only the ids we could not resolve
 		if err != nil {
 			return nil, err
 		}
@@ -1881,7 +1881,7 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 	case *kmsg.MetadataRequest:
 		// We hijack any metadata request so as to populate our
 		// own brokers and controller ID.
-		br, resp, err := cl.fetchMetadata(ctx, t, false, nil)
+		br, resp, err := cl.fetchMetadata(ctx, t, false, true, nil) // prune: yes; the user says what they want cached
 		return shards(shard(br, req, resp, err)), nil
 
 	case kmsg.AdminRequest:
@@ -3158,19 +3158,35 @@ func (cl *Client) resolveTopicMeta(ctx context.Context, topics []string, useCach
 	if results == nil {
 		results = make(map[string]cachedMetaTopic)
 	}
-	_, _, err := cl.fetchMetadataByName(ctx, all, needed, results)
+	_, _, err := cl.fetchMetadataByName(ctx, all, needed, true, results) // prune: yes; our caller wants only these cached
 	return results, err
 }
 
 // storeCachedMeta caches the fetched metadata in the Client, and
-// optionally stores each topic in results. If all is true, this was an
-// all-topics fetch and stale entries not in the response are evicted.
+// optionally stores each topic in results. If the request was for all
+// topics, stale entries not in the response are evicted.
+//
+// If prune is true, we also evict entries older than MetadataMinAge that the
+// response does not contain. Only requests that say something about what we
+// want cached prune: the metadata loop, a user's own metadata request, and
+// RequestCachedMetadata. Internal targeted fetches say nothing about the
+// topics they did not ask for, so loading brokers, resolving topic IDs,
+// creating unknown produce topics, and loading the group's topics to balance
+// all leave the rest of the cache alone.
+//
+// A request for no topics is a broker only request: the response cannot
+// contain topics and says nothing about the ones we have, so we neither
+// store nor evict.
 //
 // Topics with a nil name are skipped. Per the Kafka protocol, the broker
 // always populates the topic name for successfully resolved topics, even
 // for TopicID-only requests. A nil name only occurs for error responses
 // (e.g. UnknownTopicID), which cannot be meaningfully cached by name.
-func (cl *Client) storeCachedMeta(meta *kmsg.MetadataResponse, all bool, results map[string]cachedMetaTopic) {
+func (cl *Client) storeCachedMeta(req *kmsg.MetadataRequest, meta *kmsg.MetadataResponse, prune bool, results map[string]cachedMetaTopic) {
+	if req.Topics != nil && len(req.Topics) == 0 {
+		return
+	}
+	all := req.Topics == nil
 	cl.metaCache.mu.Lock()
 	defer cl.metaCache.mu.Unlock()
 	if cl.metaCache.topics == nil {
@@ -3242,7 +3258,7 @@ func (cl *Client) storeCachedMeta(meta *kmsg.MetadataResponse, all bool, results
 	// Prune entries older than metadataMinAge. If the number of
 	// topics we just stored equals the map size, every entry is
 	// fresh and there is nothing to prune.
-	if stored < len(cl.metaCache.topics) {
+	if prune && stored < len(cl.metaCache.topics) {
 		for topic, ct := range cl.metaCache.topics {
 			if ct.when.Equal(when) {
 				continue
