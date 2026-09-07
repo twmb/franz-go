@@ -450,24 +450,12 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	// that we will store the topics at the end of our metadata update.
 	tpsConsumerLoad := tpsConsumer.load()
 	if all {
-		allTopics := make([]string, 0, len(latest))
-		for topic, mt := range latest {
-			// loadErr should only be non-nil when requesting all
-			// topics if this is with auto-topic-creation && the
-			// creation failed. That is, we should not consume the
-			// topic since we just tried creating it and creating
-			// it failed.
-			if mt.loadErr == nil {
-				allTopics = append(allTopics, topic)
-			}
-		}
-
 		// We filter out topics will not match any of our regex's.
 		// This ensures that the `tps` field does not contain topics
 		// we will never use (the client works with misc. topics in
 		// there, but it's better to avoid it -- and allows us to use
 		// `tps` in GetConsumeTopics).
-		allTopics = c.filterMetadataAllTopics(allTopics)
+		allTopics := c.filterMetadataAllTopics(latest)
 
 		tpsConsumerLoad = tpsConsumer.ensureTopics(allTopics)
 		defer tpsConsumer.storeData(tpsConsumerLoad)

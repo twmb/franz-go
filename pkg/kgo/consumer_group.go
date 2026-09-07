@@ -2412,9 +2412,6 @@ func (g *groupConsumer) findNewAssignments() {
 		// want to load the metadata", but the topic was not returned
 		// in the metadata (or it was returned with an error).
 		if useTopic && numPartitions > 0 {
-			if g.cfg.regex && parts.isInternal {
-				continue
-			}
 			toChange[topic] = change{isNew: true, delta: numPartitions}
 			numNewTopics++
 		}
@@ -3827,8 +3824,10 @@ func commitHasFatalMemberError(resp *kmsg.OffsetCommitResponse) error {
 }
 
 type reNews struct {
-	added   map[string][]string
-	skipped []string
+	added    map[string][]string
+	excluded map[string][]string
+	internal []string
+	skipped  []string
 }
 
 func (r *reNews) add(re, match string) {
@@ -3838,20 +3837,43 @@ func (r *reNews) add(re, match string) {
 	r.added[re] = append(r.added[re], match)
 }
 
+func (r *reNews) exclude(re, match string) {
+	if r.excluded == nil {
+		r.excluded = make(map[string][]string)
+	}
+	r.excluded[re] = append(r.excluded[re], match)
+}
+
+func (r *reNews) skipInternal(topic string) {
+	r.internal = append(r.internal, topic)
+}
+
 func (r *reNews) skip(topic string) {
 	r.skipped = append(r.skipped, topic)
 }
 
 func (r *reNews) log(cfg *cfg) {
-	if len(r.added) == 0 && len(r.skipped) == 0 {
+	if cfg.logger.Level() < LogLevelInfo {
 		return
 	}
-	var addeds []string
-	for re, matches := range r.added {
-		sort.Strings(matches)
-		addeds = append(addeds, fmt.Sprintf("%s[%s]", re, strings.Join(matches, " ")))
+	if len(r.added) == 0 && len(r.excluded) == 0 && len(r.internal) == 0 && len(r.skipped) == 0 {
+		return
 	}
-	added := strings.Join(addeds, " ")
+	fmtMatches := func(m map[string][]string) string {
+		var all []string
+		for re, matches := range m {
+			sort.Strings(matches)
+			all = append(all, fmt.Sprintf("%s[%s]", re, strings.Join(matches, " ")))
+		}
+		sort.Strings(all)
+		return strings.Join(all, " ")
+	}
+	sort.Strings(r.internal)
 	sort.Strings(r.skipped)
-	cfg.logger.Log(LogLevelInfo, "consumer regular expressions evaluated on new topics", "added", added, "evaluated_and_skipped", r.skipped)
+	cfg.logger.Log(LogLevelInfo, "consumer regular expressions evaluated on new topics",
+		"added", fmtMatches(r.added),
+		"excluded", fmtMatches(r.excluded),
+		"skipped_internal", r.internal,
+		"evaluated_and_skipped", r.skipped,
+	)
 }

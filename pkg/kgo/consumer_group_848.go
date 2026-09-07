@@ -18,6 +18,18 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// adoptAssignedTopic adds a topic the broker assigned us that our regex
+// filter skipped, so that the next metadata update loads it and we can
+// fetch from it.
+func (g *groupConsumer) adoptAssignedTopic(topic string) {
+	g.cfg.logger.Log(LogLevelInfo, "adopting a topic the broker assigned that our regex filter skipped", "group", g.cfg.group, "topic", topic)
+	g.c.mu.Lock()
+	defer g.c.mu.Unlock()
+	g.reSeen[topic] = true
+	g.tps.storeTopics([]string{topic})
+	g.cl.triggerUpdateMetadataNow("consumer group heartbeat assigned a topic we have not loaded")
+}
+
 func (g *groupConsumer) should848() bool {
 	if wantBeta := g.cl.ctx.Value("opt_in_kafka_next_gen_balancer_beta"); wantBeta == nil { // !!! TODO REMOVE ONCE BROKER IMPROVES
 		return false
@@ -578,7 +590,30 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 	}
 
 	id2t := g.g.cl.id2tMap()
+	tps := g.g.tps.load()
 	newAssigned := make(map[string][]int32)
+
+	// resolve maps an assigned topic ID to a name we can fetch from,
+	// returning empty if we cannot yet. When the broker resolves our
+	// regex (no excludes), it can assign a topic that is not in tps: we
+	// never match internal topics, but the broker does. We adopt such a
+	// topic and wait for metadata to load it before assigning it.
+	resolve := func(id [16]byte) string {
+		name := id2t[id]
+		if name == "" || !g.g.cl.cfg.regex {
+			return name
+		}
+		tp, ok := tps[name]
+		if !ok {
+			g.g.adoptAssignedTopic(name)
+			tps = g.g.tps.load() // so we adopt once per response
+			return ""
+		}
+		if len(tp.load().partitions) == 0 {
+			return ""
+		}
+		return name
+	}
 
 	// Only update the last-sent fields when Topics was actually
 	// included in the request. When the request was a keepalive
@@ -601,7 +636,7 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 		g.unresolvedAssigned = nil
 		for _, t := range resp.Assignment.Topics {
 			ps := sanitizePartitions(t.Partitions)
-			name := id2t[t.TopicID]
+			name := resolve(t.TopicID)
 			if name == "" {
 				if g.unresolvedAssigned == nil {
 					g.unresolvedAssigned = make(map[topicID][]int32)
@@ -619,7 +654,7 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 	// resolve immediately - waiting for the next heartbeat is
 	// simpler and only costs one heartbeat interval (~5s).
 	for id, ps := range g.unresolvedAssigned {
-		if name := id2t[[16]byte(id)]; name != "" {
+		if name := resolve([16]byte(id)); name != "" {
 			newAssigned[name] = ps
 			delete(g.unresolvedAssigned, id)
 		}
@@ -712,39 +747,28 @@ func (g *g848) mkreq() *kmsg.ConsumerGroupHeartbeatRequest {
 	req.ServerAssignor = &g.serverAssignor
 
 	tps := g.g.tps.load()
-	if g.g.cl.cfg.regex && len(g.g.cl.cfg.excludeTopics) > 0 {
-		// KIP-848's SubscribedTopicRegex is include-only with no exclude
-		// counterpart. When excludes are configured, fall back to sending
-		// the already-resolved topic names from g.tps (which
-		// filterMetadataAllTopics populates with excludes applied).
-		// New topics are picked up on the next metadata refresh.
-		//
-		// Skip internal topics: classic regex consuming never uses them
-		// (findNewAssignments skips isInternal), and the broker honors
-		// explicit name subscriptions to internal topics, so emulating
-		// the regex with names would otherwise consume e.g.
-		// __consumer_offsets whenever the regex matches it.
-		subscribedTopics := make([]string, 0, len(tps))
-		for t, tp := range tps {
-			if tp.load().isInternal {
-				continue
-			}
-			subscribedTopics = append(subscribedTopics, t)
-		}
-		slices.Sort(subscribedTopics)
-		req.SubscribedTopicNames = subscribedTopics
-	} else if g.g.cl.cfg.regex {
+	if g.g.cl.cfg.regex && len(g.g.cl.cfg.excludeTopics) == 0 {
+		// The broker matches the regex against the entire topic name,
+		// while we match anywhere in the name (Go's MatchString). We
+		// wrap the regex in .* on both sides so that the broker
+		// resolves the same topics we would.
 		topics := g.g.cl.cfg.topics
 		patterns := make([]string, 0, len(topics))
 		for topic := range topics {
 			patterns = append(patterns, "(?:"+topic+")")
 		}
 		slices.Sort(patterns)
-		pattern := strings.Join(patterns, "|")
+		pattern := ".*(?:" + strings.Join(patterns, "|") + ").*"
 		req.SubscribedTopicRegex = &pattern
 	} else {
 		// SubscribedTopics must always exist when epoch == 0.
 		// We specifically 'make' the slice to ensure it is non-nil.
+		//
+		// KIP-848's SubscribedTopicRegex is include-only with no exclude
+		// counterpart. When excludes are configured, we send the
+		// already-resolved topic names from g.tps (which
+		// filterMetadataAllTopics populates with excludes applied).
+		// New topics are picked up on the next metadata refresh.
 		subscribedTopics := make([]string, 0, len(tps))
 		for t := range tps {
 			subscribedTopics = append(subscribedTopics, t)

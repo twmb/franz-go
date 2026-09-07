@@ -1725,6 +1725,16 @@ func ConsumePartitions(partitions map[string]map[int32]Offset) ConsumerOpt {
 // regular expressions. You can further use ConsumeExcludeTopics to exclude
 // topics that would match any ConsumeTopics regex.
 //
+// A regular expression matches anywhere in a topic name, the same as Go's
+// MatchString: "foo" matches "foo", "foobar", and "barfoo". Anchor with ^ and
+// $ to match an entire name. A regex client never consumes internal topics
+// such as __consumer_offsets; consume those from a client without
+// ConsumeRegex. The one exception to this is the next-gen consumer group
+// protocol, where if you don't use ConsumeExcludeTopics, the broker resolves
+// the regex and may include internal topics. ConsumeExcludeTopics forces
+// client-side regex evaluation because the next-gen protocol does not yet
+// support exclude regexes.
+//
 // When consuming via regex, every metadata request loads *all* topics, so that
 // all topics can be passed to any regular expressions. Every topic is
 // evaluated only once ever across all regular expressions; either it

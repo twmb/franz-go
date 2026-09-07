@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -1355,13 +1356,18 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 }
 
 // filterMetadataAllTopics, called BEFORE doOnMetadataUpdate, evaluates
-// all topics received against the user provided regex.
-func (c *consumer) filterMetadataAllTopics(topics []string) []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+// all topics received against the user provided regex and returns the
+// topics we will consume.
+//
+// We never match internal topics. The broker can still assign one to us
+// when it resolves the regex itself (KIP-848 with no excludes); see
+// adoptAssignedTopic.
+func (c *consumer) filterMetadataAllTopics(latest map[string]*metadataTopic) []string {
 	var rns reNews
 	defer rns.log(&c.cl.cfg)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	var reSeen map[string]bool
 	if c.g != nil {
@@ -1372,32 +1378,47 @@ func (c *consumer) filterMetadataAllTopics(topics []string) []string {
 		reSeen = c.d.reSeen
 	}
 
-	keep := topics[:0]
-	for _, topic := range topics {
+	// We evaluate regexes in sorted order so that the log is deterministic
+	// when a topic matches multiple regexes.
+	var includes []string
+	keep := make([]string, 0, len(latest))
+	for topic, mt := range latest {
+		// loadErr should only be non-nil when requesting all topics
+		// if this is with auto-topic-creation && the creation failed.
+		// That is, we should not consume the topic since we just
+		// tried creating it and creating it failed.
+		if mt.loadErr != nil {
+			continue
+		}
 		want, seen := reSeen[topic]
 		if !seen {
+			if includes == nil {
+				includes = slices.Sorted(maps.Keys(c.cl.cfg.topics))
+			}
 			var matchedRe string
-			for rawRe, re := range c.cl.cfg.topics {
-				if want = re.MatchString(topic); want {
+			for _, rawRe := range includes {
+				if want = c.cl.cfg.topics[rawRe].MatchString(topic); want {
 					matchedRe = rawRe
 					break
 				}
 			}
-			if want {
-				for _, re := range c.cl.cfg.excludeTopics {
+			switch {
+			case !want:
+				rns.skip(topic)
+			case mt.isInternal:
+				want = false
+				rns.skipInternal(topic)
+			default:
+				for rawEx, re := range c.cl.cfg.excludeTopics {
 					if re.MatchString(topic) {
 						want = false
+						rns.exclude(rawEx, topic)
 						break
 					}
 				}
-			}
-			// A topic is only added once it also passes the exclude
-			// regexes; logging it as added on the include match alone
-			// would report an excluded topic as both added and skipped.
-			if want {
-				rns.add(matchedRe, topic)
-			} else {
-				rns.skip(topic)
+				if want {
+					rns.add(matchedRe, topic)
+				}
 			}
 			reSeen[topic] = want
 		}

@@ -954,3 +954,78 @@ out:
 		}
 	}
 }
+
+// internalTopic returns an internal topic and whether we can produce to it.
+// kfake marks a topic internal through a topic config. A real broker either
+// rejects that config or ignores it, so we instead look up a group
+// coordinator, which creates __consumer_offsets.
+func internalTopic(tb testing.TB, name string) (string, bool, func()) {
+	tb.Helper()
+
+	deleteTopic := func(topic string) {
+		req := kmsg.NewPtrDeleteTopicsRequest()
+		req.TopicNames = []string{topic}
+		reqTopic := kmsg.NewDeleteTopicsRequestTopic()
+		reqTopic.Topic = kmsg.StringPtr(topic)
+		req.Topics = append(req.Topics, reqTopic)
+		req.RequestWith(context.Background(), adm())
+	}
+	isInternal := func(topic string) (bool, error) {
+		req := kmsg.NewPtrMetadataRequest()
+		reqTopic := kmsg.NewMetadataRequestTopic()
+		reqTopic.Topic = kmsg.StringPtr(topic)
+		req.Topics = append(req.Topics, reqTopic)
+		resp, err := req.RequestWith(context.Background(), adm())
+		if err != nil {
+			return false, err
+		}
+		for _, t := range resp.Topics {
+			if t.ErrorCode == 0 && t.Topic != nil && *t.Topic == topic {
+				return t.IsInternal, nil
+			}
+		}
+		return false, fmt.Errorf("topic %s is not in metadata", topic)
+	}
+
+	req := kmsg.NewPtrCreateTopicsRequest()
+	reqTopic := kmsg.NewCreateTopicsRequestTopic()
+	reqTopic.Topic = name
+	reqTopic.NumPartitions = 1
+	reqTopic.ReplicationFactor = int16(testrf)
+	cfg := kmsg.NewCreateTopicsRequestTopicConfig()
+	cfg.Name = "kfake.is_internal"
+	cfg.Value = kmsg.StringPtr("true")
+	reqTopic.Configs = append(reqTopic.Configs, cfg)
+	req.Topics = append(req.Topics, reqTopic)
+	resp, err := req.RequestWith(context.Background(), adm())
+	if err != nil {
+		tb.Fatalf("unable to create internal topic %q: %v", name, err)
+	}
+	if resp.Topics[0].ErrorCode == 0 {
+		internal, err := isInternal(name)
+		if err != nil {
+			tb.Fatalf("unable to describe %q: %v", name, err)
+		}
+		if internal {
+			return name, true, func() { deleteTopic(name) }
+		}
+		deleteTopic(name)
+	}
+
+	freq := kmsg.NewPtrFindCoordinatorRequest()
+	freq.CoordinatorKey = name
+	freq.CoordinatorKeys = []string{name}
+	freq.RequestWith(context.Background(), adm())
+	const offsets = "__consumer_offsets"
+	wait(tb, 30*time.Second, func() error {
+		internal, err := isInternal(offsets)
+		if err != nil {
+			return err
+		}
+		if !internal {
+			return errors.New(offsets + " is not internal")
+		}
+		return nil
+	})
+	return offsets, false, func() {}
+}
