@@ -134,3 +134,24 @@ func TestConfigRejectsInt32MillisOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigBalanceRacksIsOptIn(t *testing.T) {
+	cfg, _, err := validateCfg(ConsumerGroup("g"), Rack("az-1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.rack != "az-1" {
+		t.Errorf("rack is %q, want az-1", cfg.rack)
+	}
+	if cfg.balanceRacks {
+		t.Error("a rack alone opted the group into rack aware balancing")
+	}
+
+	cfg, _, err = validateCfg(ConsumerGroup("g"), Rack("az-1"), BalanceRacks())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.balanceRacks {
+		t.Error("BalanceRacks did not opt the group into rack aware balancing")
+	}
+}
