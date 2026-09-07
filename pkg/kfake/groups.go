@@ -2120,7 +2120,7 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 		slices.Sort(m.subscribedTopics)
 	}
 	if req.SubscribedTopicRegex != nil {
-		re, err := regexp.Compile(*req.SubscribedTopicRegex)
+		re, err := compileSubscribedTopicRegex(*req.SubscribedTopicRegex)
 		if err != nil {
 			resp.ErrorCode = kerr.InvalidRequest.Code
 			return resp
@@ -2194,7 +2194,7 @@ func (g *group) updateMemberSubscriptions(m *consumerMember, req *kmsg.ConsumerG
 		}
 	}
 	if req.SubscribedTopicRegex != nil && *req.SubscribedTopicRegex != m.subscribedRegexSource {
-		re, err := regexp.Compile(*req.SubscribedTopicRegex)
+		re, err := compileSubscribedTopicRegex(*req.SubscribedTopicRegex)
 		if err != nil {
 			return false, kerr.InvalidRequest.Code
 		}
@@ -3730,4 +3730,10 @@ func (g *group) atConsumerSessionTimeoutIn(m *consumerMember, d time.Duration) {
 			g.evictConsumerMember(m)
 		}
 	})
+}
+
+// compileSubscribedTopicRegex compiles a KIP-848 subscription regex. Kafka
+// matches the regex against the entire topic name, so we anchor it.
+func compileSubscribedTopicRegex(pattern string) (*regexp.Regexp, error) {
+	return regexp.Compile("^(?:" + pattern + ")$")
 }
