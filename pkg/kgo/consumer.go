@@ -1376,9 +1376,10 @@ func (c *consumer) filterMetadataAllTopics(topics []string) []string {
 	for _, topic := range topics {
 		want, seen := reSeen[topic]
 		if !seen {
+			var matchedRe string
 			for rawRe, re := range c.cl.cfg.topics {
 				if want = re.MatchString(topic); want {
-					rns.add(rawRe, topic)
+					matchedRe = rawRe
 					break
 				}
 			}
@@ -1390,7 +1391,12 @@ func (c *consumer) filterMetadataAllTopics(topics []string) []string {
 					}
 				}
 			}
-			if !want {
+			// A topic is only added once it also passes the exclude
+			// regexes; logging it as added on the include match alone
+			// would report an excluded topic as both added and skipped.
+			if want {
+				rns.add(matchedRe, topic)
+			} else {
 				rns.skip(topic)
 			}
 			reSeen[topic] = want
