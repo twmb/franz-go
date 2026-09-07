@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -89,6 +90,9 @@ func TestConsumeRegex(t *testing.T) {
 
 	pfx := randsha()[:16] + "-"
 
+	internal, _, internalCleanup := internalTopic(t, pfx+"internal")
+	defer internalCleanup()
+
 	// Create test topics
 	var cleanup []func()
 	for _, name := range []string{
@@ -106,11 +110,13 @@ func TestConsumeRegex(t *testing.T) {
 		}
 	}()
 
+	logs := newRingLogger(testLogger(), 4096)
 	cl, _ := newTestClient(
-		ConsumeTopics(pfx+".*"),                // Match all pfx-* topics
-		ConsumeExcludeTopics(pfx+"exclude-.*"), // Exclude pfx-exclude-* topics
+		ConsumeTopics(pfx+".*", regexp.QuoteMeta(internal)), // Match all pfx-* topics and the internal topic
+		ConsumeExcludeTopics(pfx+"exclude-.*"),              // Exclude pfx-exclude-* topics
 		ConsumeRegex(),
 		MetadataMinAge(100*time.Millisecond),
+		WithLogger(logs),
 	)
 	defer cl.Close()
 	var topics []string
@@ -127,6 +133,167 @@ func TestConsumeRegex(t *testing.T) {
 			t.Fatalf("expected to see %sinclude-*, got %v", pfx, topic)
 		}
 	}
+
+	// Every evaluated topic is logged under the decision we made for it.
+	wait(t, 15*time.Second, func() error {
+		added, excluded, skippedInternal := regexLogs(logs)
+		for _, want := range []string{pfx + "include-1", pfx + "include-2"} {
+			if !strings.Contains(added, want) {
+				return fmt.Errorf("added %q is missing %s", added, want)
+			}
+		}
+		if strings.Contains(added, pfx+"exclude-") {
+			return fmt.Errorf("added %q contains an excluded topic", added)
+		}
+		for _, want := range []string{pfx + "exclude-.*[", pfx + "exclude-1", pfx + "exclude-2"} {
+			if !strings.Contains(excluded, want) {
+				return fmt.Errorf("excluded %q is missing %s", excluded, want)
+			}
+		}
+		if !slices.Contains(skippedInternal, internal) {
+			return fmt.Errorf("skipped_internal %v is missing %s", skippedInternal, internal)
+		}
+		return nil
+	})
+}
+
+// regexLogs returns what the regex filter logged across all metadata updates.
+func regexLogs(r *ringLogger) (added, excluded string, skippedInternal []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range r.buf {
+		if e.msg != "consumer regular expressions evaluated on new topics" {
+			continue
+		}
+		for i := 0; i+1 < len(e.keyvals); i += 2 {
+			switch e.keyvals[i] {
+			case "added":
+				added += " " + e.keyvals[i+1].(string)
+			case "excluded":
+				excluded += " " + e.keyvals[i+1].(string)
+			case "skipped_internal":
+				skippedInternal = append(skippedInternal, e.keyvals[i+1].([]string)...)
+			}
+		}
+	}
+	return added, excluded, skippedInternal
+}
+
+// A share consumer subscribes by the names our regex filter resolved, so the
+// filter must skip internal topics for it as well.
+func TestConsumeRegexShareSkipsInternal(t *testing.T) {
+	t.Parallel()
+	adm() // ensure allowShare is initialized
+	if !allowShare {
+		t.Skip("broker does not support share groups (requires ShareFetch v2 and ShareAcknowledge v2, Kafka 4.2+)")
+	}
+
+	pfx := randsha()[:16] + "-"
+	internal, _, internalCleanup := internalTopic(t, pfx+"internal")
+	defer internalCleanup()
+	topic, topicCleanup := tmpNamedTopicPartitions(t, pfx+"regular", 1)
+	defer topicCleanup()
+	group, groupCleanup := tmpShareGroup(t)
+	defer groupCleanup()
+
+	cl, _ := newTestClient(
+		ConsumeTopics(pfx+".*", regexp.QuoteMeta(internal)),
+		ConsumeRegex(),
+		ShareGroup(group),
+		MetadataMinAge(100*time.Millisecond),
+	)
+	defer cl.Close()
+	wait(t, 15*time.Second, func() error {
+		cl.triggerUpdateMetadataNow("querying metadata for consumer initialization")
+		if topics := cl.GetConsumeTopics(); len(topics) != 1 || topics[0] != topic {
+			return fmt.Errorf("expected to consume only %s, got %v", topic, topics)
+		}
+		return nil
+	})
+}
+
+// When the broker resolves our regex (KIP-848 with no excludes), it matches
+// the entire topic name and it does not skip internal topics. We wrap the
+// regex so that the broker matches anywhere in the name like we do, and we
+// adopt an internal topic the broker assigns.
+func Test848RegexBrokerResolves(t *testing.T) {
+	t.Parallel()
+	adm() // ensure allow848 is initialized
+	if !allow848 {
+		t.Skip("broker does not support KIP-848 (requires ConsumerGroupHeartbeat v1, Kafka 4+)")
+	}
+
+	pfx := randsha()[:16] + "-"
+	internal, producible, internalCleanup := internalTopic(t, pfx+"internal")
+	defer internalCleanup()
+	regular := []string{pfx + "orders", pfx + "orders-v2"}
+	var cleanup []func()
+	for _, name := range regular {
+		_, c := tmpNamedTopicPartitions(t, name, 1)
+		cleanup = append(cleanup, c)
+	}
+	defer func() {
+		for _, c := range cleanup {
+			c()
+		}
+	}()
+	group, groupCleanup := tmpGroup(t)
+	defer groupCleanup()
+
+	want := regular
+	if producible {
+		want = append(want, internal)
+	}
+	producer, _ := newTestClient()
+	defer producer.Close()
+	for _, topic := range want {
+		if err := producer.ProduceSync(context.Background(), &Record{Topic: topic, Value: []byte("v")}).FirstErr(); err != nil {
+			t.Fatalf("produce to %s: %v", topic, err)
+		}
+	}
+
+	ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
+	cl, _ := newTestClient(
+		WithContext(ctx848),
+		ConsumerGroup(group),
+		ConsumeRegex(),
+		// A bare name: matched by the broker alone, only pfx-orders
+		// would be consumed.
+		ConsumeTopics(pfx+"orders", regexp.QuoteMeta(internal)),
+		ConsumeResetOffset(NewOffset().AtStart()),
+		DisableAutoCommit(),
+		MetadataMinAge(100*time.Millisecond),
+		FetchMaxWait(250*time.Millisecond),
+	)
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	seen := make(map[string]bool)
+	for len(seen) < len(want) && ctx.Err() == nil {
+		fs := cl.PollFetches(ctx)
+		fs.EachTopic(func(ft FetchTopic) {
+			if len(ft.Records()) > 0 {
+				seen[ft.Topic] = true
+			}
+		})
+	}
+	for _, topic := range want {
+		if !seen[topic] {
+			t.Errorf("did not consume from %s", topic)
+		}
+	}
+
+	// The broker assigned the internal topic to us and we adopted it.
+	wait(t, 15*time.Second, func() error {
+		if _, ok := cl.consumer.g.nowAssigned.read()[internal]; !ok {
+			return fmt.Errorf("%s is not assigned", internal)
+		}
+		if !slices.Contains(cl.GetConsumeTopics(), internal) {
+			return fmt.Errorf("%s is not consumed", internal)
+		}
+		return nil
+	})
 }
 
 // Ensure we only consume one partition if we only ask for one partition.
