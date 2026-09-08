@@ -410,37 +410,31 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	// retain their ID mapping from prior responses.
 	//
 	// If a topic was deleted and recreated, the broker returns a new
-	// ID for the same name. We do NOT add the new ID if the old ID
-	// is still present - the old mapping is preserved until the user
-	// explicitly purges via PurgeTopicsFromClient. This avoids having
-	// two IDs for the same topic name.
+	// ID for the same name. We adopt the new ID and drop the old one.
+	// KIP-848 assignments name topics by ID, so the new topic's
+	// assignment resolves through this map. Nothing needs the old entry.
+	// A response carrying the old ID is resolved through the request
+	// that sent it: fetchOffsets scans its request, and OffsetCommit,
+	// fetch sessions, and produce batches keep their own maps. A KIP-848
+	// assignment still naming the old ID stays in unresolvedAssigned
+	// until the coordinator assigns the new one. The metadata cache's
+	// byID map drops the old ID the same way.
 	{
 		old := cl.id2tMap()
+		t2id := make(map[string][16]byte, len(old))
+		for id, name := range old {
+			t2id[name] = id
+		}
 		merged := make(map[[16]byte]string, len(old)+len(latest))
 		maps.Copy(merged, old)
-
-		// Build the set of topic names that already have an ID.
-		knownNames := make(map[string]struct{}, len(merged))
-		for _, name := range merged {
-			knownNames[name] = struct{}{}
-		}
-
 		for _, mt := range latest {
 			if mt.id == noID {
 				continue
 			}
-			if _, exists := knownNames[mt.topic]; exists {
-				// This name already has an ID in the map.
-				// Only update if it's the same ID (normal
-				// case), skip if it's a different ID
-				// (recreated topic).
-				if _, sameID := merged[mt.id]; sameID {
-					merged[mt.id] = mt.topic
-				}
-				continue
+			if prior, ok := t2id[mt.topic]; ok && prior != mt.id {
+				delete(merged, prior)
 			}
 			merged[mt.id] = mt.topic
-			knownNames[mt.topic] = struct{}{}
 		}
 		cl.id2t.Store(merged)
 	}
