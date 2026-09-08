@@ -946,10 +946,10 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 
 	if len(req.batches.bs) > 0 {
 		s.cl.cfg.logger.Log(LogLevelError, "broker did not reply to all topics / partitions in the produce request! reenqueuing missing partitions", "broker", logID(s.nodeID))
-		s.handleRetryBatches(req.batches, nil, 0, true, false, "broker did not reply to all topics in produce request")
+		s.handleRetryBatches(req.batches, nil, req.backoffSeq, true, false, "broker did not reply to all topics in produce request")
 	}
 	if len(reqRetry.bs) > 0 {
-		s.handleRetryBatches(reqRetry, &kmove, 0, true, true, "produce request had retry batches")
+		s.handleRetryBatches(reqRetry, &kmove, req.backoffSeq, true, true, "produce request had retry batches")
 	}
 	if len(reqBackoff.bs) > 0 {
 		s.handleRetryBatches(reqBackoff, nil, req.backoffSeq, false, true, "produce request had timed out batches")
