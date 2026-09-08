@@ -163,6 +163,9 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 	}
 
 	if len(toDeletes) > 0 {
+		for _, td := range toDeletes {
+			c.dropGroupCommits(td.topic)
+		}
 		c.notifyTopicChange()
 		c.refreshCompactTicker()
 		c.persistTopicsState()

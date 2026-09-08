@@ -4464,3 +4464,68 @@ func TestEndTxnUnconfirmedCommitRetryRefused(t *testing.T) {
 		t.Fatalf("commit after heal: %v", err)
 	}
 }
+
+// Deleting a topic deletes every group's committed offsets for it, as Kafka
+// and Redpanda do, so a recreated topic starts with no committed offset.
+func TestDeleteTopicDropsGroupCommits(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "t", "g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	cl := newPlainClient(t, c)
+
+	commit := kmsg.NewPtrOffsetCommitRequest()
+	commit.Group = group
+	commit.Generation = -1
+	ct := kmsg.NewOffsetCommitRequestTopic()
+	ct.Topic, ct.TopicID = topic, c.TopicInfo(topic).TopicID
+	cp := kmsg.NewOffsetCommitRequestTopicPartition()
+	cp.Partition = 0
+	cp.Offset = 7
+	ct.Partitions = append(ct.Partitions, cp)
+	commit.Topics = append(commit.Topics, ct)
+	cresp := faultReq(t, cl, 0, commit).(*kmsg.OffsetCommitResponse)
+	if code := cresp.Topics[0].Partitions[0].ErrorCode; code != 0 {
+		t.Fatalf("commit answered %d", code)
+	}
+
+	fetched := func() int64 {
+		fetch := kmsg.NewPtrOffsetFetchRequest()
+		fg := kmsg.NewOffsetFetchRequestGroup()
+		fg.Group = group
+		fg.MemberEpoch = -1
+		ft := kmsg.NewOffsetFetchRequestGroupTopic()
+		ft.Topic, ft.TopicID = topic, c.TopicInfo(topic).TopicID
+		ft.Partitions = []int32{0}
+		fg.Topics = append(fg.Topics, ft)
+		fetch.Groups = append(fetch.Groups, fg)
+		fresp := faultReq(t, cl, 0, fetch).(*kmsg.OffsetFetchResponse)
+		return fresp.Groups[0].Topics[0].Partitions[0].Offset
+	}
+	if got := fetched(); got != 7 {
+		t.Fatalf("fetched %d before the delete, want 7", got)
+	}
+
+	del := kmsg.NewPtrDeleteTopicsRequest()
+	dt := kmsg.NewDeleteTopicsRequestTopic()
+	dt.Topic = kmsg.StringPtr(topic)
+	del.Topics = append(del.Topics, dt)
+	dresp := faultReq(t, cl, 0, del).(*kmsg.DeleteTopicsResponse)
+	if code := dresp.Topics[0].ErrorCode; code != 0 {
+		t.Fatalf("delete answered %d", code)
+	}
+	create := kmsg.NewPtrCreateTopicsRequest()
+	crt := kmsg.NewCreateTopicsRequestTopic()
+	crt.Topic = topic
+	crt.NumPartitions = 1
+	crt.ReplicationFactor = 1
+	create.Topics = append(create.Topics, crt)
+	crresp := faultReq(t, cl, 0, create).(*kmsg.CreateTopicsResponse)
+	if code := crresp.Topics[0].ErrorCode; code != 0 {
+		t.Fatalf("create answered %d", code)
+	}
+
+	if got := fetched(); got != -1 {
+		t.Fatalf("fetched %d after the recreate, want -1 (the commit should have been deleted with the topic)", got)
+	}
+}

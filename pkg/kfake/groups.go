@@ -196,6 +196,24 @@ func (c *Cluster) snapshotTopicMeta() topicMetaSnap {
 	return snap
 }
 
+// dropGroupCommits removes every group's committed offsets for a deleted
+// topic, as Kafka and Redpanda do. Each group mutates its commits on its own
+// manage goroutine; this runs after the topic is gone from c.data, so a
+// commit racing the delete on that goroutine is dropped too.
+func (c *Cluster) dropGroupCommits(topic string) {
+	for _, g := range c.groups.gs {
+		select {
+		case g.controlCh <- func() {
+			for part := range g.commits[topic] {
+				g.deleteCommitAndPersist(topic, part)
+			}
+		}:
+		case <-g.quitCh:
+		case <-g.c.die:
+		}
+	}
+}
+
 // notifyTopicChange recomputes target assignments for all consumer and
 // share groups after a topic is created, deleted, or has partitions
 // added. We capture a fresh metadata snapshot here (in the cluster run
