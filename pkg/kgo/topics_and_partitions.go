@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
@@ -320,6 +321,13 @@ func (d topicsPartitionsData) loadTopic(t string) *topicPartitionsData {
 	return tp.load()
 }
 
+// recreated reports whether the topic was recreated within
+// priorTopicIDExpiry.
+func (d topicsPartitionsData) recreated(t string) bool {
+	tp := d.loadTopic(t)
+	return tp != nil && tp.priorIDs.any()
+}
+
 // A helper type mapping topics to their partitions that can be updated
 // atomically.
 type topicsPartitions struct {
@@ -536,7 +544,29 @@ type topicPartitionsData struct {
 	writablePartitions []*topicPartition // subset of above
 	topic              string
 	id                 [16]byte
+	priorIDs           priorTopicIDs // IDs this topic held previously, across a delete and recreate
 	when               int64
+}
+
+// unknownIDLimitReached reports whether the ID the topic holds looks dead:
+// some partition has been rejected recreationRejectionLimit times for it
+// and no partition has fetched under it successfully since it was taken.
+// The prior ID refusal in the metadata merge lifts on this. A success
+// anywhere vetoes it: a broker that lags and leads one partition rejects
+// the ID on that partition every round, and without the veto its report
+// of the old ID would be taken back every five rounds, restarting every
+// partition each time.
+func (d *topicPartitionsData) unknownIDLimitReached() bool {
+	var limit bool
+	for _, tp := range d.partitions {
+		switch n := tp.cursor.unknownIDFails.Load(); {
+		case n < 0:
+			return false
+		case n >= recreationRejectionLimit:
+			limit = true
+		}
+	}
+	return limit
 }
 
 type topicID [16]byte
@@ -546,6 +576,128 @@ func (t topicID) String() string { return hex.EncodeToString(t[:]) }
 // noID is the zero topic ID. Below Kafka 2.8 metadata carries no IDs and
 // every ID is noID.
 var noID [16]byte
+
+// recreationRejectionLimit is how many consecutive UNKNOWN_TOPIC_ID
+// rejections we absorb before believing the broker over metadata. We adopt
+// a metadata ID change immediately; the cluster may take a while to
+// propagate the change from the controller to partition leaders. A
+// rejected cursor fetches again only after the next metadata update, so
+// the limit counts updates that still rejected us.
+//
+// If we adopt an ID that turns out to be stale (a broker lagged for longer
+// than this, or the cluster disagreed with itself), the ID we left becomes
+// a prior ID and the same rule applies in reverse: once the stale ID has
+// been rejected this many times, the next metadata update reporting the
+// correct ID is adopted. Each swap restarts the consumer from the new
+// topic's beginning, so a wrong swap re-reads records and never skips them.
+const recreationRejectionLimit = 5
+
+// priorTopicIDs is the topic IDs a topic held previously, newest first,
+// each until the time we forget it. An ID is forgotten priorTopicIDExpiry
+// after the recreation, or after the last metadata response that still
+// reported it: IDs are never reused, so a broker that reports one still
+// lags, however long it takes. Forgetting bounds the memory: a topic that
+// is never recreated holds nothing, and one that was holds nothing again
+// once no broker has reported the old ID for the expiry.
+//
+// The slice is stored in an atomic with the rest of the topic's data and
+// read while consuming, so every change copies rather than writes in place.
+type priorTopicIDs []priorTopicID
+
+type priorTopicID struct {
+	id    [16]byte
+	until time.Time
+}
+
+// priorTopicIDExpiry is how long a prior ID is remembered past the last
+// time a broker reported it, and how long the partitions a recreated topic
+// gains start from the beginning.
+const priorTopicIDExpiry = 5 * time.Minute
+
+// maxPriorTopicIDs bounds how many recreations back we remember within the
+// expiry; past this the oldest is dropped.
+const maxPriorTopicIDs = 4
+
+// add pushes id to the front, dropping an older entry for the same ID so
+// that a topic flipping between two IDs does not fill the slice with them.
+func (p *priorTopicIDs) add(id [16]byte, now time.Time) {
+	prior := p.without(id)
+	if len(prior) >= maxPriorTopicIDs {
+		prior = prior[:maxPriorTopicIDs-1]
+	}
+	next := make(priorTopicIDs, 0, len(prior)+1)
+	next = append(next, priorTopicID{id: id, until: now.Add(priorTopicIDExpiry)})
+	*p = append(next, prior...)
+}
+
+// refresh moves the deadline of id, which a broker just reported again,
+// out to the full expiry.
+func (p *priorTopicIDs) refresh(id [16]byte, now time.Time) {
+	prior := *p
+	next := make(priorTopicIDs, len(prior))
+	copy(next, prior)
+	for i := range next {
+		if next[i].id == id {
+			next[i].until = now.Add(priorTopicIDExpiry)
+		}
+	}
+	*p = next
+}
+
+// dropExpired forgets the IDs whose time has passed; with none left, the
+// slice is nil again.
+func (p *priorTopicIDs) dropExpired(now time.Time) {
+	prior := *p
+	var live int
+	for _, e := range prior {
+		if e.until.After(now) {
+			live++
+		}
+	}
+	if live == len(prior) {
+		return
+	}
+	var next priorTopicIDs
+	if live > 0 {
+		next = make(priorTopicIDs, 0, live)
+		for _, e := range prior {
+			if e.until.After(now) {
+				next = append(next, e)
+			}
+		}
+	}
+	*p = next
+}
+
+// without returns a copy of the slice without id, or the slice itself if
+// id is absent.
+func (p priorTopicIDs) without(id [16]byte) priorTopicIDs {
+	if !p.has(id) {
+		return p
+	}
+	next := make(priorTopicIDs, 0, len(p)-1)
+	for _, e := range p {
+		if e.id != id {
+			next = append(next, e)
+		}
+	}
+	return next
+}
+
+// any reports whether the topic was recreated within the expiry.
+func (p priorTopicIDs) any() bool { return len(p) > 0 }
+
+func (p priorTopicIDs) has(id [16]byte) bool {
+	if id == noID {
+		return false
+	}
+	for _, e := range p {
+		if e.id == id {
+			return true
+		}
+	}
+	return false
+}
 
 // topicPartition contains all information from Kafka for a topic's partition,
 // as well as what a client is producing to it or info about consuming from it.
@@ -705,6 +857,86 @@ func (old *topicPartition) migrateCursorTo( //nolint:revive // old/new naming ma
 
 	old.cursor.source.addCursor(old.cursor)
 	new.cursor = old.cursor
+}
+
+// swapRecreatedCursorTo is called on metadata update when the topic was
+// deleted and recreated with the same name and metadata now reports a new
+// topic ID, and when a cursor holds an ID the topic no longer has because
+// the update that adopted the ID skipped its partition. A cursor in use, or
+// whose first offset is loading, restarts from the new topic's beginning,
+// whatever the start offset (AtCommitted only keeps a partition that has no
+// commit from starting). Any other cursor takes the new ID and follows the
+// leader. Every swapped cursor drops the rejections it counted under the
+// old ID.
+//
+// We return the ID the cursor was swapped from and whether the cursor
+// restarted or stopped, so that the merge logs one line for the topic
+// rather than one per partition.
+func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new naming makes this clearer
+	new *topicPartition,
+	newID [16]byte,
+	css *consumerSessionStopper,
+) (swappedFrom [16]byte, restartedOrStopped bool) {
+	css.stop()
+
+	cl := css.cl
+	c := old.cursor
+	c.source.removeCursor(c)
+
+	oldID := c.topicID
+	c.source = new.cursor.source
+	c.topicPartitionData = new.topicPartitionData
+	c.topicID = newID
+	c.unknownIDFails.Store(0)
+
+	_, using := cl.consumer.usingCursors[c]
+	loading := css.reloadOffsets.removeLoad(c.topic, c.partition)
+	if !using && !loading {
+		c.source.addCursor(c)
+		new.cursor = c
+		return oldID, false
+	}
+
+	// We clear the offset, the consumed epoch, the high watermark, and
+	// the last consumed time, and stop the cursor from fetching. The last
+	// consumed time goes because the new topic's records may carry
+	// timestamps older than what we consumed (a republish of history),
+	// and an out of range reset by timestamp would skip them. A load
+	// pending from before the swap was dropped above: a list would load
+	// an offset for the old topic, and an epoch load would validate the
+	// old topic's epoch against the new one. The reset below, or
+	// SetOffsets, re-enables the cursor.
+	c.unset()
+
+	reset := !cl.cfg.resetOffset.noReset
+	c.restarted = reset
+	if cl.cfg.logger.Level() >= LogLevelDebug {
+		msg := "restarting the partition from the recreated topic's beginning"
+		if !reset {
+			msg = "the topic was recreated and NoResetOffset is set, so this partition is stopped until it is assigned again or you purge and re-add it"
+		}
+		cl.cfg.logger.Log(LogLevelDebug, msg,
+			"topic", c.topic,
+			"partition", c.partition,
+			"old_id", topicID(oldID),
+			"new_id", topicID(newID),
+			"new_leader", new.leader,
+			"new_leader_epoch", new.leaderEpoch,
+		)
+	}
+	if reset {
+		css.reloadOffsets.addLoad(c.topic, c.partition, loadTypeList, offsetLoad{
+			replica: -1,
+			Offset:  NewOffset().AtStart(),
+		})
+	} else {
+		cl.consumer.addFakeReadyForDrainingQuietly(c.topic, c.partition,
+			fmt.Errorf("topic was deleted and recreated; NoResetOffset disables the automatic restart, so this partition is stopped until it is assigned again or you purge and re-add it: %w", kerr.UnknownTopicID))
+	}
+
+	c.source.addCursor(c)
+	new.cursor = c
+	return oldID, true
 }
 
 func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) {

@@ -93,7 +93,14 @@ type Client struct {
 	updateMetadataNowCh  chan string // like above, but with high priority
 	blockingMetadataFnCh chan func()
 	metawait             metawait
-	metadone             chan struct{}
+
+	// sawRecreation is set the first time a metadata merge adopts a new ID
+	// for a topic we hold. Until then no topic's ID can have changed, so
+	// every recreation guard below (the commit filter, the uncommitted ID
+	// comparisons, the produce request's ID conflict check) is a no-op and
+	// is skipped: a client whose topics are never recreated pays nothing.
+	sawRecreation atomic.Bool
+	metadone      chan struct{}
 
 	metaCache struct {
 		mu     xsync.Mutex

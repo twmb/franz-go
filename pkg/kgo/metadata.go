@@ -19,14 +19,25 @@ type metawait struct {
 	mu         xsync.Mutex
 	c          *sync.Cond
 	lastUpdate time.Time
+	updates    uint64 // completed updates; see metadataUpdates
 }
 
 func (m *metawait) init() { m.c = sync.NewCond(&m.mu) }
 func (m *metawait) signal() {
 	m.mu.Lock()
 	m.lastUpdate = time.Now()
+	m.updates++
 	m.mu.Unlock()
 	m.c.Broadcast()
+}
+
+// metadataUpdates returns how many metadata updates have completed. A
+// cursor rejected for its topic ID waits for the count to grow before it
+// fetches again; a count cannot go backward the way a clock can.
+func (cl *Client) metadataUpdates() uint64 {
+	cl.metawait.mu.Lock()
+	defer cl.metawait.mu.Unlock()
+	return cl.metawait.updates
 }
 
 // ForceMetadataRefresh triggers the client to update the metadata that is
@@ -261,6 +272,14 @@ loop:
 			// still fail we will fall into the slower update below
 			// which waits (default) 5s between tries.
 			if now && err == nil && nowTries < 8 {
+				// This round merged: partitions took any new topic ID
+				// it carried. Count it and wake anything waiting on a
+				// metadata update before we loop, otherwise a cursor
+				// paused for its topic ID to be re-decided sits through
+				// every one of these rounds without seeing the updates
+				// that already fixed it.
+				cl.metawait.signal()
+				cl.consumer.doOnMetadataUpdate()
 				wait := min(cl.cfg.metadataMinAge, 250*time.Millisecond)
 				cl.cfg.logger.Log(LogLevelDebug, "immediate metadata update had inner errors, re-updating",
 					"errors", retryWhy.reason(""),
@@ -404,6 +423,8 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		}
 	}
 
+	tpsConsumerLoad := tpsConsumer.load()
+
 	// Merge topic ID mappings into the existing id2t map. We clone
 	// rather than rebuild so that topics missing from this particular
 	// metadata response (transient broker omission, non-all request)
@@ -419,6 +440,11 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	// assignment still naming the old ID stays in unresolvedAssigned
 	// until the coordinator assigns the new one. The metadata cache's
 	// byID map drops the old ID the same way.
+	//
+	// An ID the consumer's topic holds as a prior ID is a lagging
+	// broker's report; the merge below refuses it, and mapping the name
+	// back onto it here would leave a KIP-848 assignment naming the
+	// current ID unresolved for a round.
 	{
 		old := cl.id2tMap()
 		t2id := make(map[string][16]byte, len(old))
@@ -429,6 +455,9 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		maps.Copy(merged, old)
 		for _, mt := range latest {
 			if mt.id == noID {
+				continue
+			}
+			if tp, ok := tpsConsumerLoad[mt.topic]; ok && tp.load().priorIDs.has(mt.id) {
 				continue
 			}
 			if prior, ok := t2id[mt.topic]; ok && prior != mt.id {
@@ -442,7 +471,6 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	// If we are consuming with regex and fetched all topics, the metadata
 	// may have returned topics the consumer is not yet tracking. We ensure
 	// that we will store the topics at the end of our metadata update.
-	tpsConsumerLoad := tpsConsumer.load()
 	if all {
 		// We filter out topics will not match any of our regex's.
 		// This ensures that the `tps` field does not contain topics
@@ -561,7 +589,10 @@ type metadataTopic struct {
 	partitions []metadataPartition
 }
 
-func (mt *metadataTopic) newPartitions(cl *Client, kind partitionKind) *topicPartitionsData {
+// newPartitions builds the partitions of a metadata response. Every
+// partition is born with id, the ID the merge decided the topic has, which
+// is the response's ID unless the response carried none.
+func (mt *metadataTopic) newPartitions(cl *Client, kind partitionKind, id [16]byte) *topicPartitionsData {
 	n := len(mt.partitions)
 	ps := &topicPartitionsData{
 		loadErr:            mt.loadErr,
@@ -569,11 +600,11 @@ func (mt *metadataTopic) newPartitions(cl *Client, kind partitionKind) *topicPar
 		partitions:         make([]*topicPartition, 0, n),
 		writablePartitions: make([]*topicPartition, 0, n),
 		topic:              mt.topic,
-		id:                 mt.id,
+		id:                 id,
 		when:               time.Now().Unix(),
 	}
 	for i := range mt.partitions {
-		p := mt.partitions[i].newPartition(cl, kind)
+		p := mt.partitions[i].newPartition(cl, kind, id)
 		ps.partitions = append(ps.partitions, p)
 		if p.loadErr == nil {
 			ps.writablePartitions = append(ps.writablePartitions, p)
@@ -584,7 +615,6 @@ func (mt *metadataTopic) newPartitions(cl *Client, kind partitionKind) *topicPar
 
 type metadataPartition struct {
 	topic       string
-	topicID     [16]byte
 	partition   int32
 	loadErr     int16
 	leader      int32
@@ -592,7 +622,7 @@ type metadataPartition struct {
 	sns         sinkAndSource
 }
 
-func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicPartition {
+func (mp metadataPartition) newPartition(cl *Client, kind partitionKind, id [16]byte) *topicPartition {
 	td := topicPartitionData{
 		leader:      mp.leader,
 		leaderEpoch: mp.leaderEpoch,
@@ -606,7 +636,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 		r := &recBuf{
 			cl:                  cl,
 			topic:               mp.topic,
-			topicID:             mp.topicID,
+			topicID:             id,
 			partition:           mp.partition,
 			maxRecordBatchBytes: cl.maxRecordBatchBytesForTopic(mp.topic),
 			recBufsIdx:          -1,
@@ -620,7 +650,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 	case partitionKindShare:
 		p.shareCursor = &shareCursor{
 			topic:      mp.topic,
-			topicID:    mp.topicID,
+			topicID:    id,
 			partition:  mp.partition,
 			cursorsIdx: -1, // sentinel: not yet added to a source
 		}
@@ -628,7 +658,7 @@ func (mp metadataPartition) newPartition(cl *Client, kind partitionKind) *topicP
 	default:
 		p.cursor = &cursor{
 			topic:              mp.topic,
-			topicID:            mp.topicID,
+			topicID:            id,
 			partition:          mp.partition,
 			keepControl:        cl.cfg.keepControl,
 			cursorsIdx:         -1,
@@ -711,7 +741,6 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string, prune bool) (
 			}
 			mp := metadataPartition{
 				topic:       topic,
-				topicID:     topicMeta.TopicID,
 				partition:   partMeta.Partition,
 				loadErr:     partMeta.ErrorCode,
 				leader:      partMeta.Leader,
@@ -762,7 +791,6 @@ func (cl *Client) mergeTopicPartitions(
 	retryWhy *multiUpdateWhy,
 ) {
 	isProduce := kind == partitionKindProduce
-	isShare := kind == partitionKindShare
 	// The logger is an interface, so the variadic slice and the interface
 	// boxes for every argument are built at the call site even when the
 	// logger drops the line. The logs below fire once per partition per
@@ -770,8 +798,6 @@ func (cl *Client) mergeTopicPartitions(
 	// continuous garbage forever; we only pay it if debug is on.
 	debug := cl.cfg.logger.Level() >= LogLevelDebug
 	lv := *l.load() // copy so our field writes do not collide with reads
-
-	r := mt.newPartitions(cl, kind)
 
 	// Producers must store the update through a special function that
 	// manages unknown topic waiting, whereas consumers can just simply
@@ -783,29 +809,89 @@ func (cl *Client) mergeTopicPartitions(
 		defer l.v.Store(&lv)
 	}
 
-	lv.loadErr = r.loadErr
-	lv.isInternal = r.isInternal
-	lv.topic = r.topic
-	lv.id = r.id
+	lv.loadErr = mt.loadErr
+	lv.isInternal = mt.isInternal
+	lv.topic = mt.topic
 	if lv.when == 0 {
-		lv.when = r.when
+		lv.when = time.Now().Unix()
 	}
 
 	// If the load had an error for the entire topic, we set the load error
 	// but keep our stale partition information. For anything being
 	// produced, we bump the respective error or fail everything. There is
 	// nothing to be done in a consumer.
-	if r.loadErr != nil {
+	if mt.loadErr != nil {
 		if isProduce {
 			for _, topicPartition := range lv.partitions {
 				topicPartition.records.bumpRepeatedLoadErr(lv.loadErr)
 			}
-		} else if !kerr.IsRetriable(r.loadErr) || cl.cfg.keepRetryableFetchErrors {
-			cl.consumer.addFakeReadyForDraining(topic, -1, r.loadErr, "metadata refresh has a load error on this entire topic")
+		} else if !kerr.IsRetriable(mt.loadErr) || cl.cfg.keepRetryableFetchErrors {
+			cl.consumer.addFakeReadyForDraining(topic, -1, mt.loadErr, "metadata refresh has a load error on this entire topic")
 		}
-		retryWhy.add(topic, -1, r.loadErr)
+		retryWhy.add(topic, -1, mt.loadErr)
 		return
 	}
+
+	// Topic IDs are random and never reused, so a new ID for a name we
+	// hold means the topic was deleted and recreated. We adopt an ID the
+	// topic never held immediately; a partition being consumed restarts
+	// below. We refuse an ID the topic held previously until the ID we
+	// hold has been rejected recreationRejectionLimit times: a broker
+	// that has not yet learned of the recreation still reports the old
+	// ID.
+	now := time.Now()
+	lv.priorIDs.dropExpired(now)
+	var recreated bool
+	switch {
+	case kind == partitionKindProduce,
+		mt.id == lv.id,
+		lv.id == noID:
+		lv.id = mt.id
+	case mt.id == noID:
+		// A broker that reports no ID cannot tell us whether the topic
+		// was recreated, so we keep the ID we hold. The rest of the
+		// response is still usable: we merge leaders and epochs below
+		// rather than discarding the whole update. This is a cluster
+		// mid-upgrade to 2.8 or a proxy; there is nothing to retry.
+		cl.cfg.logger.Log(LogLevelDebug, "metadata update is missing the topic ID when we previously had one, keeping our ID",
+			"topic", topic,
+		)
+	case kind == partitionKindShare:
+		// Share cursors keep their ID: migrateShareCursorTo copies the
+		// cursor. Share consuming does not restart on a recreation.
+		lv.id = mt.id
+	case lv.priorIDs.has(mt.id) && !lv.unknownIDLimitReached():
+		// The broker still reports an ID the topic held before, so it
+		// still lags. We keep refusing the ID for as long as any broker
+		// reports it, and forget it once none has for the expiry.
+		cl.cfg.logger.Log(LogLevelDebug, "metadata update reports a topic ID this topic held previously, ignoring update until our ID is rejected",
+			"topic", topic,
+			"reported_id", topicID(mt.id),
+			"our_id", topicID(lv.id),
+		)
+		lv.priorIDs.refresh(mt.id, now)
+		return
+	default:
+		cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID",
+			"topic", topic,
+			"old_id", topicID(lv.id),
+			"new_id", topicID(mt.id),
+		)
+		lv.priorIDs.add(lv.id, now)
+		lv.id = mt.id
+		// The adopted ID is now the current one, not a prior one. Drop it
+		// from the prior set so that a later update reporting it (the common
+		// case once a broker catches up) is not taken for a lagging broker
+		// and skipped in id2t, which would stall 848/share reassignment.
+		lv.priorIDs = lv.priorIDs.without(mt.id)
+		recreated = true
+		cl.sawRecreation.Store(true)
+	}
+
+	// The partitions are built after the ID is decided so that every one
+	// is born with the topic's ID: a cursor's ID is the topic's, whatever
+	// the response carried.
+	r := mt.newPartitions(cl, kind, lv.id)
 
 	// Before the atomic update, we keep the latest partitions / writable
 	// partitions. All updates happen in r's slices, and we keep the
@@ -831,6 +917,10 @@ func (cl *Client) mergeTopicPartitions(
 
 	// Migrating topicPartitions is a little tricky because we have to
 	// worry about underlying pointers that may currently be loaded.
+	var (
+		swapped     int      // cursors restarted or stopped by a recreation
+		swappedFrom [16]byte // the ID they were swapped from
+	)
 	for part, oldTP := range lv.partitions {
 		exists := part < len(r.partitions)
 		if !exists {
@@ -871,6 +961,23 @@ func (cl *Client) mergeTopicPartitions(
 		//
 		// If the load errored, we keep all old information minus the
 		// load error itself (the new load will have no information).
+		// A cursor created before the topic had an ID keeps noID and
+		// fetches by name until a recreation swaps it, so a cursor whose
+		// ID differs from the topic's is one an earlier update recreated
+		// and skipped for a load error. We can read the ID: after
+		// creation only the swap writes it, on this goroutine. A
+		// recreated topic's leader epoch restarts from 0, so it is often
+		// below the old topic's: the swap comes before the epoch
+		// comparison below, which would otherwise take this for a stale
+		// broker. A partition whose load errored, as a recreated topic's
+		// can while its leaders are elected, is swapped too, on its old
+		// source: a fetch request carries one ID per topic, so every
+		// cursor of a topic must hold the topic's ID.
+		swapCursor := func() bool {
+			c := oldTP.cursor
+			return recreated || c.topicID != noID && c.topicID != lv.id
+		}
+
 		if newTP.loadErr != nil {
 			err := newTP.loadErr
 			*newTP = *oldTP
@@ -881,7 +988,22 @@ func (cl *Client) mergeTopicPartitions(
 				cl.consumer.addFakeReadyForDraining(topic, int32(part), newTP.loadErr, "metadata refresh has a load error on this partition")
 			}
 			retryWhy.add(topic, int32(part), newTP.loadErr)
+			if kind == partitionKindConsume && swapCursor() {
+				if from, ok := oldTP.swapRecreatedCursorTo(newTP, lv.id, css); ok {
+					swappedFrom, swapped = from, swapped+1
+				}
+			}
 			continue
+		}
+
+		switch kind {
+		case partitionKindConsume:
+			if swapCursor() {
+				if from, ok := oldTP.swapRecreatedCursorTo(newTP, lv.id, css); ok {
+					swappedFrom, swapped = from, swapped+1
+				}
+				continue
+			}
 		}
 
 		// If the new partition has an older leader epoch, then we
@@ -957,26 +1079,6 @@ func (cl *Client) mergeTopicPartitions(
 			)
 		}
 
-		if !isProduce {
-			var newID, oldID [16]byte
-			if isShare {
-				newID = newTP.shareCursor.topicID
-				oldID = oldTP.shareCursor.topicID
-			} else {
-				newID = newTP.cursor.topicID
-				oldID = oldTP.cursor.topicID
-			}
-			if newID == noID && oldID != noID {
-				cl.cfg.logger.Log(LogLevelWarn, "metadata update is missing the topic ID when we previously had one, ignoring update",
-					"topic", topic,
-					"partition", part,
-				)
-				*newTP = *oldTP
-				retryWhy.add(topic, int32(part), errMissingTopicID)
-				continue
-			}
-		}
-
 		// If the tp data is the same, we simply copy over the records
 		// and cursor pointers.
 		//
@@ -1020,6 +1122,25 @@ func (cl *Client) mergeTopicPartitions(
 				oldTP.migrateCursorTo(newTP, css)
 			}
 		}
+	}
+
+	// The swaps above log one line for the topic; the per partition detail
+	// is at debug. Whether a swapped cursor restarts or stops is our own
+	// config, so every swap in this update is one or the other.
+	if swapped > 0 {
+		restarted, stopped := swapped, 0
+		msg := "restarting partitions from the recreated topic's beginning"
+		if cl.cfg.resetOffset.noReset {
+			restarted, stopped = 0, swapped
+			msg = "the topic was recreated and NoResetOffset is set, so these partitions are stopped until they are assigned again or you purge and re-add the topic"
+		}
+		cl.cfg.logger.Log(LogLevelInfo, msg,
+			"topic", topic,
+			"old_id", topicID(swappedFrom),
+			"new_id", topicID(lv.id),
+			"restarted_partitions", restarted,
+			"stopped_partitions", stopped,
+		)
 	}
 
 	// For any partitions **not currently in use**, we need to add them to
@@ -1084,9 +1205,8 @@ func (cl *Client) mergeTopicPartitions(
 }
 
 var (
-	errEpochRewind    = errors.New("epoch rewind")
-	errMissingTopicID = errors.New("missing topic ID")
-	errNoLeaderEpoch  = errors.New("no leader epoch")
+	errEpochRewind   = errors.New("epoch rewind")
+	errNoLeaderEpoch = errors.New("no leader epoch")
 )
 
 type multiUpdateWhy map[kerrOrString]map[string]map[int32]struct{}
@@ -1096,12 +1216,13 @@ type kerrOrString struct {
 	s string
 }
 
-func (m *multiUpdateWhy) isOnly(err error) bool {
+// isOnly reports whether every reason is one of errs.
+func (m *multiUpdateWhy) isOnly(errs ...error) bool {
 	if m == nil {
 		return false
 	}
 	for e := range *m {
-		if !errors.Is(err, e.k) {
+		if !slices.ContainsFunc(errs, func(err error) bool { return errors.Is(err, e.k) }) {
 			return false
 		}
 	}
