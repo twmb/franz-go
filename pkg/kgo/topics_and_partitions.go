@@ -737,9 +737,10 @@ func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) 
 }
 
 type kip951move struct {
-	recBufs map[*recBuf]topicPartitionData
-	cursors map[*cursor]topicPartitionData
-	brokers []BrokerMetadata
+	recBufs  map[*recBuf]topicPartitionData
+	cursors  map[*cursor]topicPartitionData
+	brokers  []BrokerMetadata
+	backoffs map[*recBuf]bool
 }
 
 func (k *kip951move) empty() bool {
@@ -760,6 +761,16 @@ func (k *kip951move) maybeAddProducePartition(resp *kmsg.ProduceResponse, p *kms
 		len(resp.Brokers) == 0 ||
 		p.CurrentLeader.LeaderID < 0 ||
 		p.CurrentLeader.LeaderEpoch < 0 {
+		return false
+	}
+	// KIP-951 only permits an immediate retry when the hint advances our
+	// leader epoch. Repeated or stale hints must respect the produce backoff.
+	// The caller holds rb.mu, which guards rb.leaderEpoch.
+	if p.CurrentLeader.LeaderEpoch <= rb.leaderEpoch {
+		if k.backoffs == nil {
+			k.backoffs = make(map[*recBuf]bool)
+		}
+		k.backoffs[rb] = true
 		return false
 	}
 	if len(k.brokers) == 0 {

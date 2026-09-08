@@ -270,8 +270,6 @@ func (s *sink) clearBackoff() {
 func (s *sink) drain() {
 	again := true
 	for again {
-		s.maybeBackoff()
-
 		sem := s.inflightSem.Load().(chan struct{})
 		select {
 		case sem <- struct{}{}:
@@ -280,6 +278,9 @@ func (s *sink) drain() {
 			return
 		}
 
+		// A response can request backoff while we wait for an inflight slot.
+		// Check after acquiring it so the next send observes that backoff.
+		s.maybeBackoff()
 		again = s.drainState.maybeFinish(s.produce(sem))
 	}
 }
@@ -920,8 +921,9 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 				// A timed-out append, or one short of replicas,
 				// comes from a leader that is still the leader:
 				// metadata has nothing to say, so we retry after
-				// the produce backoff.
-				if rp.ErrorCode == kerr.RequestTimedOut.Code || rp.ErrorCode == kerr.NotEnoughReplicasAfterAppend.Code {
+				// the produce backoff. A repeated leader hint also
+				// needs backoff, with an asynchronous metadata refresh.
+				if rp.ErrorCode == kerr.RequestTimedOut.Code || rp.ErrorCode == kerr.NotEnoughReplicasAfterAppend.Code || kmove.backoffs[batch.owner] {
 					reqBackoff.addSeqBatch(topic, tid, partition, batch)
 				} else {
 					reqRetry.addSeqBatch(topic, tid, partition, batch)
@@ -952,7 +954,11 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 		s.handleRetryBatches(reqRetry, &kmove, 0, true, true, "produce request had retry batches")
 	}
 	if len(reqBackoff.bs) > 0 {
-		s.handleRetryBatches(reqBackoff, nil, req.backoffSeq, false, true, "produce request had timed out batches")
+		if len(kmove.backoffs) > 0 {
+			// Refresh asynchronously without making retries wait for metadata.
+			s.cl.triggerUpdateMetadata(true, "produce response had stale leader hints")
+		}
+		s.handleRetryBatches(reqBackoff, nil, req.backoffSeq, false, true, "produce request had batches requiring backoff")
 	}
 }
 
@@ -1028,6 +1034,12 @@ func (s *sink) handleReqRespBatch(
 			fmt.Fprintf(b, "move:%d:%d@%d,%d}, ", rp.CurrentLeader.LeaderID, rp.CurrentLeader.LeaderEpoch, rp.BaseOffset, nrec)
 		}
 		batch.owner.failing = true
+		return true, false
+	}
+	if kmove.backoffs[batch.owner] {
+		if debug {
+			fmt.Fprintf(b, "retrying@%d,%d(%s)}, ", rp.BaseOffset, nrec, kerr.NotLeaderForPartition)
+		}
 		return true, false
 	}
 
