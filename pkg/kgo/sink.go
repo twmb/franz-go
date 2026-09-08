@@ -270,8 +270,6 @@ func (s *sink) clearBackoff() {
 func (s *sink) drain() {
 	again := true
 	for again {
-		s.maybeBackoff()
-
 		sem := s.inflightSem.Load().(chan struct{})
 		select {
 		case sem <- struct{}{}:
@@ -279,6 +277,13 @@ func (s *sink) drain() {
 			s.drainState.hardFinish()
 			return
 		}
+
+		// We back off after taking our inflight slot, not before. A
+		// response arrives, triggers a backoff, and only then frees the
+		// slot we are waiting on, so a backoff checked before the wait
+		// is always one request out of date. Only one goroutine is ever
+		// in this loop, so holding the slot while we wait costs nothing.
+		s.maybeBackoff()
 
 		again = s.drainState.maybeFinish(s.produce(sem))
 	}
