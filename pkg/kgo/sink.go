@@ -1352,6 +1352,14 @@ func (s *sink) handleRetryBatches(
 			return
 		}
 
+		// The broker hinted a leader we are already using. We retry on
+		// the same sink, but we wait first: without this we resend as
+		// fast as the broker can reject us.
+		if kmove.hasStaleRecBuf(batch.owner) {
+			shouldBackoff = true
+			return
+		}
+
 		// If our first batch (seq == 0) fails with unknown topic, we
 		// retry immediately. Kafka can reply with valid metadata
 		// immediately after a topic was created, before the leaders
