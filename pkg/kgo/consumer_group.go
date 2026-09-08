@@ -1927,7 +1927,6 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int
 	// because the sharder's onResp resolves TopicID -> Topic in the
 	// Groups format, and resp.Topics is a copy that may lose TopicID.
 	var staleRetries int
-	var unknownTopicIDRetries int
 	var omittedRetries int
 	// injected tracks partitions whose non-retryable error we have already
 	// surfaced via a fake fetch. It is declared BEFORE the start label so it
@@ -1949,13 +1948,14 @@ start:
 		reqg.MemberEpoch = gen
 	}
 	groupTopics := g.tps.load()
+	reqIDs := make(map[string][16]byte, len(added))
 	pinV9 := false
 	for topic, partitions := range added {
 		// Skip partitions we have already surfaced a non-retryable error
 		// for and dropped (injected, below). On the first pass injected is
 		// nil and nothing is filtered; on a goto-start retry (driven by an
-		// UNSTABLE_OFFSET_COMMIT or UNKNOWN_TOPIC_ID partition) this avoids
-		// re-fetching partitions we will never re-add to the assignment.
+		// UNSTABLE_OFFSET_COMMIT partition) this avoids re-fetching
+		// partitions we will never re-add to the assignment.
 		if inj := injected[topic]; inj != nil {
 			kept := partitions[:0:0] // fresh backing array; do not mutate added
 			for _, p := range partitions {
@@ -1973,6 +1973,7 @@ start:
 		if td := groupTopics.loadTopic(topic); td != nil {
 			reqTopic.TopicID = td.id
 		}
+		reqIDs[topic] = reqTopic.TopicID
 		if reqTopic.TopicID == noID {
 			pinV9 = true
 		}
@@ -2080,8 +2081,35 @@ start:
 		}
 		topicOffsets := make(map[int32]Offset)
 		offsets[topic] = topicOffsets
+		// From OffsetFetch v10 the response carries the topic ID. Below
+		// that the coordinator matches by name, and we use the ID the
+		// topic had when we sent the request rather than the sharder's
+		// fill of TopicID. If the topic was recreated during the request,
+		// the ID we sent is dead and the partition restarts from the new
+		// topic's beginning, even if the commits returned were the new
+		// topic's: records up to the commit were read by another member
+		// and committed, and we reread them. See Offset.topicID.
+		fetchedID := reqIDs[topic]
+		if resp.Version >= 10 && rTopic.TopicID != noID {
+			fetchedID = rTopic.TopicID
+		}
+		td := groupTopics.loadTopic(topic)
 		for _, rPartition := range rTopic.Partitions {
 			if err = kerr.ErrorForCode(rPartition.ErrorCode); err != nil {
+				// The coordinator's broker does not know the ID we
+				// asked with, so no commit exists under it: the topic
+				// was deleted, or created or recreated more recently
+				// than that broker's metadata. We start from the
+				// beginning under that ID and let the fetch decide: a
+				// dead ID is rejected there, and if the topic was
+				// recreated, the offset load that follows restarts
+				// the partition.
+				if errors.Is(err, kerr.UnknownTopicID) {
+					offset := NewOffset().AtStart()
+					offset.topicID = fetchedID
+					topicOffsets[rPartition.Partition] = offset
+					continue
+				}
 				// Some partition errors are retryable:
 				//
 				// - UnstableOffsetCommit (KIP-447): a pending
@@ -2097,17 +2125,7 @@ start:
 				//   server-side, exactly as it does for Java. Only
 				//   session teardown (ctx below) interrupts it.
 				//   Do not add a retry cap.
-				//
-				// - UnknownTopicID: the broker has not yet
-				//   propagated the topic ID for a newly created
-				//   topic. We now send TopicIDs in OffsetFetch
-				//   v10+. We cap retries because the topic may
-				//   have been legitimately deleted.
-				retryable := errors.Is(err, kerr.UnstableOffsetCommit) ||
-					errors.Is(err, kerr.UnknownTopicID) && unknownTopicIDRetries < 3
-				if errors.Is(err, kerr.UnknownTopicID) {
-					unknownTopicIDRetries++
-				}
+				retryable := errors.Is(err, kerr.UnstableOffsetCommit)
 				if retryable {
 					g.cfg.logger.Log(LogLevelInfo, "fetch offsets failed with retryable partition error, waiting 1s and retrying",
 						"group", g.cfg.group,
@@ -2159,8 +2177,9 @@ start:
 				continue
 			}
 			offset := Offset{
-				at:    rPartition.Offset,
-				epoch: -1,
+				at:      rPartition.Offset,
+				epoch:   -1,
+				topicID: fetchedID,
 			}
 			if resp.Version >= 5 && kip320 { // KIP-320
 				offset.epoch = rPartition.LeaderEpoch
@@ -2172,6 +2191,15 @@ start:
 			// negative offset.
 			if rPartition.Offset < 0 {
 				offset = g.cfg.startOffset
+				// A topic recreated while we consume it has no
+				// commits yet, and the recreation restarted the
+				// partitions we had from the beginning. A partition
+				// we are newly assigned, or that the new topic added,
+				// also starts from the beginning.
+				if td != nil && td.priorIDs.any() {
+					offset = NewOffset().AtStart()
+				}
+				offset.topicID = fetchedID
 			}
 			topicOffsets[rPartition.Partition] = offset
 		}
@@ -2356,6 +2384,7 @@ start:
 				dirty:     committed,
 				head:      committed,
 				committed: committed,
+				id:        offset.topicID,
 			}
 		}
 	}
@@ -2465,6 +2494,24 @@ type uncommit struct {
 	dirty     EpochOffset // if autocommitting, what will move to head on next Poll
 	head      EpochOffset // ready to commit
 	committed EpochOffset // what is committed
+
+	// The topic ID the offsets above were recorded under, or zero if
+	// the cluster has no topic IDs. An entry recorded under an ID the
+	// topic no longer has belongs to a deleted topic: getUncommittedLocked
+	// skips it, and the next poll of the current topic replaces it.
+	// Committed offsets need no cleanup: the broker deletes them with the
+	// topic. A commit in flight when the topic is deleted is the one case
+	// this does not cover. From OffsetCommit v10 (Kafka 4.2) the broker
+	// rejects it by ID. Below v10 the group receives it if the coordinator
+	// already knows the new topic. The next consumer of the partition then
+	// validates the commit's epoch against the new log. If the new log does
+	// not have that epoch, the consumer resets to the configured start and
+	// skips nothing. If it does, usually because both topics are at epoch
+	// 0, the consumer starts at the committed offset: silently if the
+	// offset is within the new log, or at the high watermark with
+	// ErrDataLoss if it is past it. Both skip records of the new topic. The
+	// window is very small and cannot be fully guarded without topic IDs.
+	id [16]byte
 }
 
 // EpochOffset combines a record offset with the leader epoch the broker
@@ -2518,8 +2565,20 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	groupTopics := g.tps.load()
 	for _, fetch := range fetches {
 		for _, topic := range fetch.Topics {
+			// A buffered fetch of an ID we no longer consume (the
+			// topic was recreated) was polled just before the swap;
+			// its offsets belong to the old topic. A fetch without an
+			// ID comes from a cursor in an old cluster where metadata
+			// did not yet report IDs, so there is no ID to compare
+			// against.
+			if topic.TopicID != noID {
+				if td := groupTopics.loadTopic(topic.Topic); td != nil && td.id != topic.TopicID {
+					continue
+				}
+			}
 			if debug {
 				fmt.Fprintf(&b, "%s[", topic.Topic)
 			}
@@ -2547,10 +2606,13 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 					final.LeaderEpoch, // -1 if old message / unknown
 					final.Offset + 1,
 				}
+				// An entry recorded under a different ID is the old
+				// topic's, from before the swap: this poll is the
+				// first of the new topic, so the entry starts over.
 				prior, ok := topicOffsets[partition.Partition]
-				if !ok {
+				if !ok || prior.id != topic.TopicID {
 					uninit := EpochOffset{-1, 0}
-					uncommit := uncommit{uninit, uninit, uninit}
+					uncommit := uncommit{dirty: uninit, head: uninit, committed: uninit, id: topic.TopicID}
 					prior, topicOffsets[partition.Partition] = uncommit, uncommit
 				}
 
@@ -2695,6 +2757,13 @@ func (g *groupConsumer) updateCommitted(
 			respPart := &respTopic.Partitions[i]
 			uncommit, exists := topic[respPart.Partition]
 			if !exists { // just in case
+				continue
+			}
+			// A recreation adopted while this commit was in flight
+			// replaces the entry with one for the new topic. The
+			// offsets we sent are the old topic's, so they say nothing
+			// about what is committed for this entry.
+			if reqTopic.TopicID != noID && uncommit.id != noID && reqTopic.TopicID != uncommit.id {
 				continue
 			}
 			if reqPart.Partition != respPart.Partition { // bad kafka
@@ -2878,6 +2947,7 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 				dirty:     epochOffset,
 				head:      epochOffset,
 				committed: epochOffset,
+				id:        groupTopics.loadTopic(topic).id,
 			}
 			if current.dirty == epochOffset {
 				continue
@@ -2949,10 +3019,25 @@ func (g *groupConsumer) getUncommittedLocked(head, dirty bool) map[string]map[in
 		return nil
 	}
 
+	groupTopics := g.tps.load()
 	var uncommitted map[string]map[int32]EpochOffset
 	for topic, partitions := range g.uncommitted {
+		var currentID [16]byte
+		if td := groupTopics.loadTopic(topic); td != nil {
+			currentID = td.id
+		}
 		var topicUncommitted map[int32]EpochOffset
 		for partition, uncommit := range partitions {
+			// An entry without an ID was recorded before the cluster
+			// supported IDs in metadata responses. currentID is zero
+			// when the topic was purged (by you, or after
+			// ConsiderMissingTopicDeletedAfter for a regex consumer),
+			// which drops the topic but leaves its uncommitted entry.
+			// In both cases we cannot tell whether the entry belongs
+			// to a deleted topic, so we keep it.
+			if uncommit.id != noID && currentID != noID && uncommit.id != currentID {
+				continue // recorded under a deleted topic
+			}
 			if head && (dirty && uncommit.dirty == uncommit.committed || !dirty && uncommit.head == uncommit.committed) {
 				continue
 			}
@@ -3129,6 +3214,7 @@ func (cl *Client) MarkCommitRecords(rs ...*Record) {
 				dirty:     current.dirty,
 				committed: current.committed,
 				head:      newHead,
+				id:        current.id,
 			}
 		}
 	}
@@ -3166,6 +3252,7 @@ func (cl *Client) MarkCommitOffsets(unmarked map[string]map[int32]EpochOffset) {
 					dirty:     current.dirty,
 					committed: current.committed,
 					head:      newHead,
+					id:        current.id,
 				}
 			}
 		}
@@ -3521,6 +3608,24 @@ func (g *groupConsumer) commit(
 	req.InstanceID = g.cfg.instanceID
 	is848 := g.is848 // g.mu is held, per the function comment above
 
+	// The topic ID is attached to the request in the goroutine below,
+	// after these offsets were gathered and after g.mu is released. If a
+	// recreation is adopted in between, the old topic's offsets would go
+	// out under the new topic's ID and the next member to fetch them
+	// would start past the new topic's records. We capture the ID each
+	// offset was recorded under here, while g.mu is held, and drop the
+	// offsets whose ID no longer matches when the request is built.
+	recordedIDs := make(map[string]map[int32][16]byte, len(uncommitted))
+	for topic, partitions := range uncommitted {
+		ids := make(map[int32][16]byte, len(partitions))
+		for partition := range partitions {
+			if u, ok := g.uncommitted[topic][partition]; ok {
+				ids[partition] = u.id
+			}
+		}
+		recordedIDs[topic] = ids
+	}
+
 	go func() {
 		defer close(commitDone) // allow future commits to continue when we are done
 		defer commitCancel()
@@ -3553,19 +3658,37 @@ func (g *groupConsumer) commit(
 		for topic, partitions := range uncommitted {
 			reqTopic := kmsg.NewOffsetCommitRequestTopic()
 			reqTopic.Topic = topic
+			var currentID [16]byte
 			if td := groupTopics.loadTopic(topic); td != nil {
-				reqTopic.TopicID = td.id
+				currentID = td.id
+				reqTopic.TopicID = currentID
 			}
-			if reqTopic.TopicID == noID {
-				pinV9 = true
-			}
+			// Drop an offset recorded under an ID the topic no longer
+			// has; see recordedIDs above.
+			recorded := recordedIDs[topic]
 			for partition, eo := range partitions {
+				if rid, ok := recorded[partition]; ok && rid != noID && currentID != noID && rid != currentID {
+					g.cfg.logger.Log(LogLevelInfo, "not committing an offset recorded under a topic ID the topic no longer has",
+						"group", g.cfg.group,
+						"topic", topic,
+						"partition", partition,
+						"recorded_id", topicID(rid),
+						"current_id", topicID(currentID),
+					)
+					continue
+				}
 				reqPartition := kmsg.NewOffsetCommitRequestTopicPartition()
 				reqPartition.Partition = partition
 				reqPartition.Offset = eo.Offset
 				reqPartition.LeaderEpoch = eo.Epoch // KIP-320
 				reqPartition.Metadata = &req.MemberID
 				reqTopic.Partitions = append(reqTopic.Partitions, reqPartition)
+			}
+			if len(reqTopic.Partitions) == 0 {
+				continue
+			}
+			if reqTopic.TopicID == noID {
+				pinV9 = true
 			}
 			req.Topics = append(req.Topics, reqTopic)
 		}

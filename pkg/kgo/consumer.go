@@ -28,6 +28,19 @@ type Offset struct {
 
 	noReset    bool
 	afterMilli bool
+
+	// The topic ID the offset was fetched under: the ID in the
+	// OffsetFetch v10 response, or, below v10, the ID the topic had when
+	// fetchOffsets sent the request. Offsets from the user have no ID.
+	// assignPartitions sets cursor.topicID to this value, or to the
+	// current metadata loaded ID if this value is zero. The fetch is
+	// tagged with this ID.
+	//
+	// If the topic was recreated after the offset was fetched, the fetch
+	// is rejected and triggers a metadata update. The update restarts the
+	// partition from the new topic's beginning. See consumer_group.go's
+	// fetchOffsets for more detail.
+	topicID [16]byte
 }
 
 // Random negative, only significant within this package.
@@ -1274,6 +1287,20 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		}
 
 		for partition, offset := range partitions {
+			// Update the cursor ID if needed (see Offset.topicID doc).
+			// The session is stopped or guarded, and a cursor that is
+			// being assigned here cannot be in use, so this is
+			// concurrency safe.
+			if partition >= 0 && partition < int32(len(topicPartitions.partitions)) {
+				id := offset.topicID
+				if id == noID {
+					id = topicPartitions.id
+				}
+				if cursor := topicPartitions.partitions[partition].cursor; id != noID && cursor.topicID != id {
+					cursor.topicID = id
+				}
+			}
+
 			// If we are loading the first record after a millisec,
 			// we go directly to listing offsets. Epoch validation
 			// does not ever set afterMilli.
@@ -1434,6 +1461,10 @@ func (c *consumer) doOnMetadataUpdate() {
 		return
 	}
 
+	// A cursor paused by a rejected fetch waits for this update; see
+	// cursor.pausedAt.
+	c.cl.allSources((*source).maybeConsume)
+
 	// See the comment on the outstandingMetadataUpdates field for why this
 	// block below.
 	if c.outstandingMetadataUpdates.maybeBegin() {
@@ -1491,7 +1522,8 @@ type offsetLoadMap map[string]map[int32]offsetLoad
 // offsetLoad is effectively an Offset, but also includes a potential replica
 // to directly use if a cursor had a preferred replica.
 type offsetLoad struct {
-	replica int32 // -1 means leader
+	replica     int32 // -1 means leader
+	revalidated bool  // whether we already refreshed metadata to tell data loss from a topic recreation
 	// ooorMilli is non-zero when we are resetting a cursor that received
 	// OFFSET_OUT_OF_RANGE while consuming: the timestamp of the last
 	// record it consumed. The offset itself is the one that was out of
@@ -2102,6 +2134,20 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 		}
 	}
 
+	// Loads answered with data loss are validated once more after a
+	// metadata update. loadWithSessionNow forces that update even within
+	// MetadataMinAge. See handleListOrEpochResults.
+	var revalidate listOrEpochLoads
+	defer func() {
+		if !revalidate.isEmpty() {
+			s.incWorker()
+			go func() {
+				defer s.decWorker()
+				revalidate.loadWithSessionNow(s, "revalidating offsets after apparent data loss")
+			}()
+		}
+	}()
+
 	var reloads, followUps listOrEpochLoads
 	defer func() {
 		if !reloads.isEmpty() {
@@ -2136,9 +2182,10 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 	for received != issued {
 		loaded := <-results
 		received++
-		reload, followUp := s.handleListOrEpochResults(loaded)
+		reload, followUp, revalidates := s.handleListOrEpochResults(loaded)
 		reloads.mergeFrom(reload)
 		followUps.mergeFrom(followUp)
+		revalidate.mergeFrom(revalidates)
 	}
 
 	followUps.loadWithSession(s, "reset by time after an undefined epoch offset")
@@ -2162,7 +2209,7 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 // is not much else we can do. RequestWith already retries, but returns when
 // the retry limit is hit. We will backoff 1s and then allow RequestWith to
 // continue requesting and backing off.
-func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reloads, followUps listOrEpochLoads) {
+func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reloads, followUps, revalidate listOrEpochLoads) {
 	// This function can be running twice concurrently, so we need to guard
 	// listOrEpochLoadsLoading and usingCursors. For simplicity, we just
 	// guard this entire function.
@@ -2215,6 +2262,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 				lastConsumedEpoch: load.leaderEpoch,
 				lastConsumedTime:  prior.lastConsumedTime,
 				hwm:               prior.hwm,
+				restarted:         prior.restarted,
 			})
 			load.cursor.allowUsable()
 			s.c.usingCursors.use(load.cursor)
@@ -2223,6 +2271,16 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 		var edl *ErrDataLoss
 		switch {
 		case errors.As(load.err, &edl):
+			// A recreated topic looks like data loss: the epoch we
+			// consumed is not in the new log. We refresh metadata and
+			// validate once more before believing it. If the update
+			// reports a new ID, the swap drops this load and restarts
+			// from the beginning.
+			if !load.request.revalidated && load.cursor.topicID != noID {
+				load.request.revalidated = true
+				revalidate.addLoad(load.topic, load.partition, loaded.loadType, load.request)
+				continue
+			}
 			s.c.addFakeReadyForDraining(load.topic, load.partition, load.err, "notification of data loss") // signal we lost data, but set the cursor to what we can
 			use()
 
@@ -2249,7 +2307,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 		}
 	}
 
-	return reloads, followUps
+	return reloads, followUps, revalidate
 }
 
 // Splits the loads into per-broker loads, mapping each partition to the broker

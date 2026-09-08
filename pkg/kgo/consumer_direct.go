@@ -83,9 +83,18 @@ func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 		if len(partitions.partitions) == 0 {
 			continue
 		}
+		// Partitions the recreation added, which we do not consume
+		// yet, start from the beginning rather than ConsumeResetOffset:
+		// everything in the new topic arrived after we subscribed.
+		// Partitions we already consume were restarted by
+		// swapRecreatedCursorTo and are removed below.
+		start := d.cfg.startOffset
+		if partitions.priorIDs.any() {
+			start = NewOffset().AtStart()
+		}
 		toUseTopic := make(map[int32]Offset, len(partitions.partitions))
 		for partition := range partitions.partitions {
-			toUseTopic[int32(partition)] = d.cfg.startOffset
+			toUseTopic[int32(partition)] = start
 		}
 		toUse[topic] = toUseTopic
 	}
