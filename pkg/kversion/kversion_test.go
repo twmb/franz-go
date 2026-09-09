@@ -260,11 +260,12 @@ func TestGuessVersions(t *testing.T) {
 		{V4_0_0(), "v4.0"},
 		{V4_1_0(), "v4.1"},
 		{V4_2_0(), "v4.2"},
+		{V4_3_0(), "v4.3"},
 
 		// Stable is zk, controller, broker merged; we do not guess the
 		// stable version, but we do want to ensure it is at least our
 		// latest release
-		{Stable(), "at least v4.2"},
+		{Stable(), "at least v4.3"},
 	} {
 		got := test.vs.VersionGuess()
 		if got != test.exp {
