@@ -426,6 +426,9 @@ func (e *errDecompress) Error() string {
 func (e *errDecompress) Unwrap() error { return e.err }
 
 func isDecompressErr(err error) bool {
+	if err == nil {
+		return false
+	}
 	var ed *errDecompress
 	return errors.As(err, &ed)
 }

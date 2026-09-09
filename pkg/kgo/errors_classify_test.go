@@ -28,3 +28,29 @@ func TestUnexpectedEOFRetriable(t *testing.T) {
 		t.Error("first-read io.EOF should stay non-retryable")
 	}
 }
+
+func TestIsDecompressErr(t *testing.T) {
+	t.Parallel()
+
+	// A direct errDecompress should be recognized.
+	direct := &errDecompress{err: io.ErrUnexpectedEOF}
+	if !isDecompressErr(direct) {
+		t.Error("direct *errDecompress not detected")
+	}
+
+	// A wrapped errDecompress should be recognized through the chain.
+	wrapped := fmt.Errorf("process failed: %w", direct)
+	if !isDecompressErr(wrapped) {
+		t.Error("wrapped *errDecompress not detected")
+	}
+
+	// A non-decompress error must not match.
+	if isDecompressErr(io.ErrUnexpectedEOF) {
+		t.Error("plain io.ErrUnexpectedEOF falsely detected as decompress error")
+	}
+
+	// nil must not match.
+	if isDecompressErr(nil) {
+		t.Error("nil falsely detected as decompress error")
+	}
+}
