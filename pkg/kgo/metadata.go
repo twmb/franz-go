@@ -426,7 +426,7 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		}
 
 		for _, mt := range latest {
-			if mt.id == ([16]byte{}) {
+			if mt.id == noID {
 				continue
 			}
 			if _, exists := knownNames[mt.topic]; exists {
@@ -964,7 +964,6 @@ func (cl *Client) mergeTopicPartitions(
 		}
 
 		if !isProduce {
-			var noID [16]byte
 			var newID, oldID [16]byte
 			if isShare {
 				newID = newTP.shareCursor.topicID

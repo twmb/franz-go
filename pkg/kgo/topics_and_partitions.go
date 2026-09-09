@@ -543,6 +543,10 @@ type topicID [16]byte
 
 func (t topicID) String() string { return hex.EncodeToString(t[:]) }
 
+// noID is the zero topic ID. Below Kafka 2.8 metadata carries no IDs and
+// every ID is noID.
+var noID [16]byte
+
 // topicPartition contains all information from Kafka for a topic's partition,
 // as well as what a client is producing to it or info about consuming from it.
 type topicPartition struct {

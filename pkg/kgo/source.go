@@ -2956,7 +2956,7 @@ func (s *fetchSession) lookupTopic(topic string, t2id map[string][16]byte) fetch
 		s.used[topic] = t
 		id := t2id[topic]
 		s.t2id[topic] = id
-		if id == ([16]byte{}) {
+		if id == noID {
 			s.disableIDs = true
 		}
 	}

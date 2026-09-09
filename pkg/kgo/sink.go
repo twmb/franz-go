@@ -134,7 +134,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 			moreToDrain = true
 			continue
 		}
-		if req.produceMax > 12 && recBuf.topicID == ([16]byte{}) {
+		if req.produceMax > 12 && recBuf.topicID == noID {
 			req.produceMax = 12
 		}
 
