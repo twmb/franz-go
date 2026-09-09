@@ -1971,6 +1971,15 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 			recordCtx = context.WithValue(parent, shareAckKey, slab)
 		}
 	}
+	// A batch with a delete horizon stores it in FirstTimestamp, which we
+	// otherwise only fold into each record's Timestamp.
+	if batch.Attributes&0b0100_0000 != 0 {
+		parent := recordCtx
+		if parent == nil {
+			parent = context.Background()
+		}
+		recordCtx = context.WithValue(parent, deleteHorizonKey, batch.FirstTimestamp)
+	}
 	var nkept int
 	defer func() {
 		if p == nil {
