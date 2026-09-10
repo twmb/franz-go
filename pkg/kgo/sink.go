@@ -1160,6 +1160,15 @@ func (s *sink) handleReqRespBatch(
 			return true, false
 		}
 
+		// A transaction cannot recover the same way: its writes to the
+		// old topic were deleted with it. We fail the producer ID with
+		// errRecreationAbortTxn, which TryAbort recovers from, rather
+		// than with the sequence error, which recovery treats as fatal.
+		if s.cl.cfg.txnID != nil && batch.owner.recreated {
+			batch.owner.recreated = false
+			err = errRecreationAbortTxn
+		}
+
 		if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
 			s.cl.cfg.logger.Log(LogLevelInfo, "batch errored, failing the producer ID",
 				"broker", logID(s.nodeID),
@@ -1838,22 +1847,32 @@ func (recBuf *recBuf) unknownIDFails() int32 {
 // calls this with the topic's ID on every update; the ID changes when the
 // topic was recreated, and the next request goes out under it.
 //
+// We return whether a transaction is exposed to a recreation: this
+// partition was added to one, or has records for it buffered or in flight.
+// Such a transaction cannot commit safely, since its writes to the old
+// topic were deleted with it. The merge fails the transaction once for the
+// topic.
+//
 // Must be called while locked.
-func (recBuf *recBuf) setTopicID(id [16]byte) {
-	if recBuf.topicID != noID && recBuf.topicID != id {
-		recBuf.recreated = true
-	}
+func (recBuf *recBuf) setTopicID(id [16]byte) (txnExposed bool) {
+	changed := recBuf.topicID != noID && recBuf.topicID != id
 	recBuf.topicID = id
+	if !changed {
+		return false
+	}
+	recBuf.recreated = true
+	return recBuf.addedToTxn.Load() || len(recBuf.batches) > 0 || recBuf.inflight != 0
 }
 
 // setTopicIDClearFailing sets the topic ID and clears the failing state in
 // one lock: the metadata merge does both for every partition it keeps.
-func (recBuf *recBuf) setTopicIDClearFailing(id [16]byte) {
+func (recBuf *recBuf) setTopicIDClearFailing(id [16]byte) (txnExposed bool) {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
-	recBuf.setTopicID(id)
+	txnExposed = recBuf.setTopicID(id)
 	recBuf.failing = false
 	recBuf.maybeTriggerDrain()
+	return txnExposed
 }
 
 // failAllRecords fails all buffered records in this recBuf.

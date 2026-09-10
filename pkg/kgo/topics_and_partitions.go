@@ -688,8 +688,8 @@ type topicPartitionData struct {
 // must be done such that records produced during migration follow those
 // already buffered. The topic's ID is set while we hold the record buffer's
 // lock for the sink change, so a partition takes a recreated topic's ID here
-// as well.
-func (old *topicPartition) migrateProductionTo(new *topicPartition, id [16]byte) { //nolint:revive // old/new naming makes this clearer
+// as well; we return setTopicID's txnExposed.
+func (old *topicPartition) migrateProductionTo(new *topicPartition, id [16]byte) (txnExposed bool) { //nolint:revive // old/new naming makes this clearer
 	// First, remove our record buffer from the old sink.
 	old.records.sink.removeRecBuf(old.records)
 
@@ -701,7 +701,7 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition, id [16]byte)
 	old.records.mu.Lock() // guard setting sink and topic partition data
 	old.records.sink = new.records.sink
 	old.records.topicPartitionData = new.topicPartitionData
-	old.records.setTopicID(id)
+	txnExposed = old.records.setTopicID(id)
 	// okOnSink tracks "the last response on this recBuf's current sink
 	// was a success", which gates >1 in-flight per #223. After a sink
 	// change, a stale true from the old sink could allow pipelining two
@@ -719,6 +719,7 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition, id [16]byte)
 	// At this point, the new sink will be draining our records. We lastly
 	// need to copy the records pointer to our new topicPartition.
 	new.records = old.records
+	return txnExposed
 }
 
 // migrateCursorTo is called on metadata update if a topic partition's leader

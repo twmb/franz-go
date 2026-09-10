@@ -890,6 +890,7 @@ func (cl *Client) mergeTopicPartitions(
 	var (
 		swapped     int      // cursors restarted or stopped by a recreation
 		swappedFrom [16]byte // the ID they were swapped from
+		txnExposed  int      // partitions whose recreation a transaction is exposed to
 	)
 	for part, oldTP := range lv.partitions {
 		exists := part < len(r.partitions)
@@ -951,7 +952,9 @@ func (cl *Client) mergeTopicPartitions(
 			// epoch comparison below, which would otherwise keep the old
 			// information and leave this partition producing under an ID
 			// the topic no longer has.
-			oldTP.records.setTopicIDClearFailing(lv.id)
+			if oldTP.records.setTopicIDClearFailing(lv.id) {
+				txnExposed++
+			}
 
 		case partitionKindConsume:
 			// A recreated topic's leader epoch restarts from 0, so it
@@ -1103,6 +1106,23 @@ func (cl *Client) mergeTopicPartitions(
 			default:
 				oldTP.migrateCursorTo(newTP, css)
 			}
+		}
+	}
+
+	// A transaction that produced to a recreated topic, or has records for
+	// it buffered or in flight, cannot commit: its writes to the old topic
+	// were deleted with it, and a commit would report them as committed.
+	// We fail the transaction once for the topic. The producer ID error
+	// gate is for the log line: failProducerID itself no-ops once the ID
+	// has failed, but we would otherwise log on every update until you
+	// abort.
+	if txnExposed > 0 && cl.cfg.txnID != nil {
+		if cur := cl.producer.id.Load().(*producerID); cur.err == nil {
+			cl.cfg.logger.Log(LogLevelWarn, "topic recreation observed with an active transaction exposed to it; failing the transaction",
+				"topic", topic,
+				"exposed_partitions", txnExposed,
+			)
+			cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
 		}
 	}
 
