@@ -373,7 +373,7 @@ func (p *benchDecompressPool) GetDecompressBytes([]byte, CompressionCodecType) [
 	return p.buf[:0]
 }
 
-func (p *benchDecompressPool) PutDecompressBytes([]byte) {}
+func (*benchDecompressPool) PutDecompressBytes([]byte) {}
 
 func BenchmarkDecompressUserPool(b *testing.B) {
 	in := bytes.Repeat([]byte("abcdefghijklmno pqrs tuvwxy   z"), 10_000)

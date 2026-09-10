@@ -419,7 +419,7 @@ func (d *decompressor) decompress(dst []byte, out *bytes.Buffer, src []byte, cod
 	case CodecGzip:
 		return d.decompressGzip(dst, out, src)
 	case CodecSnappy:
-		return d.decompressSnappy(dst, src)
+		return decompressSnappy(dst, src)
 	case CodecLz4:
 		return d.decompressLz4(dst, out, src)
 	case CodecZstd:
@@ -446,7 +446,7 @@ func (d *decompressor) decompressGzip(dst []byte, out *bytes.Buffer, src []byte)
 	return out.Bytes(), nil
 }
 
-func (d *decompressor) decompressSnappy(dst []byte, src []byte) ([]byte, error) {
+func decompressSnappy(dst, src []byte) ([]byte, error) {
 	if len(src) > 16 && bytes.HasPrefix(src, xerialPfx) {
 		return xerialDecode(dst, src)
 	}
@@ -475,7 +475,7 @@ func (d *decompressor) decompressLz4(dst []byte, out *bytes.Buffer, src []byte) 
 	return out.Bytes(), nil
 }
 
-func (d *decompressor) decompressZstd(dst []byte, src []byte) ([]byte, error) {
+func (d *decompressor) decompressZstd(dst, src []byte) ([]byte, error) {
 	unzstd := d.unzstdPool.Get().(*zstdDecoder)
 	defer d.unzstdPool.Put(unzstd)
 	return unzstd.inner.DecodeAll(src, dst)
