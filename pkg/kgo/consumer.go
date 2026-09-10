@@ -2490,7 +2490,11 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 			}
 
 			offset := poffset(&rPartition)
-			end := func() int64 { return poffset(&resp2.Topics[i].Partitions[j]) }
+			epoch := rPartition.LeaderEpoch
+			end := func() (int64, int32) {
+				p := &resp2.Topics[i].Partitions[j]
+				return poffset(p), p.LeaderEpoch
+			}
 
 			// We ensured the resp2 shape is as we want and has no
 			// error, so resp2 lookups are safe.
@@ -2500,35 +2504,35 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 				// our end offset request: anything after the
 				// end offset *now* is after our milli.
 				if offset == -1 {
-					offset = end()
+					offset, epoch = end()
 				}
 			} else if loadPart.at >= 0 {
 				// If an exact offset, we listed start and end.
 				// We validate the offset is within bounds.
-				end := end()
+				end, endEpoch := end()
 				want := loadPart.at + loadPart.relative
 				if want >= offset {
-					offset = want
+					offset, epoch = want, -1
 				}
 				if want >= end {
-					offset = end
+					offset, epoch = end, endEpoch
 				}
 			} else if loadPart.at == -2 && loadPart.relative > 0 {
 				// Relative to the start: both start & end were
 				// issued, and we bound to the end.
-				offset += loadPart.relative
-				if end := end(); offset >= end {
-					offset = end
+				offset, epoch = offset+loadPart.relative, -1
+				if end, endEpoch := end(); offset >= end {
+					offset, epoch = end, endEpoch
 				}
 			} else if loadPart.at == -1 && loadPart.relative < 0 {
 				// Relative to the end: both start & end were
 				// issued, offset is currently the start, so we
 				// set to the end and then bound to the start.
-				start := offset
-				offset = end()
-				offset += loadPart.relative
+				start, startEpoch := offset, epoch
+				end, _ := end()
+				offset, epoch = end+loadPart.relative, -1
 				if offset <= start {
-					offset = start
+					offset, epoch = start, startEpoch
 				}
 			}
 			// Every arm above yields a non-negative offset from a
@@ -2555,7 +2559,7 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 				partition:   partition,
 				cursor:      topicPartition.cursor,
 				offset:      offset,
-				leaderEpoch: rPartition.LeaderEpoch,
+				leaderEpoch: epoch,
 				request:     loadPart,
 			})
 		}
