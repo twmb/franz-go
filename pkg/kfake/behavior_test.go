@@ -2259,6 +2259,309 @@ func TestProduceUnknownProducerIDPre360(t *testing.T) {
 	}
 }
 
+// idempotentProduceRaw sends a one record idempotent produce for the given
+// producer ID, epoch, and first sequence, and returns the partition's error
+// code.
+func idempotentProduceRaw(t *testing.T, c *kfake.Cluster, cl *kgo.Client, topic string, pid int64, epoch int16, firstSeq int32) int16 {
+	t.Helper()
+	rec := kmsg.Record{Key: []byte("k"), Value: []byte("v")}
+	rec.Length = int32(len(rec.AppendTo(nil)) - 1)
+	now := time.Now().UnixMilli()
+	batch := kmsg.RecordBatch{
+		PartitionLeaderEpoch: -1,
+		Magic:                2,
+		LastOffsetDelta:      0,
+		FirstTimestamp:       now,
+		MaxTimestamp:         now,
+		ProducerID:           pid,
+		ProducerEpoch:        epoch,
+		FirstSequence:        firstSeq,
+		NumRecords:           1,
+		Records:              rec.AppendTo(nil),
+	}
+	raw := batch.AppendTo(nil)
+	batch.Length = int32(len(raw) - 12)
+	raw = batch.AppendTo(nil)
+	batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+
+	req := kmsg.NewPtrProduceRequest()
+	req.Acks = -1
+	req.TimeoutMillis = 5000
+	rt := kmsg.NewProduceRequestTopic()
+	rt.Topic = topic
+	rt.TopicID = c.TopicInfo(topic).TopicID
+	rp := kmsg.NewProduceRequestTopicPartition()
+	rp.Partition = 0
+	rp.Records = batch.AppendTo(nil)
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("produce: %v", err)
+	}
+	return resp.Topics[0].Partitions[0].ErrorCode
+}
+
+// deleteRecordsToEnd deletes every record on partition 0 of the topic by
+// advancing the log start offset to the high watermark.
+func deleteRecordsToEnd(t *testing.T, cl *kgo.Client, topic string) {
+	t.Helper()
+	req := kmsg.NewPtrDeleteRecordsRequest()
+	req.TimeoutMillis = 5000
+	rt := kmsg.NewDeleteRecordsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewDeleteRecordsRequestTopicPartition()
+	rp.Partition = 0
+	rp.Offset = -1
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("delete records: %v", err)
+	}
+	if code := resp.Topics[0].Partitions[0].ErrorCode; code != 0 {
+		t.Fatalf("delete records: %v", kerr.ErrorForCode(code))
+	}
+}
+
+// initIdempotentPID returns a fresh idempotent producer ID and epoch.
+func initIdempotentPID(t *testing.T, cl *kgo.Client) (int64, int16) {
+	t.Helper()
+	req := kmsg.NewPtrInitProducerIDRequest()
+	req.ProducerID = -1
+	req.ProducerEpoch = -1
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
+	}
+	return resp.ProducerID, resp.ProducerEpoch
+}
+
+// TestProduceNeverWrittenPartitionFirstSeq verifies KAFKA-15591. A producer
+// the broker has no state for sends a nonzero first sequence. On an uncapped
+// cluster, a partition whose log never held a record answers
+// OUT_OF_ORDER_SEQUENCE_NUMBER. A partition that held records and was then
+// emptied by DeleteRecords accepts the append. A cluster capped at 4.2 accepts
+// both, since no released Kafka carries the check.
+func TestProduceNeverWrittenPartitionFirstSeq(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		capped  bool // cap the cluster at 4.2, which lacks the check
+		written bool // write a record and delete it back to the end first
+		want    int16
+	}{
+		{"never-written", false, false, kerr.OutOfOrderSequenceNumber.Code},
+		{"never-written-capped-4-2", true, false, 0},
+		{"emptied-by-delete-records", false, true, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "t-never-written-" + test.name
+
+			opts := []kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}
+			if test.capped {
+				opts = append(opts, kfake.MaxVersions(kversion.V4_2_0()))
+			}
+			c := newCluster(t, opts...)
+			cl := newPlainClient(t, c)
+
+			if test.written {
+				pid, epoch := initIdempotentPID(t, cl)
+				if code := idempotentProduceRaw(t, c, cl, topic, pid, epoch, 0); code != 0 {
+					t.Fatalf("seeding produce: %v", kerr.ErrorForCode(code))
+				}
+				deleteRecordsToEnd(t, cl, topic)
+			}
+
+			// Send a first sequence of 7 as a producer we have
+			// no state for. A client does this when its topic
+			// was deleted and recreated under it.
+			pid, epoch := initIdempotentPID(t, cl)
+			got := idempotentProduceRaw(t, c, cl, topic, pid, epoch, 7)
+			if got != test.want {
+				t.Fatalf("got %v, want %v", kerr.ErrorForCode(got), kerr.ErrorForCode(test.want))
+			}
+		})
+	}
+}
+
+// produceErrLogger records the errors a client logs. A test uses it to see
+// the error code the broker answered a produce with.
+type produceErrLogger struct {
+	mu   sync.Mutex
+	errs []error
+}
+
+func (*produceErrLogger) Level() kgo.LogLevel { return kgo.LogLevelInfo }
+
+func (l *produceErrLogger) Log(_ kgo.LogLevel, _ string, keyvals ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := 0; i+1 < len(keyvals); i += 2 {
+		if k, _ := keyvals[i].(string); k != "err" {
+			continue
+		}
+		if err, ok := keyvals[i+1].(error); ok {
+			l.errs = append(l.errs, err)
+		}
+	}
+}
+
+func (l *produceErrLogger) saw(target error) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.ContainsFunc(l.errs, func(err error) bool { return errors.Is(err, target) })
+}
+
+// TestProduceRecreatedTopicFirstSeq deletes and recreates a topic under an
+// idempotent client. On an uncapped cluster the broker answers the client's
+// continued sequence with OUT_OF_ORDER_SEQUENCE_NUMBER. The client bumps its
+// producer epoch, restarts at sequence 0, and resends. The recreated topic
+// then holds the three new records and nothing else. A cluster capped at 4.2
+// accepts the continued sequence.
+func TestProduceRecreatedTopicFirstSeq(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		capped  bool // cap the cluster at 4.2, which lacks the check
+		wantOOO bool
+	}{
+		{"reject", false, true},
+		{"capped-4-2", true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "t-recreate-seq-" + test.name
+
+			opts := []kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}
+			if test.capped {
+				opts = append(opts, kfake.MaxVersions(kversion.V4_2_0()))
+			}
+			c := newCluster(t, opts...)
+
+			// Produce v13 addresses topics by ID (KIP-516). The
+			// client keeps the deleted topic's ID, so the broker
+			// answers UNKNOWN_TOPIC_ID before it looks at any
+			// sequence. Cap the client at v12. It then addresses
+			// the recreated topic by name, and its sequence
+			// reaches the producer state check.
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(0, 12)
+			logger := new(produceErrLogger)
+			cl := newPlainClient(t, c,
+				kgo.MaxVersions(v),
+				// After the rejection the client waits for a
+				// metadata refresh before it resends. The
+				// default minimum age holds that refresh for
+				// 5 seconds.
+				kgo.MetadataMinAge(100*time.Millisecond),
+				kgo.WithLogger(logger),
+			)
+
+			produceNStrings(t, cl, topic, 3) // sequences 0 through 2
+			recreateTopicRaw(t, cl, topic)
+
+			// Record the first sequence of every batch the client
+			// sends from here on.
+			var (
+				seqMu sync.Mutex
+				seqs  []int32
+			)
+			c.ControlKey(int16(kmsg.Produce), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+				c.KeepControl()
+				req := kreq.(*kmsg.ProduceRequest)
+				seqMu.Lock()
+				defer seqMu.Unlock()
+				for _, rt := range req.Topics {
+					for _, rp := range rt.Partitions {
+						var b kmsg.RecordBatch
+						if err := b.ReadFrom(rp.Records); err == nil {
+							seqs = append(seqs, b.FirstSequence)
+						}
+					}
+				}
+				return nil, nil, false
+			})
+
+			var records []*kgo.Record
+			for i := range 3 {
+				r := kgo.StringRecord("post-" + strconv.Itoa(i))
+				r.Topic = topic
+				records = append(records, r)
+			}
+			produceSync(t, cl, records...)
+
+			if got := logger.saw(kerr.OutOfOrderSequenceNumber); got != test.wantOOO {
+				t.Errorf("saw OUT_OF_ORDER_SEQUENCE_NUMBER: got %v, want %v", got, test.wantOOO)
+			}
+
+			seqMu.Lock()
+			sent := slices.Clone(seqs)
+			seqMu.Unlock()
+			var sawNonzero, sawRestart bool
+			for _, seq := range sent {
+				switch {
+				case seq != 0:
+					sawNonzero = true
+				case sawNonzero:
+					sawRestart = true
+				}
+			}
+			if !sawNonzero {
+				t.Errorf("client never continued its sequence into the recreated topic: sent %v", sent)
+			}
+			if sawRestart != test.wantOOO {
+				t.Errorf("client restarted sequences: got %v, want %v (sent %v)", sawRestart, test.wantOOO, sent)
+			}
+
+			// The recreated topic holds the three new records and
+			// nothing else.
+			adm := kadm.NewClient(cl)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			ends, err := adm.ListEndOffsets(ctx, topic)
+			if err != nil {
+				t.Fatalf("list end offsets: %v", err)
+			}
+			end, ok := ends.Lookup(topic, 0)
+			if !ok || end.Err != nil {
+				t.Fatalf("no end offset for %s: ok=%v err=%v", topic, ok, end.Err)
+			}
+			if end.Offset != 3 {
+				t.Fatalf("recreated topic ends at %d, want 3", end.Offset)
+			}
+
+			consumer := newPlainClient(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.FetchMaxWait(250*time.Millisecond),
+			)
+			var got []string
+			for _, r := range consumeN(t, consumer, 3, 10*time.Second) {
+				got = append(got, string(r.Value))
+			}
+			want := []string{"post-0", "post-1", "post-2"}
+			if !slices.Equal(got, want) {
+				t.Fatalf("consumed %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 // TestClassicIncompatibleProtocolRejected verifies that a member whose
 // protocols are not supported by all existing members is rejected with
 // INCONSISTENT_GROUP_PROTOCOL.
