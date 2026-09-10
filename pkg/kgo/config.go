@@ -1616,13 +1616,13 @@ func ConsumeStartOffset(offset Offset) ConsumerOpt {
 // earliest offset. If using this option, it is strongly recommended to also
 // set ConsumeStartOffset.
 //
-// This option is *only* used if a consumer seeds OffsetOutOfRange on the
-// *first* fetch of a partition. If the consumer has consumed the partition at
-// all and sees the error, it will automatically reset to the first offset
-// after the timestamp of the last successfully consumed offset. If data loss
-// occurred such that even the last successfully consumed offset is lost, the
-// client automatically resets to the new current end offset. If you want to
-// disable offset resetting entirely, you can use [NoResetOffset].
+// This option is *only* used if a consumer sees OffsetOutOfRange before it
+// has consumed anything from a partition. Once a partition has been consumed,
+// OffsetOutOfRange resets to the nearest offset that still exists: the log
+// start if the consumer fell below it, otherwise the first offset at or after
+// the last consumed record's timestamp, never ahead of where the consumer
+// was, and never past the log end. If you want to disable offset resetting
+// entirely, you can use [NoResetOffset].
 //
 // If you use an exact or relative offsets and the offset ends up out of range,
 // the client chooses the nearest of either the log start offset or the log end
