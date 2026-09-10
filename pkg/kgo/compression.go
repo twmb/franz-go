@@ -366,8 +366,8 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 	}
 
 	var (
+		dst        []byte
 		out        *bytes.Buffer
-		rfn        func() []byte
 		userPooled bool
 	)
 	d.pools.each(func(p Pool) bool {
@@ -378,93 +378,107 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 			// len(s) > 0 (a pool returning make([]byte, sizeGuess))
 			// would have the copy/append based codecs write after the
 			// existing length, prefixing the output with stale bytes.
-			out = bytes.NewBuffer(s[:0])
-			rfn = out.Bytes
+			dst = s[:0]
 			userPooled = true
 			return true
 		}
 		return false
 	})
-	if out == nil {
+
+	// If not userPooled, grab a Buffer from local pool.
+	if !userPooled {
 		out = byteBuffers.Get().(*bytes.Buffer)
 		out.Reset()
 		defer byteBuffers.Put(out)
-		// We clone out.Bytes since we are pooling out ourselves; we
-		// need to clone before return since we immediately put into
-		// the pool.
-		//
-		// For user provided slices, we put back into the pool only
-		// after the user calls Recycle on every record that has a
-		// reference to the slice. Thus, we can return the original
-		// slice from the user-provided pool: it is only recycled
-		// at the end when the user says they are done.
-		rfn = func() []byte { return slices.Clone(out.Bytes()) }
+		dst = out.Bytes()
 	}
 
+	decoded, err := d.decompress(dst, out, src, codecType)
+	if err != nil {
+		return nil, err
+	}
+	// For user-provided pools, the slice is only returned to the pool
+	// after the user calls Recycle on every record referencing it, so
+	// the decoded bytes can be returned directly. For our internal
+	// pool, the buffer is returned immediately (via defer above), so
+	// we must clone before the caller can use the data.
+	if userPooled {
+		return decoded, nil
+	}
+	return slices.Clone(decoded), nil
+}
+
+// decompress performs the codec-specific decompression, returning the
+// decompressed bytes. dst is the starting []byte for codecs that decode
+// directly into a slice (snappy, zstd). out is a pooled *bytes.Buffer
+// for codecs that stream through io.Copy (gzip, lz4); when nil (user-
+// pooled path), a temporary buffer wrapping dst is created for those
+// codecs.
+func (d *decompressor) decompress(dst []byte, out *bytes.Buffer, src []byte, codecType CompressionCodecType) ([]byte, error) {
 	switch codecType {
 	case CodecGzip:
-		ungz := d.ungzPool.Get().(*gzip.Reader)
-		defer d.ungzPool.Put(ungz)
-		if err := ungz.Reset(bytes.NewReader(src)); err != nil {
-			return nil, err
-		}
-		if n, err := io.Copy(out, io.LimitReader(ungz, maxDecompressedSize+1)); err != nil {
-			return nil, err
-		} else if n > maxDecompressedSize {
-			return nil, errDecompressedTooLarge
-		}
-		return rfn(), nil
+		return d.decompressGzip(dst, out, src)
 	case CodecSnappy:
-		if len(src) > 16 && bytes.HasPrefix(src, xerialPfx) {
-			// Decode into the pooled destination when one exists;
-			// this path previously ignored the pool's Get entirely
-			// (fresh allocation every batch, and the Get'd slice was
-			// orphaned: never used, never put back).
-			var xdst []byte
-			if userPooled {
-				xdst = out.Bytes()
-			}
-			return xerialDecode(xdst, src)
-		}
-		// The decoded length is read from the header and allocated up
-		// front; check the claim before decoding.
-		if l, err := s2.DecodedLen(src); err != nil {
-			return nil, err
-		} else if int64(l) > maxDecompressedSize {
-			return nil, errDecompressedTooLarge
-		}
-		decoded, err := s2.Decode(out.Bytes(), src)
-		if err != nil {
-			return nil, err
-		}
-		if userPooled {
-			return decoded, nil
-		}
-		return slices.Clone(decoded), nil
+		return decompressSnappy(dst, src)
 	case CodecLz4:
-		unlz4 := d.unlz4Pool.Get().(*lz4.Reader)
-		defer d.unlz4Pool.Put(unlz4)
-		unlz4.Reset(bytes.NewReader(src))
-		if n, err := io.Copy(out, io.LimitReader(unlz4, maxDecompressedSize+1)); err != nil {
-			return nil, err
-		} else if n > maxDecompressedSize {
-			return nil, errDecompressedTooLarge
-		}
-		return rfn(), nil
+		return d.decompressLz4(dst, out, src)
 	case CodecZstd:
-		unzstd := d.unzstdPool.Get().(*zstdDecoder)
-		defer d.unzstdPool.Put(unzstd)
-		decoded, err := unzstd.inner.DecodeAll(src, out.Bytes())
-		if err != nil {
-			return nil, err
-		}
-		if userPooled {
-			return decoded, nil
-		}
-		return slices.Clone(decoded), nil
+		return d.decompressZstd(dst, src)
 	default:
 		return nil, errors.New("unknown compression codec")
 	}
+}
+
+func (d *decompressor) decompressGzip(dst []byte, out *bytes.Buffer, src []byte) ([]byte, error) {
+	ungz := d.ungzPool.Get().(*gzip.Reader)
+	defer d.ungzPool.Put(ungz)
+	if err := ungz.Reset(bytes.NewReader(src)); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = bytes.NewBuffer(dst)
+	}
+	if n, err := io.Copy(out, io.LimitReader(ungz, maxDecompressedSize+1)); err != nil {
+		return nil, err
+	} else if n > maxDecompressedSize {
+		return nil, errDecompressedTooLarge
+	}
+	return out.Bytes(), nil
+}
+
+func decompressSnappy(dst, src []byte) ([]byte, error) {
+	if len(src) > 16 && bytes.HasPrefix(src, xerialPfx) {
+		return xerialDecode(dst, src)
+	}
+	// The decoded length is read from the header and allocated up
+	// front; check the claim before decoding.
+	if l, err := s2.DecodedLen(src); err != nil {
+		return nil, err
+	} else if int64(l) > maxDecompressedSize {
+		return nil, errDecompressedTooLarge
+	}
+	return s2.Decode(dst, src)
+}
+
+func (d *decompressor) decompressLz4(dst []byte, out *bytes.Buffer, src []byte) ([]byte, error) {
+	unlz4 := d.unlz4Pool.Get().(*lz4.Reader)
+	defer d.unlz4Pool.Put(unlz4)
+	unlz4.Reset(bytes.NewReader(src))
+	if out == nil {
+		out = bytes.NewBuffer(dst)
+	}
+	if n, err := io.Copy(out, io.LimitReader(unlz4, maxDecompressedSize+1)); err != nil {
+		return nil, err
+	} else if n > maxDecompressedSize {
+		return nil, errDecompressedTooLarge
+	}
+	return out.Bytes(), nil
+}
+
+func (d *decompressor) decompressZstd(dst, src []byte) ([]byte, error) {
+	unzstd := d.unzstdPool.Get().(*zstdDecoder)
+	defer d.unzstdPool.Put(unzstd)
+	return unzstd.inner.DecodeAll(src, dst)
 }
 
 var xerialPfx = []byte{130, 83, 78, 65, 80, 80, 89, 0}
