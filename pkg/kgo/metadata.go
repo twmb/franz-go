@@ -815,16 +815,14 @@ func (cl *Client) mergeTopicPartitions(
 
 	// Topic IDs are random and never reused, so a new ID for a name we
 	// hold means the topic was deleted and recreated. We adopt an ID the
-	// topic never held immediately; a partition being consumed restarts
-	// below. We refuse an ID the topic held previously until the ID we
-	// hold has been rejected recreationRejectionLimit times: a broker
-	// that has not yet learned of the recreation still reports the old
-	// ID.
+	// topic never held immediately: a partition being consumed restarts
+	// below, and one being produced to continues under the new ID. We
+	// refuse an ID the topic held previously until the ID we hold has
+	// been rejected recreationRejectionLimit times: a broker that has
+	// not yet learned of the recreation still reports the old ID.
 	var recreated bool
 	switch {
-	case kind == partitionKindProduce,
-		r.id == lv.id,
-		lv.id == noID:
+	case r.id == lv.id, lv.id == noID: // same ID, or no ID yet: copy the ID over
 		lv.id = r.id
 	case r.id == noID:
 		// A broker that reports no ID cannot tell us whether the topic
@@ -839,15 +837,23 @@ func (cl *Client) mergeTopicPartitions(
 		// Share cursors keep their ID: migrateShareCursorTo copies the
 		// cursor. Share consuming does not restart on a recreation.
 		lv.id = r.id
-	case lv.priorIDs.has(r.id) && !lv.unknownIDLimitReached():
+	case lv.priorIDs.has(r.id) && !lv.unknownIDLimitReached(kind):
 		cl.cfg.logger.Log(LogLevelDebug, "metadata update reports a topic ID this topic held previously, ignoring update until our ID is rejected",
 			"topic", topic,
 			"reported_id", topicID(r.id),
 			"our_id", topicID(lv.id),
 		)
+		lv.clearFailing(kind)
 		return
 	default:
-		cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID",
+		what := "topic recreation detected, adopting the new topic ID"
+		switch kind {
+		case partitionKindProduce:
+			what += " for producing"
+		case partitionKindConsume:
+			what += " for consuming"
+		}
+		cl.cfg.logger.Log(LogLevelInfo, what,
 			"topic", topic,
 			"old_id", topicID(lv.id),
 			"new_id", topicID(r.id),
@@ -939,6 +945,14 @@ func (cl *Client) mergeTopicPartitions(
 		}
 
 		switch kind {
+		case partitionKindProduce:
+			// A recreated topic's leader epoch restarts from 0, so it is
+			// often below the old topic's. We take the ID before the
+			// epoch comparison below, which would otherwise keep the old
+			// information and leave this partition producing under an ID
+			// the topic no longer has.
+			oldTP.records.setTopicIDClearFailing(lv.id)
+
 		case partitionKindConsume:
 			// A recreated topic's leader epoch restarts from 0, so it
 			// is often below the old topic's. The swap comes first so
@@ -1052,8 +1066,17 @@ func (cl *Client) mergeTopicPartitions(
 			}
 			switch kind {
 			case partitionKindProduce:
+				// A partition being produced to takes the topic's ID and
+				// clears its failing state under one lock; the next
+				// request goes out under the ID. A recreated topic's log
+				// has no producer state, so the broker accepts our next
+				// sequence number, or, from KAFKA-15591, rejects it as
+				// out of order on the never-written partition. That
+				// rejection is the recreation and not data loss: we bump
+				// the producer epoch and restart the sequence numbers. A
+				// partition skipped above, for a load error, takes the
+				// ID on the next update that merges it.
 				newTP.records = oldTP.records
-				newTP.records.clearFailing() // always clear failing state for producing after meta update
 			case partitionKindShare:
 				newTP.shareCursor = oldTP.shareCursor
 			default:
@@ -1072,7 +1095,9 @@ func (cl *Client) mergeTopicPartitions(
 			}
 			switch kind {
 			case partitionKindProduce:
-				oldTP.migrateProductionTo(newTP) // migration clears failing state
+				// The ID was taken above; the migration moves the sink
+				// and clears the failing state.
+				oldTP.migrateProductionTo(newTP, lv.id)
 			case partitionKindShare:
 				oldTP.migrateShareCursorTo(cl, newTP)
 			default:
