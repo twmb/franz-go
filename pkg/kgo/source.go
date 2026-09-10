@@ -1384,10 +1384,15 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				addList := func(replica int32, log bool) {
 					if s.cl.cfg.resetOffset.noReset {
 						keep = true
-					} else if !c.lastConsumedTime.IsZero() {
+					} else if partOffset.offset >= 0 && !c.lastConsumedTime.IsZero() {
+						// We were consuming and the log changed under us, so rather than follow the reset policy
+						// we resume by the last consumed timestamp, bounded within the log and never ahead of
+						// where we were; see listOffsetsForBrokerLoad. A cursor pinned at -1 by an epoch
+						// validation has no offset to bound and takes the reset policy below.
 						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-							replica: replica,
-							Offset:  NewOffset().AfterMilli(c.lastConsumedTime.UnixMilli()),
+							replica:   replica,
+							ooorMilli: c.lastConsumedTime.UnixMilli(),
+							Offset:    NewOffset().At(partOffset.offset),
 						})
 						if log {
 							s.cl.cfg.logger.Log(LogLevelWarn, "received OFFSET_OUT_OF_RANGE, resetting to the nearest offset; either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming, or the broker has lost data and has not yet transferred leadership",

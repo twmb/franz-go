@@ -1492,6 +1492,11 @@ type offsetLoadMap map[string]map[int32]offsetLoad
 // to directly use if a cursor had a preferred replica.
 type offsetLoad struct {
 	replica int32 // -1 means leader
+	// ooorMilli is non-zero when we are resetting a cursor that received
+	// OFFSET_OUT_OF_RANGE while consuming: the timestamp of the last
+	// record it consumed. The offset itself is the one that was out of
+	// range. See listOffsetsForBrokerLoad.
+	ooorMilli int64
 	Offset
 }
 
@@ -2330,14 +2335,98 @@ func (l *loadedOffsets) addAll(as []loadedOffset) loadedOffsets {
 	return *l
 }
 
+// alignListResps prunes two ListOffsets responses to the topics and partitions
+// they have in common, sorted, so that the same index in either response is the
+// same partition. A partition erroring in one keeps that error in both.
+func alignListResps(a, b *kmsg.ListOffsetsResponse) {
+	for _, r := range []*kmsg.ListOffsetsResponse{
+		a,
+		b,
+	} {
+		ts := r.Topics
+		sort.Slice(ts, func(i, j int) bool {
+			return ts[i].Topic < ts[j].Topic
+		})
+		for i := range ts {
+			ps := ts[i].Partitions
+			sort.Slice(ps, func(i, j int) bool {
+				return ps[i].Partition < ps[j].Partition
+			})
+		}
+	}
+
+	lt := a.Topics
+	rt := b.Topics
+	lkeept := lt[:0]
+	rkeept := rt[:0]
+	// Over each response, we only keep the topic if the topics match.
+	for len(lt) > 0 && len(rt) > 0 {
+		if lt[0].Topic < rt[0].Topic {
+			lt = lt[1:]
+			continue
+		}
+		if rt[0].Topic < lt[0].Topic {
+			rt = rt[1:]
+			continue
+		}
+		// As well, for topics that match, we only keep partitions that
+		// match. In this case, we also want both partitions to be
+		// error free, otherwise we keep an error on both. If one has
+		// old style offsets, both must.
+		lp := lt[0].Partitions
+		rp := rt[0].Partitions
+		lkeepp := lp[:0]
+		rkeepp := rp[:0]
+		for len(lp) > 0 && len(rp) > 0 {
+			if lp[0].Partition < rp[0].Partition {
+				lp = lp[1:]
+				continue
+			}
+			if rp[0].Partition < lp[0].Partition {
+				rp = rp[1:]
+				continue
+			}
+			if len(lp[0].OldStyleOffsets) > 0 && len(rp[0].OldStyleOffsets) == 0 ||
+				len(lp[0].OldStyleOffsets) == 0 && len(rp[0].OldStyleOffsets) > 0 {
+				lp = lp[1:]
+				rp = rp[1:]
+				continue
+			}
+			if lp[0].ErrorCode != 0 {
+				rp[0].ErrorCode = lp[0].ErrorCode
+			} else if rp[0].ErrorCode != 0 {
+				lp[0].ErrorCode = rp[0].ErrorCode
+			}
+			lkeepp = append(lkeepp, lp[0])
+			rkeepp = append(rkeepp, rp[0])
+			lp = lp[1:]
+			rp = rp[1:]
+		}
+		// Now we update the partitions in the topic we are keeping,
+		// and keep our topic.
+		lt[0].Partitions = lkeepp
+		rt[0].Partitions = rkeepp
+		lkeept = append(lkeept, lt[0])
+		rkeept = append(rkeept, rt[0])
+		lt = lt[1:]
+		rt = rt[1:]
+	}
+	// Finally, update each response with the topics we kept. The shapes
+	// and indices are the same.
+	a.Topics = lkeept
+	b.Topics = rkeept
+}
+
 func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, tps *topicsPartitions, results chan<- loadedOffsets) {
 	loaded := loadedOffsets{broker: broker.meta.NodeID, loadType: loadTypeList}
 
-	req1, req2 := load.buildListReq(cl.cfg.isolationLevel)
+	req1, req2, req3 := load.buildListReq(cl.cfg.isolationLevel)
 	var (
 		wg     sync.WaitGroup
 		kresp2 kmsg.Response
 		err2   error
+		kresp3 kmsg.Response
+		err3   error
 	)
 	if req2 != nil {
 		wg.Add(1)
@@ -2346,12 +2435,22 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 			kresp2, err2 = broker.waitResp(ctx, req2)
 		}()
 	}
+	if req3 != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			kresp3, err3 = broker.waitResp(ctx, req3)
+		}()
+	}
 	kresp, err := broker.waitResp(ctx, req1)
 	wg.Wait()
-	if err != nil || err2 != nil {
-		if err == nil {
-			err = err2
-		}
+	if err == nil {
+		err = err2
+	}
+	if err == nil {
+		err = err3
+	}
+	if err != nil {
 		results <- loaded.addAll(load.errToLoaded(err))
 		return
 	}
@@ -2364,86 +2463,18 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 	// shapes of both responses match, and the topic & partition at each
 	// index matches. Anything that does not match is skipped (and would be
 	// a bug from Kafka), and we at the end return UnknownTopicOrPartition.
-	var resp2 *kmsg.ListOffsetsResponse
+	// With a by-time req as well, three pairwise passes leave all three
+	// responses the same shape: the last pass prunes the first response
+	// down to whatever the by-time pass removed from the second.
+	var resp2, resp3 *kmsg.ListOffsetsResponse
 	if req2 != nil {
 		resp2 = kresp2.(*kmsg.ListOffsetsResponse)
-		for _, r := range []*kmsg.ListOffsetsResponse{
-			resp,
-			resp2,
-		} {
-			ts := r.Topics
-			sort.Slice(ts, func(i, j int) bool {
-				return ts[i].Topic < ts[j].Topic
-			})
-			for i := range ts {
-				ps := ts[i].Partitions
-				sort.Slice(ps, func(i, j int) bool {
-					return ps[i].Partition < ps[j].Partition
-				})
-			}
-		}
-
-		lt := resp.Topics
-		rt := resp2.Topics
-		lkeept := lt[:0]
-		rkeept := rt[:0]
-		// Over each response, we only keep the topic if the topics match.
-		for len(lt) > 0 && len(rt) > 0 {
-			if lt[0].Topic < rt[0].Topic {
-				lt = lt[1:]
-				continue
-			}
-			if rt[0].Topic < lt[0].Topic {
-				rt = rt[1:]
-				continue
-			}
-			// As well, for topics that match, we only keep
-			// partitions that match. In this case, we also want
-			// both partitions to be error free, otherwise we keep
-			// an error on both. If one has old style offsets,
-			// both must.
-			lp := lt[0].Partitions
-			rp := rt[0].Partitions
-			lkeepp := lp[:0]
-			rkeepp := rp[:0]
-			for len(lp) > 0 && len(rp) > 0 {
-				if lp[0].Partition < rp[0].Partition {
-					lp = lp[1:]
-					continue
-				}
-				if rp[0].Partition < lp[0].Partition {
-					rp = rp[1:]
-					continue
-				}
-				if len(lp[0].OldStyleOffsets) > 0 && len(rp[0].OldStyleOffsets) == 0 ||
-					len(lp[0].OldStyleOffsets) == 0 && len(rp[0].OldStyleOffsets) > 0 {
-					lp = lp[1:]
-					rp = rp[1:]
-					continue
-				}
-				if lp[0].ErrorCode != 0 {
-					rp[0].ErrorCode = lp[0].ErrorCode
-				} else if rp[0].ErrorCode != 0 {
-					lp[0].ErrorCode = rp[0].ErrorCode
-				}
-				lkeepp = append(lkeepp, lp[0])
-				rkeepp = append(rkeepp, rp[0])
-				lp = lp[1:]
-				rp = rp[1:]
-			}
-			// Now we update the partitions in the topic we are
-			// keeping, and keep our topic.
-			lt[0].Partitions = lkeepp
-			rt[0].Partitions = rkeepp
-			lkeept = append(lkeept, lt[0])
-			rkeept = append(rkeept, rt[0])
-			lt = lt[1:]
-			rt = rt[1:]
-		}
-		// Finally, update each response with the topics we kept. The
-		// shapes and indices are the same.
-		resp.Topics = lkeept
-		resp2.Topics = rkeept
+		alignListResps(resp, resp2)
+	}
+	if req3 != nil {
+		resp3 = kresp3.(*kmsg.ListOffsetsResponse)
+		alignListResps(resp2, resp3)
+		alignListResps(resp, resp2)
 	}
 
 	poffset := func(p *kmsg.ListOffsetsResponseTopicPartition) int64 {
@@ -2495,10 +2526,37 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 				p := &resp2.Topics[i].Partitions[j]
 				return poffset(p), p.LeaderEpoch
 			}
+			third := func() (int64, int32) {
+				p := &resp3.Topics[i].Partitions[j]
+				return poffset(p), p.LeaderEpoch
+			}
 
 			// We ensured the resp2 shape is as we want and has no
 			// error, so resp2 lookups are safe.
-			if loadPart.afterMilli {
+			if loadPart.ooorMilli != 0 {
+				// We were consuming at loadPart.at and fell out of range. We resume by the last consumed
+				// timestamp, never ahead of where we were, bounded within the log. Below the start, every record
+				// left is one we never consumed, so we resume at the start. Past the end, the broker lost data,
+				// and the timestamp is our best guess at where we were. In range means the log lost data and
+				// regrew under us: by-time re-reads what replaced our records rather than skipping them. If the
+				// by-time answer is ahead of us, the records from our offset up to it are stamped older than our
+				// last record; we never read them, so we keep our offset. If there is no by-time answer, every
+				// record left is stamped older than our last record, and we keep our offset for the same reason.
+				n := loadPart.at
+				start, startEpoch := offset, epoch
+				end, endEpoch := end()
+				byTime, byTimeEpoch := third()
+				offset, epoch = n, -1
+				if byTime >= 0 && byTime < n {
+					offset, epoch = byTime, byTimeEpoch
+				}
+				if offset < start {
+					offset, epoch = start, startEpoch
+				}
+				if offset > end {
+					offset, epoch = end, endEpoch
+				}
+			} else if loadPart.afterMilli {
 				// If after a milli, if the milli is after the
 				// end of a partition, the offset is -1. We use
 				// our end offset request: anything after the
@@ -2537,9 +2595,10 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 			}
 			// Every arm above yields a non-negative offset from a
 			// well-behaved broker: by-time listings exist only for
-			// afterMilli, whose -1 is replaced by the end listing,
-			// and the start/end/exact arms bound within the
-			// responses. A negative offset here means the broker
+			// afterMilli and for a reset after consuming, whose -1
+			// is replaced by the end listing and by the offset we
+			// were at, and the start/end/exact arms bound within
+			// the responses. A negative offset here means the broker
 			// violated the protocol; clamping to 0 (the old
 			// behavior) would silently re-consume the partition
 			// from the start. Surface the misbehavior and retry
@@ -2670,13 +2729,15 @@ func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load
 
 // In general this returns one request, but if the user is using exact offsets
 // rather than start/end, then we issue both the start and end requests to
-// ensure the user's requested offset is within bounds.
-func (o offsetLoadMap) buildListReq(isolationLevel int8) (r1, r2 *kmsg.ListOffsetsRequest) {
+// ensure the user's requested offset is within bounds. A load resetting after
+// an out of range fetch also issues a third request, listing by the
+// millisecond of the last record the cursor consumed.
+func (o offsetLoadMap) buildListReq(isolationLevel int8) (r1, r2, r3 *kmsg.ListOffsetsRequest) {
 	r1 = kmsg.NewPtrListOffsetsRequest()
 	r1.ReplicaID = -1
 	r1.IsolationLevel = isolationLevel
 	r1.Topics = make([]kmsg.ListOffsetsRequestTopic, 0, len(o))
-	var createEnd bool
+	var createEnd, createByTime bool
 	for topic, partitions := range o {
 		parts := make([]kmsg.ListOffsetsRequestTopicPartition, 0, len(partitions))
 		for partition, offset := range partitions {
@@ -2692,12 +2753,19 @@ func (o offsetLoadMap) buildListReq(isolationLevel int8) (r1, r2 *kmsg.ListOffse
 			// If we are using a relative offset, we potentially
 			// issue the end request because relative may shift us
 			// too far in the other direction.
+			//
+			// If we are resetting after falling out of range while
+			// consuming, we issue the by-time list as well: we
+			// resume by time, bounded by the start and the end.
 			timestamp := offset.at
 			if offset.afterMilli {
 				createEnd = true
 			} else if timestamp >= 0 || timestamp == -2 && offset.relative > 0 || timestamp == -1 && offset.relative < 0 {
 				timestamp = -2
 				createEnd = true
+			}
+			if offset.ooorMilli != 0 {
+				createByTime = true
 			}
 			p := kmsg.NewListOffsetsRequestTopicPartition()
 			p.Partition = partition
@@ -2728,7 +2796,31 @@ func (o offsetLoadMap) buildListReq(isolationLevel int8) (r1, r2 *kmsg.ListOffse
 		}
 	}
 
-	return r1, r2
+	// A reset after consuming also lists by the last consumed timestamp.
+	// The request keeps every partition in the batch, because
+	// alignListResps prunes a partition that is missing from any one
+	// response. Partitions that are not resetting list the end again,
+	// which we ignore.
+	if createByTime {
+		r3 = kmsg.NewPtrListOffsetsRequest()
+		*r3 = *r1
+		r3.Topics = slices.Clone(r1.Topics)
+		for i := range r1.Topics {
+			l := &r3.Topics[i]
+			r := &r1.Topics[i]
+			*l = *r
+			l.Partitions = slices.Clone(r.Partitions)
+			for i := range l.Partitions {
+				p := &l.Partitions[i]
+				p.Timestamp = -1
+				if milli := o[r.Topic][p.Partition].ooorMilli; milli != 0 {
+					p.Timestamp = milli
+				}
+			}
+		}
+	}
+
+	return r1, r2, r3
 }
 
 func (o offsetLoadMap) buildEpochReq() *kmsg.OffsetForLeaderEpochRequest {
