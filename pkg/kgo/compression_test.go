@@ -361,6 +361,56 @@ func BenchmarkCompress(b *testing.B) {
 	}
 }
 
+// benchDecompressPool implements PoolDecompressBytes with a pre-allocated
+// buffer, representative of a real pool that avoids per-call allocation.
+// Single-goroutine only (the benchmark does not run sub-benchmarks in
+// parallel).
+type benchDecompressPool struct {
+	buf []byte
+}
+
+func (p *benchDecompressPool) GetDecompressBytes([]byte, CompressionCodecType) []byte {
+	return p.buf[:0]
+}
+
+func (p *benchDecompressPool) PutDecompressBytes([]byte) {}
+
+func BenchmarkDecompressUserPool(b *testing.B) {
+	in := bytes.Repeat([]byte("abcdefghijklmno pqrs tuvwxy   z"), 10_000)
+	codecs := []struct {
+		name  string
+		codec CompressionCodecType
+	}{
+		{"snappy", CodecSnappy},
+		{"zstd", CodecZstd},
+		{"gzip", CodecGzip},
+		{"lz4", CodecLz4},
+	}
+	for _, tc := range codecs {
+		c, _ := DefaultCompressor(CompressionCodec{codec: tc.codec})
+		w := new(bytes.Buffer)
+		compressed, _ := c.Compress(w, in)
+		src := append([]byte(nil), compressed...)
+
+		pool := &benchDecompressPool{buf: make([]byte, 0, len(in)*2)}
+
+		b.Run(tc.name+"/pool", func(b *testing.B) {
+			d := DefaultDecompressor(pool)
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				d.Decompress(src, tc.codec)
+			}
+		})
+		b.Run(tc.name+"/nopool", func(b *testing.B) {
+			d := DefaultDecompressor()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				d.Decompress(src, tc.codec)
+			}
+		})
+	}
+}
+
 func BenchmarkDecompress(b *testing.B) {
 	in := bytes.Repeat([]byte("abcdefghijklmno pqrs tuvwxy   z"), 100)
 	for _, codec := range []CompressionCodecType{CodecGzip, CodecSnappy, CodecLz4, CodecZstd} {
