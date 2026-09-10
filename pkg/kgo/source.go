@@ -3085,6 +3085,25 @@ func (s *source) bumpShareSessionEpochIfCurrent(epoch int32) {
 
 func (s *source) removeShareCursor(c *shareCursor) {
 	s.share.mu.Lock()
+	s.removeShareCursorLocked(c)
+	s.share.mu.Unlock()
+	// We don't need to wake the source to send this as a forgotten
+	// partition, but it doesn't hurt.
+	s.maybeShareConsume()
+}
+
+// removeShareCursorSwappingID removes the cursor and gives it the recreated
+// topic's ID under one hold of the share mutex, so no read of topicID on
+// this source sees the write. See swapRecreatedShareCursorTo.
+func (s *source) removeShareCursorSwappingID(c *shareCursor, id [16]byte) {
+	s.share.mu.Lock()
+	s.removeShareCursorLocked(c)
+	c.topicID = id
+	s.share.mu.Unlock()
+	s.maybeShareConsume()
+}
+
+func (s *source) removeShareCursorLocked(c *shareCursor) {
 	if c.cursorsIdx != len(s.share.cursors)-1 {
 		s.share.cursors[c.cursorsIdx], s.share.cursors[len(s.share.cursors)-1] = s.share.cursors[len(s.share.cursors)-1], nil
 		s.share.cursors[c.cursorsIdx].cursorsIdx = c.cursorsIdx
@@ -3095,10 +3114,6 @@ func (s *source) removeShareCursor(c *shareCursor) {
 	if s.share.cursorsStart == len(s.share.cursors) {
 		s.share.cursorsStart = 0
 	}
-	s.share.mu.Unlock()
-	// We don't need to wake the source to send this as a forgotten
-	// partition, but it doesn't hurt.
-	s.maybeShareConsume()
 }
 
 func (s *source) addShareCursor(add *shareCursor) {

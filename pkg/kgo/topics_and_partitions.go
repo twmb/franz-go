@@ -565,6 +565,8 @@ func (d *topicPartitionsData) unknownIDLimitReached(kind partitionKind) bool {
 			n = tp.records.unknownIDFails()
 		case partitionKindConsume:
 			n = tp.cursor.unknownIDFails.Load()
+		case partitionKindShare:
+			n = tp.shareCursor.unknownIDFails.Load()
 		}
 		if n >= recreationRejectionLimit {
 			return true
@@ -851,6 +853,51 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	c.source.addCursor(c)
 	new.cursor = c
 	return oldID, true
+}
+
+// swapRecreatedShareCursorTo is the share side of swapRecreatedCursorTo.
+// Share positions and acquisition state live on the broker and were deleted
+// with the old topic; the new topic's partition starts where the group's
+// share.auto.offset.reset says, which is latest by default. The cursor takes
+// the new ID for fetching. An acknowledgment is sent under the ID its
+// records were fetched under, so an acknowledgment of the old topic's
+// records goes to the broker under the old ID. The broker answers
+// UNKNOWN_TOPIC_ID, we do not retry it, and you see that error in the ack
+// callback. Nothing is redelivered: the records were deleted.
+//
+// The old source's share session still holds an (old ID, partition) entry.
+// The next request to that broker forgets it, since createShareReq forgets
+// everything in the session that no cursor wants.
+func (tp *topicPartition) swapRecreatedShareCursorTo(cl *Client, new *topicPartition) {
+	c := tp.shareCursor
+	newID := new.shareCursor.topicID
+	new.shareCursor = c
+
+	// Same leave race as migrateShareCursorTo: we register as a share
+	// worker so that leave waits for us, and if the consumer is closing
+	// we skip the swap.
+	sc := cl.consumer.s
+	if !sc.incWorker() {
+		return
+	}
+	defer sc.decWorker()
+
+	cl.sinksAndSourcesMu.Lock()
+	sns := cl.sinksAndSources[new.leader]
+	cl.sinksAndSourcesMu.Unlock()
+
+	// The old source removes the cursor and takes the new ID in one hold
+	// of its share mutex, which orders the write against every read of
+	// topicID on that source. A cursor with no source is read by nobody,
+	// and addShareCursor below publishes the write to the new source.
+	if oldSource := c.source.Load(); oldSource != nil {
+		oldSource.removeShareCursorSwappingID(c, newID)
+	} else {
+		c.topicID = newID
+	}
+	c.unknownIDFails.Store(0)
+	c.source.Store(sns.source)
+	sns.source.addShareCursor(c)
 }
 
 func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) {

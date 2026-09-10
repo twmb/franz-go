@@ -816,7 +816,8 @@ func (cl *Client) mergeTopicPartitions(
 	// Topic IDs are random and never reused, so a new ID for a name we
 	// hold means the topic was deleted and recreated. We adopt an ID the
 	// topic never held immediately: a partition being consumed restarts
-	// below, and one being produced to continues under the new ID. We
+	// below, one being produced to continues under the new ID, and a
+	// share cursor continues on the new topic's share state. We
 	// refuse an ID the topic held previously until the ID we hold has
 	// been rejected recreationRejectionLimit times: a broker that has
 	// not yet learned of the recreation still reports the old ID.
@@ -833,10 +834,6 @@ func (cl *Client) mergeTopicPartitions(
 			"topic", topic,
 		)
 		retryWhy.add(topic, -1, errMissingTopicID)
-	case kind == partitionKindShare:
-		// Share cursors keep their ID: migrateShareCursorTo copies the
-		// cursor. Share consuming does not restart on a recreation.
-		lv.id = r.id
 	case lv.priorIDs.has(r.id) && !lv.unknownIDLimitReached(kind):
 		cl.cfg.logger.Log(LogLevelDebug, "metadata update reports a topic ID this topic held previously, ignoring update until our ID is rejected",
 			"topic", topic,
@@ -852,6 +849,8 @@ func (cl *Client) mergeTopicPartitions(
 			what += " for producing"
 		case partitionKindConsume:
 			what += " for consuming"
+		case partitionKindShare:
+			what += " for share consuming"
 		}
 		cl.cfg.logger.Log(LogLevelInfo, what,
 			"topic", topic,
@@ -976,6 +975,19 @@ func (cl *Client) mergeTopicPartitions(
 				if from, ok := oldTP.swapRecreatedCursorTo(newTP, css); ok {
 					swappedFrom, swapped = from, swapped+1
 				}
+				continue
+			}
+
+		case partitionKindShare:
+			// Share positions and acquisition state live on the broker
+			// and were deleted with the old topic, so the cursor takes
+			// the new ID and continues on the new topic's share state.
+			// A cursor that missed the update which adopted the ID, for
+			// a load error on its partition, is swapped once the broker
+			// rejects it, the same as a consuming cursor.
+			rejected := oldTP.shareCursor.topicID != lv.id && oldTP.shareCursor.unknownIDFails.Load() > 0
+			if recreated || rejected {
+				oldTP.swapRecreatedShareCursorTo(cl, newTP)
 				continue
 			}
 		}
