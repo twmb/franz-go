@@ -215,6 +215,45 @@ Kafka 0.10.0 introduced the ApiVersions request; if you are working with
 brokers older than that, you must use the kversions package. Use the
 MaxVersions option for the client if you do so.
 
+## Topic recreation
+
+A topic deleted and recreated under the same name is handled by the client:
+
+* Consumers restart from the new topic's beginning
+* Producers continue under the new topic's ID
+* Transactions that wrote to the old topic fail with `TRANSACTION_ABORTABLE`;
+  aborting recovers. Transactions on the new topic work as expected
+* Share consumers continue on the new topic's share state
+
+Detection needs topic IDs, and older brokers leave windows in which a consumer
+can skip records of the new topic:
+
+* Below 2.8 (released April 2021) there are no topic IDs, so the client cannot
+  detect a recreation. A consumer keeps its old offset and either skips the new
+  topic's first records or resets if the offset is out of range. A producer
+  keeps its sequence numbers
+* From 2.8 to 3.0, fetches carry topic names. Until the next metadata update
+  reports the new ID, a consumer fetches the new topic at its old offset. If
+  the new partition's leader epoch equals the one in the consumer's metadata
+  and the old offset is within the new log, the records before the old offset
+  are skipped. If the old offset is exactly the end of the new log, the fetch
+  is an ordinary empty poll, so nothing signals the recreation and the
+  partition stays idle until the next metadata refresh, up to MetadataMaxAge.
+  Any other leader epoch is rejected, and the rejection triggers the update
+  that detects the recreation
+* Below 4.2, offset commits and fetches carry topic names. Two windows:
+  * A commit already sent when the topic is deleted lands on the new topic if
+    the group coordinator already knows it. The next consumer of that partition
+    starts at that offset
+  * The coordinator deletes the old topic's commits when it applies the
+    deletion, which can lag the broker that reported the new ID. A partition
+    assigned in that lag, by a rebalance or a consumer starting up, fetches the
+    old commit. If its leader epoch exists in the new log, usually because both
+    topics are at epoch 0, consumption starts at the old offset: silently if
+    the offset is within the new log, and at the high watermark with
+    `ErrDataLoss` if it is past it. An epoch the new log does not have resets
+    to the configured start offset instead
+
 ## Metrics & logging
 
 **Note** there exists plug-in packages that allow you to easily add prometheus
