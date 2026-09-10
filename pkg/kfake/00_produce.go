@@ -239,6 +239,18 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					errCode = kerr.UnknownProducerID.Code
 				}
 
+				// KAFKA-15591: if a partition's log has never held a
+				// record, we accept only a first sequence of zero
+				// from a producer we have no state for. Otherwise a
+				// client can have two produces in flight to a just
+				// created partition. We can handle them out of order,
+				// and the earlier one is then lost with no error. A
+				// partition that once held records accepts any first
+				// sequence, even after the records are gone.
+				if errCode == 0 && c.rejectsNeverWrittenNonzeroSeq() && window != nil && !window.seen && b.FirstSequence != 0 && pd.highWatermark == 0 {
+					errCode = kerr.OutOfOrderSequenceNumber.Code
+				}
+
 				if errCode == 0 {
 					switch {
 					case window == nil && b.ProducerEpoch != -1:

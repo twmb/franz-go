@@ -2972,6 +2972,13 @@ func TestIssue1281(t *testing.T) {
 		return resp.Topics[0].Partitions[0].ErrorCode
 	}
 
+	// KAFKA-15591 accepts only a first sequence of zero from an unknown
+	// producer if the partition's log has never held a record, so seed the
+	// log with a non-idempotent batch first.
+	if errCode := produce(makeBatch(-1, -1, -1, 1)); errCode != 0 {
+		t.Fatalf("seeding the log: %v", kerr.ErrorForCode(errCode))
+	}
+
 	// Unknown PID 1000 epoch 2, non-zero firstSeq=10: should be accepted.
 	errCode := produce(makeBatch(1000, 2, 10, 3))
 	if errCode != 0 {

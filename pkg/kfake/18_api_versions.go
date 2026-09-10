@@ -171,6 +171,20 @@ func (c *Cluster) maxVersion(key int16) int16 {
 	return min(cfgMax, v.MaxVersion)
 }
 
+// rejectsNeverWrittenNonzeroSeq returns whether we model KAFKA-15591
+// (apache/kafka pull request 23234), which ships in Kafka 4.5. If a
+// partition's log has never held a record, we accept only a first sequence of
+// zero from a producer we have no state for.
+//
+// kversion has no 4.5 table yet, so no API version separates 4.5 from 4.2. An
+// uncapped cluster is how we model the newest broker, so it applies the check.
+// A cluster capped with MaxVersions is a released version that lacks the
+// check, so it does not. Once kversion gains the 4.5 API versions, gate on one
+// of them the way the 2.5 check gates on InitProducerID v3.
+func (c *Cluster) rejectsNeverWrittenNonzeroSeq() bool {
+	return c.cfg.maxVersions == nil
+}
+
 var (
 	apiVersionsMu   sync.Mutex
 	apiVersionsKeys = make(map[int16]kmsg.ApiVersionsResponseApiKey)
