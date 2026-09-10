@@ -7,6 +7,8 @@ package kfake
 import (
 	"context"
 	"errors"
+	"net"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -358,5 +360,137 @@ func TestProduceTimedOutRetriesOnBackoff(t *testing.T) {
 	// The timed-out append still landed, so the retry deduplicates.
 	if hwm := c.PartitionInfo(topic, 0).HighWatermark; hwm != 1 {
 		t.Fatalf("high watermark %d; want 1", hwm)
+	}
+}
+
+// A broker can answer NOT_LEADER_OR_FOLLOWER with a KIP-951 CurrentLeader
+// that names the leader we are already producing to at the epoch we already
+// have, or at an older epoch. That hint moves nothing, and staging it as a
+// move skipped both the retry wait and the metadata update, so every retry
+// went out at round trip speed until the record budget was gone.
+func TestProduceStaleLeaderHintBacksOff(t *testing.T) {
+	t.Parallel()
+	for _, idempotent := range []bool{false, true} {
+		for _, test := range []struct {
+			name        string
+			epochDelta  int32 // hinted epoch, relative to the one the client has
+			leaderDelta int32 // hinted leader, relative to the real one
+			immediate   int32 // retries that go out at once because the hint moved us
+		}{
+			{name: "same_epoch"},
+			{name: "older_epoch", epochDelta: -1},
+			{name: "same_epoch_other_leader", leaderDelta: 1},
+			{name: "newer_epoch_then_repeated", epochDelta: 1, immediate: 1},
+		} {
+			t.Run(test.name+"/idempotent="+strconv.FormatBool(idempotent), func(t *testing.T) {
+				t.Parallel()
+
+				const topic = "stale-hint"
+				const retries = 3
+				c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+				// Start at epoch 1 so that an older hint is still a valid epoch.
+				if err := c.MoveTopicPartition(topic, 0, 0); err != nil {
+					t.Fatal(err)
+				}
+
+				var backoffs atomic.Int32
+				opts := []kgo.Opt{
+					// Any request answered with a retryable error waits on
+					// RetryBackoffFn; leave produce as the only one that can.
+					kgo.DisableClientMetrics(),
+					kgo.RetryBackoffFn(func(int) time.Duration { backoffs.Add(1); return 10 * time.Millisecond }),
+					kgo.RecordRetries(retries),
+				}
+				if !idempotent {
+					opts = append(opts, kgo.DisableIdempotentWrite(), kgo.MaxProduceRequestsInflightPerBroker(1))
+				}
+				cl := newPlainClient(t, c, opts...)
+
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("warmup")}).FirstErr(); err != nil {
+					t.Fatal(err)
+				}
+				backoffs.Store(0)
+
+				pi := c.PartitionInfo(topic, 0)
+				host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
+				port, _ := strconv.Atoi(portStr)
+
+				var produces atomic.Int32
+				c.ControlKey(int16(kmsg.Produce), func(req kmsg.Request) (kmsg.Response, error, bool) {
+					c.KeepControl()
+					produces.Add(1)
+					r := req.ResponseKind().(*kmsg.ProduceResponse)
+					rt := kmsg.NewProduceResponseTopic()
+					rt.Topic = topic
+					rt.TopicID = req.(*kmsg.ProduceRequest).Topics[0].TopicID
+					rp := kmsg.NewProduceResponseTopicPartition()
+					rp.ErrorCode = kerr.NotLeaderForPartition.Code
+					rp.CurrentLeader.LeaderID = pi.Leader + test.leaderDelta
+					rp.CurrentLeader.LeaderEpoch = pi.Epoch + test.epochDelta
+					rt.Partitions = append(rt.Partitions, rp)
+					r.Topics = append(r.Topics, rt)
+					r.Brokers = []kmsg.ProduceResponseBroker{{NodeID: pi.Leader, Host: host, Port: int32(port)}}
+					return r, nil, true
+				})
+
+				err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("probe")}).FirstErr()
+				if !errors.Is(err, kerr.NotLeaderForPartition) {
+					t.Errorf("got err %v, want NOT_LEADER_OR_FOLLOWER", err)
+				}
+				if got := produces.Load(); got != retries+1 {
+					t.Errorf("got %d produce requests, want %d", got, retries+1)
+				}
+				// A hint that moves us retries at once; every other retry,
+				// including one for a same-epoch hint at another leader,
+				// waits exactly once. Exactly once also pins drain checking
+				// its backoff after taking an inflight slot, not before.
+				if want := int32(retries) - test.immediate; backoffs.Load() != want {
+					t.Errorf("got %d backoffs, want %d", backoffs.Load(), want)
+				}
+			})
+		}
+	}
+}
+
+// A hint that names a new leader still moves us and retries there at once.
+func TestProduceLeaderHintMovesWithoutBackoff(t *testing.T) {
+	t.Parallel()
+
+	const topic = "hint-move"
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic))
+	var backoffs atomic.Int32
+	cl := newPlainClient(t, c,
+		kgo.DisableClientMetrics(),
+		kgo.RetryBackoffFn(func(int) time.Duration { backoffs.Add(1); return time.Second }),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("warmup")}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	backoffs.Store(0)
+
+	old := c.PartitionInfo(topic, 0)
+	if err := c.MoveTopicPartition(topic, 0, (old.Leader+1)%2); err != nil {
+		t.Fatal(err)
+	}
+	var produces atomic.Int32
+	c.ControlKey(int16(kmsg.Produce), func(kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		produces.Add(1)
+		return nil, nil, false
+	})
+
+	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("probe")}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	if got := produces.Load(); got != 2 {
+		t.Errorf("got %d produce requests, want the rejected attempt and its retry", got)
+	}
+	if got := backoffs.Load(); got != 0 {
+		t.Errorf("got %d backoffs, want 0", got)
 	}
 }

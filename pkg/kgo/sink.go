@@ -270,8 +270,6 @@ func (s *sink) clearBackoff() {
 func (s *sink) drain() {
 	again := true
 	for again {
-		s.maybeBackoff()
-
 		sem := s.inflightSem.Load().(chan struct{})
 		select {
 		case sem <- struct{}{}:
@@ -279,6 +277,13 @@ func (s *sink) drain() {
 			s.drainState.hardFinish()
 			return
 		}
+
+		// We back off after taking our inflight slot, not before. A
+		// response arrives, triggers a backoff, and only then frees the
+		// slot we are waiting on, so a backoff checked before the wait
+		// is always one request out of date. Only one goroutine is ever
+		// in this loop, so holding the slot while we wait costs nothing.
+		s.maybeBackoff()
 
 		again = s.drainState.maybeFinish(s.produce(sem))
 	}
@@ -946,10 +951,10 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 
 	if len(req.batches.bs) > 0 {
 		s.cl.cfg.logger.Log(LogLevelError, "broker did not reply to all topics / partitions in the produce request! reenqueuing missing partitions", "broker", logID(s.nodeID))
-		s.handleRetryBatches(req.batches, nil, 0, true, false, "broker did not reply to all topics in produce request")
+		s.handleRetryBatches(req.batches, nil, req.backoffSeq, true, false, "broker did not reply to all topics in produce request")
 	}
 	if len(reqRetry.bs) > 0 {
-		s.handleRetryBatches(reqRetry, &kmove, 0, true, true, "produce request had retry batches")
+		s.handleRetryBatches(reqRetry, &kmove, req.backoffSeq, true, true, "produce request had retry batches")
 	}
 	if len(reqBackoff.bs) > 0 {
 		s.handleRetryBatches(reqBackoff, nil, req.backoffSeq, false, true, "produce request had timed out batches")
@@ -1344,6 +1349,14 @@ func (s *sink) handleRetryBatches(
 		// to backoff nor do we need to trigger a metadata update.
 		if kmove.hasRecBuf(batch.owner) {
 			numMoveBatches++
+			return
+		}
+
+		// The broker hinted a leader we are already using. We retry on
+		// the same sink, but we wait first: without this we resend as
+		// fast as the broker can reject us.
+		if kmove.hasStaleRecBuf(batch.owner) {
+			shouldBackoff = true
 			return
 		}
 
