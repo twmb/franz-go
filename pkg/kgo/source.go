@@ -204,6 +204,16 @@ type cursorOffset struct {
 	hwm int64
 }
 
+// lastConsumedMilli returns the millisecond of the last record we consumed,
+// or zero if we have consumed nothing. Resetting after an out of range fetch
+// resumes by this millisecond.
+func (o *cursorOffset) lastConsumedMilli() int64 {
+	if o.lastConsumedTime.IsZero() {
+		return 0
+	}
+	return o.lastConsumedTime.UnixMilli()
+}
+
 // use, for fetch requests, freezes a view of the cursorOffset.
 func (c *cursor) use() *cursorOffsetNext {
 	// A source using a cursor has exclusive access to the use field by
@@ -1384,11 +1394,10 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				addList := func(replica int32, log bool) {
 					if s.cl.cfg.resetOffset.noReset {
 						keep = true
-					} else if partOffset.offset >= 0 && !c.lastConsumedTime.IsZero() {
+					} else if !c.lastConsumedTime.IsZero() {
 						// We were consuming and the log changed under us, so rather than follow the reset policy
 						// we resume by the last consumed timestamp, bounded within the log and never ahead of
-						// where we were; see listOffsetsForBrokerLoad. A cursor pinned at -1 by an epoch
-						// validation has no offset to bound and takes the reset policy below.
+						// where we were; see listOffsetsForBrokerLoad.
 						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
 							replica:   replica,
 							ooorMilli: c.lastConsumedTime.UnixMilli(),
@@ -1444,6 +1453,9 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					if kip320 {
 						reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
 							replica: -1,
+							// If the validation answers UNDEFINED_EPOCH_OFFSET, the reset it issues is by the last
+							// consumed timestamp; see loadEpochsForBrokerLoad.
+							ooorMilli: c.lastConsumedMilli(),
 							Offset: Offset{
 								at:    partOffset.offset,
 								epoch: partOffset.lastConsumedEpoch,
@@ -1470,6 +1482,9 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				if partOffset.lastConsumedEpoch >= 0 {
 					reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
 						replica: -1,
+						// If the validation answers UNDEFINED_EPOCH_OFFSET, the reset it issues is by the last
+						// consumed timestamp; see loadEpochsForBrokerLoad.
+						ooorMilli: c.lastConsumedMilli(),
 						Offset: Offset{
 							at:    partOffset.offset,
 							epoch: partOffset.lastConsumedEpoch,

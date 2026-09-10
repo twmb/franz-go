@@ -686,6 +686,10 @@ func (old *topicPartition) migrateCursorTo( //nolint:revive // old/new naming ma
 		old.cursor.use()
 		css.reloadOffsets.addLoad(old.cursor.topic, old.cursor.partition, loadTypeEpoch, offsetLoad{
 			replica: -1,
+			// If the validation answers UNDEFINED_EPOCH_OFFSET, the reset it
+			// issues is by the last consumed timestamp; see
+			// loadEpochsForBrokerLoad.
+			ooorMilli: old.cursor.lastConsumedMilli(),
 			Offset: Offset{
 				at:    old.cursor.offset,
 				epoch: old.cursor.lastConsumedEpoch,

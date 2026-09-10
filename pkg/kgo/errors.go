@@ -244,6 +244,10 @@ var (
 	// broker misbehavior surfaces in polls; the load is still retried.
 	errNegativeListedOffset = errors.New("broker replied to a ListOffsets request with an invalid negative offset")
 
+	// errResetAfterUndefinedEpoch is our own signal to reset a cursor by
+	// time after an epoch validation could not answer.
+	errResetAfterUndefinedEpoch = errors.New("resetting by time after an undefined epoch offset")
+
 	errFetchNoProgress = errors.New("fetch response contained record batches but none contained or exceeded the requested offset")
 
 	// Injected as a fake errored fetch when an OffsetFetch response

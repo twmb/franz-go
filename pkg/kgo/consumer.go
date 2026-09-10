@@ -2102,7 +2102,7 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 		}
 	}
 
-	var reloads listOrEpochLoads
+	var reloads, followUps listOrEpochLoads
 	defer func() {
 		if !reloads.isEmpty() {
 			s.incWorker()
@@ -2136,8 +2136,12 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 	for received != issued {
 		loaded := <-results
 		received++
-		reloads.mergeFrom(s.handleListOrEpochResults(loaded))
+		reload, followUp := s.handleListOrEpochResults(loaded)
+		reloads.mergeFrom(reload)
+		followUps.mergeFrom(followUp)
 	}
+
+	followUps.loadWithSession(s, "reset by time after an undefined epoch offset")
 }
 
 // Called within a consumer session, this function handles results from list
@@ -2158,7 +2162,7 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 // is not much else we can do. RequestWith already retries, but returns when
 // the retry limit is hit. We will backoff 1s and then allow RequestWith to
 // continue requesting and backing off.
-func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reloads listOrEpochLoads) {
+func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reloads, followUps listOrEpochLoads) {
 	// This function can be running twice concurrently, so we need to guard
 	// listOrEpochLoadsLoading and usingCursors. For simplicity, we just
 	// guard this entire function.
@@ -2225,6 +2229,9 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 		case load.err == nil:
 			use()
 
+		case errors.Is(load.err, errResetAfterUndefinedEpoch):
+			followUps.addLoad(load.topic, load.partition, loadTypeList, load.request)
+
 		default: // from ErrorCode in a response, or broker request err, or request is canceled as our session is ending
 			reloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
 			if !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialNonTimeoutErr(load.err) && !isContextErr(load.err) { // non-retryable response error; signal such in a response
@@ -2242,7 +2249,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 		}
 	}
 
-	return reloads
+	return reloads, followUps
 }
 
 // Splits the loads into per-broker loads, mapping each partition to the broker
@@ -2689,24 +2696,23 @@ func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load
 			var err error
 			switch {
 			case rPartition.EndOffset < 0:
-				// KIP-320 UNDEFINED_EPOCH_OFFSET: a conformant broker
-				// answers endOffset -1 (and leaderEpoch -1) when its
-				// leader-epoch cache holds no record of the requested
-				// epoch - an empty or freshly-truncated cache, an unclean
-				// election to a replica with no epoch history, or an epoch
-				// newer than anything in the log. This is NOT data loss; the
-				// broker simply cannot tell us a truncation point. The old
-				// `EndOffset < offset` arm treated the -1 sentinel as
-				// "truncated to offset -1", surfacing a spurious ErrDataLoss
-				// and pinning the cursor at -1. Instead carry the sentinel
-				// through so the next fetch hits OFFSET_OUT_OF_RANGE and
-				// resets via the configured ConsumeResetOffset (or, under
-				// NoResetOffset, surfaces OOOR rather than a bogus data-loss
-				// error) - the same reset path the cursor already took,
-				// minus the false alarm. Matches the Java client, which
-				// resets per policy on this sentinel rather than comparing
-				// -1 against the validating position.
-				offset = rPartition.EndOffset
+				// KIP-320 UNDEFINED_EPOCH_OFFSET: the broker has no record of the epoch we asked about. Its epoch
+				// cache is empty, or ends before the epoch we consumed at: an unclean election to a replica
+				// without history, or a leader that diverged from the one we consumed from. Asking again gets
+				// the same answer, since a leader's cache only gains the epochs it writes itself. That is not
+				// data loss, but we can no longer trust our offset, so we reset exactly as an out of range fetch
+				// after consuming does: by the last consumed timestamp, never ahead of where we were.
+				loaded.add(loadedOffset{
+					topic:     topic,
+					partition: partition,
+					err:       errResetAfterUndefinedEpoch,
+					request: offsetLoad{
+						replica:   -1,
+						ooorMilli: loadPart.ooorMilli,
+						Offset:    NewOffset().At(offset),
+					},
+				})
+				continue
 			case rPartition.EndOffset < offset:
 				err = &ErrDataLoss{topic, partition, offset, loadPart.epoch, rPartition.EndOffset, rPartition.LeaderEpoch}
 				offset = rPartition.EndOffset
