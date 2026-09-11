@@ -2077,6 +2077,46 @@ const streamReserve = 96
 // batch while leaving int32 arithmetic comfortably safe.
 const streamMergeMaxUncompressed = 256 << 20
 
+// mergeResult carries the products of mergeSpan to spliceMerge.
+type mergeResult struct {
+	m        *recBatch // the merged batch
+	consumed int       // source batches fully consumed (the last may be split)
+	tail     *recBatch // remainder of a split source, or nil
+	aborted  bool      // true if a failure sweep invalidated the merge
+}
+
+// tryFit reports whether recWire uncompressed bytes can be added to the
+// batch without the compressed output exceeding limit.
+//
+// It tracks two quantities:
+//   - checkpoint: exact compressed length at the last flush (known)
+//   - sinceFlush: uncompressed bytes written since then (unknown)
+//
+// The pessimistic bound assumes sinceFlush bytes are incompressible. Only
+// when that bound says "might be full" does it flush the compressor to get
+// the real number. If the real number still says full, the batch is full.
+//
+// Returns (fits, demoted): demoted is true when a compressor error forces
+// fallback to uncompressed sizing.
+func (st *batchStream) tryFit(recWire, limit int) (fits, demoted bool) {
+	if st.uncompressed+recWire > streamMergeMaxUncompressed {
+		return false, false
+	}
+	if streamReserve+st.checkpoint+st.sinceFlush+recWire <= limit {
+		return true, false // pessimistic says it fits -- no flush needed
+	}
+	// Might be full -- flush to tighten the estimate.
+	if st.sc.flush() != nil {
+		// Effectively impossible for in-memory writes. Everything
+		// appended so far was admitted by worst case, so the batch is
+		// valid uncompressed; tell the caller to demote to legacy.
+		return false, true
+	}
+	st.checkpoint = st.sc.len()
+	st.sinceFlush = 0
+	return streamReserve+st.checkpoint+recWire <= limit, false
+}
+
 // releaseStream releases streaming-compression resources when a batch dies
 // (failed, aborted, or finished). Idempotent. Callers hold batch.mu when the
 // batch could concurrently be in a produce request's AppendTo; the
@@ -2620,49 +2660,71 @@ func (s *sink) mergeBacklogs() {
 // and sequence must never change (idempotence), and on retries it is resent
 // verbatim.
 func (recBuf *recBuf) mergeBacklog(cc *compressor, codec CompressionCodecType) {
-	// PHASE 1: steal.
-	recBuf.mu.Lock()
-	if recBuf.purged || recBuf.failing || len(recBuf.batches)-recBuf.batchDrainIdx < 2 {
-		recBuf.mu.Unlock()
+	span := recBuf.stealMergeSpan()
+	if span == nil {
 		return
 	}
-	stealIdx := recBuf.batchDrainIdx
+	result := recBuf.mergeSpan(span, cc, codec)
+	recBuf.spliceMerge(span, result)
+}
+
+// stealMergeSpan claims consecutive never-sent batches at the drain index by
+// marking them merging=true, which blocks admission appends and drains without
+// removing them from recBuf.batches (so a concurrent failure sweep still owns
+// their promises). Returns nil if there is nothing to merge.
+//
+// Acquires and releases recBuf.mu internally.
+func (recBuf *recBuf) stealMergeSpan() []*recBatch {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+	if recBuf.purged || recBuf.failing || len(recBuf.batches)-recBuf.batchDrainIdx < 2 {
+		return nil
+	}
 	var span []*recBatch
-	for _, b := range recBuf.batches[stealIdx:] {
+	for _, b := range recBuf.batches[recBuf.batchDrainIdx:] {
 		if b.frozen || b.merging || b.stream != nil {
 			break
 		}
 		span = append(span, b)
 	}
 	if len(span) < 2 {
-		recBuf.mu.Unlock()
-		return // nothing to merge with; draining stays byte-for-byte legacy
+		return nil // nothing to merge with; draining stays byte-for-byte legacy
 	}
 	for _, b := range span {
 		b.merging = true
 	}
-	recBuf.mu.Unlock()
+	return span
+}
 
-	// PHASE 2: merge, holding only the current source's batch.mu.
-	limit := int(recBuf.maxRecordBatchBytes)
-	m := recBuf.newStreamBatch(cc, codec)
-	st := m.stream
+// mergeSpan streams the span's records through a compressor into one batch
+// bounded by compressed size, deciding membership record by record. Each
+// source is read under its batch.mu (aborting if a failure sweep nil'd its
+// records). A cut mid-source moves the remaining records into a fresh tail
+// batch -- legal because the source was never sent and has no sequence
+// (sequences are assigned at tryAddBatch).
+//
+// No recBuf.mu is held; only individual source batch.mu's are taken one at
+// a time.
+func (recBuf *recBuf) mergeSpan(span []*recBatch, cc *compressor, codec CompressionCodecType) mergeResult {
 	var (
-		consumed int       // source batches consumed (the last may be split)
-		tail     *recBatch // remainder of a split source
-		aborted  = st == nil
+		limit = int(recBuf.maxRecordBatchBytes)
+		m     = recBuf.newStreamBatch(cc, codec)
+		st    = m.stream
+		r     mergeResult
 	)
-merge:
+
+	r.m = m
+	r.aborted = st == nil
 	for _, src := range span {
-		if aborted {
+		if r.aborted {
 			break
 		}
 		src.mu.Lock()
 		if src.records == nil {
 			// A failure sweep took the recBuf mid-merge; it owns every
-			// record's promise. Discard the merge below.
+			// record's promise. Discard the merge in spliceMerge.
 			src.mu.Unlock()
-			aborted = true
+			r.aborted = true
 			break
 		}
 		for ri, pr := range src.records {
@@ -2671,44 +2733,35 @@ merge:
 
 			var fits bool
 			switch {
-			case st != nil && st.uncompressed+recWire > streamMergeMaxUncompressed:
-				fits = false // cap uncompressed accumulation; see the const doc
 			case len(m.records) == 0:
 				fits = streamReserve+recWire <= limit
 			case st == nil:
-				// Demoted mid-merge: m is legacy; bound by uncompressed size.
+				// Demoted to legacy: bound by uncompressed size.
 				fits = int(m.wireLength)+recWire <= limit
-			case streamReserve+st.checkpoint+st.sinceFlush+recWire <= limit:
-				fits = true
 			default:
-				if st.sc.flush() != nil {
-					// Effectively impossible for in-memory writes. Everything
-					// appended so far was admitted by worst case, so m is
-					// valid uncompressed; demote it to legacy and re-check.
+				var demoted bool
+				fits, demoted = st.tryFit(recWire, limit)
+				if demoted {
 					m.releaseStream()
 					st = nil
 					fits = int(m.wireLength)+recWire <= limit
-				} else {
-					st.checkpoint = st.sc.len()
-					st.sinceFlush = 0
-					fits = streamReserve+st.checkpoint+recWire <= limit
 				}
 			}
 			if !fits {
-				// Cut before this record. Records ri.. of src move to a tail
-				// batch (recomputing their offset/timestamp deltas); the tail
-				// is unfrozen and seeds the next merge.
+				// Cut before this record. Records ri.. of src move to a
+				// tail batch (recomputing their offset/timestamp deltas);
+				// the tail is unfrozen and seeds the next merge.
 				if ri > 0 {
-					tail = recBuf.newRecordBatch()
+					r.tail = recBuf.newRecordBatch()
 					for _, tpr := range src.records[ri:] {
-						tnums := tail.calculateRecordNumbers(tpr.Record)
-						tail.appendRecord(tpr, tnums)
+						tnums := r.tail.calculateRecordNumbers(tpr.Record)
+						r.tail.appendRecord(tpr, tnums)
 						tpr.setLengthAndTimestampDelta(tnums.lengthField, tnums.tsDelta)
 					}
-					consumed++ // src is split across m and tail
+					r.consumed++ // src is split across m and tail
 				}
 				src.mu.Unlock()
-				break merge
+				return r
 			}
 
 			m.appendRecord(pr, nums)
@@ -2725,23 +2778,31 @@ merge:
 			}
 		}
 		src.mu.Unlock()
-		consumed++
+		r.consumed++
 	}
+	return r
+}
 
-	// PHASE 3: splice. Validation is anchored on the CURRENT drain index
-	// rather than the steal-time one: a produce response completing during
-	// the merge pops finished front batches and shifts every index left,
-	// which moves the span without touching it - the span is still valid
-	// exactly when it sits, in order and unfrozen, at the head of what is
-	// left to drain. Only a failure sweep (batches replaced/nil'd) or a
-	// retry rewind (drain head now a frozen batch) invalidates the merge.
+// spliceMerge validates that the stolen span is still intact and untouched,
+// then replaces the consumed sources with the merged batch (+ tail). On any
+// interference (failure sweep, retry rewind, concurrent freeze) the merge is
+// discarded and source record stamps are restored.
+//
+// Validation is anchored on the CURRENT drain index rather than the steal-time
+// one: a produce response completing during the merge pops finished front
+// batches and shifts every index left, which moves the span without touching
+// it -- the span is still valid exactly when it sits, in order and unfrozen,
+// at the head of what is left to drain.
+//
+// Acquires recBuf.mu for its duration.
+func (recBuf *recBuf) spliceMerge(span []*recBatch, r mergeResult) {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
 	for _, b := range span {
 		b.merging = false
 	}
 	spliceIdx := recBuf.batchDrainIdx
-	valid := !aborted && consumed > 0 &&
+	valid := !r.aborted && r.consumed > 0 &&
 		!recBuf.purged &&
 		len(recBuf.batches) >= spliceIdx+len(span)
 	if valid {
@@ -2753,7 +2814,7 @@ merge:
 		}
 	}
 	if !valid {
-		// Phase 2 re-stamped the span records' stored length/timestamp
+		// mergeSpan re-stamped the span records' stored length/timestamp
 		// deltas to merge-relative values as it serialized them. The merge
 		// is being discarded, so the sources will drain as-is on the legacy
 		// path, which serializes from those stored stamps: restore them to
@@ -2764,25 +2825,25 @@ merge:
 			src.restoreRecordStamps()
 			src.mu.Unlock()
 		}
-		m.releaseStream()
-		recBuf.cl.prsPool.put(m.records)
-		if tail != nil {
-			recBuf.cl.prsPool.put(tail.records)
+		r.m.releaseStream()
+		recBuf.cl.prsPool.put(r.m.records)
+		if r.tail != nil {
+			recBuf.cl.prsPool.put(r.tail.records)
 		}
 		return
 	}
 	// The consumed sources' record slices were fully copied into m (and
 	// tail); with the span validated untouched, nothing else references them.
-	for _, b := range span[:consumed] {
+	for _, b := range span[:r.consumed] {
 		recBuf.cl.prsPool.put(b.records)
 	}
-	keep := span[consumed:]
+	keep := span[r.consumed:]
 	rest := recBuf.batches[spliceIdx+len(span):]
 	nb := make([]*recBatch, 0, spliceIdx+2+len(keep)+len(rest))
 	nb = append(nb, recBuf.batches[:spliceIdx]...)
-	nb = append(nb, m)
-	if tail != nil {
-		nb = append(nb, tail)
+	nb = append(nb, r.m)
+	if r.tail != nil {
+		nb = append(nb, r.tail)
 	}
 	nb = append(nb, keep...)
 	recBuf.batches = append(nb, rest...)
