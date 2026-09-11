@@ -1604,18 +1604,16 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 //	NewOffset().AtEnd()       == auto.offset.reset "latest"
 //	NewOffset().AtCommitted() == auto.offset.reset "none"
 //
-// Be sure to check the documentation for [ConsumeResetOffset], especially if
-// you rely on this option as the reset offset as well.
+// This option sets the start offset only. [ConsumeResetOffset] is
+// independent, and setting this option does not change it. The reverse does
+// not hold: setting ConsumeResetOffset and not this option sets both.
 func ConsumeStartOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.startOffset, cfg.setStartOffset = offset, true }}
 }
 
 // ConsumeResetOffset sets the offset to reset to if the client ever sees
-// OffsetOutOfRange while fetching. If you do not set [ConsumeStartOffset],
-// this is also the offset to start consuming from when consuming a partition
-// for the first time. The default is NewOffset().AtStart(), i.e., reset to the
-// earliest offset. If using this option, it is strongly recommended to also
-// set ConsumeStartOffset.
+// OffsetOutOfRange while fetching, overriding the default of
+// NewOffset().AtStart(), i.e. reset to the earliest offset.
 //
 // This option is *only* used if a consumer sees OffsetOutOfRange before it
 // has consumed anything from a partition. Once a partition has been consumed,
@@ -1650,8 +1648,9 @@ func ConsumeStartOffset(offset Offset) ConsumerOpt {
 // consuming when you encounter OffsetOutOfRange. It is highly recommended
 // to read the docs for all Offset methods.
 //
-// Be sure to check the documentation for [ConsumeStartOffset], especially if
-// you rely on this option as the start offset as well.
+// If you do not set [ConsumeStartOffset], this option sets it as well. The
+// reverse does not hold: setting ConsumeStartOffset leaves this option at its
+// default.
 func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset, cfg.setResetOffset = offset, true }}
 }
