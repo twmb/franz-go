@@ -2039,7 +2039,7 @@ func (recBuf *recBuf) newStreamBatch(cc *compressor, codec CompressionCodecType)
 	// needs none.
 	buf := new(bytes.Buffer)
 	if sc := cc.newStream(codec, buf); sc != nil {
-		b.stream = &batchStream{sc: sc, buf: buf, codec: codec}
+		b.stream = &batchStream{sc: sc, codec: codec}
 	}
 	return b
 }
@@ -2050,17 +2050,14 @@ func (recBuf *recBuf) newStreamBatch(cc *compressor, codec CompressionCodecType)
 // size, and the sealed compressed blob is written directly at drain (see
 // appendSealedTo), which also makes retries free of recompression.
 type batchStream struct {
-	sc    *streamCompressor
-	buf   *bytes.Buffer // sc writes here; blob aliases it once sealed
-	codec CompressionCodecType
-
-	checkpoint   int    // exact compressed length at the last flush
-	sinceFlush   int    // uncompressed record bytes written since the last flush
+	sc           *streamCompressor
+	codec        CompressionCodecType
 	uncompressed int    // total uncompressed record bytes in the batch
-	scratch      []byte // per-record serialization scratch, reused
+	blob         []byte // the finished compressed records payload; GC-owned
+}
 
-	sealed bool
-	blob   []byte // the finished compressed records payload; GC-owned
+func (b *batchStream) sealed() bool {
+	return b.blob != nil
 }
 
 // streamReserve is the worst-case wire overhead around a streaming batch's
@@ -2083,38 +2080,6 @@ type mergeResult struct {
 	consumed int       // source batches fully consumed (the last may be split)
 	tail     *recBatch // remainder of a split source, or nil
 	aborted  bool      // true if a failure sweep invalidated the merge
-}
-
-// tryFit reports whether recWire uncompressed bytes can be added to the
-// batch without the compressed output exceeding limit.
-//
-// It tracks two quantities:
-//   - checkpoint: exact compressed length at the last flush (known)
-//   - sinceFlush: uncompressed bytes written since then (unknown)
-//
-// The pessimistic bound assumes sinceFlush bytes are incompressible. Only
-// when that bound says "might be full" does it flush the compressor to get
-// the real number. If the real number still says full, the batch is full.
-//
-// Returns (fits, demoted): demoted is true when a compressor error forces
-// fallback to uncompressed sizing.
-func (st *batchStream) tryFit(recWire, limit int) (fits, demoted bool) {
-	if st.uncompressed+recWire > streamMergeMaxUncompressed {
-		return false, false
-	}
-	if streamReserve+st.checkpoint+st.sinceFlush+recWire <= limit {
-		return true, false // pessimistic says it fits -- no flush needed
-	}
-	// Might be full -- flush to tighten the estimate.
-	if st.sc.flush() != nil {
-		// Effectively impossible for in-memory writes. Everything
-		// appended so far was admitted by worst case, so the batch is
-		// valid uncompressed; tell the caller to demote to legacy.
-		return false, true
-	}
-	st.checkpoint = st.sc.len()
-	st.sinceFlush = 0
-	return streamReserve+st.checkpoint+recWire <= limit, false
 }
 
 // releaseStream releases streaming-compression resources when a batch dies
@@ -2707,10 +2672,13 @@ func (recBuf *recBuf) stealMergeSpan() []*recBatch {
 // a time.
 func (recBuf *recBuf) mergeSpan(span []*recBatch, cc *compressor, codec CompressionCodecType) mergeResult {
 	var (
-		limit = int(recBuf.maxRecordBatchBytes)
-		m     = recBuf.newStreamBatch(cc, codec)
-		st    = m.stream
-		r     mergeResult
+		r          mergeResult
+		m          = recBuf.newStreamBatch(cc, codec)
+		st         = m.stream
+		scratch    []byte // scratch space
+		limit      = int(recBuf.maxRecordBatchBytes)
+		sinceFlush int // uncompressed record bytes written since the last flush
+		checkpoint int // exact compressed length at the last flush
 	)
 
 	r.m = m
@@ -2738,13 +2706,22 @@ func (recBuf *recBuf) mergeSpan(span []*recBatch, cc *compressor, codec Compress
 			case st == nil:
 				// Demoted to legacy: bound by uncompressed size.
 				fits = int(m.wireLength)+recWire <= limit
+			case st.uncompressed+recWire > streamMergeMaxUncompressed:
+				fits = false // cap uncompressed accumulation; see the const doc
+			case streamReserve+checkpoint+sinceFlush+recWire <= limit:
+				fits = true
 			default:
-				var demoted bool
-				fits, demoted = st.tryFit(recWire, limit)
-				if demoted {
+				if st.sc.flush() != nil {
+					// Effectively impossible for in-memory writes. Everything
+					// appended so far was admitted by worst case, so m is
+					// valid uncompressed; demote it to legacy and re-check.
 					m.releaseStream()
 					st = nil
 					fits = int(m.wireLength)+recWire <= limit
+				} else {
+					checkpoint = st.sc.len()
+					sinceFlush = 0
+					fits = streamReserve+checkpoint+recWire <= limit
 				}
 			}
 			if !fits {
@@ -2767,13 +2744,13 @@ func (recBuf *recBuf) mergeSpan(span []*recBatch, cc *compressor, codec Compress
 			m.appendRecord(pr, nums)
 			pr.setLengthAndTimestampDelta(nums.lengthField, nums.tsDelta)
 			if st != nil {
-				st.scratch = pr.appendTo(st.scratch[:0], int32(len(m.records)-1))
-				if err := st.sc.write(st.scratch); err != nil {
+				scratch = pr.appendTo(scratch[:0], int32(len(m.records)-1))
+				if err := st.sc.write(scratch); err != nil {
 					m.releaseStream() // demote; m stays valid: admitted by worst case
 					st = nil
 				} else {
-					st.sinceFlush += len(st.scratch)
-					st.uncompressed += len(st.scratch)
+					sinceFlush += len(scratch)
+					st.uncompressed += len(scratch)
 				}
 			}
 		}
@@ -2877,7 +2854,7 @@ func (b *recBatch) restoreRecordStamps() {
 // wireLength/stream under it.
 func (b *recBatch) sealStream(produceVersion int32) {
 	st := b.stream
-	if st == nil || st.sealed {
+	if st == nil || st.sealed() {
 		return
 	}
 	// Ancient-broker guard: the codec was chosen against the produce version
@@ -2904,7 +2881,6 @@ func (b *recBatch) sealStream(produceVersion int32) {
 	}
 	b.mu.Lock()
 	st.blob = blob
-	st.sealed = true
 	b.wireLength = recordBatchOverhead + int32(len(blob))
 	b.mu.Unlock()
 }
@@ -3029,7 +3005,7 @@ func (b seqRecBatch) appendTo(
 	transactional bool,
 	compressor Compressor,
 ) (dst []byte, m ProduceBatchMetrics) { // named return so that our defer for flexible versions can modify it
-	if st := b.stream; st != nil && st.sealed {
+	if st := b.stream; st != nil && st.sealed() {
 		if version >= 7 || st.codec != CodecZstd {
 			return b.appendSealedTo(in, version, producerID, producerEpoch, transactional)
 		}
