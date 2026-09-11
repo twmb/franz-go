@@ -1632,7 +1632,7 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 			"balance_protocol", protocol,
 			"leader", true,
 		)
-		plan, err = g.balanceGroup(protocol, resp.Members, resp.SkipAssignment)
+		plan, err = g.balanceGroup(protocol, resp)
 	} else if leaderNoPlan {
 		g.leader.Store(true)
 		g.cfg.logger.Log(LogLevelInfo, "joined as leader but unable to balance group due to KIP-345 limitations",
