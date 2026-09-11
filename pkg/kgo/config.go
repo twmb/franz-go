@@ -681,7 +681,7 @@ func defaultCfg() cfg {
 		maxBytes:       50 << 20,
 		maxPartBytes:   1 << 20,
 		startOffset:    NewOffset().AtStart(),
-		resetOffset:    NewOffset().AtStart(),
+		resetOffset:    NewOffset().Lookback(30 * time.Second),
 		isolationLevel: 0,
 
 		maxConcurrentFetches: -1, // unbounded default
@@ -1611,42 +1611,41 @@ func ConsumeStartOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.startOffset, cfg.setStartOffset = offset, true }}
 }
 
-// ConsumeResetOffset sets the offset to reset to if the client ever sees
-// OffsetOutOfRange while fetching, overriding the default of
-// NewOffset().AtStart(), i.e. reset to the earliest offset.
+// ConsumeResetOffset sets where to resume a partition when the client detects
+// that the broker lost data at a point the client cannot determine,
+// overriding the default of NewOffset().Lookback(30*time.Second).
 //
-// This option is *only* used if a consumer sees OffsetOutOfRange before it
-// has consumed anything from a partition. Once a partition has been consumed,
-// OffsetOutOfRange resets to the nearest offset that still exists: the log
-// start if the consumer fell below it, otherwise the first offset at or after
-// the last consumed record's timestamp, never ahead of where the consumer
-// was, and never past the log end. If you want to disable offset resetting
-// entirely, you can use [NoResetOffset].
+// There are three such points: our offset is past the log end, our offset is
+// back within the log after an OffsetOutOfRange, or an OffsetForLeaderEpoch
+// validation replied that it has no record of the epoch we consumed at. Each
+// one also reports an [ErrDataLoss].
 //
-// If you use an exact or relative offsets and the offset ends up out of range,
-// the client chooses the nearest of either the log start offset or the log end
-// offset. For example, using At(3) when the partition starts at 8 results in
-// the partition being consumed from offset 8.
+// Two cases need no policy, and this option does not apply to them. If we fell
+// below the log start, we resume at the log start: every record that still
+// exists is one we never consumed. If we have consumed nothing from the
+// partition, the offset we asked for is simply not in the log, and we bound it
+// within the log the way an exact offset is bound everywhere else.
 //
-// The following determines the offset for when a partition is seen for the
-// first time, or reset while fetching:
-//
-//	at start?                         => reset to the log start offset
-//	at end?                           => reset to the log end offset
-//	at exact?                         => reset to an exact offset (3 means offset 3)
-//	relative?                         => reset to the above, + / - the relative amount
-//	exact/relative are out of bounds? => reset to the nearest boundary (start or end)
-//	after millisec?                   => reset to the first offset after millisec if one exists, else the log end offset
+// The default looks back thirty seconds from the timestamp of the last record
+// we consumed and resumes at the first record at or after that, never ahead of
+// where we were and never outside the log. The lookback exists because a
+// producer stamps a record when your application produces it: delivery latency
+// and retries put records in the log out of timestamp order, so the records
+// around where we were consuming span a range of timestamps rather than
+// sitting at one. Thirty seconds covers that spread. A longer duration
+// re-reads more, a shorter one risks skipping a record that was stamped early
+// and written late.
 //
 // To match Kafka's auto.offset.reset,
 //
-//	NewOffset().AtStart()     == auto.offset.reset "earliest"
-//	NewOffset().AtEnd()       == auto.offset.reset "latest"
-//	NewOffset().AtCommitted() == auto.offset.reset "none"
+//	NewOffset().Lookback(d) == "by_duration", the default with d of 30s
+//	NewOffset().AtStart()   == "earliest": never skip, at the cost of re-reading the log
+//	NewOffset().AtEnd()     == "latest": skip whatever was lost
+//	NoResetOffset()         == "none": the partition is fatal on any OffsetOutOfRange
 //
-// With the above, make sure to use [NoResetOffset] if you want to stop
-// consuming when you encounter OffsetOutOfRange. It is highly recommended
-// to read the docs for all Offset methods.
+// If you use an exact or relative offset, the client bounds it to the nearest
+// of the log start offset or the log end offset. For example, using At(3) when
+// the partition starts at 8 resumes at offset 8.
 //
 // If you do not set [ConsumeStartOffset], this option sets it as well. The
 // reverse does not hold: setting ConsumeStartOffset leaves this option at its

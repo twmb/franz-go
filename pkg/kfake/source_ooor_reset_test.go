@@ -155,9 +155,13 @@ func TestOutOfRangePastEndResetsByTime(t *testing.T) {
 		return resp, nil, true
 	})
 
+	// A zero lookback resumes at the last record consumed. The default
+	// thirty second lookback would rewind past every record here, since they
+	// are stamped a second apart.
 	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.ConsumeStartOffset(kgo.NewOffset().AtStart()),
+		kgo.ConsumeResetOffset(kgo.NewOffset().Lookback(0)),
 		kgo.DisableFetchSessions(),
 		kgo.FetchMaxWait(100*time.Millisecond),
 	)
@@ -276,9 +280,13 @@ func TestOutOfRangeInRangeNeverSkipsForward(t *testing.T) {
 				return resp, nil, true
 			})
 
+			// A zero lookback is the by-time reset this test is about: the
+			// reference is the last record consumed. AtStart would resume at
+			// the log start and never list by time at all.
 			cl := newPlainClient(t, c,
 				kgo.ConsumeTopics(topic),
-				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.ConsumeStartOffset(kgo.NewOffset().AtStart()),
+				kgo.ConsumeResetOffset(kgo.NewOffset().Lookback(0)),
 				kgo.DisableFetchSessions(),
 				kgo.FetchMaxWait(100*time.Millisecond),
 			)
