@@ -2038,7 +2038,7 @@ func (recBuf *recBuf) newStreamBatch(cc *compressor, codec CompressionCodecType)
 	// so pooling would require a proven-safe put-back point; GC ownership
 	// needs none.
 	buf := new(bytes.Buffer)
-	if sc := cc.stream(codec, buf); sc != nil {
+	if sc := cc.newStream(codec, buf); sc != nil {
 		b.stream = &batchStream{sc: sc, buf: buf, codec: codec}
 	}
 	return b
