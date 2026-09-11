@@ -1595,6 +1595,7 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 //	relative?                         => start at the above, + / - the relative amount
 //	exact/relative are out of bounds? => start at the nearest boundary (start or end)
 //	after millisec?                   => start at first offset after millisec if one exists, else log end offset
+//	lookback?                         => start at the first offset at or after now minus the lookback, else log end offset
 //
 // To match Kafka's auto.offset.reset which is used for both the start offset
 // and the reset offset,
