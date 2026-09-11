@@ -351,47 +351,55 @@ func (c *compressor) pickCodec(produceVersion int32) CompressionCodecType {
 // in large chunks, matching the efficiency of the legacy whole-batch Compress.
 var streamStagePool = sync.Pool{New: func() any { return bufio.NewWriterSize(nil, 32<<10) }}
 
+// writeFlushCloser is the common interface satisfied by gzip.Writer,
+// zstd.Encoder, and lz4.Writer -- the streamable codec writers.
+type writeFlushCloser interface {
+	io.Writer
+	Flush() error
+	Close() error
+}
+
 // streamCompressor incrementally compresses a batch's records into dst. It lets
 // the buffering path decide batch membership by compressed size (cut a batch
 // just before the compressed bytes would exceed the wire limit) instead of the
 // conservative uncompressed bound, packing ~ratio-x more records per request.
 type streamCompressor struct {
-	c     *compressor
-	codec CompressionCodecType
 	dst   *bytes.Buffer
 	stage *bufio.Writer
-	gz    *gzip.Writer
-	zstd  *zstdEncoder
-	lz4   *lz4.Writer
+	wr    writeFlushCloser // the codec writer (gzip/zstd/lz4)
+	rel   func()           // returns the codec writer to its pool
 }
 
 // stream returns a streaming compressor writing into dst for a streamable
 // codec, or nil otherwise. release must be called when finished.
-func (c *compressor) stream(codec CompressionCodecType, dst *bytes.Buffer) *streamCompressor {
-	sc := &streamCompressor{c: c, codec: codec, dst: dst}
+func (c *compressor) newStream(codec CompressionCodecType, dst *bytes.Buffer) *streamCompressor {
+	sc := &streamCompressor{dst: dst}
 	switch codec {
 	case CodecGzip:
-		sc.gz = c.gzPool.Get().(*gzip.Writer)
-		sc.gz.Reset(dst)
+		gz := c.gzPool.Get().(*gzip.Writer)
+		gz.Reset(dst)
+		sc.wr = gz
+		sc.rel = func() { c.gzPool.Put(gz) }
 	case CodecZstd:
-		sc.zstd = c.zstdPool.Get().(*zstdEncoder)
-		sc.zstd.inner.Reset(dst)
+		// The release closure resets the encoder to a nil writer before
+		// pooling: the pool's other consumer (Compress) uses EncodeAll
+		// without Resetting, matching how the pool's New creates encoders
+		// (zstd.NewWriter(nil, ...)), so we must hand back an encoder in
+		// that same EncodeAll-usable state.
+		ze := c.zstdPool.Get().(*zstdEncoder)
+		ze.inner.Reset(dst)
+		sc.wr = ze.inner
+		sc.rel = func() { ze.inner.Reset(nil); c.zstdPool.Put(ze) }
 	case CodecLz4:
-		sc.lz4 = c.lz4Pool.Get().(*lz4.Writer)
-		sc.lz4.Reset(dst)
+		lw := c.lz4Pool.Get().(*lz4.Writer)
+		lw.Reset(dst)
+		sc.wr = lw
+		sc.rel = func() { c.lz4Pool.Put(lw) }
 	default:
 		return nil
 	}
 	sc.stage = streamStagePool.Get().(*bufio.Writer)
-	switch codec {
-	case CodecGzip:
-		sc.stage.Reset(sc.gz)
-	case CodecZstd:
-		sc.stage.Reset(sc.zstd.inner)
-	case CodecLz4:
-		sc.stage.Reset(sc.lz4)
-	default: // unreachable: the switch above returned nil
-	}
+	sc.stage.Reset(sc.wr)
 	return sc
 }
 
@@ -406,16 +414,7 @@ func (sc *streamCompressor) flush() error {
 	if err := sc.stage.Flush(); err != nil {
 		return err
 	}
-	switch sc.codec {
-	case CodecGzip:
-		return sc.gz.Flush()
-	case CodecZstd:
-		return sc.zstd.inner.Flush()
-	case CodecLz4:
-		return sc.lz4.Flush()
-	default: // unreachable: stream() only builds streamable codecs
-		return nil
-	}
+	return sc.wr.Flush()
 }
 
 // len is the compressed byte count; meaningful only right after flush/finish.
@@ -428,43 +427,23 @@ func (sc *streamCompressor) finish() ([]byte, error) {
 	if err := sc.stage.Flush(); err != nil {
 		return nil, err
 	}
-	switch sc.codec {
-	case CodecGzip:
-		if err := sc.gz.Close(); err != nil {
-			return nil, err
-		}
-	case CodecZstd:
-		if err := sc.zstd.inner.Close(); err != nil {
-			return nil, err
-		}
-	case CodecLz4:
-		if err := sc.lz4.Close(); err != nil {
-			return nil, err
-		}
-	default: // unreachable: stream() only builds streamable codecs
+	if err := sc.wr.Close(); err != nil {
+		return nil, err
 	}
 	return sc.dst.Bytes(), nil
 }
 
-// release returns the underlying writer to its pool. The zstd encoder is Reset
-// to a nil writer first: the pool's other consumer (Compress) uses EncodeAll
-// without Resetting, exactly matching how the pool's New creates encoders
-// (zstd.NewWriter(nil, ...)), so we must hand back an encoder in that same
-// EncodeAll-usable state rather than one with a closed stream attached. gzip
-// needs no equivalent because Compress always Resets it before use.
+// release returns the staging buffer and codec writer to their pools via the
+// release closure bound at construction time.
 func (sc *streamCompressor) release() {
-	sc.stage.Reset(nil)
-	streamStagePool.Put(sc.stage)
-	sc.stage = nil
-	switch sc.codec {
-	case CodecGzip:
-		sc.c.gzPool.Put(sc.gz)
-	case CodecZstd:
-		sc.zstd.inner.Reset(nil)
-		sc.c.zstdPool.Put(sc.zstd)
-	case CodecLz4:
-		sc.c.lz4Pool.Put(sc.lz4)
-	default: // unreachable: stream() only builds streamable codecs
+	if sc.stage != nil {
+		sc.stage.Reset(nil)
+		streamStagePool.Put(sc.stage)
+		sc.stage = nil
+	}
+	if sc.rel != nil {
+		sc.rel()
+		sc.rel = nil
 	}
 }
 
