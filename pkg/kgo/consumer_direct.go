@@ -80,7 +80,8 @@ func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 			continue
 		}
 		partitions := topicPartitions.load()
-		if len(partitions.partitions) == 0 {
+		npartitions := partitions.npartitions()
+		if npartitions == 0 {
 			continue
 		}
 		// Partitions the recreation added, which we do not consume
@@ -92,8 +93,8 @@ func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 		if partitions.priorIDs.any() {
 			start = NewOffset().AtStart()
 		}
-		toUseTopic := make(map[int32]Offset, len(partitions.partitions))
-		for partition := range partitions.partitions {
+		toUseTopic := make(map[int32]Offset, npartitions)
+		for partition := range npartitions {
 			toUseTopic[int32(partition)] = start
 		}
 		toUse[topic] = toUseTopic

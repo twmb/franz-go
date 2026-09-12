@@ -2415,7 +2415,7 @@ func (g *groupConsumer) findNewAssignments() {
 	toChange := make(map[string]change, len(topics))
 	for topic, topicPartitions := range topics {
 		parts := topicPartitions.load()
-		numPartitions := len(parts.partitions)
+		numPartitions := parts.npartitions()
 		// If we are already using this topic, add that it changed if
 		// there are more partitions than we were using prior.
 		if used, exists := g.using[topic]; exists {

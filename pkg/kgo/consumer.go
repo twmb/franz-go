@@ -1524,6 +1524,10 @@ type offsetLoadMap map[string]map[int32]offsetLoad
 type offsetLoad struct {
 	replica     int32 // -1 means leader
 	revalidated bool  // whether we already refreshed metadata to tell data loss from a topic recreation
+	// nonexistentAt is when this load last failed because our metadata
+	// does not have the partition. The first such failure is quiet and
+	// later ones are reported; see nonexistentLoad.
+	nonexistentAt int64
 	// ooorMilli is non-zero when we are resetting a cursor that received
 	// OFFSET_OUT_OF_RANGE while consuming: the timestamp of the last
 	// record it consumed. The offset itself is the one that was out of
@@ -1622,6 +1626,35 @@ func (l *listOrEpochLoads) removeLoad(t string, p int32) (removed bool) {
 		}
 	}
 	return removed
+}
+
+// splitNonexistent removes the loads that failed because our metadata does
+// not have their partition, returning them and the latest time one failed.
+// These retry on a metadata update rather than a second later, so they wait
+// apart from everything else.
+func (l *listOrEpochLoads) splitNonexistent() (nonexistent listOrEpochLoads, at int64) {
+	for _, src := range []struct {
+		m        offsetLoadMap
+		loadType listOrEpochLoadType
+	}{
+		{l.List, loadTypeList},
+		{l.Epoch, loadTypeEpoch},
+	} {
+		for t, ps := range src.m {
+			for p, o := range ps {
+				if o.nonexistentAt == 0 {
+					continue
+				}
+				nonexistent.addLoad(t, p, src.loadType, o)
+				at = max(at, o.nonexistentAt)
+				delete(ps, p)
+			}
+			if len(ps) == 0 {
+				delete(src.m, t)
+			}
+		}
+	}
+	return nonexistent, at
 }
 
 func (l listOrEpochLoads) each(fn func(string, int32)) {
@@ -2150,6 +2183,17 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 
 	var reloads, followUps listOrEpochLoads
 	defer func() {
+		// A load for a partition our metadata does not have waits for
+		// a metadata update; nothing else can answer it. Everything
+		// else waits a second.
+		if nonexistent, at := reloads.splitNonexistent(); !nonexistent.isEmpty() {
+			s.incWorker()
+			go func() {
+				defer s.decWorker()
+				defer nonexistent.loadWithSession(s, "reload offsets for a partition our metadata does not have")
+				s.waitNonexistent(at)
+			}()
+		}
 		if !reloads.isEmpty() {
 			s.incWorker()
 			go func() {
@@ -2189,6 +2233,50 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 	}
 
 	followUps.loadWithSession(s, "reset by time after an undefined epoch offset")
+}
+
+// waitNonexistent holds a retry for a partition our metadata does not have
+// until a metadata update has completed since the load failed at time at. We
+// wait at least MetadataMinAge as well, so that the retry follows one update
+// rather than every update the rest of the client asks for.
+func (s *consumerSession) waitNonexistent(at int64) {
+	cl := s.c.cl
+	wait := max(time.Second, cl.cfg.metadataMinAge)
+	for {
+		cl.triggerUpdateMetadata(false, "loading offsets for a partition our metadata does not have")
+		timer := time.NewTimer(wait)
+		select {
+		case <-timer.C:
+		case <-s.ctx.Done():
+			timer.Stop()
+			return
+		}
+		timer.Stop()
+		if cl.metadataUpdatedAfter(at) {
+			return
+		}
+	}
+}
+
+// nonexistentLoad answers a load whose partition is not in our metadata.
+//
+// We say the partition does not exist only if we hold the topic, the topic
+// loaded without error, and the partition is past the count the topic has.
+// Even then, the first failure is quiet: a group can assign a partition
+// moments before our own metadata catches up. Every later failure is reported
+// to you. The stamp on the request tells the two apart, and it holds the
+// retry until the next metadata update; see waitNonexistent.
+func (cl *Client) nonexistentLoad(topic string, partition int32, d *topicPartitionsData, request offsetLoad) loadedOffset {
+	gone := d != nil && d.loadErr == nil && len(d.partitions) > 0 && int(partition) >= d.npartitions()
+	report := gone && request.nonexistentAt != 0
+	request.nonexistentAt = time.Now().UnixNano()
+
+	err := error(kerr.UnknownTopicOrPartition)
+	if report {
+		err = fmt.Errorf("our metadata for topic %s does not have partition %d: %w", topic, partition, kerr.UnknownTopicOrPartition)
+		cl.consumer.addFakeReadyForDraining(topic, partition, err, "notification that our metadata does not have this partition")
+	}
+	return loadedOffset{topic: topic, partition: partition, err: err, request: request}
 }
 
 // Called within a consumer session, this function handles results from list
@@ -2576,7 +2664,16 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 			}
 
 			if partition < 0 || partition >= int32(len(topicPartitions.partitions)) {
-				continue // should not happen: we have not seen this partition from a metadata response
+				// We have not seen this partition in a metadata
+				// response. Answer for it here: falling out
+				// below leaves a bare retryable error that
+				// retries forever and tells you nothing.
+				loaded.add(cl.nonexistentLoad(topic, partition, topicPartitions, loadPart))
+				delete(loadParts, partition)
+				if len(loadParts) == 0 {
+					delete(load, topic)
+				}
+				continue
 			}
 			topicPartition := topicPartitions.partitions[partition]
 
@@ -2692,7 +2789,7 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 	results <- loaded.addAll(load.errToLoaded(kerr.UnknownTopicOrPartition))
 }
 
-func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, tps *topicsPartitions, results chan<- loadedOffsets) {
+func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, tps *topicsPartitions, results chan<- loadedOffsets) {
 	loaded := loadedOffsets{broker: broker.meta.NodeID, loadType: loadTypeEpoch}
 
 	kresp, err := broker.waitResp(ctx, load.buildEpochReq())
@@ -2738,7 +2835,13 @@ func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load
 			}
 
 			if partition < 0 || partition >= int32(len(topicPartitions.partitions)) {
-				continue // should not happen: we have not seen this partition from a metadata response
+				// See the same block in listOffsetsForBrokerLoad.
+				loaded.add(cl.nonexistentLoad(topic, partition, topicPartitions, loadPart))
+				delete(loadParts, partition)
+				if len(loadParts) == 0 {
+					delete(load, topic)
+				}
+				continue
 			}
 			topicPartition := topicPartitions.partitions[partition]
 

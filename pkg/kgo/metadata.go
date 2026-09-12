@@ -813,6 +813,13 @@ func (cl *Client) mergeTopicPartitions(
 		return
 	}
 
+	// A prior ID and the partitions a recreation removed share one
+	// deadline: past it we have waited long enough that every broker has
+	// had a chance to report the recreation, so we forget the old ID and
+	// delete the partitions.
+	now := time.Now().UnixNano()
+	lv.priorIDs.dropExpired(now)
+
 	// Topic IDs are random and never reused, so a new ID for a name we
 	// hold means the topic was deleted and recreated. We adopt an ID the
 	// topic never held immediately: a partition being consumed restarts
@@ -857,7 +864,7 @@ func (cl *Client) mergeTopicPartitions(
 			"old_id", topicID(lv.id),
 			"new_id", topicID(r.id),
 		)
-		lv.priorIDs.add(lv.id)
+		lv.priorIDs.add(lv.id, now+int64(cl.cfg.recreatedPartitionDelete))
 		lv.id = r.id
 		recreated = true
 	}
@@ -868,6 +875,13 @@ func (cl *Client) mergeTopicPartitions(
 	defer func() {
 		lv.partitions = r.partitions
 		lv.writablePartitions = r.writablePartitions
+		lv.numPurgatory = 0
+		for i := len(r.partitions) - 1; i >= 0; i-- {
+			if r.partitions[i].purgatoryUntil() == 0 {
+				break
+			}
+			lv.numPurgatory++
+		}
 	}()
 
 	// We should have no deleted partitions, but there are two cases where
@@ -890,6 +904,8 @@ func (cl *Client) mergeTopicPartitions(
 		swapped     int      // cursors restarted or stopped by a recreation
 		swappedFrom [16]byte // the ID they were swapped from
 		txnExposed  int      // partitions whose recreation a transaction is exposed to
+		purging     bool     // whether we are deleting the tail a recreation removed
+		purged      int      // how many partitions we deleted
 	)
 	for part, oldTP := range lv.partitions {
 		exists := part < len(r.partitions)
@@ -907,6 +923,42 @@ func (cl *Client) mergeTopicPartitions(
 			// or automatically for regex consumers when the topic
 			// has been missing from metadata for longer than
 			// ConsiderMissingTopicDeletedAfter.
+			//
+			// Case 2 is the exception: a recreated topic answers for
+			// what it has, so a partition missing from the response
+			// that adopted the new ID is one the new topic does not
+			// have. We put the partition in purgatory rather than
+			// delete it at once, because the ID can reach us before
+			// every broker has caught up. A partition in purgatory
+			// is not one you can produce to nor one a balancer
+			// assigns, we keep asking for it, and we hide the
+			// answers that agree it is gone. If it stays missing for
+			// ConsiderRecreatedPartitionsDeletedAfter we delete it
+			// here.
+			switch {
+			case recreated:
+				oldTP.setPurgatoryUntil(now + int64(cl.cfg.recreatedPartitionDelete))
+			case purging:
+				// A lower partition is being deleted, so every
+				// partition past it goes with it: what we keep
+				// must stay indexed by partition number.
+			default:
+				until := oldTP.purgatoryUntil()
+				purging = until != 0 && now >= until
+			}
+			if purging {
+				switch kind {
+				case partitionKindProduce:
+					oldTP.purgeProduction()
+				case partitionKindShare:
+					oldTP.purgeShareCursor(cl)
+				default:
+					oldTP.purgeCursor(cl, css)
+				}
+				purged++
+				continue
+			}
+
 			dup := *oldTP
 			newTP := &dup
 			newTP.loadErr = errMissingMetadataPartition
@@ -924,6 +976,11 @@ func (cl *Client) mergeTopicPartitions(
 			continue
 		}
 		newTP := r.partitions[part]
+
+		// The topic has the partition, so it is not in purgatory. This
+		// also undoes a stamp from a recreation that a later response
+		// disagreed with.
+		oldTP.setPurgatoryUntil(0)
 
 		// Like above for the entire topic, an individual partition
 		// can have a load error. Unlike for the topic, individual
@@ -969,8 +1026,11 @@ func (cl *Client) mergeTopicPartitions(
 			// cursor afterward with the old ID. The broker rejects its
 			// fetches with UNKNOWN_TOPIC_ID, the cursor records the
 			// rejection, and the next merge swaps it here (rejected
-			// below).
-			rejected := oldTP.cursor.topicID != lv.id && oldTP.cursor.unknownIDFails.Load() > 0
+			// below). We read the ID the rejection was for rather
+			// than the cursor's own: we run outside the session
+			// that guards it.
+			rejectedID := oldTP.cursor.rejectedID.Load()
+			rejected := rejectedID != nil && *rejectedID != lv.id
 			if recreated || rejected {
 				if from, ok := oldTP.swapRecreatedCursorTo(newTP, css); ok {
 					swappedFrom, swapped = from, swapped+1
@@ -985,7 +1045,8 @@ func (cl *Client) mergeTopicPartitions(
 			// A cursor that missed the update which adopted the ID, for
 			// a load error on its partition, is swapped once the broker
 			// rejects it, the same as a consuming cursor.
-			rejected := oldTP.shareCursor.topicID != lv.id && oldTP.shareCursor.unknownIDFails.Load() > 0
+			rejectedID := oldTP.shareCursor.rejectedID.Load()
+			rejected := rejectedID != nil && *rejectedID != lv.id
 			if recreated || rejected {
 				oldTP.swapRecreatedShareCursorTo(cl, newTP)
 				continue
@@ -1136,6 +1197,14 @@ func (cl *Client) mergeTopicPartitions(
 			)
 			cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
 		}
+	}
+
+	if purged > 0 {
+		cl.cfg.logger.Log(LogLevelInfo, "deleting partitions that a recreated topic does not have and that no broker has reported since",
+			"topic", topic,
+			"deleted_partitions", purged,
+			"id", topicID(lv.id),
+		)
 	}
 
 	// The swaps above log one line for the topic; the per partition detail

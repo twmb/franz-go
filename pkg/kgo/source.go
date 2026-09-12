@@ -120,7 +120,9 @@ type cursor struct {
 	topic string
 	// The topic ID we fetch with. Written at cursor creation, by
 	// assignPartitions from Offset.topicID, and by swapRecreatedCursorTo,
-	// all with the session stopped or guarded.
+	// all with the session stopped or guarded, and read only by a source
+	// building or handling a fetch inside a session. Anything outside a
+	// session that wants to know the ID we fetch with reads rejectedID.
 	topicID   [16]byte
 	partition int32
 
@@ -128,12 +130,22 @@ type cursor struct {
 	// successful fetch resets it. See recreationRejectionLimit.
 	unknownIDFails atomic.Int32
 
+	// The topic ID a fetch was last rejected under, nil if the cursor is
+	// not being rejected for its ID. The metadata merge reads this to see
+	// whether the ID we fetch with is dead; it runs outside the session,
+	// so it cannot read topicID.
+	rejectedID atomic.Pointer[[16]byte]
+
 	// Unix nanos of the fetch response that paused this cursor (a
 	// rejected topic ID, or records held back by the epoch check). The
 	// cursor keeps its offset, so without this it would fetch again
 	// immediately; instead it does not fetch until a metadata update
 	// completes after that time.
 	pausedAt atomic.Int64
+
+	// Set by the metadata merge when a recreation removed this partition;
+	// see topicPartition.purgatoryUntil.
+	purgatoryUntil atomic.Int64
 
 	keepControl bool // whether to keep control records
 
@@ -245,6 +257,7 @@ func (c *cursor) unset() {
 	// An unset cursor is not fetching; clear its rejection count and
 	// pause.
 	c.unknownIDFails.Store(0)
+	c.rejectedID.Store(nil)
 	c.pausedAt.Store(0)
 	c.setOffset(cursorOffset{
 		offset:            -1,
@@ -1329,6 +1342,26 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 			priorOffset := partOffset.offset
 			fp := partOffset.processRespPartition(br, rp, s.cl.cfg.decompressor, s.cl.cfg.hooks)
+
+			// A partition in purgatory is one a recreation removed.
+			// We keep fetching it in case a broker that has it
+			// answers, but a broker agreeing with metadata that the
+			// partition is gone is not news: no error for you, no
+			// count, and no metadata update. We pause so that the
+			// next try follows a metadata update rather than the
+			// next round trip. Any other answer proves the
+			// partition exists, so we leave purgatory.
+			if c.purgatoryUntil.Load() != 0 {
+				switch fp.Err {
+				case kerr.UnknownTopicID, kerr.InconsistentTopicID, kerr.UnknownTopicOrPartition:
+					strip(topic, partition, fp.Err)
+					c.pauseForMetadata()
+					continue
+				default:
+					c.purgatoryUntil.Store(0)
+				}
+			}
+
 			if fp.Err != nil {
 				if moving := kmove.maybeAddFetchPartition(resp, rp, c); moving {
 					strip(topic, partition, fp.Err)
@@ -1378,6 +1411,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 			case nil:
 				c.unknownIDFails.Store(0)
+				c.rejectedID.Store(nil)
 				keep = true
 
 			case kerr.UnknownTopicID, kerr.InconsistentTopicID:
@@ -1395,6 +1429,8 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// schedules for this error adopts the new ID and
 				// restarts the partition. A deleted topic surfaces
 				// the error.
+				rejectedID := c.topicID
+				c.rejectedID.Store(&rejectedID)
 				if fails := c.unknownIDFails.Add(1); fails > recreationRejectionLimit {
 					c.unknownIDFails.Add(-1)
 					keep = true

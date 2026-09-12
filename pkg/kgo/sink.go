@@ -1607,6 +1607,9 @@ type recBuf struct {
 	// with is dead, so unlike unknownFailures it counts only rejections
 	// of the ID itself.
 	unknownIDFailures int64
+	// purgatoryUntil is set by the metadata merge when a recreation
+	// removed this partition; see topicPartition.purgatoryUntil.
+	purgatoryUntil int64
 
 	// lingering is a timer that avoids starting maybeDrain until expiry,
 	// allowing for more records to be buffered in a single batch.
@@ -1823,6 +1826,11 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 // returns it until the metadata merge adopts the new ID), and the
 // metadata-side errMissingMetadataPartition twin. Returns whether we have
 // exceeded the limit.
+//
+// A partition in purgatory is one a recreation removed, so the ID we produce
+// with is the topic's current ID and a rejection of it says nothing about the
+// ID. We leave the ID count alone and keep counting unknownFailures, so
+// buffered records still fail at MaxBufferedRecords' unknown limit.
 func (recBuf *recBuf) checkUnknownFailLimit(err error) bool {
 	switch {
 	case err == nil:
@@ -1830,7 +1838,7 @@ func (recBuf *recBuf) checkUnknownFailLimit(err error) bool {
 		recBuf.unknownIDFailures = 0
 	case errors.Is(err, kerr.UnknownTopicOrPartition) || errors.Is(err, kerr.UnknownTopicID) || errors.Is(err, errMissingMetadataPartition):
 		recBuf.unknownFailures++
-		if errors.Is(err, kerr.UnknownTopicID) {
+		if errors.Is(err, kerr.UnknownTopicID) && recBuf.purgatoryUntil == 0 {
 			recBuf.unknownIDFailures++
 		}
 	}
@@ -1841,6 +1849,18 @@ func (recBuf *recBuf) unknownIDFails() int32 {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
 	return int32(min(recBuf.unknownIDFailures, 1<<31-1))
+}
+
+func (recBuf *recBuf) purgatory() int64 {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+	return recBuf.purgatoryUntil
+}
+
+func (recBuf *recBuf) setPurgatory(until int64) {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+	recBuf.purgatoryUntil = until
 }
 
 // setTopicID sets the ID we produce to the topic with. The metadata merge

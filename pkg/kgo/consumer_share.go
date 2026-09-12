@@ -104,7 +104,8 @@ type (
 		// and every read is under a source's share mutex: createShareReq
 		// and the cursor map in handleShareReqResp. Acknowledgments use
 		// the ID on the slab instead, which is the ID the records were
-		// fetched under.
+		// fetched under. Anything holding no share mutex, the metadata
+		// merge included, reads rejectedID.
 		topicID [16]byte
 
 		partition int32
@@ -118,6 +119,22 @@ type (
 		// returns it until brokers sync, so we strip it up to
 		// recreationRejectionLimit times, then return it.
 		unknownIDFails atomic.Int32
+
+		// The topic ID a share fetch was last rejected under, nil if
+		// the cursor is not being rejected for its ID. The metadata
+		// merge reads this to see whether the ID we fetch with is
+		// dead; it holds no share mutex, so it cannot read topicID.
+		rejectedID atomic.Pointer[[16]byte]
+
+		// Set by the metadata merge when a recreation removed this
+		// partition; see topicPartition.purgatoryUntil.
+		purgatoryUntil atomic.Int64
+
+		// Unix nanos of the response that paused this cursor, which
+		// today is only a response for a partition in purgatory. The
+		// cursor is left out of requests until a metadata update
+		// completes after that time, the share twin of cursor.pausedAt.
+		pausedAt atomic.Int64
 
 		cursorsIdx int
 
@@ -969,7 +986,7 @@ func (sc *shareConsumer) maybeStartManage() {
 		return
 	}
 	for _, topicPartitions := range sc.tps.load() {
-		if len(topicPartitions.load().partitions) > 0 {
+		if topicPartitions.load().npartitions() > 0 {
 			go sc.manage()
 			return
 		}
@@ -2769,6 +2786,20 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 				// errors surface: share sessions give the user no
 				// other signal.
 				partErr := kerr.ErrorForCode(rp.ErrorCode)
+
+				// A partition in purgatory is one a recreation
+				// removed; see the same block in source.go's
+				// handleReqResp.
+				if cursor.purgatoryUntil.Load() != 0 {
+					switch partErr {
+					case kerr.UnknownTopicID, kerr.InconsistentTopicID, kerr.UnknownTopicOrPartition:
+						cursor.pausedAt.Store(time.Now().UnixNano())
+						continue
+					default:
+						cursor.purgatoryUntil.Store(0)
+					}
+				}
+
 				updateWhy.add(topicName, rp.Partition, partErr)
 				keep := true
 				switch {
@@ -2777,6 +2808,8 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 					// brokers sync, and a recreated topic until the
 					// merge adopts the new ID. We strip it up to the
 					// limit, then return it, like the classic cursor.
+					rejectedID := rt.TopicID
+					cursor.rejectedID.Store(&rejectedID)
 					if fails := cursor.unknownIDFails.Add(1); fails > recreationRejectionLimit {
 						cursor.unknownIDFails.Add(-1)
 					} else if !sc.cfg.keepRetryableFetchErrors {
@@ -2796,6 +2829,8 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 				continue
 			}
 			cursor.unknownIDFails.Store(0)
+			cursor.rejectedID.Store(nil)
+			cursor.purgatoryUntil.Store(0)
 
 			if len(rp.Records) == 0 && len(rp.AcquiredRecords) == 0 {
 				continue
@@ -3111,6 +3146,12 @@ func (s *source) createShareReq(skipAckDrain bool) (
 		// strip). applyMovesBlocking re-enables it once the move has run.
 		if !c.assigned.Load() || c.moving.Load() || paused.has(c.topic, c.partition) {
 			continue
+		}
+		if at := c.pausedAt.Load(); at != 0 {
+			if !s.cl.metadataUpdatedAfter(at) {
+				continue
+			}
+			c.pausedAt.Store(0)
 		}
 		wantSet[tidp{c.topicID, c.partition}] = struct{}{}
 		usable = append(usable, c)

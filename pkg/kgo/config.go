@@ -139,6 +139,7 @@ type cfg struct {
 	manualFlushing            bool
 	txnBackoff                time.Duration
 	missingTopicDelete        time.Duration
+	recreatedPartitionDelete  time.Duration
 
 	partitioner Partitioner
 	compressor  Compressor
@@ -235,6 +236,12 @@ func (cfg *cfg) validate() error {
 	if cfg.maxPartBytes > cfg.maxBytes {
 		cfg.maxPartBytes = cfg.maxBytes
 	}
+
+	// Deleting a partition a recreation removed is permanent, so we must
+	// give every broker a chance to report the recreation first. We raise
+	// the duration here rather than refuse the config, so that a long
+	// MetadataMinAge alone never fails to build a client.
+	cfg.recreatedPartitionDelete = max(cfg.recreatedPartitionDelete, 5*cfg.metadataMinAge+10*time.Second)
 
 	if cfg.allowIdempotentProduceCancellation && cfg.txnID != nil {
 		return errors.New("cannot allow idempotent produce cancellation and use transactional IDs")
@@ -651,9 +658,10 @@ func defaultCfg() cfg {
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 		maxBrokerReadBytes:  100 << 20,
 
-		metadataMaxAge:     5 * time.Minute,
-		metadataMinAge:     5 * time.Second,
-		missingTopicDelete: time.Minute,
+		metadataMaxAge:           5 * time.Minute,
+		metadataMinAge:           5 * time.Second,
+		missingTopicDelete:       time.Minute,
+		recreatedPartitionDelete: 5 * time.Minute,
 
 		//////////////
 		// producer //
@@ -1050,6 +1058,26 @@ func ConcurrentTransactionsBackoff(backoff time.Duration) Opt {
 // times until the cluster fully broadcasts the topic creation.
 func ConsiderMissingTopicDeletedAfter(t time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.missingTopicDelete = t }}
+}
+
+// ConsiderRecreatedPartitionsDeletedAfter sets the amount of time a partition
+// can be missing from metadata responses after the topic it belongs to was
+// deleted and recreated with fewer partitions before the partition is
+// deleted from the client, overriding the default of 5m.
+//
+// A recreation is detected from the topic ID, and the ID can reach us before
+// every broker has caught up. Until this duration elapses we keep the
+// partition and keep asking for it, and we hide the "this partition does not
+// exist" errors it answers with. If the partition comes back, we resume on
+// it. If it does not, we delete it: a consumer stops fetching it, and records
+// buffered for producing to it fail.
+//
+// A shorter duration than five metadata refresh intervals plus ten seconds
+// (see MetadataMinAge) is raised to it: the delete is permanent, so we wait
+// for enough metadata rounds that a slow broadcast cannot lose us a partition
+// that does exist.
+func ConsiderRecreatedPartitionsDeletedAfter(t time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.recreatedPartitionDelete = t }}
 }
 
 // OnRebootstrapRequired sets the function to call when a metadata response has

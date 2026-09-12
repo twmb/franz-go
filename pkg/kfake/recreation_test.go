@@ -495,10 +495,13 @@ func TestRecreationConsumerSwapShrink(t *testing.T) {
 	recreateTopic(t, cl, topic, 1)
 	produceVals(t, c, topic, 0, "n0")
 
+	// Partition 1 is in purgatory: we keep asking for it and hide the
+	// answers that agree it is gone, so nothing about it reaches the
+	// caller while partition 0 keeps delivering.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var gotN0, gotErr bool
-	for ctx.Err() == nil && (!gotN0 || !gotErr) {
+	var gotN0 bool
+	for ctx.Err() == nil && !gotN0 {
 		fetches := cl.PollFetches(ctx)
 		fetches.EachRecord(func(r *kgo.Record) {
 			if string(r.Value) == "n0" {
@@ -508,13 +511,11 @@ func TestRecreationConsumerSwapShrink(t *testing.T) {
 			}
 		})
 		fetches.EachError(func(_ string, p int32, err error) {
-			if p == 1 && errors.Is(err, kerr.UnknownTopicID) {
-				gotErr = true
-			}
+			t.Errorf("unexpected error on partition %d: %v", p, err)
 		})
 	}
-	if !gotN0 || !gotErr {
-		t.Fatalf("wanted new partition-0 record and a partition-1 UnknownTopicID error, got record=%v err=%v; log tail:\n%s", gotN0, gotErr, lg.tail(6000))
+	if !gotN0 {
+		t.Fatalf("no new partition-0 record; log tail:\n%s", lg.tail(6000))
 	}
 }
 
@@ -2040,4 +2041,235 @@ func TestRecreationShareSwap(t *testing.T) {
 	// The new topic starts fresh share state: consumption continues.
 	produceVals(t, c, topic, 0, "n0", "n1")
 	collectVals(t, cl, "n0", "n1")
+}
+
+// The per topic deletion line; it carries a count rather than one line per
+// partition.
+const logPurgatoryDelete = "deleting partitions that a recreated topic does not have"
+
+// A shrink that reverses inside the purgatory window: the partition comes
+// back in a metadata response, we stop hiding its answers, and consumption
+// resumes on it.
+func TestRecreationShrinkFlapsBack(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	produceVals(t, c, topic, 0, "v0")
+	produceVals(t, c, topic, 1, "v1")
+	collectVals(t, cl, "v0", "v1")
+
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, cl, lg, logSwap, 1)
+	produceVals(t, c, topic, 0, "n0")
+	collectVals(t, cl, "n0")
+
+	// Back to two partitions well inside the window. The partition is in
+	// the next metadata response, which clears purgatory.
+	addPartitions(t, admin, topic, 2)
+	produceVals(t, c, topic, 1, "n1")
+	collectVals(t, cl, "n1")
+	if got := lg.count(logPurgatoryDelete); got != 0 {
+		t.Errorf("deleted partitions during a flap back: %d log lines, want 0", got)
+	}
+}
+
+// addPartitions grows a topic to a total partition count.
+func addPartitions(t *testing.T, cl *kgo.Client, topic string, total int32) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req := kmsg.NewPtrCreatePartitionsRequest()
+	rt := kmsg.NewCreatePartitionsRequestTopic()
+	rt.Topic = topic
+	rt.Count = total
+	req.Topics = append(req.Topics, rt)
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("create partitions: %v", err)
+	}
+	if ec := resp.Topics[0].ErrorCode; ec != 0 {
+		t.Fatalf("create partitions: %v", kerr.ErrorForCode(ec))
+	}
+}
+
+// A partition that stays missing for the whole window is deleted: the
+// consumer stops fetching it and the client logs one line for the topic with
+// a count.
+//
+// ConsiderRecreatedPartitionsDeletedAfter must be at least five metadata min
+// ages plus ten seconds, so this test cannot be quick.
+func TestRecreationShrinkDeletesAfterWindow(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(3, topic))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.ConsiderRecreatedPartitionsDeletedAfter(10500*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	produceVals(t, c, topic, 0, "v0")
+	produceVals(t, c, topic, 1, "v1")
+	produceVals(t, c, topic, 2, "v2")
+	collectVals(t, cl, "v0", "v1", "v2")
+
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, cl, lg, logSwap, 1)
+	produceVals(t, c, topic, 0, "n0")
+	collectVals(t, cl, "n0")
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && lg.count(logPurgatoryDelete) == 0 {
+		cl.ForceMetadataRefresh()
+		time.Sleep(250 * time.Millisecond)
+	}
+	if got := lg.count(logPurgatoryDelete); got != 1 {
+		t.Fatalf("deletion logged %d times, want 1; log tail:\n%s", got, lg.tail(6000))
+	}
+	if !strings.Contains(lg.tail(0), "deleted_partitions 2") {
+		t.Errorf("deletion line does not count the two partitions; log tail:\n%s", lg.tail(4000))
+	}
+
+	// The topic is one partition now and still delivers.
+	produceVals(t, c, topic, 0, "n1")
+	collectVals(t, cl, "n1")
+}
+
+// A consistency-requiring partitioner picks from the partitions the topic
+// has now, so a shrink stops it picking the partitions the recreation
+// removed.
+func TestRecreationShrinkStopsProducing(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(4, topic))
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+
+	manualLog := new(capLogger)
+	manual := newPlainClient(t, c,
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.WithLogger(manualLog),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Key: []byte("k0"), Value: []byte("v0")}).FirstErr(); err != nil {
+		t.Fatalf("produce before the recreation: %v", err)
+	}
+	if err := manual.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 3, Value: []byte("m")}).FirstErr(); err != nil {
+		t.Fatalf("manual produce before the recreation: %v", err)
+	}
+
+	recreateTopic(t, cl, topic, 1)
+	waitForLog(t, cl, lg, logSwap, 1)
+	waitForLog(t, manual, manualLog, logSwap, 1)
+
+	// Every key now maps onto the one partition the topic has.
+	for i := range 32 {
+		r := &kgo.Record{Topic: topic, Key: fmt.Appendf(nil, "k%d", i), Value: []byte("n")}
+		if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+			t.Fatalf("produce %d after the recreation: %v", i, err)
+		}
+		if r.Partition != 0 {
+			t.Fatalf("record %d landed on partition %d, which the recreation removed", i, r.Partition)
+		}
+	}
+
+	// Naming a partition in purgatory is rejected rather than buffered.
+	if err := manual.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte("m")}).FirstErr(); err != nil {
+		t.Fatalf("manual produce to the partition the topic has: %v", err)
+	}
+	if err := manual.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 3, Value: []byte("m")}).FirstErr(); err == nil {
+		t.Error("manual produce to a partition the recreation removed succeeded")
+	}
+}
+
+// A group assigned a partition our metadata does not have: the first
+// ListOffsets failure is quiet, because our metadata can be a moment behind
+// the assignment, and every later one is reported.
+func TestGroupAssignedNonexistentPartition(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "t", "g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(3, topic))
+	admin := newPlainClient(t, c)
+	stale := staleMetadata(t, admin, topic)
+	addPartitions(t, admin, topic, 4)
+
+	// Every metadata answer now reports three partitions while the
+	// cluster has four, so the group assigns us a partition we do not
+	// have.
+	c.ControlKey(int16(kmsg.Metadata), func(kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		return stale, nil, true
+	})
+	var lists atomic.Int32
+	c.ControlKey(int16(kmsg.ListOffsets), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.ListOffsetsRequest)
+		for _, rt := range req.Topics {
+			for _, rp := range rt.Partitions {
+				if rt.Topic == topic && rp.Partition == 3 {
+					lists.Add(1)
+				}
+			}
+		}
+		return nil, nil, false
+	})
+
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		opt848(),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	var reported int32
+	for ctx.Err() == nil && reported == 0 {
+		fetches := cl.PollFetches(ctx)
+		fetches.EachError(func(_ string, p int32, err error) {
+			if p != 3 || !errors.Is(err, kerr.UnknownTopicOrPartition) {
+				return
+			}
+			if !strings.Contains(err.Error(), "our metadata for topic") {
+				t.Errorf("partition 3 error %q is not the one we answer a load with", err)
+			}
+			reported = lists.Load()
+		})
+	}
+	if reported == 0 {
+		t.Fatalf("no error for the partition we do not have; %d list offsets requests, log tail:\n%s", lists.Load(), lg.tail(6000))
+	}
+	if reported < 2 {
+		t.Errorf("the first list offsets failure was reported; want the first quiet (%d requests when reported)", reported)
+	}
 }

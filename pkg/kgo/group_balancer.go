@@ -410,7 +410,7 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 			needMeta = true
 			continue
 		}
-		topicPartitionCount[topic] = int32(len(data.load().partitions))
+		topicPartitionCount[topic] = int32(data.load().npartitions())
 	}
 
 	// If our consumer metadata does not contain all topics, the group is

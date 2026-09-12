@@ -538,7 +538,19 @@ type topicPartitionsData struct {
 	id                 [16]byte
 	priorIDs           priorTopicIDs // IDs this topic held previously, across a delete and recreate
 	when               int64
+	numPurgatory       int // trailing partitions a recreation removed; see topicPartition.purgatoryUntil
 }
+
+// npartitions is how many partitions the topic has now. Partitions that a
+// recreation removed are kept for a while (see
+// ConsiderRecreatedPartitionsDeletedAfter) and are not counted: they are
+// always a tail of the slice, because a partition missing from a metadata
+// response is always a suffix of what we had.
+//
+// Anything choosing a partition to produce to or to consume uses this;
+// anything indexing a partition we were handed uses the full length, so that
+// a partition in purgatory still looks present.
+func (d *topicPartitionsData) npartitions() int { return len(d.partitions) - d.numPurgatory }
 
 // clearFailing lets every partition produce again after a metadata update
 // that kept our view of the topic. A produce retry waits for an update to
@@ -598,19 +610,68 @@ var noID [16]byte
 // topic's beginning, so a wrong swap re-reads records and never skips them.
 const recreationRejectionLimit = 5
 
-// priorTopicIDs is the last two topic IDs a topic held previously, newest
-// first. A zero entry is unused.
-type priorTopicIDs [2][16]byte
+// priorTopicIDs is the topic IDs a topic held previously, newest first. Each
+// ID is dropped once its deadline passes, the same deadline the partitions
+// the recreation removed are deleted at.
+type priorTopicIDs []priorTopicID
 
-func (p *priorTopicIDs) add(id [16]byte) { p[1], p[0] = p[0], id }
+type priorTopicID struct {
+	id    [16]byte
+	until int64 // unix nanos; we forget this ID after it
+}
 
-func (p *priorTopicIDs) any() bool { return p[0] != noID }
+// maxPriorTopicIDs bounds how many recreations back we remember. Past this
+// the oldest is dropped.
+const maxPriorTopicIDs = 8
 
-func (p *priorTopicIDs) has(id [16]byte) bool {
-	return id != noID && (p[0] == id || p[1] == id)
+// add pushes id to the front. We copy rather than write in place: the data
+// this slice lives in is stored in an atomic and read by anything consuming
+// or producing.
+func (p *priorTopicIDs) add(id [16]byte, until int64) {
+	prior := *p
+	if len(prior) >= maxPriorTopicIDs {
+		prior = prior[:maxPriorTopicIDs-1]
+	}
+	next := make(priorTopicIDs, 0, len(prior)+1)
+	next = append(next, priorTopicID{id: id, until: until})
+	*p = append(next, prior...)
+}
+
+// dropExpired forgets the IDs whose deadline has passed.
+func (p *priorTopicIDs) dropExpired(now int64) {
+	prior := *p
+	var live int
+	for _, e := range prior {
+		if e.until > now {
+			live++
+		}
+	}
+	if live == len(prior) {
+		return
+	}
+	next := make(priorTopicIDs, 0, live)
+	for _, e := range prior {
+		if e.until > now {
+			next = append(next, e)
+		}
+	}
+	*p = next
 }
 
 // any reports whether the topic was ever recreated while we held it.
+func (p priorTopicIDs) any() bool { return len(p) > 0 }
+
+func (p priorTopicIDs) has(id [16]byte) bool {
+	if id == noID {
+		return false
+	}
+	for _, e := range p {
+		if e.id == id {
+			return true
+		}
+	}
+	return false
+}
 
 // topicPartition contains all information from Kafka for a topic's partition,
 // as well as what a client is producing to it or info about consuming from it.
@@ -665,6 +726,36 @@ func (tp *topicPartition) partition() int32 {
 		return tp.shareCursor.partition
 	}
 	return tp.cursor.partition
+}
+
+// purgatoryUntil is the unix nano deadline at which we delete this partition,
+// which a recreation removed from the topic. Zero means the partition is not
+// in purgatory.
+//
+// The deadline lives on the record buffer, cursor, or share cursor rather
+// than here because a response can clear it: a broker that answers for the
+// partition proves it exists, and that answer must outlive the metadata that
+// said it does not.
+func (tp *topicPartition) purgatoryUntil() int64 {
+	switch {
+	case tp.records != nil:
+		return tp.records.purgatory()
+	case tp.shareCursor != nil:
+		return tp.shareCursor.purgatoryUntil.Load()
+	default:
+		return tp.cursor.purgatoryUntil.Load()
+	}
+}
+
+func (tp *topicPartition) setPurgatoryUntil(until int64) {
+	switch {
+	case tp.records != nil:
+		tp.records.setPurgatory(until)
+	case tp.shareCursor != nil:
+		tp.shareCursor.purgatoryUntil.Store(until)
+	default:
+		tp.cursor.purgatoryUntil.Store(until)
+	}
 }
 
 // Contains stuff that changes on metadata update that we copy into a cursor or
@@ -803,6 +894,7 @@ func (old *topicPartition) swapRecreatedCursorTo( //nolint:revive // old/new nam
 	c.topicPartitionData = new.topicPartitionData
 	c.topicID = newID
 	c.unknownIDFails.Store(0)
+	c.rejectedID.Store(nil)
 
 	_, using := cl.consumer.usingCursors[c]
 	loading := css.reloadOffsets.removeLoad(c.topic, c.partition)
@@ -896,6 +988,7 @@ func (tp *topicPartition) swapRecreatedShareCursorTo(cl *Client, new *topicParti
 		c.topicID = newID
 	}
 	c.unknownIDFails.Store(0)
+	c.rejectedID.Store(nil)
 	c.source.Store(sns.source)
 	sns.source.addShareCursor(c)
 }
@@ -935,6 +1028,63 @@ func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) 
 	}
 	c.source.Store(sns.source)
 	sns.source.addShareCursor(c)
+}
+
+// purgeProduction is called on metadata update when a partition that a
+// recreation removed has stayed missing for the whole purgatory window: the
+// topic does not have it. This mirrors the front half of migrateProductionTo
+// and abandons the buffer rather than moving it.
+//
+// We set purged first so that a record being buffered right now fails when it
+// goes to buffer, then we remove the buffer from its sink, then we fail what
+// is in it. The merge stores a partition slice without this partition, so
+// nothing chooses it again.
+func (tp *topicPartition) purgeProduction() {
+	r := tp.records
+	r.mu.Lock()
+	r.purged = true
+	r.mu.Unlock()
+
+	// We do not lock for r.sink: this runs in the metadata goroutine, the
+	// only writer of it. We do not WANT to lock because r.mu =>
+	// r.sink.recBufsMu inverts the lock order.
+	r.sink.removeRecBuf(r)
+
+	r.mu.Lock()
+	r.failAllRecords(fmt.Errorf("topic was recreated and no longer has partition %d: %w", r.partition, kerr.UnknownTopicOrPartition))
+	r.mu.Unlock()
+}
+
+// purgeCursor is the consuming half of purgeProduction. It mirrors the front
+// of migrateCursorTo, then forgets the cursor instead of moving it: the
+// cursor stops fetching, any offset load for it is dropped, and it is no
+// longer one we consume.
+func (tp *topicPartition) purgeCursor(cl *Client, css *consumerSessionStopper) {
+	css.stop()
+
+	c := tp.cursor
+	c.source.removeCursor(c)
+	css.reloadOffsets.removeLoad(c.topic, c.partition)
+	delete(cl.consumer.usingCursors, c)
+	c.unset()
+}
+
+// purgeShareCursor is the share half of purgeProduction. It mirrors the front
+// of migrateShareCursorTo, then drops the cursor instead of landing it on a
+// new source. Acks still pending on it have nowhere to go: no source holds
+// the cursor anymore, so we answer them here rather than leave FlushAcks
+// waiting on them.
+func (tp *topicPartition) purgeShareCursor(cl *Client) {
+	c := tp.shareCursor
+	c.assigned.Store(false)
+	if source := c.source.Load(); source != nil {
+		source.removeShareCursor(c)
+	}
+	entries, _ := c.drainAcks(true)
+	if n := int64(len(entries)); n > 0 {
+		err := fmt.Errorf("topic was recreated and no longer has partition %d: %w", c.partition, kerr.UnknownTopicOrPartition)
+		cl.consumer.s.enqueueCallback(ShareAckResults{{c.topic, c.partition, err}}, n)
+	}
 }
 
 type kip951move struct {
@@ -1275,7 +1425,18 @@ func (k *kip951move) doMove(cl *Client) {
 				)
 				// The ID is the one we store below, so the record
 				// buffer and the stored data stay consistent.
-				old.migrateProductionTo(new, lr.r.id)
+				// We can be the first to see a recreation for
+				// this partition, so we fail a transaction
+				// exposed to it the same way the merge does.
+				if old.migrateProductionTo(new, lr.r.id) && cl.cfg.txnID != nil {
+					if cur := cl.producer.id.Load().(*producerID); cur.err == nil {
+						cl.cfg.logger.Log(LogLevelWarn, "topic recreation observed with an active transaction exposed to it; failing the transaction",
+							"topic", recBuf.topic,
+							"partition", recBuf.partition,
+						)
+						cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
+					}
+				}
 			} else {
 				recBuf.clearFailing()
 			}
