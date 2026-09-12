@@ -204,16 +204,6 @@ type cursorOffset struct {
 	hwm int64
 }
 
-// lastConsumedMilli returns the millisecond of the last record we consumed,
-// or zero if we have consumed nothing. Resetting after an out of range fetch
-// resumes by this millisecond.
-func (o *cursorOffset) lastConsumedMilli() int64 {
-	if o.lastConsumedTime.IsZero() {
-		return 0
-	}
-	return o.lastConsumedTime.UnixMilli()
-}
-
 // use, for fetch requests, freezes a view of the cursorOffset.
 func (c *cursor) use() *cursorOffsetNext {
 	// A source using a cursor has exclusive access to the use field by
@@ -1392,32 +1382,42 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// no reset offset was configured. If so, we ignore
 				// trying to reset and instead keep our failed partition.
 				addList := func(replica int32, log bool) {
-					if s.cl.cfg.resetOffset.noReset {
+					switch {
+					case s.cl.cfg.resetOffset.noReset:
 						keep = true
-					} else if !c.lastConsumedTime.IsZero() {
-						// We were consuming and the log changed under us, so rather than follow the reset policy
-						// we resume by the last consumed timestamp, bounded within the log and never ahead of
-						// where we were; see listOffsetsForBrokerLoad.
+
+					case c.lastConsumedTime.IsZero():
+						// We have never consumed this partition, so there is nothing to
+						// recover to. The offset we asked for is simply not in the log:
+						// we bound it within the log, which is what an exact offset does
+						// everywhere else.
 						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-							replica:   replica,
-							ooorMilli: c.lastConsumedTime.UnixMilli(),
-							Offset:    NewOffset().At(partOffset.offset),
+							replica: replica,
+							Offset:  NewOffset().At(partOffset.offset),
 						})
 						if log {
-							s.cl.cfg.logger.Log(LogLevelWarn, "received OFFSET_OUT_OF_RANGE, resetting to the nearest offset; either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming, or the broker has lost data and has not yet transferred leadership",
+							s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE with nothing consumed, bounding our offset within the log",
 								"broker", logID(s.nodeID),
 								"topic", topic,
 								"partition", partition,
 								"prior_offset", partOffset.offset,
 							)
 						}
-					} else {
+
+					default:
+						// We were consuming and the log changed under us. If we fell below the log start, the
+						// start is exact and we resume there. Otherwise the broker lost data at a point we
+						// cannot determine, and ConsumeResetOffset decides; see listOffsetsForBrokerLoad. The
+						// epoch never reaches the wire on a list load; we carry the epoch we consumed at so
+						// the reset can report it in ErrDataLoss.
 						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-							replica: replica,
-							Offset:  s.cl.cfg.resetOffset,
+							replica:   replica,
+							ooor:      true,
+							ooorMilli: s.cl.cfg.resetOffset.ooorMilliFor(c.lastConsumedTime),
+							Offset:    NewOffset().At(partOffset.offset).WithEpoch(c.lastConsumedEpoch),
 						})
 						if log {
-							s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE on the first fetch, resetting to the configured ConsumeResetOffset",
+							s.cl.cfg.logger.Log(LogLevelWarn, "received OFFSET_OUT_OF_RANGE, resetting to the nearest offset; either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming, or the broker has lost data and has not yet transferred leadership",
 								"broker", logID(s.nodeID),
 								"topic", topic,
 								"partition", partition,
@@ -1453,9 +1453,9 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					if kip320 {
 						reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
 							replica: -1,
-							// If the validation answers UNDEFINED_EPOCH_OFFSET, the reset it issues is by the last
-							// consumed timestamp; see loadEpochsForBrokerLoad.
-							ooorMilli: c.lastConsumedMilli(),
+							// If the validation answers UNDEFINED_EPOCH_OFFSET, the reset it issues follows
+							// ConsumeResetOffset; see loadEpochsForBrokerLoad.
+							ooorMilli: s.cl.cfg.resetOffset.ooorMilliFor(c.lastConsumedTime),
 							Offset: Offset{
 								at:    partOffset.offset,
 								epoch: partOffset.lastConsumedEpoch,
@@ -1482,9 +1482,9 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				if partOffset.lastConsumedEpoch >= 0 {
 					reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
 						replica: -1,
-						// If the validation answers UNDEFINED_EPOCH_OFFSET, the reset it issues is by the last
-						// consumed timestamp; see loadEpochsForBrokerLoad.
-						ooorMilli: c.lastConsumedMilli(),
+						// If the validation answers UNDEFINED_EPOCH_OFFSET, the reset it issues follows
+						// ConsumeResetOffset; see loadEpochsForBrokerLoad.
+						ooorMilli: s.cl.cfg.resetOffset.ooorMilliFor(c.lastConsumedTime),
 						Offset: Offset{
 							at:    partOffset.offset,
 							epoch: partOffset.lastConsumedEpoch,

@@ -529,9 +529,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 	if cfg.setResetOffset && !cfg.setStartOffset {
 		cfg.startOffset = cfg.resetOffset
-	} else if cfg.setStartOffset && !cfg.setResetOffset {
-		cfg.resetOffset = cfg.startOffset
-	} // else they are both set (keep) or both unset (defaults)
+	} // else the start offset is set and stands alone, or both are set, or both are defaults
 
 	ctx := context.Background()
 

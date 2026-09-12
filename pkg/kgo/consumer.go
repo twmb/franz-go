@@ -28,6 +28,9 @@ type Offset struct {
 
 	noReset    bool
 	afterMilli bool
+
+	lookback    time.Duration
+	hasLookback bool
 }
 
 // Random negative, only significant within this package.
@@ -35,6 +38,9 @@ const atCommitted = -999
 
 // MarshalJSON implements json.Marshaler.
 func (o Offset) MarshalJSON() ([]byte, error) {
+	if o.hasLookback {
+		return fmt.Appendf(nil, `{"Lookback":"%s","Epoch":%d,"CurrentEpoch":%d}`, o.lookback, o.epoch, o.currentEpoch), nil
+	}
 	if o.relative == 0 {
 		return fmt.Appendf(nil, `{"At":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.at, o.epoch, o.currentEpoch), nil
 	}
@@ -43,6 +49,9 @@ func (o Offset) MarshalJSON() ([]byte, error) {
 
 // String returns the offset as a string; the purpose of this is for logs.
 func (o Offset) String() string {
+	if o.hasLookback {
+		return fmt.Sprintf("{lookback %s e%d ce%d}", o.lookback, o.epoch, o.currentEpoch)
+	}
 	if o.relative == 0 {
 		return fmt.Sprintf("{%d e%d ce%d}", o.at, o.epoch, o.currentEpoch)
 	} else if o.relative > 0 {
@@ -98,6 +107,9 @@ func NoResetOffset() Offset {
 //
 //	AfterMilli(time.Now().UnixMilli())
 //
+// AfterMilli pins an instant when you create the offset; [Offset.Lookback]
+// instead computes the timestamp when the client resolves the offset.
+//
 // By default when using this offset, if consuming encounters an
 // OffsetOutOfRange error, consuming will reset to the first offset after this
 // timestamp. You can use NoResetOffset().AfterMilli(...) to instead switch the
@@ -107,6 +119,34 @@ func (o Offset) AfterMilli(millisec int64) Offset {
 	o.relative = 0
 	o.epoch = -1
 	o.afterMilli = true
+	o.lookback = 0
+	o.hasLookback = false
+	return o
+}
+
+// Lookback returns an offset that consumes from the first offset at or after
+// a duration before a reference point in time. Unlike [Offset.AfterMilli],
+// which pins an instant when you create the offset, the timestamp is computed
+// when the client resolves the offset.
+//
+// As a start offset, the reference is the current time, so Lookback(time.Hour)
+// consumes the last hour of a partition as of when that partition is first
+// resolved. This is Kafka's auto.offset.reset=by_duration.
+//
+// As a reset offset, the reference is the timestamp of the last record the
+// client consumed. See [ConsumeResetOffset].
+//
+// If no record is that new, this offset resolves to the end of the partition.
+//
+// A negative duration would look forward rather than back, so we clamp it to
+// zero: the reference point itself.
+func (o Offset) Lookback(d time.Duration) Offset {
+	o.at = 0
+	o.relative = 0
+	o.epoch = -1
+	o.afterMilli = true
+	o.lookback = max(d, 0)
+	o.hasLookback = true
 	return o
 }
 
@@ -114,6 +154,8 @@ func (o Offset) AfterMilli(millisec int64) Offset {
 // partition.
 func (o Offset) AtStart() Offset {
 	o.afterMilli = false
+	o.lookback = 0
+	o.hasLookback = false
 	o.at = -2
 	return o
 }
@@ -124,6 +166,8 @@ func (o Offset) AtStart() Offset {
 // check out AfterMilli.
 func (o Offset) AtEnd() Offset {
 	o.afterMilli = false
+	o.lookback = 0
+	o.hasLookback = false
 	o.at = -1
 	return o
 }
@@ -137,6 +181,8 @@ func (o Offset) AtEnd() Offset {
 func (o Offset) AtCommitted() Offset {
 	o.noReset = true
 	o.afterMilli = false
+	o.lookback = 0
+	o.hasLookback = false
 	o.at = atCommitted
 	return o
 }
@@ -146,6 +192,8 @@ func (o Offset) AtCommitted() Offset {
 // begin 100 before the end.
 func (o Offset) Relative(n int64) Offset {
 	o.afterMilli = false
+	o.lookback = 0
+	o.hasLookback = false
 	o.relative = n
 	return o
 }
@@ -155,6 +203,8 @@ func (o Offset) Relative(n int64) Offset {
 // detection.
 func (o Offset) WithEpoch(e int32) Offset {
 	o.afterMilli = false
+	o.lookback = 0
+	o.hasLookback = false
 	if e < 0 {
 		e = -1
 	}
@@ -173,11 +223,47 @@ func (o Offset) WithEpoch(e int32) Offset {
 // start.
 func (o Offset) At(at int64) Offset {
 	o.afterMilli = false
+	o.lookback = 0
+	o.hasLookback = false
 	if at < -2 {
 		at = -2
 	}
 	o.at = at
 	return o
+}
+
+// ooorMilliFor returns the timestamp to list by when resetting a cursor that
+// fell out of range after consuming, or zero if this offset needs no by-time
+// listing.
+func (o Offset) ooorMilliFor(lastConsumed time.Time) int64 {
+	if !o.afterMilli || lastConsumed.IsZero() {
+		return 0
+	}
+	if o.hasLookback {
+		return lookbackMilli(lastConsumed.UnixMilli(), o.lookback)
+	}
+	return listMilli(o.at)
+}
+
+// listMilli keeps a by-time listing off the timestamps a ListOffsets request
+// reserves: -1 is the end, -2 the start, -3 the max timestamp. A lookback from
+// a record stamped near the unix epoch subtracts into that range. Zero means we
+// ask for no by-time listing at all, so we floor at 1, which answers the same
+// as any target that far back: the first record in the log.
+func listMilli(milli int64) int64 {
+	return max(milli, 1)
+}
+
+// lookbackMilli returns the millisecond timestamp d before milli. Lookback
+// clamps d to be non-negative, so the only way to subtract past the bottom of
+// an int64 is a record carrying a timestamp near it; we floor rather than wrap
+// around to a huge future timestamp, which would list the end and skip records.
+func lookbackMilli(milli int64, d time.Duration) int64 {
+	back := d.Milliseconds()
+	if milli-back > milli {
+		return 1
+	}
+	return listMilli(milli - back)
 }
 
 type consumer struct {
@@ -1492,10 +1578,13 @@ type offsetLoadMap map[string]map[int32]offsetLoad
 // to directly use if a cursor had a preferred replica.
 type offsetLoad struct {
 	replica int32 // -1 means leader
-	// ooorMilli is non-zero when we are resetting a cursor that received
-	// OFFSET_OUT_OF_RANGE while consuming: the timestamp of the last
-	// record it consumed. The offset itself is the one that was out of
-	// range. See listOffsetsForBrokerLoad.
+	// ooor is set when we are resetting a cursor that received
+	// OFFSET_OUT_OF_RANGE while consuming. The Offset carries the offset
+	// that was out of range, and Offset.epoch the epoch we consumed at,
+	// which a list load otherwise ignores. See listOffsetsForBrokerLoad.
+	ooor bool
+	// ooorMilli is the timestamp for the by-time listing when
+	// ConsumeResetOffset needs one, and zero when it does not.
 	ooorMilli int64
 	Offset
 }
@@ -2529,6 +2618,7 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 
 			offset := poffset(&rPartition)
 			epoch := rPartition.LeaderEpoch
+			var err error
 			end := func() (int64, int32) {
 				p := &resp2.Topics[i].Partitions[j]
 				return poffset(p), p.LeaderEpoch
@@ -2540,28 +2630,52 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 
 			// We ensured the resp2 shape is as we want and has no
 			// error, so resp2 lookups are safe.
-			if loadPart.ooorMilli != 0 {
-				// We were consuming at loadPart.at and fell out of range. We resume by the last consumed
-				// timestamp, never ahead of where we were, bounded within the log. Below the start, every record
-				// left is one we never consumed, so we resume at the start. Past the end, the broker lost data,
-				// and the timestamp is our best guess at where we were. In range means the log lost data and
-				// regrew under us: by-time re-reads what replaced our records rather than skipping them. If the
-				// by-time answer is ahead of us, the records from our offset up to it are stamped older than our
-				// last record; we never read them, so we keep our offset. If there is no by-time answer, every
-				// record left is stamped older than our last record, and we keep our offset for the same reason.
+			if loadPart.ooor {
 				n := loadPart.at
 				start, startEpoch := offset, epoch
 				end, endEpoch := end()
-				byTime, byTimeEpoch := third()
-				offset, epoch = n, -1
-				if byTime >= 0 && byTime < n {
-					offset, epoch = byTime, byTimeEpoch
-				}
-				if offset < start {
+				if n < start {
+					// The broker deleted what we were consuming. Every record left is one we never
+					// consumed, so the start is exact: no policy, and no data loss to report beyond
+					// the warning we already logged.
 					offset, epoch = start, startEpoch
-				}
-				if offset > end {
-					offset, epoch = end, endEpoch
+				} else {
+					// The log shrank below us, at a point we cannot determine: the epoch path either
+					// did not run or could not answer. ConsumeResetOffset decides where we resume,
+					// and we never resume ahead of where we were.
+					r := cl.cfg.resetOffset
+					switch {
+					case r.afterMilli:
+						// A by-time listing is in the response only if we asked for one.
+						// If the by-time answer is ahead of us, the records between are
+						// stamped older than our last record and we never read them, so
+						// we keep our offset; no answer at all means the same thing.
+						offset, epoch = n, -1
+						if loadPart.ooorMilli != 0 {
+							if byTime, byTimeEpoch := third(); byTime >= 0 && byTime < n {
+								offset, epoch = byTime, byTimeEpoch
+							}
+						}
+					case r.at == -2:
+						offset, epoch = start, startEpoch
+						if r.relative != 0 {
+							offset, epoch = offset+r.relative, -1
+						}
+					case r.at == -1:
+						offset, epoch = end, endEpoch
+						if r.relative != 0 {
+							offset, epoch = offset+r.relative, -1
+						}
+					default:
+						offset, epoch = r.at+r.relative, -1
+					}
+					if offset < start {
+						offset, epoch = start, startEpoch
+					}
+					if offset > end {
+						offset, epoch = end, endEpoch
+					}
+					err = &ErrDataLoss{topic, partition, n, loadPart.epoch, offset, epoch}
 				}
 			} else if loadPart.afterMilli {
 				// If after a milli, if the milli is after the
@@ -2626,6 +2740,7 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 				cursor:      topicPartition.cursor,
 				offset:      offset,
 				leaderEpoch: epoch,
+				err:         err,
 				request:     loadPart,
 			})
 		}
@@ -2699,17 +2814,18 @@ func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load
 				// KIP-320 UNDEFINED_EPOCH_OFFSET: the broker has no record of the epoch we asked about. Its epoch
 				// cache is empty, or ends before the epoch we consumed at: an unclean election to a replica
 				// without history, or a leader that diverged from the one we consumed from. Asking again gets
-				// the same answer, since a leader's cache only gains the epochs it writes itself. That is not
-				// data loss, but we can no longer trust our offset, so we reset exactly as an out of range fetch
-				// after consuming does: by the last consumed timestamp, never ahead of where we were.
+				// the same answer, since a leader's cache only gains the epochs it writes itself. We cannot
+				// locate where the log diverged, so we reset exactly as an out of range fetch after consuming
+				// does: ConsumeResetOffset decides, never ahead of where we were.
 				loaded.add(loadedOffset{
 					topic:     topic,
 					partition: partition,
 					err:       errResetAfterUndefinedEpoch,
 					request: offsetLoad{
 						replica:   -1,
+						ooor:      true,
 						ooorMilli: loadPart.ooorMilli,
-						Offset:    NewOffset().At(offset),
+						Offset:    NewOffset().At(offset).WithEpoch(loadPart.epoch),
 					},
 				})
 				continue
@@ -2765,6 +2881,11 @@ func (o offsetLoadMap) buildListReq(isolationLevel int8) (r1, r2, r3 *kmsg.ListO
 			// resume by time, bounded by the start and the end.
 			timestamp := offset.at
 			if offset.afterMilli {
+				// A lookback offset in the start role resolves its timestamp now,
+				// rather than when you built the offset.
+				if offset.hasLookback {
+					timestamp = lookbackMilli(time.Now().UnixMilli(), offset.lookback)
+				}
 				createEnd = true
 			} else if timestamp >= 0 || timestamp == -2 && offset.relative > 0 || timestamp == -1 && offset.relative < 0 {
 				timestamp = -2
