@@ -534,9 +534,16 @@ type topicPartitionsData struct {
 	isInternal         bool
 	partitions         []*topicPartition // partition num => partition
 	writablePartitions []*topicPartition // subset of above
-	topic              string
-	id                 [16]byte
-	when               int64
+	// rackEligible is the same-rack subset of writablePartitions,
+	// precomputed at metadata merge for RackAwarePartitioning so producing
+	// never allocates. A non-consistency record prefers these; when it is
+	// empty (no available same-rack leader) doPartition uses the normal
+	// mapping unfiltered. Nil unless the option is enabled and a rack is set.
+	// See mergeTopicPartitions and doPartition.
+	rackEligible []*topicPartition
+	topic        string
+	id           [16]byte
+	when         int64
 }
 
 type topicID [16]byte

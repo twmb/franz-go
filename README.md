@@ -426,6 +426,7 @@ generation.
 | [KIP-1076](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1076%3A++Metrics+for+client+applications+KIP-714+extension) — User provided client metrics | 4.0 | Supported |
 | [KIP-1082](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1082%3A+Require+Client-Generated+IDs+over+the+ConsumerGroupHeartbeat+RPC) — ClientID in the next-gen rebalancer | 4.0 | Supported & hidden |
 | [KIP-1102](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1102%3A+Enable+clients+to+rebootstrap+based+on+timeout+or+error+code) — RebootstrapRequired | 4.0 | Supported |
+| [KIP-1123](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1123%3A+Rack-aware+partitioning+for+Kafka+Producer) — Rack-aware producer partitioning | 4.4 | Supported (via `RackAwarePartitioning`) |
 | [KIP-1139](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1139%3A+Add+support+for+OAuth+jwt-bearer+grant+type) - Oauth JWT bearer grant| 4.0 | Supported |
 | [KIP-1142](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1142%3A+Allow+to+list+non-existent+group+which+has+dynamic+config) - ListConfigResources | 4.1 | Supported (kadm v1.17+) |
 | [KIP-1152](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1152%3A+Add+transactional+ID+pattern+filter+to+ListTransactions+API) - ListTransactions.TransactionalIDPattern | 4.1 | Supported (kadm v1.17+) |
