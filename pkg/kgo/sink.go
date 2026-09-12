@@ -134,7 +134,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 			moreToDrain = true
 			continue
 		}
-		if req.produceMax > 12 && recBuf.topicID == ([16]byte{}) {
+		if req.produceMax > 12 && recBuf.topicID == noID {
 			req.produceMax = 12
 		}
 
@@ -915,6 +915,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 				&kmove,
 				kresp,
 				topic,
+				tid,
 				rp,
 				batch,
 				req.producerID,
@@ -966,6 +967,7 @@ func (s *sink) handleReqRespBatch(
 	kmove *kip951move,
 	resp *kmsg.ProduceResponse,
 	topic string,
+	tid [16]byte,
 	rp *kmsg.ProduceResponseTopicPartition,
 	batch seqRecBatch,
 	producerID int64,
@@ -1040,7 +1042,15 @@ func (s *sink) handleReqRespBatch(
 	if errors.Is(err, kerr.MessageTooLarge) {
 		err = fmt.Errorf("%w (uncompressed_bytes=%d, compressed_bytes=%d)", err, batchMetrics.UncompressedBytes, batchMetrics.CompressedBytes)
 	}
-	failUnknown := batch.owner.checkUnknownFailLimit(err)
+	// A request that carried an ID the topic no longer has, because the
+	// merge adopted a new one while the request was in flight, is
+	// rejected with UNKNOWN_TOPIC_ID and retried under the new ID. That
+	// rejection says nothing about the new topic, so it does not count
+	// toward the unknown-topic fail limit.
+	var failUnknown bool
+	if stale := tid != noID && tid != batch.owner.topicID; !stale || err == nil {
+		failUnknown = batch.owner.checkUnknownFailLimit(err)
+	}
 	switch {
 	case err == kerr.ConcurrentTransactions:
 		// Occasionally this is bubbled back to the producer as of
@@ -1123,6 +1133,40 @@ func (s *sink) handleReqRespBatch(
 				fmt.Fprintf(b, "resetting@%d,%d(%s)}, ", rp.BaseOffset, nrec, err)
 			}
 			return true, false
+		}
+
+		// The first produce into a recreated partition is rejected as
+		// out of order by Kafka 4.5 (KAFKA-15591): the new log has no
+		// producer state for us. That is the recreation, not data loss,
+		// so we bump the producer epoch and restart sequence numbers
+		// without telling you records were lost.
+		if batch.owner.recreated && s.cl.cfg.txnID == nil {
+			if debug {
+				s.cl.cfg.logger.Log(LogLevelDebug, "first produce to a recreated partition was rejected as out of order; the new log has no producer state, bumping producer epoch and resetting sequence numbers",
+					"broker", logID(s.nodeID),
+					"topic", topic,
+					"partition", rp.Partition,
+					"topic_id", topicID(tid),
+					"producer_id", producerID,
+					"producer_epoch", producerEpoch,
+					"err", err,
+				)
+			}
+			batch.owner.recreated = false
+			s.cl.failProducerID(producerID, producerEpoch, errReloadProducerID)
+			if debug {
+				fmt.Fprintf(b, "resetting@%d,%d(%s)}, ", rp.BaseOffset, nrec, err)
+			}
+			return true, false
+		}
+
+		// A transaction cannot recover the same way: its writes to the
+		// old topic were deleted with it. We fail the producer ID with
+		// errRecreationAbortTxn, which TryAbort recovers from, rather
+		// than with the sequence error, which recovery treats as fatal.
+		if s.cl.cfg.txnID != nil && batch.owner.recreated {
+			batch.owner.recreated = false
+			err = errRecreationAbortTxn
 		}
 
 		if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
@@ -1223,6 +1267,7 @@ func (s *sink) handleReqRespBatch(
 				batch.owner.okOnSink = true
 			}
 			batch.owner.lastAckedOffset = rp.BaseOffset + int64(len(batch.records))
+			batch.owner.recreated = false
 			if resp.Version >= 12 && s.cl.cfg.txnID != nil {
 				batch.owner.addedToTxn.Swap(true)
 			}
@@ -1448,7 +1493,6 @@ type recBuf struct {
 	cl *Client // for cfg, record finishing
 
 	topic     string
-	topicID   [16]byte
 	partition int32
 
 	// The number of bytes we can buffer in a batch for this particular
@@ -1465,6 +1509,15 @@ type recBuf struct {
 	buffered atomic.Int64
 
 	mu xsync.Mutex // guards r/w access to all fields below
+
+	// The topic ID we produce with. The metadata merge sets it on every
+	// update; it changes when the topic was recreated. See setTopicID.
+	topicID [16]byte
+	// Set when setTopicID changes the ID: the partition is a recreated
+	// topic's and the new log has no producer state for us. A sequence
+	// error on it is the recreation, not data loss, once: the error
+	// handling clears it, as does a produce that succeeds.
+	recreated bool
 
 	// sink is who is currently draining us. This can be modified
 	// concurrently during a metadata update.
@@ -1549,6 +1602,14 @@ type recBuf struct {
 	// all records once this exceeds the config's unknown topic fail limit.
 	// If we ever see a different error (or no error), this is reset.
 	unknownFailures int64
+	// unknownIDFailures counts consecutive UNKNOWN_TOPIC_ID rejections.
+	// The metadata merge reads it to decide whether the ID we produce
+	// with is dead, so unlike unknownFailures it counts only rejections
+	// of the ID itself.
+	unknownIDFailures int64
+	// purgatoryUntil is set by the metadata merge when a recreation
+	// removed this partition; see topicPartition.purgatoryUntil.
+	purgatoryUntil int64
 
 	// lingering is a timer that avoids starting maybeDrain until expiry,
 	// allowing for more records to be buffered in a single batch.
@@ -1760,18 +1821,78 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 // topic error bumps it; any other error leaves it unchanged -- resetting only
 // on success is what keeps interleaved errors (e.g. an alternating
 // NOT_LEADER_FOR_PARTITION) from holding the count below the limit forever.
-// Three errors count: UNKNOWN_TOPIC_OR_PARTITION, UNKNOWN_TOPIC_ID (a deleted-
-// and-recreated topic returns it until the user purges and re-adds, since
-// produce v13+ keys topics by ID), and the metadata-side
-// errMissingMetadataPartition twin. Returns whether we have exceeded the limit.
+// Three errors count: UNKNOWN_TOPIC_OR_PARTITION, UNKNOWN_TOPIC_ID (produce
+// v13+ keys topics by ID; a deleted topic returns it, and a recreated topic
+// returns it until the metadata merge adopts the new ID), and the
+// metadata-side errMissingMetadataPartition twin. Returns whether we have
+// exceeded the limit.
+//
+// A partition in purgatory is one a recreation removed, so the ID we produce
+// with is the topic's current ID and a rejection of it says nothing about the
+// ID. We leave the ID count alone and keep counting unknownFailures, so
+// buffered records still fail at MaxBufferedRecords' unknown limit.
 func (recBuf *recBuf) checkUnknownFailLimit(err error) bool {
 	switch {
 	case err == nil:
 		recBuf.unknownFailures = 0
+		recBuf.unknownIDFailures = 0
 	case errors.Is(err, kerr.UnknownTopicOrPartition) || errors.Is(err, kerr.UnknownTopicID) || errors.Is(err, errMissingMetadataPartition):
 		recBuf.unknownFailures++
+		if errors.Is(err, kerr.UnknownTopicID) && recBuf.purgatoryUntil == 0 {
+			recBuf.unknownIDFailures++
+		}
 	}
 	return recBuf.cl.cfg.maxUnknownFailures >= 0 && recBuf.unknownFailures > recBuf.cl.cfg.maxUnknownFailures
+}
+
+func (recBuf *recBuf) unknownIDFails() int32 {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+	return int32(min(recBuf.unknownIDFailures, 1<<31-1))
+}
+
+func (recBuf *recBuf) purgatory() int64 {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+	return recBuf.purgatoryUntil
+}
+
+func (recBuf *recBuf) setPurgatory(until int64) {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+	recBuf.purgatoryUntil = until
+}
+
+// setTopicID sets the ID we produce to the topic with. The metadata merge
+// calls this with the topic's ID on every update; the ID changes when the
+// topic was recreated, and the next request goes out under it.
+//
+// We return whether a transaction is exposed to a recreation: this
+// partition was added to one, or has records for it buffered or in flight.
+// Such a transaction cannot commit safely, since its writes to the old
+// topic were deleted with it. The merge fails the transaction once for the
+// topic.
+//
+// Must be called while locked.
+func (recBuf *recBuf) setTopicID(id [16]byte) (txnExposed bool) {
+	changed := recBuf.topicID != noID && recBuf.topicID != id
+	recBuf.topicID = id
+	if !changed {
+		return false
+	}
+	recBuf.recreated = true
+	return recBuf.addedToTxn.Load() || len(recBuf.batches) > 0 || recBuf.inflight != 0
+}
+
+// setTopicIDClearFailing sets the topic ID and clears the failing state in
+// one lock: the metadata merge does both for every partition it keeps.
+func (recBuf *recBuf) setTopicIDClearFailing(id [16]byte) (txnExposed bool) {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+	txnExposed = recBuf.setTopicID(id)
+	recBuf.failing = false
+	recBuf.maybeTriggerDrain()
+	return txnExposed
 }
 
 // failAllRecords fails all buffered records in this recBuf.

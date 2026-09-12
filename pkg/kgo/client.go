@@ -3234,7 +3234,8 @@ func (cl *Client) storeCachedMeta(req *kmsg.MetadataRequest, meta *kmsg.Metadata
 		}
 		// A recreated topic comes back under a new ID. Delete the old
 		// ID's mapping when overwriting the entry, else byID accumulates
-		// stale IDs forever and resolves IDs that no longer exist.
+		// stale IDs forever and resolves IDs that no longer exist. The
+		// id2t map drops it the same way at the metadata merge.
 		if old, ok := cl.metaCache.topics[topicName]; ok && old.id != topic.TopicID && old.id != zeroID {
 			delete(cl.metaCache.byID, old.id)
 		}
@@ -3597,11 +3598,11 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 	var resolving bool
 	for _, g := range req.Groups {
 		for _, t := range g.Topics {
-			if t.Topic == "" && t.TopicID != ([16]byte{}) {
+			if t.Topic == "" && t.TopicID != noID {
 				unresolvedIDs = append(unresolvedIDs, t.TopicID)
 				resolving = true
 			}
-			if t.Topic != "" && t.TopicID == ([16]byte{}) {
+			if t.Topic != "" && t.TopicID == noID {
 				unresolvedNames = append(unresolvedNames, t.Topic)
 				resolving = true
 			}
@@ -3632,13 +3633,13 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 			g := &req.Groups[i]
 			for j := range g.Topics {
 				t := &g.Topics[j]
-				if t.Topic == "" && t.TopicID != ([16]byte{}) {
+				if t.Topic == "" && t.TopicID != noID {
 					t.Topic = cl.metaCache.byID[t.TopicID]
 					if t.Topic == "" {
 						t.Topic = id2t[t.TopicID]
 					}
 				}
-				if t.TopicID == ([16]byte{}) && t.Topic != "" {
+				if t.TopicID == noID && t.Topic != "" {
 					if ct, ok := cl.metaCache.topics[t.Topic]; ok {
 						t.TopicID = ct.id
 					} else if ct, ok := nameMeta[t.Topic]; ok {
@@ -3760,10 +3761,10 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 	for i := range resp.Groups {
 		for j := range resp.Groups[i].Topics {
 			t := &resp.Groups[i].Topics[j]
-			if t.Topic == "" && t.TopicID != ([16]byte{}) {
+			if t.Topic == "" && t.TopicID != noID {
 				unresolvedIDs = append(unresolvedIDs, t.TopicID)
 			}
-			if t.TopicID == ([16]byte{}) && t.Topic != "" {
+			if t.TopicID == noID && t.Topic != "" {
 				unresolvedNames = append(unresolvedNames, t.Topic)
 			}
 		}
@@ -3786,7 +3787,7 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 		for i := range resp.Groups {
 			for j := range resp.Groups[i].Topics {
 				t := &resp.Groups[i].Topics[j]
-				if t.Topic == "" && t.TopicID != ([16]byte{}) {
+				if t.Topic == "" && t.TopicID != noID {
 					t.Topic = cl.metaCache.byID[t.TopicID]
 					if t.Topic == "" && resp.Version >= 10 {
 						for k := range t.Partitions {
@@ -3796,11 +3797,11 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 						}
 					}
 				}
-				if t.TopicID == ([16]byte{}) && t.Topic != "" {
+				if t.TopicID == noID && t.Topic != "" {
 					if ct, ok := cl.metaCache.topics[t.Topic]; ok {
 						t.TopicID = ct.id
 					}
-					if t.TopicID == ([16]byte{}) && resp.Version >= 10 {
+					if t.TopicID == noID && resp.Version >= 10 {
 						for k := range t.Partitions {
 							if t.Partitions[k].ErrorCode == 0 {
 								t.Partitions[k].ErrorCode = kerr.UnknownTopicOrPartition.Code

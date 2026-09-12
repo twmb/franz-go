@@ -46,6 +46,11 @@ var (
 	// Static membership (KIP-345) requires JoinGroup v5+.
 	allowStaticMembership = false
 
+	// Fetch v13 (Kafka 3.1) is the first that sends topic IDs rather than
+	// topic names. Below it, a fetch of a recreated topic is served by
+	// name at the old topic's offset.
+	allowFetchTopicIDs = false
+
 	// KIP-848 requires ConsumerGroupHeartbeat v1 (key 68, stable).
 	// Must match should848() which calls supportsKIP848v1().
 	allow848 = false
@@ -224,6 +229,9 @@ func adm() *Client {
 				}
 				if v, ok := versions.LookupMaxKeyVersion(68); ok && v >= 1 { // 68 = ConsumerGroupHeartbeat v1 (KIP-848 stable)
 					allow848 = true
+				}
+				if v, ok := versions.LookupMaxKeyVersion(1); ok && v >= 13 { // 1 = Fetch v13 (KIP-516 topic IDs)
+					allowFetchTopicIDs = true
 				}
 				sf, sfOK := versions.LookupMaxKeyVersion(78) // 78 = ShareFetch
 				sa, saOK := versions.LookupMaxKeyVersion(79) // 79 = ShareAcknowledge

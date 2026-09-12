@@ -29,6 +29,14 @@ func (m *metawait) signal() {
 	m.c.Broadcast()
 }
 
+// metadataUpdatedAfter reports whether a metadata update completed after
+// the unix nanos t.
+func (cl *Client) metadataUpdatedAfter(t int64) bool {
+	cl.metawait.mu.Lock()
+	defer cl.metawait.mu.Unlock()
+	return cl.metawait.lastUpdate.UnixNano() > t
+}
+
 // ForceMetadataRefresh triggers the client to update the metadata that is
 // currently used for producing & consuming.
 //
@@ -410,37 +418,31 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	// retain their ID mapping from prior responses.
 	//
 	// If a topic was deleted and recreated, the broker returns a new
-	// ID for the same name. We do NOT add the new ID if the old ID
-	// is still present - the old mapping is preserved until the user
-	// explicitly purges via PurgeTopicsFromClient. This avoids having
-	// two IDs for the same topic name.
+	// ID for the same name. We adopt the new ID and drop the old one.
+	// KIP-848 assignments name topics by ID, so the new topic's
+	// assignment resolves through this map. Nothing needs the old entry.
+	// A response carrying the old ID is resolved through the request
+	// that sent it: fetchOffsets scans its request, and OffsetCommit,
+	// fetch sessions, and produce batches keep their own maps. A KIP-848
+	// assignment still naming the old ID stays in unresolvedAssigned
+	// until the coordinator assigns the new one. The metadata cache's
+	// byID map drops the old ID the same way.
 	{
 		old := cl.id2tMap()
+		t2id := make(map[string][16]byte, len(old))
+		for id, name := range old {
+			t2id[name] = id
+		}
 		merged := make(map[[16]byte]string, len(old)+len(latest))
 		maps.Copy(merged, old)
-
-		// Build the set of topic names that already have an ID.
-		knownNames := make(map[string]struct{}, len(merged))
-		for _, name := range merged {
-			knownNames[name] = struct{}{}
-		}
-
 		for _, mt := range latest {
-			if mt.id == ([16]byte{}) {
+			if mt.id == noID {
 				continue
 			}
-			if _, exists := knownNames[mt.topic]; exists {
-				// This name already has an ID in the map.
-				// Only update if it's the same ID (normal
-				// case), skip if it's a different ID
-				// (recreated topic).
-				if _, sameID := merged[mt.id]; sameID {
-					merged[mt.id] = mt.topic
-				}
-				continue
+			if prior, ok := t2id[mt.topic]; ok && prior != mt.id {
+				delete(merged, prior)
 			}
 			merged[mt.id] = mt.topic
-			knownNames[mt.topic] = struct{}{}
 		}
 		cl.id2t.Store(merged)
 	}
@@ -768,7 +770,6 @@ func (cl *Client) mergeTopicPartitions(
 	retryWhy *multiUpdateWhy,
 ) {
 	isProduce := kind == partitionKindProduce
-	isShare := kind == partitionKindShare
 	// The logger is an interface, so the variadic slice and the interface
 	// boxes for every argument are built at the call site even when the
 	// logger drops the line. The logs below fire once per partition per
@@ -792,7 +793,6 @@ func (cl *Client) mergeTopicPartitions(
 	lv.loadErr = r.loadErr
 	lv.isInternal = r.isInternal
 	lv.topic = r.topic
-	lv.id = r.id
 	if lv.when == 0 {
 		lv.when = r.when
 	}
@@ -813,12 +813,75 @@ func (cl *Client) mergeTopicPartitions(
 		return
 	}
 
+	// A prior ID and the partitions a recreation removed share one
+	// deadline: past it we have waited long enough that every broker has
+	// had a chance to report the recreation, so we forget the old ID and
+	// delete the partitions.
+	now := time.Now().UnixNano()
+	lv.priorIDs.dropExpired(now)
+
+	// Topic IDs are random and never reused, so a new ID for a name we
+	// hold means the topic was deleted and recreated. We adopt an ID the
+	// topic never held immediately: a partition being consumed restarts
+	// below, one being produced to continues under the new ID, and a
+	// share cursor continues on the new topic's share state. We
+	// refuse an ID the topic held previously until the ID we hold has
+	// been rejected recreationRejectionLimit times: a broker that has
+	// not yet learned of the recreation still reports the old ID.
+	var recreated bool
+	switch {
+	case r.id == lv.id, lv.id == noID: // same ID, or no ID yet: copy the ID over
+		lv.id = r.id
+	case r.id == noID:
+		// A broker that reports no ID cannot tell us whether the topic
+		// was recreated, so we keep the ID we hold. The rest of the
+		// response is still usable: we merge leaders and epochs below
+		// rather than discarding the whole update.
+		cl.cfg.logger.Log(LogLevelWarn, "metadata update is missing the topic ID when we previously had one, keeping our ID",
+			"topic", topic,
+		)
+		retryWhy.add(topic, -1, errMissingTopicID)
+	case lv.priorIDs.has(r.id) && !lv.unknownIDLimitReached(kind):
+		cl.cfg.logger.Log(LogLevelDebug, "metadata update reports a topic ID this topic held previously, ignoring update until our ID is rejected",
+			"topic", topic,
+			"reported_id", topicID(r.id),
+			"our_id", topicID(lv.id),
+		)
+		lv.clearFailing(kind)
+		return
+	default:
+		what := "topic recreation detected, adopting the new topic ID"
+		switch kind {
+		case partitionKindProduce:
+			what += " for producing"
+		case partitionKindConsume:
+			what += " for consuming"
+		case partitionKindShare:
+			what += " for share consuming"
+		}
+		cl.cfg.logger.Log(LogLevelInfo, what,
+			"topic", topic,
+			"old_id", topicID(lv.id),
+			"new_id", topicID(r.id),
+		)
+		lv.priorIDs.add(lv.id, now+int64(cl.cfg.recreatedPartitionDelete))
+		lv.id = r.id
+		recreated = true
+	}
+
 	// Before the atomic update, we keep the latest partitions / writable
 	// partitions. All updates happen in r's slices, and we keep the
 	// results and store them in lv.
 	defer func() {
 		lv.partitions = r.partitions
 		lv.writablePartitions = r.writablePartitions
+		lv.numPurgatory = 0
+		for i := len(r.partitions) - 1; i >= 0; i-- {
+			if r.partitions[i].purgatoryUntil() == 0 {
+				break
+			}
+			lv.numPurgatory++
+		}
 	}()
 
 	// We should have no deleted partitions, but there are two cases where
@@ -837,6 +900,13 @@ func (cl *Client) mergeTopicPartitions(
 
 	// Migrating topicPartitions is a little tricky because we have to
 	// worry about underlying pointers that may currently be loaded.
+	var (
+		swapped     int      // cursors restarted or stopped by a recreation
+		swappedFrom [16]byte // the ID they were swapped from
+		txnExposed  int      // partitions whose recreation a transaction is exposed to
+		purging     bool     // whether we are deleting the tail a recreation removed
+		purged      int      // how many partitions we deleted
+	)
 	for part, oldTP := range lv.partitions {
 		exists := part < len(r.partitions)
 		if !exists {
@@ -853,6 +923,42 @@ func (cl *Client) mergeTopicPartitions(
 			// or automatically for regex consumers when the topic
 			// has been missing from metadata for longer than
 			// ConsiderMissingTopicDeletedAfter.
+			//
+			// Case 2 is the exception: a recreated topic answers for
+			// what it has, so a partition missing from the response
+			// that adopted the new ID is one the new topic does not
+			// have. We put the partition in purgatory rather than
+			// delete it at once, because the ID can reach us before
+			// every broker has caught up. A partition in purgatory
+			// is not one you can produce to nor one a balancer
+			// assigns, we keep asking for it, and we hide the
+			// answers that agree it is gone. If it stays missing for
+			// ConsiderRecreatedPartitionsDeletedAfter we delete it
+			// here.
+			switch {
+			case recreated:
+				oldTP.setPurgatoryUntil(now + int64(cl.cfg.recreatedPartitionDelete))
+			case purging:
+				// A lower partition is being deleted, so every
+				// partition past it goes with it: what we keep
+				// must stay indexed by partition number.
+			default:
+				until := oldTP.purgatoryUntil()
+				purging = until != 0 && now >= until
+			}
+			if purging {
+				switch kind {
+				case partitionKindProduce:
+					oldTP.purgeProduction()
+				case partitionKindShare:
+					oldTP.purgeShareCursor(cl)
+				default:
+					oldTP.purgeCursor(cl, css)
+				}
+				purged++
+				continue
+			}
+
 			dup := *oldTP
 			newTP := &dup
 			newTP.loadErr = errMissingMetadataPartition
@@ -871,6 +977,11 @@ func (cl *Client) mergeTopicPartitions(
 		}
 		newTP := r.partitions[part]
 
+		// The topic has the partition, so it is not in purgatory. This
+		// also undoes a stamp from a recreation that a later response
+		// disagreed with.
+		oldTP.setPurgatoryUntil(0)
+
 		// Like above for the entire topic, an individual partition
 		// can have a load error. Unlike for the topic, individual
 		// partition errors are always retryable.
@@ -888,6 +999,58 @@ func (cl *Client) mergeTopicPartitions(
 			}
 			retryWhy.add(topic, int32(part), newTP.loadErr)
 			continue
+		}
+
+		switch kind {
+		case partitionKindProduce:
+			// A recreated topic's leader epoch restarts from 0, so it is
+			// often below the old topic's. We take the ID before the
+			// epoch comparison below, which would otherwise keep the old
+			// information and leave this partition producing under an ID
+			// the topic no longer has.
+			if oldTP.records.setTopicIDClearFailing(lv.id) {
+				txnExposed++
+			}
+
+		case partitionKindConsume:
+			// A recreated topic's leader epoch restarts from 0, so it
+			// is often below the old topic's. The swap comes first so
+			// that the epoch comparison below does not think this is a
+			// stale broker.
+			//
+			// A cursor can still fetch with the old ID after metadata
+			// adopted the new one: fetchOffsets sent its OffsetFetch
+			// while metadata still had the old ID, the update then
+			// adopted the new ID and swapped only the cursors that
+			// existed at the time, and assignPartitions created this
+			// cursor afterward with the old ID. The broker rejects its
+			// fetches with UNKNOWN_TOPIC_ID, the cursor records the
+			// rejection, and the next merge swaps it here (rejected
+			// below). We read the ID the rejection was for rather
+			// than the cursor's own: we run outside the session
+			// that guards it.
+			rejectedID := oldTP.cursor.rejectedID.Load()
+			rejected := rejectedID != nil && *rejectedID != lv.id
+			if recreated || rejected {
+				if from, ok := oldTP.swapRecreatedCursorTo(newTP, css); ok {
+					swappedFrom, swapped = from, swapped+1
+				}
+				continue
+			}
+
+		case partitionKindShare:
+			// Share positions and acquisition state live on the broker
+			// and were deleted with the old topic, so the cursor takes
+			// the new ID and continues on the new topic's share state.
+			// A cursor that missed the update which adopted the ID, for
+			// a load error on its partition, is swapped once the broker
+			// rejects it, the same as a consuming cursor.
+			rejectedID := oldTP.shareCursor.rejectedID.Load()
+			rejected := rejectedID != nil && *rejectedID != lv.id
+			if recreated || rejected {
+				oldTP.swapRecreatedShareCursorTo(cl, newTP)
+				continue
+			}
 		}
 
 		// If the new partition has an older leader epoch, then we
@@ -963,27 +1126,6 @@ func (cl *Client) mergeTopicPartitions(
 			)
 		}
 
-		if !isProduce {
-			var noID [16]byte
-			var newID, oldID [16]byte
-			if isShare {
-				newID = newTP.shareCursor.topicID
-				oldID = oldTP.shareCursor.topicID
-			} else {
-				newID = newTP.cursor.topicID
-				oldID = oldTP.cursor.topicID
-			}
-			if newID == noID && oldID != noID {
-				cl.cfg.logger.Log(LogLevelWarn, "metadata update is missing the topic ID when we previously had one, ignoring update",
-					"topic", topic,
-					"partition", part,
-				)
-				*newTP = *oldTP
-				retryWhy.add(topic, int32(part), errMissingTopicID)
-				continue
-			}
-		}
-
 		// If the tp data is the same, we simply copy over the records
 		// and cursor pointers.
 		//
@@ -1000,8 +1142,17 @@ func (cl *Client) mergeTopicPartitions(
 			}
 			switch kind {
 			case partitionKindProduce:
+				// A partition being produced to takes the topic's ID and
+				// clears its failing state under one lock; the next
+				// request goes out under the ID. A recreated topic's log
+				// has no producer state, so the broker accepts our next
+				// sequence number, or, from KAFKA-15591, rejects it as
+				// out of order on the never-written partition. That
+				// rejection is the recreation and not data loss: we bump
+				// the producer epoch and restart the sequence numbers. A
+				// partition skipped above, for a load error, takes the
+				// ID on the next update that merges it.
 				newTP.records = oldTP.records
-				newTP.records.clearFailing() // always clear failing state for producing after meta update
 			case partitionKindShare:
 				newTP.shareCursor = oldTP.shareCursor
 			default:
@@ -1020,13 +1171,59 @@ func (cl *Client) mergeTopicPartitions(
 			}
 			switch kind {
 			case partitionKindProduce:
-				oldTP.migrateProductionTo(newTP) // migration clears failing state
+				// The ID was taken above; the migration moves the sink
+				// and clears the failing state.
+				oldTP.migrateProductionTo(newTP, lv.id)
 			case partitionKindShare:
 				oldTP.migrateShareCursorTo(cl, newTP)
 			default:
 				oldTP.migrateCursorTo(newTP, css)
 			}
 		}
+	}
+
+	// A transaction that produced to a recreated topic, or has records for
+	// it buffered or in flight, cannot commit: its writes to the old topic
+	// were deleted with it, and a commit would report them as committed.
+	// We fail the transaction once for the topic. The producer ID error
+	// gate is for the log line: failProducerID itself no-ops once the ID
+	// has failed, but we would otherwise log on every update until you
+	// abort.
+	if txnExposed > 0 && cl.cfg.txnID != nil {
+		if cur := cl.producer.id.Load().(*producerID); cur.err == nil {
+			cl.cfg.logger.Log(LogLevelWarn, "topic recreation observed with an active transaction exposed to it; failing the transaction",
+				"topic", topic,
+				"exposed_partitions", txnExposed,
+			)
+			cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
+		}
+	}
+
+	if purged > 0 {
+		cl.cfg.logger.Log(LogLevelInfo, "deleting partitions that a recreated topic does not have and that no broker has reported since",
+			"topic", topic,
+			"deleted_partitions", purged,
+			"id", topicID(lv.id),
+		)
+	}
+
+	// The swaps above log one line for the topic; the per partition detail
+	// is at debug. Whether a swapped cursor restarts or stops is our own
+	// config, so every swap in this update is one or the other.
+	if swapped > 0 {
+		restarted, stopped := swapped, 0
+		msg := "restarting partitions from the recreated topic's beginning"
+		if cl.cfg.resetOffset.noReset {
+			restarted, stopped = 0, swapped
+			msg = "the topic was recreated and NoResetOffset is set, so these partitions are stopped until you purge and re-add the topic"
+		}
+		cl.cfg.logger.Log(LogLevelInfo, msg,
+			"topic", topic,
+			"old_id", topicID(swappedFrom),
+			"new_id", topicID(lv.id),
+			"restarted_partitions", restarted,
+			"stopped_partitions", stopped,
+		)
 	}
 
 	// For any partitions **not currently in use**, we need to add them to
@@ -1103,12 +1300,13 @@ type kerrOrString struct {
 	s string
 }
 
-func (m *multiUpdateWhy) isOnly(err error) bool {
+// isOnly reports whether every reason is one of errs.
+func (m *multiUpdateWhy) isOnly(errs ...error) bool {
 	if m == nil {
 		return false
 	}
 	for e := range *m {
-		if !errors.Is(err, e.k) {
+		if !slices.ContainsFunc(errs, func(err error) bool { return errors.Is(err, e.k) }) {
 			return false
 		}
 	}

@@ -417,7 +417,7 @@ func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults
 		if pd == nil {
 			continue
 		}
-		if r.Partition < 0 || int(r.Partition) >= len(pd.partitions) {
+		if r.Partition < 0 || int(r.Partition) >= pd.npartitions() {
 			continue
 		}
 		rb := pd.partitions[r.Partition].records
@@ -893,10 +893,16 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 		parts.partitioner = cl.cfg.partitioner.ForTopic(pr.Topic)
 	}
 
+	// Partitions a recreation removed are excluded: a partitioner that
+	// requires consistency, ManualPartitioner included, must not pick one,
+	// and the fallback below must not fall back onto one. The writable
+	// subset needs no filtering: a removed partition carries a load error,
+	// which already keeps it out.
+	live := partsData.partitions[:partsData.npartitions()]
 	mapping := partsData.writablePartitions
 	if parts.partitioner.RequiresConsistency(pr.Record) {
-		mapping = partsData.partitions
-	} else if len(mapping) == 0 && len(partsData.partitions) > 0 {
+		mapping = live
+	} else if len(mapping) == 0 && len(live) > 0 {
 		// Every partition has a retriable load error, e.g. a rolling
 		// restart of an RF=1 broker briefly left all partitions
 		// leaderless. Rather than failing the record up front with
@@ -907,7 +913,7 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 		// the delivery timeout or retry limits, the record fails
 		// with the partition's actual load error. The Java client
 		// falls back identically when no partition is available.
-		mapping = partsData.partitions
+		mapping = live
 	}
 	if len(mapping) == 0 {
 		cl.producer.promiseRecord(pr, errors.New("unable to partition record due to no usable partitions"))

@@ -28,6 +28,19 @@ type Offset struct {
 
 	noReset    bool
 	afterMilli bool
+
+	// The topic ID the offset was fetched under: the ID in the
+	// OffsetFetch v10 response, or, below v10, the ID the topic had when
+	// fetchOffsets sent the request. Offsets from the user have no ID.
+	// assignPartitions sets cursor.topicID to this value, or to the
+	// current metadata loaded ID if this value is zero. The fetch is
+	// tagged with this ID.
+	//
+	// If the topic was recreated after the offset was fetched, the fetch
+	// is rejected and triggers a metadata update. The update restarts the
+	// partition from the new topic's beginning. See consumer_group.go's
+	// fetchOffsets for more detail.
+	topicID [16]byte
 }
 
 // Random negative, only significant within this package.
@@ -1274,6 +1287,20 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		}
 
 		for partition, offset := range partitions {
+			// Update the cursor ID if needed (see Offset.topicID doc).
+			// The session is stopped or guarded, and a cursor that is
+			// being assigned here cannot be in use, so this is
+			// concurrency safe.
+			if partition >= 0 && partition < int32(len(topicPartitions.partitions)) {
+				id := offset.topicID
+				if id == noID {
+					id = topicPartitions.id
+				}
+				if cursor := topicPartitions.partitions[partition].cursor; id != noID && cursor.topicID != id {
+					cursor.topicID = id
+				}
+			}
+
 			// If we are loading the first record after a millisec,
 			// we go directly to listing offsets. Epoch validation
 			// does not ever set afterMilli.
@@ -1434,6 +1461,10 @@ func (c *consumer) doOnMetadataUpdate() {
 		return
 	}
 
+	// A cursor paused by a rejected fetch waits for this update; see
+	// cursor.pausedAt.
+	c.cl.allSources((*source).maybeConsume)
+
 	// See the comment on the outstandingMetadataUpdates field for why this
 	// block below.
 	if c.outstandingMetadataUpdates.maybeBegin() {
@@ -1491,7 +1522,12 @@ type offsetLoadMap map[string]map[int32]offsetLoad
 // offsetLoad is effectively an Offset, but also includes a potential replica
 // to directly use if a cursor had a preferred replica.
 type offsetLoad struct {
-	replica int32 // -1 means leader
+	replica     int32 // -1 means leader
+	revalidated bool  // whether we already refreshed metadata to tell data loss from a topic recreation
+	// nonexistentAt is when this load last failed because our metadata
+	// does not have the partition. The first such failure is quiet and
+	// later ones are reported; see nonexistentLoad.
+	nonexistentAt int64
 	// ooorMilli is non-zero when we are resetting a cursor that received
 	// OFFSET_OUT_OF_RANGE while consuming: the timestamp of the last
 	// record it consumed. The offset itself is the one that was out of
@@ -1590,6 +1626,35 @@ func (l *listOrEpochLoads) removeLoad(t string, p int32) (removed bool) {
 		}
 	}
 	return removed
+}
+
+// splitNonexistent removes the loads that failed because our metadata does
+// not have their partition, returning them and the latest time one failed.
+// These retry on a metadata update rather than a second later, so they wait
+// apart from everything else.
+func (l *listOrEpochLoads) splitNonexistent() (nonexistent listOrEpochLoads, at int64) {
+	for _, src := range []struct {
+		m        offsetLoadMap
+		loadType listOrEpochLoadType
+	}{
+		{l.List, loadTypeList},
+		{l.Epoch, loadTypeEpoch},
+	} {
+		for t, ps := range src.m {
+			for p, o := range ps {
+				if o.nonexistentAt == 0 {
+					continue
+				}
+				nonexistent.addLoad(t, p, src.loadType, o)
+				at = max(at, o.nonexistentAt)
+				delete(ps, p)
+			}
+			if len(ps) == 0 {
+				delete(src.m, t)
+			}
+		}
+	}
+	return nonexistent, at
 }
 
 func (l listOrEpochLoads) each(fn func(string, int32)) {
@@ -2102,8 +2167,33 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 		}
 	}
 
+	// Loads answered with data loss are validated once more after a
+	// metadata update. loadWithSessionNow forces that update even within
+	// MetadataMinAge. See handleListOrEpochResults.
+	var revalidate listOrEpochLoads
+	defer func() {
+		if !revalidate.isEmpty() {
+			s.incWorker()
+			go func() {
+				defer s.decWorker()
+				revalidate.loadWithSessionNow(s, "revalidating offsets after apparent data loss")
+			}()
+		}
+	}()
+
 	var reloads, followUps listOrEpochLoads
 	defer func() {
+		// A load for a partition our metadata does not have waits for
+		// a metadata update; nothing else can answer it. Everything
+		// else waits a second.
+		if nonexistent, at := reloads.splitNonexistent(); !nonexistent.isEmpty() {
+			s.incWorker()
+			go func() {
+				defer s.decWorker()
+				defer nonexistent.loadWithSession(s, "reload offsets for a partition our metadata does not have")
+				s.waitNonexistent(at)
+			}()
+		}
 		if !reloads.isEmpty() {
 			s.incWorker()
 			go func() {
@@ -2136,12 +2226,57 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 	for received != issued {
 		loaded := <-results
 		received++
-		reload, followUp := s.handleListOrEpochResults(loaded)
+		reload, followUp, revalidates := s.handleListOrEpochResults(loaded)
 		reloads.mergeFrom(reload)
 		followUps.mergeFrom(followUp)
+		revalidate.mergeFrom(revalidates)
 	}
 
 	followUps.loadWithSession(s, "reset by time after an undefined epoch offset")
+}
+
+// waitNonexistent holds a retry for a partition our metadata does not have
+// until a metadata update has completed since the load failed at time at. We
+// wait at least MetadataMinAge as well, so that the retry follows one update
+// rather than every update the rest of the client asks for.
+func (s *consumerSession) waitNonexistent(at int64) {
+	cl := s.c.cl
+	wait := max(time.Second, cl.cfg.metadataMinAge)
+	for {
+		cl.triggerUpdateMetadata(false, "loading offsets for a partition our metadata does not have")
+		timer := time.NewTimer(wait)
+		select {
+		case <-timer.C:
+		case <-s.ctx.Done():
+			timer.Stop()
+			return
+		}
+		timer.Stop()
+		if cl.metadataUpdatedAfter(at) {
+			return
+		}
+	}
+}
+
+// nonexistentLoad answers a load whose partition is not in our metadata.
+//
+// We say the partition does not exist only if we hold the topic, the topic
+// loaded without error, and the partition is past the count the topic has.
+// Even then, the first failure is quiet: a group can assign a partition
+// moments before our own metadata catches up. Every later failure is reported
+// to you. The stamp on the request tells the two apart, and it holds the
+// retry until the next metadata update; see waitNonexistent.
+func (cl *Client) nonexistentLoad(topic string, partition int32, d *topicPartitionsData, request offsetLoad) loadedOffset {
+	gone := d != nil && d.loadErr == nil && len(d.partitions) > 0 && int(partition) >= d.npartitions()
+	report := gone && request.nonexistentAt != 0
+	request.nonexistentAt = time.Now().UnixNano()
+
+	err := error(kerr.UnknownTopicOrPartition)
+	if report {
+		err = fmt.Errorf("our metadata for topic %s does not have partition %d: %w", topic, partition, kerr.UnknownTopicOrPartition)
+		cl.consumer.addFakeReadyForDraining(topic, partition, err, "notification that our metadata does not have this partition")
+	}
+	return loadedOffset{topic: topic, partition: partition, err: err, request: request}
 }
 
 // Called within a consumer session, this function handles results from list
@@ -2162,7 +2297,7 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 // is not much else we can do. RequestWith already retries, but returns when
 // the retry limit is hit. We will backoff 1s and then allow RequestWith to
 // continue requesting and backing off.
-func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reloads, followUps listOrEpochLoads) {
+func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reloads, followUps, revalidate listOrEpochLoads) {
 	// This function can be running twice concurrently, so we need to guard
 	// listOrEpochLoadsLoading and usingCursors. For simplicity, we just
 	// guard this entire function.
@@ -2215,6 +2350,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 				lastConsumedEpoch: load.leaderEpoch,
 				lastConsumedTime:  prior.lastConsumedTime,
 				hwm:               prior.hwm,
+				restarted:         prior.restarted,
 			})
 			load.cursor.allowUsable()
 			s.c.usingCursors.use(load.cursor)
@@ -2223,6 +2359,16 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 		var edl *ErrDataLoss
 		switch {
 		case errors.As(load.err, &edl):
+			// A recreated topic looks like data loss: the epoch we
+			// consumed is not in the new log. We refresh metadata and
+			// validate once more before believing it. If the update
+			// reports a new ID, the swap drops this load and restarts
+			// from the beginning.
+			if !load.request.revalidated && load.cursor.topicID != noID {
+				load.request.revalidated = true
+				revalidate.addLoad(load.topic, load.partition, loaded.loadType, load.request)
+				continue
+			}
 			s.c.addFakeReadyForDraining(load.topic, load.partition, load.err, "notification of data loss") // signal we lost data, but set the cursor to what we can
 			use()
 
@@ -2249,7 +2395,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 		}
 	}
 
-	return reloads, followUps
+	return reloads, followUps, revalidate
 }
 
 // Splits the loads into per-broker loads, mapping each partition to the broker
@@ -2518,7 +2664,16 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 			}
 
 			if partition < 0 || partition >= int32(len(topicPartitions.partitions)) {
-				continue // should not happen: we have not seen this partition from a metadata response
+				// We have not seen this partition in a metadata
+				// response. Answer for it here: falling out
+				// below leaves a bare retryable error that
+				// retries forever and tells you nothing.
+				loaded.add(cl.nonexistentLoad(topic, partition, topicPartitions, loadPart))
+				delete(loadParts, partition)
+				if len(loadParts) == 0 {
+					delete(load, topic)
+				}
+				continue
 			}
 			topicPartition := topicPartitions.partitions[partition]
 
@@ -2634,7 +2789,7 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 	results <- loaded.addAll(load.errToLoaded(kerr.UnknownTopicOrPartition))
 }
 
-func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, tps *topicsPartitions, results chan<- loadedOffsets) {
+func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, tps *topicsPartitions, results chan<- loadedOffsets) {
 	loaded := loadedOffsets{broker: broker.meta.NodeID, loadType: loadTypeEpoch}
 
 	kresp, err := broker.waitResp(ctx, load.buildEpochReq())
@@ -2680,7 +2835,13 @@ func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load
 			}
 
 			if partition < 0 || partition >= int32(len(topicPartitions.partitions)) {
-				continue // should not happen: we have not seen this partition from a metadata response
+				// See the same block in listOffsetsForBrokerLoad.
+				loaded.add(cl.nonexistentLoad(topic, partition, topicPartitions, loadPart))
+				delete(loadParts, partition)
+				if len(loadParts) == 0 {
+					delete(load, topic)
+				}
+				continue
 			}
 			topicPartition := topicPartitions.partitions[partition]
 
