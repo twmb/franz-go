@@ -812,6 +812,44 @@ func (cl *Client) mergeTopicPartitions(
 		lv.writablePartitions = r.writablePartitions
 	}()
 
+	// We never adopt new topic IDs from recreated topics. Users must purge
+	// and re-add the topic if they want them to work.
+	//
+	// When we detect recreation, we permanently save the original ID we
+	// saw into recreatedFrom. This allows us to fail producing/consuming
+	// going forward.
+	//
+	//   * For consumers, stopping our consumer session and restarting it
+	//     removes the topic from any broker fetch session state.
+	//   * For producers, we fail anything client side ourselves. It is
+	//     possible that a few records will get through to the new topic
+	//     due to automatic OOOSN recovery before metadata catches it and
+	//     locks.
+	//   * Any active transaction will be failed.
+	if lv.recreatedFrom == noID && r.id != noID && len(lv.partitions) > 0 {
+		var oldID [16]byte
+		switch kind {
+		case partitionKindProduce:
+			oldID = lv.partitions[0].records.topicID
+		case partitionKindShare:
+			oldID = lv.partitions[0].shareCursor.topicID
+		default:
+			oldID = lv.partitions[0].cursor.topicID
+		}
+		if oldID != noID && oldID != r.id {
+			lv.recreatedFrom = oldID
+			if kind == partitionKindConsume {
+				css.stop()
+			}
+			cl.cfg.logger.Log(LogLevelWarn, "metadata has a new ID for a topic we already hold: the topic was deleted and recreated; we do not adopt the new ID, the topic fails with UNKNOWN_TOPIC_ID until it is purged and re-added",
+				"topic", topic,
+				"old_id", topicID(oldID),
+				"new_id", topicID(r.id),
+			)
+		}
+	}
+	recreated := lv.recreatedFrom != noID
+
 	// We should have no deleted partitions, but there are two cases where
 	// we could.
 	//
@@ -1014,7 +1052,7 @@ func (cl *Client) mergeTopicPartitions(
 			case partitionKindShare:
 				oldTP.migrateShareCursorTo(cl, newTP)
 			default:
-				oldTP.migrateCursorTo(newTP, css)
+				oldTP.migrateCursorTo(newTP, css, recreated)
 			}
 		}
 	}
@@ -1038,6 +1076,16 @@ func (cl *Client) mergeTopicPartitions(
 				cl.consumer.addFakeReadyForDraining(topic, newTP.partition(), newTP.loadErr, "metadata refresh has a load error on a new partition")
 			}
 			retryWhy.add(topic, newTP.partition(), newTP.loadErr)
+		}
+		if recreated {
+			switch kind {
+			case partitionKindProduce:
+				newTP.records.topicID = lv.recreatedFrom
+			case partitionKindShare:
+				newTP.shareCursor.topicID = lv.recreatedFrom
+			default:
+				newTP.cursor.topicID = lv.recreatedFrom
+			}
 		}
 		switch kind {
 		case partitionKindProduce:
