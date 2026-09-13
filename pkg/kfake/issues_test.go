@@ -4801,3 +4801,56 @@ func TestIssue1422(t *testing.T) {
 		})
 	}
 }
+
+// TestListOffsetsMaxTimestampFirstRecord verifies ListOffsets -3 (KIP-734)
+// answers with the first record, in offset order, that carries the
+// partition's max timestamp: a real broker picks the earliest batch that
+// reached the max (RecordBatch.offsetOfMaxTimestamp). kfake previously
+// answered with the last offset of the last batch that reached it.
+func TestListOffsetsMaxTimestampFirstRecord(t *testing.T) {
+	t.Parallel()
+	const topic = "list-offsets-max-ts"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), BrokerConfigs(map[string]string{"log.segment.bytes": "1"}))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// One batch per inner slice, one segment per batch. The max
+	// timestamp 30 first appears at offset 1 and repeats at offsets 2
+	// and 4.
+	batches := [][]int64{
+		{10, 30, 30}, // offsets 0-2
+		{20, 30},     // offsets 3-4
+		{25},         // offset 5
+	}
+	pcl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.ProducerLinger(time.Minute))
+	for _, tss := range batches {
+		for _, ts := range tss {
+			pcl.Produce(ctx, &kgo.Record{Value: []byte("v"), Timestamp: time.UnixMilli(ts)}, nil)
+		}
+		if err := pcl.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	req := kmsg.NewPtrListOffsetsRequest()
+	rt := kmsg.NewListOffsetsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewListOffsetsRequestTopicPartition()
+	rp.Timestamp = -3
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+	resp, err := req.RequestWith(ctx, newPlainClient(t, c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatal("missing partition response")
+	}
+	p := resp.Topics[0].Partitions[0]
+	if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+		t.Fatal(err)
+	}
+	if p.Offset != 1 || p.Timestamp != 30 {
+		t.Errorf("got offset %d timestamp %d, want offset 1 timestamp 30", p.Offset, p.Timestamp)
+	}
+}

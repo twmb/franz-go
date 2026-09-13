@@ -112,15 +112,19 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 					sp.Offset = pd.highWatermark
 				}
 			case -3:
-				// KIP-734: Return offset and timestamp of record with max timestamp
-				m := pd.maxTimestampBatch()
-				if m == nil {
+				// KIP-734: the first record with the max timestamp.
+				offset, timestamp, epoch, found, err := c.offsetOfMaxTimestamp(pd)
+				if err != nil {
+					sp.ErrorCode = kerr.CorruptMessage.Code
+					continue
+				}
+				if found {
+					sp.Offset = offset
+					sp.Timestamp = timestamp
+					sp.LeaderEpoch = epoch
+				} else {
 					sp.Offset = -1
 					sp.Timestamp = -1
-				} else {
-					sp.Offset = m.firstOffset + int64(m.lastOffsetDelta)
-					sp.Timestamp = m.maxTimestamp
-					sp.LeaderEpoch = m.epoch
 				}
 			default:
 				offset, timestamp, epoch, found, err := c.offsetForTimestamp(pd, rp.Timestamp)
@@ -139,6 +143,32 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 		}
 	}
 	return resp, nil
+}
+
+// offsetOfMaxTimestamp answers ListOffsets -3 the way a real broker does
+// (RecordBatch.offsetOfMaxTimestamp): the first record, in offset order,
+// whose timestamp is the partition's max timestamp. Returns found == false
+// for an empty partition, or if the max timestamp batch's header names a
+// timestamp none of its records carry.
+func (c *Cluster) offsetOfMaxTimestamp(pd *partData) (offset, timestamp int64, epoch int32, found bool, err error) {
+	m := pd.maxTimestampBatch()
+	if m == nil {
+		return 0, 0, 0, false, nil
+	}
+	batch, err := c.readBatchFull(pd, pd.maxTimestampSeg, m)
+	if err != nil {
+		return 0, 0, 0, false, err
+	}
+	recs, err := BatchRecords(batch.RecordBatch)
+	if err != nil {
+		return 0, 0, 0, false, err
+	}
+	for _, rec := range recs {
+		if batch.FirstTimestamp+rec.TimestampDelta64 == m.maxTimestamp {
+			return batch.FirstOffset + int64(rec.OffsetDelta), m.maxTimestamp, m.epoch, true, nil
+		}
+	}
+	return 0, 0, 0, false, nil
 }
 
 // offsetForTimestamp answers a ListOffsets timestamp query the way a real

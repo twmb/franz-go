@@ -262,10 +262,11 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 	active.index = append(active.index, pb.meta(segPos))
 	active.updateEpochRange(pd.epoch)
 
-	// Track max timestamp batch for ListOffsets -3 (KIP-734)
+	// Track the max timestamp batch for ListOffsets -3 (KIP-734). On a
+	// tie the earlier batch keeps the max, as on a real broker.
 	segIdx := len(pd.segments) - 1
 	metaIdx := len(active.index) - 1
-	if pd.maxTimestampSeg < 0 || b.MaxTimestamp >= pd.maxTimestampBatch().maxTimestamp {
+	if pd.maxTimestampSeg < 0 || b.MaxTimestamp > pd.maxTimestampBatch().maxTimestamp {
 		pd.maxTimestampSeg = segIdx
 		pd.maxTimestampIdx = metaIdx
 	}
@@ -326,7 +327,7 @@ func (pd *partData) rebuildMaxTimestampMeta() {
 	pd.maxTimestampIdx = -1
 	pd.maxTimestampSeen = 0
 	pd.eachBatchMeta(func(si, mi int, m *batchMeta) bool {
-		if pd.maxTimestampSeg < 0 || m.maxTimestamp >= pd.maxTimestampBatch().maxTimestamp {
+		if pd.maxTimestampSeg < 0 || m.maxTimestamp > pd.maxTimestampBatch().maxTimestamp {
 			pd.maxTimestampSeg = si
 			pd.maxTimestampIdx = mi
 		}
