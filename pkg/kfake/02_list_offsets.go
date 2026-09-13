@@ -161,16 +161,16 @@ func (c *Cluster) offsetOfMaxTimestamp(pd *partData) (offset, timestamp int64, e
 	if err != nil {
 		return 0, 0, 0, false, err
 	}
-	recs, err := BatchRecords(batch.RecordBatch)
-	if err != nil {
+	err = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) bool {
+		if batch.FirstTimestamp+rec.TimestampDelta64 == m.maxTimestamp {
+			offset, found = batch.FirstOffset+int64(rec.OffsetDelta), true
+		}
+		return !found
+	})
+	if err != nil || !found {
 		return 0, 0, 0, false, err
 	}
-	for _, rec := range recs {
-		if batch.FirstTimestamp+rec.TimestampDelta64 == m.maxTimestamp {
-			return batch.FirstOffset + int64(rec.OffsetDelta), m.maxTimestamp, m.epoch, true, nil
-		}
-	}
-	return 0, 0, 0, false, nil
+	return offset, m.maxTimestamp, m.epoch, true, nil
 }
 
 // offsetForTimestamp answers a ListOffsets timestamp query the way a real
@@ -184,44 +184,42 @@ func (c *Cluster) offsetOfMaxTimestamp(pd *partData) (offset, timestamp int64, e
 // was found. Returns found == false in that case, and if no segment
 // reaches ts.
 func (c *Cluster) offsetForTimestamp(pd *partData, ts int64) (offset, timestamp int64, epoch int32, found bool, err error) {
-	si := 0
-	for ; si < len(pd.segments); si++ {
-		if pd.segments[si].maxTimestamp >= ts {
-			break
-		}
-	}
+	// Both running maxes are monotonic: the first binary search lands
+	// on the first segment whose max reaches ts, the second on the
+	// first batch in it that can hold a record at or after ts. The loop
+	// then passes over a batch that cannot: one whose own max is below
+	// ts, or one deleted from below (a snapshot load keeps such batches
+	// in the index; the broker likewise starts its scan no earlier than
+	// the log start offset).
+	si := sort.Search(len(pd.segments), func(i int) bool {
+		return pd.segments[i].maxEarlierTimestamp >= ts
+	})
 	if si == len(pd.segments) {
 		return 0, 0, 0, false, nil
 	}
 	seg := &pd.segments[si]
-	// maxEarlierTimestamp is monotonic, so this lands on the first batch
-	// in the segment that can hold a record at or after ts.
 	mi := sort.Search(len(seg.index), func(i int) bool {
 		return seg.index[i].maxEarlierTimestamp >= ts
 	})
 	for ; mi < len(seg.index); mi++ {
 		m := &seg.index[mi]
-		// A batch entirely below the log start offset cannot hold the
-		// answer, so it is not read. After a snapshot load the index
-		// still lists such batches; the broker likewise starts its scan
-		// no earlier than the log start offset.
 		if m.maxTimestamp < ts || m.firstOffset+int64(m.lastOffsetDelta) < pd.logStartOffset {
 			continue
 		}
-		batch, err := c.readBatchFull(pd, si, m)
-		if err != nil {
+		var batch *partBatch
+		if batch, err = c.readBatchFull(pd, si, m); err != nil {
 			return 0, 0, 0, false, err
 		}
-		recs, err := BatchRecords(batch.RecordBatch)
-		if err != nil {
-			return 0, 0, 0, false, err
-		}
-		for _, rec := range recs {
+		err = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) bool {
 			recTimestamp := batch.FirstTimestamp + rec.TimestampDelta64
 			recOffset := batch.FirstOffset + int64(rec.OffsetDelta)
 			if recTimestamp >= ts && recOffset >= pd.logStartOffset {
-				return recOffset, recTimestamp, m.epoch, true, nil
+				offset, timestamp, epoch, found = recOffset, recTimestamp, m.epoch, true
 			}
+			return !found
+		})
+		if err != nil || found {
+			return offset, timestamp, epoch, found, err
 		}
 	}
 	return 0, 0, 0, false, nil

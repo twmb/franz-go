@@ -4716,6 +4716,12 @@ func TestIssue1422(t *testing.T) {
 				wantRunning = append(wantRunning, running)
 			}
 			var pd *partData
+			segRunning := func() (got []int64) {
+				for i := range pd.segments {
+					got = append(got, pd.segments[i].maxEarlierTimestamp)
+				}
+				return got
+			}
 			checkIndex := func(when string) {
 				t.Helper()
 				if pd, _ = c.data.tps.getp(topic, 0); pd == nil {
@@ -4727,10 +4733,16 @@ func TestIssue1422(t *testing.T) {
 					return true
 				})
 				if !slices.Equal(gotRunning, wantRunning) {
-					t.Fatalf("running max timestamps %s: got %v, want %v", when, gotRunning, wantRunning)
+					t.Fatalf("batch running max timestamps %s: got %v, want %v", when, gotRunning, wantRunning)
 				}
-				if tc.segBytes != "" && len(pd.segments) != len(batches) {
-					t.Fatalf("%d segments %s, want %d", len(pd.segments), when, len(batches))
+				// With one batch per segment, the segments' running max is
+				// the same sequence; with one segment, it is the last value.
+				wantSeg := wantRunning[len(wantRunning)-1:]
+				if tc.segBytes != "" {
+					wantSeg = wantRunning
+				}
+				if got := segRunning(); !slices.Equal(got, wantSeg) {
+					t.Fatalf("segment running max timestamps %s: got %v, want %v", when, got, wantSeg)
 				}
 			}
 			checkIndex("after producing")
@@ -4821,6 +4833,15 @@ func TestIssue1422(t *testing.T) {
 			// segment. With every batch in one segment, the scan reaches
 			// offset 8.
 			deleteTo(5)
+			// Segment 0 is gone with one batch per segment; segment 1's
+			// max still counts its deleted 10_060 record.
+			wantSeg := []int64{10_070}
+			if tc.segBytes != "" {
+				wantSeg = []int64{10_060, 10_060, 10_070}
+			}
+			if got := segRunning(); !slices.Equal(got, wantSeg) {
+				t.Fatalf("segment running max timestamps after deleting to 5: got %v, want %v", got, wantSeg)
+			}
 			check(10_045, 5, 10_050)
 			check(10_050, 5, 10_050)
 			if tc.segBytes != "" {
