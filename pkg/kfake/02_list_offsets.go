@@ -125,10 +125,7 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 				donep(rt.Topic, rp.Partition, kerr.UnknownTopicOrPartition.Code)
 				continue
 			}
-			if pd.leader != b && req.ReplicaID != -2 {
-				donep(rt.Topic, rp.Partition, kerr.NotLeaderForPartition.Code)
-				continue
-			}
+			// The epoch is checked before leadership (Partition.getLocalLog).
 			if le := rp.CurrentLeaderEpoch; le != -1 {
 				if le < pd.epoch {
 					donep(rt.Topic, rp.Partition, kerr.FencedLeaderEpoch.Code)
@@ -137,6 +134,10 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 					donep(rt.Topic, rp.Partition, kerr.UnknownLeaderEpoch.Code)
 					continue
 				}
+			}
+			if pd.leader != b && req.ReplicaID != -2 {
+				donep(rt.Topic, rp.Partition, kerr.NotLeaderForPartition.Code)
+				continue
 			}
 
 			// A partition with no answer keeps the defaults: offset -1,

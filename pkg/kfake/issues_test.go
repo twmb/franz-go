@@ -5199,9 +5199,25 @@ func TestListOffsetsBrokerChecks(t *testing.T) {
 	check("beyond the end", listOffsetsAt(t, cl, int(leader), topic, 0, 2_001, -1, 0), none)
 
 	// A consumer must ask the leader; the debugging replica id may ask
-	// any replica.
+	// any replica. A stale epoch is reported before leadership.
 	check("consumer at follower", listOffsetsAt(t, cl, int(follower), topic, 0, -1, -1, 0), want{err: kerr.NotLeaderForPartition})
 	check("debugging at follower", listOffsetsAt(t, cl, int(follower), topic, 0, -1, -2, 0), want{offset: 2, timestamp: -1, epoch: pd.epoch})
+	{
+		req := kmsg.NewPtrListOffsetsRequest()
+		req.ReplicaID = -1
+		rt := kmsg.NewListOffsetsRequestTopic()
+		rt.Topic = topic
+		rp := kmsg.NewListOffsetsRequestTopicPartition()
+		rp.Timestamp = -1
+		rp.CurrentLeaderEpoch = pd.epoch + 1
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		resp, err := cl.Broker(int(follower)).Request(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check("unknown epoch at follower", resp.(*kmsg.ListOffsetsResponse).Topics[0].Partitions[0], want{err: kerr.UnknownLeaderEpoch})
+	}
 
 	// Open a transaction: the LSO stays at 2 while the HWM moves to 3.
 	// Only a consumer's read_committed request answers the LSO.
