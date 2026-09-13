@@ -64,7 +64,7 @@ type (
 	batchMeta struct {
 		firstOffset         int64 // first record offset
 		segPos              int64 // byte position within segment file
-		maxEarlierTimestamp int64 // for ListOffsets binary search
+		maxEarlierTimestamp int64 // max timestamp of this and all earlier batches, for ListOffsets binary search
 		firstTimestamp      int64
 		maxTimestamp        int64
 		producerID          int64 // needed for isBatchAborted in compaction
@@ -81,12 +81,12 @@ type (
 		p           int32
 		dir         string
 
-		highWatermark     int64
-		lastStableOffset  int64
-		logStartOffset    int64
-		epoch             int32 // current epoch
-		maxFirstTimestamp int64 // max FirstTimestamp seen (for maxEarlierTimestamp optimization)
-		nbytes            int64
+		highWatermark    int64
+		lastStableOffset int64
+		logStartOffset   int64
+		epoch            int32 // current epoch
+		maxTimestampSeen int64 // max MaxTimestamp across all batches (the running max for maxEarlierTimestamp)
+		nbytes           int64
 
 		// PID-based LSO tracking: maps producer ID to earliest
 		// uncommitted offset on this partition. LSO = min of all
@@ -124,12 +124,13 @@ type (
 		// For list offsets, we may need to return the first offset
 		// after a given requested timestamp. Client provided
 		// timestamps can go forwards and backwards. We answer list
-		// offsets with a binary search: even if this batch has a small
-		// timestamp, this is produced _after_ a potentially higher
-		// timestamp, so it is after it in the list offset response.
+		// offsets with a binary search over the running max of
+		// MaxTimestamp: even if this batch has a small timestamp,
+		// this is produced _after_ a potentially higher timestamp,
+		// so it is after it in the list offset response.
 		//
-		// When we drop the earlier timestamp, we update all following
-		// firstMaxTimestamps that match the dropped timestamp.
+		// When we drop batches, rebuildMaxTimestampMeta recomputes
+		// the running max over the batches that remain.
 		maxEarlierTimestamp int64
 
 		inTx bool
@@ -235,11 +236,9 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 // If transactional, the producer's PID is registered in uncommittedPIDs
 // so the LSO stays at the earliest uncommitted offset.
 func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx bool) int64 {
-	maxEarlierTimestamp := b.FirstTimestamp
-	if maxEarlierTimestamp < pd.maxFirstTimestamp {
-		maxEarlierTimestamp = pd.maxFirstTimestamp
-	} else {
-		pd.maxFirstTimestamp = maxEarlierTimestamp
+	maxEarlierTimestamp := b.MaxTimestamp
+	if pd.hasBatches() && pd.maxTimestampSeen > maxEarlierTimestamp {
+		maxEarlierTimestamp = pd.maxTimestampSeen
 	}
 	b.FirstOffset = pd.highWatermark
 	b.PartitionLeaderEpoch = pd.epoch
@@ -270,6 +269,7 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 		pd.maxTimestampSeg = segIdx
 		pd.maxTimestampIdx = metaIdx
 	}
+	pd.maxTimestampSeen = maxEarlierTimestamp
 
 	firstOffset := b.FirstOffset
 	pd.highWatermark += int64(b.NumRecords)
@@ -317,21 +317,23 @@ func (pd *partData) maxTimestampBatch() *batchMeta {
 	return &pd.segments[pd.maxTimestampSeg].index[pd.maxTimestampIdx]
 }
 
-// rebuildMaxTimestampMeta rebuilds maxTimestampSeg/maxTimestampIdx from the
-// batchMeta index. Called after loading segments from disk.
+// rebuildMaxTimestampMeta rebuilds maxTimestampSeg/maxTimestampIdx, each
+// batch's maxEarlierTimestamp, and maxTimestampSeen from the batchMeta
+// index. Called after loading segments from disk and after batches are
+// dropped, so the running max only covers batches that still exist.
 func (pd *partData) rebuildMaxTimestampMeta() {
 	pd.maxTimestampSeg = -1
 	pd.maxTimestampIdx = -1
-	for si := range pd.segments {
-		seg := &pd.segments[si]
-		for mi := range seg.index {
-			m := &seg.index[mi]
-			if pd.maxTimestampSeg < 0 || m.maxTimestamp >= pd.maxTimestampBatch().maxTimestamp {
-				pd.maxTimestampSeg = si
-				pd.maxTimestampIdx = mi
-			}
+	pd.maxTimestampSeen = 0
+	pd.eachBatchMeta(func(si, mi int, m *batchMeta) bool {
+		if pd.maxTimestampSeg < 0 || m.maxTimestamp >= pd.maxTimestampBatch().maxTimestamp {
+			pd.maxTimestampSeg = si
+			pd.maxTimestampIdx = mi
 		}
-	}
+		pd.maxTimestampSeen = pd.maxTimestampBatch().maxTimestamp
+		m.maxEarlierTimestamp = pd.maxTimestampSeen
+		return true
+	})
 }
 
 // hasBatches returns true if there is at least one batch in any segment.
@@ -381,20 +383,27 @@ func (pd *partData) pruneEmptySegments() {
 
 // eachBatchMeta calls fn for each batchMeta across all segments.
 func (pd *partData) eachBatchMeta(fn func(segIdx, metaIdx int, m *batchMeta) bool) {
-	for si := range pd.segments {
+	pd.eachBatchMetaFrom(0, 0, fn)
+}
+
+// eachBatchMetaFrom calls fn for each batchMeta from the given position
+// onward, in offset order, until fn returns false.
+func (pd *partData) eachBatchMetaFrom(segIdx, metaIdx int, fn func(segIdx, metaIdx int, m *batchMeta) bool) {
+	for si := segIdx; si < len(pd.segments); si++ {
 		seg := &pd.segments[si]
-		for mi := range seg.index {
+		for mi := metaIdx; mi < len(seg.index); mi++ {
 			if !fn(si, mi, &seg.index[mi]) {
 				return
 			}
 		}
+		metaIdx = 0
 	}
 }
 
 // findBatchMeta does a two-level binary search for the first batch where
 // field(batch) >= target. The field must be monotonically non-decreasing
-// across batches (e.g. epoch, maxTimestamp). Returns (-1, -1, nil) if no
-// batch satisfies the condition.
+// across batches (e.g. epoch, maxEarlierTimestamp). Returns (-1, -1, nil)
+// if no batch satisfies the condition.
 func (pd *partData) findBatchMeta(target int64, field func(*batchMeta) int64) (segIdx, metaIdx int, meta *batchMeta) {
 	// Level 1: find first segment whose last batch has field >= target.
 	si := sort.Search(len(pd.segments), func(i int) bool {

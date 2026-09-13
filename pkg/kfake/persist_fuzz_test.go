@@ -1275,12 +1275,12 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 
 	// Phase 2: open with snapshot, record state
 	type partState struct {
-		hwm               int64
-		lso               int64
-		logStartOffset    int64
-		maxFirstTimestamp int64
-		nbytes            int64
-		batchCount        int
+		hwm              int64
+		lso              int64
+		logStartOffset   int64
+		maxTimestampSeen int64
+		nbytes           int64
+		batchCount       int
 	}
 
 	var snapState partState
@@ -1294,12 +1294,12 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 			t.Fatal("partition missing after snapshot load")
 		}
 		snapState = partState{
-			hwm:               pd.highWatermark,
-			lso:               pd.lastStableOffset,
-			logStartOffset:    pd.logStartOffset,
-			maxFirstTimestamp: pd.maxFirstTimestamp,
-			nbytes:            pd.nbytes,
-			batchCount:        pd.totalBatches(),
+			hwm:              pd.highWatermark,
+			lso:              pd.lastStableOffset,
+			logStartOffset:   pd.logStartOffset,
+			maxTimestampSeen: pd.maxTimestampSeen,
+			nbytes:           pd.nbytes,
+			batchCount:       pd.totalBatches(),
 		}
 		c.Close()
 	}
@@ -1323,12 +1323,12 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 			t.Fatal("partition missing after full replay")
 		}
 		replayState := partState{
-			hwm:               pd.highWatermark,
-			lso:               pd.lastStableOffset,
-			logStartOffset:    pd.logStartOffset,
-			maxFirstTimestamp: pd.maxFirstTimestamp,
-			nbytes:            pd.nbytes,
-			batchCount:        pd.totalBatches(),
+			hwm:              pd.highWatermark,
+			lso:              pd.lastStableOffset,
+			logStartOffset:   pd.logStartOffset,
+			maxTimestampSeen: pd.maxTimestampSeen,
+			nbytes:           pd.nbytes,
+			batchCount:       pd.totalBatches(),
 		}
 
 		if snapState.hwm != replayState.hwm {
@@ -1340,8 +1340,8 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 		if snapState.logStartOffset != replayState.logStartOffset {
 			t.Errorf("logStartOffset: snapshot=%d replay=%d", snapState.logStartOffset, replayState.logStartOffset)
 		}
-		if snapState.maxFirstTimestamp != replayState.maxFirstTimestamp {
-			t.Errorf("maxFirstTimestamp: snapshot=%d replay=%d", snapState.maxFirstTimestamp, replayState.maxFirstTimestamp)
+		if snapState.maxTimestampSeen != replayState.maxTimestampSeen {
+			t.Errorf("maxTimestampSeen: snapshot=%d replay=%d", snapState.maxTimestampSeen, replayState.maxTimestampSeen)
 		}
 		if snapState.nbytes != replayState.nbytes {
 			t.Errorf("nbytes: snapshot=%d replay=%d", snapState.nbytes, replayState.nbytes)

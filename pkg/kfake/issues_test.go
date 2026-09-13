@@ -5,6 +5,9 @@ import (
 	"errors"
 	"hash/crc32"
 	"net"
+	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -4620,5 +4623,181 @@ func TestIssue1423(t *testing.T) {
 			t.Errorf("control record at offset %d: got marker version %d coordinator epoch %d, want version 0 coordinator epoch %d",
 				r.Offset, marker.Version, marker.CoordinatorEpoch, want[i].coordinatorEpoch)
 		}
+	}
+}
+
+// TestIssue1422 verifies ListOffsets with a timestamp answers the way a
+// real broker does: the first batch (in offset order) whose max timestamp
+// reaches the requested timestamp, then the first record in that batch at
+// or after the timestamp and at or after the log start offset. kfake
+// previously returned the last record at or before the timestamp, and it
+// binary searched batches by each batch's own max timestamp even though
+// client timestamps can go backwards from one batch to the next.
+//
+// The restart cases reload the partition from disk, once from a snapshot
+// and once by replaying the segments, since the running max the search
+// uses is recomputed on load.
+func TestIssue1422(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		segBytes string
+		restart  bool
+		replay   bool
+	}{
+		{name: "one_segment"},
+		{name: "segment_per_batch", segBytes: "1"},
+		{name: "restart_snapshot", segBytes: "1", restart: true},
+		{name: "restart_replay", segBytes: "1", restart: true, replay: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const topic = "issue-1422"
+			opts := []Opt{NumBrokers(1)}
+			if tc.segBytes != "" {
+				opts = append(opts, BrokerConfigs(map[string]string{"log.segment.bytes": tc.segBytes}))
+			}
+			var dir string
+			if tc.restart {
+				dir = t.TempDir()
+				opts = append(opts, DataDir(dir))
+			}
+			c := newCluster(t, append(opts, SeedTopics(1, topic))...)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Each inner slice is produced as one batch: a long linger
+			// buffers the records, and Flush sends them together.
+			// Timestamps go backwards from batch 1 to batch 2.
+			batches := [][]int64{
+				{10_000, 10_010, 10_010, 10_020}, // offsets 0-3
+				{10_050, 10_060},                 // offsets 4-5
+				{10_030, 10_040},                 // offsets 6-7
+				{10_070},                         // offset 8
+			}
+			pcl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.ProducerLinger(time.Minute))
+			var offset int64
+			for _, tss := range batches {
+				var recs []*kgo.Record
+				for _, ts := range tss {
+					recs = append(recs, &kgo.Record{Value: []byte("v"), Timestamp: time.UnixMilli(ts)})
+				}
+				for _, r := range recs {
+					pcl.Produce(ctx, r, nil)
+				}
+				if err := pcl.Flush(ctx); err != nil {
+					t.Fatal(err)
+				}
+				for _, r := range recs {
+					if r.Offset != offset {
+						t.Fatalf("record with timestamp %d landed at offset %d, want %d", r.Timestamp.UnixMilli(), r.Offset, offset)
+					}
+					offset++
+				}
+			}
+			// The search binary searches the running max of the batch
+			// max timestamps, which must be exact both as produced and
+			// as reloaded.
+			var wantRunning []int64
+			for i, tss := range batches {
+				running := slices.Max(tss)
+				if i > 0 {
+					running = max(running, wantRunning[i-1])
+				}
+				wantRunning = append(wantRunning, running)
+			}
+			var pd *partData
+			checkIndex := func(when string) {
+				t.Helper()
+				if pd, _ = c.data.tps.getp(topic, 0); pd == nil {
+					t.Fatalf("partition missing %s", when)
+				}
+				var gotRunning []int64
+				pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
+					gotRunning = append(gotRunning, m.maxEarlierTimestamp)
+					return true
+				})
+				if !slices.Equal(gotRunning, wantRunning) {
+					t.Fatalf("running max timestamps %s: got %v, want %v", when, gotRunning, wantRunning)
+				}
+				if tc.segBytes != "" && len(pd.segments) != len(batches) {
+					t.Fatalf("%d segments %s, want %d", len(pd.segments), when, len(batches))
+				}
+			}
+			checkIndex("after producing")
+
+			if tc.restart {
+				pcl.Close()
+				c.Close()
+				if tc.replay {
+					if err := os.Remove(filepath.Join(dir, "partitions", topic+"-0", "snapshot.json")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				c = newCluster(t, opts...)
+				checkIndex("after reload")
+			}
+
+			cl := newPlainClient(t, c)
+			listAt := func(ts int64) kmsg.ListOffsetsResponseTopicPartition {
+				t.Helper()
+				req := kmsg.NewPtrListOffsetsRequest()
+				rt := kmsg.NewListOffsetsRequestTopic()
+				rt.Topic = topic
+				rp := kmsg.NewListOffsetsRequestTopicPartition()
+				rp.Timestamp = ts
+				rt.Partitions = append(rt.Partitions, rp)
+				req.Topics = append(req.Topics, rt)
+				resp, err := req.RequestWith(ctx, cl)
+				if err != nil {
+					t.Fatalf("ListOffsets at %d: %v", ts, err)
+				}
+				if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+					t.Fatalf("ListOffsets at %d: missing partition response", ts)
+				}
+				p := resp.Topics[0].Partitions[0]
+				if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+					t.Fatalf("ListOffsets at %d: %v", ts, err)
+				}
+				return p
+			}
+			check := func(ts, wantOffset, wantTimestamp int64) {
+				t.Helper()
+				if p := listAt(ts); p.Offset != wantOffset || p.Timestamp != wantTimestamp {
+					t.Errorf("ListOffsets at %d: got offset %d timestamp %d, want offset %d timestamp %d",
+						ts, p.Offset, p.Timestamp, wantOffset, wantTimestamp)
+				} else if wantOffset != -1 && p.LeaderEpoch != pd.epoch {
+					t.Errorf("ListOffsets at %d: got leader epoch %d, want %d", ts, p.LeaderEpoch, pd.epoch)
+				}
+			}
+
+			check(9_999, 0, 10_000)
+			check(10_000, 0, 10_000)
+			check(10_005, 1, 10_010) // between two records of one batch
+			check(10_010, 1, 10_010) // the first of two equal timestamps
+			check(10_011, 3, 10_020)
+			check(10_020, 3, 10_020)
+			check(10_021, 4, 10_050) // next batch
+			check(10_035, 4, 10_050) // batch 1 reaches it first, even though batch 2 has 10_040
+			check(10_055, 5, 10_060)
+			check(10_061, 8, 10_070) // batch 2's max timestamp is below, skip to batch 3
+			check(10_070, 8, 10_070)
+			check(10_071, -1, -1)
+
+			// Delete the first two records, leaving a log start offset in the
+			// middle of batch 0. The answer must not point below it.
+			adm := kadm.NewClient(cl)
+			del, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: 2}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := del.Error(); err != nil {
+				t.Fatal(err)
+			}
+			check(9_999, 2, 10_010)
+			check(10_005, 2, 10_010)
+			check(10_010, 2, 10_010)
+			check(10_011, 3, 10_020)
+		})
 	}
 }
