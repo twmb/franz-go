@@ -812,6 +812,7 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 	pd.segments = nil
 
 	if len(batches) == 0 {
+		pd.rolledAt = time.Now()
 		pd.rebuildMaxTimestampMeta()
 		return
 	}
@@ -836,7 +837,7 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 	// Write segment (.dat) and index (.idx) files.
 	c.fs.MkdirAll(pdir, 0o755)
 	for _, g := range groups {
-		si := segmentInfo{base: g.base}
+		si := segmentInfo{base: g.base, lastModified: time.Now().UnixMilli()}
 		segPath := filepath.Join(pdir, segmentFileName(g.base))
 		idxPath := filepath.Join(pdir, indexFileName(g.base))
 		sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
@@ -1237,6 +1238,7 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 		pd.leader = c.bs[snap.LeaderNode]
 	}
 	pd.createdAt = snap.CreatedAt
+	pd.rolledAt = snap.CreatedAt
 	for i, base := range segFiles {
 		ss := snap.Segments[i]
 		pd.segments = append(pd.segments, segmentInfo{
@@ -1423,6 +1425,7 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 	if pd.hasBatches() {
 		pd.createdAt = time.UnixMilli(pd.segments[0].index[0].firstTimestamp)
 	}
+	pd.rolledAt = pd.createdAt
 
 	// Initialize active segment state so persistBatchToSegment
 	// appends to the last segment instead of segment 0.
@@ -1454,11 +1457,16 @@ func (c *Cluster) initActiveSegment(pd *partData, fsys fs, pdir string) {
 // wire bytes; entry boundaries are found via RecordBatch Length (big-endian
 // int32 at byte 8). Index entries are fixed-size (15 bytes each).
 func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base int64) ([]*partBatch, error) {
-	raw, err := fsys.ReadFile(filepath.Join(pdir, segmentFileName(base)))
+	segPath := filepath.Join(pdir, segmentFileName(base))
+	raw, err := fsys.ReadFile(segPath)
 	if err != nil {
 		return nil, err
 	}
 	idxRaw, _ := fsys.ReadFile(filepath.Join(pdir, indexFileName(base)))
+	var lastModified int64
+	if info, err := fsys.Stat(segPath); err == nil {
+		lastModified = info.ModTime().UnixMilli()
+	}
 
 	// Find the segmentInfo for this base to rebuild epoch ranges and index
 	// from the actual batch data. The snapshot stores segment metadata
@@ -1468,6 +1476,7 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 	for i := range pd.segments {
 		if pd.segments[i].base == base {
 			seg = &pd.segments[i]
+			seg.lastModified = lastModified
 			break
 		}
 	}

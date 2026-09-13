@@ -59,18 +59,29 @@ type (
 		index    []batchMeta // per-batch metadata, nil = evicted
 		readFile file        // cached read handle for sealed segments, nil = not yet opened
 
-		// maxBatch is the first batch in the file to reach the
-		// segment's max timestamp, like a real segment's
-		// maxTimestampAndOffsetSoFar. Unlike the index, it keeps
-		// counting batches deleted from below the log start offset:
-		// their bytes stay in the file until the whole segment goes,
-		// and the broker still answers ListOffsets -3 with them.
-		maxBatch batchMeta
-		// maxEarlierTimestamp is the max of maxBatch.maxTimestamp over
-		// this and every earlier segment, so ListOffsets can binary
-		// search for the first segment that reaches a timestamp. Set
-		// on append; rebuildMaxTimestampMeta recomputes it when
-		// segments are dropped or loaded.
+		// maxTimestamp and maxBatch are a real segment's
+		// maxTimestampSoFar and maxTimestampAndOffsetSoFar: the max
+		// timestamp over every batch in the file, floored at -1, and
+		// the first batch in the file to carry it. Unlike the index,
+		// they keep counting batches deleted from below the log start
+		// offset: their bytes stay in the file until the whole segment
+		// goes, and the broker still answers ListOffsets -3 with them.
+		// A batch whose max timestamp is below -1 never raises
+		// maxTimestamp; when nothing has, maxBatch is the first batch
+		// at exactly -1 (the broker searches for its -1 running max),
+		// or empty (nbytes 0) if there is none.
+		maxTimestamp int64
+		maxBatch     batchMeta
+		// lastModified is the file's modification time in ms, which a
+		// real segment answers as its largest timestamp while no batch
+		// has a timestamp at or above zero, and which ListOffsets v0
+		// lists by.
+		lastModified int64
+		// maxEarlierTimestamp is the max of largestTimestamp over this
+		// and every earlier segment, so ListOffsets can binary search
+		// for the first segment that reaches a timestamp. Set on
+		// append; rebuildMaxTimestampMeta recomputes it when segments
+		// are dropped or loaded.
 		maxEarlierTimestamp int64
 	}
 
@@ -115,6 +126,11 @@ type (
 		shareWatch map[*watchShareFetch]struct{}
 
 		createdAt time.Time
+		// rolledAt is when the log last became empty (creation, or the
+		// trim or compaction that removed every segment): a real broker
+		// then rolls an empty segment, whose modification time
+		// ListOffsets v0 lists by while no batch exists.
+		rolledAt time.Time
 
 		// Segment state - used in all modes (memFS for in-memory, osFS for disk).
 		// Segment files (.dat) contain pure RecordBatch wire bytes.
@@ -233,6 +249,7 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 			watch:      make(map[*watchFetch]struct{}),
 			shareWatch: make(map[*watchShareFetch]struct{}),
 			createdAt:  time.Now(),
+			rolledAt:   time.Now(),
 		}
 	}
 }
@@ -271,12 +288,13 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 	active.index = append(active.index, meta)
 	active.updateEpochRange(pd.epoch)
 	active.updateMaxBatch(meta, segPos == 0)
+	active.lastModified = time.Now().UnixMilli()
 	if n := len(pd.segments); n > 1 {
-		active.maxEarlierTimestamp = max(active.maxBatch.maxTimestamp, pd.segments[n-2].maxEarlierTimestamp)
+		active.maxEarlierTimestamp = max(active.largestTimestamp(), pd.segments[n-2].maxEarlierTimestamp)
 	} else {
-		active.maxEarlierTimestamp = active.maxBatch.maxTimestamp
+		active.maxEarlierTimestamp = active.largestTimestamp()
 	}
-	if active.maxBatch.maxTimestamp > pd.segments[pd.maxTimestampSeg].maxBatch.maxTimestamp {
+	if active.maxTimestamp > pd.segments[pd.maxTimestampSeg].maxTimestamp {
 		pd.maxTimestampSeg = len(pd.segments) - 1
 	}
 	pd.maxTimestampSeen = maxEarlierTimestamp
@@ -304,13 +322,31 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 	return firstOffset
 }
 
-// updateMaxBatch records m as the segment's max timestamp batch if it is
-// the first batch in the file or its max timestamp is above the current
-// one. On a tie the earlier batch keeps it, as on a real broker.
+// updateMaxBatch folds a batch into the segment's maxTimestamp and
+// maxBatch. first is true for the batch at the start of the file. On a
+// tie the earlier batch keeps maxBatch, as on a real broker.
 func (si *segmentInfo) updateMaxBatch(m batchMeta, first bool) {
-	if first || m.maxTimestamp > si.maxBatch.maxTimestamp {
+	if first {
+		si.maxTimestamp = -1
+		si.maxBatch = batchMeta{}
+	}
+	switch {
+	case m.maxTimestamp > si.maxTimestamp:
+		si.maxTimestamp = m.maxTimestamp
+		si.maxBatch = m
+	case m.maxTimestamp == -1 && si.maxBatch.nbytes == 0:
 		si.maxBatch = m
 	}
+}
+
+// largestTimestamp is what a real segment's largestTimestamp answers:
+// the max batch timestamp, or the file's modification time while no
+// batch has a timestamp at or above zero.
+func (si *segmentInfo) largestTimestamp() int64 {
+	if si.maxTimestamp >= 0 {
+		return si.maxTimestamp
+	}
+	return si.lastModified
 }
 
 // updateEpochRange updates the segment's min/max epoch from a batch epoch.
@@ -347,11 +383,11 @@ func (pd *partData) rebuildMaxTimestampMeta() {
 	pd.maxTimestampSeg = 0
 	for si := range pd.segments {
 		seg := &pd.segments[si]
-		seg.maxEarlierTimestamp = seg.maxBatch.maxTimestamp
+		seg.maxEarlierTimestamp = seg.largestTimestamp()
 		if si > 0 {
 			seg.maxEarlierTimestamp = max(seg.maxEarlierTimestamp, pd.segments[si-1].maxEarlierTimestamp)
 		}
-		if seg.maxBatch.maxTimestamp > pd.segments[pd.maxTimestampSeg].maxBatch.maxTimestamp {
+		if seg.maxTimestamp > pd.segments[pd.maxTimestampSeg].maxTimestamp {
 			pd.maxTimestampSeg = si
 		}
 	}
@@ -535,9 +571,44 @@ outer:
 	// so the next produce creates fresh files.
 	if len(pd.segments) == 0 {
 		pd.closeActiveFiles(false)
+		pd.rolledAt = time.Now()
 	}
 	pd.rebuildMaxTimestampMeta()
 	pd.trimAbortedTxns()
+}
+
+// legacyOffsetsBefore answers ListOffsets v0 the way a broker that still
+// served it did (UnifiedLog.legacyFetchOffsetsBefore): up to maxNum
+// offsets, descending, from the start offset of each segment last
+// modified at or before ts, plus the log end offset as of now. -1 lists
+// from the end, -2 from the start.
+func (pd *partData) legacyOffsetsBefore(ts int64, maxNum int32) []int64 {
+	type offsetTime struct{ offset, modified int64 }
+	var entries []offsetTime
+	for i := range pd.segments {
+		seg := &pd.segments[i]
+		entries = append(entries, offsetTime{max(seg.base, pd.logStartOffset), seg.lastModified})
+	}
+	if len(pd.segments) == 0 {
+		entries = append(entries, offsetTime{pd.logStartOffset, pd.rolledAt.UnixMilli()})
+	} else {
+		entries = append(entries, offsetTime{pd.highWatermark, time.Now().UnixMilli()})
+	}
+	start := len(entries) - 1
+	switch ts {
+	case -1:
+	case -2:
+		start = 0
+	default:
+		for start >= 0 && entries[start].modified > ts {
+			start--
+		}
+	}
+	var offsets []int64
+	for ; start >= 0 && int32(len(offsets)) < maxNum; start-- {
+		offsets = append(offsets, entries[start].offset)
+	}
+	return offsets
 }
 
 func (pd *partData) closeActiveFiles(doSync bool) {

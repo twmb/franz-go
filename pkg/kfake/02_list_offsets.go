@@ -26,6 +26,8 @@ import (
 // replica answers, and IsolationLevel is ignored.
 //
 // Version notes:
+// * v0: MaxNumOffsets and OldStyleOffsets, listed by segment modification time
+// * v1: one offset per partition, found by record timestamp
 // * v2: IsolationLevel for read_committed
 // * v4: CurrentLeaderEpoch for fencing, LeaderEpoch in response
 // * v6: Flexible versions
@@ -140,6 +142,10 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 			// A partition with no answer keeps the defaults: offset -1,
 			// timestamp -1, leader epoch -1.
 			sp := donep(rt.Topic, rp.Partition, 0)
+			if req.Version == 0 {
+				sp.OldStyleOffsets = pd.legacyOffsetsBefore(rp.Timestamp, rp.MaxNumOffsets)
+				continue
+			}
 			switch rp.Timestamp {
 			case -2, -4:
 				sp.Offset = pd.logStartOffset
@@ -205,16 +211,17 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 // timestamp none of its records carry.
 func (c *Cluster) offsetOfMaxTimestamp(pd *partData) (offset, timestamp int64, epoch int32, found bool, err error) {
 	si := pd.maxTimestampSegment()
-	if si < 0 {
+	if si < 0 || pd.segments[si].maxBatch.nbytes == 0 {
 		return 0, 0, 0, false, nil
 	}
-	m := &pd.segments[si].maxBatch
+	seg := &pd.segments[si]
+	m := &seg.maxBatch
 	batch, err := c.readBatchFull(pd, si, m)
 	if err != nil {
 		return 0, 0, 0, false, err
 	}
 	err = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) bool {
-		if batch.FirstTimestamp+rec.TimestampDelta64 == m.maxTimestamp {
+		if batch.FirstTimestamp+rec.TimestampDelta64 == seg.maxTimestamp {
 			offset, found = batch.FirstOffset+int64(rec.OffsetDelta), true
 		}
 		return !found
@@ -222,7 +229,7 @@ func (c *Cluster) offsetOfMaxTimestamp(pd *partData) (offset, timestamp int64, e
 	if err != nil || !found {
 		return 0, 0, 0, false, err
 	}
-	return offset, m.maxTimestamp, m.epoch, true, nil
+	return offset, seg.maxTimestamp, m.epoch, true, nil
 }
 
 // offsetForTimestamp answers a ListOffsets timestamp query the way a real

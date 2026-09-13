@@ -141,6 +141,7 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 							watch:      make(map[*watchFetch]struct{}),
 							shareWatch: make(map[*watchShareFetch]struct{}),
 							createdAt:  time.Now(),
+							rolledAt:   time.Now(),
 						}
 					})
 					pd.t = rt.Topic
