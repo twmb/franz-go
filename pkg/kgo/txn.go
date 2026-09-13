@@ -230,9 +230,12 @@ func (s *GroupTransactSession) failed() bool {
 // This returns whether the transaction committed or any error that occurred.
 // No returned error is retryable. Either the transactional ID has entered a
 // failed state, or the client retried so much that the retry limit was hit,
-// and odds are you should not continue. While a context is allowed, canceling
-// it will likely leave the client in an invalid state. Canceling should only
-// be done if you want to shut down.
+// and odds are you should not continue. The exception is a transaction that
+// produced to a topic which was then deleted and recreated: this aborts and
+// returns an error wrapping kerr.UnknownTopicID, and you can continue once
+// you purge the topic and add it back; see EndTransaction. While a context is
+// allowed, canceling it will likely leave the client in an invalid state.
+// Canceling should only be done if you want to shut down.
 func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry) (committed bool, err error) {
 	defer func() {
 		s.failMu.Lock()
@@ -268,7 +271,12 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	var g *groupConsumer
 
 	kip447 := false
-	if wantCommit && !failed {
+	// The transaction cannot commit if a topic it produced to was
+	// recreated; see EndTransaction. We abort without committing offsets.
+	if topics := s.cl.producer.topicsRecreatedInTxn(); wantCommit && len(topics) > 0 {
+		commitErr = errRecreatedInTxn(topics)
+	}
+	if wantCommit && !failed && commitErr == nil {
 		isAbortableCommitErr := func(err error) bool {
 			// ILLEGAL_GENERATION: rebalance began and completed
 			// before we committed.
@@ -562,6 +570,7 @@ func (cl *Client) BeginTransaction() error {
 
 	cl.producer.inTxn = true
 	cl.producer.producedInTxn.Store(false)
+	cl.producer.clearRecreatedInTxn()
 	if !cl.producer.tx890p2.Load() && cl.supportsKIP890p2() {
 		cl.producer.tx890p2.Store(true)
 	}
@@ -681,6 +690,10 @@ func (cl *Client) UnsafeAbortBufferedRecords() {
 	cl.failBufferedRecords(ErrAborting)
 }
 
+func errRecreatedInTxn(topics []string) error {
+	return fmt.Errorf("the transaction produced to %v before the topic was deleted and recreated; the records the old topic acknowledged are gone, abort the transaction: %w, %w", topics, kerr.TransactionAbortable, kerr.UnknownTopicID)
+}
+
 // EndTransaction ends a transaction and resets the client's internal state to
 // not be in a transaction.
 //
@@ -712,6 +725,13 @@ func (cl *Client) UnsafeAbortBufferedRecords() {
 //   - UnknownProducerID is recoverable for Kafka 2.5+
 //   - TransactionAbortable is always recoverable (after aborting)
 //
+// A transaction that produced to a topic which was then deleted and
+// recreated cannot commit: the records the old topic acknowledged are gone
+// with it, while the offsets the transaction consumed would be committed.
+// TryCommit is refused with an error wrapping TransactionAbortable and
+// UnknownTopicID and the transaction stays open; abort it, and produce the
+// records again in a new transaction.
+//
 // Note that canceling the context will likely leave the client in an
 // undesirable state, because canceling the context may cancel the in-flight
 // EndTransaction request, making it impossible to know whether the commit or
@@ -722,6 +742,11 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 
 	if !cl.producer.inTxn {
 		return nil
+	}
+	if commit {
+		if topics := cl.producer.topicsRecreatedInTxn(); len(topics) > 0 {
+			return errRecreatedInTxn(topics)
+		}
 	}
 	cl.producer.inTxn = false
 
@@ -1299,17 +1324,18 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 		}
 	}
 
+	if len(req.Topics) == 0 { // everything was answered above
+		onDone(req, kmsg.NewPtrTxnOffsetCommitResponse(), nil)
+		return
+	}
+
 	priorDone := g.commitDone
 	commitDone := make(chan struct{})
 	g.commitDone = commitDone
 
 	go func() {
 		defer close(commitDone) // allow future commits to continue when we are done
-		if len(req.Topics) == 0 {
-			onDone(req, kmsg.NewPtrTxnOffsetCommitResponse(), nil)
-			return
-		}
-		if priorDone != nil { // wait for any prior request to finish
+		if priorDone != nil {   // wait for any prior request to finish
 			// Same as commit(): we must NOT cancel the prior commit
 			// because canceling kills the TCP connection, and our
 			// subsequent request on a new connection can be processed

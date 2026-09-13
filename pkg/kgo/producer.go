@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,6 +46,12 @@ type producer struct {
 
 	id           atomic.Value
 	producingTxn atomic.Bool
+
+	// recreatedInTxn holds topics the current transaction produced to
+	// before they were deleted and recreated. The transaction cannot
+	// commit; see EndTransaction. BeginTransaction clears it.
+	recreatedInTxnMu xsync.Mutex
+	recreatedInTxn   map[string]struct{}
 
 	// We must have a producer field for flushing; we cannot just have a
 	// field on recBufs that is toggled on flush. If we did, then a new
@@ -283,6 +291,41 @@ func (p *producer) purgeTopics(topics []string) {
 }
 
 func (p *producer) isAborting() bool { return p.aborting.Load() > 0 }
+
+// noteRecreatedInTxn records that the current transaction produced to a
+// topic that was then recreated. A partition counts if it was added to the
+// transaction or has a request in flight: the buffer is abandoned, so the
+// response can no longer mark it added.
+func (p *producer) noteRecreatedInTxn(topic string, partitions []*topicPartition) {
+	for _, tp := range partitions {
+		recBuf := tp.records
+		recBuf.mu.Lock()
+		inflight := recBuf.inflight > 0
+		recBuf.mu.Unlock()
+		if !inflight && !recBuf.addedToTxn.Load() {
+			continue
+		}
+		p.recreatedInTxnMu.Lock()
+		if p.recreatedInTxn == nil {
+			p.recreatedInTxn = make(map[string]struct{})
+		}
+		p.recreatedInTxn[topic] = struct{}{}
+		p.recreatedInTxnMu.Unlock()
+		return
+	}
+}
+
+func (p *producer) topicsRecreatedInTxn() []string {
+	p.recreatedInTxnMu.Lock()
+	defer p.recreatedInTxnMu.Unlock()
+	return slices.Sorted(maps.Keys(p.recreatedInTxn))
+}
+
+func (p *producer) clearRecreatedInTxn() {
+	p.recreatedInTxnMu.Lock()
+	p.recreatedInTxn = nil
+	p.recreatedInTxnMu.Unlock()
+}
 
 func noPromise(*Record, error) {}
 

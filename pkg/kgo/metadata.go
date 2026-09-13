@@ -841,16 +841,19 @@ func (cl *Client) mergeTopicPartitions(
 			if kind == partitionKindConsume {
 				css.stop()
 			}
+			if isProduce {
+				for _, tp := range lv.partitions {
+					tp.records.abandon(kerr.UnknownTopicID)
+				}
+				if cl.cfg.txnID != nil {
+					cl.producer.noteRecreatedInTxn(topic, lv.partitions)
+				}
+			}
 			cl.cfg.logger.Log(LogLevelWarn, "metadata has a new ID for a topic we already hold: the topic was deleted and recreated; we do not adopt the new ID, the topic fails with UNKNOWN_TOPIC_ID until it is purged and re-added",
 				"topic", topic,
 				"old_id", topicID(oldID),
 				"new_id", topicID(r.id),
 			)
-			if isProduce {
-				for _, tp := range lv.partitions {
-					tp.records.abandon(kerr.UnknownTopicID)
-				}
-			}
 		}
 	}
 	recreated := lv.recreatedFrom != noID
