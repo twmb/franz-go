@@ -249,77 +249,101 @@ func TestDecompressBombBounded(t *testing.T) {
 	}
 }
 
-type lenfulDecompressPool struct{}
-
-func (lenfulDecompressPool) GetDecompressBytes([]byte, CompressionCodecType) []byte {
-	// Return a slice with nonzero length and garbage contents: only the
-	// capacity may be used as the decompression destination.
-	b := make([]byte, 64, 64<<10)
-	for i := range b {
-		b[i] = 0xAA
-	}
-	return b
+// decompressPool hands out a slice of the configured length and capacity
+// filled with 0xAA and records what is put back.
+type decompressPool struct {
+	len, cap int
+	given    []byte
+	puts     [][]byte
 }
 
-func (lenfulDecompressPool) PutDecompressBytes([]byte) {}
+func (p *decompressPool) GetDecompressBytes([]byte, CompressionCodecType) []byte {
+	p.given = bytes.Repeat([]byte{0xAA}, p.cap)[:p.len]
+	return p.given
+}
 
-// A PoolDecompressBytes implementation may return a slice with len > 0
-// (e.g. make([]byte, sizeGuess)). Decompression must write from index 0,
-// not append after the existing length: pre-fix, gzip/lz4/zstd returned
-// the slice's stale prefix followed by the decompressed data, corrupting
-// every compressed batch (snappy alone overwrote from index 0).
-func TestDecompressUserPoolLenNonzero(t *testing.T) {
+func (p *decompressPool) PutDecompressBytes(b []byte) { p.puts = append(p.puts, b) }
+
+// TestDecompressPools pins what Decompress promises, for every codec, with
+// and without a PoolDecompressBytes. With a pool, output starts at index 0
+// of the pool's slice whatever its length, is decoded in place when the
+// capacity suffices and is the grown slice otherwise, and Put is never
+// called on success since only Recycle may. When decoding fails no record
+// will ever Recycle, so the pool's slice is put back at once, zeroed
+// through its capacity. With no pool, snappy and xerial return a fresh
+// allocation and gzip and lz4 a clone; only zstd returns the decoder's own
+// allocation, so that decoder is held and decoded on twice to pin that it
+// does not write into an earlier result.
+func TestDecompressPools(t *testing.T) {
 	t.Parallel()
-	in := bytes.Repeat([]byte("payload bytes 01234 "), 64)
-	for _, codec := range []CompressionCodecType{CodecGzip, CodecSnappy, CodecLz4, CodecZstd} {
-		c, err := DefaultCompressor(CompressionCodec{codec: codec})
-		if err != nil {
-			t.Fatalf("codec %d: unexpected compressor err: %v", codec, err)
-		}
-		w := new(bytes.Buffer)
-		compressed, used := c.Compress(w, in)
-		if used != codec {
-			t.Fatalf("codec %d: compressed with %d", codec, used)
-		}
-		got, err := DefaultDecompressor(lenfulDecompressPool{}).Decompress(compressed, codec)
-		if err != nil {
-			t.Errorf("codec %d: unexpected decompress err: %v", codec, err)
-			continue
-		}
-		if !bytes.Equal(got, in) {
-			t.Errorf("codec %d: decompressed data corrupted (len %d, exp %d)", codec, len(got), len(in))
-		}
-	}
-}
+	inA := bytes.Repeat([]byte("batch A 0123456789 "), 4000)
+	inB := bytes.Repeat([]byte("batch B abcdefghij "), 5000)
+	inputsA, inputsB := codecInputs(t, inA), codecInputs(t, inB)
+	garbage := bytes.Repeat([]byte{0xff, 0x00, 0x13, 0x37}, 8)
+	for _, pt := range []struct {
+		name     string
+		len, cap int // the pool's slice; cap 0 means no pool
+		corrupt  bool
+	}{
+		{name: "nopool"},
+		{name: "fits", cap: 2 * len(inA)},
+		{name: "fits-with-len", len: 64, cap: 2 * len(inA)},
+		{name: "too-small", cap: 16},
+		{name: "corrupt", cap: 2 * len(inA), corrupt: true},
+	} {
+		for i, tc := range inputsA {
+			name := pt.name + "/" + tc.name
+			pool := &decompressPool{len: pt.len, cap: pt.cap}
+			var pools []Pool
+			if pt.cap > 0 {
+				pools = append(pools, pool)
+			}
+			d := DefaultDecompressor(pools...)
 
-type capturingDecompressPool struct{ got []byte }
+			if pt.corrupt {
+				src := garbage
+				if tc.name == "snappy-xerial" {
+					src = append(append([]byte{}, xerialPfx...), garbage...)
+				}
+				if _, err := d.Decompress(src, tc.codec); err == nil {
+					t.Errorf("%s: corrupt input unexpectedly decompressed", name)
+				} else if len(pool.puts) != 1 || len(pool.puts[0]) != pt.len || &pool.puts[0][:1][0] != &pool.given[:1][0] {
+					t.Errorf("%s: pool did not get its slice back after the failure (%d puts)", name, len(pool.puts))
+				} else if i := bytes.IndexFunc(pool.puts[0][:pt.cap], func(r rune) bool { return r != 0 }); i >= 0 {
+					t.Errorf("%s: byte %d not zeroed before put", name, i)
+				}
+				continue
+			}
 
-func (p *capturingDecompressPool) GetDecompressBytes([]byte, CompressionCodecType) []byte {
-	p.got = make([]byte, 0, 64<<10)
-	return p.got
-}
-
-func (*capturingDecompressPool) PutDecompressBytes([]byte) {}
-
-// Xerial-framed snappy must decode into the pooled destination like every
-// other codec path; pre-fix it took the pool's Get, ignored it, and
-// allocated fresh (orphaning the Get'd slice from the pool's perspective).
-func TestXerialDecodeUsesPool(t *testing.T) {
-	t.Parallel()
-	data, err := base64.StdEncoding.DecodeString("glNOQVBQWQAAAAABAAAAAQAAAA8NMEhlbGxvLCBXb3JsZCE=")
-	if err != nil {
-		t.Fatalf("base64 decode error = %v", err)
-	}
-	pool := new(capturingDecompressPool)
-	got, err := DefaultDecompressor(pool).Decompress(data, CodecSnappy)
-	if err != nil {
-		t.Fatalf("unexpected decompress err: %v", err)
-	}
-	if string(got) != "Hello, World!" {
-		t.Errorf("got %q != exp %q", got, "Hello, World!")
-	}
-	if len(got) == 0 || cap(pool.got) == 0 || &got[0] != &pool.got[:1][0] {
-		t.Error("xerial decode did not decode into the pooled slice")
+			got, err := d.Decompress(tc.src, tc.codec)
+			if err != nil {
+				t.Errorf("%s: unexpected decompress err: %v", name, err)
+				continue
+			}
+			if !bytes.Equal(got, inA) {
+				t.Errorf("%s: decompressed data corrupted (len %d, exp %d)", name, len(got), len(inA))
+				continue
+			}
+			if pt.cap > 0 {
+				if len(pool.puts) != 0 {
+					t.Errorf("%s: Decompress called Put %d times on success", name, len(pool.puts))
+				}
+				if inPool := &got[0] == &pool.given[:1][0]; inPool != (pt.cap >= len(inA)) {
+					t.Errorf("%s: decoded into the pool's slice: %v, want %v", name, inPool, !inPool)
+				}
+			} else if tc.codec == CodecZstd {
+				zd := d.(*decompressor).unzstdPool.Get().(*zstdDecoder)
+				gotA, err := zd.inner.DecodeAll(tc.src, nil)
+				if err != nil || !bytes.Equal(gotA, inA) {
+					t.Fatalf("%s: first batch: err %v", name, err)
+				}
+				if gotB, err := zd.inner.DecodeAll(inputsB[i].src, nil); err != nil || !bytes.Equal(gotB, inB) {
+					t.Errorf("%s: second batch: err %v", name, err)
+				} else if !bytes.Equal(gotA, inA) {
+					t.Errorf("%s: first batch modified by a later decode", name)
+				}
+			}
+		}
 	}
 }
 

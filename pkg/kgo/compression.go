@@ -360,29 +360,43 @@ type zstdDecoder struct {
 	inner *zstd.Decoder
 }
 
-func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([]byte, error) {
+func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) (_ []byte, err error) {
 	if codecType == CodecNone {
 		return src, nil
 	}
 
 	var (
-		dst        []byte
-		userPooled bool
+		dst      []byte
+		userPool PoolDecompressBytes
+		pooled   []byte
 	)
 	d.pools.each(func(p Pool) bool {
 		if pdecompressBytes, ok := p.(PoolDecompressBytes); ok {
-			s := pdecompressBytes.GetDecompressBytes(src, codecType)
+			userPool = pdecompressBytes
+			pooled = pdecompressBytes.GetDecompressBytes(src, codecType)
 			// Only the slice's capacity is used: decompressed data
 			// must start at index 0, while a buffer initialized with
-			// len(s) > 0 (a pool returning make([]byte, sizeGuess))
+			// len > 0 (a pool returning make([]byte, sizeGuess))
 			// would have the copy/append based codecs write after the
 			// existing length, prefixing the output with stale bytes.
-			dst = s[:0]
-			userPooled = true
+			dst = pooled[:0]
 			return true
 		}
 		return false
 	})
+	userPooled := userPool != nil
+	if userPooled {
+		// A batch that fails to decode yields no records, so nothing
+		// will Recycle the slice: put it back now. We do not know how
+		// far the codec wrote before failing, so we clear the whole
+		// capacity.
+		defer func() {
+			if err != nil {
+				clear(pooled[:cap(pooled)])
+				userPool.PutDecompressBytes(pooled)
+			}
+		}()
+	}
 
 	// For user provided slices, we put back into the pool only after the
 	// user calls Recycle on every record that has a reference to the
