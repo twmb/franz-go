@@ -478,29 +478,44 @@ func xerialDecode(dst, src []byte) ([]byte, error) {
 	// everything after: uint32 chunk size, snappy chunk
 	// we come into this function knowing src is at least 16
 	src = src[16:]
-	var chunk []byte
-	var err error
-	for len(src) > 0 {
-		if len(src) < 4 {
+	// Walk the chunk headers first, summing the claimed decoded lengths
+	// and bounding the total, so that dst grows once. This touches a few
+	// bytes per chunk and skips the rest.
+	var total int64
+	for rem := src; len(rem) > 0; {
+		if len(rem) < 4 {
 			return nil, errMalformedXerial
 		}
-		size := int32(binary.BigEndian.Uint32(src))
-		src = src[4:]
-		if size < 0 || len(src) < int(size) {
+		size := int32(binary.BigEndian.Uint32(rem))
+		rem = rem[4:]
+		if size < 0 || len(rem) < int(size) {
 			return nil, errMalformedXerial
 		}
-		// Chunks accumulate; bound the cumulative claimed output before
-		// decoding each chunk.
-		if l, err := s2.DecodedLen(src[:size]); err != nil {
+		l, err := s2.DecodedLen(rem[:size])
+		if err != nil {
 			return nil, err
-		} else if int64(l) > maxDecompressedSize-int64(len(dst)) {
+		}
+		total += int64(l)
+		if total > maxDecompressedSize-int64(len(dst)) {
 			return nil, errDecompressedTooLarge
 		}
-		if chunk, err = s2.Decode(chunk[:cap(chunk)], src[:size]); err != nil {
+		rem = rem[size:]
+	}
+	dst = slices.Grow(dst, int(total))
+	// s2 decodes in place when the destination has room for the decoded
+	// length, so each chunk decodes straight into dst's spare capacity.
+	for len(src) > 0 {
+		size := int(binary.BigEndian.Uint32(src))
+		src = src[4:]
+		l, err := s2.DecodedLen(src[:size])
+		if err != nil {
 			return nil, err
 		}
+		if _, err := s2.Decode(dst[len(dst):len(dst)+l], src[:size]); err != nil {
+			return nil, err
+		}
+		dst = dst[:len(dst)+l]
 		src = src[size:]
-		dst = append(dst, chunk...)
 	}
 	return dst, nil
 }
