@@ -771,6 +771,15 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		}
 	}
 
+	// A transaction whose writes all went to partitions a recreated topic
+	// no longer has looks like it produced nothing: the merge deleted
+	// those partitions from the client. The producer ID it failed for
+	// them still says the transaction wrote to the old topic, so it must
+	// abort like any other exposed one.
+	if cur := cl.producer.id.Load().(*producerID); errors.Is(cur.err, errRecreationAbortTxn) {
+		anyAdded = true
+	}
+
 	// If no partition was added to a transaction, then we have nothing to commit.
 	//
 	// Note that anyAdded is true if the producer ID was failed, meaning we will
@@ -819,7 +828,49 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 			}
 			cl.producer.inTxn = true
 			cl.producer.endUnconfirmed = unconfirmed
-			return kerr.OperationNotAttempted
+			// The producer id's own error says why the commit was
+			// refused; errors.Is against OperationNotAttempted still
+			// matches.
+			return fmt.Errorf("%w; the producer id error requiring the abort: %w", kerr.OperationNotAttempted, err)
+		}
+
+		// errRecreationAbortTxn is our own error, so the broker side
+		// transaction is still open at our current epoch. Below KIP-890
+		// part 2 we must abort it on the wire BEFORE recovering: if we
+		// re-init first, the broker aborts the open transaction and
+		// bumps the epoch, and our re-init retry then arrives with the
+		// old epoch and is fenced with PRODUCER_FENCED, permanently.
+		// Under part 2 a re-init on an open transaction is fine.
+		if errors.Is(err, errRecreationAbortTxn) && !cl.producer.tx890p2.Load() {
+			aerr := cl.doWithConcurrentTransactions(ctx, "EndTxn", func() error {
+				req := kmsg.NewPtrEndTxnRequest()
+				req.TransactionalID = *cl.cfg.txnID
+				req.ProducerID = id
+				req.ProducerEpoch = epoch
+				req.Commit = false
+				resp, err := req.RequestWith(context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4}), cl)
+				if err != nil {
+					return err
+				}
+				return kerr.ErrorForCode(resp.ErrorCode)
+			})
+			// INVALID_TXN_STATE means no transaction was open broker
+			// side (every write was rejected before it registered),
+			// so there is nothing to abort. Any other failure means the
+			// abort may not have reached the coordinator, and a re-init
+			// now could be fenced for good, so we restore what this
+			// call consumed and return: the retry is TryAbort again.
+			if aerr != nil && !errors.Is(aerr, kerr.InvalidTxnState) {
+				for _, rb := range addedSwapped {
+					rb.addedToTxn.Store(true)
+				}
+				if offsetsWereAdded {
+					g.offsetsAddedToTxn = true
+				}
+				cl.producer.inTxn = true
+				cl.producer.endUnconfirmed = unconfirmed
+				return fmt.Errorf("aborting the transaction after a topic recreation failed, retry the abort: %w", aerr)
+			}
 		}
 
 		// If we recovered the producer ID, we return early, since
@@ -1018,7 +1069,13 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 	}
 
 	var recoverable bool
-	if cl.producer.tx890p2.Load() {
+	if errors.Is(err, errRecreationAbortTxn) {
+		// Our own error: the broker saw nothing fatal, so recovering
+		// after the abort is safe. This comes before the split below
+		// because the error wraps TransactionAbortable, which the
+		// pre-KIP-890 part 2 arm treats as unrecoverable.
+		recoverable = true
+	} else if cl.producer.tx890p2.Load() {
 		// Under KIP-890 part 2 (transaction.version=2 in effect for
 		// this client's transactions), InvalidProducerIDMapping and
 		// InvalidProducerEpoch are not recoverable; only

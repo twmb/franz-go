@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -101,14 +102,15 @@ func inputProducer() {
 		perr := e.Err()
 		commit := kgo.TransactionEndTry(doCommit && perr == nil)
 
-		switch err := cl.EndTransaction(ctx, commit); err {
-		case nil:
+		err := cl.EndTransaction(ctx, commit)
+		switch {
+		case err == nil:
 			if doCommit {
 				fmt.Println("transaction committed")
 			} else {
 				fmt.Println("transaction aborted")
 			}
-		case kerr.OperationNotAttempted:
+		case errors.Is(err, kerr.OperationNotAttempted):
 			if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
 				die("abort failed: %v", err)
 			}

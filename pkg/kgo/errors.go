@@ -263,6 +263,15 @@ var (
 	// cannot see stale assignment state and miss a revocation.
 	errReassigned848 = errors.New("848 reassignment detected")
 
+	// Fails the producer ID when a topic this transaction produced to was
+	// recreated: a commit could commit writes that were deleted with the
+	// old topic. It wraps kerr.TransactionAbortable, so GroupTransactSession
+	// aborts and you retry EndTransaction with TryAbort.
+	// maybeRecoverProducerID recognizes this error: we created it ourselves
+	// and the broker saw nothing fatal, so recovering after the abort is
+	// safe.
+	errRecreationAbortTxn = fmt.Errorf("topic was deleted and recreated during the transaction; the transaction cannot commit safely across the recreation: %w", kerr.TransactionAbortable)
+
 	//////////////
 	// EXTERNAL //
 	//////////////

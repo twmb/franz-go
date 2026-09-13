@@ -1136,6 +1136,22 @@ func (s *sink) handleReqRespBatch(
 			return true, false
 		}
 
+		// A transaction's first produce into a recreated partition is
+		// rejected as out of order by Kafka 4.5 (KAFKA-15591), or as an
+		// unknown producer below 2.5: the new log has no producer state
+		// for us. Its writes to the old topic were deleted with it, so
+		// we fail the producer ID with errRecreationAbortTxn, which
+		// TryAbort recovers from, rather than with the sequence error,
+		// which recovery treats as fatal. The epoch and mapping errors
+		// are the coordinator's, not the log's, and are handled as
+		// before. (The idempotent producer never gets here: the merge
+		// bumps its epoch when it adopts the new ID.)
+		noState := err == kerr.OutOfOrderSequenceNumber || err == kerr.UnknownProducerID
+		if noState && s.cl.cfg.txnID != nil && batch.owner.recreated {
+			batch.owner.recreated = false
+			err = errRecreationAbortTxn
+		}
+
 		if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
 			s.cl.cfg.logger.Log(LogLevelInfo, "batch errored, failing the producer ID",
 				"broker", logID(s.nodeID),
@@ -1845,25 +1861,35 @@ func (recBuf *recBuf) unknownIDFails() int32 {
 // stage another, as after a sink change (see okOnSink), or a batch under
 // the new ID could land before its predecessor is retried.
 //
+// We return whether a transaction is exposed to a recreation: this
+// partition was added to one, or has records for it buffered or in flight.
+// Such a transaction cannot commit safely, since its writes to the old
+// topic were deleted with it. The merge fails the transaction once for the
+// topic.
+//
 // Must be called while locked.
-func (recBuf *recBuf) setTopicID(id [16]byte) {
-	if recBuf.topicID != noID && recBuf.topicID != id {
-		recBuf.recreated = true
-		recBuf.okOnSink = false
-		recBuf.unknownFailures = 0
-		recBuf.unknownIDFailures = 0
-	}
+func (recBuf *recBuf) setTopicID(id [16]byte) (txnExposed bool) {
+	changed := recBuf.topicID != noID && recBuf.topicID != id
 	recBuf.topicID = id
+	if !changed {
+		return false
+	}
+	recBuf.recreated = true
+	recBuf.okOnSink = false
+	recBuf.unknownFailures = 0
+	recBuf.unknownIDFailures = 0
+	return recBuf.addedToTxn.Load() || len(recBuf.batches) > 0 || recBuf.inflight != 0
 }
 
 // setTopicIDClearFailing sets the topic ID and clears the failing state in
 // one lock: the metadata merge does both for every partition it keeps.
-func (recBuf *recBuf) setTopicIDClearFailing(id [16]byte) {
+func (recBuf *recBuf) setTopicIDClearFailing(id [16]byte) (txnExposed bool) {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
-	recBuf.setTopicID(id)
+	txnExposed = recBuf.setTopicID(id)
 	recBuf.failing = false
 	recBuf.maybeTriggerDrain()
+	return txnExposed
 }
 
 // failAllRecords fails all buffered records in this recBuf.

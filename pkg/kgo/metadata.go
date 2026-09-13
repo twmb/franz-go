@@ -944,6 +944,7 @@ func (cl *Client) mergeTopicPartitions(
 	var (
 		swapped     int      // cursors restarted or stopped by a recreation
 		swappedFrom [16]byte // the ID they were swapped from
+		txnExposed  int      // partitions whose recreation a transaction is exposed to
 	)
 	for part, oldTP := range lv.partitions {
 		exists := part < len(r.partitions)
@@ -1013,8 +1014,11 @@ func (cl *Client) mergeTopicPartitions(
 				// does not produce under the old one meanwhile.
 				rb := newTP.records
 				rb.mu.Lock()
-				rb.setTopicID(lv.id)
+				exposed := rb.setTopicID(lv.id)
 				rb.mu.Unlock()
+				if exposed {
+					txnExposed++
+				}
 				rb.bumpRepeatedLoadErr(newTP.loadErr)
 			} else if !kerr.IsRetriable(newTP.loadErr) || cl.cfg.keepRetryableFetchErrors {
 				cl.consumer.addFakeReadyForDraining(topic, int32(part), newTP.loadErr, "metadata refresh has a load error on this partition")
@@ -1036,11 +1040,15 @@ func (cl *Client) mergeTopicPartitions(
 			// epoch comparison below, which would keep the old leader,
 			// and the old ID, for maxEpochRewinds updates.
 			if recreated {
+				var exposed bool
 				if newTP.topicPartitionData == oldTP.topicPartitionData {
 					newTP.records = oldTP.records
-					newTP.records.setTopicIDClearFailing(lv.id)
+					exposed = newTP.records.setTopicIDClearFailing(lv.id)
 				} else {
-					oldTP.migrateProductionTo(newTP, lv.id)
+					exposed = oldTP.migrateProductionTo(newTP, lv.id)
+				}
+				if exposed {
+					txnExposed++
 				}
 				continue
 			}
@@ -1178,6 +1186,23 @@ func (cl *Client) mergeTopicPartitions(
 			default:
 				oldTP.migrateCursorTo(newTP, css)
 			}
+		}
+	}
+
+	// A transaction that produced to a recreated topic, or has records for
+	// it buffered or in flight, cannot commit: its writes to the old topic
+	// were deleted with it, and a commit would report them as committed.
+	// We fail the transaction once for the topic. The producer ID error
+	// gate is for the log line: failProducerID itself no-ops once the ID
+	// has failed, but we would otherwise log on every update until you
+	// abort.
+	if txnExposed > 0 && cl.cfg.txnID != nil {
+		if cur := cl.producer.id.Load().(*producerID); cur.err == nil {
+			cl.cfg.logger.Log(LogLevelWarn, "topic recreation observed with an active transaction exposed to it; failing the transaction",
+				"topic", topic,
+				"exposed_partitions", txnExposed,
+			)
+			cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
 		}
 	}
 
