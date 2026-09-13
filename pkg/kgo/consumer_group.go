@@ -2404,10 +2404,12 @@ start:
 //   - new topics are found for consuming (changing this consumer's join metadata)
 //
 // Additionally, if the member is the leader, this rejoins the group if the
-// leader notices new partitions in an existing topic.
+// leader notices new partitions in an existing topic, or fewer partitions
+// after a topic was recreated.
 //
-// This does not rejoin if the leader notices a partition is lost, which is
-// finicky.
+// A partition that a metadata response merely omits does not count as
+// lost: the merge keeps it, so the count we see never shrinks for that. It
+// shrinks only when a recreation deleted partitions.
 func (g *groupConsumer) findNewAssignments() {
 	topics := g.tps.load()
 
@@ -2422,10 +2424,11 @@ func (g *groupConsumer) findNewAssignments() {
 		parts := topicPartitions.load()
 		numPartitions := len(parts.partitions)
 		// If we are already using this topic, add that it changed if
-		// there are more partitions than we were using prior.
+		// there are more partitions than we were using prior, or fewer
+		// after a recreation.
 		if used, exists := g.using[topic]; exists {
-			if added := numPartitions - used; added > 0 {
-				toChange[topic] = change{delta: added}
+			if delta := numPartitions - used; delta > 0 || delta < 0 && numPartitions > 0 {
+				toChange[topic] = change{delta: delta}
 			}
 			continue
 		}
@@ -2485,7 +2488,7 @@ func (g *groupConsumer) findNewAssignments() {
 		g.signalSubscriptionChange("rejoining because there are more topics to consume, our interests have changed")
 	} else if g.leader.Load() {
 		if len(toChange) > 0 {
-			g.rejoin("rejoining because we are the leader and noticed some topics have new partitions")
+			g.rejoin("rejoining because we are the leader and noticed some topics changed partition counts")
 		} else if externalRejoin {
 			g.rejoin("leader detected that partitions on topics another member is consuming have changed, rejoining to trigger rebalance")
 		}

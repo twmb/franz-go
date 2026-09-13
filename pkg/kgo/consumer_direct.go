@@ -99,10 +99,23 @@ func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 		toUse[topic] = toUseTopic
 	}
 
+	npartitions := func(topic string) int {
+		if tp, ok := topics[topic]; ok {
+			return len(tp.load().partitions)
+		}
+		return 0
+	}
+
 	// If any topic has specific partitions pinned (from ConsumePartitions
-	// or AddConsumePartitions), add them.
+	// or AddConsumePartitions), add them. A pinned partition our metadata
+	// does not have waits for the update that has it: loading its offset
+	// before then only fails.
 	for topic := range d.m {
+		n := npartitions(topic)
 		for partition, offset := range d.ps[topic] {
+			if int(partition) >= n {
+				continue
+			}
 			toUseTopic, exists := toUse[topic]
 			if !exists {
 				toUseTopic = make(map[int32]Offset, 10)
@@ -112,8 +125,19 @@ func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 		}
 	}
 
-	// With everything we want to consume, remove what we are already.
+	// With everything we want to consume, remove what we are already. A
+	// partition past the topic's count was deleted by a recreation (the
+	// merge keeps a partition a response merely omits, so the count never
+	// shrinks otherwise); we forget it so that we consume it again if a
+	// later recreation or partition add brings it back.
 	for topic, partitions := range d.using {
+		if n := npartitions(topic); n > 0 {
+			for partition := range partitions {
+				if int(partition) >= n {
+					delete(partitions, partition)
+				}
+			}
+		}
 		toUseTopic, exists := toUse[topic]
 		if !exists {
 			continue // metadata update did not return this topic (regex or failing load)

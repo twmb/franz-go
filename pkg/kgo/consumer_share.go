@@ -158,7 +158,7 @@ type (
 		ackMu       xsync.Mutex
 		pendingAcks []*shareAckState // user acks (r.Ack, finalizePreviousPoll, batchAckRecords)
 		pendingGaps []shareAckRange  // internal acks (gap acks, release-undeliverable)
-		closed      bool             // set to reject user-side acks arriving after shutdown
+		closed      error            // set to reject user-side acks with this error: the consumer left, or a recreation deleted the partition
 	}
 
 	// AckStatus defines how the broker should handle an acquired share group
@@ -716,8 +716,8 @@ func (s *source) closeShareSession(ctx context.Context) {
 		}
 	}
 
-	// Drain all cursor acks. drainAcks(true) sets the closed flag
-	// atomically with the drain so post-leave Record.Ack gets a
+	// Drain all cursor acks. drainAcks with an error sets the closed
+	// error atomically with the drain so post-leave Record.Ack gets a
 	// callback instead of being silently lost.
 	//
 	// Renew entries are converted to release: we are shutting down,
@@ -726,7 +726,7 @@ func (s *source) closeShareSession(ctx context.Context) {
 	// waiting for the acquisition lock to expire.
 	s.share.mu.Lock()
 	epoch := s.share.sessionEpoch
-	drains := s.drainAllShareAcks(true)
+	drains := s.drainAllShareAcks(errShareConsumerLeft)
 	s.share.mu.Unlock()
 	var nAcks int64
 	for _, d := range drains {
@@ -954,7 +954,7 @@ func (sc *shareConsumer) purgeTopics(topics []string) {
 			cursor.assigned.Store(false)
 			cursor.unpause(sc.cl) // see purgeShareCursor: unpause so pausedCursors does not leak
 			cursor.source.Load().removeShareCursor(cursor)
-			entries, _ := cursor.drainAcks(true)
+			entries, _ := cursor.drainAcks(errShareConsumerLeft)
 			if n := int64(len(entries)); n > 0 {
 				sc.enqueueCallback(ShareAckResults{{cursor.topic, cursor.partition, errShareConsumerLeft}}, n)
 			}
@@ -1771,7 +1771,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 	if predrained != nil {
 		drains = predrained
 	} else {
-		drains = s.drainAllShareAcks(false)
+		drains = s.drainAllShareAcks(nil)
 	}
 	s.share.mu.Unlock()
 
@@ -2011,9 +2011,9 @@ func (sc *shareConsumer) enqueueAllAcks(byCursor cursorsAcks) {
 	)
 	for cursor, entries := range byCursor {
 		cursor.ackMu.Lock()
-		if cursor.closed {
+		if cursor.closed != nil {
 			cursor.ackMu.Unlock()
-			closedRes = append(closedRes, ShareAckResult{cursor.topic, cursor.partition, errShareConsumerLeft})
+			closedRes = append(closedRes, ShareAckResult{cursor.topic, cursor.partition, cursor.closed})
 			continue
 		}
 		cursor.pendingAcks = append(cursor.pendingAcks, entries...)
@@ -2082,15 +2082,15 @@ func (sc *shareConsumer) drainCallbacks(entry shareCallbackEntry) {
 
 // requeue puts a drain's entries and gaps back onto its cursor in
 // one mutex acquisition. If the cursor is closed (e.g. after
-// PurgeTopics), entries fire the left-group callback; gaps are
-// silently dropped.
+// PurgeTopics), entries fire the callback with the closing error; gaps
+// are silently dropped.
 func (d *cursorAckDrain) requeue(sc *shareConsumer) {
 	c := d.cursor
 	c.ackMu.Lock()
-	if c.closed {
+	if c.closed != nil {
 		c.ackMu.Unlock()
 		if len(d.entries) > 0 {
-			sc.enqueueCallback(ShareAckResults{{c.topic, c.partition, errShareConsumerLeft}}, int64(len(d.entries)))
+			sc.enqueueCallback(ShareAckResults{{c.topic, c.partition, c.closed}}, int64(len(d.entries)))
 		}
 		return
 	}
@@ -2104,7 +2104,7 @@ func (d *cursorAckDrain) requeue(sc *shareConsumer) {
 // FlushAcks. Returns false if the cursor is closed.
 func (c *shareCursor) enqueueGaps(gaps []shareAckRange) bool {
 	c.ackMu.Lock()
-	if c.closed {
+	if c.closed != nil {
 		c.ackMu.Unlock()
 		return false
 	}
@@ -2127,16 +2127,16 @@ func (c *shareCursor) unpause(cl *Client) {
 }
 
 // drainAcks removes and returns all pending user acks and gaps
-// under c.ackMu. If close is true, marks the cursor closed so
-// later appendAck / enqueueGaps return a left-group error.
-func (c *shareCursor) drainAcks(close bool) ([]*shareAckState, []shareAckRange) {
+// under c.ackMu. A non-nil close marks the cursor closed so that later
+// appendAck / enqueueGaps answer with that error.
+func (c *shareCursor) drainAcks(close error) ([]*shareAckState, []shareAckRange) {
 	c.ackMu.Lock()
 	entries := c.pendingAcks
 	gaps := c.pendingGaps
 	c.pendingAcks = nil
 	c.pendingGaps = nil
-	if close {
-		c.closed = true
+	if close != nil {
+		c.closed = close
 	}
 	c.ackMu.Unlock()
 	return entries, gaps
@@ -2151,7 +2151,7 @@ func (c *shareCursor) drainAcks(close bool) ([]*shareAckState, []shareAckRange) 
 // risky to send acks from old topic IDs than to try to filter within the
 // client and risk letting an ack through to the new topic meant for the old
 // topic.
-func (s *source) drainAllShareAcks(close bool) []cursorAckDrain {
+func (s *source) drainAllShareAcks(close error) []cursorAckDrain {
 	var drains []cursorAckDrain
 	for _, c := range s.share.cursors {
 		entries, gaps := c.drainAcks(close)
@@ -2220,14 +2220,14 @@ func (st *shareAckState) appendAck() {
 	c := st.slab.cursor
 	sc := st.slab.ackSource.share.sc
 	c.ackMu.Lock()
-	if c.closed {
+	if c.closed != nil {
 		c.ackMu.Unlock()
-		sc.enqueueCallback(ShareAckResults{{c.topic, c.partition, errShareConsumerLeft}}, 0)
+		sc.enqueueCallback(ShareAckResults{{c.topic, c.partition, c.closed}}, 0)
 		return
 	}
 	wake := len(c.pendingAcks) == 0 // only empty->non-empty needs a wake signal
 	c.pendingAcks = append(c.pendingAcks, st)
-	sc.pendingAcks.Add(1) // must happen inside mu, otherwise drainAcks(true) could race before we inc and FlushAcks could end early
+	sc.pendingAcks.Add(1) // must happen inside mu, otherwise a closing drainAcks could race before we inc and FlushAcks could end early
 	c.ackMu.Unlock()
 
 	if wake {
@@ -3189,7 +3189,7 @@ func (s *source) createShareReq(skipAckDrain bool) (
 	// Drain acks from all cursors on this source (not just usable
 	// ones) to piggyback on the ShareFetch request.
 	if !skipAckDrain {
-		piggybackAcks = s.drainAllShareAcks(false)
+		piggybackAcks = s.drainAllShareAcks(nil)
 		nAcks, nStaleAcks, staleResults = filterStaleEntries(s, epoch, piggybackAcks)
 		// Compute hasRenew once here so callers don't have to re-walk
 		// every entry's status atomic in a separate hasRenewAck pass.

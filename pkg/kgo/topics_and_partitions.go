@@ -1049,6 +1049,79 @@ func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) 
 	sns.source.addShareCursor(c)
 }
 
+// errRecreationDeleted is the error a deleted partition's records and acks
+// fail with, and the error a consumer sees for it once.
+func errRecreationDeleted(partition int32) error {
+	return fmt.Errorf("topic was recreated and no longer has partition %d: %w", partition, kerr.UnknownTopicOrPartition)
+}
+
+// purgeProduction is called on metadata update when a recreation removed
+// this partition. This mirrors the front half of migrateProductionTo and
+// abandons the buffer rather than moving it: we set purged first so that a
+// record being buffered right now fails, remove the buffer from its sink,
+// then fail what is in it. The merge stores a partition slice without this
+// partition, so nothing chooses it again.
+//
+// We return whether a transaction was exposed to this partition, the same as
+// setTopicID: a transaction that wrote only to partitions the recreation
+// deleted must still fail, since those writes are gone. We read the exposure
+// before failAllRecords empties the batches.
+func (tp *topicPartition) purgeProduction() (txnExposed bool) {
+	r := tp.records
+	err := errRecreationDeleted(r.partition)
+	r.mu.Lock()
+	r.purged = err
+	txnExposed = r.addedToTxn.Load() || len(r.batches) > 0 || r.inflight != 0
+	r.mu.Unlock()
+
+	// We do not lock for r.sink: this runs in the metadata goroutine, the
+	// only writer of it. We do not WANT to lock because r.mu =>
+	// r.sink.recBufsMu inverts the lock order.
+	r.sink.removeRecBuf(r)
+
+	r.mu.Lock()
+	r.failAllRecords(err)
+	r.mu.Unlock()
+	return txnExposed
+}
+
+// purgeCursor is the consuming half of purgeProduction. It mirrors the front
+// of migrateCursorTo, then forgets the cursor instead of moving it: the
+// cursor stops fetching, any offset load for it is dropped, and it is no
+// longer one we consume. You see the partition's deletion once as an error,
+// like data loss.
+func (tp *topicPartition) purgeCursor(cl *Client, css *consumerSessionStopper) {
+	css.stop()
+
+	c := tp.cursor
+	c.source.removeCursor(c)
+	loading := css.reloadOffsets.removeLoad(c.topic, c.partition)
+	_, using := cl.consumer.usingCursors[c]
+	delete(cl.consumer.usingCursors, c)
+	if using || loading {
+		cl.consumer.addFakeReadyForDraining(c.topic, c.partition, errRecreationDeleted(c.partition), "metadata refresh sees a recreated topic without this partition")
+	}
+	c.unset()
+}
+
+// purgeShareCursor is the share half of purgeProduction, and mirrors what
+// purging a topic does to its share cursors: the cursor leaves its source and
+// the acks still pending on it are answered here, since no source holds the
+// cursor anymore to send them.
+func (tp *topicPartition) purgeShareCursor(cl *Client) {
+	c := tp.shareCursor
+	c.assigned.Store(false)
+	c.unpause(cl) // a rejected cursor may be paused; unpause so pausedCursors does not leak
+	if source := c.source.Load(); source != nil {
+		source.removeShareCursor(c)
+	}
+	err := errRecreationDeleted(c.partition)
+	entries, _ := c.drainAcks(err)
+	if n := int64(len(entries)); n > 0 {
+		cl.consumer.s.enqueueCallback(ShareAckResults{{c.topic, c.partition, err}}, n)
+	}
+}
+
 type kip951move struct {
 	recBufs map[*recBuf]topicPartitionData
 	cursors map[*cursor]topicPartitionData

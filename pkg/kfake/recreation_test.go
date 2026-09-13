@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -477,8 +478,12 @@ func TestRecreationConsumerSwapGrow(t *testing.T) {
 	collectVals(t, cl, "n0", "n1")
 }
 
+// The per topic line for partitions a recreation removed.
+const logDeleted = "deleting partitions the recreated topic does not have"
+
 // Recreation with fewer partitions: survivors swap and continue, and the
-// vanished partition surfaces UNKNOWN_TOPIC_ID rather than reading anything.
+// vanished partition is deleted. The consumer sees its deletion once, as an
+// error naming the recreation, and never reads from it again.
 func TestRecreationConsumerSwapShrink(t *testing.T) {
 	t.Parallel()
 
@@ -502,8 +507,9 @@ func TestRecreationConsumerSwapShrink(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var gotN0, gotErr bool
-	for ctx.Err() == nil && (!gotN0 || !gotErr) {
+	var gotN0 bool
+	var errs int
+	for ctx.Err() == nil && (!gotN0 || errs == 0) {
 		fetches := cl.PollFetches(ctx)
 		fetches.EachRecord(func(r *kgo.Record) {
 			if string(r.Value) == "n0" {
@@ -513,14 +519,255 @@ func TestRecreationConsumerSwapShrink(t *testing.T) {
 			}
 		})
 		fetches.EachError(func(_ string, p int32, err error) {
-			if p == 1 && errors.Is(err, kerr.UnknownTopicID) {
-				gotErr = true
+			if p != 1 || !errors.Is(err, kerr.UnknownTopicOrPartition) || !strings.Contains(err.Error(), "recreated") {
+				t.Errorf("unexpected error on partition %d: %v", p, err)
 			}
+			errs++
 		})
 	}
-	if !gotN0 || !gotErr {
-		t.Fatalf("wanted new partition-0 record and a partition-1 UnknownTopicID error, got record=%v err=%v; log tail:\n%s", gotN0, gotErr, lg.tail(6000))
+	if !gotN0 || errs != 1 {
+		t.Fatalf("wanted new partition-0 record and one partition-1 deletion error, got record=%v errors=%d; log tail:\n%s", gotN0, errs, lg.tail(6000))
 	}
+	if got := lg.count(logDeleted); got != 1 {
+		t.Errorf("deletion logged %d times, want 1", got)
+	}
+	verifyZeroRecords(t, cl, 300*time.Millisecond)
+}
+
+// A partition a recreation removed comes back when partitions are added
+// again: it is consumed from the beginning, by a topic consumer and by a
+// consumer that pinned it.
+func TestRecreationShrinkComesBack(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
+	admin := newPlainClient(t, c)
+	lg := new(capLogger)
+	all := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	pinLog := new(capLogger)
+	pinned := newPlainClient(t, c,
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{topic: {1: kgo.NewOffset().AtStart()}}),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(pinLog),
+	)
+
+	produceVals(t, c, topic, 0, "v0")
+	produceVals(t, c, topic, 1, "v1")
+	collectVals(t, all, "v0", "v1")
+	collectVals(t, pinned, "v1")
+
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, all, lg, logDeleted, 1)
+	waitForLog(t, pinned, pinLog, logDeleted, 1)
+
+	// Nothing fetches the deleted partition, so nothing triggers the
+	// metadata update that would notice it is back; a client notices on
+	// its own at MetadataMaxAge.
+	addPartitions(t, admin, topic, 2)
+	all.ForceMetadataRefresh()
+	pinned.ForceMetadataRefresh()
+	produceVals(t, c, topic, 1, "n1", "n2")
+	collectVals(t, all, "n1", "n2")
+	collectVals(t, pinned, "n1", "n2")
+}
+
+// addPartitions grows a topic to a total partition count.
+func addPartitions(t *testing.T, cl *kgo.Client, topic string, total int32) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req := kmsg.NewPtrCreatePartitionsRequest()
+	rt := kmsg.NewCreatePartitionsRequestTopic()
+	rt.Topic = topic
+	rt.Count = total
+	req.Topics = append(req.Topics, rt)
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("create partitions: %v", err)
+	}
+	if ec := resp.Topics[0].ErrorCode; ec != 0 {
+		t.Fatalf("create partitions: %v", kerr.ErrorForCode(ec))
+	}
+}
+
+// A classic group's leader rebalances the group off the partitions a
+// recreation removed, and rebalances again when partitions are added back.
+func TestRecreationShrinkGroupClassic(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "t", "gshrink"
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
+	admin := newPlainClient(t, c)
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.FetchMaxWait(250*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+
+	produceVals(t, c, topic, 0, "v0")
+	produceVals(t, c, topic, 1, "v1")
+	collectVals(t, cl, "v0", "v1")
+
+	const logRejoin = "noticed some topics changed partition counts"
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, cl, lg, logDeleted, 1)
+	waitForLogQuiet(t, lg, logRejoin, 1)
+	produceVals(t, c, topic, 0, "n0")
+	collectVals(t, cl, "n0")
+
+	addPartitions(t, admin, topic, 2)
+	waitForLog(t, cl, lg, logRejoin, 2)
+	produceVals(t, c, topic, 1, "n1")
+	collectVals(t, cl, "n1")
+}
+
+// A recreation with fewer partitions fails the records buffered for the
+// partitions it removed, with an error naming the recreation, and a
+// partitioner that requires consistency picks from the partitions the topic
+// has now.
+func TestRecreationShrinkProducer(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(4, topic))
+	admin := newPlainClient(t, c)
+	lg := new(capLogger)
+	cl := newPlainClient(t, c,
+		kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	manualLog := new(capLogger)
+	manual := newPlainClient(t, c,
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.WithLogger(manualLog),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Key: []byte("k0"), Value: []byte("v0")}).FirstErr(); err != nil {
+		t.Fatalf("produce before the recreation: %v", err)
+	}
+	if err := manual.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 3, Value: []byte("m")}).FirstErr(); err != nil {
+		t.Fatalf("manual produce before the recreation: %v", err)
+	}
+
+	// A record buffered for partition 3 while the recreation removes it
+	// fails with the deletion error rather than waiting on a partition
+	// that does not exist. The leader rejects it until then so that it
+	// stays buffered.
+	hold := c.Fault(Fault{
+		Keys:       []kmsg.Key{kmsg.Produce},
+		Topic:      topic,
+		Partitions: []int32{3},
+		Err:        kerr.NotLeaderForPartition,
+		Count:      -1,
+	})
+	buffered := make(chan error, 1)
+	manual.Produce(ctx, &kgo.Record{Topic: topic, Partition: 3, Value: []byte("late")}, func(_ *kgo.Record, err error) { buffered <- err })
+	waitHits(t, hold, 1)
+	recreateTopic(t, admin, topic, 1)
+	hold.Remove()
+	waitForLog(t, cl, lg, logDeleted, 1)
+	waitForLog(t, manual, manualLog, logDeleted, 1)
+	select {
+	case err := <-buffered:
+		if !errors.Is(err, kerr.UnknownTopicOrPartition) || !strings.Contains(err.Error(), "recreated") {
+			t.Fatalf("buffered record failed with %v, want the deletion error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the record buffered for the removed partition was not failed")
+	}
+
+	// Every key now maps onto the one partition the topic has.
+	for i := range 32 {
+		r := &kgo.Record{Topic: topic, Key: fmt.Appendf(nil, "k%d", i), Value: []byte("n")}
+		if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+			t.Fatalf("produce %d after the recreation: %v", i, err)
+		}
+		if r.Partition != 0 {
+			t.Fatalf("record %d landed on partition %d, which the recreation removed", i, r.Partition)
+		}
+	}
+
+	// Naming a removed partition is rejected rather than buffered.
+	if err := manual.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte("m")}).FirstErr(); err != nil {
+		t.Fatalf("manual produce to the partition the topic has: %v", err)
+	}
+	if err := manual.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 3, Value: []byte("m")}).FirstErr(); err == nil {
+		t.Error("manual produce to a partition the recreation removed succeeded")
+	}
+}
+
+// A share consumer's partition that a recreation removed is deleted: its
+// pending acks are answered with the deletion error and consumption goes on
+// for the partitions the topic has.
+func TestRecreationShrinkShare(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "t", "sgshrink"
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
+	admin := newPlainClient(t, c)
+	setShareAutoOffsetReset(t, admin, group)
+
+	var ackMu sync.Mutex
+	var ackResults kgo.ShareAckResults
+	lg := new(capLogger)
+	cl := newShareConsumer(t, c, topic, group,
+		kgo.ShareAckCallback(func(_ *kgo.Client, results kgo.ShareAckResults) {
+			ackMu.Lock()
+			defer ackMu.Unlock()
+			ackResults = append(ackResults, results...)
+		}),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+
+	// Acquire the records of the partition the recreation removes, and
+	// acknowledge them only after the deletion: the cursor is gone, and
+	// the acknowledgment reports why.
+	produceVals(t, c, topic, 1, "v1", "v2")
+	rs := collectRecords(t, cl, 2, 5*time.Second)
+
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, cl, lg, logDeleted, 1)
+	cl.MarkAcks(kgo.AckAccept, rs...)
+
+	// The deleted partition's cursor is closed, so the acks are answered
+	// from the client, on the callback goroutine; nothing is pending for
+	// FlushAcks to wait on, so we wait for the callback itself.
+	deadline := time.Now().Add(5 * time.Second)
+	var results kgo.ShareAckResults
+	for sawDeleted := false; !sawDeleted; {
+		if time.Now().After(deadline) {
+			t.Fatalf("acks of the removed partition's records did not fail with the deletion error; callback results: %v; log tail:\n%s", results, lg.tail(8000))
+		}
+		time.Sleep(10 * time.Millisecond)
+		ackMu.Lock()
+		results = slices.Clone(ackResults)
+		ackMu.Unlock()
+		for _, r := range results {
+			if r.Topic == topic && r.Partition == 1 && errors.Is(r.Err, kerr.UnknownTopicOrPartition) && strings.Contains(r.Err.Error(), "recreated") {
+				sawDeleted = true
+			}
+		}
+	}
+
+	produceVals(t, c, topic, 0, "n0", "n1")
+	collectVals(t, cl, "n0", "n1")
 }
 
 // Regex consumers ride the same merge swap when the recreation happens
@@ -2652,5 +2899,43 @@ func TestRecreationAtCommitted(t *testing.T) {
 	}
 	if got := lg.count("restarting the partition"); got != 0 {
 		t.Fatalf("AtCommitted restarted the partition %d times; want none", got)
+	}
+}
+
+// A transaction whose only write went to a partition the recreation removes
+// must still fail: those writes were deleted with the partition, so a commit
+// would report records that are gone (an EOS violation). The merge counts a
+// deleted partition's transaction exposure the same as a surviving one.
+func TestRecreationTxnDeletedPartitionOnly(t *testing.T) {
+	t.Parallel()
+
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	lg := new(capLogger)
+	txcl := newPlainClient(t, c,
+		kgo.TransactionalID("tx-delonly"),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.MetadataMinAge(100*time.Millisecond),
+		kgo.WithLogger(lg),
+	)
+	admin := newPlainClient(t, c)
+
+	if err := txcl.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	// Write only to partition 1, which the shrink to one partition removes.
+	if err := txcl.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 1, Value: []byte("a0")}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	recreateTopic(t, admin, topic, 1)
+	waitForLog(t, txcl, lg, logTxnObserved, 1)
+
+	if err := txcl.EndTransaction(ctx, kgo.TryCommit); !errors.Is(err, kerr.TransactionAbortable) {
+		t.Fatalf("commit got %v; want the abortable recreation error", err)
+	}
+	if err := txcl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("abort after the observation: %v", err)
 	}
 }

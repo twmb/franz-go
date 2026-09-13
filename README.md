@@ -237,6 +237,11 @@ up to MetadataMaxAge. Then:
   commits the rest
 * Share consumers continue on the new topic's share state. Acknowledgments of
   the old topic's records fail with `UNKNOWN_TOPIC_ID`
+* Partitions the new topic does not have are deleted from the client: a
+  consumer sees one error for each, naming the recreation, records buffered
+  for them fail with the same error, and a classic group's leader rebalances
+  the group off them. A partition that comes back later is consumed from the
+  beginning
 * A broker that keeps reporting the old topic ID is ignored while any fetch
   or produce under the new ID is served, and for five minutes after the old
   ID was last reported. Past that, its report is taken as another

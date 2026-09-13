@@ -932,11 +932,17 @@ func (cl *Client) mergeTopicPartitions(
 	//
 	// 2) a topic was deleted and recreated with fewer partitions
 	//
-	// Case 1 is temporary and heals on a later refresh; case 2 is
-	// permanent. Below, we keep the missing partition around either way.
-	// For producers we bump its load error, which fails buffered records
-	// only once the unknown fail limit trips (so case 1 does not fail
-	// records); consumers keep consuming through the existing cursor.
+	// Case 1 is temporary and heals on a later refresh, so we keep the
+	// missing partition around. For producers we bump its load error,
+	// which fails buffered records only once the unknown fail limit trips
+	// (so case 1 does not fail records); consumers keep consuming through
+	// the existing cursor.
+	//
+	// Case 2 is the response that adopted the new ID: a broker that knows
+	// a topic knows the partitions it was created with, so a partition
+	// missing from that response is one the new topic does not have, and
+	// we delete it. A lagging broker that reports the old ID afterward is
+	// refused above, so it cannot delete anything.
 
 	// Migrating topicPartitions is a little tricky because we have to
 	// worry about underlying pointers that may currently be loaded.
@@ -944,12 +950,30 @@ func (cl *Client) mergeTopicPartitions(
 		swapped     int      // cursors restarted or stopped by a recreation
 		swappedFrom [16]byte // the ID they were swapped from
 		txnExposed  int      // partitions whose recreation a transaction is exposed to
+		deleted     int      // partitions the recreated topic does not have
 	)
 	for part, oldTP := range lv.partitions {
 		exists := part < len(r.partitions)
 		if !exists {
 			// This is the "deleted" case; see the comment above.
-			//
+			if recreated {
+				switch kind {
+				case partitionKindProduce:
+					// A transaction that wrote only to deleted
+					// partitions must still fail; count the
+					// exposure before the buffer is abandoned.
+					if oldTP.purgeProduction() {
+						txnExposed++
+					}
+				case partitionKindShare:
+					oldTP.purgeShareCursor(cl)
+				default:
+					oldTP.purgeCursor(cl, css)
+				}
+				deleted++
+				continue
+			}
+
 			// We need to keep the partition around. For producing,
 			// the partition could be loaded and a record could be
 			// added to it after we bump the load error. For
@@ -1225,6 +1249,15 @@ func (cl *Client) mergeTopicPartitions(
 			)
 			cl.failProducerID(cur.id, cur.epoch, errRecreationAbortTxn)
 		}
+	}
+
+	if deleted > 0 {
+		cl.cfg.logger.Log(LogLevelInfo, "deleting partitions the recreated topic does not have",
+			"topic", topic,
+			"deleted_partitions", deleted,
+			"remaining_partitions", len(r.partitions),
+			"new_id", topicID(lv.id),
+		)
 	}
 
 	// The swaps above log one line for the topic; the per partition detail
