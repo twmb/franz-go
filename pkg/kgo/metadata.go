@@ -846,6 +846,11 @@ func (cl *Client) mergeTopicPartitions(
 				"old_id", topicID(oldID),
 				"new_id", topicID(r.id),
 			)
+			if isProduce {
+				for _, tp := range lv.partitions {
+					tp.records.abandon(kerr.UnknownTopicID)
+				}
+			}
 		}
 	}
 	recreated := lv.recreatedFrom != noID
@@ -899,6 +904,11 @@ func (cl *Client) mergeTopicPartitions(
 			continue
 		}
 		newTP := r.partitions[part]
+
+		if isProduce && recreated {
+			*newTP = *oldTP
+			continue
+		}
 
 		// Like above for the entire topic, an individual partition
 		// can have a load error. Unlike for the topic, individual
@@ -1089,7 +1099,9 @@ func (cl *Client) mergeTopicPartitions(
 		}
 		switch kind {
 		case partitionKindProduce:
-			if newTP.records.recBufsIdx == -1 {
+			if recreated {
+				newTP.records.abandon(kerr.UnknownTopicID)
+			} else if newTP.records.recBufsIdx == -1 {
 				newTP.records.sink.addRecBuf(newTP.records)
 				if debug {
 					cl.cfg.logger.Log(LogLevelDebug, "metadata refresh new produce partition",

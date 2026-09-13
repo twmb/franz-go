@@ -277,33 +277,7 @@ func (p *producer) purgeTopics(topics []string) {
 
 	for _, d := range purged {
 		for _, p := range d.partitions {
-			r := p.records
-
-			// First we set purged, so that anything in the process
-			// of being buffered will immediately fail when it goes
-			// to buffer.
-			r.mu.Lock()
-			r.purged = true
-			r.mu.Unlock()
-
-			// Now we remove from the sink. When we do, the recBuf
-			// is effectively abandoned. Any active produces may
-			// finish before we fail the records; if they finish
-			// after they will no longer belong in the batch, but
-			// they may have been produced. This is the duplicate
-			// risk a user runs when purging.
-			//
-			// We do not need to lock for `r.sink` access because
-			// this is run in a blocking metadata fn, meaning the
-			// sink cannot change. We do not WANT to lock because
-			// r.mu => r.sink.recBufsMu would cause lock inversion.
-			r.sink.removeRecBuf(r)
-
-			// Once abandoned, we now need to fail anything that
-			// was buffered.
-			r.mu.Lock()
-			r.failAllRecords(errPurged)
-			r.mu.Unlock()
+			p.records.abandon(errPurged)
 		}
 	}
 }

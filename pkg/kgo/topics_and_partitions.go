@@ -1078,6 +1078,11 @@ func (k *kip951move) doMove(cl *Client) {
 			if !ok {
 				continue // perhaps concurrently purged
 			}
+			if lr.r.recreatedFrom != noID {
+				// The buffers are abandoned and out of every sink;
+				// moving one would add it back.
+				continue
+			}
 			old, new, modified := modifyP(lr.r, recBuf.partition, td, func(tp *topicPartition) bool { return tp.records == recBuf })
 			if modified {
 				cl.cfg.logger.Log(LogLevelInfo, "moving producing partition due to kip-951 not_leader_for_partition",
