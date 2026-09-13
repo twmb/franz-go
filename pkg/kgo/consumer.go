@@ -107,6 +107,9 @@ func NoResetOffset() Offset {
 //
 //	AfterMilli(time.Now().UnixMilli())
 //
+// AfterMilli pins an instant when you create the offset; [Offset.Lookback]
+// instead computes the timestamp when the client resolves the offset.
+//
 // By default when using this offset, if consuming encounters an
 // OffsetOutOfRange error, consuming will reset to the first offset after this
 // timestamp. You can use NoResetOffset().AfterMilli(...) to instead switch the
@@ -118,6 +121,39 @@ func (o Offset) AfterMilli(millisec int64) Offset {
 	o.afterMilli = true
 	o.lookback = 0
 	o.hasLookback = false
+	return o
+}
+
+// Lookback returns an offset that consumes from the first offset at or after
+// a duration before a reference point in time. Unlike [Offset.AfterMilli],
+// which pins an instant when you create the offset, the timestamp is computed
+// when the client resolves the offset.
+//
+// As a start offset, the reference is the current time, so Lookback(time.Hour)
+// consumes the last hour of a partition as of when that partition is first
+// resolved. This is Kafka's auto.offset.reset=by_duration.
+//
+// If no record is that new, a start offset resolves to the end of the
+// partition.
+//
+// As a reset offset, the reference is the timestamp of the last record the
+// client consumed, and if no record is that new the client stays where it was
+// rather than moving to the end. A partition that has consumed nothing has no
+// such record, so the lookback falls away and the offset's position is used:
+// the beginning of the partition. See [ConsumeResetOffset].
+//
+// This option is *not* compatible with any At options (nor Relative nor
+// WithEpoch); using any of those will clear the lookback.
+//
+// A negative duration would look forward rather than back, so we clamp it to
+// zero: the reference point itself.
+func (o Offset) Lookback(d time.Duration) Offset {
+	o.at = -2
+	o.relative = 0
+	o.epoch = -1
+	o.afterMilli = true
+	o.lookback = max(d, 0)
+	o.hasLookback = true
 	return o
 }
 
@@ -214,11 +250,11 @@ func (o Offset) listMilli(lastConsumedMilli int64) int64 {
 
 // lookbackMilli returns the millisecond timestamp d before milli, floored so
 // that a by-time listing never asks for a timestamp a ListOffsets request
-// reserves: -1 is the end, -2 the start, -3 the max timestamp. The lookback is
-// a fixed positive duration, so only a record carrying a timestamp near the
-// bottom of an int64 can subtract past it, wrapping around to a huge future
-// timestamp that would list the end and skip records. Any target at or below
-// zero precedes every record in the log, so 1 answers the same as all of them.
+// reserves: -1 is the end, -2 the start, -3 the max timestamp. Lookback clamps
+// d to be non-negative, so only a record carrying a timestamp near the bottom
+// of an int64 can subtract past it, wrapping around to a huge future timestamp
+// that would list the end and skip records. Any target at or below zero
+// precedes every record in the log, so 1 answers the same as all of them.
 func lookbackMilli(milli int64, d time.Duration) int64 {
 	back := d.Milliseconds()
 	if milli-back > milli {
@@ -2846,6 +2882,11 @@ func (o offsetLoadMap) buildListReq(isolationLevel int8, reset Offset) (r1, r2, 
 			// resume by time, bounded by the start and the end.
 			timestamp := offset.at
 			if offset.afterMilli {
+				// A lookback offset in the start role resolves its timestamp now,
+				// rather than when you built the offset.
+				if offset.hasLookback {
+					timestamp = lookbackMilli(time.Now().UnixMilli(), offset.lookback)
+				}
 				createEnd = true
 			} else if timestamp >= 0 || timestamp == -2 && offset.relative > 0 || timestamp == -1 && offset.relative < 0 {
 				timestamp = -2

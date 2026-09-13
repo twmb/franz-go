@@ -681,7 +681,7 @@ func defaultCfg() cfg {
 		maxBytes:       50 << 20,
 		maxPartBytes:   1 << 20,
 		startOffset:    NewOffset().AtStart(),
-		resetOffset:    Offset{at: -2, epoch: -1, afterMilli: true, lookback: 30 * time.Second, hasLookback: true},
+		resetOffset:    NewOffset().Lookback(30 * time.Second),
 		isolationLevel: 0,
 
 		maxConcurrentFetches: -1, // unbounded default
@@ -1593,6 +1593,7 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 //	relative?                         => start at the above, + / - the relative amount
 //	exact/relative are out of bounds? => start at the nearest boundary (start or end)
 //	after millisec?                   => start at first offset after millisec if one exists, else log end offset
+//	lookback?                         => start at the first offset at or after now minus the lookback, else log end offset
 //
 // To match Kafka's auto.offset.reset which is used for both the start offset
 // and the reset offset,
@@ -1612,8 +1613,8 @@ func ConsumeStartOffset(offset Offset) ConsumerOpt {
 }
 
 // ConsumeResetOffset sets where to resume a partition when the client detects
-// that the broker lost data at a point the client cannot determine, overriding
-// the default, which resumes thirty seconds before the last record consumed.
+// that the broker lost data at a point the client cannot determine,
+// overriding the default of NewOffset().Lookback(30*time.Second).
 //
 // There are three such points: our offset is past the log end, our offset is
 // back within the log after an OffsetOutOfRange, or an OffsetForLeaderEpoch
@@ -1640,9 +1641,10 @@ func ConsumeStartOffset(offset Offset) ConsumerOpt {
 //
 // To match Kafka's auto.offset.reset,
 //
-//	NewOffset().AtStart() == "earliest": never skip, at the cost of re-reading the log
-//	NewOffset().AtEnd()   == "latest": skip whatever was lost
-//	NoResetOffset()       == "none": the partition is fatal on any OffsetOutOfRange
+//	NewOffset().Lookback(d) == "by_duration", the default with d of 30s
+//	NewOffset().AtStart()   == "earliest": never skip, at the cost of re-reading the log
+//	NewOffset().AtEnd()     == "latest": skip whatever was lost
+//	NoResetOffset()         == "none": the partition is fatal on any OffsetOutOfRange
 //
 // If you use an exact or relative offset, the client bounds it to the nearest
 // of the log start offset or the log end offset. For example, using At(3) when

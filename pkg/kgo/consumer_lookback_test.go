@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+func TestLookbackClampsNegative(t *testing.T) {
+	t.Parallel()
+	if o := NewOffset().Lookback(-time.Hour); o.lookback != 0 {
+		t.Errorf("Lookback(-time.Hour) kept %s, want 0", o.lookback)
+	}
+}
+
 func TestLookbackMilli(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
