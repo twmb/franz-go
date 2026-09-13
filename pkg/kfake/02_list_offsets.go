@@ -148,16 +148,20 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 }
 
 // offsetOfMaxTimestamp answers ListOffsets -3 the way a real broker does
-// (RecordBatch.offsetOfMaxTimestamp): the first record, in offset order,
-// whose timestamp is the partition's max timestamp. Returns found == false
-// for an empty partition, or if the max timestamp batch's header names a
+// (UnifiedLog.fetchOffsetByTimestamp, RecordBatch.offsetOfMaxTimestamp):
+// the segment with the greatest max timestamp, the earliest on a tie,
+// then the first batch in it to reach that max, then the first record in
+// that batch carrying it. The broker does not check the log start offset
+// here, so the answer can be a record deleted from below. Returns found
+// == false for an empty partition, or if the batch's header names a
 // timestamp none of its records carry.
 func (c *Cluster) offsetOfMaxTimestamp(pd *partData) (offset, timestamp int64, epoch int32, found bool, err error) {
-	m := pd.maxTimestampBatch()
-	if m == nil {
+	si := pd.maxTimestampSegment()
+	if si < 0 {
 		return 0, 0, 0, false, nil
 	}
-	batch, err := c.readBatchFull(pd, pd.maxTimestampSeg, m)
+	m := &pd.segments[si].maxBatch
+	batch, err := c.readBatchFull(pd, si, m)
 	if err != nil {
 		return 0, 0, 0, false, err
 	}

@@ -1455,10 +1455,9 @@ func TestTrimLeftDeletesSegmentFiles(t *testing.T) {
 		t.Fatalf("expected positive nbytes after partial trim, got %d", pd.nbytes)
 	}
 
-	// maxTimestampBatch should still be valid
-	m := pd.maxTimestampBatch()
-	if m == nil {
-		t.Fatal("maxTimestampBatch should not be nil after partial trim")
+	// The max timestamp segment should still be valid.
+	if si := pd.maxTimestampSegment(); si < 0 || si >= len(pd.segments) {
+		t.Fatalf("maxTimestampSegment returned %d after partial trim, want a segment in [0, %d)", si, len(pd.segments))
 	}
 }
 
@@ -1498,8 +1497,8 @@ func TestTrimLeftAllThenProduce(t *testing.T) {
 	if pd.activeIdxFile != nil {
 		t.Fatal("activeIdxFile should be nil after full trim")
 	}
-	if pd.maxTimestampBatch() != nil {
-		t.Fatal("maxTimestampBatch should be nil after full trim")
+	if si := pd.maxTimestampSegment(); si != -1 {
+		t.Fatalf("maxTimestampSegment returned %d after full trim, want -1", si)
 	}
 
 	// Produce again - should not panic.
@@ -1870,8 +1869,9 @@ func TestTrimLeftPartialSegment(t *testing.T) {
 	}
 }
 
-// TestMaxTimestampBatchAfterCompaction verifies that maxTimestampSeg/Idx
-// are correctly rebuilt after compaction changes the batch set.
+// TestMaxTimestampBatchAfterCompaction verifies that the max timestamp
+// segment and batch are correctly rebuilt after compaction changes the
+// batch set.
 func TestMaxTimestampBatchAfterCompaction(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1890,11 +1890,11 @@ func TestMaxTimestampBatchAfterCompaction(t *testing.T) {
 		c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
 	}
 
-	m := pd.maxTimestampBatch()
-	if m == nil {
-		t.Fatal("maxTimestampBatch should not be nil")
+	si := pd.maxTimestampSegment()
+	if si < 0 {
+		t.Fatal("maxTimestampSegment should find a segment")
 	}
-	maxTS := m.maxTimestamp
+	maxTS := pd.segments[si].maxBatch.maxTimestamp
 
 	// Rebuild segments (simulating compaction output).
 	var batches []*partBatch
@@ -1908,12 +1908,12 @@ func TestMaxTimestampBatchAfterCompaction(t *testing.T) {
 	})
 	c.rebuildSegments(pd, batches)
 
-	m2 := pd.maxTimestampBatch()
-	if m2 == nil {
-		t.Fatal("maxTimestampBatch should not be nil after rebuild")
+	si2 := pd.maxTimestampSegment()
+	if si2 < 0 {
+		t.Fatal("maxTimestampSegment should find a segment after rebuild")
 	}
-	if m2.maxTimestamp != maxTS {
-		t.Fatalf("maxTimestamp changed after rebuild: before=%d after=%d", maxTS, m2.maxTimestamp)
+	if got := pd.segments[si2].maxBatch.maxTimestamp; got != maxTS {
+		t.Fatalf("maxTimestamp changed after rebuild: before=%d after=%d", maxTS, got)
 	}
 }
 

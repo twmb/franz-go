@@ -59,17 +59,18 @@ type (
 		index    []batchMeta // per-batch metadata, nil = evicted
 		readFile file        // cached read handle for sealed segments, nil = not yet opened
 
-		// maxTimestamp is the max MaxTimestamp over every batch in the
-		// file, like a real segment's maxTimestampSoFar. Unlike the
-		// index, it keeps counting batches deleted from below the log
-		// start offset: their bytes stay in the file until the whole
-		// segment goes.
-		maxTimestamp int64
-		// maxEarlierTimestamp is the max of maxTimestamp over this and
-		// every earlier segment, so ListOffsets can binary search for
-		// the first segment that reaches a timestamp. Set on append;
-		// rebuildMaxTimestampMeta recomputes it when segments are
-		// dropped or loaded.
+		// maxBatch is the first batch in the file to reach the
+		// segment's max timestamp, like a real segment's
+		// maxTimestampAndOffsetSoFar. Unlike the index, it keeps
+		// counting batches deleted from below the log start offset:
+		// their bytes stay in the file until the whole segment goes,
+		// and the broker still answers ListOffsets -3 with them.
+		maxBatch batchMeta
+		// maxEarlierTimestamp is the max of maxBatch.maxTimestamp over
+		// this and every earlier segment, so ListOffsets can binary
+		// search for the first segment that reaches a timestamp. Set
+		// on append; rebuildMaxTimestampMeta recomputes it when
+		// segments are dropped or loaded.
 		maxEarlierTimestamp int64
 	}
 
@@ -105,11 +106,6 @@ type (
 		// uncommitted offset on this partition. LSO = min of all
 		// values, or HWM if empty. Replaces per-batch inTx scanning.
 		uncommittedPIDs map[int64]int64
-
-		// For ListOffsets timestamp -3 (KIP-734): track the batch with max timestamp.
-		// Indexes into the flattened batchMeta across all segments.
-		maxTimestampSeg int // segment index, -1 if none
-		maxTimestampIdx int // index within that segment's batchMeta
 
 		leader    *broker
 		followers followers
@@ -230,14 +226,12 @@ func (c *Cluster) noLeader() *broker {
 func (c *Cluster) newPartData(p int32) func() *partData {
 	return func() *partData {
 		return &partData{
-			p:               p,
-			dir:             defLogDir,
-			maxTimestampSeg: -1,
-			maxTimestampIdx: -1,
-			leader:          c.bs[rand.Intn(len(c.bs))],
-			watch:           make(map[*watchFetch]struct{}),
-			shareWatch:      make(map[*watchShareFetch]struct{}),
-			createdAt:       time.Now(),
+			p:          p,
+			dir:        defLogDir,
+			leader:     c.bs[rand.Intn(len(c.bs))],
+			watch:      make(map[*watchFetch]struct{}),
+			shareWatch: make(map[*watchShareFetch]struct{}),
+			createdAt:  time.Now(),
 		}
 	}
 }
@@ -272,22 +266,14 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 		return -1
 	}
 	active := &pd.segments[len(pd.segments)-1]
-	active.index = append(active.index, pb.meta(segPos))
+	meta := pb.meta(segPos)
+	active.index = append(active.index, meta)
 	active.updateEpochRange(pd.epoch)
-	active.updateMaxTimestamp(b.MaxTimestamp, segPos == 0)
+	active.updateMaxBatch(meta, segPos == 0)
 	if n := len(pd.segments); n > 1 {
-		active.maxEarlierTimestamp = max(active.maxTimestamp, pd.segments[n-2].maxEarlierTimestamp)
+		active.maxEarlierTimestamp = max(active.maxBatch.maxTimestamp, pd.segments[n-2].maxEarlierTimestamp)
 	} else {
-		active.maxEarlierTimestamp = active.maxTimestamp
-	}
-
-	// Track the max timestamp batch for ListOffsets -3 (KIP-734). On a
-	// tie the earlier batch keeps the max, as on a real broker.
-	segIdx := len(pd.segments) - 1
-	metaIdx := len(active.index) - 1
-	if pd.maxTimestampSeg < 0 || b.MaxTimestamp > pd.maxTimestampBatch().maxTimestamp {
-		pd.maxTimestampSeg = segIdx
-		pd.maxTimestampIdx = metaIdx
+		active.maxEarlierTimestamp = active.maxBatch.maxTimestamp
 	}
 	pd.maxTimestampSeen = maxEarlierTimestamp
 
@@ -314,11 +300,12 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 	return firstOffset
 }
 
-// updateMaxTimestamp folds a batch's max timestamp into the segment's.
-// first is true for the batch at the start of the file.
-func (si *segmentInfo) updateMaxTimestamp(ts int64, first bool) {
-	if first || ts > si.maxTimestamp {
-		si.maxTimestamp = ts
+// updateMaxBatch records m as the segment's max timestamp batch if it is
+// the first batch in the file or its max timestamp is above the current
+// one. On a tie the earlier batch keeps it, as on a real broker.
+func (si *segmentInfo) updateMaxBatch(m batchMeta, first bool) {
+	if first || m.maxTimestamp > si.maxBatch.maxTimestamp {
+		si.maxBatch = m
 	}
 }
 
@@ -337,36 +324,39 @@ func (si *segmentInfo) updateEpochRange(epoch int32) {
 	}
 }
 
-// maxTimestampBatch returns the batchMeta for the max-timestamp batch.
-func (pd *partData) maxTimestampBatch() *batchMeta {
-	if pd.maxTimestampSeg < 0 {
-		return nil
+// maxTimestampSegment returns the index of the segment with the greatest
+// max timestamp, the earliest on a tie, or -1 if there are no segments.
+// This is the segment a real broker answers ListOffsets -3 from.
+func (pd *partData) maxTimestampSegment() int {
+	best := -1
+	for si := range pd.segments {
+		if best < 0 || pd.segments[si].maxBatch.maxTimestamp > pd.segments[best].maxBatch.maxTimestamp {
+			best = si
+		}
 	}
-	return &pd.segments[pd.maxTimestampSeg].index[pd.maxTimestampIdx]
+	return best
 }
 
-// rebuildMaxTimestampMeta rebuilds maxTimestampSeg/maxTimestampIdx, each
-// batch's maxEarlierTimestamp, each segment's maxEarlierTimestamp, and
-// maxTimestampSeen from the batchMeta index and the segments' max
-// timestamps. Called after loading segments from disk and after batches
-// are dropped, so the running max only covers batches that still exist.
+// rebuildMaxTimestampMeta rebuilds each batch's maxEarlierTimestamp, each
+// segment's maxEarlierTimestamp, and maxTimestampSeen from the batchMeta
+// index and the segments' max batches. Called after loading segments
+// from disk and after batches are dropped, so the running max only
+// covers batches that still exist.
 func (pd *partData) rebuildMaxTimestampMeta() {
 	for si := range pd.segments {
 		seg := &pd.segments[si]
-		seg.maxEarlierTimestamp = seg.maxTimestamp
+		seg.maxEarlierTimestamp = seg.maxBatch.maxTimestamp
 		if si > 0 {
 			seg.maxEarlierTimestamp = max(seg.maxEarlierTimestamp, pd.segments[si-1].maxEarlierTimestamp)
 		}
 	}
-	pd.maxTimestampSeg = -1
-	pd.maxTimestampIdx = -1
 	pd.maxTimestampSeen = 0
-	pd.eachBatchMeta(func(si, mi int, m *batchMeta) bool {
-		if pd.maxTimestampSeg < 0 || m.maxTimestamp > pd.maxTimestampBatch().maxTimestamp {
-			pd.maxTimestampSeg = si
-			pd.maxTimestampIdx = mi
+	first := true
+	pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
+		if first || m.maxTimestamp > pd.maxTimestampSeen {
+			pd.maxTimestampSeen = m.maxTimestamp
 		}
-		pd.maxTimestampSeen = pd.maxTimestampBatch().maxTimestamp
+		first = false
 		m.maxEarlierTimestamp = pd.maxTimestampSeen
 		return true
 	})
