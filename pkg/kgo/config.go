@@ -653,7 +653,7 @@ func defaultCfg() cfg {
 
 		metadataMaxAge:     5 * time.Minute,
 		metadataMinAge:     5 * time.Second,
-		missingTopicDelete: 15 * time.Second,
+		missingTopicDelete: time.Minute,
 
 		//////////////
 		// producer //
@@ -1043,7 +1043,7 @@ func ConcurrentTransactionsBackoff(backoff time.Duration) Opt {
 
 // ConsiderMissingTopicDeletedAfter sets the amount of time a topic can be
 // missing from metadata responses _after_ loading it at least once before it
-// is considered deleted, overriding the default of 15s. Note that for newer
+// is considered deleted, overriding the default of 1m. Note that for newer
 // versions of Kafka, it may take a bit of time (~15s) for the cluster to fully
 // recognize a newly created topic. If this option is set too low, there is
 // some risk that the client will internally purge and re-see a topic a few

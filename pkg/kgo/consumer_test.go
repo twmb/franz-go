@@ -423,6 +423,7 @@ func TestIssue434(t *testing.T) {
 		ConsumeRegex(),
 		FetchMaxWait(100*time.Millisecond),
 		KeepRetryableFetchErrors(),
+		ConsiderMissingTopicDeletedAfter(15*time.Second), // pinned: this test waits on the purge, so it must not track the default
 	)
 	defer cl.Close()
 
@@ -718,6 +719,7 @@ func TestIssue523(t *testing.T) {
 				FetchMaxWait(time.Second),
 				KeepRetryableFetchErrors(),
 				UnknownTopicRetries(-1),
+				ConsiderMissingTopicDeletedAfter(15*time.Second), // pinned: this test waits on the purge, so it must not track the default
 			)
 			defer cl.Close()
 
@@ -742,8 +744,8 @@ func TestIssue523(t *testing.T) {
 				if errors.Is(fs.Err0(), context.DeadlineExceeded) {
 					break
 				}
-				if time.Since(start) > 40*time.Second { // missing topic delete is 15s by default
-					t.Fatalf("still repeatedly requesting metadata after 20s")
+				if time.Since(start) > 40*time.Second { // the option above is pinned to 15s
+					t.Fatalf("still repeatedly requesting metadata after 40s")
 				}
 				if fs.Err0() != nil {
 					time.Sleep(time.Second)
