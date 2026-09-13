@@ -640,15 +640,16 @@ func (g *shareGroup) handleRegularHeartbeat(creq *clientReq, req *kmsg.ShareGrou
 	// Like Kafka's ShareGroupAssignmentBuilder.build(), the epoch is only
 	// advanced during the member's own heartbeat, not when other members
 	// join/leave.
+	epochBefore := m.memberEpoch
 	g.reconcileMember(m)
 
 	resp.MemberID = &req.MemberID
 	resp.MemberEpoch = m.memberEpoch
 
-	// Only send assignment when it may have changed: subscriptions
-	// changed or the member epoch was bumped.
-	// kgo handles nil Assignment gracefully (skips reconciliation).
-	if req.SubscribedTopicNames != nil || m.memberEpoch != m.previousMemberEpoch {
+	// Like Kafka, we send the assignment only to a full request (one
+	// carrying SubscribedTopicNames) or when this heartbeat changed it;
+	// a client that misses one has to ask with a full request.
+	if req.SubscribedTopicNames != nil || m.memberEpoch != epochBefore {
 		resp.Assignment = g.makeAssignment(m)
 	}
 	return resp
