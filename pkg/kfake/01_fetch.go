@@ -74,6 +74,9 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 				topic = c.data.id2t[ft.TopicID]
 			}
 			for _, p := range ft.Partitions {
+				if req.Version >= 13 {
+					session.forgetUnknownID(ft.TopicID, p)
+				}
 				session.forgetPartition(topic, p)
 			}
 		}
@@ -110,20 +113,32 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 			req.Topics[i].Topic = rt.Topic
 		}
 		for _, rp := range rt.Partitions {
-			toFetch = append(toFetch, fetchPartition{
+			fp := fetchPartition{
 				topic:        rt.Topic,
 				topicID:      rt.TopicID,
 				partition:    rp.Partition,
 				fetchOffset:  rp.FetchOffset,
 				maxBytes:     rp.PartitionMaxBytes,
 				currentEpoch: rp.CurrentLeaderEpoch,
-			})
-			// Update session with this partition's state. An
-			// unresolvable v13 topic ID is answered above but not
-			// tracked: "" is not a valid session key.
-			if rt.Topic != "" || req.Version < 13 {
-				session.updatePartition(rt.Topic, rt.TopicID, rp.Partition, rp.FetchOffset, rp.PartitionMaxBytes, rp.CurrentLeaderEpoch)
 			}
+			// Update session with this partition's state. Kafka
+			// matches a v13 request partition to a session entry
+			// by topic ID and keeps the name the entry was added
+			// under, so an ID that stopped resolving still reaches
+			// the log by that name. An unresolvable ID with no
+			// entry is tracked by ID: Kafka caches it with no name
+			// and answers UNKNOWN_TOPIC_ID for it on every fetch of
+			// the session.
+			if fp.topic == "" && req.Version >= 13 {
+				fp.topic = session.nameOfID(rt.TopicID, rp.Partition)
+				fp.staleID = fp.topic != ""
+			}
+			if fp.topic != "" || req.Version < 13 {
+				session.updatePartition(fp.topic, rt.TopicID, rp.Partition, rp.FetchOffset, rp.PartitionMaxBytes, rp.CurrentLeaderEpoch)
+			} else {
+				session.updateUnknownID(rt.TopicID, rp.Partition, rp.FetchOffset, rp.PartitionMaxBytes, rp.CurrentLeaderEpoch)
+			}
+			toFetch = append(toFetch, fp)
 		}
 	}
 
@@ -131,8 +146,33 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	// that weren't in the request
 	if session != nil && !newSession {
 		inRequest := make(map[tp]bool)
+		inRequestUnknown := make(map[idp]bool)
 		for _, fp := range toFetch {
+			if fp.topic == "" {
+				inRequestUnknown[idp{fp.topicID, fp.partition}] = true
+				continue
+			}
 			inRequest[tp{fp.topic, fp.partition}] = true
+		}
+		for key, sp := range session.unknownIDs {
+			if inRequestUnknown[key] {
+				continue
+			}
+			// An ID that resolves now was created after the entry was
+			// added; it becomes a normal entry under its name, which
+			// the loop below picks up.
+			if topic := c.data.id2t[key.id]; topic != "" {
+				delete(session.unknownIDs, key)
+				session.partitions[tp{topic, key.p}] = sp
+				continue
+			}
+			toFetch = append(toFetch, fetchPartition{
+				topicID:      key.id,
+				partition:    key.p,
+				fetchOffset:  sp.fetchOffset,
+				maxBytes:     sp.maxBytes,
+				currentEpoch: sp.currentEpoch,
+			})
 		}
 		for key, sp := range session.partitions {
 			if !inRequest[key] {
@@ -324,7 +364,10 @@ full:
 		}
 		pd, ok := c.data.tps.getp(fp.topic, fp.partition)
 		if !ok {
-			if req.Version >= 13 {
+			// A v13 partition with a name got it from its session
+			// entry; the entry reaches the log by that name, as on
+			// a real broker, and fails as a missing partition.
+			if req.Version >= 13 && fp.topic == "" {
 				donep(fp.topic, fp.topicID, fp.partition, kerr.UnknownTopicID.Code)
 			} else {
 				donep(fp.topic, fp.topicID, fp.partition, kerr.UnknownTopicOrPartition.Code)
@@ -513,7 +556,19 @@ type fetchSession struct {
 	id         int32
 	epoch      int32
 	partitions map[tp]fetchSessionPartition
+	// unknownIDs holds v13+ entries whose topic ID did not resolve when
+	// they were added. Kafka caches these with no name and answers
+	// UNKNOWN_TOPIC_ID for them on every fetch of the session; a client
+	// that keeps such an entry in its session sees the error on every
+	// fetch rather than once.
+	unknownIDs map[idp]fetchSessionPartition
 	lastUsed   time.Time
+}
+
+// idp keys a session entry by topic ID and partition.
+type idp struct {
+	id uuid
+	p  int32
 }
 
 // fetchSessionPartition tracks per-partition state within a session.
@@ -588,6 +643,7 @@ func (fs *fetchSessions) getOrCreate(brokerNode, sessionID, sessionEpoch int32, 
 			id:         id,
 			epoch:      1,
 			partitions: make(map[tp]fetchSessionPartition),
+			unknownIDs: make(map[idp]fetchSessionPartition),
 			lastUsed:   now,
 		}
 		fs.sessions[brokerNode][id] = session
@@ -634,6 +690,41 @@ func (s *fetchSession) forgetPartition(topic string, partition int32) {
 		return
 	}
 	delete(s.partitions, tp{topic, partition})
+}
+
+// nameOfID returns the name of the session entry added under topicID for
+// partition, if any.
+func (s *fetchSession) nameOfID(topicID uuid, partition int32) string {
+	if s == nil {
+		return ""
+	}
+	for key, sp := range s.partitions {
+		if sp.topicID == topicID && key.p == partition {
+			return key.t
+		}
+	}
+	return ""
+}
+
+func (s *fetchSession) updateUnknownID(topicID uuid, partition int32, fetchOffset int64, maxBytes, currentEpoch int32) {
+	if s == nil {
+		return
+	}
+	s.unknownIDs[idp{topicID, partition}] = fetchSessionPartition{
+		topicID:            topicID,
+		fetchOffset:        fetchOffset,
+		maxBytes:           maxBytes,
+		currentEpoch:       currentEpoch,
+		lastHighWatermark:  -1,
+		lastLogStartOffset: -1,
+	}
+}
+
+func (s *fetchSession) forgetUnknownID(topicID uuid, partition int32) {
+	if s == nil {
+		return
+	}
+	delete(s.unknownIDs, idp{topicID, partition})
 }
 
 func (s *fetchSession) bumpEpoch() {
