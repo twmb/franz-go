@@ -361,21 +361,109 @@ func BenchmarkCompress(b *testing.B) {
 	}
 }
 
-func BenchmarkDecompress(b *testing.B) {
-	in := bytes.Repeat([]byte("abcdefghijklmno pqrs tuvwxy   z"), 100)
-	for _, codec := range []CompressionCodecType{CodecGzip, CodecSnappy, CodecLz4, CodecZstd} {
-		c, _ := DefaultCompressor(CompressionCodec{codec: codec})
-		w := byteBuffers.Get().(*bytes.Buffer)
-		w.Reset()
-		c.Compress(w, in, 99)
+type codecInput struct {
+	name  string
+	codec CompressionCodecType
+	src   []byte
+}
 
-		b.Run(fmt.Sprint(codec), func(b *testing.B) {
+// codecInputs compresses in under every codec, plus xerial framed snappy
+// (what the Java client writes) and a streamed zstd frame with no content
+// size in its header (what Java's zstd writer produces). The zstd writer
+// is flushed midway so the frame header goes out before the size is known.
+func codecInputs(tb testing.TB, in []byte) []codecInput {
+	tb.Helper()
+	inputs := []codecInput{
+		{name: "gzip", codec: CodecGzip},
+		{name: "snappy", codec: CodecSnappy},
+		{name: "lz4", codec: CodecLz4},
+		{name: "zstd", codec: CodecZstd},
+	}
+	for i := range inputs {
+		c, err := DefaultCompressor(CompressionCodec{codec: inputs[i].codec})
+		if err != nil {
+			tb.Fatalf("%s: unexpected compressor err: %v", inputs[i].name, err)
+		}
+		var used CompressionCodecType
+		inputs[i].src, used = c.Compress(new(bytes.Buffer), in)
+		if used != inputs[i].codec {
+			tb.Fatalf("%s: compressed with %d", inputs[i].name, used)
+		}
+	}
+	var zstream bytes.Buffer
+	zw, err := zstd.NewWriter(&zstream)
+	if err != nil {
+		tb.Fatalf("zstd writer: %v", err)
+	}
+	if _, err := zw.Write(in[:len(in)/2]); err != nil {
+		tb.Fatalf("zstd write: %v", err)
+	}
+	if err := zw.Flush(); err != nil {
+		tb.Fatalf("zstd flush: %v", err)
+	}
+	if _, err := zw.Write(in[len(in)/2:]); err != nil {
+		tb.Fatalf("zstd write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		tb.Fatalf("zstd close: %v", err)
+	}
+	return append(inputs,
+		codecInput{name: "snappy-xerial", codec: CodecSnappy, src: xerialFrame(in, 32<<10)},
+		codecInput{name: "zstd-stream", codec: CodecZstd, src: zstream.Bytes()},
+	)
+}
+
+// xerialFrame frames in the way the Java snappy stream does: a header,
+// then per chunk a big endian length and a raw snappy block.
+func xerialFrame(in []byte, chunkSize int) []byte {
+	xer := append([]byte{}, xerialPfx...)
+	xer = append(xer, make([]byte, 8)...) // version + compat fields
+	for len(in) > 0 {
+		n := min(chunkSize, len(in))
+		chunk := s2.EncodeSnappy(nil, in[:n])
+		xer = binary.BigEndian.AppendUint32(xer, uint32(len(chunk)))
+		xer = append(xer, chunk...)
+		in = in[n:]
+	}
+	return xer
+}
+
+// benchDecompressPool implements PoolDecompressBytes with a pre-allocated
+// buffer, representative of a real pool that avoids per-call allocation.
+// Single-goroutine only (the benchmark does not run sub-benchmarks in
+// parallel).
+type benchDecompressPool struct {
+	buf []byte
+}
+
+func (p *benchDecompressPool) GetDecompressBytes([]byte, CompressionCodecType) []byte {
+	return p.buf[:0]
+}
+
+func (*benchDecompressPool) PutDecompressBytes([]byte) {}
+
+func BenchmarkDecompress(b *testing.B) {
+	in := bytes.Repeat([]byte("abcdefghijklmno pqrs tuvwxy   z"), 10_000)
+	for _, tc := range codecInputs(b, in) {
+		pool := &benchDecompressPool{buf: make([]byte, 0, len(in)*2)}
+		b.Run(tc.name+"/pool", func(b *testing.B) {
+			d := DefaultDecompressor(pool)
+			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				d := DefaultDecompressor()
-				d.Decompress(w.Bytes(), codec)
+				if _, err := d.Decompress(tc.src, tc.codec); err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
-		byteBuffers.Put(w)
+		b.Run(tc.name+"/nopool", func(b *testing.B) {
+			d := DefaultDecompressor()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if _, err := d.Decompress(tc.src, tc.codec); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

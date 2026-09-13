@@ -366,8 +366,7 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 	}
 
 	var (
-		out        *bytes.Buffer
-		rfn        func() []byte
+		dst        []byte
 		userPooled bool
 	)
 	d.pools.each(func(p Pool) bool {
@@ -378,93 +377,93 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 			// len(s) > 0 (a pool returning make([]byte, sizeGuess))
 			// would have the copy/append based codecs write after the
 			// existing length, prefixing the output with stale bytes.
-			out = bytes.NewBuffer(s[:0])
-			rfn = out.Bytes
+			dst = s[:0]
 			userPooled = true
 			return true
 		}
 		return false
 	})
-	if out == nil {
-		out = byteBuffers.Get().(*bytes.Buffer)
-		out.Reset()
-		defer byteBuffers.Put(out)
-		// We clone out.Bytes since we are pooling out ourselves; we
-		// need to clone before return since we immediately put into
-		// the pool.
-		//
-		// For user provided slices, we put back into the pool only
-		// after the user calls Recycle on every record that has a
-		// reference to the slice. Thus, we can return the original
-		// slice from the user-provided pool: it is only recycled
-		// at the end when the user says they are done.
-		rfn = func() []byte { return slices.Clone(out.Bytes()) }
-	}
 
+	// For user provided slices, we put back into the pool only after the
+	// user calls Recycle on every record that has a reference to the
+	// slice, so we can return the pool's slice directly.
+	//
+	// Snappy and zstd decode into dst when it has the capacity and
+	// otherwise allocate their own output. With no user pool, dst is nil
+	// and the fresh allocation is what we return: it is not shared with
+	// anything, so there is nothing to clone.
+	var r io.Reader
 	switch codecType {
+	case CodecSnappy:
+		return decompressSnappy(dst, src)
+	case CodecZstd:
+		return d.decompressZstd(dst, src)
 	case CodecGzip:
 		ungz := d.ungzPool.Get().(*gzip.Reader)
 		defer d.ungzPool.Put(ungz)
 		if err := ungz.Reset(bytes.NewReader(src)); err != nil {
 			return nil, err
 		}
-		if n, err := io.Copy(out, io.LimitReader(ungz, maxDecompressedSize+1)); err != nil {
-			return nil, err
-		} else if n > maxDecompressedSize {
-			return nil, errDecompressedTooLarge
-		}
-		return rfn(), nil
-	case CodecSnappy:
-		if len(src) > 16 && bytes.HasPrefix(src, xerialPfx) {
-			// Decode into the pooled destination when one exists;
-			// this path previously ignored the pool's Get entirely
-			// (fresh allocation every batch, and the Get'd slice was
-			// orphaned: never used, never put back).
-			var xdst []byte
-			if userPooled {
-				xdst = out.Bytes()
-			}
-			return xerialDecode(xdst, src)
-		}
-		// The decoded length is read from the header and allocated up
-		// front; check the claim before decoding.
-		if l, err := s2.DecodedLen(src); err != nil {
-			return nil, err
-		} else if int64(l) > maxDecompressedSize {
-			return nil, errDecompressedTooLarge
-		}
-		decoded, err := s2.Decode(out.Bytes(), src)
-		if err != nil {
-			return nil, err
-		}
-		if userPooled {
-			return decoded, nil
-		}
-		return slices.Clone(decoded), nil
+		r = ungz
 	case CodecLz4:
 		unlz4 := d.unlz4Pool.Get().(*lz4.Reader)
 		defer d.unlz4Pool.Put(unlz4)
 		unlz4.Reset(bytes.NewReader(src))
-		if n, err := io.Copy(out, io.LimitReader(unlz4, maxDecompressedSize+1)); err != nil {
-			return nil, err
-		} else if n > maxDecompressedSize {
-			return nil, errDecompressedTooLarge
-		}
-		return rfn(), nil
-	case CodecZstd:
-		unzstd := d.unzstdPool.Get().(*zstdDecoder)
-		defer d.unzstdPool.Put(unzstd)
-		decoded, err := unzstd.inner.DecodeAll(src, out.Bytes())
-		if err != nil {
-			return nil, err
-		}
-		if userPooled {
-			return decoded, nil
-		}
-		return slices.Clone(decoded), nil
+		r = unlz4
 	default:
 		return nil, errors.New("unknown compression codec")
 	}
+
+	// Gzip and lz4 stream into a bytes.Buffer. With no user pool we use
+	// our own pooled buffer so it grows once and is reused; we must clone
+	// before the deferred Put.
+	if userPooled {
+		out := bytes.NewBuffer(dst)
+		if err := readBounded(out, r); err != nil {
+			return nil, err
+		}
+		return out.Bytes(), nil
+	}
+	out := byteBuffers.Get().(*bytes.Buffer)
+	out.Reset()
+	defer byteBuffers.Put(out)
+	if err := readBounded(out, r); err != nil {
+		return nil, err
+	}
+	return slices.Clone(out.Bytes()), nil
+}
+
+// readBounded streams r into out, rejecting more than maxDecompressedSize.
+// We call ReadFrom directly rather than io.Copy so that a stack allocated
+// out does not escape through the io.Writer interface.
+func readBounded(out *bytes.Buffer, r io.Reader) error {
+	lr := io.LimitedReader{R: r, N: maxDecompressedSize + 1}
+	if n, err := out.ReadFrom(&lr); err != nil {
+		return err
+	} else if n > maxDecompressedSize {
+		return errDecompressedTooLarge
+	}
+	return nil
+}
+
+func decompressSnappy(dst, src []byte) ([]byte, error) {
+	if len(src) > 16 && bytes.HasPrefix(src, xerialPfx) {
+		return xerialDecode(dst, src)
+	}
+	// The decoded length is read from the header and allocated up
+	// front; check the claim before decoding.
+	if l, err := s2.DecodedLen(src); err != nil {
+		return nil, err
+	} else if int64(l) > maxDecompressedSize {
+		return nil, errDecompressedTooLarge
+	}
+	return s2.Decode(dst, src)
+}
+
+func (d *decompressor) decompressZstd(dst, src []byte) ([]byte, error) {
+	unzstd := d.unzstdPool.Get().(*zstdDecoder)
+	defer d.unzstdPool.Put(unzstd)
+	return unzstd.inner.DecodeAll(src, dst)
 }
 
 var xerialPfx = []byte{130, 83, 78, 65, 80, 80, 89, 0}
