@@ -867,10 +867,11 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 				c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: write index: %v", pd.t, pd.p, err)
 				break
 			}
-			pos += batchSize
-			si.size += batchSize
 			si.index = append(si.index, meta)
 			si.updateEpochRange(b.epoch)
+			si.updateMaxTimestamp(b.MaxTimestamp, pos == 0)
+			pos += batchSize
+			si.size += batchSize
 		}
 		sf.Sync()
 		sf.Close()
@@ -1513,6 +1514,7 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 		if seg != nil {
 			seg.index = append(seg.index, batch.meta(int64(pos)))
 			seg.updateEpochRange(batch.epoch)
+			seg.updateMaxTimestamp(rb.MaxTimestamp, pos == 0)
 		}
 		pos += batchSize
 		batchIdx++

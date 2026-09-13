@@ -4635,8 +4635,16 @@ func TestIssue1423(t *testing.T) {
 // client timestamps can go backwards from one batch to the next.
 //
 // The restart cases reload the partition from disk, once from a snapshot
-// and once by replaying the segments, since the running max the search
-// uses is recomputed on load.
+// and once by replaying the segments, since the timestamps the search
+// uses are recomputed on load.
+//
+// The broker commits to the first segment whose largest timestamp reaches
+// the target (UnifiedLog.searchOffsetInLocalLog), where the largest
+// timestamp still counts records deleted from below the log start offset,
+// and answers -1 if that segment has no record at or after both the
+// target and the log start offset. So the same log answers a query
+// differently depending on where the segment boundaries fall, and the
+// last checks below expect that.
 func TestIssue1422(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -4668,10 +4676,11 @@ func TestIssue1422(t *testing.T) {
 
 			// Each inner slice is produced as one batch: a long linger
 			// buffers the records, and Flush sends them together.
-			// Timestamps go backwards from batch 1 to batch 2.
+			// Timestamps go backwards within batch 1 and from batch 1
+			// to batch 2.
 			batches := [][]int64{
 				{10_000, 10_010, 10_010, 10_020}, // offsets 0-3
-				{10_050, 10_060},                 // offsets 4-5
+				{10_060, 10_050},                 // offsets 4-5
 				{10_030, 10_040},                 // offsets 6-7
 				{10_070},                         // offset 8
 			}
@@ -4777,9 +4786,9 @@ func TestIssue1422(t *testing.T) {
 			check(10_010, 1, 10_010) // the first of two equal timestamps
 			check(10_011, 3, 10_020)
 			check(10_020, 3, 10_020)
-			check(10_021, 4, 10_050) // next batch
-			check(10_035, 4, 10_050) // batch 1 reaches it first, even though batch 2 has 10_040
-			check(10_055, 5, 10_060)
+			check(10_021, 4, 10_060) // next batch
+			check(10_035, 4, 10_060) // batch 1 reaches it first, even though batch 2 has 10_040
+			check(10_055, 4, 10_060)
 			check(10_061, 8, 10_070) // batch 2's max timestamp is below, skip to batch 3
 			check(10_070, 8, 10_070)
 			check(10_071, -1, -1)
@@ -4787,17 +4796,39 @@ func TestIssue1422(t *testing.T) {
 			// Delete the first two records, leaving a log start offset in the
 			// middle of batch 0. The answer must not point below it.
 			adm := kadm.NewClient(cl)
-			del, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: 2}}})
-			if err != nil {
-				t.Fatal(err)
+			deleteTo := func(at int64) {
+				t.Helper()
+				del, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: at}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := del.Error(); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if err := del.Error(); err != nil {
-				t.Fatal(err)
-			}
+			deleteTo(2)
 			check(9_999, 2, 10_010)
 			check(10_005, 2, 10_010)
 			check(10_010, 2, 10_010)
 			check(10_011, 3, 10_020)
+
+			// Delete through offset 4, the 10_060 record that is batch 1's
+			// max. Batch 1 still holds offset 5 at 10_050. A query at 10_055
+			// is answered by the segment holding batch 1, whose largest
+			// timestamp is still 10_060: with one batch per segment that
+			// segment has no live record at or after 10_055, so the answer
+			// is -1 even though offset 8 at 10_070 follows in the next
+			// segment. With every batch in one segment, the scan reaches
+			// offset 8.
+			deleteTo(5)
+			check(10_045, 5, 10_050)
+			check(10_050, 5, 10_050)
+			if tc.segBytes != "" {
+				check(10_055, -1, -1)
+			} else {
+				check(10_055, 8, 10_070)
+			}
+			check(10_061, 8, 10_070)
 		})
 	}
 }

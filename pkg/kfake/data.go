@@ -58,6 +58,13 @@ type (
 		size     int64       // file size in bytes
 		index    []batchMeta // per-batch metadata, nil = evicted
 		readFile file        // cached read handle for sealed segments, nil = not yet opened
+
+		// maxTimestamp is the max MaxTimestamp over every batch in the
+		// file, like a real segment's maxTimestampSoFar. Unlike the
+		// index, it keeps counting batches deleted from below the log
+		// start offset: their bytes stay in the file until the whole
+		// segment goes.
+		maxTimestamp int64
 	}
 
 	// batchMeta is the in-memory index entry for a batch stored in a segment file.
@@ -261,6 +268,7 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 	active := &pd.segments[len(pd.segments)-1]
 	active.index = append(active.index, pb.meta(segPos))
 	active.updateEpochRange(pd.epoch)
+	active.updateMaxTimestamp(b.MaxTimestamp, segPos == 0)
 
 	// Track the max timestamp batch for ListOffsets -3 (KIP-734). On a
 	// tie the earlier batch keeps the max, as on a real broker.
@@ -293,6 +301,14 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 		w.fire()
 	}
 	return firstOffset
+}
+
+// updateMaxTimestamp folds a batch's max timestamp into the segment's.
+// first is true for the batch at the start of the file.
+func (si *segmentInfo) updateMaxTimestamp(ts int64, first bool) {
+	if first || ts > si.maxTimestamp {
+		si.maxTimestamp = ts
+	}
 }
 
 // updateEpochRange updates the segment's min/max epoch from a batch epoch.
@@ -384,27 +400,20 @@ func (pd *partData) pruneEmptySegments() {
 
 // eachBatchMeta calls fn for each batchMeta across all segments.
 func (pd *partData) eachBatchMeta(fn func(segIdx, metaIdx int, m *batchMeta) bool) {
-	pd.eachBatchMetaFrom(0, 0, fn)
-}
-
-// eachBatchMetaFrom calls fn for each batchMeta from the given position
-// onward, in offset order, until fn returns false.
-func (pd *partData) eachBatchMetaFrom(segIdx, metaIdx int, fn func(segIdx, metaIdx int, m *batchMeta) bool) {
-	for si := segIdx; si < len(pd.segments); si++ {
+	for si := range pd.segments {
 		seg := &pd.segments[si]
-		for mi := metaIdx; mi < len(seg.index); mi++ {
+		for mi := range seg.index {
 			if !fn(si, mi, &seg.index[mi]) {
 				return
 			}
 		}
-		metaIdx = 0
 	}
 }
 
 // findBatchMeta does a two-level binary search for the first batch where
 // field(batch) >= target. The field must be monotonically non-decreasing
-// across batches (e.g. epoch, maxEarlierTimestamp). Returns (-1, -1, nil)
-// if no batch satisfies the condition.
+// across batches (e.g. epoch). Returns (-1, -1, nil) if no batch
+// satisfies the condition.
 func (pd *partData) findBatchMeta(target int64, field func(*batchMeta) int64) (segIdx, metaIdx int, meta *batchMeta) {
 	// Level 1: find first segment whose last batch has field >= target.
 	si := sort.Search(len(pd.segments), func(i int) bool {
