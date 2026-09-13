@@ -261,6 +261,13 @@ loop:
 			// still fail we will fall into the slower update below
 			// which waits (default) 5s between tries.
 			if now && err == nil && nowTries < 8 {
+				// This round merged: the metadata we just fetched was
+				// applied. Signal it and run the consumer's update hook
+				// before looping, otherwise everything waiting on a
+				// metadata update sleeps through every one of these
+				// rounds even though each of them updated.
+				cl.metawait.signal()
+				cl.consumer.doOnMetadataUpdate()
 				wait := min(cl.cfg.metadataMinAge, 250*time.Millisecond)
 				cl.cfg.logger.Log(LogLevelDebug, "immediate metadata update had inner errors, re-updating",
 					"errors", retryWhy.reason(""),
