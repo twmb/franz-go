@@ -511,6 +511,7 @@ issue:
 	if err != nil {
 		tb.Fatalf("unable to create topic %q: %v", topic, err)
 	}
+	waitForTopic(tb, topic, partitions)
 
 	var cleaned bool
 	return topic, func() {
@@ -542,6 +543,58 @@ issue:
 			tb.Logf("unable to delete topic %q: %v", topic, err)
 		}
 	}
+}
+
+// A CreateTopics response only means the controller accepted the topic.
+// Brokers learn of it from the metadata log a little later, and until they
+// do, a metadata request or produce for the topic is answered
+// UNKNOWN_TOPIC_OR_PARTITION. We wait until every broker reports the topic
+// with all partitions.
+func waitForTopic(tb testing.TB, topic string, partitions int) {
+	tb.Helper()
+
+	req := kmsg.NewPtrMetadataRequest()
+	reqTopic := kmsg.NewMetadataRequestTopic()
+	reqTopic.Topic = kmsg.StringPtr(topic)
+	req.Topics = append(req.Topics, reqTopic)
+
+	check := func(resp *kmsg.MetadataResponse) error {
+		for _, t := range resp.Topics {
+			if t.Topic == nil || *t.Topic != topic {
+				continue
+			}
+			if err := kerr.ErrorForCode(t.ErrorCode); err != nil {
+				return err
+			}
+			if len(t.Partitions) != partitions {
+				return fmt.Errorf("has %d partitions, want %d", len(t.Partitions), partitions)
+			}
+			for _, p := range t.Partitions {
+				if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+					return fmt.Errorf("partition %d: %w", p.Partition, err)
+				}
+			}
+			return nil
+		}
+		return errors.New("is not in metadata")
+	}
+
+	wait(tb, 30*time.Second, func() error {
+		resp, err := req.RequestWith(context.Background(), adm())
+		if err != nil {
+			return err
+		}
+		for _, b := range resp.Brokers {
+			bresp, err := adm().Broker(int(b.NodeID)).Request(context.Background(), req)
+			if err != nil {
+				return fmt.Errorf("broker %d: %w", b.NodeID, err)
+			}
+			if err := check(bresp.(*kmsg.MetadataResponse)); err != nil {
+				return fmt.Errorf("broker %d: topic %s %w", b.NodeID, topic, err)
+			}
+		}
+		return nil
+	})
 }
 
 func tmpGroup(tb testing.TB) (string, func()) {
