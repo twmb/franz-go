@@ -5062,3 +5062,156 @@ func TestListOffsetsTimestampSkipsDeletedBatches(t *testing.T) {
 		t.Errorf("the lookup read %d times, want 1 (the one live batch)", reads)
 	}
 }
+
+// listOffsetsAt sends one ListOffsets partition through the given broker
+// (or any broker when node is -1) and returns its response entry.
+func listOffsetsAt(t *testing.T, cl *kgo.Client, node int, topic string, partition int32, ts int64, replicaID int32, isolation int8) kmsg.ListOffsetsResponseTopicPartition {
+	t.Helper()
+	req := kmsg.NewPtrListOffsetsRequest()
+	req.ReplicaID = replicaID
+	req.IsolationLevel = isolation
+	rt := kmsg.NewListOffsetsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewListOffsetsRequestTopicPartition()
+	rp.Partition = partition
+	rp.Timestamp = ts
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+	var (
+		resp kmsg.Response
+		err  error
+	)
+	if node < 0 {
+		resp, err = req.RequestWith(context.Background(), cl)
+	} else {
+		resp, err = cl.Broker(node).Request(context.Background(), req)
+	}
+	if err != nil {
+		t.Fatalf("ListOffsets at %d: %v", ts, err)
+	}
+	r := resp.(*kmsg.ListOffsetsResponse)
+	if len(r.Topics) != 1 || len(r.Topics[0].Partitions) != 1 {
+		t.Fatalf("ListOffsets at %d: missing partition response", ts)
+	}
+	return r.Topics[0].Partitions[0]
+}
+
+// TestListOffsetsBrokerChecks verifies the per-partition answers a broker
+// gives before and around the offset lookup itself: a partition listed
+// twice is INVALID_REQUEST, a negative timestamp the request version does
+// not support is UNSUPPORTED_VERSION (checked before the topic is looked
+// up), -4 answers like -2, -5 answers -1 with no tiered storage, an
+// answer with no offset carries leader epoch -1, the debugging replica id
+// is answered by a follower, and a non-consumer replica id ignores the
+// isolation level.
+func TestListOffsetsBrokerChecks(t *testing.T) {
+	t.Parallel()
+	const topic = "list-offsets-checks"
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pcl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	for _, ts := range []int64{1_000, 2_000} {
+		if err := pcl.ProduceSync(ctx, &kgo.Record{Value: []byte("v"), Timestamp: time.UnixMilli(ts)}).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pd, _ := c.data.tps.getp(topic, 0)
+	leader := pd.leader.node
+	var follower int32 = -1
+	for _, b := range c.bs {
+		if b.node != leader {
+			follower = b.node
+		}
+	}
+	if follower < 0 {
+		t.Fatal("no follower broker")
+	}
+
+	atVersion := func(v int16) *kgo.Client {
+		vs := kversion.Stable()
+		vs.SetMaxKeyVersion(int16(kmsg.ListOffsets), v)
+		return newPlainClient(t, c, kgo.MaxVersions(vs))
+	}
+	cl := atVersion(10)
+
+	// Duplicate partition: both entries are INVALID_REQUEST.
+	{
+		req := kmsg.NewPtrListOffsetsRequest()
+		req.ReplicaID = -1
+		rt := kmsg.NewListOffsetsRequestTopic()
+		rt.Topic = topic
+		for range 2 {
+			rp := kmsg.NewListOffsetsRequestTopicPartition()
+			rp.Timestamp = -1
+			rt.Partitions = append(rt.Partitions, rp)
+		}
+		req.Topics = append(req.Topics, rt)
+		resp, err := cl.Broker(int(leader)).Request(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := resp.(*kmsg.ListOffsetsResponse)
+		if len(r.Topics) != 1 || len(r.Topics[0].Partitions) != 2 {
+			t.Fatalf("duplicate partition: got %d topics, want 1 with 2 partitions", len(r.Topics))
+		}
+		for _, p := range r.Topics[0].Partitions {
+			if p.ErrorCode != kerr.InvalidRequest.Code {
+				t.Errorf("duplicate partition: got %v, want INVALID_REQUEST", kerr.ErrorForCode(p.ErrorCode))
+			}
+		}
+	}
+
+	type want struct {
+		err               error
+		offset, timestamp int64
+		epoch             int32
+	}
+	check := func(what string, p kmsg.ListOffsetsResponseTopicPartition, w want) {
+		t.Helper()
+		if err := kerr.ErrorForCode(p.ErrorCode); !errors.Is(err, w.err) {
+			t.Errorf("%s: got error %v, want %v", what, err, w.err)
+			return
+		}
+		if w.err == nil && (p.Offset != w.offset || p.Timestamp != w.timestamp || p.LeaderEpoch != w.epoch) {
+			t.Errorf("%s: got offset %d timestamp %d epoch %d, want offset %d timestamp %d epoch %d",
+				what, p.Offset, p.Timestamp, p.LeaderEpoch, w.offset, w.timestamp, w.epoch)
+		}
+	}
+	none := want{offset: -1, timestamp: -1, epoch: -1}
+
+	// Special timestamps below the version that added them, and any
+	// other negative timestamp, are UNSUPPORTED_VERSION, even for a
+	// topic that does not exist.
+	check("-7", listOffsetsAt(t, cl, int(leader), topic, 0, -7, -1, 0), want{err: kerr.UnsupportedVersion})
+	check("-7 unknown topic", listOffsetsAt(t, cl, int(leader), "nope", 0, -7, -1, 0), want{err: kerr.UnsupportedVersion})
+	check("-6 at v10", listOffsetsAt(t, cl, int(leader), topic, 0, -6, -1, 0), want{err: kerr.UnsupportedVersion})
+	check("-3 at v6", listOffsetsAt(t, atVersion(6), int(leader), topic, 0, -3, -1, 0), want{err: kerr.UnsupportedVersion})
+	check("-3 at v7", listOffsetsAt(t, atVersion(7), int(leader), topic, 0, -3, -1, 0), want{offset: 1, timestamp: 2_000, epoch: pd.epoch})
+	check("-4 at v7", listOffsetsAt(t, atVersion(7), int(leader), topic, 0, -4, -1, 0), want{err: kerr.UnsupportedVersion})
+	check("-4 at v8", listOffsetsAt(t, atVersion(8), int(leader), topic, 0, -4, -1, 0), want{offset: 0, timestamp: -1, epoch: pd.epoch})
+	check("-5 at v8", listOffsetsAt(t, atVersion(8), int(leader), topic, 0, -5, -1, 0), want{err: kerr.UnsupportedVersion})
+	check("-5 at v9", listOffsetsAt(t, atVersion(9), int(leader), topic, 0, -5, -1, 0), none)
+
+	// No record at or after the timestamp: no offset, no epoch.
+	check("beyond the end", listOffsetsAt(t, cl, int(leader), topic, 0, 2_001, -1, 0), none)
+
+	// A consumer must ask the leader; the debugging replica id may ask
+	// any replica.
+	check("consumer at follower", listOffsetsAt(t, cl, int(follower), topic, 0, -1, -1, 0), want{err: kerr.NotLeaderForPartition})
+	check("debugging at follower", listOffsetsAt(t, cl, int(follower), topic, 0, -1, -2, 0), want{offset: 2, timestamp: -1, epoch: pd.epoch})
+
+	// Open a transaction: the LSO stays at 2 while the HWM moves to 3.
+	// Only a consumer's read_committed request answers the LSO.
+	txn := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.TransactionalID("list-offsets-checks"))
+	if err := txn.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txn.ProduceSync(ctx, &kgo.Record{Value: []byte("v"), Timestamp: time.UnixMilli(3_000)}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	check("latest read_committed consumer", listOffsetsAt(t, cl, int(leader), topic, 0, -1, -1, 1), want{offset: 2, timestamp: -1, epoch: pd.epoch})
+	check("latest read_committed replica 5", listOffsetsAt(t, cl, int(leader), topic, 0, -1, 5, 1), want{offset: 3, timestamp: -1, epoch: pd.epoch})
+	check("latest read_uncommitted consumer", listOffsetsAt(t, cl, int(leader), topic, 0, -1, -1, 0), want{offset: 3, timestamp: -1, epoch: pd.epoch})
+}

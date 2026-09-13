@@ -9,21 +9,43 @@ import (
 
 // ListOffsets: v0-10
 //
-// Timestamp special values:
+// Timestamp special values, answered as a broker without tiered storage
+// answers them:
 // * -2: Earliest offset (log start offset)
-// * -1: Latest offset (high watermark or LSO depending on isolation level)
+// * -1: Latest offset (high watermark, or the LSO under read_committed)
 // * -3: Max timestamp offset (KIP-734, v7+)
+// * -4: Earliest local offset (KIP-405, v8+): the log start offset
+// * -5: Latest tiered offset (KIP-1005, v9+): -1, nothing is tiered
+// * -6: Earliest pending upload offset (KIP-1023, v11+): -1, nothing is tiered
+// Any other negative timestamp, or a special value sent below the version
+// that added it, is UNSUPPORTED_VERSION for that partition. A partition
+// listed twice in one request is INVALID_REQUEST for both entries.
+//
+// ReplicaID -1 is a consumer: IsolationLevel applies, and the partition
+// must be led by this broker. ReplicaID -2 is the debugging id: any
+// replica answers, and IsolationLevel is ignored.
 //
 // Version notes:
 // * v2: IsolationLevel for read_committed
 // * v4: CurrentLeaderEpoch for fencing, LeaderEpoch in response
 // * v6: Flexible versions
 // * v7: Timestamp -3 for max timestamp (KIP-734)
-// * v8: Timestamp -4 for local log start (KIP-405) - tiered storage, not implemented
-// * v9: Timestamp -5 for remote storage offset (KIP-1005) - tiered storage, not implemented
+// * v8: Timestamp -4 for local log start (KIP-405)
+// * v9: Timestamp -5 for remote storage offset (KIP-1005)
 // * v10: TimeoutMillis for remote storage lookups - not implemented
 
 func init() { regKey(2, 0, 10) }
+
+// listOffsetsMinVersion is the request version each special timestamp
+// needs (ReplicaManager.timestampMinSupportedVersion).
+var listOffsetsMinVersion = map[int64]int16{
+	-2: 1,
+	-1: 1,
+	-3: 7,
+	-4: 8,
+	-5: 9,
+	-6: 11,
+}
 
 func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 	var (
@@ -56,6 +78,19 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 		return &st.Partitions[len(st.Partitions)-1]
 	}
 
+	type tp struct {
+		t string
+		p int32
+	}
+	seen := make(map[tp]int)
+	for _, rt := range req.Topics {
+		for _, rp := range rt.Partitions {
+			seen[tp{rt.Topic, rp.Partition}]++
+		}
+	}
+	consumer := req.ReplicaID == -1
+	readCommitted := consumer && req.IsolationLevel == 1
+
 	for _, rt := range req.Topics {
 		tk := faultKey{topic: rt.Topic}
 		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, tk); e != nil {
@@ -70,6 +105,16 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 				donep(rt.Topic, rp.Partition, e.Code)
 				continue
 			}
+			if req.Version >= 1 {
+				if seen[tp{rt.Topic, rp.Partition}] > 1 {
+					donep(rt.Topic, rp.Partition, kerr.InvalidRequest.Code)
+					continue
+				}
+				if minVersion, ok := listOffsetsMinVersion[rp.Timestamp]; rp.Timestamp < 0 && (!ok || req.Version < minVersion) {
+					donep(rt.Topic, rp.Partition, kerr.UnsupportedVersion.Code)
+					continue
+				}
+			}
 			if !ok {
 				donep(rt.Topic, rp.Partition, kerr.UnknownTopicOrPartition.Code)
 				continue
@@ -79,7 +124,7 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 				donep(rt.Topic, rp.Partition, kerr.UnknownTopicOrPartition.Code)
 				continue
 			}
-			if pd.leader != b {
+			if pd.leader != b && req.ReplicaID != -2 {
 				donep(rt.Topic, rp.Partition, kerr.NotLeaderForPartition.Code)
 				continue
 			}
@@ -93,11 +138,13 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 				}
 			}
 
+			// A partition with no answer keeps the defaults: offset -1,
+			// timestamp -1, leader epoch -1.
 			sp := donep(rt.Topic, rp.Partition, 0)
-			sp.LeaderEpoch = pd.epoch
 			switch rp.Timestamp {
-			case -2:
+			case -2, -4:
 				sp.Offset = pd.logStartOffset
+				sp.LeaderEpoch = pd.epoch
 				// The epoch accompanying a listed offset is the epoch
 				// of the record at that offset (a real broker answers
 				// from its leader-epoch cache), not the partition's
@@ -108,28 +155,24 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 					sp.LeaderEpoch = pd.segments[segIdx].index[metaIdx].epoch
 				}
 			case -1:
-				if req.IsolationLevel == 1 {
+				sp.Offset = pd.highWatermark
+				if readCommitted {
 					sp.Offset = pd.lastStableOffset
-				} else {
-					sp.Offset = pd.highWatermark
 				}
-			case -3:
-				// KIP-734: the first record with the max timestamp.
-				offset, timestamp, epoch, found, err := c.offsetOfMaxTimestamp(pd)
-				if err != nil {
-					sp.ErrorCode = kerr.CorruptMessage.Code
-					continue
-				}
-				if found {
-					sp.Offset = offset
-					sp.Timestamp = timestamp
-					sp.LeaderEpoch = epoch
-				} else {
-					sp.Offset = -1
-					sp.Timestamp = -1
-				}
+				sp.LeaderEpoch = pd.epoch
+			case -5, -6:
 			default:
-				offset, timestamp, epoch, found, err := c.offsetForTimestamp(pd, rp.Timestamp)
+				var (
+					offset, timestamp int64
+					epoch             int32
+					found             bool
+					err               error
+				)
+				if rp.Timestamp == -3 {
+					offset, timestamp, epoch, found, err = c.offsetOfMaxTimestamp(pd)
+				} else {
+					offset, timestamp, epoch, found, err = c.offsetForTimestamp(pd, rp.Timestamp)
+				}
 				if err != nil {
 					sp.ErrorCode = kerr.CorruptMessage.Code
 					continue
@@ -138,8 +181,6 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 					sp.Offset = offset
 					sp.Timestamp = timestamp
 					sp.LeaderEpoch = epoch
-				} else {
-					sp.Offset = -1
 				}
 			}
 		}
