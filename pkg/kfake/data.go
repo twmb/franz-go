@@ -100,6 +100,7 @@ type (
 		logStartOffset   int64
 		epoch            int32 // current epoch
 		maxTimestampSeen int64 // max MaxTimestamp across all batches (the running max for maxEarlierTimestamp)
+		maxTimestampSeg  int   // index of the segment with the greatest max timestamp, the earliest on a tie
 		nbytes           int64
 
 		// PID-based LSO tracking: maps producer ID to earliest
@@ -275,6 +276,9 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 	} else {
 		active.maxEarlierTimestamp = active.maxBatch.maxTimestamp
 	}
+	if active.maxBatch.maxTimestamp > pd.segments[pd.maxTimestampSeg].maxBatch.maxTimestamp {
+		pd.maxTimestampSeg = len(pd.segments) - 1
+	}
 	pd.maxTimestampSeen = maxEarlierTimestamp
 
 	firstOffset := b.FirstOffset
@@ -328,26 +332,27 @@ func (si *segmentInfo) updateEpochRange(epoch int32) {
 // max timestamp, the earliest on a tie, or -1 if there are no segments.
 // This is the segment a real broker answers ListOffsets -3 from.
 func (pd *partData) maxTimestampSegment() int {
-	best := -1
-	for si := range pd.segments {
-		if best < 0 || pd.segments[si].maxBatch.maxTimestamp > pd.segments[best].maxBatch.maxTimestamp {
-			best = si
-		}
+	if len(pd.segments) == 0 {
+		return -1
 	}
-	return best
+	return pd.maxTimestampSeg
 }
 
 // rebuildMaxTimestampMeta rebuilds each batch's maxEarlierTimestamp, each
-// segment's maxEarlierTimestamp, and maxTimestampSeen from the batchMeta
-// index and the segments' max batches. Called after loading segments
-// from disk and after batches are dropped, so the running max only
-// covers batches that still exist.
+// segment's maxEarlierTimestamp, maxTimestampSeg, and maxTimestampSeen
+// from the batchMeta index and the segments' max batches. Called after
+// loading segments from disk and after batches are dropped, so the
+// running max only covers batches that still exist.
 func (pd *partData) rebuildMaxTimestampMeta() {
+	pd.maxTimestampSeg = 0
 	for si := range pd.segments {
 		seg := &pd.segments[si]
 		seg.maxEarlierTimestamp = seg.maxBatch.maxTimestamp
 		if si > 0 {
 			seg.maxEarlierTimestamp = max(seg.maxEarlierTimestamp, pd.segments[si-1].maxEarlierTimestamp)
+		}
+		if seg.maxBatch.maxTimestamp > pd.segments[pd.maxTimestampSeg].maxBatch.maxTimestamp {
+			pd.maxTimestampSeg = si
 		}
 	}
 	pd.maxTimestampSeen = 0
