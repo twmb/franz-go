@@ -360,14 +360,22 @@ type ErrDataLoss struct {
 	// ConsumedToEpoch is the epoch for the offset the client was currently
 	// consuming.
 	ConsumedToEpoch int32
-	// ResetTo is what the client reset the partition to; everything from
-	// ResetTo to ConsumedTo was lost.
+	// ResetTo is what the client reset the partition to. If the client
+	// located where the log diverged, everything from ResetTo to ConsumedTo
+	// was lost. If it could not, [ConsumeResetOffset] chose ResetTo and
+	// records below ResetTo may also have been replaced.
 	ResetTo int64
 	// ResetToEpoch is the epoch the client was reset to.
 	ResetToEpoch int32
 }
 
 func (e *ErrDataLoss) Error() string {
+	if e.ResetTo == e.ConsumedTo {
+		return fmt.Sprintf("topic %s partition %d lost records;"+
+			" the client consumed to offset %d epoch %d and resumed there,"+
+			" but records below that offset may have been replaced and were not re-read",
+			e.Topic, e.Partition, e.ConsumedTo, e.ConsumedToEpoch)
+	}
 	return fmt.Sprintf("topic %s partition %d lost records;"+
 		" the client consumed to offset %d epoch %d but was reset to offset %d epoch %d",
 		e.Topic, e.Partition, e.ConsumedTo, e.ConsumedToEpoch, e.ResetTo, e.ResetToEpoch)

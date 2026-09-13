@@ -530,8 +530,14 @@ func NewClient(opts ...Opt) (*Client, error) {
 	if cfg.setResetOffset && !cfg.setStartOffset {
 		cfg.startOffset = cfg.resetOffset
 	} else if cfg.setStartOffset && !cfg.setResetOffset {
-		cfg.resetOffset = cfg.startOffset
-	} // else they are both set (keep) or both unset (defaults)
+		// Only the noReset flag carries over. AtCommitted documents that it
+		// opts into NoResetOffset, and a group consumer that sets it as the
+		// start offset relies on that reaching the OffsetOutOfRange check.
+		// The position does not carry: the reset offset now decides where
+		// we resume when the broker loses data, and a start offset of
+		// AtStart would re-read the whole log on every such loss.
+		cfg.resetOffset.noReset = cfg.startOffset.noReset
+	}
 
 	ctx := context.Background()
 

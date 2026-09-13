@@ -118,12 +118,12 @@ func TestOutOfRangePastEndResetsByTime(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	// Timestamps one second apart, so the last consumed record is the
-	// only one at its timestamp.
+	// Timestamps a minute apart, so the last consumed record is the only
+	// one at its timestamp and the default thirty second rewind stays on it.
 	pcl := newPlainClient(t, c)
 	base := time.Now().Add(-time.Hour)
 	for i := range nrecs {
-		r := &kgo.Record{Topic: topic, Value: fmt.Appendf(nil, "v%d", i), Timestamp: base.Add(time.Duration(i) * time.Second)}
+		r := &kgo.Record{Topic: topic, Value: fmt.Appendf(nil, "v%d", i), Timestamp: base.Add(time.Duration(i) * time.Minute)}
 		if err := pcl.ProduceSync(ctx, r).FirstErr(); err != nil {
 			t.Fatal(err)
 		}
@@ -157,7 +157,7 @@ func TestOutOfRangePastEndResetsByTime(t *testing.T) {
 
 	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.ConsumeStartOffset(kgo.NewOffset().AtStart()),
 		kgo.DisableFetchSessions(),
 		kgo.FetchMaxWait(100*time.Millisecond),
 	)
@@ -276,9 +276,12 @@ func TestOutOfRangeInRangeNeverSkipsForward(t *testing.T) {
 				return resp, nil, true
 			})
 
+			// The default reset lists by time, which is what this test
+			// injects an answer for. AtStart would resume at the log start
+			// and never list by time at all.
 			cl := newPlainClient(t, c,
 				kgo.ConsumeTopics(topic),
-				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.ConsumeStartOffset(kgo.NewOffset().AtStart()),
 				kgo.DisableFetchSessions(),
 				kgo.FetchMaxWait(100*time.Millisecond),
 			)
