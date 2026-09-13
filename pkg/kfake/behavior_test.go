@@ -1674,11 +1674,13 @@ func (l *produceErrLogger) saw(target error) bool {
 }
 
 // TestProduceRecreatedTopicFirstSeq deletes and recreates a topic under an
-// idempotent client. On an uncapped cluster the broker answers the client's
-// continued sequence with OUT_OF_ORDER_SEQUENCE_NUMBER. The client bumps its
-// producer epoch, restarts at sequence 0, and resends. The recreated topic
-// then holds the three new records and nothing else. A cluster capped at 4.2
-// accepts the continued sequence.
+// idempotent client producing by name. On an uncapped cluster the broker
+// answers the client's continued sequence with OUT_OF_ORDER_SEQUENCE_NUMBER.
+// The client reloads its producer ID and refreshes metadata before resending;
+// the refresh reports the new topic ID, so the client fails the records with
+// UNKNOWN_TOPIC_ID rather than resending into the recreated topic, which
+// stays empty. A cluster capped at 4.2 accepts the continued sequence: the
+// client had no signal, and the three records land.
 func TestProduceRecreatedTopicFirstSeq(t *testing.T) {
 	t.Parallel()
 
@@ -1686,9 +1688,11 @@ func TestProduceRecreatedTopicFirstSeq(t *testing.T) {
 		name    string
 		capped  bool // cap the cluster at 4.2, which lacks the check
 		wantOOO bool
+		wantErr error
+		wantEnd int64
 	}{
-		{"reject", false, true},
-		{"capped-4-2", true, false},
+		{"reject", false, true, kerr.UnknownTopicID, 0},
+		{"capped-4-2", true, false, nil, 3},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -1750,7 +1754,11 @@ func TestProduceRecreatedTopicFirstSeq(t *testing.T) {
 				r.Topic = topic
 				records = append(records, r)
 			}
-			produceSync(t, cl, records...)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := cl.ProduceSync(ctx, records...).FirstErr(); !errors.Is(err, test.wantErr) {
+				t.Fatalf("produce after the recreation returned %v, want %v", err, test.wantErr)
+			}
 
 			if got := logger.saw(kerr.OutOfOrderSequenceNumber); got != test.wantOOO {
 				t.Errorf("saw OUT_OF_ORDER_SEQUENCE_NUMBER: got %v, want %v", got, test.wantOOO)
@@ -1771,15 +1779,11 @@ func TestProduceRecreatedTopicFirstSeq(t *testing.T) {
 			if !sawNonzero {
 				t.Errorf("client never continued its sequence into the recreated topic: sent %v", sent)
 			}
-			if sawRestart != test.wantOOO {
-				t.Errorf("client restarted sequences: got %v, want %v (sent %v)", sawRestart, test.wantOOO, sent)
+			if sawRestart {
+				t.Errorf("client restarted sequences into the recreated topic (sent %v)", sent)
 			}
 
-			// The recreated topic holds the three new records and
-			// nothing else.
 			adm := kadm.NewClient(cl)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
 			ends, err := adm.ListEndOffsets(ctx, topic)
 			if err != nil {
 				t.Fatalf("list end offsets: %v", err)
@@ -1788,8 +1792,11 @@ func TestProduceRecreatedTopicFirstSeq(t *testing.T) {
 			if !ok || end.Err != nil {
 				t.Fatalf("no end offset for %s: ok=%v err=%v", topic, ok, end.Err)
 			}
-			if end.Offset != 3 {
-				t.Fatalf("recreated topic ends at %d, want 3", end.Offset)
+			if end.Offset != test.wantEnd {
+				t.Fatalf("recreated topic ends at %d, want %d", end.Offset, test.wantEnd)
+			}
+			if test.wantEnd == 0 {
+				return
 			}
 
 			consumer := newPlainClient(t, c,

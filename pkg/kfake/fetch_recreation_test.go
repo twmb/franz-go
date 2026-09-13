@@ -37,10 +37,17 @@ func fetchByID(sessionID, sessionEpoch, maxWait int32, id [16]byte, partitions .
 // new topic ID.
 func recreateTopic(t *testing.T, c *Cluster, topic string) {
 	t.Helper()
+	recreateTopicN(t, c, topic, 1)
+}
+
+// recreateTopicN deletes the topic and creates it again with the given
+// number of partitions.
+func recreateTopicN(t *testing.T, c *Cluster, topic string, partitions int32) {
+	t.Helper()
 	if err := c.DeleteTopic(topic); err != nil {
 		t.Fatalf("delete topic: %v", err)
 	}
-	if err := c.CreateTopic(topic, 1, nil); err != nil {
+	if err := c.CreateTopic(topic, partitions, nil); err != nil {
 		t.Fatalf("create topic: %v", err)
 	}
 }
