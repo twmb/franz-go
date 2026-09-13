@@ -88,8 +88,7 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 			seen[tp{rt.Topic, rp.Partition}]++
 		}
 	}
-	consumer := req.ReplicaID == -1
-	readCommitted := consumer && req.IsolationLevel == 1
+	readCommitted := req.ReplicaID == -1 && req.IsolationLevel == 1
 
 	for _, rt := range req.Topics {
 		tk := faultKey{topic: rt.Topic}
@@ -177,7 +176,15 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 					sp.ErrorCode = kerr.CorruptMessage.Code
 					continue
 				}
-				if found {
+				// A record at or past the last fetchable offset is not
+				// an answer (ReplicaManager.fetchOffset): under
+				// read_committed, a record in an open transaction lists
+				// as if nothing matched.
+				lastFetchable := pd.highWatermark
+				if readCommitted {
+					lastFetchable = pd.lastStableOffset
+				}
+				if found && offset < lastFetchable {
 					sp.Offset = offset
 					sp.Timestamp = timestamp
 					sp.LeaderEpoch = epoch

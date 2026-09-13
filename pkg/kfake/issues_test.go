@@ -5102,8 +5102,9 @@ func listOffsetsAt(t *testing.T, cl *kgo.Client, node int, topic string, partiti
 // not support is UNSUPPORTED_VERSION (checked before the topic is looked
 // up), -4 answers like -2, -5 answers -1 with no tiered storage, an
 // answer with no offset carries leader epoch -1, the debugging replica id
-// is answered by a follower, and a non-consumer replica id ignores the
-// isolation level.
+// is answered by a follower, a non-consumer replica id ignores the
+// isolation level, and a timestamp or -3 answer inside an open
+// transaction is no answer under read_committed.
 func TestListOffsetsBrokerChecks(t *testing.T) {
 	t.Parallel()
 	const topic = "list-offsets-checks"
@@ -5214,4 +5215,24 @@ func TestListOffsetsBrokerChecks(t *testing.T) {
 	check("latest read_committed consumer", listOffsetsAt(t, cl, int(leader), topic, 0, -1, -1, 1), want{offset: 2, timestamp: -1, epoch: pd.epoch})
 	check("latest read_committed replica 5", listOffsetsAt(t, cl, int(leader), topic, 0, -1, 5, 1), want{offset: 3, timestamp: -1, epoch: pd.epoch})
 	check("latest read_uncommitted consumer", listOffsetsAt(t, cl, int(leader), topic, 0, -1, -1, 0), want{offset: 3, timestamp: -1, epoch: pd.epoch})
+
+	// The record at 3_000 is at offset 2, at the LSO: a read_committed
+	// timestamp or -3 lookup that resolves to it answers nothing, and
+	// answers it once the transaction commits.
+	inTxn := want{offset: 2, timestamp: 3_000, epoch: pd.epoch}
+	check("3_000 read_committed open", listOffsetsAt(t, cl, int(leader), topic, 0, 3_000, -1, 1), none)
+	check("3_000 read_uncommitted open", listOffsetsAt(t, cl, int(leader), topic, 0, 3_000, -1, 0), inTxn)
+	check("-3 read_committed open", listOffsetsAt(t, cl, int(leader), topic, 0, -3, -1, 1), none)
+	check("-3 read_uncommitted open", listOffsetsAt(t, cl, int(leader), topic, 0, -3, -1, 0), inTxn)
+	if err := txn.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+	check("3_000 read_committed committed", listOffsetsAt(t, cl, int(leader), topic, 0, 3_000, -1, 1), inTxn)
+	// The commit marker at offset 3 carries the coordinator's wall clock
+	// timestamp, so it is now the max timestamp record; a broker does
+	// not skip control batches here either.
+	if p := listOffsetsAt(t, cl, int(leader), topic, 0, -3, -1, 1); p.ErrorCode != 0 || p.Offset != 3 || p.Timestamp <= 3_000 {
+		t.Errorf("-3 read_committed committed: got error %v offset %d timestamp %d, want offset 3 at the marker's timestamp",
+			kerr.ErrorForCode(p.ErrorCode), p.Offset, p.Timestamp)
+	}
 }
