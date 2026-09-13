@@ -4536,3 +4536,89 @@ func TestDeleteTopicDropsGroupCommits(t *testing.T) {
 		t.Fatalf("fetched %d after the recreate, want -1 (the commit should have been deleted with the topic)", got)
 	}
 }
+
+// TestIssue1423 verifies commit and abort control records carry the
+// EndTxnMarker value a real broker writes (an int16 version followed by
+// the int32 coordinator epoch), both for the markers kfake writes as the
+// coordinator on EndTxn and for markers written through WriteTxnMarkers.
+// kfake previously wrote the control record key with an empty value, which
+// consumers that decode the marker reject.
+func TestIssue1423(t *testing.T) {
+	t.Parallel()
+	const topic = "issue-1423"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	txn := newPlainClient(t, c, kgo.TransactionalID("issue-1423"), kgo.DefaultProduceTopic(topic))
+	for _, end := range []kgo.TransactionEndTry{kgo.TryCommit, kgo.TryAbort} {
+		if err := txn.BeginTransaction(); err != nil {
+			t.Fatal(err)
+		}
+		if err := txn.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+		if err := txn.EndTransaction(ctx, end); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A marker written by admin tooling carries the request's coordinator
+	// epoch. kfake does not check the pid here, so any pid will do.
+	adm := kadm.NewClient(newPlainClient(t, c))
+	written, err := adm.WriteTxnMarkers(ctx, kadm.TxnMarkers{
+		ProducerID:       12345,
+		ProducerEpoch:    3,
+		Commit:           true,
+		CoordinatorEpoch: 7,
+		Topics:           kadm.TopicsSet{topic: {0: {}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	written.EachPartition(func(p kadm.TxnMarkersPartitionResponse) {
+		if p.Err != nil {
+			t.Fatalf("WriteTxnMarkers %s[%d]: %v", p.Topic, p.Partition, p.Err)
+		}
+	})
+
+	// The log is: data, commit, data, abort, commit.
+	want := []struct {
+		typ              kmsg.ControlRecordKeyType
+		coordinatorEpoch int32
+	}{
+		{kmsg.ControlRecordKeyTypeCommit, 0},
+		{kmsg.ControlRecordKeyTypeAbort, 0},
+		{kmsg.ControlRecordKeyTypeCommit, 7},
+	}
+	cl := newPlainClient(t, c, kgo.ConsumeTopics(topic), kgo.KeepControlRecords())
+	var control []*kgo.Record
+	for len(control) < len(want) {
+		fs := cl.PollFetches(ctx)
+		if err := fs.Err(); err != nil {
+			t.Fatal(err)
+		}
+		fs.EachRecord(func(r *kgo.Record) {
+			if r.Attrs.IsControl() {
+				control = append(control, r)
+			}
+		})
+	}
+	for i, r := range control {
+		var key kmsg.ControlRecordKey
+		if err := key.ReadFrom(r.Key); err != nil {
+			t.Fatalf("control record at offset %d: decoding key %x: %v", r.Offset, r.Key, err)
+		}
+		if key.Type != want[i].typ {
+			t.Errorf("control record at offset %d: got type %v, want %v", r.Offset, key.Type, want[i].typ)
+		}
+		var marker kmsg.EndTxnMarker
+		if err := marker.ReadFrom(r.Value); err != nil {
+			t.Fatalf("control record at offset %d: decoding value %x as an EndTxnMarker: %v", r.Offset, r.Value, err)
+		}
+		if marker.Version != 0 || marker.CoordinatorEpoch != want[i].coordinatorEpoch {
+			t.Errorf("control record at offset %d: got marker version %d coordinator epoch %d, want version 0 coordinator epoch %d",
+				r.Offset, marker.Version, marker.CoordinatorEpoch, want[i].coordinatorEpoch)
+		}
+	}
+}
