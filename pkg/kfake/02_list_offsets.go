@@ -201,7 +201,11 @@ func (c *Cluster) offsetForTimestamp(pd *partData, ts int64) (offset, timestamp 
 	})
 	for ; mi < len(seg.index); mi++ {
 		m := &seg.index[mi]
-		if m.maxTimestamp < ts {
+		// A batch entirely below the log start offset cannot hold the
+		// answer, so it is not read. After a snapshot load the index
+		// still lists such batches; the broker likewise starts its scan
+		// no earlier than the log start offset.
+		if m.maxTimestamp < ts || m.firstOffset+int64(m.lastOffsetDelta) < pd.logStartOffset {
 			continue
 		}
 		batch, err := c.readBatchFull(pd, si, m)

@@ -4885,3 +4885,100 @@ func TestListOffsetsMaxTimestampFirstRecord(t *testing.T) {
 		t.Errorf("got offset %d timestamp %d, want offset 1 timestamp 30", p.Offset, p.Timestamp)
 	}
 }
+
+// readCountingFS counts file reads so a test can see how many batches a
+// request pulled from a segment.
+type readCountingFS struct {
+	fs
+	reads atomic.Int64
+}
+
+type readCountingFile struct {
+	file
+	c *readCountingFS
+}
+
+func (f *readCountingFS) OpenFile(name string, flag int, perm os.FileMode) (file, error) {
+	fl, err := f.fs.OpenFile(name, flag, perm)
+	if err != nil {
+		return nil, err
+	}
+	return &readCountingFile{fl, f}, nil
+}
+
+func (f *readCountingFile) Read(p []byte) (int, error) {
+	f.c.reads.Add(1)
+	return f.file.Read(p)
+}
+
+// TestListOffsetsTimestampSkipsDeletedBatches verifies a ListOffsets
+// timestamp lookup does not read batches that lie entirely below the log
+// start offset. A snapshot load keeps index entries for such batches, so
+// after DeleteRecords and a restart the scan would otherwise read and
+// decompress every deleted batch in the segment before reaching the first
+// live one.
+func TestListOffsetsTimestampSkipsDeletedBatches(t *testing.T) {
+	t.Parallel()
+	const topic, n = "list-offsets-skip-deleted", 200
+	cfs := &readCountingFS{fs: newMemFS()}
+	opts := []Opt{NumBrokers(1), DataDir(t.TempDir()), withFS(cfs)}
+	c := newCluster(t, append(opts, SeedTopics(1, topic))...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// One batch per record, all in one segment, timestamps increasing.
+	pcl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	for i := range n {
+		r := &kgo.Record{Value: []byte("v"), Timestamp: time.UnixMilli(int64(1000 + i))}
+		if err := pcl.ProduceSync(ctx, r).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if pd, _ := c.data.tps.getp(topic, 0); pd.totalBatches() != n || len(pd.segments) != 1 {
+		t.Fatalf("produced %d batches in %d segments, want %d in 1", pd.totalBatches(), len(pd.segments), n)
+	}
+
+	// Delete all but the last record, then restart from the snapshot.
+	// The reloaded index lists every batch again.
+	adm := kadm.NewClient(pcl)
+	del, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: n - 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := del.Error(); err != nil {
+		t.Fatal(err)
+	}
+	pcl.Close()
+	c.Close()
+	c = newCluster(t, opts...)
+	pd, _ := c.data.tps.getp(topic, 0)
+	if pd == nil || pd.totalBatches() != n || pd.logStartOffset != n-1 {
+		t.Fatalf("after reload: want %d index entries and log start offset %d, got %+v", n, n-1, pd)
+	}
+
+	// Every batch's max timestamp is at or after 0, so the scan starts
+	// at the first index entry and must skip the deleted ones without
+	// reading them.
+	req := kmsg.NewPtrListOffsetsRequest()
+	rt := kmsg.NewListOffsetsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewListOffsetsRequestTopicPartition()
+	rp.Timestamp = 0
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+	cfs.reads.Store(0)
+	resp, err := req.RequestWith(ctx, newPlainClient(t, c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := resp.Topics[0].Partitions[0]
+	if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+		t.Fatal(err)
+	}
+	if p.Offset != n-1 || p.Timestamp != 1000+n-1 {
+		t.Errorf("got offset %d timestamp %d, want offset %d timestamp %d", p.Offset, p.Timestamp, n-1, 1000+n-1)
+	}
+	if reads := cfs.reads.Load(); reads != 1 {
+		t.Errorf("the lookup read %d times, want 1 (the one live batch)", reads)
+	}
+}
