@@ -737,24 +737,32 @@ func (pids *pids) expireTransactionalIDs() {
 	}
 }
 
-func (pidinf *pidinfo) endTx(commit bool) {
-	// Control record key format: version (int16=0) + type (int16: 0=abort, 1=commit)
-	var controlType byte // abort = 0
+// txnMarkerBatch builds the control batch that ends a transaction: one
+// control record whose key names the marker type and whose value is the
+// EndTxnMarker (version and coordinator epoch), as the transaction
+// coordinator writes on a real broker. Returns the batch and its encoded
+// size.
+func txnMarkerBatch(pid int64, epoch int16, commit bool, coordinatorEpoch int32) (kmsg.RecordBatch, int) {
+	key := kmsg.ControlRecordKey{Type: kmsg.ControlRecordKeyTypeAbort}
 	if commit {
-		controlType = 1 // commit
+		key.Type = kmsg.ControlRecordKeyTypeCommit
 	}
-	rec := kmsg.Record{Key: []byte{0, 0, 0, controlType}}
+	marker := kmsg.EndTxnMarker{CoordinatorEpoch: coordinatorEpoch}
+	rec := kmsg.Record{
+		Key:   key.AppendTo(nil),
+		Value: marker.AppendTo(nil),
+	}
 	rec.Length = int32(len(rec.AppendTo(nil)) - 1) // -1 because length itself is encoded as a varint, and varint_length(record_length) == 1 byte
 	now := time.Now().UnixMilli()
 	b := kmsg.RecordBatch{
 		PartitionLeaderEpoch: -1,
 		Magic:                2,
-		Attributes:           int16(0b00000000_00110000),
+		Attributes:           int16(0b00000000_00110000), // control + transactional
 		LastOffsetDelta:      0,
 		FirstTimestamp:       now,
 		MaxTimestamp:         now,
-		ProducerID:           pidinf.id,
-		ProducerEpoch:        pidinf.epoch,
+		ProducerID:           pid,
+		ProducerEpoch:        epoch,
 		FirstSequence:        -1,
 		NumRecords:           1,
 		Records:              rec.AppendTo(nil),
@@ -762,6 +770,13 @@ func (pidinf *pidinfo) endTx(commit bool) {
 	benc := b.AppendTo(nil)
 	b.Length = int32(len(benc) - 12)
 	b.CRC = int32(crc32.Checksum(benc[21:], crc32c))
+	return b, len(benc)
+}
+
+func (pidinf *pidinfo) endTx(commit bool) {
+	// kfake is its own coordinator and has no coordinator epoch, so the
+	// marker carries 0, the same epoch DescribeProducers reports.
+	b, nbytes := txnMarkerBatch(pidinf.id, pidinf.epoch, commit, 0)
 
 	pidinf.txParts.each(func(t string, p int32, _ *partData) {
 		c := pidinf.pids.c
@@ -781,7 +796,7 @@ func (pidinf *pidinfo) endTx(commit bool) {
 		firstUncommitted, hadUncommitted := pd.uncommittedPIDs[pidinf.id]
 		delete(pd.uncommittedPIDs, pidinf.id)
 
-		controlOffset := c.pushBatch(pd, len(benc), b, false) // control record is not itself transactional
+		controlOffset := c.pushBatch(pd, nbytes, b, false) // control record is not itself transactional
 		if controlOffset < 0 {
 			c.cfg.logger.Logf(LogLevelError, "endTx: failed to persist control batch for %s p%d pid %d", t, p, pidinf.id)
 			pd.recalculateLSO()

@@ -112,47 +112,97 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 					sp.Offset = pd.highWatermark
 				}
 			case -3:
-				// KIP-734: Return offset and timestamp of record with max timestamp
-				m := pd.maxTimestampBatch()
-				if m == nil {
+				// KIP-734: the first record with the max timestamp.
+				offset, timestamp, epoch, found, err := c.offsetOfMaxTimestamp(pd)
+				if err != nil {
+					sp.ErrorCode = kerr.CorruptMessage.Code
+					continue
+				}
+				if found {
+					sp.Offset = offset
+					sp.Timestamp = timestamp
+					sp.LeaderEpoch = epoch
+				} else {
 					sp.Offset = -1
 					sp.Timestamp = -1
-				} else {
-					sp.Offset = m.firstOffset + int64(m.lastOffsetDelta)
-					sp.Timestamp = m.maxTimestamp
-					sp.LeaderEpoch = m.epoch
 				}
 			default:
-				// Two-level binary search for the first batch whose maxTimestamp >= requested timestamp.
-				segIdx, _, meta := pd.findBatchMeta(rp.Timestamp, func(m *batchMeta) int64 { return m.maxTimestamp })
-				if meta == nil {
-					sp.Offset = -1
+				offset, timestamp, epoch, found, err := c.offsetForTimestamp(pd, rp.Timestamp)
+				if err != nil {
+					sp.ErrorCode = kerr.CorruptMessage.Code
+					continue
+				}
+				if found {
+					sp.Offset = offset
+					sp.Timestamp = timestamp
+					sp.LeaderEpoch = epoch
 				} else {
-					sp.Offset = meta.firstOffset
-					sp.Timestamp = meta.firstTimestamp
-					sp.LeaderEpoch = meta.epoch
-					// Read the full batch to iterate records for precise timestamp
-					batch, err := c.readBatchFull(pd, segIdx, meta)
-					if err != nil {
-						sp.ErrorCode = kerr.CorruptMessage.Code
-						continue
-					}
-					err = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) error {
-						timestamp := batch.FirstTimestamp + rec.TimestampDelta64
-						offset := batch.FirstOffset + int64(rec.OffsetDelta)
-						if timestamp <= rp.Timestamp {
-							sp.Offset = offset
-							sp.Timestamp = timestamp
-						}
-						return nil
-					})
-					if err != nil {
-						sp.ErrorCode = kerr.CorruptMessage.Code
-						continue
-					}
+					sp.Offset = -1
 				}
 			}
 		}
 	}
 	return resp, nil
+}
+
+// offsetOfMaxTimestamp answers ListOffsets -3 the way a real broker does
+// (RecordBatch.offsetOfMaxTimestamp): the first record, in offset order,
+// whose timestamp is the partition's max timestamp. Returns found == false
+// for an empty partition, or if the max timestamp batch's header names a
+// timestamp none of its records carry.
+func (c *Cluster) offsetOfMaxTimestamp(pd *partData) (offset, timestamp int64, epoch int32, found bool, err error) {
+	m := pd.maxTimestampBatch()
+	if m == nil {
+		return 0, 0, 0, false, nil
+	}
+	batch, err := c.readBatchFull(pd, pd.maxTimestampSeg, m)
+	if err != nil {
+		return 0, 0, 0, false, err
+	}
+	recs, err := BatchRecords(batch.RecordBatch)
+	if err != nil {
+		return 0, 0, 0, false, err
+	}
+	for _, rec := range recs {
+		if batch.FirstTimestamp+rec.TimestampDelta64 == m.maxTimestamp {
+			return batch.FirstOffset + int64(rec.OffsetDelta), m.maxTimestamp, m.epoch, true, nil
+		}
+	}
+	return 0, 0, 0, false, nil
+}
+
+// offsetForTimestamp answers a ListOffsets timestamp query the way a real
+// broker does (FileRecords.searchForTimestamp): the first batch in offset
+// order whose max timestamp reaches ts, then the first record in it at or
+// after ts and at or after the log start offset. If every such record in
+// that batch was deleted from below, the scan moves on to the next batch.
+// Returns found == false if no record qualifies.
+func (c *Cluster) offsetForTimestamp(pd *partData, ts int64) (offset, timestamp int64, epoch int32, found bool, err error) {
+	segIdx, metaIdx, meta := pd.findBatchMeta(ts, func(m *batchMeta) int64 { return m.maxEarlierTimestamp })
+	if meta == nil {
+		return 0, 0, 0, false, nil
+	}
+	pd.eachBatchMetaFrom(segIdx, metaIdx, func(si, _ int, m *batchMeta) bool {
+		if m.maxTimestamp < ts {
+			return true
+		}
+		var batch *partBatch
+		if batch, err = c.readBatchFull(pd, si, m); err != nil {
+			return false
+		}
+		var recs []kmsg.Record
+		if recs, err = BatchRecords(batch.RecordBatch); err != nil {
+			return false
+		}
+		for _, rec := range recs {
+			recTimestamp := batch.FirstTimestamp + rec.TimestampDelta64
+			recOffset := batch.FirstOffset + int64(rec.OffsetDelta)
+			if recTimestamp >= ts && recOffset >= pd.logStartOffset {
+				offset, timestamp, epoch, found = recOffset, recTimestamp, m.epoch, true
+				return false
+			}
+		}
+		return true
+	})
+	return offset, timestamp, epoch, found, err
 }

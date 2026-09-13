@@ -1,9 +1,6 @@
 package kfake
 
 import (
-	"hash/crc32"
-	"time"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -19,7 +16,7 @@ import (
 // * Writes a control batch per requested partition with the given pid+epoch
 // * Updates abortedTxns tracking and recalculates LSO
 // * Does NOT transition pid state (that's the coordinator's role)
-// * CoordinatorEpoch is accepted but not validated (kfake is single-coord)
+// * CoordinatorEpoch is not validated (kfake is single-coord); it is written into the marker value
 //
 // Version notes:
 // * v1: Flexible versions
@@ -75,7 +72,7 @@ func (c *Cluster) handleWriteTxnMarkers(creq *clientReq) (kmsg.Response, error) 
 				case pd.leader != creq.cc.b:
 					setErr(kerr.NotLeaderForPartition.Code)
 				default:
-					if off := c.writeTxnMarker(pd, m.ProducerID, m.ProducerEpoch, m.Committed); off < 0 {
+					if off := c.writeTxnMarker(pd, m.ProducerID, m.ProducerEpoch, m.Committed, m.CoordinatorEpoch); off < 0 {
 						setErr(kerr.UnknownServerError.Code)
 					}
 				}
@@ -92,35 +89,13 @@ func (c *Cluster) handleWriteTxnMarkers(creq *clientReq) (kmsg.Response, error) 
 // writeTxnMarker writes a commit/abort control batch for (pid, epoch) to
 // the partition, updates aborted-txn tracking, and recalculates the LSO.
 // Returns the control batch offset, or -1 on persist failure.
-func (c *Cluster) writeTxnMarker(pd *partData, pid int64, epoch int16, commit bool) int64 {
-	var controlType byte // 0=abort
-	if commit {
-		controlType = 1 // commit
-	}
-	rec := kmsg.Record{Key: []byte{0, 0, 0, controlType}}
-	rec.Length = int32(len(rec.AppendTo(nil)) - 1)
-	now := time.Now().UnixMilli()
-	b := kmsg.RecordBatch{
-		PartitionLeaderEpoch: -1,
-		Magic:                2,
-		Attributes:           int16(0b00000000_00110000), // control + txnl
-		LastOffsetDelta:      0,
-		FirstTimestamp:       now,
-		MaxTimestamp:         now,
-		ProducerID:           pid,
-		ProducerEpoch:        epoch,
-		FirstSequence:        -1,
-		NumRecords:           1,
-		Records:              rec.AppendTo(nil),
-	}
-	benc := b.AppendTo(nil)
-	b.Length = int32(len(benc) - 12)
-	b.CRC = int32(crc32.Checksum(benc[21:], crc32c))
+func (c *Cluster) writeTxnMarker(pd *partData, pid int64, epoch int16, commit bool, coordinatorEpoch int32) int64 {
+	b, nbytes := txnMarkerBatch(pid, epoch, commit, coordinatorEpoch)
 
 	firstOffset, hadTxn := pd.uncommittedPIDs[pid]
 	delete(pd.uncommittedPIDs, pid)
 
-	controlOffset := c.pushBatch(pd, len(benc), b, false)
+	controlOffset := c.pushBatch(pd, nbytes, b, false)
 	if controlOffset < 0 {
 		pd.recalculateLSO()
 		return -1

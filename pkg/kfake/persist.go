@@ -269,6 +269,10 @@ type (
 //   [4 bytes: epoch, little-endian]
 //   [8 bytes: maxEarlierTimestamp, little-endian]
 //   [1 byte: flags (bit 0 = inTx)]
+//
+// maxEarlierTimestamp is a running max that goes stale when earlier
+// batches are dropped, so load recomputes it from the batch headers
+// (rebuildMaxTimestampMeta) rather than trusting the stored value.
 
 const indexEntrySize = 15
 
@@ -784,7 +788,7 @@ func (c *Cluster) savePartition(fsys fs, dir, topic string, part int32, pd *part
 		LogStartOffset:   pd.logStartOffset,
 		Epoch:            pd.epoch,
 		LeaderNode:       pd.leader.node,
-		MaxTimestamp:     pd.maxFirstTimestamp,
+		MaxTimestamp:     pd.maxTimestampSeen,
 		CreatedAt:        pd.createdAt,
 		AbortedTxns:      abortedTxns,
 		Segments:         snapSegments,
@@ -1231,7 +1235,6 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	if snap.LeaderNode >= 0 && int(snap.LeaderNode) < len(c.bs) {
 		pd.leader = c.bs[snap.LeaderNode]
 	}
-	pd.maxFirstTimestamp = snap.MaxTimestamp
 	pd.createdAt = snap.CreatedAt
 	for i, base := range segFiles {
 		ss := snap.Segments[i]
@@ -1407,11 +1410,8 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 	// Rebuild LSO and other metadata
 	pd.recalculateLSO()
 
-	// Rebuild maxTimestamp and nbytes from batchMeta
+	// Rebuild nbytes and the timestamp metadata from batchMeta
 	pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
-		if m.firstTimestamp > pd.maxFirstTimestamp {
-			pd.maxFirstTimestamp = m.firstTimestamp
-		}
 		pd.nbytes += int64(m.nbytes)
 		return true
 	})
@@ -1493,21 +1493,21 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 			break // corruption - truncate
 		}
 
-		// Read metadata from index file (if available).
+		// Read metadata from index file (if available). The stored
+		// maxEarlierTimestamp is not used: rebuildMaxTimestampMeta
+		// recomputes it once every segment is loaded.
 		var epoch int32
-		var maxEarlierTS int64
 		var inTx bool
 		idxOff := batchIdx * indexEntrySize
 		if idxOff+indexEntrySize <= len(idxRaw) {
-			epoch, maxEarlierTS, inTx, _ = decodeIndexEntry(idxRaw[idxOff : idxOff+indexEntrySize])
+			epoch, _, inTx, _ = decodeIndexEntry(idxRaw[idxOff : idxOff+indexEntrySize])
 		}
 
 		batch := &partBatch{
-			RecordBatch:         *rb,
-			nbytes:              batchSize,
-			epoch:               epoch,
-			maxEarlierTimestamp: maxEarlierTS,
-			inTx:                inTx,
+			RecordBatch: *rb,
+			nbytes:      batchSize,
+			epoch:       epoch,
+			inTx:        inTx,
 		}
 		result = append(result, batch)
 		if seg != nil {
