@@ -698,6 +698,9 @@ func (cl *Client) Ping(ctx context.Context) error {
 // still exists on the broker, this function will at most only temporarily
 // remove the topic from the client and the topic will be re-discovered.
 //
+// Purging a topic and adding it back is also how to resume after a topic was
+// deleted and recreated; see the README for more details.
+//
 // For admin requests, this deletes the topic from the cached metadata map for
 // sharded requests. Metadata for sharded admin requests is only cached for
 // MetadataMinAge anyway, but the map is not cleaned up once the metadata

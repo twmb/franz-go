@@ -215,6 +215,33 @@ Kafka 0.10.0 introduced the ApiVersions request; if you are working with
 brokers older than that, you must use the kversions package. Use the
 MaxVersions option for the client if you do so.
 
+## Topic recreation
+
+The client always produces to or consumes from the _first_ instance of a topic.
+If you delete and recreate a topic, and if the client can detect it (i.e. the
+broker is modern enough and is using topic IDs), the client will refuse to
+produce to or consume from the new instance of the topic.
+
+You can handle this in your application by using `PurgeTopicsFromClient`, which
+purges all information about a topic from within the client, and then (for
+consumers) calling `AddConsumeTopics`. Producers will auto recover after purging
+once you produce again.
+
+Depending on your broker version, you may experience different side effects from
+trying to keep a client alive across topic recreation:
+* Producing pre-4.1 while recreating a topic may result in batch 2 being before
+  batch 1 on the new topic, and may result in some duplicates.
+* Consuming pre-3.1 could result in the new topic's messages being skipped,
+  since the consumer will stay at the offset it was at in the old topic.
+* Committing pre-4.2 could result in commits for the old topic landing for the
+  new topic, and consumers picking up these stale commits and skipping messages
+* Transactional commits pre-4.4 have the same problem.
+
+It is not recommended to try to keep a client alive across a topic recreation,
+_but_ if you want to do so: always upgrade to the latest Kafka. Doing so will
+make this client hard-lock more reliably and avoid side effects; you can then
+purge and add as needed.
+
 ## Metrics & logging
 
 **Note** there exists plug-in packages that allow you to easily add prometheus
