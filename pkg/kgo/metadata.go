@@ -1165,6 +1165,18 @@ func (m *multiUpdateWhy) isOnly(err error) bool {
 	return true
 }
 
+func (m *multiUpdateWhy) has(err error) bool {
+	if m == nil {
+		return false
+	}
+	for e := range *m {
+		if errors.Is(err, e.k) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *multiUpdateWhy) add(t string, p int32, err error) {
 	if err == nil {
 		return
