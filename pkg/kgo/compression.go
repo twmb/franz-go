@@ -332,10 +332,18 @@ type decompressor struct {
 func DefaultDecompressor(pools ...Pool) Decompressor {
 	d := &decompressor{
 		ungzPool: sync.Pool{
-			New: func() any { return new(gzip.Reader) },
+			New: func() any {
+				r := new(gzipDecoder)
+				r.lim.R = &r.inner
+				return r
+			},
 		},
 		unlz4Pool: sync.Pool{
-			New: func() any { return lz4.NewReader(nil) },
+			New: func() any {
+				r := &lz4Decoder{inner: lz4.NewReader(nil)}
+				r.lim.R = r.inner
+				return r
+			},
 		},
 		unzstdPool: sync.Pool{
 			New: func() any {
@@ -358,6 +366,21 @@ func DefaultDecompressor(pools ...Pool) Decompressor {
 
 type zstdDecoder struct {
 	inner *zstd.Decoder
+}
+
+// The gzip and lz4 decoders are pooled together with the bytes.Reader they
+// read from and the LimitedReader that bounds their output, so that a
+// decompress allocates none of them.
+type gzipDecoder struct {
+	inner gzip.Reader
+	src   bytes.Reader
+	lim   io.LimitedReader
+}
+
+type lz4Decoder struct {
+	inner *lz4.Reader
+	src   bytes.Reader
+	lim   io.LimitedReader
 }
 
 func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) (_ []byte, err error) {
@@ -406,24 +429,26 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) (_
 	// otherwise allocate their own output. With no user pool, dst is nil
 	// and the fresh allocation is what we return: it is not shared with
 	// anything, so there is nothing to clone.
-	var r io.Reader
+	var lim *io.LimitedReader
 	switch codecType {
 	case CodecSnappy:
 		return decompressSnappy(dst, src)
 	case CodecZstd:
 		return d.decompressZstd(dst, src)
 	case CodecGzip:
-		ungz := d.ungzPool.Get().(*gzip.Reader)
+		ungz := d.ungzPool.Get().(*gzipDecoder)
 		defer d.ungzPool.Put(ungz)
-		if err := ungz.Reset(bytes.NewReader(src)); err != nil {
+		ungz.src.Reset(src)
+		if err := ungz.inner.Reset(&ungz.src); err != nil {
 			return nil, err
 		}
-		r = ungz
+		lim = &ungz.lim
 	case CodecLz4:
-		unlz4 := d.unlz4Pool.Get().(*lz4.Reader)
+		unlz4 := d.unlz4Pool.Get().(*lz4Decoder)
 		defer d.unlz4Pool.Put(unlz4)
-		unlz4.Reset(bytes.NewReader(src))
-		r = unlz4
+		unlz4.src.Reset(src)
+		unlz4.inner.Reset(&unlz4.src)
+		lim = &unlz4.lim
 	default:
 		return nil, errors.New("unknown compression codec")
 	}
@@ -433,7 +458,7 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) (_
 	// before the deferred Put.
 	if userPooled {
 		out := bytes.NewBuffer(dst)
-		if err := readBounded(out, r); err != nil {
+		if err := readBounded(out, lim); err != nil {
 			return nil, err
 		}
 		return out.Bytes(), nil
@@ -441,18 +466,19 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) (_
 	out := byteBuffers.Get().(*bytes.Buffer)
 	out.Reset()
 	defer byteBuffers.Put(out)
-	if err := readBounded(out, r); err != nil {
+	if err := readBounded(out, lim); err != nil {
 		return nil, err
 	}
 	return slices.Clone(out.Bytes()), nil
 }
 
-// readBounded streams r into out, rejecting more than maxDecompressedSize.
-// We call ReadFrom directly rather than io.Copy so that a stack allocated
-// out does not escape through the io.Writer interface.
-func readBounded(out *bytes.Buffer, r io.Reader) error {
-	lr := io.LimitedReader{R: r, N: maxDecompressedSize + 1}
-	if n, err := out.ReadFrom(&lr); err != nil {
+// readBounded streams lim into out, rejecting more than
+// maxDecompressedSize. We call ReadFrom directly rather than io.Copy so
+// that a stack allocated out does not escape through the io.Writer
+// interface.
+func readBounded(out *bytes.Buffer, lim *io.LimitedReader) error {
+	lim.N = maxDecompressedSize + 1
+	if n, err := out.ReadFrom(lim); err != nil {
 		return err
 	} else if n > maxDecompressedSize {
 		return errDecompressedTooLarge
