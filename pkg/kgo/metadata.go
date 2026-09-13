@@ -835,7 +835,8 @@ func (cl *Client) mergeTopicPartitions(
 	// Topic IDs are random and never reused, so a new ID for a name we
 	// hold means the topic was deleted and recreated. We adopt an ID the
 	// topic never held immediately: a partition being consumed restarts
-	// below, and one being produced to continues under the new ID. We
+	// below, one being produced to continues under the new ID, and a
+	// share cursor continues on the new topic's share state. We
 	// refuse an ID the topic held previously until the ID we hold has
 	// been rejected recreationRejectionLimit times: a broker that has
 	// not yet learned of the recreation still reports the old ID.
@@ -854,10 +855,6 @@ func (cl *Client) mergeTopicPartitions(
 		cl.cfg.logger.Log(LogLevelDebug, "metadata update is missing the topic ID when we previously had one, keeping our ID",
 			"topic", topic,
 		)
-	case kind == partitionKindShare:
-		// Share cursors keep their ID: migrateShareCursorTo copies the
-		// cursor. Share consuming does not restart on a recreation.
-		lv.id = mt.id
 	case lv.priorIDs.has(mt.id) && !lv.unknownIDLimitReached(kind):
 		// The broker still reports an ID the topic held before, so it
 		// still lags. We keep refusing the ID for as long as any broker
@@ -877,6 +874,8 @@ func (cl *Client) mergeTopicPartitions(
 			what += " for producing"
 		case partitionKindConsume:
 			what += " for consuming"
+		case partitionKindShare:
+			what += " for share consuming"
 		}
 		cl.cfg.logger.Log(LogLevelInfo, what,
 			"topic", topic,
@@ -1024,9 +1023,18 @@ func (cl *Client) mergeTopicPartitions(
 				cl.consumer.addFakeReadyForDraining(topic, int32(part), newTP.loadErr, "metadata refresh has a load error on this partition")
 			}
 			retryWhy.add(topic, int32(part), newTP.loadErr)
-			if kind == partitionKindConsume && swapCursor() {
-				if from, ok := oldTP.swapRecreatedCursorTo(newTP, lv.id, css); ok {
-					swappedFrom, swapped = from, swapped+1
+			switch kind {
+			case partitionKindProduce:
+				// The recBuf took the ID above, under its lock.
+			case partitionKindConsume:
+				if swapCursor() {
+					if from, ok := oldTP.swapRecreatedCursorTo(newTP, lv.id, css); ok {
+						swappedFrom, swapped = from, swapped+1
+					}
+				}
+			case partitionKindShare:
+				if c := oldTP.shareCursor; recreated || c.topicID != noID && c.topicID != lv.id {
+					oldTP.swapRecreatedShareCursorTo(cl, newTP, lv.id)
 				}
 			}
 			continue
@@ -1058,6 +1066,19 @@ func (cl *Client) mergeTopicPartitions(
 				if from, ok := oldTP.swapRecreatedCursorTo(newTP, lv.id, css); ok {
 					swappedFrom, swapped = from, swapped+1
 				}
+				continue
+			}
+
+		case partitionKindShare:
+			// Share positions and acquisition state live on the broker
+			// and were deleted with the old topic, so the cursor takes
+			// the new ID and continues on the new topic's share state.
+			// A cursor that missed the update which adopted the ID, for
+			// a load error on its partition, holds an ID the topic no
+			// longer has and is swapped here, the same as a consuming
+			// cursor.
+			if c := oldTP.shareCursor; recreated || c.topicID != noID && c.topicID != lv.id {
+				oldTP.swapRecreatedShareCursorTo(cl, newTP, lv.id)
 				continue
 			}
 		}

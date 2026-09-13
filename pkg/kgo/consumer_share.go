@@ -97,20 +97,36 @@ type (
 	}
 
 	shareCursor struct {
-		topic     string
-		topicID   [16]byte
+		topic string
+
+		// The topic ID we fetch with: the topic's ID from metadata. A
+		// recreation swap changes it while holding the share mutex of
+		// the source the cursor is leaving, and every read on a source
+		// is under its share mutex: createShareReq and the cursor map in
+		// handleShareReqResp. The swap runs on the metadata goroutine,
+		// the only writer after creation, so the metadata merge can read
+		// it. Acknowledgments use the ID on the slab instead, which is
+		// the ID the records were fetched under.
+		topicID [16]byte
+
 		partition int32
 
 		// source is atomic to support cursors moving between
 		// sources concurrent with user acking.
 		source atomic.Pointer[source]
 
-		// unknownIDFails counts consecutive UnknownTopicID fetch
-		// errors, mirroring cursor.unknownIDFails: the error is
-		// transient on a just-created topic while brokers sync, so we
-		// strip it for a few fetches, but persistent means the topic
-		// was recreated and we surface it forever (stall loudly).
+		// Consecutive UNKNOWN_TOPIC_ID rejections of fetches with
+		// topicID, -1 once a fetch succeeded under it, 0 before either,
+		// like cursor.unknownIDFails: a just-created topic returns the
+		// rejection until brokers sync, so we strip it up to
+		// recreationRejectionLimit times, then return it.
 		unknownIDFails atomic.Int32
+
+		// The metadata update count this cursor waits for after a fetch
+		// rejected its topic ID, or 0, like cursor.awaitUpdate. A share
+		// fetch goes out per poll, so without this a rejection would be
+		// counted per poll rather than per metadata update.
+		awaitUpdate atomic.Uint64
 
 		cursorsIdx int
 
@@ -192,7 +208,8 @@ type (
 		lastOffset   int64
 		source       *source
 		sessionEpoch int32
-		ackType      int8 // uniform type for the entire range
+		topicID      [16]byte // the response topic ID the records came from
+		ackType      int8     // uniform type for the entire range
 	}
 
 	// shareAckState is per-record ack state (24 bytes), used as
@@ -251,6 +268,7 @@ type (
 		cursor               *shareCursor
 		acqLockDeadlineNanos int64
 		sessionEpoch         int32
+		topicID              [16]byte // the response topic ID the records came from
 	}
 
 	// shareCallbackEntry is pushed onto the callbackRing. The drainer
@@ -277,6 +295,7 @@ type (
 	// cursorAckDrain is a cursor + the entries/gaps drained from it.
 	cursorAckDrain struct {
 		cursor  *shareCursor
+		topicID [16]byte         // the ID the entries and gaps were fetched under
 		entries []*shareAckState // user acks
 		gaps    []shareAckRange  // internal acks (gap/release)
 	}
@@ -759,13 +778,13 @@ func (s *source) closeShareSession(ctx context.Context) {
 			if len(ranges) == 0 {
 				continue
 			}
-			drainIdx[tidp{d.cursor.topicID, d.cursor.partition}] = i
-			tidx, ok := topicIdx[d.cursor.topicID]
+			drainIdx[tidp{d.topicID, d.cursor.partition}] = i
+			tidx, ok := topicIdx[d.topicID]
 			if !ok {
 				tidx = len(req.Topics)
-				topicIdx[d.cursor.topicID] = tidx
+				topicIdx[d.topicID] = tidx
 				req.Topics = append(req.Topics, kmsg.ShareAcknowledgeRequestTopic{
-					TopicID: d.cursor.topicID,
+					TopicID: d.topicID,
 				})
 			}
 			rt := &req.Topics[tidx]
@@ -933,6 +952,7 @@ func (sc *shareConsumer) purgeTopics(topics []string) {
 		for i := range td.partitions {
 			cursor := td.partitions[i].shareCursor
 			cursor.assigned.Store(false)
+			cursor.unpause(sc.cl) // see purgeShareCursor: unpause so pausedCursors does not leak
 			cursor.source.Load().removeShareCursor(cursor)
 			entries, _ := cursor.drainAcks(true)
 			if n := int64(len(entries)); n > 0 {
@@ -1807,15 +1827,15 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 		if len(ranges) == 0 {
 			continue
 		}
-		drainIdx[tidp{d.cursor.topicID, d.cursor.partition}] = i
+		drainIdx[tidp{d.topicID, d.cursor.partition}] = i
 		if hasRenew {
 			req.IsRenewAck = true
 		}
-		tidx, ok := topicIdx[d.cursor.topicID]
+		tidx, ok := topicIdx[d.topicID]
 		if !ok {
 			tidx = len(req.Topics)
-			topicIdx[d.cursor.topicID] = tidx
-			req.Topics = append(req.Topics, kmsg.ShareAcknowledgeRequestTopic{TopicID: d.cursor.topicID})
+			topicIdx[d.topicID] = tidx
+			req.Topics = append(req.Topics, kmsg.ShareAcknowledgeRequestTopic{TopicID: d.topicID})
 		}
 		rp := kmsg.ShareAcknowledgeRequestTopicPartition{Partition: d.cursor.partition}
 		for _, r := range ranges {
@@ -1960,7 +1980,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 
 // releaseUndeliverable releases records that were "acquired" but for which the
 // broker gave us no record data (i.e. protocol violation).
-func (s *source) releaseUndeliverable(cursor *shareCursor, acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, epoch int32) {
+func (s *source) releaseUndeliverable(cursor *shareCursor, tid [16]byte, acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, epoch int32) {
 	if len(acquired) == 0 {
 		return
 	}
@@ -1974,6 +1994,7 @@ func (s *source) releaseUndeliverable(cursor *shareCursor, acquired []kmsg.Share
 			lastOffset:   ar.LastOffset,
 			source:       s,
 			sessionEpoch: epoch,
+			topicID:      tid,
 			ackType:      int8(AckRelease),
 		})
 	}
@@ -2092,6 +2113,19 @@ func (c *shareCursor) enqueueGaps(gaps []shareAckRange) bool {
 	return true
 }
 
+// pauseForMetadata and unpause are the share twins of the cursor's.
+func (c *shareCursor) pauseForMetadata(cl *Client) {
+	if c.awaitUpdate.Swap(cl.metadataUpdates()+1) == 0 {
+		cl.consumer.pausedCursors.Add(1)
+	}
+}
+
+func (c *shareCursor) unpause(cl *Client) {
+	if c.awaitUpdate.Swap(0) != 0 {
+		cl.consumer.pausedCursors.Add(-1)
+	}
+}
+
 // drainAcks removes and returns all pending user acks and gaps
 // under c.ackMu. If close is true, marks the cursor closed so
 // later appendAck / enqueueGaps return a left-group error.
@@ -2111,12 +2145,48 @@ func (c *shareCursor) drainAcks(close bool) ([]*shareAckState, []shareAckRange) 
 // drainAllShareAcks drains every cursor under s.share, returning
 // only non-empty drains. Caller must hold s.share.mu. close is
 // forwarded to drainAcks.
+//
+// A cursor's acks are grouped by ID, one drain per ID: a cursor swapped by a
+// recreation holds acks under the old ID until they are flushed. It is less
+// risky to send acks from old topic IDs than to try to filter within the
+// client and risk letting an ack through to the new topic meant for the old
+// topic.
 func (s *source) drainAllShareAcks(close bool) []cursorAckDrain {
 	var drains []cursorAckDrain
 	for _, c := range s.share.cursors {
 		entries, gaps := c.drainAcks(close)
-		if len(entries) > 0 || len(gaps) > 0 {
-			drains = append(drains, cursorAckDrain{cursor: c, entries: entries, gaps: gaps})
+		if len(entries) == 0 && len(gaps) == 0 {
+			continue
+		}
+		var id [16]byte
+		if len(entries) > 0 {
+			id = entries[0].slab.topicID
+		} else {
+			id = gaps[0].topicID
+		}
+		oneID := !slices.ContainsFunc(entries, func(e *shareAckState) bool { return e.slab.topicID != id }) &&
+			!slices.ContainsFunc(gaps, func(g shareAckRange) bool { return g.topicID != id })
+		if oneID {
+			drains = append(drains, cursorAckDrain{cursor: c, topicID: id, entries: entries, gaps: gaps})
+			continue
+		}
+		byID := make(map[[16]byte]int, 2)
+		drainFor := func(tid [16]byte) *cursorAckDrain {
+			i, ok := byID[tid]
+			if !ok {
+				i = len(drains)
+				byID[tid] = i
+				drains = append(drains, cursorAckDrain{cursor: c, topicID: tid})
+			}
+			return &drains[i]
+		}
+		for _, e := range entries {
+			d := drainFor(e.slab.topicID)
+			d.entries = append(d.entries, e)
+		}
+		for _, g := range gaps {
+			d := drainFor(g.topicID)
+			d.gaps = append(d.gaps, g)
 		}
 	}
 	return drains
@@ -2344,6 +2414,7 @@ func buildAckRanges(entries []*shareAckState, gaps []shareAckRange) (ranges []sh
 			lastOffset:   e.offset,
 			source:       e.slab.ackSource,
 			sessionEpoch: e.slab.sessionEpoch,
+			topicID:      e.slab.topicID,
 			ackType:      t,
 		})
 	}
@@ -2600,6 +2671,22 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 			}
 		}
 	}
+	// cursorMap includes both usable and piggyback-only cursors so
+	// ack-only partitions in the response are not treated as unknown. We
+	// build it here because a recreation swap writes shareCursor.topicID
+	// under this mutex. fetched is the fetch half: an entry the response
+	// carries only because we acknowledged under it, such as the old
+	// topic's ID after a recreation, answers the ack and nothing else.
+	cursorMap := make(map[tidp]*shareCursor, len(usable)+len(piggybackAcks))
+	fetched := make(map[tidp]struct{}, len(usable))
+	for _, c := range usable {
+		key := tidp{c.topicID, c.partition}
+		cursorMap[key] = c
+		fetched[key] = struct{}{}
+	}
+	for _, d := range piggybackAcks {
+		cursorMap[tidp{d.topicID, d.cursor.partition}] = d.cursor
+	}
 	newEpoch := s.share.sessionEpoch
 	s.share.mu.Unlock()
 	if sessionStale {
@@ -2621,16 +2708,6 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 		acqLockMillis = 1000
 	}
 	acqLockDeadlineNanos := time.Now().Add(time.Duration(acqLockMillis) * time.Millisecond).UnixNano()
-
-	// cursorMap includes both usable and piggyback-only cursors so
-	// ack-only partitions in the response are not treated as unknown.
-	cursorMap := make(map[tidp]*shareCursor, len(usable)+len(piggybackAcks))
-	for _, c := range usable {
-		cursorMap[tidp{c.topicID, c.partition}] = c
-	}
-	for _, d := range piggybackAcks {
-		cursorMap[tidp{d.cursor.topicID, d.cursor.partition}] = d.cursor
-	}
 
 	var (
 		fetch              Fetch
@@ -2696,6 +2773,9 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 			if sessionStale {
 				continue // records are unackable, extract ack results only
 			}
+			if _, ok := fetched[tpKey]; !ok {
+				continue // an ack under an ID we no longer fetch with; see fetched
+			}
 
 			// then records.
 			if rp.ErrorCode != 0 {
@@ -2723,15 +2803,26 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 				updateWhy.add(topicName, rp.Partition, partErr)
 				keep := true
 				switch {
-				case errors.Is(partErr, kerr.UnknownTopicID):
-					// Transient on just-created topics while
-					// brokers sync; persistent means recreation.
-					// Strip a few, then surface forever, exactly
-					// like the classic cursor's grace counter.
-					if fails := cursor.unknownIDFails.Add(1); fails > 5 {
-						cursor.unknownIDFails.Add(-1)
+				case errors.Is(partErr, kerr.UnknownTopicID), errors.Is(partErr, kerr.InconsistentTopicID):
+					// A just-created topic returns this until
+					// brokers sync, and a recreated topic until the
+					// merge adopts the new ID. We strip it up to the
+					// limit, then return it, like the classic cursor,
+					// and past the first rejection the cursor waits
+					// for a metadata update before fetching again.
+					fails := cursor.unknownIDFails.Load()
+					if fails < 0 {
+						fails = 0
+					}
+					fails++
+					cursor.unknownIDFails.Store(fails)
+					if fails > recreationRejectionLimit {
+						cursor.unknownIDFails.Store(recreationRejectionLimit)
 					} else if !sc.cfg.keepRetryableFetchErrors {
 						keep = false
+					}
+					if fails > 1 {
+						cursor.pauseForMetadata(s.cl)
 					}
 				default:
 					if kerr.IsRetriable(partErr) && !sc.cfg.keepRetryableFetchErrors {
@@ -2746,7 +2837,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 				}
 				continue
 			}
-			cursor.unknownIDFails.Store(0)
+			cursor.unknownIDFails.Store(-1) // fetched under this ID; see unknownIDLimitReached
 
 			if len(rp.Records) == 0 && len(rp.AcquiredRecords) == 0 {
 				continue
@@ -2759,7 +2850,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 					"partition", rp.Partition,
 					"acquired_ranges", len(rp.AcquiredRecords),
 				)
-				s.releaseUndeliverable(cursor, rp.AcquiredRecords, newEpoch)
+				s.releaseUndeliverable(cursor, rt.TopicID, rp.AcquiredRecords, newEpoch)
 				continue
 			}
 
@@ -2769,7 +2860,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 			// The records are acquired for us on the broker,
 			// not auto-released.
 
-			fp, gapAcks := s.processSharePartition(topicName, cursor, newEpoch, rp, acqLockDeadlineNanos)
+			fp, gapAcks := s.processSharePartition(topicName, rt.TopicID, cursor, newEpoch, rp, acqLockDeadlineNanos)
 			if len(gapAcks) > 0 {
 				cursor.enqueueGaps(gapAcks)
 			}
@@ -2802,15 +2893,19 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 	// Like the classic fetch path: per-partition errors trigger an
 	// immediate metadata update so the cursor can migrate (this is the
 	// only heal when the response carries no CurrentLeader hint), except
-	// pure unknown-topic reasons, which likely mean the topic does not
-	// exist yet and reloading is wasteful - those ride the debounced
-	// trigger. Hinted moves are handled via applyMoves and do not land
+	// unknown topic errors, which likely mean the topic does not exist and
+	// reloading is wasteful. A rejected topic ID still schedules an update
+	// within MetadataMinAge, since that is how the merge adopts a
+	// recreation. Hinted moves are handled via applyMoves and do not land
 	// in updateWhy.
 	if updateWhy != nil {
 		why := updateWhy.reason(fmt.Sprintf("share fetch had inner topic errors from broker %d", s.nodeID))
-		if updateWhy.isOnly(kerr.UnknownTopicOrPartition) || updateWhy.isOnly(kerr.UnknownTopicID) {
+		switch {
+		case updateWhy.isOnly(kerr.UnknownTopicOrPartition):
 			s.cl.triggerUpdateMetadata(false, why)
-		} else {
+		case updateWhy.isOnly(kerr.UnknownTopicID, kerr.InconsistentTopicID):
+			s.cl.triggerUpdateMetadata(true, why)
+		default:
 			s.cl.triggerUpdateMetadataNow(why)
 		}
 	}
@@ -2846,7 +2941,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 // The broker tracks acks in blocks - regardless of whether there are
 // actually underlying records. We ack the gaps immediately to free
 // up the acquired count on the broker.
-func (s *source) processSharePartition(topicName string, cursor *shareCursor, sessionEpoch int32, rp *kmsg.ShareFetchResponseTopicPartition, acqLockDeadlineNanos int64) (FetchPartition, []shareAckRange) {
+func (s *source) processSharePartition(topicName string, tid [16]byte, cursor *shareCursor, sessionEpoch int32, rp *kmsg.ShareFetchResponseTopicPartition, acqLockDeadlineNanos int64) (FetchPartition, []shareAckRange) {
 	sc := s.share.sc
 	// Build a synthetic FetchResponseTopicPartition because ShareFetch
 	// uses the same wire format for records.
@@ -2871,6 +2966,7 @@ func (s *source) processSharePartition(topicName string, cursor *shareCursor, se
 				cursor:               cursor,
 				acqLockDeadlineNanos: acqLockDeadlineNanos,
 				sessionEpoch:         sessionEpoch,
+				topicID:              tid,
 			}
 		},
 	}, &fakePart, sc.cfg.decompressor, nil)
@@ -2980,6 +3076,7 @@ func (s *source) processSharePartition(topicName string, cursor *shareCursor, se
 					lastOffset:   r.Offset - 1,
 					source:       s,
 					sessionEpoch: sessionEpoch,
+					topicID:      tid,
 					ackType:      gapType,
 				})
 			}
@@ -3005,6 +3102,7 @@ func (s *source) processSharePartition(topicName string, cursor *shareCursor, se
 				lastOffset:   ar.LastOffset,
 				source:       s,
 				sessionEpoch: sessionEpoch,
+				topicID:      tid,
 				ackType:      gapType,
 			})
 		}
@@ -3055,6 +3153,12 @@ func (s *source) createShareReq(skipAckDrain bool) (
 		// strip). applyMovesBlocking re-enables it once the move has run.
 		if !c.assigned.Load() || c.moving.Load() || paused.has(c.topic, c.partition) {
 			continue
+		}
+		if want := c.awaitUpdate.Load(); want != 0 {
+			if s.cl.metadataUpdates() < want {
+				continue
+			}
+			c.unpause(s.cl)
 		}
 		wantSet[tidp{c.topicID, c.partition}] = struct{}{}
 		usable = append(usable, c)
@@ -3159,7 +3263,7 @@ func (s *source) createShareReq(skipAckDrain bool) (
 			if len(ranges) == 0 {
 				continue
 			}
-			tid := d.cursor.topicID
+			tid := d.topicID
 			partition := d.cursor.partition
 			sentPiggyback[tidp{tid, partition}] = i
 			tidx, ok := topicIdx[tid]

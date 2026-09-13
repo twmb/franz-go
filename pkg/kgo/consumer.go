@@ -1482,9 +1482,14 @@ func (c *consumer) doOnMetadataUpdate() {
 	}
 
 	// A cursor paused by a rejected fetch waits for this update; see
-	// cursor.awaitUpdate.
+	// cursor.awaitUpdate. A share source's loop exits once every cursor
+	// it has is paused, so it is started again here.
 	if c.pausedCursors.Load() > 0 {
-		c.cl.allSources((*source).maybeConsume)
+		if c.s != nil {
+			c.cl.allSources((*source).maybeShareConsume)
+		} else {
+			c.cl.allSources((*source).maybeConsume)
+		}
 	}
 
 	// See the comment on the outstandingMetadataUpdates field for why this
