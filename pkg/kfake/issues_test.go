@@ -4635,8 +4635,16 @@ func TestIssue1423(t *testing.T) {
 // client timestamps can go backwards from one batch to the next.
 //
 // The restart cases reload the partition from disk, once from a snapshot
-// and once by replaying the segments, since the running max the search
-// uses is recomputed on load.
+// and once by replaying the segments, since the timestamps the search
+// uses are recomputed on load.
+//
+// The broker commits to the first segment whose largest timestamp reaches
+// the target (UnifiedLog.searchOffsetInLocalLog), where the largest
+// timestamp still counts records deleted from below the log start offset,
+// and answers -1 if that segment has no record at or after both the
+// target and the log start offset. So the same log answers a query
+// differently depending on where the segment boundaries fall, and the
+// last checks below expect that.
 func TestIssue1422(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -4668,10 +4676,11 @@ func TestIssue1422(t *testing.T) {
 
 			// Each inner slice is produced as one batch: a long linger
 			// buffers the records, and Flush sends them together.
-			// Timestamps go backwards from batch 1 to batch 2.
+			// Timestamps go backwards within batch 1 and from batch 1
+			// to batch 2.
 			batches := [][]int64{
 				{10_000, 10_010, 10_010, 10_020}, // offsets 0-3
-				{10_050, 10_060},                 // offsets 4-5
+				{10_060, 10_050},                 // offsets 4-5
 				{10_030, 10_040},                 // offsets 6-7
 				{10_070},                         // offset 8
 			}
@@ -4707,6 +4716,12 @@ func TestIssue1422(t *testing.T) {
 				wantRunning = append(wantRunning, running)
 			}
 			var pd *partData
+			segRunning := func() (got []int64) {
+				for i := range pd.segments {
+					got = append(got, pd.segments[i].maxEarlierTimestamp)
+				}
+				return got
+			}
 			checkIndex := func(when string) {
 				t.Helper()
 				if pd, _ = c.data.tps.getp(topic, 0); pd == nil {
@@ -4718,10 +4733,16 @@ func TestIssue1422(t *testing.T) {
 					return true
 				})
 				if !slices.Equal(gotRunning, wantRunning) {
-					t.Fatalf("running max timestamps %s: got %v, want %v", when, gotRunning, wantRunning)
+					t.Fatalf("batch running max timestamps %s: got %v, want %v", when, gotRunning, wantRunning)
 				}
-				if tc.segBytes != "" && len(pd.segments) != len(batches) {
-					t.Fatalf("%d segments %s, want %d", len(pd.segments), when, len(batches))
+				// With one batch per segment, the segments' running max is
+				// the same sequence; with one segment, it is the last value.
+				wantSeg := wantRunning[len(wantRunning)-1:]
+				if tc.segBytes != "" {
+					wantSeg = wantRunning
+				}
+				if got := segRunning(); !slices.Equal(got, wantSeg) {
+					t.Fatalf("segment running max timestamps %s: got %v, want %v", when, got, wantSeg)
 				}
 			}
 			checkIndex("after producing")
@@ -4777,9 +4798,9 @@ func TestIssue1422(t *testing.T) {
 			check(10_010, 1, 10_010) // the first of two equal timestamps
 			check(10_011, 3, 10_020)
 			check(10_020, 3, 10_020)
-			check(10_021, 4, 10_050) // next batch
-			check(10_035, 4, 10_050) // batch 1 reaches it first, even though batch 2 has 10_040
-			check(10_055, 5, 10_060)
+			check(10_021, 4, 10_060) // next batch
+			check(10_035, 4, 10_060) // batch 1 reaches it first, even though batch 2 has 10_040
+			check(10_055, 4, 10_060)
 			check(10_061, 8, 10_070) // batch 2's max timestamp is below, skip to batch 3
 			check(10_070, 8, 10_070)
 			check(10_071, -1, -1)
@@ -4787,17 +4808,48 @@ func TestIssue1422(t *testing.T) {
 			// Delete the first two records, leaving a log start offset in the
 			// middle of batch 0. The answer must not point below it.
 			adm := kadm.NewClient(cl)
-			del, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: 2}}})
-			if err != nil {
-				t.Fatal(err)
+			deleteTo := func(at int64) {
+				t.Helper()
+				del, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: at}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := del.Error(); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if err := del.Error(); err != nil {
-				t.Fatal(err)
-			}
+			deleteTo(2)
 			check(9_999, 2, 10_010)
 			check(10_005, 2, 10_010)
 			check(10_010, 2, 10_010)
 			check(10_011, 3, 10_020)
+
+			// Delete through offset 4, the 10_060 record that is batch 1's
+			// max. Batch 1 still holds offset 5 at 10_050. A query at 10_055
+			// is answered by the segment holding batch 1, whose largest
+			// timestamp is still 10_060: with one batch per segment that
+			// segment has no live record at or after 10_055, so the answer
+			// is -1 even though offset 8 at 10_070 follows in the next
+			// segment. With every batch in one segment, the scan reaches
+			// offset 8.
+			deleteTo(5)
+			// Segment 0 is gone with one batch per segment; segment 1's
+			// max still counts its deleted 10_060 record.
+			wantSeg := []int64{10_070}
+			if tc.segBytes != "" {
+				wantSeg = []int64{10_060, 10_060, 10_070}
+			}
+			if got := segRunning(); !slices.Equal(got, wantSeg) {
+				t.Fatalf("segment running max timestamps after deleting to 5: got %v, want %v", got, wantSeg)
+			}
+			check(10_045, 5, 10_050)
+			check(10_050, 5, 10_050)
+			if tc.segBytes != "" {
+				check(10_055, -1, -1)
+			} else {
+				check(10_055, 8, 10_070)
+			}
+			check(10_061, 8, 10_070)
 		})
 	}
 }
@@ -4852,5 +4904,102 @@ func TestListOffsetsMaxTimestampFirstRecord(t *testing.T) {
 	}
 	if p.Offset != 1 || p.Timestamp != 30 {
 		t.Errorf("got offset %d timestamp %d, want offset 1 timestamp 30", p.Offset, p.Timestamp)
+	}
+}
+
+// readCountingFS counts file reads so a test can see how many batches a
+// request pulled from a segment.
+type readCountingFS struct {
+	fs
+	reads atomic.Int64
+}
+
+type readCountingFile struct {
+	file
+	c *readCountingFS
+}
+
+func (f *readCountingFS) OpenFile(name string, flag int, perm os.FileMode) (file, error) {
+	fl, err := f.fs.OpenFile(name, flag, perm)
+	if err != nil {
+		return nil, err
+	}
+	return &readCountingFile{fl, f}, nil
+}
+
+func (f *readCountingFile) Read(p []byte) (int, error) {
+	f.c.reads.Add(1)
+	return f.file.Read(p)
+}
+
+// TestListOffsetsTimestampSkipsDeletedBatches verifies a ListOffsets
+// timestamp lookup does not read batches that lie entirely below the log
+// start offset. A snapshot load keeps index entries for such batches, so
+// after DeleteRecords and a restart the scan would otherwise read and
+// decompress every deleted batch in the segment before reaching the first
+// live one.
+func TestListOffsetsTimestampSkipsDeletedBatches(t *testing.T) {
+	t.Parallel()
+	const topic, n = "list-offsets-skip-deleted", 200
+	cfs := &readCountingFS{fs: newMemFS()}
+	opts := []Opt{NumBrokers(1), DataDir(t.TempDir()), withFS(cfs)}
+	c := newCluster(t, append(opts, SeedTopics(1, topic))...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// One batch per record, all in one segment, timestamps increasing.
+	pcl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	for i := range n {
+		r := &kgo.Record{Value: []byte("v"), Timestamp: time.UnixMilli(int64(1000 + i))}
+		if err := pcl.ProduceSync(ctx, r).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if pd, _ := c.data.tps.getp(topic, 0); pd.totalBatches() != n || len(pd.segments) != 1 {
+		t.Fatalf("produced %d batches in %d segments, want %d in 1", pd.totalBatches(), len(pd.segments), n)
+	}
+
+	// Delete all but the last record, then restart from the snapshot.
+	// The reloaded index lists every batch again.
+	adm := kadm.NewClient(pcl)
+	del, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: n - 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := del.Error(); err != nil {
+		t.Fatal(err)
+	}
+	pcl.Close()
+	c.Close()
+	c = newCluster(t, opts...)
+	pd, _ := c.data.tps.getp(topic, 0)
+	if pd == nil || pd.totalBatches() != n || pd.logStartOffset != n-1 {
+		t.Fatalf("after reload: want %d index entries and log start offset %d, got %+v", n, n-1, pd)
+	}
+
+	// Every batch's max timestamp is at or after 0, so the scan starts
+	// at the first index entry and must skip the deleted ones without
+	// reading them.
+	req := kmsg.NewPtrListOffsetsRequest()
+	rt := kmsg.NewListOffsetsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewListOffsetsRequestTopicPartition()
+	rp.Timestamp = 0
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+	cfs.reads.Store(0)
+	resp, err := req.RequestWith(ctx, newPlainClient(t, c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := resp.Topics[0].Partitions[0]
+	if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+		t.Fatal(err)
+	}
+	if p.Offset != n-1 || p.Timestamp != 1000+n-1 {
+		t.Errorf("got offset %d timestamp %d, want offset %d timestamp %d", p.Offset, p.Timestamp, n-1, 1000+n-1)
+	}
+	if reads := cfs.reads.Load(); reads != 1 {
+		t.Errorf("the lookup read %d times, want 1 (the one live batch)", reads)
 	}
 }

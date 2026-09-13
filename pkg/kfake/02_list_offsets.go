@@ -1,6 +1,8 @@
 package kfake
 
 import (
+	"sort"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -159,50 +161,66 @@ func (c *Cluster) offsetOfMaxTimestamp(pd *partData) (offset, timestamp int64, e
 	if err != nil {
 		return 0, 0, 0, false, err
 	}
-	recs, err := BatchRecords(batch.RecordBatch)
-	if err != nil {
+	err = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) bool {
+		if batch.FirstTimestamp+rec.TimestampDelta64 == m.maxTimestamp {
+			offset, found = batch.FirstOffset+int64(rec.OffsetDelta), true
+		}
+		return !found
+	})
+	if err != nil || !found {
 		return 0, 0, 0, false, err
 	}
-	for _, rec := range recs {
-		if batch.FirstTimestamp+rec.TimestampDelta64 == m.maxTimestamp {
-			return batch.FirstOffset + int64(rec.OffsetDelta), m.maxTimestamp, m.epoch, true, nil
-		}
-	}
-	return 0, 0, 0, false, nil
+	return offset, m.maxTimestamp, m.epoch, true, nil
 }
 
 // offsetForTimestamp answers a ListOffsets timestamp query the way a real
-// broker does (FileRecords.searchForTimestamp): the first batch in offset
-// order whose max timestamp reaches ts, then the first record in it at or
-// after ts and at or after the log start offset. If every such record in
-// that batch was deleted from below, the scan moves on to the next batch.
-// Returns found == false if no record qualifies.
+// broker does. The broker commits to the first segment whose largest
+// timestamp reaches ts (UnifiedLog.searchOffsetInLocalLog), then within
+// it takes the first batch whose max timestamp reaches ts and the first
+// record in that batch at or after ts and at or after the log start
+// offset (FileRecords.searchForTimestamp). If that batch's qualifying
+// records were all deleted from below, the scan moves on to the next
+// batch, but never to the next segment: the broker answers that nothing
+// was found. Returns found == false in that case, and if no segment
+// reaches ts.
 func (c *Cluster) offsetForTimestamp(pd *partData, ts int64) (offset, timestamp int64, epoch int32, found bool, err error) {
-	segIdx, metaIdx, meta := pd.findBatchMeta(ts, func(m *batchMeta) int64 { return m.maxEarlierTimestamp })
-	if meta == nil {
+	// Both running maxes are monotonic: the first binary search lands
+	// on the first segment whose max reaches ts, the second on the
+	// first batch in it that can hold a record at or after ts. The loop
+	// then passes over a batch that cannot: one whose own max is below
+	// ts, or one deleted from below (a snapshot load keeps such batches
+	// in the index; the broker likewise starts its scan no earlier than
+	// the log start offset).
+	si := sort.Search(len(pd.segments), func(i int) bool {
+		return pd.segments[i].maxEarlierTimestamp >= ts
+	})
+	if si == len(pd.segments) {
 		return 0, 0, 0, false, nil
 	}
-	pd.eachBatchMetaFrom(segIdx, metaIdx, func(si, _ int, m *batchMeta) bool {
-		if m.maxTimestamp < ts {
-			return true
+	seg := &pd.segments[si]
+	mi := sort.Search(len(seg.index), func(i int) bool {
+		return seg.index[i].maxEarlierTimestamp >= ts
+	})
+	for ; mi < len(seg.index); mi++ {
+		m := &seg.index[mi]
+		if m.maxTimestamp < ts || m.firstOffset+int64(m.lastOffsetDelta) < pd.logStartOffset {
+			continue
 		}
 		var batch *partBatch
 		if batch, err = c.readBatchFull(pd, si, m); err != nil {
-			return false
+			return 0, 0, 0, false, err
 		}
-		var recs []kmsg.Record
-		if recs, err = BatchRecords(batch.RecordBatch); err != nil {
-			return false
-		}
-		for _, rec := range recs {
+		err = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) bool {
 			recTimestamp := batch.FirstTimestamp + rec.TimestampDelta64
 			recOffset := batch.FirstOffset + int64(rec.OffsetDelta)
 			if recTimestamp >= ts && recOffset >= pd.logStartOffset {
 				offset, timestamp, epoch, found = recOffset, recTimestamp, m.epoch, true
-				return false
 			}
+			return !found
+		})
+		if err != nil || found {
+			return offset, timestamp, epoch, found, err
 		}
-		return true
-	})
-	return offset, timestamp, epoch, found, err
+	}
+	return 0, 0, 0, false, nil
 }

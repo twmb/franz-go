@@ -58,6 +58,19 @@ type (
 		size     int64       // file size in bytes
 		index    []batchMeta // per-batch metadata, nil = evicted
 		readFile file        // cached read handle for sealed segments, nil = not yet opened
+
+		// maxTimestamp is the max MaxTimestamp over every batch in the
+		// file, like a real segment's maxTimestampSoFar. Unlike the
+		// index, it keeps counting batches deleted from below the log
+		// start offset: their bytes stay in the file until the whole
+		// segment goes.
+		maxTimestamp int64
+		// maxEarlierTimestamp is the max of maxTimestamp over this and
+		// every earlier segment, so ListOffsets can binary search for
+		// the first segment that reaches a timestamp. Set on append;
+		// rebuildMaxTimestampMeta recomputes it when segments are
+		// dropped or loaded.
+		maxEarlierTimestamp int64
 	}
 
 	// batchMeta is the in-memory index entry for a batch stored in a segment file.
@@ -261,6 +274,12 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 	active := &pd.segments[len(pd.segments)-1]
 	active.index = append(active.index, pb.meta(segPos))
 	active.updateEpochRange(pd.epoch)
+	active.updateMaxTimestamp(b.MaxTimestamp, segPos == 0)
+	if n := len(pd.segments); n > 1 {
+		active.maxEarlierTimestamp = max(active.maxTimestamp, pd.segments[n-2].maxEarlierTimestamp)
+	} else {
+		active.maxEarlierTimestamp = active.maxTimestamp
+	}
 
 	// Track the max timestamp batch for ListOffsets -3 (KIP-734). On a
 	// tie the earlier batch keeps the max, as on a real broker.
@@ -295,6 +314,14 @@ func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx b
 	return firstOffset
 }
 
+// updateMaxTimestamp folds a batch's max timestamp into the segment's.
+// first is true for the batch at the start of the file.
+func (si *segmentInfo) updateMaxTimestamp(ts int64, first bool) {
+	if first || ts > si.maxTimestamp {
+		si.maxTimestamp = ts
+	}
+}
+
 // updateEpochRange updates the segment's min/max epoch from a batch epoch.
 func (si *segmentInfo) updateEpochRange(epoch int32) {
 	if len(si.index) <= 1 {
@@ -319,10 +346,18 @@ func (pd *partData) maxTimestampBatch() *batchMeta {
 }
 
 // rebuildMaxTimestampMeta rebuilds maxTimestampSeg/maxTimestampIdx, each
-// batch's maxEarlierTimestamp, and maxTimestampSeen from the batchMeta
-// index. Called after loading segments from disk and after batches are
-// dropped, so the running max only covers batches that still exist.
+// batch's maxEarlierTimestamp, each segment's maxEarlierTimestamp, and
+// maxTimestampSeen from the batchMeta index and the segments' max
+// timestamps. Called after loading segments from disk and after batches
+// are dropped, so the running max only covers batches that still exist.
 func (pd *partData) rebuildMaxTimestampMeta() {
+	for si := range pd.segments {
+		seg := &pd.segments[si]
+		seg.maxEarlierTimestamp = seg.maxTimestamp
+		if si > 0 {
+			seg.maxEarlierTimestamp = max(seg.maxEarlierTimestamp, pd.segments[si-1].maxEarlierTimestamp)
+		}
+	}
 	pd.maxTimestampSeg = -1
 	pd.maxTimestampIdx = -1
 	pd.maxTimestampSeen = 0
@@ -384,27 +419,20 @@ func (pd *partData) pruneEmptySegments() {
 
 // eachBatchMeta calls fn for each batchMeta across all segments.
 func (pd *partData) eachBatchMeta(fn func(segIdx, metaIdx int, m *batchMeta) bool) {
-	pd.eachBatchMetaFrom(0, 0, fn)
-}
-
-// eachBatchMetaFrom calls fn for each batchMeta from the given position
-// onward, in offset order, until fn returns false.
-func (pd *partData) eachBatchMetaFrom(segIdx, metaIdx int, fn func(segIdx, metaIdx int, m *batchMeta) bool) {
-	for si := segIdx; si < len(pd.segments); si++ {
+	for si := range pd.segments {
 		seg := &pd.segments[si]
-		for mi := metaIdx; mi < len(seg.index); mi++ {
+		for mi := range seg.index {
 			if !fn(si, mi, &seg.index[mi]) {
 				return
 			}
 		}
-		metaIdx = 0
 	}
 }
 
 // findBatchMeta does a two-level binary search for the first batch where
 // field(batch) >= target. The field must be monotonically non-decreasing
-// across batches (e.g. epoch, maxEarlierTimestamp). Returns (-1, -1, nil)
-// if no batch satisfies the condition.
+// across batches (e.g. epoch). Returns (-1, -1, nil) if no batch
+// satisfies the condition.
 func (pd *partData) findBatchMeta(target int64, field func(*batchMeta) int64) (segIdx, metaIdx int, meta *batchMeta) {
 	// Level 1: find first segment whose last batch has field >= target.
 	si := sort.Search(len(pd.segments), func(i int) bool {
@@ -1084,7 +1112,9 @@ func (d *data) retentionBytes(t string) int64 {
 	return -1
 }
 
-func forEachBatchRecord(batch kmsg.RecordBatch, cb func(kmsg.Record) error) error {
+// forEachBatchRecord decodes the batch's records one at a time and calls
+// fn for each until fn returns false.
+func forEachBatchRecord(batch kmsg.RecordBatch, fn func(kmsg.Record) bool) error {
 	records, err := kgo.DefaultDecompressor().Decompress(
 		batch.Records,
 		kgo.CompressionCodecType(batch.Attributes&0x0007),
@@ -1098,8 +1128,8 @@ func forEachBatchRecord(batch kmsg.RecordBatch, cb func(kmsg.Record) error) erro
 		if err != nil {
 			return fmt.Errorf("corrupt batch: %w", err)
 		}
-		if err := cb(rec); err != nil {
-			return err
+		if !fn(rec) {
+			return nil
 		}
 		length, amt := binary.Varint(records)
 		records = records[length+int64(amt):]
@@ -1114,9 +1144,9 @@ func forEachBatchRecord(batch kmsg.RecordBatch, cb func(kmsg.Record) error) erro
 // if they could not be processed.
 func BatchRecords(b kmsg.RecordBatch) ([]kmsg.Record, error) {
 	var rs []kmsg.Record
-	err := forEachBatchRecord(b, func(r kmsg.Record) error {
+	err := forEachBatchRecord(b, func(r kmsg.Record) bool {
 		rs = append(rs, r)
-		return nil
+		return true
 	})
 	return rs, err
 }
@@ -1210,16 +1240,16 @@ func (c *Cluster) compact(pd *partData, topic string) {
 		if batch.Attributes&0x0020 != 0 || pd.isBatchAborted(batch) {
 			return true
 		}
-		_ = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) error {
+		_ = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) bool {
 			if rec.Key == nil {
-				return nil
+				return true
 			}
 			absOffset := batch.FirstOffset + int64(rec.OffsetDelta)
 			k := string(rec.Key)
 			if prev, exists := keyOffsets[k]; !exists || absOffset > prev {
 				keyOffsets[k] = absOffset
 			}
-			return nil
+			return true
 		})
 		return true
 	})
@@ -1253,28 +1283,28 @@ func (c *Cluster) compact(pd *partData, topic string) {
 		}
 
 		var surviving []kmsg.Record
-		_ = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) error {
+		_ = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) bool {
 			absOffset := batch.FirstOffset + int64(rec.OffsetDelta)
 
 			if rec.Key == nil {
-				return nil
+				return true
 			}
 
 			// Drop superseded records (a later record has the same key).
 			if keyOffsets[string(rec.Key)] > absOffset {
-				return nil
+				return true
 			}
 
 			// Drop expired tombstones (nil value).
 			if rec.Value == nil {
 				recTs := batch.FirstTimestamp + int64(rec.TimestampDelta)
 				if now-recTs >= deleteRetentionMs {
-					return nil
+					return true
 				}
 			}
 
 			surviving = append(surviving, rec)
-			return nil
+			return true
 		})
 
 		if len(surviving) == 0 {
