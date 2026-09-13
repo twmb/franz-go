@@ -283,7 +283,7 @@ func (p *producer) purgeTopics(topics []string) {
 			// of being buffered will immediately fail when it goes
 			// to buffer.
 			r.mu.Lock()
-			r.purged = true
+			r.purged = errPurged
 			r.mu.Unlock()
 
 			// Now we remove from the sink. When we do, the recBuf

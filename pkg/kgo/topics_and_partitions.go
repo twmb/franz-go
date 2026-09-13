@@ -548,18 +548,39 @@ type topicPartitionsData struct {
 	when               int64
 }
 
+// clearFailing lets every partition produce again after a metadata update
+// that kept our view of the topic. A produce retry waits for an update to
+// clear the partition's failing state (see handleRetryBatches), which the
+// merge does per partition; an update it ignores must do it here, or the
+// retry never goes out.
+func (d *topicPartitionsData) clearFailing(kind partitionKind) {
+	if kind != partitionKindProduce {
+		return
+	}
+	for _, tp := range d.partitions {
+		tp.records.clearFailing()
+	}
+}
+
 // unknownIDLimitReached reports whether the ID the topic holds looks dead:
 // some partition has been rejected recreationRejectionLimit times for it
-// and no partition has fetched under it successfully since it was taken.
-// The prior ID refusal in the metadata merge lifts on this. A success
-// anywhere vetoes it: a broker that lags and leads one partition rejects
-// the ID on that partition every round, and without the veto its report
-// of the old ID would be taken back every five rounds, restarting every
-// partition each time.
-func (d *topicPartitionsData) unknownIDLimitReached() bool {
+// and no partition has fetched or produced under it successfully since it
+// was taken (a count of -1). The prior ID refusal in the metadata merge
+// lifts on this. A success anywhere vetoes it: a broker that lags and
+// leads one partition rejects the ID on that partition every round, and
+// without the veto its report of the old ID would be taken back every five
+// rounds, restarting every partition each time.
+func (d *topicPartitionsData) unknownIDLimitReached(kind partitionKind) bool {
 	var limit bool
 	for _, tp := range d.partitions {
-		switch n := tp.cursor.unknownIDFails.Load(); {
+		var n int32
+		switch kind {
+		case partitionKindProduce:
+			n = tp.records.unknownIDFails()
+		case partitionKindConsume:
+			n = tp.cursor.unknownIDFails.Load()
+		}
+		switch {
 		case n < 0:
 			return false
 		case n >= recreationRejectionLimit:
@@ -775,8 +796,10 @@ type topicPartitionData struct {
 // migrateProductionTo is called on metadata update if a topic partition's sink
 // has changed. This moves record production from one sink to the other; this
 // must be done such that records produced during migration follow those
-// already buffered.
-func (old *topicPartition) migrateProductionTo(new *topicPartition) { //nolint:revive // old/new naming makes this clearer
+// already buffered. The topic's ID is set while we hold the record buffer's
+// lock for the sink change, so a partition takes a recreated topic's ID here
+// as well.
+func (old *topicPartition) migrateProductionTo(new *topicPartition, id [16]byte) { //nolint:revive // old/new naming makes this clearer
 	// First, remove our record buffer from the old sink.
 	old.records.sink.removeRecBuf(old.records)
 
@@ -788,6 +811,7 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition) { //nolint:r
 	old.records.mu.Lock() // guard setting sink and topic partition data
 	old.records.sink = new.records.sink
 	old.records.topicPartitionData = new.topicPartitionData
+	old.records.setTopicID(id)
 	// okOnSink tracks "the last response on this recBuf's current sink
 	// was a success", which gates >1 in-flight per #223. After a sink
 	// change, a stale true from the old sink could allow pipelining two
@@ -1312,7 +1336,9 @@ func (k *kip951move) doMove(cl *Client) {
 					"old_leader", old.leader,
 					"old_leader_epoch", old.leaderEpoch,
 				)
-				old.migrateProductionTo(new)
+				// The ID is the one we store below, so the record
+				// buffer and the stored data stay consistent.
+				old.migrateProductionTo(new, lr.r.id)
 			} else {
 				recBuf.clearFailing()
 			}

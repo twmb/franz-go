@@ -834,18 +834,16 @@ func (cl *Client) mergeTopicPartitions(
 
 	// Topic IDs are random and never reused, so a new ID for a name we
 	// hold means the topic was deleted and recreated. We adopt an ID the
-	// topic never held immediately; a partition being consumed restarts
-	// below. We refuse an ID the topic held previously until the ID we
-	// hold has been rejected recreationRejectionLimit times: a broker
-	// that has not yet learned of the recreation still reports the old
-	// ID.
+	// topic never held immediately: a partition being consumed restarts
+	// below, and one being produced to continues under the new ID. We
+	// refuse an ID the topic held previously until the ID we hold has
+	// been rejected recreationRejectionLimit times: a broker that has
+	// not yet learned of the recreation still reports the old ID.
 	now := time.Now()
 	lv.priorIDs.dropExpired(now)
 	var recreated bool
 	switch {
-	case kind == partitionKindProduce,
-		mt.id == lv.id,
-		lv.id == noID:
+	case mt.id == lv.id, lv.id == noID: // same ID, or no ID yet: copy the ID over
 		lv.id = mt.id
 	case mt.id == noID:
 		// A broker that reports no ID cannot tell us whether the topic
@@ -860,7 +858,7 @@ func (cl *Client) mergeTopicPartitions(
 		// Share cursors keep their ID: migrateShareCursorTo copies the
 		// cursor. Share consuming does not restart on a recreation.
 		lv.id = mt.id
-	case lv.priorIDs.has(mt.id) && !lv.unknownIDLimitReached():
+	case lv.priorIDs.has(mt.id) && !lv.unknownIDLimitReached(kind):
 		// The broker still reports an ID the topic held before, so it
 		// still lags. We keep refusing the ID for as long as any broker
 		// reports it, and forget it once none has for the expiry.
@@ -870,9 +868,17 @@ func (cl *Client) mergeTopicPartitions(
 			"our_id", topicID(lv.id),
 		)
 		lv.priorIDs.refresh(mt.id, now)
+		lv.clearFailing(kind)
 		return
 	default:
-		cl.cfg.logger.Log(LogLevelInfo, "topic recreation detected, adopting the new topic ID",
+		what := "topic recreation detected, adopting the new topic ID"
+		switch kind {
+		case partitionKindProduce:
+			what += " for producing"
+		case partitionKindConsume:
+			what += " for consuming"
+		}
+		cl.cfg.logger.Log(LogLevelInfo, what,
 			"topic", topic,
 			"old_id", topicID(lv.id),
 			"new_id", topicID(mt.id),
@@ -886,6 +892,24 @@ func (cl *Client) mergeTopicPartitions(
 		lv.priorIDs = lv.priorIDs.without(mt.id)
 		recreated = true
 		cl.sawRecreation.Store(true)
+
+		// The new topic's log has no producer state for us, and the
+		// idempotent producer's next batch would carry a continued
+		// sequence number: Kafka 2.5 to 4.4 accept it and 4.5 rejects it
+		// as out of order (KAFKA-15591). We bump the producer epoch
+		// locally instead (KIP-360, as after data loss), so that the
+		// first batch to every partition of the new topic starts at
+		// sequence 0, which every version accepts. The bump waits for
+		// requests in flight, so a batch staged behind one rejected for
+		// the old ID cannot land before it. This runs before any
+		// partition takes the new ID, so no request goes out under the
+		// new ID at the old epoch. A transaction is handled below: its
+		// writes to the old topic are gone and it must abort.
+		if isProduce && cl.cfg.txnID == nil && !cl.cfg.disableIdempotency {
+			if cur := cl.producer.id.Load().(*producerID); cur.err == nil && cur.id >= 0 {
+				cl.failProducerID(cur.id, cur.epoch, errReloadProducerID)
+			}
+		}
 	}
 
 	// The partitions are built after the ID is decided so that every one
@@ -983,7 +1007,15 @@ func (cl *Client) mergeTopicPartitions(
 			*newTP = *oldTP
 			newTP.loadErr = err
 			if isProduce {
-				newTP.records.bumpRepeatedLoadErr(newTP.loadErr)
+				// A recreated topic's partitions can load with an
+				// error while their leaders are elected. The
+				// partition takes the topic's ID now, so that it
+				// does not produce under the old one meanwhile.
+				rb := newTP.records
+				rb.mu.Lock()
+				rb.setTopicID(lv.id)
+				rb.mu.Unlock()
+				rb.bumpRepeatedLoadErr(newTP.loadErr)
 			} else if !kerr.IsRetriable(newTP.loadErr) || cl.cfg.keepRetryableFetchErrors {
 				cl.consumer.addFakeReadyForDraining(topic, int32(part), newTP.loadErr, "metadata refresh has a load error on this partition")
 			}
@@ -997,6 +1029,22 @@ func (cl *Client) mergeTopicPartitions(
 		}
 
 		switch kind {
+		case partitionKindProduce:
+			// A recreated topic's leader epoch restarts from 0, so it is
+			// often below the old topic's. The partition takes the new
+			// topic's leader and ID now rather than going through the
+			// epoch comparison below, which would keep the old leader,
+			// and the old ID, for maxEpochRewinds updates.
+			if recreated {
+				if newTP.topicPartitionData == oldTP.topicPartitionData {
+					newTP.records = oldTP.records
+					newTP.records.setTopicIDClearFailing(lv.id)
+				} else {
+					oldTP.migrateProductionTo(newTP, lv.id)
+				}
+				continue
+			}
+
 		case partitionKindConsume:
 			if swapCursor() {
 				if from, ok := oldTP.swapRecreatedCursorTo(newTP, lv.id, css); ok {
@@ -1095,8 +1143,15 @@ func (cl *Client) mergeTopicPartitions(
 			}
 			switch kind {
 			case partitionKindProduce:
+				// The partition takes the topic's ID and clears its
+				// failing state under one lock. The ID only changes here
+				// when the topic gained one, or when the partition was
+				// skipped for a load error on the adopting update.
 				newTP.records = oldTP.records
-				newTP.records.clearFailing() // always clear failing state for producing after meta update
+				// The exposure return is ignored: this arm runs only
+				// when the ID did not change, so setTopicID reports
+				// no exposure. The recreated arm above counts it.
+				newTP.records.setTopicIDClearFailing(lv.id)
 			case partitionKindShare:
 				newTP.shareCursor = oldTP.shareCursor
 			default:
@@ -1115,7 +1170,9 @@ func (cl *Client) mergeTopicPartitions(
 			}
 			switch kind {
 			case partitionKindProduce:
-				oldTP.migrateProductionTo(newTP) // migration clears failing state
+				// Ignored for the same reason as the sibling call
+				// above: no ID change here, so no exposure to report.
+				oldTP.migrateProductionTo(newTP, lv.id)
 			case partitionKindShare:
 				oldTP.migrateShareCursorTo(cl, newTP)
 			default:
