@@ -134,15 +134,13 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 					}
 					pd := c.data.tps.mkp(rt.Topic, partNum, func() *partData {
 						return &partData{
-							p:               partNum,
-							dir:             defLogDir,
-							maxTimestampSeg: -1,
-							maxTimestampIdx: -1,
-							leader:          leader,
-							followers:       followers,
-							watch:           make(map[*watchFetch]struct{}),
-							shareWatch:      make(map[*watchShareFetch]struct{}),
-							createdAt:       time.Now(),
+							p:          partNum,
+							dir:        defLogDir,
+							leader:     leader,
+							followers:  followers,
+							watch:      make(map[*watchFetch]struct{}),
+							shareWatch: make(map[*watchShareFetch]struct{}),
+							createdAt:  time.Now(),
 						}
 					})
 					pd.t = rt.Topic

@@ -869,7 +869,7 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 			}
 			si.index = append(si.index, meta)
 			si.updateEpochRange(b.epoch)
-			si.updateMaxTimestamp(b.MaxTimestamp, pos == 0)
+			si.updateMaxBatch(meta, pos == 0)
 			pos += batchSize
 			si.size += batchSize
 		}
@@ -1512,9 +1512,10 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 		}
 		result = append(result, batch)
 		if seg != nil {
-			seg.index = append(seg.index, batch.meta(int64(pos)))
+			meta := batch.meta(int64(pos))
+			seg.index = append(seg.index, meta)
 			seg.updateEpochRange(batch.epoch)
-			seg.updateMaxTimestamp(rb.MaxTimestamp, pos == 0)
+			seg.updateMaxBatch(meta, pos == 0)
 		}
 		pos += batchSize
 		batchIdx++

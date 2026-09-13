@@ -4856,54 +4856,113 @@ func TestIssue1422(t *testing.T) {
 
 // TestListOffsetsMaxTimestampFirstRecord verifies ListOffsets -3 (KIP-734)
 // answers with the first record, in offset order, that carries the
-// partition's max timestamp: a real broker picks the earliest batch that
-// reached the max (RecordBatch.offsetOfMaxTimestamp). kfake previously
-// answered with the last offset of the last batch that reached it.
+// partition's max timestamp: a real broker picks the segment with the
+// greatest max timestamp (the earliest on a tie), the first batch in it
+// to reach that max, and the first record in that batch carrying it
+// (UnifiedLog.fetchOffsetByTimestamp, RecordBatch.offsetOfMaxTimestamp).
+// kfake previously answered with the last offset of the last batch that
+// reached the max.
+//
+// The broker does not check the log start offset for -3, and a segment's
+// max still counts records deleted from below it, so after DeleteRecords
+// the answer can be a deleted record and depends on where the segment
+// boundaries fall. The checks after the deletes expect that.
 func TestListOffsetsMaxTimestampFirstRecord(t *testing.T) {
 	t.Parallel()
-	const topic = "list-offsets-max-ts"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), BrokerConfigs(map[string]string{"log.segment.bytes": "1"}))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	for _, tc := range []struct {
+		name     string
+		segBytes string
+	}{
+		{"one_segment", ""},
+		{"segment_per_batch", "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const topic = "list-offsets-max-ts"
+			opts := []Opt{NumBrokers(1), SeedTopics(1, topic)}
+			if tc.segBytes != "" {
+				opts = append(opts, BrokerConfigs(map[string]string{"log.segment.bytes": tc.segBytes}))
+			}
+			c := newCluster(t, opts...)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 
-	// One batch per inner slice, one segment per batch. The max
-	// timestamp 30 first appears at offset 1 and repeats at offsets 2
-	// and 4.
-	batches := [][]int64{
-		{10, 30, 30}, // offsets 0-2
-		{20, 30},     // offsets 3-4
-		{25},         // offset 5
-	}
-	pcl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.ProducerLinger(time.Minute))
-	for _, tss := range batches {
-		for _, ts := range tss {
-			pcl.Produce(ctx, &kgo.Record{Value: []byte("v"), Timestamp: time.UnixMilli(ts)}, nil)
-		}
-		if err := pcl.Flush(ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
+			// One batch per inner slice. The max timestamp 30 first
+			// appears at offset 1 and repeats at offsets 2 and 4.
+			batches := [][]int64{
+				{10, 30, 30}, // offsets 0-2
+				{20, 30},     // offsets 3-4
+				{25},         // offset 5
+			}
+			pcl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.ProducerLinger(time.Minute))
+			for _, tss := range batches {
+				for _, ts := range tss {
+					pcl.Produce(ctx, &kgo.Record{Value: []byte("v"), Timestamp: time.UnixMilli(ts)}, nil)
+				}
+				if err := pcl.Flush(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pd, _ := c.data.tps.getp(topic, 0)
+			if pd.totalBatches() != len(batches) || (tc.segBytes != "" && len(pd.segments) != len(batches)) {
+				t.Fatalf("produced %d batches in %d segments", pd.totalBatches(), len(pd.segments))
+			}
 
-	req := kmsg.NewPtrListOffsetsRequest()
-	rt := kmsg.NewListOffsetsRequestTopic()
-	rt.Topic = topic
-	rp := kmsg.NewListOffsetsRequestTopicPartition()
-	rp.Timestamp = -3
-	rt.Partitions = append(rt.Partitions, rp)
-	req.Topics = append(req.Topics, rt)
-	resp, err := req.RequestWith(ctx, newPlainClient(t, c))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
-		t.Fatal("missing partition response")
-	}
-	p := resp.Topics[0].Partitions[0]
-	if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-		t.Fatal(err)
-	}
-	if p.Offset != 1 || p.Timestamp != 30 {
-		t.Errorf("got offset %d timestamp %d, want offset 1 timestamp 30", p.Offset, p.Timestamp)
+			cl := newPlainClient(t, c)
+			check := func(wantOffset int64) {
+				t.Helper()
+				req := kmsg.NewPtrListOffsetsRequest()
+				rt := kmsg.NewListOffsetsRequestTopic()
+				rt.Topic = topic
+				rp := kmsg.NewListOffsetsRequestTopicPartition()
+				rp.Timestamp = -3
+				rt.Partitions = append(rt.Partitions, rp)
+				req.Topics = append(req.Topics, rt)
+				resp, err := req.RequestWith(ctx, cl)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+					t.Fatal("missing partition response")
+				}
+				p := resp.Topics[0].Partitions[0]
+				if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+					t.Fatal(err)
+				}
+				if p.Offset != wantOffset || p.Timestamp != 30 {
+					t.Errorf("got offset %d timestamp %d, want offset %d timestamp 30", p.Offset, p.Timestamp, wantOffset)
+				}
+			}
+			check(1)
+
+			adm := kadm.NewClient(cl)
+			deleteTo := func(at int64) {
+				t.Helper()
+				del, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: at}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := del.Error(); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// Offsets 0 and 1 are deleted, but offset 1 is still the
+			// first record at the max in its segment's file.
+			deleteTo(2)
+			check(1)
+
+			// Batch 0 is fully deleted. With one batch per segment its
+			// segment is gone, so the answer moves to offset 4 in the
+			// next segment. With one segment, the file still holds
+			// batch 0 and the answer stays at offset 1.
+			deleteTo(3)
+			if tc.segBytes != "" {
+				check(4)
+			} else {
+				check(1)
+			}
+		})
 	}
 }
 
