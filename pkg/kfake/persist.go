@@ -889,12 +889,7 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 	var allEntries []groupLogEntry
 	for _, g := range c.groups.gs {
-		var entries []groupLogEntry
-		g.waitControl(func() {
-			g.drainReqCh()
-			entries = c.collectGroupEntries(g)
-		})
-		allEntries = append(allEntries, entries...)
+		allEntries = append(allEntries, c.collectGroupEntries(g)...)
 	}
 
 	path := filepath.Join(dir, "groups.log")
@@ -917,8 +912,6 @@ func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 }
 
 // collectGroupEntries gathers all persistable state from a group.
-// This must be called from within the group's manage goroutine via
-// waitControl, OR after the group has been stopped (shutdown).
 func (*Cluster) collectGroupEntries(g *group) []groupLogEntry {
 	var entries []groupLogEntry
 
@@ -1655,7 +1648,6 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 			g.generation = meta.Generation
 		}
 		c.groups.gs[name] = g
-		go g.manage(nil) // loaded from disk - no firstJoin cleanup
 	}
 
 	// Apply commits
@@ -1666,7 +1658,6 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 		if !ok {
 			g = c.groups.newGroup(ck.group)
 			c.groups.gs[ck.group] = g
-			go g.manage(nil) // loaded from disk - no firstJoin cleanup
 		}
 		oc := offsetCommit{
 			offset:      entry.Offset,
@@ -1676,9 +1667,7 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 		if entry.LastCommit != nil {
 			oc.lastCommit = time.UnixMilli(*entry.LastCommit)
 		}
-		g.waitControl(func() {
-			g.commits.set(ck.topic, ck.part, oc)
-		})
+		g.commits.set(ck.topic, ck.part, oc)
 	}
 
 	// Apply static members
@@ -1689,12 +1678,10 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 		if !ok {
 			continue
 		}
-		g.waitControl(func() {
-			if g.staticMembers == nil {
-				g.staticMembers = make(map[string]string)
-			}
-			g.staticMembers[sk.instance] = entry.MemberID
-		})
+		if g.staticMembers == nil {
+			g.staticMembers = make(map[string]string)
+		}
+		g.staticMembers[sk.instance] = entry.MemberID
 	}
 
 	return nil
@@ -2222,8 +2209,7 @@ type (
 func (c *Cluster) saveSessionState() error {
 	ss := sessionState{ShutdownAt: time.Now()}
 	for _, g := range c.groups.gs {
-		g.waitControl(func() {
-			g.drainReqCh()
+		{
 			c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: group=%s state=%s members=%d consumerMembers=%d",
 				g.name, g.state, len(g.members), len(g.consumerMembers))
 			switch {
@@ -2281,7 +2267,7 @@ func (c *Cluster) saveSessionState() error {
 				}
 				ss.ConsumerGroups[g.name] = sg
 			}
-		})
+		}
 	}
 	// Save share group partition state (SPSO + per-record tracking)
 	// AND members. Persisting members is what lets a post-restart
@@ -2471,11 +2457,9 @@ func (c *Cluster) loadSessionState() error {
 			c.cfg.logger.Logf(LogLevelInfo, "loadSessionState: classic group %s not found in groups.gs", name)
 			continue
 		}
-		g.waitControl(func() {
-			g.restoreClassicMembers(ss.ShutdownAt, sg)
-			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored classic group=%s members=%d state=%s",
-				name, len(g.members), g.state)
-		})
+		g.restoreClassicMembers(ss.ShutdownAt, sg)
+		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored classic group=%s members=%d state=%s",
+			name, len(g.members), g.state)
 	}
 
 	for name, sg := range ss.ConsumerGroups {
@@ -2484,11 +2468,9 @@ func (c *Cluster) loadSessionState() error {
 			c.cfg.logger.Logf(LogLevelInfo, "loadSessionState: consumer group %s not found in groups.gs", name)
 			continue
 		}
-		g.waitControl(func() {
-			g.restoreConsumerMembers(ss.ShutdownAt, sg)
-			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored consumer group=%s members=%d state=%s",
-				name, len(g.consumerMembers), g.state)
-		})
+		g.restoreConsumerMembers(ss.ShutdownAt, sg)
+		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored consumer group=%s members=%d state=%s",
+			name, len(g.consumerMembers), g.state)
 	}
 
 	// Restore share group partition state AND members. The share group

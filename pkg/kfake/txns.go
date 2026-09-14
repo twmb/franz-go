@@ -460,15 +460,10 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 	if g != nil {
 		if req.Version >= 3 && (req.MemberID != "" || req.Generation != -1) {
 			var errCode int16
-			if !g.waitControl(func() {
-				if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
-					errCode = err.Code
-					return
-				}
+			if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
+				errCode = err.Code
+			} else {
 				errCode = g.validateMemberGeneration(req.MemberID, req.Generation)
-			}) {
-				doneall(kerr.GroupIDNotFound.Code)
-				return resp
 			}
 			if errCode != 0 {
 				doneall(errCode)
@@ -840,12 +835,9 @@ func (pidinf *pidinfo) endTx(commit bool) {
 			if g == nil {
 				g = pidinf.pids.c.groups.newGroup(groupID)
 				pidinf.pids.c.groups.gs[groupID] = g
-				go g.manage(func() {})
 			}
-			g.waitControl(func() {
-				groupOffsets.each(func(t string, p int32, oc *offsetCommit) {
-					g.commitAndPersist(t, p, *oc)
-				})
+			groupOffsets.each(func(t string, p int32, oc *offsetCommit) {
+				g.commitAndPersist(t, p, *oc)
 			})
 		}
 	}

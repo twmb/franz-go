@@ -31,6 +31,11 @@ type (
 		wakeCh       chan *slept
 		watchFetchCh chan *watchFetch
 
+		// groupWorkCh carries timer-driven group work back to run(),
+		// which owns all group state. Timers cannot touch that state
+		// themselves, so they hand us a closure instead.
+		groupWorkCh chan func()
+
 		controlMu      sync.Mutex
 		control        map[int16][]*controlCtx
 		currentBroker  *broker
@@ -151,6 +156,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		reqCh:        make(chan *clientReq, 20),
 		wakeCh:       make(chan *slept, 10),
 		watchFetchCh: make(chan *watchFetch, 20),
+		groupWorkCh:  make(chan func(), 16),
 		control:      make(map[int16][]*controlCtx),
 		controlSleep: make(chan sleepChs, 1),
 
@@ -369,21 +375,20 @@ func (c *Cluster) Close() {
 }
 
 // drainReqChForShutdown processes any pending OffsetCommit requests in
-// c.reqCh, dispatching them to the appropriate group goroutines. This
-// is called at the start of the shutdown admin function, before
-// saveToDisk. Without this, Go's select in run() may pick adminCh over
-// reqCh, causing committed offsets to be lost across restarts.
+// c.reqCh. This is called at the start of the shutdown admin function,
+// before saveToDisk. Without this, Go's select in run() may pick adminCh
+// over reqCh, causing committed offsets to be lost across restarts.
 //
-// TxnOffsetCommitRequest is not handled here: transactional offset
-// staging is processed inline in run() (not dispatched to a group
-// goroutine), so any in-flight TxnOffsetCommit simply fails on the
-// client side and the client must abort/retry the transaction.
+// TxnOffsetCommitRequest is not handled here: transactional offsets are
+// staged on the producer ID and only mirrored into the group when the
+// transaction commits, so any in-flight TxnOffsetCommit simply fails on
+// the client side and the client must abort/retry the transaction.
 func (c *Cluster) drainReqChForShutdown() {
 	for {
 		select {
 		case creq := <-c.reqCh:
 			if _, ok := creq.kreq.(*kmsg.OffsetCommitRequest); ok {
-				c.groups.handleOffsetCommit(creq)
+				creq.reply(c.groups.handleOffsetCommit(creq))
 			}
 		default:
 			return
@@ -432,6 +437,12 @@ func (c *Cluster) run() {
 			c.compactTicker.Stop()
 		}
 		c.offsetExpireTicker.Stop()
+		// An unfired timer holds its group, and the group holds the
+		// cluster: without this a closed cluster and all its data stay
+		// reachable until the last session timeout expires.
+		for _, g := range c.groups.gs {
+			g.stopTimers()
+		}
 	}()
 	c.offsetExpireTicker = time.NewTicker(time.Duration(c.offsetsRetentionCheckIntervalMs()) * time.Millisecond)
 outer:
@@ -482,6 +493,10 @@ outer:
 
 		case <-c.pids.txTimer.C:
 			c.pids.handleTimeout()
+			continue
+
+		case fn := <-c.groupWorkCh:
+			fn()
 			continue
 
 		case <-c.compactTickerC():
@@ -549,6 +564,15 @@ outer:
 				select {
 				case admin := <-c.adminCh:
 					admin()
+					continue inner
+				case fn := <-c.groupWorkCh:
+					fn()
+					continue inner
+				case <-c.compactTickerC():
+					c.compactAll()
+					continue inner
+				case <-c.offsetExpireTicker.C:
+					c.expireGroupOffsets()
 					continue inner
 				case res := <-s.res:
 					c.finishSleptControl(s)
@@ -741,10 +765,10 @@ outer:
 			s.continueDequeue <- struct{}{}
 		}
 		if kresp == nil && err == nil {
-			// Group requests (JoinGroup, SyncGroup, Heartbeat, etc.)
-			// are dispatched to goroutines that send the response
-			// later via creq.reply(). The mute stays held until
-			// cc.write() processes the response.
+			// A group request (JoinGroup, SyncGroup) can park in
+			// the group as a member's waitingReply; a later state
+			// transition on this loop replies to it. The mute stays
+			// held until cc.write() processes the response.
 			//
 			// acks=0 produce requests have no response at all, but
 			// cc.write() serializes responses by sequence number;
@@ -926,6 +950,15 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 			select {
 			case admin := <-c.adminCh:
 				admin()
+				continue
+			case fn := <-c.groupWorkCh:
+				fn()
+				continue
+			case <-c.compactTickerC():
+				c.compactAll()
+				continue
+			case <-c.offsetExpireTicker.C:
+				c.expireGroupOffsets()
 				continue
 			case res := <-res:
 				c.maybePopControl(res.handled, cctx)
@@ -1166,8 +1199,8 @@ func (bs *bsleep) wait() {
 
 // For out of order control, all control functions run concurrently, serially.
 // Whenever they wake up, they send themselves down setWake. waitSet manages
-// handling the wake up and interacting with the serial manage goroutine to
-// run everything properly.
+// handling the wake up and scheduling the control function back onto the run
+// loop to run everything properly.
 func (bs *bsleep) waitSet() {
 	for {
 		bs.mu.Lock()
@@ -1526,19 +1559,8 @@ func (c *Cluster) expireGroupOffsets() {
 	retentionMs := c.offsetsRetentionMs()
 	for name, g := range c.groups.gs {
 		unstable := c.pids.hasUnstableOffsets(name)
-		var shouldDelete bool
-		if !g.waitControl(func() {
-			shouldDelete = g.expireOffsets(retentionMs, unstable)
-			if shouldDelete {
-				g.quitOnce()
-			}
-		}) {
-			continue
-		}
-		select {
-		case <-g.quitCh:
-			delete(c.groups.gs, name)
-		default:
+		if g.expireOffsets(retentionMs, unstable) {
+			g.kill()
 		}
 	}
 }

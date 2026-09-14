@@ -8,7 +8,6 @@ import (
 	"math"
 	"regexp"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -45,9 +44,6 @@ type (
 		protocols    map[string]int
 		protocol     string
 
-		reqCh     chan *clientReq
-		controlCh chan func()
-
 		nJoining int
 
 		tRebalance     *time.Timer
@@ -59,9 +55,6 @@ type (
 		consumerMembers map[string]*consumerMember
 		partitionEpochs map[uuid]map[int32]int32 // (topicID, partition) -> owning member's epoch; -1 or absent means free
 		lastTopicMeta   topicMetaSnap            // last snapshot received, for recomputation on member removal
-
-		quit   sync.Once
-		quitCh chan struct{}
 	}
 
 	groupMember struct {
@@ -197,31 +190,24 @@ func (c *Cluster) snapshotTopicMeta() topicMetaSnap {
 }
 
 // dropGroupCommits removes every group's committed offsets for a deleted
-// topic, as Kafka and Redpanda do. Each group mutates its commits on its own
-// manage goroutine; this runs after the topic is gone from c.data, so a
-// commit racing the delete on that goroutine is dropped too.
+// topic, as Kafka and Redpanda do. The commits are gone when we return, so
+// the DeleteTopics response we are answering cannot beat the drop.
 func (c *Cluster) dropGroupCommits(topic string) {
 	for _, g := range c.groups.gs {
-		select {
-		case g.controlCh <- func() {
-			for part := range g.commits[topic] {
-				g.deleteCommitAndPersist(topic, part)
-			}
-		}:
-		case <-g.quitCh:
-		case <-g.c.die:
+		for part := range g.commits[topic] {
+			g.deleteCommitAndPersist(topic, part)
 		}
 	}
 }
 
 // notifyTopicChange recomputes target assignments for all consumer and
 // share groups after a topic is created, deleted, or has partitions
-// added. We capture a fresh metadata snapshot here (in the cluster run
-// loop where c.data is safe to read) and pass it to the manage
-// goroutine so that the recomputation always sees the latest topics.
-// This avoids a race where the manage goroutine could recompute using
-// a stale snapshot from a heartbeat that was enqueued before the topic
-// change.
+// added. Every group is recomputed before we return, so the response to
+// the request that changed the topic cannot beat the recomputation.
+//
+// Note that on a delete we run BEFORE the topic leaves c.data: DeleteTopics
+// drops it in a deferred block that runs after us, so the recomputation
+// here still sees the topic and still assigns its partitions.
 //
 // The generation bump matches Kafka's behavior where topic changes bump
 // the group epoch. This ensures heartbeat responses keep re-sending the
@@ -230,26 +216,15 @@ func (c *Cluster) dropGroupCommits(topic string) {
 // Without this, a client that receives an assignment with an unknown
 // topic ID (metadata not yet refreshed) would miss the assignment
 // permanently because the server recorded it as delivered.
-//
-// This blocks the cluster run loop until each group's manage goroutine
-// processes the notification. This is safe: the manage goroutine never
-// calls c.admin() and replies go to cc.respCh (drained by the
-// connection write goroutine, not the run loop).
 func (c *Cluster) notifyTopicChange() {
 	snap := c.snapshotTopicMeta()
 	for _, g := range c.groups.gs {
-		select {
-		case g.controlCh <- func() {
-			if len(g.consumerMembers) > 0 {
-				g.groupEpoch++
-				g.lastTopicMeta = snap
-				g.computeTargetAssignment(snap)
-				g.updateConsumerStateField()
-				g.persistMeta848()
-			}
-		}:
-		case <-g.quitCh:
-		case <-g.c.die:
+		if len(g.consumerMembers) > 0 {
+			g.groupEpoch++
+			g.lastTopicMeta = snap
+			g.computeTargetAssignment(snap)
+			g.updateConsumerStateField()
+			g.persistMeta848()
 		}
 	}
 	for _, sg := range c.shareGroups.gs {
@@ -305,17 +280,28 @@ func (gs *groups) newGroup(name string) *group {
 		pending:       make(map[string]*groupMember),
 		staticMembers: make(map[string]string),
 		protocols:     make(map[string]int),
-		reqCh:         make(chan *clientReq, 16),
-		controlCh:     make(chan func(), 1), // buffer 1: holds a pending notifyTopicChange
-		quitCh:        make(chan struct{}),
 	}
 }
 
-// handleJoin completely hijacks the incoming request.
-func (gs *groups) handleJoin(creq *clientReq) {
+// newOrExisting returns the group for name, creating it if it does not
+// exist. The second return is whether we created it: if the very first
+// request to a new group is invalid, the caller drops the group again.
+func (gs *groups) newOrExisting(name string) (*group, bool) {
 	if gs.gs == nil {
 		gs.gs = make(map[string]*group)
 	}
+	if g := gs.gs[name]; g != nil {
+		return g, false
+	}
+	g := gs.newGroup(name)
+	gs.gs[name] = g
+	return g, true
+}
+
+// handleJoin creates the group if needed and dispatches the join. A nil
+// response means the member is parked in the join barrier and will be
+// replied to when the rebalance completes.
+func (gs *groups) handleJoin(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.JoinGroupRequest)
 
 	// Group type exclusivity: if this group ID is already a share
@@ -325,90 +311,62 @@ func (gs *groups) handleJoin(creq *clientReq) {
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
 		resp.MemberID = ""
 		resp.Generation = -1
-		creq.cc.respCh <- clientResp{kresp: resp, corr: creq.corr, seq: creq.seq}
-		return
+		return resp
 	}
 
-start:
-	g := gs.gs[req.Group]
-	if g == nil {
-		g = gs.newGroup(req.Group)
-		waitJoin := make(chan struct{})
-		gs.gs[req.Group] = g
-		go g.manage(func() { close(waitJoin) })
-		defer func() { <-waitJoin }()
-	}
-	select {
-	case g.reqCh <- creq:
-	case <-g.quitCh:
+	g, isNew := gs.newOrExisting(req.Group)
+	kresp, ok := g.handleJoin(creq)
+	if isNew && !ok {
 		delete(gs.gs, req.Group)
-		goto start
-	case <-g.c.die:
 	}
+	return kresp
 }
 
-// Returns true if the request is hijacked and handled, otherwise false if the
-// group does not exist.
-func (gs *groups) handleHijack(group string, creq *clientReq) bool {
+// Returns the response and true if the group exists, otherwise false.
+func (gs *groups) handleHijack(group string, fn func(*group) kmsg.Response) (kmsg.Response, bool) {
 	if gs.gs == nil {
-		return false
+		return nil, false
 	}
 	g := gs.gs[group]
 	if g == nil {
-		return false
+		return nil, false
 	}
-	select {
-	case g.reqCh <- creq:
-		return true
-	case <-g.quitCh:
-		return false
-	case <-g.c.die:
-		return false
-	}
+	return fn(g), true
 }
 
-func (gs *groups) handleSync(creq *clientReq) bool {
-	return gs.handleHijack(creq.kreq.(*kmsg.SyncGroupRequest).Group, creq)
+func (gs *groups) handleSync(creq *clientReq) (kmsg.Response, bool) {
+	return gs.handleHijack(creq.kreq.(*kmsg.SyncGroupRequest).Group, func(g *group) kmsg.Response { return g.handleSync(creq) })
 }
 
-func (gs *groups) handleHeartbeat(creq *clientReq) bool {
-	return gs.handleHijack(creq.kreq.(*kmsg.HeartbeatRequest).Group, creq)
+func (gs *groups) handleHeartbeat(creq *clientReq) (kmsg.Response, bool) {
+	return gs.handleHijack(creq.kreq.(*kmsg.HeartbeatRequest).Group, func(g *group) kmsg.Response { return g.handleHeartbeat(creq) })
 }
 
-func (gs *groups) handleLeave(creq *clientReq) bool {
-	return gs.handleHijack(creq.kreq.(*kmsg.LeaveGroupRequest).Group, creq)
+func (gs *groups) handleLeave(creq *clientReq) (kmsg.Response, bool) {
+	return gs.handleHijack(creq.kreq.(*kmsg.LeaveGroupRequest).Group, func(g *group) kmsg.Response { return g.handleLeave(creq) })
 }
 
-func (gs *groups) handleOffsetCommit(creq *clientReq) {
-	if gs.gs == nil {
-		gs.gs = make(map[string]*group)
-	}
+func (gs *groups) handleOffsetCommit(creq *clientReq) *kmsg.OffsetCommitResponse {
 	req := creq.kreq.(*kmsg.OffsetCommitRequest)
-	// Snapshot topic metadata here (cluster goroutine, where c.data is
-	// safe to read) so the group goroutine can validate that committed
+	// Snapshot topic metadata so we can validate that committed
 	// partitions exist, like a real broker's API layer does before the
 	// coordinator sees the commit.
 	creq.topicMeta = gs.c.snapshotTopicMeta()
-start:
-	g := gs.gs[req.Group]
-	if g == nil {
-		g = gs.newGroup(req.Group)
-		waitCommit := make(chan struct{})
-		gs.gs[req.Group] = g
-		go g.manage(func() { close(waitCommit) })
-		defer func() { <-waitCommit }()
-	}
-	select {
-	case g.reqCh <- creq:
-	case <-g.quitCh:
+	g, isNew := gs.newOrExisting(req.Group)
+	kresp, ok := g.dispatchOffsetCommit(creq)
+	if isNew && !ok {
 		delete(gs.gs, req.Group)
-		goto start
-	case <-g.c.die:
 	}
+	// Never nil: a commit is always answered, never parked. A nil
+	// pointer here becomes a non-nil kmsg.Response in the caller, which
+	// the loop would then try to write.
+	return kresp
 }
 
-func (gs *groups) handleOffsetDelete(creq *clientReq) bool {
-	return gs.handleHijack(creq.kreq.(*kmsg.OffsetDeleteRequest).Group, creq)
+func (gs *groups) handleOffsetDelete(creq *clientReq) (kmsg.Response, bool) {
+	// handleOffsetDelete is never nil: a delete is always answered, never
+	// parked. A nil pointer would become a non-nil kmsg.Response here.
+	return gs.handleHijack(creq.kreq.(*kmsg.OffsetDeleteRequest).Group, func(g *group) kmsg.Response { return g.handleOffsetDelete(creq) })
 }
 
 func (gs *groups) handleList(creq *clientReq) *kmsg.ListGroupsResponse {
@@ -423,20 +381,18 @@ func (gs *groups) handleList(creq *clientReq) *kmsg.ListGroupsResponse {
 		if e := g.c.deny(creq, g.name, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: g.name}); e != nil {
 			continue
 		}
-		g.waitControl(func() {
-			if len(req.StatesFilter) > 0 && !slices.Contains(req.StatesFilter, g.state.String()) {
-				return
-			}
-			if len(req.TypesFilter) > 0 && !slices.Contains(req.TypesFilter, g.typ) {
-				return
-			}
-			sg := kmsg.NewListGroupsResponseGroup()
-			sg.Group = g.name
-			sg.ProtocolType = g.protocolType
-			sg.GroupState = g.state.String()
-			sg.GroupType = g.typ
-			resp.Groups = append(resp.Groups, sg)
-		})
+		if len(req.StatesFilter) > 0 && !slices.Contains(req.StatesFilter, g.state.String()) {
+			continue
+		}
+		if len(req.TypesFilter) > 0 && !slices.Contains(req.TypesFilter, g.typ) {
+			continue
+		}
+		sg := kmsg.NewListGroupsResponseGroup()
+		sg.Group = g.name
+		sg.ProtocolType = g.protocolType
+		sg.GroupState = g.state.String()
+		sg.GroupType = g.typ
+		resp.Groups = append(resp.Groups, sg)
 	}
 	return resp
 }
@@ -474,34 +430,30 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 			}
 			continue
 		}
-		if !g.waitControl(func() {
-			sg.State = g.state.String()
-			sg.ProtocolType = g.protocolType
+		sg.State = g.state.String()
+		sg.ProtocolType = g.protocolType
+		if g.state == groupStable {
+			sg.Protocol = g.protocol
+		}
+		for _, m := range g.members {
+			sm := kmsg.NewDescribeGroupsResponseGroupMember()
+			sm.MemberID = m.memberID
+			sm.InstanceID = m.instanceID
+			sm.ClientID = m.clientID
+			sm.ClientHost = m.clientHost
 			if g.state == groupStable {
-				sg.Protocol = g.protocol
-			}
-			for _, m := range g.members {
-				sm := kmsg.NewDescribeGroupsResponseGroupMember()
-				sm.MemberID = m.memberID
-				sm.InstanceID = m.instanceID
-				sm.ClientID = m.clientID
-				sm.ClientHost = m.clientHost
-				if g.state == groupStable {
-					for _, p := range m.join.Protocols {
-						if p.Name == g.protocol {
-							sm.ProtocolMetadata = p.Metadata
-							break
-						}
+				for _, p := range m.join.Protocols {
+					if p.Name == g.protocol {
+						sm.ProtocolMetadata = p.Metadata
+						break
 					}
-					sm.MemberAssignment = m.assignment
 				}
-				sg.Members = append(sg.Members, sm)
+				sm.MemberAssignment = m.assignment
 			}
-			if req.IncludeAuthorizedOperations {
-				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
-			}
-		}) {
-			sg.State = groupDead.String()
+			sg.Members = append(sg.Members, sm)
+		}
+		if req.IncludeAuthorizedOperations {
+			sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
 		}
 	}
 	return resp
@@ -542,36 +494,21 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 			setErr(kerr.GroupIDNotFound.Code)
 			continue
 		}
-		if !g.waitControl(func() {
-			if g.typ == "consumer" {
-				if g.activeConsumerCount() == 0 {
-					g.quitOnce()
-				} else {
-					setErr(kerr.NonEmptyGroup.Code)
-				}
+		if g.typ == "consumer" {
+			if g.activeConsumerCount() == 0 {
+				g.kill()
 			} else {
-				switch g.state {
-				case groupDead:
-					setErr(kerr.GroupIDNotFound.Code)
-				case groupEmpty:
-					g.quitOnce()
-				case groupPreparingRebalance, groupCompletingRebalance, groupStable, groupReconciling:
-					setErr(kerr.NonEmptyGroup.Code)
-				}
+				setErr(kerr.NonEmptyGroup.Code)
 			}
-		}) {
-			setErr(kerr.GroupIDNotFound.Code)
-		}
-		// Delete from gs.gs in the Cluster.run() goroutine, not
-		// inside the waitControl callback. The callback runs in the
-		// manage goroutine; if it calls quitOnce() (closing quitCh),
-		// waitControl can return before the callback finishes, and a
-		// delete(gs.gs) in the callback would race with any
-		// concurrent gs.gs iteration in Cluster.run().
-		select {
-		case <-g.quitCh:
-			delete(gs.gs, rg)
-		default:
+		} else {
+			switch g.state {
+			case groupDead:
+				setErr(kerr.GroupIDNotFound.Code)
+			case groupEmpty:
+				g.kill()
+			case groupPreparingRebalance, groupCompletingRebalance, groupStable, groupReconciling:
+				setErr(kerr.NonEmptyGroup.Code)
+			}
 		}
 	}
 	return resp
@@ -644,100 +581,99 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 			}
 		}
 
-		// KIP-447: check for pending transactional offsets before
-		// entering waitControl (pids must be accessed from run()).
-		// Real Kafka returns UNSTABLE_OFFSET_COMMIT per-partition,
-		// not per-group.
+		// KIP-447: real Kafka returns UNSTABLE_OFFSET_COMMIT
+		// per-partition, not per-group.
 		unstable := req.RequireStable && gs.c.pids.hasUnstableOffsets(rg.Group)
 		g, ok := gs.gs[rg.Group]
 		if !ok {
 			sg.ErrorCode = kerr.GroupIDNotFound.Code
 			continue
 		}
-		if !g.waitControl(func() {
-			// KIP-848: validate MemberID/MemberEpoch for consumer
-			// groups. Admin fetches (MemberID absent with
-			// MemberEpoch < 0) skip validation. MemberID="" is a
-			// real-but-invalid memberId per Java, not an admin
-			// signal - it falls through to the member lookup and
-			// returns UnknownMemberID.
-			adminFetch := rg.MemberID == nil && rg.MemberEpoch < 0
-			if g.typ == "consumer" && !adminFetch {
-				if rg.MemberID == nil || *rg.MemberID == "" {
-					sg.ErrorCode = kerr.UnknownMemberID.Code
-					return
-				}
-				m, ok := g.consumerMembers[*rg.MemberID]
-				if !ok {
-					sg.ErrorCode = kerr.UnknownMemberID.Code
-					return
-				}
-				if rg.MemberEpoch != m.memberEpoch {
-					sg.ErrorCode = kerr.StaleMemberEpoch.Code
-					return
-				}
-			}
-			if rg.Topics == nil {
-				for t, ps := range g.commits {
-					st := kmsg.NewOffsetFetchResponseGroupTopic()
-					st.Topic = t
-					st.TopicID = gs.c.data.t2id[t]
-					for p, c := range ps {
-						sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
-						sp.Partition = p
-						if unstable {
-							sp.ErrorCode = kerr.UnstableOffsetCommit.Code
-							sp.Offset = -1
-							sp.LeaderEpoch = -1
-						} else {
-							sp.Offset = c.offset
-							sp.LeaderEpoch = c.leaderEpoch
-							sp.Metadata = c.metadata
-						}
-						st.Partitions = append(st.Partitions, sp)
-					}
-					sg.Topics = append(sg.Topics, st)
-				}
-			} else {
-				for _, t := range rg.Topics {
-					st := kmsg.NewOffsetFetchResponseGroupTopic()
-					st.Topic = t.Topic
-					st.TopicID = t.TopicID
-					for _, p := range t.Partitions {
-						sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
-						sp.Partition = p
-						if e := creq.faults.check(faultKey{group: rg.Group, topic: t.Topic, topicID: t.TopicID}.part(p)); e != nil {
-							sp.ErrorCode = e.Code
-							sp.Offset = -1
-							sp.LeaderEpoch = -1
-							st.Partitions = append(st.Partitions, sp)
-							continue
-						}
-						if unstable {
-							sp.ErrorCode = kerr.UnstableOffsetCommit.Code
-							sp.Offset = -1
-							sp.LeaderEpoch = -1
-						} else {
-							c, ok := g.commits.getp(t.Topic, p)
-							if !ok {
-								sp.Offset = -1
-								sp.LeaderEpoch = -1
-							} else {
-								sp.Offset = c.offset
-								sp.LeaderEpoch = c.leaderEpoch
-								sp.Metadata = c.metadata
-							}
-						}
-						st.Partitions = append(st.Partitions, sp)
-					}
-					sg.Topics = append(sg.Topics, st)
-				}
-			}
-		}) {
-			sg.ErrorCode = kerr.GroupIDNotFound.Code
-		}
+		g.fillOffsetFetch(creq, rg, sg, unstable)
 	}
 	return resp
+}
+
+// fillOffsetFetch fills one group's portion of an OffsetFetch response.
+func (g *group) fillOffsetFetch(creq *clientReq, rg kmsg.OffsetFetchRequestGroup, sg *kmsg.OffsetFetchResponseGroup, unstable bool) {
+	// KIP-848: validate MemberID/MemberEpoch for consumer
+	// groups. Admin fetches (MemberID absent with
+	// MemberEpoch < 0) skip validation. MemberID="" is a
+	// real-but-invalid memberId per Java, not an admin
+	// signal - it falls through to the member lookup and
+	// returns UnknownMemberID.
+	adminFetch := rg.MemberID == nil && rg.MemberEpoch < 0
+	if g.typ == "consumer" && !adminFetch {
+		if rg.MemberID == nil || *rg.MemberID == "" {
+			sg.ErrorCode = kerr.UnknownMemberID.Code
+			return
+		}
+		m, ok := g.consumerMembers[*rg.MemberID]
+		if !ok {
+			sg.ErrorCode = kerr.UnknownMemberID.Code
+			return
+		}
+		if rg.MemberEpoch != m.memberEpoch {
+			sg.ErrorCode = kerr.StaleMemberEpoch.Code
+			return
+		}
+	}
+	if rg.Topics == nil {
+		for t, ps := range g.commits {
+			st := kmsg.NewOffsetFetchResponseGroupTopic()
+			st.Topic = t
+			st.TopicID = g.c.data.t2id[t]
+			for p, c := range ps {
+				sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
+				sp.Partition = p
+				if unstable {
+					sp.ErrorCode = kerr.UnstableOffsetCommit.Code
+					sp.Offset = -1
+					sp.LeaderEpoch = -1
+				} else {
+					sp.Offset = c.offset
+					sp.LeaderEpoch = c.leaderEpoch
+					sp.Metadata = c.metadata
+				}
+				st.Partitions = append(st.Partitions, sp)
+			}
+			sg.Topics = append(sg.Topics, st)
+		}
+	} else {
+		for _, t := range rg.Topics {
+			st := kmsg.NewOffsetFetchResponseGroupTopic()
+			st.Topic = t.Topic
+			st.TopicID = t.TopicID
+			for _, p := range t.Partitions {
+				sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
+				sp.Partition = p
+				if e := creq.faults.check(faultKey{group: rg.Group, topic: t.Topic, topicID: t.TopicID}.part(p)); e != nil {
+					sp.ErrorCode = e.Code
+					sp.Offset = -1
+					sp.LeaderEpoch = -1
+					st.Partitions = append(st.Partitions, sp)
+					continue
+				}
+				if unstable {
+					sp.ErrorCode = kerr.UnstableOffsetCommit.Code
+					sp.Offset = -1
+					sp.LeaderEpoch = -1
+				} else {
+					c, ok := g.commits.getp(t.Topic, p)
+					if !ok {
+						sp.Offset = -1
+						sp.LeaderEpoch = -1
+					} else {
+						sp.Offset = c.offset
+						sp.LeaderEpoch = c.leaderEpoch
+						sp.Metadata = c.metadata
+					}
+				}
+				st.Partitions = append(st.Partitions, sp)
+			}
+			sg.Topics = append(sg.Topics, st)
+		}
+	}
 }
 
 func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
@@ -814,121 +750,60 @@ func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 // GROUP HANDLING //
 ////////////////////
 
-func (g *group) manage(detachNew func()) {
-	// On the first join only, we want to ensure that if the join is
-	// invalid, we clean the group up before we detach from the cluster
-	// serialization loop that is initializing us. Groups loaded from
-	// disk pass nil to skip this cleanup - they are legitimate groups
-	// that should not self-destruct if the first post-restart request
-	// happens to fail validation.
-	var firstJoin func(bool)
-	if detachNew == nil {
-		firstJoin = func(bool) {}
+// dispatchOffsetCommit handles a commit for either group type. The bool
+// is whether the request was valid; a brand new group created solely to
+// hold this commit is dropped again if it was not.
+func (g *group) dispatchOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse, bool) {
+	var resp *kmsg.OffsetCommitResponse
+	var ok bool
+	if g.typ == "consumer" {
+		resp, ok = g.handleConsumerOffsetCommit(creq), true
 	} else {
-		firstJoin = func(ok bool) {
-			firstJoin = func(bool) {}
-			if !ok {
-				delete(g.gs.gs, g.name)
-				g.quitOnce()
-			}
-			detachNew()
+		resp, ok = g.handleOffsetCommit(creq)
+	}
+	if resp != nil && len(creq.offsetCommitErrTopics) > 0 {
+		resp.Topics = append(resp.Topics, creq.offsetCommitErrTopics...)
+	}
+	return resp, ok
+}
+
+// stopTimers stops every timer the group owns. An unstopped timer keeps
+// the group, and through it the cluster, alive in the runtime timer heap
+// until it fires.
+func (g *group) stopTimers() {
+	for _, m := range g.members {
+		if m.t != nil {
+			m.t.Stop()
 		}
 	}
-
-	defer func() {
-		for _, m := range g.members {
-			if m.t != nil {
-				m.t.Stop()
-			}
+	for _, m := range g.pending {
+		if m.t != nil {
+			m.t.Stop()
 		}
-		for _, m := range g.pending {
-			if m.t != nil {
-				m.t.Stop()
-			}
+	}
+	for _, m := range g.consumerMembers {
+		if m.t != nil {
+			m.t.Stop()
 		}
-		for _, m := range g.consumerMembers {
-			if m.t != nil {
-				m.t.Stop()
-			}
-		}
-	}()
-
-	for {
-		select {
-		case <-g.quitCh:
-			return
-		case <-g.c.die:
-			return
-		case creq := <-g.reqCh:
-			kresp, ok := g.dispatchReq(creq)
-			firstJoin(ok)
-			if kresp != nil {
-				g.reply(creq, kresp, nil)
-			}
-
-		case fn := <-g.controlCh:
-			fn()
-		}
+		g.cancelConsumerRebalanceTimeout(m)
+	}
+	if g.tRebalance != nil {
+		g.tRebalance.Stop()
+	}
+	if g.tPendingSync != nil {
+		g.tPendingSync.Stop()
 	}
 }
 
-// dispatchReq handles a single request from reqCh. Returns the response
-// and whether the request was valid (for firstJoin tracking). Used by
-// manage() and by drainReqCh during shutdown.
-func (g *group) dispatchReq(creq *clientReq) (kmsg.Response, bool) {
-	switch creq.kreq.(type) {
-	case *kmsg.JoinGroupRequest:
-		return g.handleJoin(creq)
-	case *kmsg.SyncGroupRequest:
-		return g.handleSync(creq), true
-	case *kmsg.HeartbeatRequest:
-		return g.handleHeartbeat(creq), true
-	case *kmsg.LeaveGroupRequest:
-		return g.handleLeave(creq), true
-	case *kmsg.OffsetCommitRequest:
-		var resp *kmsg.OffsetCommitResponse
-		var ok bool
-		if g.typ == "consumer" {
-			resp, ok = g.handleConsumerOffsetCommit(creq), true
-		} else {
-			resp, ok = g.handleOffsetCommit(creq)
-		}
-		if resp != nil && len(creq.offsetCommitErrTopics) > 0 {
-			resp.Topics = append(resp.Topics, creq.offsetCommitErrTopics...)
-		}
-		return resp, ok
-	case *kmsg.OffsetDeleteRequest:
-		return g.handleOffsetDelete(creq), true
-	case *kmsg.ConsumerGroupHeartbeatRequest:
-		g.lastTopicMeta = creq.topicMeta
-		return g.handleConsumerHeartbeat(creq), true
-	}
-	return nil, true
-}
-
-// drainReqCh processes any pending requests in reqCh. Called from a
-// waitControl closure during shutdown to ensure committed offsets from
-// in-flight OffsetCommit requests are captured before snapshotting.
-// Must run in the manage goroutine (via waitControl).
-func (g *group) drainReqCh() {
-	for {
-		select {
-		case creq := <-g.reqCh:
-			kresp, _ := g.dispatchReq(creq)
-			if kresp != nil {
-				g.reply(creq, kresp, nil)
-			}
-		default:
-			return
-		}
-	}
-}
-
-// The group manage loop does not block: it sends to respCh which eventually
-// writes; but that write is fast. There is no long-blocking code in the manage
-// loop.
-func (g *group) waitControl(fn func()) bool {
-	return waitManageControl(g.controlCh, g.quitCh, g.c, fn)
+// kill marks the group dead and drops it from the cluster. Timers that
+// fired before this see the group is gone and do nothing.
+//
+// The group must be empty: a member with a parked JoinGroup or SyncGroup
+// is dropped here with no reply, leaving the client to time out.
+func (g *group) kill() {
+	g.state = groupDead
+	g.stopTimers()
+	delete(g.gs.gs, g.name)
 }
 
 // waitManageControl sends fn to a manage goroutine's controlCh and blocks
@@ -975,14 +850,6 @@ sent:
 			admin()
 		}
 	}
-}
-
-// Called in the manage loop.
-func (g *group) quitOnce() {
-	g.quit.Do(func() {
-		g.state = groupDead
-		close(g.quitCh)
-	})
 }
 
 // Handles a join. We do not do the delayed join aspects in Kafka, we just punt
@@ -1513,12 +1380,18 @@ func (g *group) rebalance() {
 	if g.tRebalance != nil {
 		g.tRebalance.Stop()
 	}
-	g.tRebalance = g.timerControlFn(time.Duration(g.maxRebalanceTimeoutMs())*time.Millisecond, g.completeRebalance)
+	g.tRebalance = g.timerWork(time.Duration(g.maxRebalanceTimeoutMs())*time.Millisecond, g.completeRebalance)
 }
 
 // Transitions the group to either dead or stable, depending on if any members
 // remain by the time we clear those that are not waiting in join.
 func (g *group) completeRebalance() {
+	// A timer that already fired cannot be retracted. If the rebalance
+	// completed inline since, every member is waiting in sync with an
+	// empty waitingReply and a late run would remove all of them.
+	if g.state != groupPreparingRebalance {
+		return
+	}
 	if g.tRebalance != nil {
 		g.tRebalance.Stop()
 		g.tRebalance = nil
@@ -1598,8 +1471,12 @@ func (g *group) completeRebalance() {
 	if g.tPendingSync != nil {
 		g.tPendingSync.Stop()
 	}
-	g.tPendingSync = g.timerControlFn(time.Duration(g.maxRebalanceTimeoutMs())*time.Millisecond, func() {
-		if len(g.pendingSyncIDs) == 0 {
+	gen := g.generation
+	g.tPendingSync = g.timerWork(time.Duration(g.maxRebalanceTimeoutMs())*time.Millisecond, func() {
+		// An empty barrier means everyone synced. A different
+		// generation means this timer belongs to a barrier that is
+		// already over and the members waiting now are not ours.
+		if g.generation != gen || len(g.pendingSyncIDs) == 0 {
 			return
 		}
 		// Remove all pending members, then trigger one rebalance.
@@ -1687,15 +1564,22 @@ func (g *group) maxRebalanceTimeoutMs() int32 {
 	return max
 }
 
-// timerControlFn starts a timer that, on expiry, sends fn to the
-// group's control channel. If the group is shutting down, the send
-// is abandoned.
-func (g *group) timerControlFn(d time.Duration, fn func()) *time.Timer {
+// timerWork starts a timer that, on expiry, hands fn to the cluster run
+// loop, which owns all group state. Stopping the timer is best effort:
+// a timer that already fired cannot be retracted, so fn itself must
+// tolerate running late. We only guarantee that fn does not run for a
+// group that has since been deleted or replaced.
+func (g *group) timerWork(d time.Duration, fn func()) *time.Timer {
 	return time.AfterFunc(d, func() {
+		work := func() {
+			if g.gs.gs[g.name] != g {
+				return
+			}
+			fn()
+		}
 		select {
-		case <-g.quitCh:
 		case <-g.c.die:
-		case g.controlCh <- fn:
+		case g.c.groupWorkCh <- work:
 		}
 	})
 }
@@ -1871,14 +1755,7 @@ func (g *group) reply(creq *clientReq, kresp kmsg.Response, m *groupMember) {
 // KIP-848 CONSUMER GROUPS
 ///////////////////////////
 
-// Hijacks the consumer group heartbeat request into the group's manage
-// goroutine. We snapshot topic metadata here (running in Cluster.run,
-// safe access to c.data) so that computeAssignment does not need to
-// call c.admin(), which would deadlock.
-func (gs *groups) handleConsumerGroupHeartbeat(creq *clientReq) {
-	if gs.gs == nil {
-		gs.gs = make(map[string]*group)
-	}
+func (gs *groups) handleConsumerGroupHeartbeat(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
 
 	// Group type exclusivity: if this group ID is already a share
@@ -1886,29 +1763,13 @@ func (gs *groups) handleConsumerGroupHeartbeat(creq *clientReq) {
 	if _, isShare := gs.c.shareGroups.gs[req.Group]; isShare {
 		resp := req.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
-		creq.cc.respCh <- clientResp{kresp: resp, corr: creq.corr, seq: creq.seq}
-		return
+		return resp
 	}
 
-start:
-	g := gs.gs[req.Group]
-	if g == nil {
-		g = gs.newGroup(req.Group)
-		gs.gs[req.Group] = g
-		go g.manage(func() {})
-	}
+	g, _ := gs.newOrExisting(req.Group)
 	creq.topicMeta = gs.c.snapshotTopicMeta()
-	select {
-	case g.reqCh <- creq:
-	case <-g.quitCh:
-		// Group quit while we were dispatching. Replace the dead
-		// group with a fresh one and retry so the heartbeat is
-		// handled normally (the new group will return
-		// UNKNOWN_MEMBER_ID for the stale member).
-		delete(gs.gs, req.Group)
-		goto start
-	case <-g.c.die:
-	}
+	g.lastTopicMeta = creq.topicMeta
+	return g.handleConsumerHeartbeat(creq)
 }
 
 func (gs *groups) handleConsumerGroupDescribe(creq *clientReq) *kmsg.ConsumerGroupDescribeResponse {
@@ -1941,14 +1802,14 @@ func (gs *groups) handleConsumerGroupDescribe(creq *clientReq) *kmsg.ConsumerGro
 			}
 			continue
 		}
-		if !g.waitControl(func() {
-			if g.typ != "consumer" {
-				sg.ErrorCode = kerr.GroupIDNotFound.Code
-				if req.IncludeAuthorizedOperations {
-					sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
-				}
-				return
+		if g.typ != "consumer" {
+			sg.ErrorCode = kerr.GroupIDNotFound.Code
+			if req.IncludeAuthorizedOperations {
+				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
 			}
+			continue
+		}
+		{
 			sg.State = g.state.String()
 			sg.Epoch = g.groupEpoch
 			sg.AssignmentEpoch = g.targetAssignmentEpoch
@@ -1970,8 +1831,6 @@ func (gs *groups) handleConsumerGroupDescribe(creq *clientReq) *kmsg.ConsumerGro
 			if req.IncludeAuthorizedOperations {
 				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
 			}
-		}) {
-			sg.ErrorCode = kerr.GroupIDNotFound.Code
 		}
 	}
 	return resp
@@ -3149,7 +3008,7 @@ func (g *group) classicSubscribedTopics() map[string]struct{} {
 // period (KIP-211). Returns true if all offsets expired and the group can
 // be deleted (no members, no pending txn offsets).
 //
-// Must be called from within the group's manage goroutine.
+// Must be called from Cluster.run().
 func (g *group) expireOffsets(retentionMs int64, hasUnstableOffsets bool) bool {
 	subscribed := g.offsetExpirationFilter()
 	if subscribed == nil {
@@ -3295,7 +3154,7 @@ func (g *group) scheduleConsumerRebalanceTimeout(m *consumerMember) {
 	timeout := time.Duration(m.rebalanceTimeoutMs) * time.Millisecond
 	epoch := m.memberEpoch
 	memberID := m.memberID
-	m.tRebal = g.timerControlFn(timeout, func() {
+	m.tRebal = g.timerWork(timeout, func() {
 		// Check the member still exists and hasn't
 		// progressed past the epoch we were watching.
 		cur, ok := g.consumerMembers[memberID]
@@ -3570,8 +3429,8 @@ func (g *group) removePartitionEpochs(a map[uuid][]int32, expectedEpoch int32) {
 }
 
 // validateMemberGeneration checks that the memberID and generation are
-// valid for this group. Must be called from the manage loop (via
-// waitControl). Returns 0 on success or an error code.
+// valid for this group. Must be called from Cluster.run(). Returns 0 on
+// success or an error code.
 func (g *group) validateMemberGeneration(memberID string, generation int32) int16 {
 	if g.typ == "consumer" {
 		if memberID != "" {
@@ -3672,7 +3531,7 @@ func (g *group) atSessionTimeoutIn(m *groupMember, d time.Duration, fn func()) {
 		m.t.Stop()
 	}
 	m.last = time.Now()
-	m.t = g.timerControlFn(d, func() {
+	m.t = g.timerWork(d, func() {
 		if time.Since(m.last) >= d {
 			fn()
 		}
@@ -3741,7 +3600,7 @@ func (g *group) atConsumerSessionTimeoutIn(m *consumerMember, d time.Duration) {
 		m.t.Stop()
 	}
 	m.last = time.Now()
-	m.t = g.timerControlFn(d, func() {
+	m.t = g.timerWork(d, func() {
 		if time.Since(m.last) >= d {
 			g.c.cfg.logger.Logf(LogLevelWarn, "consumerSessionTimeout: group=%s member=%s epoch=%d remaining=%d",
 				g.logName(), m.memberID, m.memberEpoch, len(g.consumerMembers)-1)
