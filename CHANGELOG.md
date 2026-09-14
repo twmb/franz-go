@@ -1,3 +1,53 @@
+v1.21.7
+===
+
+A handful of bug fixes and improvements found by users and while working on
+v1.22. Rather than enumerating the relevant commits, you can check the git log
+between v1.21.6 and this release - there are many minor commits. As well, kfake
+has been improved significantly and has more API surface to aid in writing
+tests.
+
+* A rare, very niche panic while producing has been fixed. Thanks
+  [@PumpkinDemo](https://github.com/PumpkinDemo) for the report, see
+  [#1385](https://github.com/twmb/franz-go/issues/1385) for more details.
+
+* If retention deleted the segment a consumer was reading, the
+  OffsetOutOfRange reset listed by the last consumed timestamp and could skip
+  surviving records, or jump to the log end and skip everything. The reset
+  now resumes at the log start when below it.
+
+* Improved KIP-951 handling (the broker returning where a partition should move
+  with the produce response if the partition changed leadership). Previously, a
+  broker could return NotLeaderForPartition _and_ hint the leader the client
+  was already using, at the same or an older epoch. These hints are now
+  ignored and the client backs off, rather than spinning. Thanks
+  [@3AceShowHand](https://github.com/3AceShowHand) for the report and
+  [@jjj-n](https://github.com/jjj-n) for a fix, see
+  [#1412](https://github.com/twmb/franz-go/issues/1412).
+
+* Rack aware balancers ignored rack for any topic the group leader did not
+  itself consume. A client now loads the rack for _all_ partitions in the
+  group, even if the leader does not consume some of the topics.
+
+* The metadata cache has been improved (there were a few cases where it was
+  emptied erroneously).
+
+* Regex consuming now consistently never matches internal topics such as
+  `__consumer_offsets`. As well, the regex log no longer reports an excluded
+  topic as both added and skipped (thanks [@lahsivjar](https://github.com/lahsivjar)).
+
+* Decompression allocates less (thanks [@scunningham](https://github.com/scunningham)).
+  If you use pools, slices are now reliably returned if decompression errors.
+
+* The client now starts at a random seed broker rather than always the
+  first, so many clients starting at once no longer all hit the same seed.
+  Thanks [@chailuecha](https://github.com/chailuecha)!
+
+* A producer that receives RequestTimedOut or NotEnoughReplicasAfterAppend now
+  retries after the produce backoff rather than waiting for a metadata refresh.
+
+* A few other minor improvements and bug fixes.
+
 v1.21.6
 ===
 
