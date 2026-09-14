@@ -132,5 +132,6 @@ outer:
 	}
 
 	c.refreshCompactTicker()
+	c.shareGroups.refreshSweepTicker()
 	return resp, nil
 }

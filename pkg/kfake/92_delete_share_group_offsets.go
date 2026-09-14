@@ -10,7 +10,7 @@ import (
 // Behavior:
 // * Removes all share partition state for specified topics
 // * Only works on empty groups (no active members)
-// * Shuts down the manage goroutine if the group becomes truly empty
+// * Drops the group if it becomes truly empty
 //   (no members and no partition state)
 
 func init() { regKey(92, 0, 0) }
@@ -61,13 +61,12 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 		topicInfo[rt.Topic] = info
 	}
 
-	if !sg.waitControl(func() {
-		if len(sg.members) > 0 {
-			resp.ErrorCode = kerr.NonEmptyGroup.Code
-			return
-		}
+	if len(sg.members) > 0 {
+		resp.ErrorCode = kerr.NonEmptyGroup.Code
+		return resp, nil
+	}
 
-		sg.mu.Lock()
+	{
 		for i := range req.Topics {
 			rt := &req.Topics[i]
 			rst := kmsg.NewDeleteShareGroupOffsetsResponseTopic()
@@ -91,18 +90,8 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 			}
 			resp.Topics = append(resp.Topics, rst)
 		}
-		sg.mu.Unlock() // not deferred: maybeQuit below acquires sg.mu
 
 		sg.maybeQuit()
-	}) {
-		resp.ErrorCode = kerr.GroupIDNotFound.Code
-	}
-
-	// Clean up from shareGroups.gs if the group shut down.
-	select {
-	case <-sg.quitCh:
-		delete(c.shareGroups.gs, req.GroupID)
-	default:
 	}
 
 	return resp, nil

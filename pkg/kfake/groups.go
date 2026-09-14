@@ -228,16 +228,10 @@ func (c *Cluster) notifyTopicChange() {
 		}
 	}
 	for _, sg := range c.shareGroups.gs {
-		select {
-		case sg.controlCh <- func() {
-			if len(sg.members) > 0 {
-				sg.groupEpoch++
-				sg.lastTopicMeta = snap
-				sg.recomputeAssignments()
-			}
-		}:
-		case <-sg.quitCh:
-		case <-sg.c.die:
+		if len(sg.members) > 0 {
+			sg.groupEpoch++
+			sg.lastTopicMeta = snap
+			sg.recomputeAssignments()
 		}
 	}
 }
@@ -804,52 +798,6 @@ func (g *group) kill() {
 	g.state = groupDead
 	g.stopTimers()
 	delete(g.gs.gs, g.name)
-}
-
-// waitManageControl sends fn to a manage goroutine's controlCh and blocks
-// until it completes. Used by group.waitControl and shareGroup.waitControl.
-//
-// This is a free function (not a method) because group and shareGroup are
-// separate types that both need this logic. They share controlCh/quitCh/c
-// fields but don't share a common embedded struct, so we pass the channels
-// explicitly to avoid duplicating the deadlock-avoidance logic.
-//
-// Drains adminCh while waiting to avoid deadlock: the pids manage loop may
-// call c.admin() (e.g. transaction timeout abort) while we're blocked sending
-// to controlCh or waiting for the function to complete.
-func waitManageControl(controlCh chan func(), quitCh chan struct{}, c *Cluster, fn func()) bool {
-	wait := make(chan struct{})
-	wfn := func() { fn(); close(wait) }
-	for {
-		select {
-		case <-quitCh:
-			return false
-		case <-c.die:
-			return false
-		case controlCh <- wfn:
-			goto sent
-		case admin := <-c.adminCh:
-			admin()
-		}
-	}
-sent:
-	// Once sent, the manage goroutine will run fn synchronously.
-	// We must not select on quitCh here: fn itself may call
-	// quitOnce (e.g. deleting an empty group), closing quitCh
-	// before close(wait) executes. If the scheduler preempts
-	// between the two closes, a quitCh select case would see
-	// quitCh ready but wait not yet closed and incorrectly
-	// return false.
-	for {
-		select {
-		case <-wait:
-			return true
-		case <-c.die:
-			return false
-		case admin := <-c.adminCh:
-			admin()
-		}
-	}
 }
 
 // Handles a join. We do not do the delayed join aspects in Kafka, we just punt

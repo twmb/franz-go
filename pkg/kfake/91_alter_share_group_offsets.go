@@ -63,16 +63,12 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 		topicInfo[rt.Topic] = info
 	}
 
-	if !sg.waitControl(func() {
-		if len(sg.members) > 0 {
-			resp.ErrorCode = kerr.NonEmptyGroup.Code
-			return
-		}
+	if len(sg.members) > 0 {
+		resp.ErrorCode = kerr.NonEmptyGroup.Code
+		return resp, nil
+	}
 
-		// Guard against concurrent admin operations (e.g., sweep
-		// timer or another AlterShareGroupOffsets) while in manage.
-		sg.mu.Lock()
-		defer sg.mu.Unlock()
+	{
 		for i := range req.Topics {
 			rt := &req.Topics[i]
 			rst := kmsg.NewAlterShareGroupOffsetsResponseTopic()
@@ -126,8 +122,6 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 			}
 			resp.Topics = append(resp.Topics, rst)
 		}
-	}) {
-		resp.ErrorCode = kerr.GroupIDNotFound.Code
 	}
 
 	return resp, nil

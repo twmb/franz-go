@@ -116,9 +116,7 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 			// explicitly: a recreated topic starts share consumption
 			// fresh (SPSO per group config, no acquired records).
 			for _, sg := range c.shareGroups.gs {
-				sg.mu.Lock()
 				delete(sg.partitions, td.topic)
-				sg.mu.Unlock()
 			}
 		}
 	}()

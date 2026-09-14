@@ -202,7 +202,6 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	c.groups.c = c
 	c.shareGroups.c = c
 	c.shareGroups.gs = make(map[string]*shareGroup)
-	c.shareGroups.sweepCh = make(chan *shareGroup, 16)
 	c.shareGroups.sessions = make(map[shareSessionKey]*shareSession)
 	c.shareGroups.connWatch = make(map[*clientConn]struct{})
 	c.shareGroups.disconnCh = make(chan *clientConn, 16)
@@ -220,6 +219,9 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 				b.ln.Close()
 			}
 			c.closeOpenFiles()
+			// Loading from disk can recreate share groups, which
+			// starts the sweep ticker before run() exists to stop it.
+			c.shareGroups.stopSweepTicker()
 			close(c.die)
 		}
 	}()
@@ -437,14 +439,21 @@ func (c *Cluster) run() {
 			c.compactTicker.Stop()
 		}
 		c.offsetExpireTicker.Stop()
+		c.shareGroups.stopSweepTicker()
 		// An unfired timer holds its group, and the group holds the
 		// cluster: without this a closed cluster and all its data stay
 		// reachable until the last session timeout expires.
 		for _, g := range c.groups.gs {
 			g.stopTimers()
 		}
+		for _, g := range c.shareGroups.gs {
+			g.stopTimers()
+		}
 	}()
 	c.offsetExpireTicker = time.NewTicker(time.Duration(c.offsetsRetentionCheckIntervalMs()) * time.Millisecond)
+	// Loading from disk can create share groups, and it also loads the
+	// broker configs the interval comes from.
+	c.shareGroups.refreshSweepTicker()
 outer:
 	for {
 		var (
@@ -507,8 +516,8 @@ outer:
 			c.expireGroupOffsets()
 			continue
 
-		case sg := <-c.shareGroups.sweepCh:
-			sg.fireAllShareWatchers()
+		case <-c.shareGroups.sweepTickerC():
+			c.shareGroups.sweepAllExpiredAcquisitions()
 			continue
 
 		case cc := <-c.shareGroups.disconnCh:
@@ -573,6 +582,9 @@ outer:
 					continue inner
 				case <-c.offsetExpireTicker.C:
 					c.expireGroupOffsets()
+					continue inner
+				case <-c.shareGroups.sweepTickerC():
+					c.shareGroups.sweepAllExpiredAcquisitions()
 					continue inner
 				case res := <-s.res:
 					c.finishSleptControl(s)
@@ -959,6 +971,9 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 				continue
 			case <-c.offsetExpireTicker.C:
 				c.expireGroupOffsets()
+				continue
+			case <-c.shareGroups.sweepTickerC():
+				c.shareGroups.sweepAllExpiredAcquisitions()
 				continue
 			case res := <-res:
 				c.maybePopControl(res.handled, cctx)

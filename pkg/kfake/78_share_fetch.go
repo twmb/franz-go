@@ -164,10 +164,8 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 		if sg != nil {
 			ackTs := ackTopicsFromFetch(req.Topics)
-			sg.mu.Lock()
 			toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck, onAckNotLeader)
 			released := sg.releaseRecordsForSessionLocked(memberID, session, id2t, maxDelivery)
-			sg.mu.Unlock()
 			ensureAckedParts(resp, ackTs, addTopic)
 			// fireAllShareWatchers fires every partition in the
 			// group, which is a superset of the partitions in
@@ -199,8 +197,8 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 
 	// Ensure sg is non-nil: epoch 0 creates it via createSession, but
 	// epoch > 0 and watcher paths only looked it up via get() at the
-	// top of handleShareFetch. That get() returns nil if the manage
-	// goroutine quit between session creation and this request (e.g.,
+	// top of handleShareFetch. That get() returns nil if the group went
+	// away between session creation and this request (e.g.,
 	// DeleteShareGroupOffsets emptied the group). We recreate the group
 	// so that ack processing and record acquisition below have a valid
 	// shareGroup to operate on.
@@ -214,9 +212,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		var toFire []*partData
 		if w == nil {
 			ackTs := ackTopicsFromFetch(req.Topics)
-			sg.mu.Lock()
 			toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck, onAckNotLeader)
-			sg.mu.Unlock()
 			ensureAckedParts(resp, ackTs, addTopic)
 		}
 		fireAll(toFire)
@@ -270,7 +266,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 
 	// Lock the share group's partition state for ack processing and
 	// record acquisition. Batch I/O happens after unlocking.
-	sg.mu.Lock()
 
 	// Process piggybacked acks first (skipped on watcher re-invocation,
 	// since acks were already processed in the initial call).
@@ -360,16 +355,9 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		})
 	}
 
-	sg.mu.Unlock()
-
-	// Fire watchers outside the lock for ack-released records.
-	// This cannot move above the unlock: the acquisition loop
-	// above requires sg.mu, and firing inside the lock would
-	// deadlock when woken watchers try to re-acquire sg.mu.
+	// Fire watchers for ack-released records.
 	fireAll(toFire)
 
-	// Read batch bytes outside the lock -- this may do disk I/O in
-	// persistence mode and we don't want to block the sweep timer.
 	for _, ap := range acquiredParts {
 		firstAcq := ap.ranges[0].FirstOffset
 		lastAcq := ap.ranges[len(ap.ranges)-1].LastOffset

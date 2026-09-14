@@ -1891,8 +1891,6 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 
 // persistGroupEntry appends a group log entry.
 // Called from group handlers when dataDir is set.
-// Multiple group manage() goroutines may call this concurrently,
-// so writes are serialized with groupsLogMu.
 func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
 	if !c.persist() || c.dead.Load() {
 		return nil
@@ -2275,16 +2273,11 @@ func (c *Cluster) saveSessionState() error {
 	// triggering a fresh join + full-group rebalance on every --restart
 	// cycle, which otherwise starves net-forward consumption progress.
 	for name, sg := range c.shareGroups.gs {
-		if !sg.waitControl(func() {
-			// No drainReqCh here: share group heartbeats are the
-			// only request type dispatched to sg.reqCh.
-			// Contrast with group.drainReqCh which must flush
-			// OffsetCommit requests before snapshotting.
+		{
 			ssg := sessionShareGroup{
 				GroupEpoch: sg.groupEpoch,
 				Partitions: make(map[string]map[int32]sessionSharePartition),
 			}
-			sg.mu.Lock()
 			sg.partitions.each(func(topic string, partition int32, sp *sharePartition) {
 				if _, ok := ssg.Partitions[topic]; !ok {
 					ssg.Partitions[topic] = make(map[int32]sessionSharePartition)
@@ -2304,7 +2297,6 @@ func (c *Cluster) saveSessionState() error {
 				}
 				ssg.Partitions[topic][partition] = ssp
 			})
-			sg.mu.Unlock()
 			for _, m := range sg.members {
 				sm := sessionShareMember{
 					ID:               m.memberID,
@@ -2330,8 +2322,6 @@ func (c *Cluster) saveSessionState() error {
 				}
 				ss.ShareGroups[name] = ssg
 			}
-		}) {
-			c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: share group %s manage loop exited, skipping", name)
 		}
 	}
 
@@ -2474,8 +2464,8 @@ func (c *Cluster) loadSessionState() error {
 	}
 
 	// Restore share group partition state AND members. The share group
-	// manage goroutine is created on demand (getOrCreate), so we create
-	// it here to restore state into.
+	// is created on demand (getOrCreate), so we create it here to
+	// restore state into.
 	//
 	// If the member set is restored, acquisitions are preserved as
 	// "acquired" against their original memberID. When the client's
@@ -2529,10 +2519,9 @@ func (c *Cluster) loadSessionState() error {
 	acquisitionStale := time.Since(ss.ShutdownAt) >= shareLockDuration
 	for name, ssg := range ss.ShareGroups {
 		sg := c.shareGroups.getOrCreate(name)
-		sg.waitControl(func() {
+		{
 			sg.groupEpoch = ssg.GroupEpoch
 			restoredMembers := restoreMembers(sg, ssg.Members)
-			sg.mu.Lock()
 			for topic, parts := range ssg.Partitions {
 				for partition, ssp := range parts {
 					sp := sg.partitions.mkp(topic, partition, func() *sharePartition {
@@ -2573,10 +2562,9 @@ func (c *Cluster) loadSessionState() error {
 					sp.advanceSPSO()
 				}
 			}
-			sg.mu.Unlock()
 			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored share group=%s epoch=%d members=%d",
 				name, sg.groupEpoch, len(sg.members))
-		})
+		}
 	}
 
 	if len(ss.GroupConfigs) > 0 {
