@@ -33,7 +33,10 @@ type (
 
 		// groupWorkCh carries timer-driven group work back to run(),
 		// which owns all group state. Timers cannot touch that state
-		// themselves, so they hand us a closure instead.
+		// themselves, so they hand us a closure instead. This is
+		// unbuffered so that a timer waits for the loop rather than
+		// stacking work behind it, and so that nothing can come to
+		// depend on a queue depth.
 		groupWorkCh chan func()
 
 		controlMu      sync.Mutex
@@ -155,7 +158,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		reqCh:        make(chan *clientReq, 20),
 		wakeCh:       make(chan *slept, 10),
 		watchFetchCh: make(chan *watchFetch, 20),
-		groupWorkCh:  make(chan func(), 16),
+		groupWorkCh:  make(chan func()),
 		control:      make(map[int16][]*controlCtx),
 		controlSleep: make(chan sleepChs, 1),
 
