@@ -72,7 +72,7 @@ type (
 		groupsLogFile      file
 		pidsLogFile        file
 		groupsLogSize      int64
-		pidsLogSize        atomic.Int64
+		pidsLogSize        int64
 		needsGroupsCompact bool
 
 		die  chan struct{}
@@ -774,6 +774,20 @@ outer:
 			return
 		}
 	}
+}
+
+// afterFuncOnLoop starts a timer that, on expiry, hands fn to run(), which
+// owns all group state. The timer goroutine must not touch that state
+// itself. Stopping the timer is best effort: a timer that already fired
+// cannot be retracted, so fn must tolerate running late and check for
+// itself that the state it acts on is still there.
+func (c *Cluster) afterFuncOnLoop(d time.Duration, fn func()) *time.Timer {
+	return time.AfterFunc(d, func() {
+		select {
+		case <-c.die:
+		case c.groupWorkCh <- fn:
+		}
+	})
 }
 
 // Control is a function to call on any client request the cluster handles.

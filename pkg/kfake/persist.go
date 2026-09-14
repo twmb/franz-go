@@ -1559,7 +1559,7 @@ func (c *Cluster) loadPIDsLog(fsys fs, dir string) error {
 		}
 		return err
 	}
-	c.pidsLogSize.Store(int64(len(raw)))
+	c.pidsLogSize = int64(len(raw))
 
 	entries, validBytes := readEntries(raw)
 	if validBytes < len(raw) {
@@ -1935,7 +1935,8 @@ func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
 		c.pidsLogFile = nil
 		return err
 	}
-	if c.pidsLogSize.Add(int64(n)) >= c.stateLogCompactBytes() {
+	c.pidsLogSize += int64(n)
+	if c.pidsLogSize >= c.stateLogCompactBytes() {
 		c.compactPIDsLog()
 	}
 	return nil
@@ -1968,7 +1969,7 @@ func (c *Cluster) compactPIDsLog() {
 	}
 	path := filepath.Join(c.cfg.dataDir, "pids.log")
 	if info, err := c.fs.Stat(path); err == nil {
-		c.pidsLogSize.Store(info.Size())
+		c.pidsLogSize = info.Size()
 	}
 }
 

@@ -1488,23 +1488,15 @@ func (g *group) maxRebalanceTimeoutMs() int32 {
 	return max
 }
 
-// timerWork starts a timer that, on expiry, hands fn to the cluster run
-// loop, which owns all group state. Stopping the timer is best effort:
-// a timer that already fired cannot be retracted, so fn itself must
-// tolerate running late. We only guarantee that fn does not run for a
-// group that has since been deleted or replaced.
+// timerWork runs fn on the cluster run loop after d. We only guarantee
+// that fn does not run for a group that has since been deleted or
+// replaced; see [Cluster.afterFuncOnLoop] for the rest.
 func (g *group) timerWork(d time.Duration, fn func()) *time.Timer {
-	return time.AfterFunc(d, func() {
-		work := func() {
-			if g.c.groups.gs[g.name] != g {
-				return
-			}
-			fn()
+	return g.c.afterFuncOnLoop(d, func() {
+		if g.c.groups.gs[g.name] != g {
+			return
 		}
-		select {
-		case <-g.c.die:
-		case g.c.groupWorkCh <- work:
-		}
+		fn()
 	})
 }
 
@@ -1663,11 +1655,7 @@ func (g *group) reply(creq *clientReq, kresp kmsg.Response, m *groupMember) {
 	if m != nil {
 		m.waitingReply = nil
 	}
-	select {
-	case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, seq: creq.seq}:
-	case <-creq.cc.done:
-		return
-	case <-g.c.die:
+	if !creq.reply(kresp) {
 		return
 	}
 	if m != nil {

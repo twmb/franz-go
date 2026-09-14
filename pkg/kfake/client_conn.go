@@ -70,14 +70,17 @@ func (cc *clientConn) unmute(ok bool) {
 }
 
 // reply sends a response back to the client, respecting connection close
-// and cluster shutdown. Used by the shutdown drain, which answers requests
-// outside the run loop's normal return path.
-func (creq *clientReq) reply(kresp kmsg.Response) {
+// and cluster shutdown. It returns false if the client will never see the
+// response, either because the connection died or because the cluster is
+// shutting down.
+func (creq *clientReq) reply(kresp kmsg.Response) bool {
 	select {
 	case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, seq: creq.seq}:
+		return true
 	case <-creq.cc.done:
 	case <-creq.cc.c.die:
 	}
+	return false
 }
 
 func (cc *clientConn) read() {

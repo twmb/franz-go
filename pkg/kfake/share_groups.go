@@ -870,23 +870,17 @@ func (g *shareGroup) resetSessionTimeout(m *shareMember) {
 	}
 	timeout := time.Duration(g.c.shareSessionTimeoutMs()) * time.Millisecond
 	m.last = time.Now()
-	m.t = time.AfterFunc(timeout, func() {
-		work := func() {
-			if g.c.shareGroups.gs[g.name] != g {
-				return
-			}
-			// A timer that already fired cannot be retracted: the
-			// member may have heartbeated since, or left and
-			// rejoined under the same ID.
-			if g.members[m.memberID] != m || time.Since(m.last) < timeout {
-				return
-			}
-			g.fenceMember(m.memberID)
+	m.t = g.c.afterFuncOnLoop(timeout, func() {
+		if g.c.shareGroups.gs[g.name] != g {
+			return
 		}
-		select {
-		case <-g.c.die:
-		case g.c.groupWorkCh <- work:
+		// A timer that already fired cannot be retracted: the
+		// member may have heartbeated since, or left and
+		// rejoined under the same ID.
+		if g.members[m.memberID] != m || time.Since(m.last) < timeout {
+			return
 		}
+		g.fenceMember(m.memberID)
 	})
 }
 
