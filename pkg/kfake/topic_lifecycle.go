@@ -5,6 +5,10 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// These run the same code the matching request handler runs, so they cannot
+// drift from it, but they do not go through the request path: faults and
+// controls do not see them and ACLs do not apply.
+
 // CreateTopic creates a topic with the given configs, nil for none. A topic
 // deleted and created again under the same name gets a new topic ID.
 func (c *Cluster) CreateTopic(topic string, partitions int32, configs map[string]string) error {

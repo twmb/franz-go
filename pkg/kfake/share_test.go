@@ -3,6 +3,7 @@ package kfake
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1573,51 +1574,21 @@ func TestShareGroupRebalanceOccurs(t *testing.T) {
 	c := newCluster(t, SeedTopics(int32(partitions), topic))
 	produceShareN(t, c, topic, group, total)
 
-	admin := newPlainClient(t, c)
-	defer admin.Close()
-
-	// describeEpoch returns (epoch, members). If the group has not
-	// been created yet (GROUP_ID_NOT_FOUND -- happens briefly before
-	// any consumer has heartbeated), it returns (0, 0) rather than
-	// fatal-ing so the polling helper below can wait it out.
-	describeEpoch := func() (epoch int32, members int) {
-		req := kmsg.NewPtrShareGroupDescribeRequest()
-		req.GroupIDs = []string{group}
-		resp, err := req.RequestWith(context.Background(), admin)
-		if err != nil {
-			t.Fatalf("describe: %v", err)
-		}
-		if len(resp.Groups) != 1 {
-			t.Fatalf("expected 1 group, got %d", len(resp.Groups))
-		}
-		g := resp.Groups[0]
-		if errors.Is(kerr.ErrorForCode(g.ErrorCode), kerr.GroupIDNotFound) {
-			return 0, 0
-		}
-		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
-			t.Fatalf("describe error: %v", err)
-		}
-		return g.GroupEpoch, len(g.Members)
-	}
-
-	waitForMembers := func(want int) int32 {
-		t.Helper()
-		deadline := time.Now().Add(15 * time.Second)
-		var lastE int32
-		var lastM int
-		for time.Now().Before(deadline) {
-			lastE, lastM = describeEpoch()
-			if lastM == want {
-				return lastE
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		t.Fatalf("timeout waiting for %d members (last: epoch=%d, members=%d)", want, lastE, lastM)
-		return 0
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+
+	// waitForMembers waits for the group to carry want members and
+	// returns the epoch it settled on.
+	waitForMembers := func(want int) int32 {
+		t.Helper()
+		g, err := c.WaitGroupInfo(ctx, group, func(g *GroupInfo) bool {
+			return g != nil && len(g.Members) == want
+		})
+		if err != nil {
+			t.Fatalf("waiting for %d members: %v", want, err)
+		}
+		return g.Epoch
+	}
 
 	// seen is shared between both consumers; a record acquired twice
 	// (e.g. released on one member's leave) appears in `deliveries`
@@ -1913,30 +1884,13 @@ func TestShareGroupSubscriptionPurge(t *testing.T) {
 		r.Ack(kgo.AckAccept)
 	}
 
-	// Phase 3: verify broker sees the updated subscription. Poll
-	// ShareGroupDescribe until the member's SubscribedTopicNames lists
-	// only topicB.
-	admin := newPlainClient(t, c)
-	defer admin.Close()
-	deadline = time.Now().Add(10 * time.Second)
-	var lastSubscribed []string
-	for time.Now().Before(deadline) {
-		req := kmsg.NewPtrShareGroupDescribeRequest()
-		req.GroupIDs = []string{group}
-		resp, err := req.RequestWith(context.Background(), admin)
-		if err != nil {
-			t.Fatalf("describe: %v", err)
-		}
-		if len(resp.Groups) == 1 && len(resp.Groups[0].Members) == 1 {
-			lastSubscribed = resp.Groups[0].Members[0].SubscribedTopicNames
-			if len(lastSubscribed) == 1 && lastSubscribed[0] == topicB {
-				break
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if !(len(lastSubscribed) == 1 && lastSubscribed[0] == topicB) {
-		t.Fatalf("broker never saw subscription change: last observed SubscribedTopicNames=%v", lastSubscribed)
+	// Phase 3: verify the broker sees the updated subscription, which
+	// the next heartbeat carries.
+	g, err := c.WaitGroupInfo(ctx, group, func(g *GroupInfo) bool {
+		return g != nil && len(g.Members) == 1 && slices.Equal(g.Members[0].SubscribedTopics, []string{topicB})
+	})
+	if err != nil {
+		t.Fatalf("broker never saw the subscription change: group %+v", g)
 	}
 
 	// Phase 4: continue consuming. Verify only B records arrive and

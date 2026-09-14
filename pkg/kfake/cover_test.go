@@ -12,28 +12,14 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// newCoverCluster is newCluster with a heartbeat interval short enough that
+// these tests do not wait on the default.
 func newCoverCluster(t *testing.T, opts ...Opt) *Cluster {
 	t.Helper()
 	opts = append([]Opt{BrokerConfigs(map[string]string{
 		"group.consumer.heartbeat.interval.ms": "100",
 	})}, opts...)
-	c, err := NewCluster(opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(c.Close)
-	return c
-}
-
-func newCoverClient(t *testing.T, c *Cluster, opts ...kgo.Opt) *kgo.Client {
-	t.Helper()
-	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...)}, opts...)
-	cl, err := kgo.NewClient(opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cl.Close)
-	return cl
+	return newCluster(t, opts...)
 }
 
 // TestCreatePartitionsAddsPartitions verifies that CreatePartitions actually
@@ -45,7 +31,7 @@ func TestCreatePartitionsAddsPartitions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 	adm := kadm.NewClient(cl)
 
 	resp, err := adm.CreatePartitions(ctx, 3, topic)
@@ -81,7 +67,7 @@ func TestCreatePartitionsWithExplicitAssignment(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 
 	req := kmsg.NewCreatePartitionsRequest()
 	rt := kmsg.NewCreatePartitionsRequestTopic()
@@ -120,7 +106,7 @@ func TestCreatePartitionsErrorCases(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 
 	cases := []struct {
 		name    string
@@ -234,7 +220,7 @@ func TestCreatePartitionsValidateOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 
 	req := kmsg.NewCreatePartitionsRequest()
 	req.ValidateOnly = true
@@ -271,7 +257,7 @@ func TestDescribeLogDirsReportsStorageSize(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c, kgo.DefaultProduceTopic(topic))
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	for range 10 {
 		if err := cl.ProduceSync(ctx, kgo.StringRecord("data")).FirstErr(); err != nil {
 			t.Fatal(err)
@@ -340,7 +326,7 @@ func TestAlterReplicaLogDirsMovesPartition(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 	newDir := "/data/kafka-logs-moved"
 
 	// Move partition 0 to a new directory.
@@ -400,7 +386,7 @@ func TestAlterPartitionAssignments(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 
 	// Successful reassignment (non-nil replicas accepted).
 	req := kmsg.NewAlterPartitionAssignmentsRequest()
@@ -471,7 +457,7 @@ func TestAddRemoveNodeUpdatesCluster(t *testing.T) {
 	// Verify we can produce: the new broker should appear in metadata.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 	adm := kadm.NewClient(cl)
 	meta, err := adm.Metadata(ctx)
 	if err != nil {
@@ -533,7 +519,7 @@ func TestMoveTopicPartitionChangesLeader(t *testing.T) {
 	// Verify it's usable: produce to the partition.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cl := newCoverClient(t, c, kgo.DefaultProduceTopic(topic))
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	if err := cl.ProduceSync(ctx, kgo.StringRecord("after-move")).FirstErr(); err != nil {
 		t.Fatalf("failed to produce after leader move: %v", err)
 	}
@@ -557,7 +543,7 @@ func TestSCRAMCredentialLifecycle(t *testing.T) {
 	c := newCoverCluster(t, NumBrokers(1))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 
 	upsert := func(name string, mech int8, iterations int32) {
 		t.Helper()
@@ -661,7 +647,7 @@ func TestSCRAMValidationErrors(t *testing.T) {
 	c := newCoverCluster(t, NumBrokers(1))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 
 	upsertAndExpect := func(name string, mech int8, iter int32, wantErr int16) {
 		t.Helper()
@@ -791,7 +777,7 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 	adm := kadm.NewClient(cl)
 
 	// Set broker config via AlterConfigs.
@@ -935,7 +921,7 @@ func TestIncrementalAlterConfigsOperations(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 	adm := kadm.NewClient(cl)
 
 	// SET a broker config.
@@ -1105,7 +1091,7 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		DefaultNumPartitions(7))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 	adm := kadm.NewClient(cl)
 
 	// Duplicate topic names in request.
@@ -1286,7 +1272,7 @@ func TestDeleteTopicsByID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 
 	// Get topic ID.
 	metaReq := kmsg.NewMetadataRequest()
@@ -1334,7 +1320,7 @@ func TestDescribeProducersShowsActiveTransaction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	producer := newCoverClient(t, c,
+	producer := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID("desc-prod-txn"),
 	)
@@ -1346,7 +1332,7 @@ func TestDescribeProducersShowsActiveTransaction(t *testing.T) {
 	}
 
 	// Describe: we should see the active producer.
-	cl := newCoverClient(t, c)
+	cl := newPlainClient(t, c)
 	req := kmsg.NewDescribeProducersRequest()
 	rt := kmsg.NewDescribeProducersRequestTopic()
 	rt.Topic = topic
@@ -1396,7 +1382,7 @@ func TestTxnProduceAndCommit(t *testing.T) {
 	defer cancel()
 
 	// Transactional produce.
-	txnCl := newCoverClient(t, c,
+	txnCl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID("txn-produce-id"),
 	)
@@ -1413,7 +1399,7 @@ func TestTxnProduceAndCommit(t *testing.T) {
 	}
 
 	// Read committed consumer should see all 5 records.
-	consumer := newCoverClient(t, c,
+	consumer := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
@@ -1442,7 +1428,7 @@ func TestListTransactionsFindsOngoing(t *testing.T) {
 	defer cancel()
 
 	txnID := "list-txn-ongoing-id"
-	producer := newCoverClient(t, c,
+	producer := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID(txnID),
 	)
@@ -1453,7 +1439,7 @@ func TestListTransactionsFindsOngoing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	adm := kadm.NewClient(newCoverClient(t, c))
+	adm := kadm.NewClient(newPlainClient(t, c))
 
 	// Unfiltered list.
 	listed, err := adm.ListTransactions(ctx, nil, nil)
@@ -1494,7 +1480,7 @@ func TestShufflePartitionLeadersIsUsable(t *testing.T) {
 	defer cancel()
 
 	// Produce to all partitions.
-	cl := newCoverClient(t, c, kgo.DefaultProduceTopic(topic))
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	for p := range int32(5) {
 		r := kgo.StringRecord("after-shuffle")
 		r.Partition = p
@@ -1531,7 +1517,7 @@ func TestOffsetForLeaderEpochCurrentEpoch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c, kgo.DefaultProduceTopic(topic))
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	for range 5 {
 		if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
 			t.Fatal(err)
@@ -1572,7 +1558,7 @@ func TestOffsetForLeaderEpochAfterLeaderChange(t *testing.T) {
 
 	// Produce 3 records at epoch 0.
 	origLeader := c.LeaderFor(topic, 0)
-	cl := newCoverClient(t, c, kgo.DefaultProduceTopic(topic), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.RecordPartitioner(kgo.ManualPartitioner()))
 	for range 3 {
 		if err := cl.ProduceSync(ctx, kgo.StringRecord("e0")).FirstErr(); err != nil {
 			t.Fatal(err)
@@ -1589,7 +1575,7 @@ func TestOffsetForLeaderEpochAfterLeaderChange(t *testing.T) {
 	}
 
 	// Produce 2 records at epoch 1 (need a fresh client to pick up new leader).
-	cl2 := newCoverClient(t, c, kgo.DefaultProduceTopic(topic), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	cl2 := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.RecordPartitioner(kgo.ManualPartitioner()))
 	for range 2 {
 		if err := cl2.ProduceSync(ctx, kgo.StringRecord("e1")).FirstErr(); err != nil {
 			t.Fatal(err)
@@ -1636,7 +1622,7 @@ func TestOffsetForLeaderEpochEmptyPartition(t *testing.T) {
 	// Move partition to bump epoch, but don't produce. This tests the
 	// "no batches" path (lines 97-105 in the handler).
 	c.MoveTopicPartition(topic, 0, 0) // epoch 0 -> 1
-	adm := kadm.NewClient(newCoverClient(t, c))
+	adm := kadm.NewClient(newPlainClient(t, c))
 	var req kadm.OffsetForLeaderEpochRequest
 	req.Add(topic, 0, 0) // query for old epoch 0
 	resp, err := adm.OffsetForLeaderEpoch(ctx, req)
@@ -1661,7 +1647,7 @@ func TestDeleteTopicsByName(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adm := kadm.NewClient(newCoverClient(t, c))
+	adm := kadm.NewClient(newPlainClient(t, c))
 	resp, err := adm.DeleteTopics(ctx, topic)
 	if err != nil {
 		t.Fatal(err)
@@ -1683,7 +1669,7 @@ func TestDeleteTopicsUnknownByName(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adm := kadm.NewClient(newCoverClient(t, c))
+	adm := kadm.NewClient(newPlainClient(t, c))
 	resp, err := adm.DeleteTopics(ctx, "does-not-exist")
 	if err != nil {
 		t.Fatal(err)
@@ -1705,7 +1691,7 @@ func TestListOffsetsEarliestLatest(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c, kgo.DefaultProduceTopic(topic))
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	for range 5 {
 		if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
 			t.Fatal(err)
@@ -1747,7 +1733,7 @@ func TestListOffsetsReadCommittedDuringTxn(t *testing.T) {
 	defer cancel()
 
 	// Produce 3 non-transactional records first.
-	cl := newCoverClient(t, c, kgo.DefaultProduceTopic(topic))
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	for range 3 {
 		if err := cl.ProduceSync(ctx, kgo.StringRecord("non-txn")).FirstErr(); err != nil {
 			t.Fatal(err)
@@ -1755,7 +1741,7 @@ func TestListOffsetsReadCommittedDuringTxn(t *testing.T) {
 	}
 
 	// Begin a transaction and produce 2 more.
-	txnCl := newCoverClient(t, c,
+	txnCl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID("list-offsets-rc-txn"),
 	)
@@ -1820,7 +1806,7 @@ func TestTxnAbortDiscardsOffsets(t *testing.T) {
 	defer cancel()
 
 	// Produce some records so there's something to "consume".
-	cl := newCoverClient(t, c, kgo.DefaultProduceTopic(topic))
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	for range 5 {
 		if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
 			t.Fatal(err)
@@ -1828,7 +1814,7 @@ func TestTxnAbortDiscardsOffsets(t *testing.T) {
 	}
 
 	// Use raw protocol for the full transactional offset commit flow.
-	rawCl := newCoverClient(t, c)
+	rawCl := newPlainClient(t, c)
 
 	// InitProducerID.
 	initReq := kmsg.NewInitProducerIDRequest()
@@ -1913,7 +1899,7 @@ func TestTxnAbortRecordsInvisibleToReadCommitted(t *testing.T) {
 	defer cancel()
 
 	// Produce 3 committed records.
-	cl := newCoverClient(t, c, kgo.DefaultProduceTopic(topic))
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	for range 3 {
 		if err := cl.ProduceSync(ctx, kgo.StringRecord("committed")).FirstErr(); err != nil {
 			t.Fatal(err)
@@ -1921,7 +1907,7 @@ func TestTxnAbortRecordsInvisibleToReadCommitted(t *testing.T) {
 	}
 
 	// Produce 5 records in a transaction, then ABORT.
-	txnCl := newCoverClient(t, c,
+	txnCl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID("txn-abort-invisible-id"),
 	)
@@ -1945,7 +1931,7 @@ func TestTxnAbortRecordsInvisibleToReadCommitted(t *testing.T) {
 	}
 
 	// read_committed consumer should see only 5 records (3 + 2), not 10.
-	consumer := newCoverClient(t, c,
+	consumer := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
@@ -1986,7 +1972,7 @@ func TestTxnReinitAbortsOpenTxn(t *testing.T) {
 	defer cancel()
 
 	// Produce 3 records and walk away without ending the transaction.
-	abandoned := newCoverClient(t, c,
+	abandoned := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID(txnID),
 	)
@@ -2001,7 +1987,7 @@ func TestTxnReinitAbortsOpenTxn(t *testing.T) {
 
 	// A second client on the same transactional ID inits fresh, taking
 	// the ID over, and commits 2 records of its own.
-	taker := newCoverClient(t, c,
+	taker := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID(txnID),
 	)
@@ -2017,7 +2003,7 @@ func TestTxnReinitAbortsOpenTxn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	consumer := newCoverClient(t, c,
+	consumer := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
@@ -2050,7 +2036,7 @@ func TestDeleteRecordsAdvancesStartOffset(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cl := newCoverClient(t, c, kgo.DefaultProduceTopic(topic))
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	for range 10 {
 		if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
 			t.Fatal(err)
@@ -2098,7 +2084,7 @@ func TestDeleteRecordsAdvancesStartOffset(t *testing.T) {
 	}
 
 	// Consumer from start should only see records 7-9 (3 records).
-	consumer := newCoverClient(t, c,
+	consumer := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchMaxWait(250*time.Millisecond),

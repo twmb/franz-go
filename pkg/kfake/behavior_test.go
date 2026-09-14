@@ -579,11 +579,7 @@ func Test848TopicCreatedAfterJoin(t *testing.T) {
 	}
 
 	// Create the new topic and produce to it.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	adm := kadm.NewClient(newClient848(t, c))
-	_, err := adm.CreateTopics(ctx, 1, 1, nil, newTopic)
-	if err != nil {
+	if err := c.CreateTopic(newTopic, 1, nil); err != nil {
 		t.Fatalf("create topic failed: %v", err)
 	}
 	for i := range nRecords {
@@ -640,11 +636,7 @@ func Test848TopicCreatedAfterJoinNoPeriodicMeta(t *testing.T) {
 		t.Fatalf("expected %d records from existing topic, got %d", nRecords, len(records))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	adm := kadm.NewClient(newClient848(t, c))
-	_, err := adm.CreateTopics(ctx, 1, 1, nil, newTopic)
-	if err != nil {
+	if err := c.CreateTopic(newTopic, 1, nil); err != nil {
 		t.Fatalf("create topic failed: %v", err)
 	}
 	for i := range nRecords {

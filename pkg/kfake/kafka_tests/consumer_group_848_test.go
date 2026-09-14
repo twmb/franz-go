@@ -233,8 +233,8 @@ func Test848DescribeGroup(t *testing.T) {
 	consumer := newGroupConsumer(t, c, topic, group)
 	_ = consumeN(t, consumer, 10, 10*time.Second)
 
-	// Allow heartbeats to stabilize.
-	time.Sleep(500 * time.Millisecond)
+	// The describe below reads the member the group settled on.
+	waitStable(t, c, group, 1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -1175,17 +1175,9 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	// After committing, a waiting readCommitted consumer should wake up
 	// and return the newly committed data.
 
-	// Use a ControlKey observer to know when the consumer's fetch request
+	// Observe fetches so we know when the consumer's fetch request
 	// arrives at the server, then commit. This avoids a flaky sleep.
-	fetchArrived := make(chan struct{}, 1)
-	c.ControlKey(int16(kmsg.Fetch), func(kmsg.Request) (kmsg.Response, error, bool) {
-		select {
-		case fetchArrived <- struct{}{}:
-		default:
-		}
-		c.KeepControl()
-		return nil, nil, false
-	})
+	fetchArrived := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Fetch}, Observe: true, Count: -1})
 
 	consumer3, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -1211,9 +1203,7 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	}()
 
 	// Wait for the consumer's fetch to arrive at the server, then commit.
-	select {
-	case <-fetchArrived:
-	case <-ctx.Done():
+	if err := fetchArrived.Wait(ctx, 1); err != nil {
 		t.Fatal("timeout waiting for fetch request to arrive")
 	}
 
@@ -1382,16 +1372,10 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	// JoinGroup arrives before m1's: if m1 (leader) arrives first, it
 	// completes a rebalance with only itself, then m2's join starts a
 	// new rebalance waiting for m1, who is already done - deadlock.
-	m2Received := make(chan struct{}, 1)
-	c.ControlKey(int16(kmsg.JoinGroup), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if kreq.(*kmsg.JoinGroupRequest).MemberID == m2ID {
-			select {
-			case m2Received <- struct{}{}:
-			default:
-			}
-		}
-		return nil, nil, false
+	m2Received := c.Fault(Fault{
+		Keys:    []kmsg.Key{kmsg.JoinGroup},
+		Observe: true,
+		When:    func(kreq kmsg.Request) bool { return kreq.(*kmsg.JoinGroupRequest).MemberID == m2ID },
 	})
 
 	var wg sync.WaitGroup
@@ -1402,7 +1386,9 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 		defer wg.Done()
 		resp2Rebalance, err2 = joinGroup(cl2, m2ID, metadataV1)
 	}()
-	<-m2Received
+	if err := m2Received.Wait(ctx, 1); err != nil {
+		t.Fatal("m2's JoinGroup never arrived")
+	}
 
 	resp1Rebalance, err1 := joinGroup(cl1, m1ID, metadataV1)
 	wg.Wait()
@@ -1427,16 +1413,10 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	// THE CRITICAL TEST: m2 (non-leader) rejoins with CHANGED metadata
 	// while group is Stable. With the bug, m2 would get the same generation
 	// back (no rebalance). With the fix, a new rebalance is triggered.
-	m2JoinReceived := make(chan struct{}, 1)
-	c.ControlKey(int16(kmsg.JoinGroup), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if kreq.(*kmsg.JoinGroupRequest).MemberID == m2ID {
-			select {
-			case m2JoinReceived <- struct{}{}:
-			default:
-			}
-		}
-		return nil, nil, false
+	m2JoinReceived := c.Fault(Fault{
+		Keys:    []kmsg.Key{kmsg.JoinGroup},
+		Observe: true,
+		When:    func(kreq kmsg.Request) bool { return kreq.(*kmsg.JoinGroupRequest).MemberID == m2ID },
 	})
 
 	done := make(chan struct{})
@@ -1446,7 +1426,9 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	}()
 
 	// Wait for m2's JoinGroup to arrive at the server.
-	<-m2JoinReceived
+	if err := m2JoinReceived.Wait(ctx, 1); err != nil {
+		t.Fatal("m2's rejoin never arrived")
+	}
 
 	select {
 	case <-done:
@@ -2076,9 +2058,7 @@ func TestRequestCachedMetadata(t *testing.T) {
 
 		// Create a new topic after the client's main metadata loop
 		// has already run, so neither metaCache nor id2t know about it.
-		adm := kadm.NewClient(cl)
-		_, err := adm.CreateTopic(ctx, 1, 1, nil, "newTopic")
-		if err != nil {
+		if err := c.CreateTopic("newTopic", 1, nil); err != nil {
 			t.Fatal(err)
 		}
 
@@ -3334,15 +3314,9 @@ func TestEndTxnUnconfirmedErrorNoSilentJoin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// One-shot control: fail the FIRST EndTxn with UNKNOWN_SERVER_ERROR
-	// without kfake ever processing it, leaving the broker-side
-	// transaction ongoing.
-	c.ControlKey(int16(kmsg.EndTxn), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		req := kreq.(*kmsg.EndTxnRequest)
-		resp := req.ResponseKind().(*kmsg.EndTxnResponse)
-		resp.ErrorCode = kerr.UnknownServerError.Code
-		return resp, nil, true
-	})
+	// Fail the FIRST EndTxn with UNKNOWN_SERVER_ERROR without kfake ever
+	// processing it, leaving the broker-side transaction ongoing.
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError})
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -3678,23 +3652,7 @@ func TestShareGroupIDNotFoundRejoin(t *testing.T) {
 
 	// Share groups default share.auto.offset.reset to latest; set earliest
 	// so the consumer sees the record produced before it joined.
-	acreq := kmsg.NewPtrIncrementalAlterConfigsRequest()
-	acres := kmsg.NewIncrementalAlterConfigsRequestResource()
-	acres.ResourceType = kmsg.ConfigResourceTypeGroupConfig
-	acres.ResourceName = group
-	accfg := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
-	accfg.Name = "share.auto.offset.reset"
-	accfg.Op = 0
-	accfg.Value = kmsg.StringPtr("earliest")
-	acres.Configs = append(acres.Configs, accfg)
-	acreq.Resources = append(acreq.Resources, acres)
-	acresp, err := acreq.RequestWith(ctx, producer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ec := acresp.Resources[0].ErrorCode; ec != 0 {
-		t.Fatalf("alter group config failed with code %d", ec)
-	}
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	if err := producer.ProduceSync(ctx, kgo.StringRecord("r1")).FirstErr(); err != nil {
 		t.Fatal(err)

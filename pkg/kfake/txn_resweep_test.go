@@ -2,7 +2,6 @@ package kfake
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -75,20 +74,17 @@ func TestAuditTxnEndTxnUnknownServerErrorNotFalseCommit(t *testing.T) {
 		t.Fatalf("polled %d/%d records", got, msgs)
 	}
 
-	// Fail every EndTxn with UNKNOWN_SERVER_ERROR. The control is keep-forever
+	// Fail every EndTxn with UNKNOWN_SERVER_ERROR. The fault never runs out
 	// so the in-loop retry (pre-fix) sees it too.
-	var endtxns atomic.Int32
-	c.ControlKey(int16(kmsg.EndTxn), func(req kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		endtxns.Add(1)
-		resp := req.ResponseKind().(*kmsg.EndTxnResponse)
-		resp.ErrorCode = kerr.UnknownServerError.Code
-		return resp, nil, true
+	endtxns := c.Fault(Fault{
+		Keys:  []kmsg.Key{kmsg.EndTxn},
+		Err:   kerr.UnknownServerError,
+		Count: -1,
 	})
 
 	committed, err := s.End(ctx, kgo.TryCommit)
-	if endtxns.Load() == 0 {
-		t.Fatalf("expected the EndTxn control to fire at least once, got 0 (err=%v)", err)
+	if endtxns.Hits() == 0 {
+		t.Fatalf("expected the EndTxn fault to fire at least once, got 0 (err=%v)", err)
 	}
 	if committed {
 		t.Fatalf("BUG REPRODUCED: End reported committed=true even though every EndTxn failed with UNKNOWN_SERVER_ERROR; the consumer offsets were advanced for a transaction the broker may have aborted (err=%v)", err)

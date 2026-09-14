@@ -60,24 +60,13 @@ func TestAutoCommitOnClose(t *testing.T) {
 	// Close the consumer.
 	cl.Close()
 
-	// Verify the committed offset using a new admin client.
-	admCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admCl.Close()
-	adm := kadm.NewClient(admCl)
-
-	fetched, err := adm.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok := fetched.Lookup(topic, 0)
+	// Verify the committed offset.
+	o, ok := groupCommits(c, group)[topic][0]
 	if !ok {
 		t.Fatal("no committed offset found after close")
 	}
-	if o.At != 5 {
-		t.Errorf("expected committed offset 5, got %d", o.At)
+	if o.Offset != 5 {
+		t.Errorf("expected committed offset 5, got %d", o.Offset)
 	}
 }
 
@@ -105,11 +94,7 @@ func TestCommitMetadata(t *testing.T) {
 		t.Fatalf("commit failed: %v", err)
 	}
 
-	fetched, err := adm.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok := fetched.Lookup(topic, 0)
+	o, ok := groupCommits(c, group)[topic][0]
 	if !ok {
 		t.Fatal("committed offset not found")
 	}
@@ -190,17 +175,12 @@ func TestAsyncCommit(t *testing.T) {
 	wg.Wait()
 
 	// Verify committed offset.
-	adm := kadm.NewClient(cl)
-	fetched, err := adm.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok := fetched.Lookup(topic, 0)
+	o, ok := groupCommits(c, group)[topic][0]
 	if !ok {
 		t.Fatal("committed offset not found")
 	}
-	if o.At != 5 {
-		t.Errorf("expected committed offset 5, got %d", o.At)
+	if o.Offset != 5 {
+		t.Errorf("expected committed offset 5, got %d", o.Offset)
 	}
 }
 
@@ -223,16 +203,12 @@ func TestCommitSpecifiedOffsets(t *testing.T) {
 		t.Fatalf("commit 3 failed: %v", err)
 	}
 
-	fetched, err := adm.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok := fetched.Lookup(topic, 0)
+	o, ok := groupCommits(c, group)[topic][0]
 	if !ok {
 		t.Fatal("committed offset not found")
 	}
-	if o.At != 3 {
-		t.Errorf("expected offset 3, got %d", o.At)
+	if o.Offset != 3 {
+		t.Errorf("expected offset 3, got %d", o.Offset)
 	}
 
 	// Update to a different offset.
@@ -243,16 +219,12 @@ func TestCommitSpecifiedOffsets(t *testing.T) {
 		t.Fatalf("commit 7 failed: %v", err)
 	}
 
-	fetched, err = adm.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok = fetched.Lookup(topic, 0)
+	o, ok = groupCommits(c, group)[topic][0]
 	if !ok {
 		t.Fatal("committed offset not found")
 	}
-	if o.At != 7 {
-		t.Errorf("expected offset 7, got %d", o.At)
+	if o.Offset != 7 {
+		t.Errorf("expected offset 7, got %d", o.Offset)
 	}
 }
 
@@ -300,16 +272,11 @@ func TestPositionAndCommit(t *testing.T) {
 	}
 
 	// Verify committed offset matches what we consumed.
-	adm := kadm.NewClient(cl)
-	fetched, err := adm.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok := fetched.Lookup(topic, 0)
+	o, ok := groupCommits(c, group)[topic][0]
 	if !ok {
 		t.Fatal("committed offset not found")
 	}
-	if o.At < 5 {
-		t.Errorf("expected committed offset >= 5, got %d", o.At)
+	if o.Offset < 5 {
+		t.Errorf("expected committed offset >= 5, got %d", o.Offset)
 	}
 }

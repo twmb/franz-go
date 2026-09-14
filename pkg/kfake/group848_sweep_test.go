@@ -147,15 +147,12 @@ func TestAudit848StaleUnresolvedJoin(t *testing.T) {
 			return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch == 0
 		},
 	})
-	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		req := kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
-		if req.MemberEpoch <= 0 {
-			c.KeepControl()
-			return nil, nil, false
-		}
-		resp := req.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.FencedMemberEpoch.Code
-		return resp, nil, true
+	c.Fault(kfake.Fault{
+		Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
+		Err:  kerr.FencedMemberEpoch,
+		When: func(kreq kmsg.Request) bool {
+			return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch > 0
+		},
 	})
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer waitCancel()

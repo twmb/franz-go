@@ -3,7 +3,6 @@ package kfake
 import (
 	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -266,22 +265,14 @@ func TestShareFetchTopLevelErrorBackoff(t *testing.T) {
 	)
 	produceShareN(t, c, topic, group, 1)
 
-	var (
-		mu    sync.Mutex
-		times []time.Time
-	)
+	// The observer goes in first: the fault below answers every share
+	// fetch, so only a fault ahead of it counts them.
+	attempts := c.Fault(Fault{Keys: []kmsg.Key{kmsg.ShareFetch}, TopLevel: true, Observe: true, Count: -1})
 	c.Fault(Fault{
 		Keys:     []kmsg.Key{kmsg.ShareFetch},
 		TopLevel: true,
 		Err:      kerr.GroupAuthorizationFailed,
 		Count:    -1,
-	})
-	c.ControlKey(int16(kmsg.ShareFetch), func(kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		mu.Lock()
-		times = append(times, time.Now())
-		mu.Unlock()
-		return nil, nil, false
 	})
 
 	cl := shareChurnConsumer(t, c, topic, group)
@@ -298,23 +289,12 @@ func TestShareFetchTopLevelErrorBackoff(t *testing.T) {
 	}()
 
 	// Wait for the first ShareFetch, then measure a 2s window.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		mu.Lock()
-		n := len(times)
-		mu.Unlock()
-		if n > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no ShareFetch arrived")
-		}
-		time.Sleep(10 * time.Millisecond)
+	if err := attempts.Wait(ctx, 1); err != nil {
+		t.Fatal("no ShareFetch arrived")
 	}
+	first := attempts.Hits()
 	time.Sleep(2 * time.Second)
-	mu.Lock()
-	n := len(times)
-	mu.Unlock()
+	n := attempts.Hits() - first
 
 	// Post-fix pacing: retryBackoff walks 250ms, 500ms, 750ms, 1s with
 	// +/-20% jitter, so a 2s window sees ~4-6 attempts. Allow 12 for CI
