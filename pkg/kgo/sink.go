@@ -439,7 +439,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// sequence numbers using our new producer ID, which will then again
 	// fail with OOOSN.
 	req, txnReq, moreToDrain := s.createReq(id, epoch)
-	if len(req.batches.bs) == 0 { // everything was failing or lingering, or what is buffered is in flight already
+	if len(req.batches.bs) == 0 { // every recBuf is failing, has nothing new buffered, or is waiting on what is in flight
 		return moreToDrain
 	}
 
