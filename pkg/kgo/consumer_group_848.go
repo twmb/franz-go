@@ -253,7 +253,10 @@ outer:
 				// change" and never corrects that, while Topics=[]
 				// tells the server "I have nothing", forcing it to
 				// re-deliver.
-				topicsMatch := len(req.Topics) > 0 && reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics)
+				// A topic in reassign needs a response that carries
+				// the assignment, which only a full request gets when
+				// the assignment did not change; see reassign.
+				topicsMatch := len(req.Topics) > 0 && reflect.DeepEqual(g848.lastSubscribedTopics, req.SubscribedTopicNames) && reflect.DeepEqual(g848.lastTopics, req.Topics) && !g.needsReassign(g.nowAssigned.read())
 				if prerevoking || topicsMatch {
 					req.InstanceID = nil
 					req.RackID = nil
@@ -710,7 +713,7 @@ func (g *g848) handleResp(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.Co
 		}
 	}
 
-	if !mapi32sDeepEq(current, newAssigned) {
+	if !mapi32sDeepEq(current, newAssigned) || g.g.needsReassign(newAssigned) {
 		// Store BEFORE the deferred storeMember runs, so an observer that
 		// sees new memberGen via memberGen.load() is guaranteed to also
 		// see the matching nowAssigned via nowAssigned.read().

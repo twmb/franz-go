@@ -50,6 +50,13 @@ type groupConsumer struct {
 
 	rejoinCh chan string // cap 1; sent to if subscription changes (regex)
 
+	// reassign holds topics that metadata added back to using while the
+	// broker still assigned them, so their cursors are new but the
+	// assignment did not change by name. A regex topic that is purged
+	// and then rediscovered does this. The next session treats them as
+	// added; see diffAssigned. Guarded by mu.
+	reassign map[string]struct{}
+
 	// For EOS, before we commit, we force a heartbeat. If the client and
 	// group member are both configured properly, then the transactional
 	// timeout will be less than the session timeout. By forcing a
@@ -660,15 +667,40 @@ func (g *groupConsumer) leave(ctx context.Context) {
 	}()
 }
 
+// needsReassign returns whether the assignment names a topic in reassign,
+// whose cursors a new session must assign even though the assignment did
+// not change.
+func (g *groupConsumer) needsReassign(assigned map[string][]int32) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for topic := range g.reassign {
+		if _, ok := assigned[topic]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // returns the difference of g.nowAssigned and g.lastAssigned.
 func (g *groupConsumer) diffAssigned() (added, lost map[string][]int32) {
 	nowAssigned := g.nowAssigned.clone()
+	g.mu.Lock()
+	reassign := g.reassign
+	g.reassign = nil
+	g.mu.Unlock()
 	if !g.cooperative.Load() {
 		return nowAssigned, nil
 	}
 
 	added = make(map[string][]int32, len(nowAssigned))
 	lost = make(map[string][]int32, len(nowAssigned))
+	// A topic in both last and now whose cursors are nonetheless new is
+	// added in full; see reassign.
+	for topic := range reassign {
+		if partitions, ok := nowAssigned[topic]; ok {
+			added[topic] = partitions
+		}
+	}
 
 	// First, we diff lasts: any topic in last but not now is lost,
 	// otherwise, (1) new partitions are added, (2) common partitions are
@@ -2430,8 +2462,18 @@ func (g *groupConsumer) findNewAssignments() {
 		return
 	}
 
+	nowAssigned := g.nowAssigned.read()
 	for topic, change := range toChange {
 		g.using[topic] += change.delta
+		// The broker still assigns a topic we start using anew: it was
+		// purged and came back, and only a new session assigns its
+		// cursors. See reassign.
+		if _, assigned := nowAssigned[topic]; change.isNew && assigned {
+			if g.reassign == nil {
+				g.reassign = make(map[string]struct{})
+			}
+			g.reassign[topic] = struct{}{}
+		}
 	}
 
 	if !g.managing {
