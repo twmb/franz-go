@@ -83,24 +83,34 @@ func (c *Cluster) handleDeleteRecords(creq *clientReq) (kmsg.Response, error) {
 				donep(rt.Topic, rp.Partition, kerr.NotLeaderForPartition.Code)
 				continue
 			}
-			to := rp.Offset
-			if to == -1 {
-				to = pd.highWatermark
-			}
-			if to < pd.logStartOffset || to > pd.highWatermark {
-				donep(rt.Topic, rp.Partition, kerr.OffsetOutOfRange.Code)
+			to, e := c.deleteRecords(pd, rp.Offset)
+			if e != nil {
+				donep(rt.Topic, rp.Partition, e.Code)
 				continue
 			}
-			// logStartOffset is not persisted live. On crash
-			// recovery without a snapshot it resets to 0,
-			// matching real Kafka unclean leader election.
-			// The snapshot captures it on clean shutdown.
-			pd.logStartOffset = to
-			c.trimLeft(pd)
 			sp := donep(rt.Topic, rp.Partition, 0)
 			sp.LowWatermark = to
 		}
 	}
 
 	return resp, nil
+}
+
+// deleteRecords truncates the partition to offset, as DeleteRecords does. An
+// offset of -1 truncates to the high watermark. We return the new log start
+// offset, which the response reports as the low watermark.
+func (c *Cluster) deleteRecords(pd *partData, offset int64) (int64, *kerr.Error) {
+	to := offset
+	if to == -1 {
+		to = pd.highWatermark
+	}
+	if to < pd.logStartOffset || to > pd.highWatermark {
+		return 0, kerr.OffsetOutOfRange
+	}
+	// logStartOffset is not persisted live. On crash recovery without a
+	// snapshot it resets to 0, matching real Kafka unclean leader
+	// election. The snapshot captures it on clean shutdown.
+	pd.logStartOffset = to
+	c.trimLeft(pd)
+	return to, nil
 }

@@ -86,39 +86,7 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 	var toDeletes []toDelete
 	defer func() {
 		for _, td := range toDeletes {
-			// Close active segment files before removing partition directories.
-			if t, ok := c.data.tps.gett(td.topic); ok {
-				for p, pd := range t {
-					pd.closeAllFiles(false)
-					pdir := partDir(c.storageDir, td.topic, p)
-					if err := c.fs.RemoveAll(pdir); err != nil {
-						c.cfg.logger.Logf(LogLevelWarn, "delete topic %s partition %d dir: %v", td.topic, p, err)
-					}
-				}
-			}
-			delete(c.data.tps, td.topic)
-			delete(c.data.id2t, td.id)
-			delete(c.data.t2id, td.topic)
-			delete(c.data.treplicas, td.topic)
-			delete(c.data.tcfgs, td.topic)
-			delete(c.data.tnorms, normalizeTopicName(td.topic))
-			// Producer state is per-log and dies with the topic: a
-			// recreated topic rehydrates empty state, and handleProduce
-			// decides what each version accepts from a producer it has
-			// no state for. Transactional REGISTRATIONS survive (the
-			// coordinator is name-keyed on a real broker); endTx
-			// re-resolves current partition data when writing markers.
-			for _, pidinf := range c.pids.ids {
-				delete(pidinf.windows, td.topic)
-			}
-			// Share-partition state is topic-ID-keyed on a real broker
-			// and dies with the topic; kfake keys by name, so clear it
-			// explicitly: a recreated topic starts share consumption
-			// fresh (SPSO per group config, no acquired records).
-			for _, sg := range c.shareGroups.gs {
-				delete(sg.partitions, td.topic)
-			}
-			c.dropGroupCommits(td.topic)
+			c.deleteTopic(td.topic, td.id)
 		}
 		if len(toDeletes) > 0 {
 			c.notifyTopicChange()
@@ -147,8 +115,7 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 				continue
 			}
 		}
-		t, ok := c.data.tps.gett(topic)
-		if !ok {
+		if _, ok := c.data.tps.gett(topic); !ok {
 			if rt.Topic != nil {
 				donet(&topic, id, kerr.UnknownTopicOrPartition.Code)
 			} else {
@@ -159,12 +126,54 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 
 		donet(&topic, id, 0)
 		toDeletes = append(toDeletes, toDelete{topic, id})
-		for _, pd := range t {
-			for watch := range pd.watch {
-				watch.deleted()
-			}
-		}
 	}
 
 	return resp, nil
+}
+
+// deleteTopic wakes the topic's watching fetchers and tears the topic down:
+// its data, its files, and everything else keyed by the topic. The caller
+// runs notifyTopicChange, refreshCompactTicker and persistTopicsState once,
+// after its whole batch.
+func (c *Cluster) deleteTopic(topic string, id uuid) {
+	t, ok := c.data.tps.gett(topic)
+	if !ok {
+		return
+	}
+	for _, pd := range t {
+		for watch := range pd.watch {
+			watch.deleted()
+		}
+	}
+	// Close active segment files before removing partition directories.
+	for p, pd := range t {
+		pd.closeAllFiles(false)
+		pdir := partDir(c.storageDir, topic, p)
+		if err := c.fs.RemoveAll(pdir); err != nil {
+			c.cfg.logger.Logf(LogLevelWarn, "delete topic %s partition %d dir: %v", topic, p, err)
+		}
+	}
+	delete(c.data.tps, topic)
+	delete(c.data.id2t, id)
+	delete(c.data.t2id, topic)
+	delete(c.data.treplicas, topic)
+	delete(c.data.tcfgs, topic)
+	delete(c.data.tnorms, normalizeTopicName(topic))
+	// Producer state is per-log and dies with the topic: a recreated topic
+	// rehydrates empty state, and handleProduce decides what each version
+	// accepts from a producer it has no state for. Transactional
+	// REGISTRATIONS survive (the coordinator is name-keyed on a real
+	// broker); endTx re-resolves current partition data when writing
+	// markers.
+	for _, pidinf := range c.pids.ids {
+		delete(pidinf.windows, topic)
+	}
+	// Share-partition state is topic-ID-keyed on a real broker and dies
+	// with the topic; kfake keys by name, so clear it explicitly: a
+	// recreated topic starts share consumption fresh (SPSO per group
+	// config, no acquired records).
+	for _, sg := range c.shareGroups.gs {
+		delete(sg.partitions, topic)
+	}
+	c.dropGroupCommits(topic)
 }
