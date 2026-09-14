@@ -4674,36 +4674,15 @@ func TestIssue1422(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			// Each inner slice is produced as one batch: a long linger
-			// buffers the records, and Flush sends them together.
-			// Timestamps go backwards within batch 1 and from batch 1
-			// to batch 2.
+			// One batch per inner slice. Timestamps go backwards
+			// within batch 1 and from batch 1 to batch 2.
 			batches := [][]int64{
 				{10_000, 10_010, 10_010, 10_020}, // offsets 0-3
 				{10_060, 10_050},                 // offsets 4-5
 				{10_030, 10_040},                 // offsets 6-7
 				{10_070},                         // offset 8
 			}
-			pcl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.ProducerLinger(time.Minute))
-			var offset int64
-			for _, tss := range batches {
-				var recs []*kgo.Record
-				for _, ts := range tss {
-					recs = append(recs, &kgo.Record{Value: []byte("v"), Timestamp: time.UnixMilli(ts)})
-				}
-				for _, r := range recs {
-					pcl.Produce(ctx, r, nil)
-				}
-				if err := pcl.Flush(ctx); err != nil {
-					t.Fatal(err)
-				}
-				for _, r := range recs {
-					if r.Offset != offset {
-						t.Fatalf("record with timestamp %d landed at offset %d, want %d", r.Timestamp.UnixMilli(), r.Offset, offset)
-					}
-					offset++
-				}
-			}
+			produceBatches(t, c, topic, batches)
 			// The search binary searches the running max of the batch
 			// max timestamps, which must be exact both as produced and
 			// as reloaded.
@@ -4748,7 +4727,6 @@ func TestIssue1422(t *testing.T) {
 			checkIndex("after producing")
 
 			if tc.restart {
-				pcl.Close()
 				c.Close()
 				if tc.replay {
 					if err := os.Remove(filepath.Join(dir, "partitions", topic+"-0", "snapshot.json")); err != nil {
@@ -4894,15 +4872,7 @@ func TestListOffsetsMaxTimestampFirstRecord(t *testing.T) {
 				{20, 30},     // offsets 3-4
 				{25},         // offset 5
 			}
-			pcl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.ProducerLinger(time.Minute))
-			for _, tss := range batches {
-				for _, ts := range tss {
-					pcl.Produce(ctx, &kgo.Record{Value: []byte("v"), Timestamp: time.UnixMilli(ts)}, nil)
-				}
-				if err := pcl.Flush(ctx); err != nil {
-					t.Fatal(err)
-				}
-			}
+			produceBatches(t, c, topic, batches)
 			pd, _ := c.data.tps.getp(topic, 0)
 			if pd.totalBatches() != len(batches) || (tc.segBytes != "" && len(pd.segments) != len(batches)) {
 				t.Fatalf("produced %d batches in %d segments", pd.totalBatches(), len(pd.segments))

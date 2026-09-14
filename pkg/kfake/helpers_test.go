@@ -2,7 +2,10 @@ package kfake
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -10,6 +13,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 type testMemFS struct{ fs fs }
@@ -105,6 +109,84 @@ func produceN(t *testing.T, c *Cluster, topic string, n int) {
 }
 
 func stringp(s string) *string { return &s }
+
+// timestampBatch builds the wire bytes of one v2 record batch whose records
+// carry the given millisecond timestamps, patching Length and a valid
+// Castagnoli CRC.
+func timestampBatch(tss []int64) []byte {
+	first := tss[0]
+	var recs []byte
+	for i, ts := range tss {
+		r := kmsg.Record{
+			OffsetDelta:      int32(i),
+			TimestampDelta64: ts - first,
+			Value:            []byte("v"),
+		}
+		// Length counts the bytes after the length varint itself, so we
+		// serialize once with Length 0 to measure and once with it set.
+		// Both are a one byte varint for records this small.
+		r.Length = int32(len(r.AppendTo(nil)) - 1)
+		recs = append(recs, r.AppendTo(nil)...)
+	}
+	rb := kmsg.RecordBatch{
+		PartitionLeaderEpoch: -1,
+		Magic:                2,
+		LastOffsetDelta:      int32(len(tss)) - 1,
+		FirstTimestamp:       first,
+		MaxTimestamp:         slices.Max(tss),
+		ProducerID:           -1,
+		ProducerEpoch:        -1,
+		FirstSequence:        -1,
+		NumRecords:           int32(len(tss)),
+		Records:              recs,
+	}
+	raw := rb.AppendTo(nil)
+	// Length covers every byte after FirstOffset(8)+Length(4), and the
+	// Castagnoli CRC covers from Attributes (byte 21) onward.
+	binary.BigEndian.PutUint32(raw[8:12], uint32(len(raw)-12))
+	binary.BigEndian.PutUint32(raw[17:21], crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+	return raw
+}
+
+// produceBatches sends one Produce request per inner slice, each carrying a
+// single record batch whose records have the given millisecond timestamps.
+// A test that needs exact batch boundaries has to put them on the wire
+// itself. A long linger with a Flush per batch does not give you one batch
+// per flush: a drain loop can still be running from the previous flush, and
+// it sends whatever is buffered the moment its in flight slot frees, which
+// splits the batch you are building.
+func produceBatches(t *testing.T, c *Cluster, topic string, batches [][]int64) {
+	t.Helper()
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 12) // Produce v13 identifies topics by ID; v12 takes the name
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	defer cl.Close()
+
+	var offset int64
+	for _, tss := range batches {
+		req := kmsg.NewPtrProduceRequest()
+		req.Acks = -1
+		req.TimeoutMillis = 5000
+		rt := kmsg.NewProduceRequestTopic()
+		rt.Topic = topic
+		rp := kmsg.NewProduceRequestTopicPartition()
+		rp.Records = timestampBatch(tss)
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		resp, err := req.RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatalf("producing %v: %v", tss, err)
+		}
+		p := resp.Topics[0].Partitions[0]
+		if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+			t.Fatalf("producing %v: %v", tss, err)
+		}
+		if p.BaseOffset != offset {
+			t.Fatalf("batch %v landed at offset %d, want %d", tss, p.BaseOffset, offset)
+		}
+		offset += int64(len(tss))
+	}
+}
 
 // produceShareN creates a plain client, sets share.auto.offset.reset=earliest
 // for the given group, produces n string records to the topic, and flushes.
