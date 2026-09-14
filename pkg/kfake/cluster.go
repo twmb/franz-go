@@ -749,16 +749,12 @@ outer:
 			// held until cc.write() processes the response.
 			//
 			// acks=0 produce requests have no response at all, but
-			// cc.write() serializes responses by sequence number;
-			// if we simply skipped this request's sequence, every
-			// later response on the connection would wait forever
-			// in the out-of-order buffer (a real broker responds
-			// to later requests on such a connection normally).
-			// Send a skip sentinel: write() advances its sequence
-			// and unmutes without writing anything.
+			// the mute is held until write() runs. Send a skip
+			// sentinel: write() unmutes without writing anything so
+			// that read() can submit the next request.
 			if req, ok := kreq.(*kmsg.ProduceRequest); ok && req.Acks == 0 {
 				select {
-				case creq.cc.respCh <- clientResp{corr: creq.corr, seq: creq.seq, skip: true}:
+				case creq.cc.respCh <- clientResp{corr: creq.corr, skip: true}:
 				case <-creq.cc.done:
 				case <-c.die:
 					return
@@ -768,7 +764,7 @@ outer:
 		}
 
 		select {
-		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err, seq: creq.seq}:
+		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err}:
 		case <-creq.cc.done:
 		case <-c.die:
 			return
