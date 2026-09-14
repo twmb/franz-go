@@ -466,35 +466,6 @@ outer:
 			handled bool
 		)
 
-		// Drain ready watchers before the main select so that
-		// completed long-polls are dispatched promptly. Under
-		// heavy parallel load (many tests with -race), the
-		// main select's random pick can starve watchers in
-		// favor of reqCh, causing fetch timeouts.
-		for {
-			select {
-			case w = <-c.watchFetchCh:
-				if w.cleaned {
-					w = nil
-					continue
-				}
-				w.cleanup()
-				creq = w.creq
-			case wsf = <-c.shareGroups.watchFetchCh:
-				if wsf.cleaned {
-					wsf = nil
-					continue
-				}
-				wsf.cleanup()
-				creq = wsf.creq
-			default:
-				goto mainSelect
-			}
-			break
-		}
-		goto handleReq
-
-	mainSelect:
 		select {
 		case <-c.die:
 			return
@@ -616,7 +587,6 @@ outer:
 			creq = wsf.creq
 		}
 
-	handleReq:
 		kresp, err, handled = c.tryControl(creq)
 		if handled {
 			goto afterControl
