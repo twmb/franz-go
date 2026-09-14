@@ -876,12 +876,11 @@ const (
 )
 
 // defHeartbeatInterval is the default group.consumer.heartbeat.interval.ms.
-// Real Kafka defaults to 5s; in test binaries we use 100ms so that
-// KIP-848 reconciliation completes quickly.
-var defHeartbeatInterval = 5000
+// This is 5s, the same as Kafka; you lower it with the config itself.
+const defHeartbeatInterval = 5000
 
 // defSessionTimeout is the default group.consumer.session.timeout.ms.
-var defSessionTimeout = 45000
+const defSessionTimeout = 45000
 
 // Default topic and broker configs. Topic/broker pairs that share the same
 // underlying setting (e.g. max.message.bytes / message.max.bytes) both
