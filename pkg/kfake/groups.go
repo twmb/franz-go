@@ -2985,7 +2985,12 @@ func (g *group) expireOffsets(retentionMs int64, hasUnstableOffsets bool) bool {
 		return false
 	}
 	if g.typ == "consumer" {
-		return g.activeConsumerCount() == 0
+		// A static member parked at epoch -2 is still a member: it
+		// keeps the instance ID mapping it rejoins through, and Kafka
+		// calls the group empty only when it holds no members at all.
+		// Deleting the group here would throw that mapping away while
+		// the member is briefly gone.
+		return len(g.consumerMembers) == 0
 	}
 	return g.state == groupEmpty
 }
