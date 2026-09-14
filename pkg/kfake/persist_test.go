@@ -28,14 +28,11 @@ func TestPersistProduceCloseReopen(t *testing.T) {
 
 	// Phase 1: create cluster, produce records, close
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			SeedTopics(1, "test-topic"),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
 		if err != nil {
 			t.Fatal(err)
@@ -65,13 +62,10 @@ func TestPersistProduceCloseReopen(t *testing.T) {
 
 	// Phase 2: reopen, consume and verify
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		cl := newPlainClient(t, c,
@@ -100,15 +94,12 @@ func TestPersistSyncWritesCrashRecovery(t *testing.T) {
 
 	// Phase 1: create cluster with SyncWrites, produce, then simulate crash (don't Close)
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			SyncWrites(),
 			NumBrokers(1),
 			SeedTopics(1, "sync-topic"),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
 		if err != nil {
 			t.Fatal(err)
@@ -133,13 +124,10 @@ func TestPersistSyncWritesCrashRecovery(t *testing.T) {
 
 	// Phase 2: reopen without Close having been called, verify data recovered
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		cl := newPlainClient(t, c,
@@ -163,14 +151,11 @@ func TestPersistGroupCommitsRestart(t *testing.T) {
 
 	// Phase 1: produce, consume with group, commit offsets, close
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		// Produce records
 		produceN(t, c, topic, 10)
@@ -203,13 +188,10 @@ func TestPersistGroupCommitsRestart(t *testing.T) {
 
 	// Phase 2: reopen, consume from group - should resume from offset 5
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		o, ok := groupCommits(c, group)[topic][0]
@@ -233,14 +215,11 @@ func TestPersistPIDEpochRestart(t *testing.T) {
 	var origPID int64
 	var origEpoch int16
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			SeedTopics(1, "pid-topic"),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		cl, err := kgo.NewClient(
 			kgo.SeedBrokers(c.ListenAddrs()...),
 			kgo.TransactionalID("test-txn"),
@@ -283,13 +262,10 @@ func TestPersistPIDEpochRestart(t *testing.T) {
 
 	// Phase 2: reopen, verify PID is recoverable
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		// Init a new client with same txn ID - should get same PID with bumped epoch
@@ -336,16 +312,13 @@ func TestPersistACLsRestart(t *testing.T) {
 
 	// Phase 1: create with ACLs, close
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			EnableSASL(),
 			Superuser("PLAIN", "admin", "admin"),
 			EnableACLs(),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		saslOpt := kgo.SASL(plain.Plain(func(_ context.Context) (plain.Auth, error) {
 			return plain.Auth{User: "admin", Pass: "admin"}, nil
 		}))
@@ -372,16 +345,13 @@ func TestPersistACLsRestart(t *testing.T) {
 
 	// Phase 2: reopen, verify ACLs persisted
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			EnableSASL(),
 			Superuser("PLAIN", "admin", "admin"),
 			EnableACLs(),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		saslOpt := kgo.SASL(plain.Plain(func(_ context.Context) (plain.Auth, error) {
@@ -410,28 +380,22 @@ func TestPersistBrokerConfigsRestart(t *testing.T) {
 
 	// Phase 1: set broker configs, close
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			BrokerConfigs(map[string]string{
 				"log.retention.ms": "86400000",
 			}),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		c.Close()
 	}
 
 	// Phase 2: reopen, verify config persisted
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		cl := newPlainClient(t, c)
@@ -464,14 +428,11 @@ func TestPersistTopicConfigsRestart(t *testing.T) {
 
 	// Phase 1: create topic, set topic configs via AlterConfigs, close.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -495,13 +456,10 @@ func TestPersistTopicConfigsRestart(t *testing.T) {
 
 	// Phase 2: reopen, verify topic configs persisted.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		cl := newPlainClient(t, c)
@@ -539,15 +497,12 @@ func TestPersistCRCCorruption(t *testing.T) {
 
 	// Phase 1: create cluster with SyncWrites, produce, close properly
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			SyncWrites(),
 			NumBrokers(1),
 			SeedTopics(1, "crc-topic"),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		produceN(t, c, "crc-topic", 5)
 		c.Close()
 	}
@@ -582,13 +537,10 @@ func TestPersistCRCCorruption(t *testing.T) {
 
 	// Phase 2: reopen with full replay - should truncate corrupt entry
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		// HWM should reflect only the recovered (non-corrupt) batches.
@@ -618,7 +570,7 @@ func TestPersistSegmentRollover(t *testing.T) {
 
 	// Use a very small segment size to force rollover
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			SeedTopics(1, "seg-topic"),
@@ -626,9 +578,6 @@ func TestPersistSegmentRollover(t *testing.T) {
 				"log.segment.bytes": "100", // tiny segment size
 			}),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
 		if err != nil {
 			t.Fatal(err)
@@ -663,13 +612,10 @@ func TestPersistSegmentRollover(t *testing.T) {
 	}
 	// Reopen and verify all records
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		cl := newPlainClient(t, c,
@@ -711,14 +657,11 @@ func TestPersistMultipleTopics(t *testing.T) {
 
 	// Phase 1: create multiple topics with data
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			SeedTopics(2, topics...),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
 		if err != nil {
 			t.Fatal(err)
@@ -740,13 +683,10 @@ func TestPersistMultipleTopics(t *testing.T) {
 
 	// Phase 2: reopen and verify all topics
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		adm := kadm.NewClient(newPlainClient(t, c))
@@ -775,15 +715,12 @@ func TestPersistSyncWritesGroupCommitCrash(t *testing.T) {
 
 	// Phase 1: produce, consume with group, commit, then crash (no Close)
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			SyncWrites(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		produceN(t, c, topic, 10)
 
@@ -814,13 +751,10 @@ func TestPersistSyncWritesGroupCommitCrash(t *testing.T) {
 
 	// Phase 2: reopen, verify committed offsets survived the crash
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		o, ok := groupCommits(c, group)[topic][0]
@@ -844,15 +778,12 @@ func TestPersistSyncWritesOffsetDeleteCrash(t *testing.T) {
 
 	// Phase 1: produce, commit offsets, then delete them, then crash
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			SyncWrites(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		produceN(t, c, topic, 5)
 
@@ -899,13 +830,10 @@ func TestPersistSyncWritesOffsetDeleteCrash(t *testing.T) {
 	// The group may not exist at all (GROUP_ID_NOT_FOUND) since
 	// the only commit was deleted - that's also a valid outcome.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		if _, ok := groupCommits(c, group)[topic][0]; ok {
@@ -926,15 +854,12 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 
 	// Phase 1: produce, then use transactional offset commit, crash
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			SyncWrites(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		// Produce some records
 		produceN(t, c, topic, 10)
@@ -1024,13 +949,10 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 
 	// Phase 2: reopen, verify transactional offset commit survived
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		o, ok := groupCommits(c, group)[topic][0]
@@ -1056,15 +978,12 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 	// Phase 1: create group, trigger multiple rebalance cycles, crash
 	var lastGeneration int32
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			SyncWrites(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -1107,13 +1026,10 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 
 	// Phase 2: reopen, raw JoinGroup to verify generation continues.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1208,15 +1124,12 @@ func TestPersistStaticMemberDeleteCrash(t *testing.T) {
 
 	// Phase 1: join with static member, explicitly leave, crash
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			SyncWrites(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1309,13 +1222,10 @@ func TestPersistStaticMemberDeleteCrash(t *testing.T) {
 	// FENCED_INSTANCE_ID. Using the instanceID here (not a dynamic join)
 	// ensures we actually exercise that code path.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1349,10 +1259,7 @@ func TestPersistAbortedTxnsRestart(t *testing.T) {
 
 			// Phase 1: produce committed + aborted transactional records, clean shutdown.
 			{
-				c, err := NewCluster(DataDir(dir), SyncWrites(), NumBrokers(1), SeedTopics(1, topic))
-				if err != nil {
-					t.Fatal(err)
-				}
+				c := newCluster(t, DataDir(dir), SyncWrites(), NumBrokers(1), SeedTopics(1, topic))
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				cl, err := kgo.NewClient(
@@ -1405,10 +1312,7 @@ func TestPersistAbortedTxnsRestart(t *testing.T) {
 
 			// Phase 2: reopen and verify read_committed filters aborted records.
 			{
-				c, err := NewCluster(DataDir(dir), NumBrokers(1))
-				if err != nil {
-					t.Fatal(err)
-				}
+				c := newCluster(t, DataDir(dir), NumBrokers(1))
 				defer c.Close()
 				cl := newPlainClient(t, c,
 					kgo.FetchIsolationLevel(kgo.ReadCommitted()),
@@ -1455,15 +1359,12 @@ func TestPersistSaveGroupsLogCloseBeforeTruncate(t *testing.T) {
 
 	// Phase 1: create multiple groups with live offset commits, close cleanly.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			SyncWrites(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1500,13 +1401,10 @@ func TestPersistSaveGroupsLogCloseBeforeTruncate(t *testing.T) {
 
 	// Phase 2: reopen, verify all 3 groups' offsets survived.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		for i := range 3 {
@@ -1579,15 +1477,12 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 	// Phase 1: produce committed records (txn1), then start a second
 	// transaction and produce records but DON'T commit - simulate crash.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			SyncWrites(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1637,13 +1532,10 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 
 	// Phase 2: reopen (full replay), verify in-flight txn is implicitly aborted.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		// Verify LSO has advanced past all records (in-flight was aborted).
@@ -1745,14 +1637,11 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 	// Phase 1: produce committed records, then produce in-progress
 	// records and do a CLEAN shutdown (c.Close()).
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1807,13 +1696,10 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 
 	// Phase 2: reopen with same memFS, verify in-progress txn is preserved.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		// LSO should be behind HWM (in-progress transaction).
@@ -1899,14 +1785,11 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 
 	// Phase 1: produce in a transaction, close without committing.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1940,13 +1823,10 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 
 	// Phase 2: reopen - the expired txn should be auto-aborted.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		// LSO should equal HWM - the txn was aborted, not restored.
@@ -2003,15 +1883,12 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 	// Phase 1: create a consumer group, then close the server FIRST so
 	// the client's LeaveGroup fails - simulating a restart.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 			GroupMinSessionTimeout(500*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -2061,14 +1938,11 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 	// Phase 2: restart, verify phantom is alive (500ms < 1s), close.
 	// This advances shutdownAt to ~500ms after the real LastHeartbeat.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 			GroupMinSessionTimeout(500*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		g := c.GroupInfo(group)
 		if g == nil || g.State != "Stable" {
@@ -2090,14 +1964,11 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 	// phase 1 (~1.1s ago) -> expired. Without the fix, fallback to
 	// shutdownAt from phase 2 (~600ms ago) -> alive (bug).
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 			GroupMinSessionTimeout(500*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		g := c.GroupInfo(group)
@@ -2146,15 +2017,12 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 	// Phase 1: create an 848 consumer group, then close the server
 	// FIRST so the client's leave heartbeat fails.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 			brokerCfgs,
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		ctx, cancel := context.WithTimeout(ctx848, 5*time.Second)
 		defer cancel()
@@ -2196,14 +2064,11 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 
 	// Phase 2: restart, verify phantom is alive (500ms < 1s), close.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 			brokerCfgs,
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		state, members := describe848(c)
 		if state != "Stable" {
@@ -2223,14 +2088,11 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 	// (~1.1s ago) -> expired. Without the fix, fallback to shutdownAt
 	// from phase 2 (~600ms ago) -> alive (bug).
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 			brokerCfgs,
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		state, members := describe848(c)
@@ -2255,15 +2117,12 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 	// Phase 1: produce records, clean shutdown (creates snapshot).
 	var savedNbytes int64
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			SyncWrites(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -2297,13 +2156,10 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 
 	// Phase 2: reopen from snapshot, verify exact nbytes match.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		pi := c.PartitionInfo(topic, 0)
@@ -2369,15 +2225,12 @@ func TestPersistSnapshotTruncatedSegment(t *testing.T) {
 
 	// Phase 1: produce records, close cleanly (writes snapshot + segments).
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			SyncWrites(),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		produceN(t, c, topic, 10)
 
 		pi := c.PartitionInfo(topic, 0)
@@ -2416,13 +2269,10 @@ func TestPersistSnapshotTruncatedSegment(t *testing.T) {
 	// Phase 2: reopen with snapshot + truncated segment.
 	// HWM should be clamped to match the actual loaded batches.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		pi := c.PartitionInfo(topic, 0)
@@ -2453,13 +2303,10 @@ func TestPersistQuotasRestart(t *testing.T) {
 
 	// Phase 1: set quotas, close.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		cl := newPlainClient(t, c)
 		req := kmsg.NewAlterClientQuotasRequest()
 		entry := kmsg.NewAlterClientQuotasRequestEntry()
@@ -2489,13 +2336,10 @@ func TestPersistQuotasRestart(t *testing.T) {
 
 	// Phase 2: reopen, verify quotas persisted.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		cl := newPlainClient(t, c)
@@ -2546,14 +2390,11 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 
 	// Phase 1: create two topics, produce data, delete one, close.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			SeedTopics(1, keepTopic, deleteTopic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		produceN(t, c, keepTopic, 5)
 		produceN(t, c, deleteTopic, 5)
 		if err := c.DeleteTopic(deleteTopic); err != nil {
@@ -2571,13 +2412,10 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 
 	// Phase 2: reopen and verify.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		adm := kadm.NewClient(newPlainClient(t, c))
@@ -2617,14 +2455,11 @@ func TestPersistSessionStateClassicGroup(t *testing.T) {
 
 	// Phase 1: produce, create a classic consumer group with one member, close
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		// Produce records
 		produceN(t, c, topic, 10)
@@ -2667,13 +2502,10 @@ func TestPersistSessionStateClassicGroup(t *testing.T) {
 
 	// Phase 2: reopen - session state should be loaded and file deleted
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		// session_state.json should be deleted after load
@@ -2744,14 +2576,11 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 
 	// Phase 1: init PID, produce 3 batches, close cleanly
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 			SeedTopics(1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -2793,13 +2622,10 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 
 	// Phase 2: reopen, retry the last produce - should be a dup
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -2868,14 +2694,11 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 
 	// Phase 1: create cluster, join group, commit offsets, close.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			NumBrokers(1),
 			DataDir(dir),
 			SeedTopics(-1, topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		cl, err := kgo.NewClient(
 			kgo.SeedBrokers(c.ListenAddrs()...),
 			kgo.ConsumerGroup(group),
@@ -2903,14 +2726,11 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 	// was closed). Send a raw OffsetCommit with a stale generation - this
 	// should fail with IllegalGeneration but NOT kill the group.
 	{
-		c, err := NewCluster(
+		c := newCluster(t,
 			NumBrokers(1),
 			DataDir(dir),
 			Ports(0),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		cl := newPlainClient(t, c)
@@ -2971,7 +2791,7 @@ func TestPersistLogCompaction(t *testing.T) {
 	const group = "compact-group"
 
 	// Use a low threshold so compaction triggers quickly.
-	c, err := NewCluster(
+	c := newCluster(t,
 		DataDir(dir),
 		NumBrokers(1),
 		SeedTopics(1, topic),
@@ -2979,9 +2799,6 @@ func TestPersistLogCompaction(t *testing.T) {
 			"state.log.compact.bytes": "1024",
 		}),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -3041,16 +2858,13 @@ func TestPersistLogCompaction(t *testing.T) {
 	c.Close()
 
 	// Reopen and verify state survives restart after compaction.
-	c2, err := NewCluster(
+	c2 := newCluster(t,
 		DataDir(dir),
 		NumBrokers(1),
 		BrokerConfigs(map[string]string{
 			"state.log.compact.bytes": "1024",
 		}),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer c2.Close()
 
 	o2, ok := groupCommits(c2, group)[topic][0]
@@ -3072,7 +2886,7 @@ func TestPersistLogCompactionCrashGroups(t *testing.T) {
 
 	const topic = "crash-topic"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		DataDir(dir),
 		NumBrokers(1),
 		SeedTopics(1, topic),
@@ -3080,9 +2894,6 @@ func TestPersistLogCompactionCrashGroups(t *testing.T) {
 			"state.log.compact.bytes": "128", // very aggressive
 		}),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -3151,13 +2962,10 @@ func TestPersistLogCompactionCrashGroups(t *testing.T) {
 	c.Close()
 
 	// Open from crash snapshot (no Close was called on original - simulates crash).
-	c2, err := NewCluster(
+	c2 := newCluster(t,
 		DataDir(crashDir),
 		NumBrokers(1),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer c2.Close()
 
 	for g := range nGroups {
@@ -3182,7 +2990,7 @@ func TestPersistLogCompactionCrashPIDs(t *testing.T) {
 
 	const topic = "txn-crash-topic"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		DataDir(dir),
 		NumBrokers(1),
 		SeedTopics(1, topic),
@@ -3190,9 +2998,6 @@ func TestPersistLogCompactionCrashPIDs(t *testing.T) {
 			"state.log.compact.bytes": "128", // very aggressive
 		}),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -3227,7 +3032,7 @@ func TestPersistLogCompactionCrashPIDs(t *testing.T) {
 
 	// Check pids.log size - should have been compacted
 	pidsPath := filepath.Join(dir, "pids.log")
-	_, err = os.Stat(pidsPath)
+	_, err := os.Stat(pidsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3238,13 +3043,10 @@ func TestPersistLogCompactionCrashPIDs(t *testing.T) {
 	c.Close()
 
 	// Open from crash snapshot
-	c2, err := NewCluster(
+	c2 := newCluster(t,
 		DataDir(crashDir),
 		NumBrokers(1),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer c2.Close()
 
 	// Verify we can still produce with the same txn IDs (PIDs survived)
@@ -3337,10 +3139,7 @@ func TestPersistShareGroupSPSO(t *testing.T) {
 
 	// Phase 1: produce, consume all records via share group, ack, close.
 	{
-		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
 
 		produceShareN(t, c, topic, group, total)
 
@@ -3372,10 +3171,7 @@ func TestPersistShareGroupSPSO(t *testing.T) {
 
 	// Phase 2: reopen, verify no records are redelivered.
 	{
-		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
 		defer c.Close()
 
 		cl := newShareConsumer(t, c, topic, group)
@@ -3395,10 +3191,7 @@ func TestPersistShareGroupAcquiredReleasedOnRestart(t *testing.T) {
 
 	// Phase 1: produce, acquire records via raw ShareFetch (no ack), close.
 	{
-		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
 
 		produceShareN(t, c, topic, group, total)
 
@@ -3418,10 +3211,7 @@ func TestPersistShareGroupAcquiredReleasedOnRestart(t *testing.T) {
 
 	// Phase 2: reopen, verify the records are available for redelivery.
 	{
-		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
 		defer c.Close()
 
 		cl := newShareConsumer(t, c, topic, group)
@@ -3443,10 +3233,7 @@ func TestPersistShareGroupConfigRestart(t *testing.T) {
 
 	// Phase 1: set share.auto.offset.reset=earliest, produce records, close.
 	{
-		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
 		c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 		produceN(t, c, topic, 10)
 		c.Close()
@@ -3455,10 +3242,7 @@ func TestPersistShareGroupConfigRestart(t *testing.T) {
 	// Phase 2: reopen, join share group. If the config survived, the SPSO
 	// should start at 0 (earliest) and we should see the 10 records.
 	{
-		c, err := NewCluster(tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
 		defer c.Close()
 
 		cl := newShareConsumer(t, c, topic, group)
@@ -3486,15 +3270,12 @@ func TestPersistShareGroupArchivedNotRedelivered(t *testing.T) {
 
 	// Phase 1: produce records, drain-with-release until archived, close.
 	{
-		c, err := NewCluster(tmem.opt(), NumBrokers(1),
+		c := newCluster(t, tmem.opt(), NumBrokers(1),
 			SeedTopics(1, topic),
 			BrokerConfigs(map[string]string{
 				"group.share.delivery.count.limit": strconv.Itoa(maxDelivery),
 			}),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		produceShareN(t, c, topic, group, total)
 
@@ -3535,15 +3316,12 @@ func TestPersistShareGroupArchivedNotRedelivered(t *testing.T) {
 
 	// Phase 2: reopen with same max delivery config, verify no records.
 	{
-		c, err := NewCluster(tmem.opt(), NumBrokers(1),
+		c := newCluster(t, tmem.opt(), NumBrokers(1),
 			SeedTopics(1, topic),
 			BrokerConfigs(map[string]string{
 				"group.share.delivery.count.limit": strconv.Itoa(maxDelivery),
 			}),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer c.Close()
 
 		cl := newShareConsumer(t, c, topic, group)
