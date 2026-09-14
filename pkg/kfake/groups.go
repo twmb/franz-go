@@ -22,7 +22,6 @@ type (
 
 	group struct {
 		c    *Cluster
-		gs   *groups
 		name string
 		typ  string
 
@@ -256,7 +255,6 @@ func (g *group) logName() string { return g.name[:min(16, len(g.name))] }
 func (gs *groups) newGroup(name string) *group {
 	return &group{
 		c:             gs.c,
-		gs:            gs,
 		name:          name,
 		typ:           "classic", // group-coordinator/src/main/java/org/apache/kafka/coordinator/group/Group.java
 		members:       make(map[string]*groupMember),
@@ -270,9 +268,6 @@ func (gs *groups) newGroup(name string) *group {
 // exist. The second return is whether we created it: if the very first
 // request to a new group is invalid, the caller drops the group again.
 func (gs *groups) newOrExisting(name string) (*group, bool) {
-	if gs.gs == nil {
-		gs.gs = make(map[string]*group)
-	}
 	if g := gs.gs[name]; g != nil {
 		return g, false
 	}
@@ -307,9 +302,6 @@ func (gs *groups) handleJoin(creq *clientReq) kmsg.Response {
 
 // Returns the response and true if the group exists, otherwise false.
 func (gs *groups) handleHijack(group string, fn func(*group) kmsg.Response) (kmsg.Response, bool) {
-	if gs.gs == nil {
-		return nil, false
-	}
 	g := gs.gs[group]
 	if g == nil {
 		return nil, false
@@ -782,7 +774,7 @@ func (g *group) stopTimers() {
 func (g *group) kill() {
 	g.state = groupDead
 	g.stopTimers()
-	delete(g.gs.gs, g.name)
+	delete(g.c.groups.gs, g.name)
 }
 
 // Handles a join. We do not do the delayed join aspects in Kafka, we just punt
@@ -1504,7 +1496,7 @@ func (g *group) maxRebalanceTimeoutMs() int32 {
 func (g *group) timerWork(d time.Duration, fn func()) *time.Timer {
 	return time.AfterFunc(d, func() {
 		work := func() {
-			if g.gs.gs[g.name] != g {
+			if g.c.groups.gs[g.name] != g {
 				return
 			}
 			fn()

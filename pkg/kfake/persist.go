@@ -1625,9 +1625,6 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 	r := replayGroupsLog(entries)
 
 	// Initialize groups from replayed state
-	if c.groups.gs == nil {
-		c.groups.gs = make(map[string]*group)
-	}
 	for name, data := range r.metas {
 		var meta groupLogEntry
 		json.Unmarshal(data, &meta)

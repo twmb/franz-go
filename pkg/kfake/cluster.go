@@ -195,6 +195,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 	c.data.c = c
 	c.groups.c = c
+	c.groups.gs = make(map[string]*group)
 	c.shareGroups.c = c
 	c.shareGroups.gs = make(map[string]*shareGroup)
 	c.shareGroups.sessions = make(map[shareSessionKey]*shareSession)

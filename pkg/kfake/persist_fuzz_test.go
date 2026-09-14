@@ -587,9 +587,6 @@ func TestChaosGroupCommitsCrashRecover(t *testing.T) {
 		for _, gn := range groupNames {
 			var g *group
 			c.admin(func() {
-				if c.groups.gs == nil {
-					c.groups.gs = make(map[string]*group)
-				}
 				g = c.groups.newGroup(gn)
 				c.groups.gs[gn] = g
 			})
@@ -901,9 +898,6 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 	// Create a group and set up 848 metadata.
 	var g *group
 	c.admin(func() {
-		if c.groups.gs == nil {
-			c.groups.gs = make(map[string]*group)
-		}
 		g = c.groups.newGroup("test-848-group")
 		c.groups.gs["test-848-group"] = g
 
@@ -1197,9 +1191,6 @@ func TestPersistOffsetDeleteRoundTrip(t *testing.T) {
 	// Create a group with committed offsets
 	var g *group
 	c.admin(func() {
-		if c.groups.gs == nil {
-			c.groups.gs = make(map[string]*group)
-		}
 		g = c.groups.newGroup("g1")
 		c.groups.gs["g1"] = g
 	})

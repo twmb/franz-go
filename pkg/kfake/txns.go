@@ -828,9 +828,6 @@ func (pidinf *pidinfo) endTx(commit bool) {
 			if !hasOffsets || len(groupOffsets) == 0 {
 				continue
 			}
-			if pidinf.pids.c.groups.gs == nil {
-				pidinf.pids.c.groups.gs = make(map[string]*group)
-			}
 			g := pidinf.pids.c.groups.gs[groupID]
 			if g == nil {
 				g = pidinf.pids.c.groups.newGroup(groupID)
