@@ -585,11 +585,14 @@ func TestChaosGroupCommitsCrashRecover(t *testing.T) {
 		groupNames := []string{"g1", "g2", "g3"}
 		expectedCommits := make(map[string]map[string]int64) // group -> topic -> offset
 		for _, gn := range groupNames {
-			if c.groups.gs == nil {
-				c.groups.gs = make(map[string]*group)
-			}
-			g := c.groups.newGroup(gn)
-			c.groups.gs[gn] = g
+			var g *group
+			c.admin(func() {
+				if c.groups.gs == nil {
+					c.groups.gs = make(map[string]*group)
+				}
+				g = c.groups.newGroup(gn)
+				c.groups.gs[gn] = g
+			})
 
 			expectedCommits[gn] = make(map[string]int64)
 			for _, topic := range []string{"t1", "t2"} {
@@ -597,14 +600,14 @@ func TestChaosGroupCommitsCrashRecover(t *testing.T) {
 				expectedCommits[gn][topic] = offset
 				c.admin(func() {
 					g.commits.set(topic, 0, offsetCommit{offset: offset, leaderEpoch: -1})
-				})
-				c.persistGroupEntry(groupLogEntry{
-					Type:   "commit",
-					Group:  gn,
-					Topic:  topic,
-					Part:   0,
-					Offset: offset,
-					Epoch:  -1,
+					c.persistGroupEntry(groupLogEntry{
+						Type:   "commit",
+						Group:  gn,
+						Topic:  topic,
+						Part:   0,
+						Offset: offset,
+						Epoch:  -1,
+					})
 				})
 			}
 		}
@@ -896,25 +899,26 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 	}
 
 	// Create a group and set up 848 metadata.
-	if c.groups.gs == nil {
-		c.groups.gs = make(map[string]*group)
-	}
-	g := c.groups.newGroup("test-848-group")
-	c.groups.gs["test-848-group"] = g
-
+	var g *group
 	c.admin(func() {
+		if c.groups.gs == nil {
+			c.groups.gs = make(map[string]*group)
+		}
+		g = c.groups.newGroup("test-848-group")
+		c.groups.gs["test-848-group"] = g
+
 		g.typ = "consumer"
 		g.assignorName = "uniform"
 		g.groupEpoch = 7
-	})
 
-	// Persist the 848 metadata entry.
-	c.persistGroupEntry(groupLogEntry{
-		Type:       "meta848",
-		Group:      "test-848-group",
-		GroupType:  "consumer",
-		Assignor:   "uniform",
-		GroupEpoch: 7,
+		// Persist the 848 metadata entry.
+		c.persistGroupEntry(groupLogEntry{
+			Type:       "meta848",
+			Group:      "test-848-group",
+			GroupType:  "consumer",
+			Assignor:   "uniform",
+			GroupEpoch: 7,
+		})
 	})
 
 	// Also set a commit to verify it coexists with meta848.
@@ -1191,35 +1195,38 @@ func TestPersistOffsetDeleteRoundTrip(t *testing.T) {
 	}
 
 	// Create a group with committed offsets
-	if c.groups.gs == nil {
-		c.groups.gs = make(map[string]*group)
-	}
-	g := c.groups.newGroup("g1")
-	c.groups.gs["g1"] = g
+	var g *group
+	c.admin(func() {
+		if c.groups.gs == nil {
+			c.groups.gs = make(map[string]*group)
+		}
+		g = c.groups.newGroup("g1")
+		c.groups.gs["g1"] = g
+	})
 
 	// Commit offsets for partitions 0 and 1 (topic has 1 partition,
 	// but the group commit map is independent of actual partition count)
 	c.admin(func() {
 		g.commits.set("t1", 0, offsetCommit{offset: 100, leaderEpoch: -1})
-	})
-	c.persistGroupEntry(groupLogEntry{
-		Type:   "commit",
-		Group:  "g1",
-		Topic:  "t1",
-		Part:   0,
-		Offset: 100,
-		Epoch:  -1,
+		c.persistGroupEntry(groupLogEntry{
+			Type:   "commit",
+			Group:  "g1",
+			Topic:  "t1",
+			Part:   0,
+			Offset: 100,
+			Epoch:  -1,
+		})
 	})
 
 	// Delete partition 0's offset
 	c.admin(func() {
 		g.commits.delp("t1", 0)
-	})
-	c.persistGroupEntry(groupLogEntry{
-		Type:  "delete",
-		Group: "g1",
-		Topic: "t1",
-		Part:  0,
+		c.persistGroupEntry(groupLogEntry{
+			Type:  "delete",
+			Group: "g1",
+			Topic: "t1",
+			Part:  0,
+		})
 	})
 
 	c.Close()

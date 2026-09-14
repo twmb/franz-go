@@ -69,12 +69,11 @@ type (
 		// groups.log, pids.log, etc.) only write when persist().
 		storageDir         string
 		fs                 fs
-		groupsLogMu        sync.Mutex
 		groupsLogFile      file
 		pidsLogFile        file
-		groupsLogSize      atomic.Int64
+		groupsLogSize      int64
 		pidsLogSize        atomic.Int64
-		needsGroupsCompact atomic.Bool
+		needsGroupsCompact bool
 
 		die  chan struct{}
 		dead atomic.Bool
@@ -766,7 +765,7 @@ outer:
 		c.pids.updateTimer()
 
 	afterControl:
-		if c.needsGroupsCompact.Load() {
+		if c.needsGroupsCompact {
 			c.compactGroupsLog()
 		}
 		// If s is non-nil, this is either a previously slept control

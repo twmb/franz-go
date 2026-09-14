@@ -1616,7 +1616,7 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 		}
 		return err
 	}
-	c.groupsLogSize.Store(int64(len(raw)))
+	c.groupsLogSize = int64(len(raw))
 
 	entries, validBytes := readEntries(raw)
 	if validBytes < len(raw) {
@@ -1893,8 +1893,6 @@ func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
 	if !c.persist() || c.dead.Load() {
 		return nil
 	}
-	c.groupsLogMu.Lock()
-	defer c.groupsLogMu.Unlock()
 	if c.groupsLogFile == nil {
 		path := filepath.Join(c.cfg.dataDir, "groups.log")
 		f, err := c.fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -1911,8 +1909,9 @@ func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
 		c.groupsLogFile = nil
 		return err
 	}
-	if c.groupsLogSize.Add(int64(n)) >= c.stateLogCompactBytes() {
-		c.needsGroupsCompact.Store(true)
+	c.groupsLogSize += int64(n)
+	if c.groupsLogSize >= c.stateLogCompactBytes() {
+		c.needsGroupsCompact = true
 	}
 	return nil
 }
@@ -1977,14 +1976,10 @@ func (c *Cluster) compactPIDsLog() {
 }
 
 // compactGroupsLog rewrites groups.log keeping only the latest entry per
-// key. Unlike saveGroupsLog (which collects from live group state via
-// waitControl), this compacts from the file itself under groupsLogMu,
-// ensuring no entries are lost to a race with persistGroupEntry.
+// key. Unlike saveGroupsLog, which collects from live group state, this
+// compacts from the file itself.
 func (c *Cluster) compactGroupsLog() {
-	c.needsGroupsCompact.Store(false)
-
-	c.groupsLogMu.Lock()
-	defer c.groupsLogMu.Unlock()
+	c.needsGroupsCompact = false
 
 	// Close the live append handle so any pending data is flushed
 	// before we read the file.
@@ -2048,7 +2043,7 @@ func (c *Cluster) compactGroupsLog() {
 		return
 	}
 	if info, err := c.fs.Stat(path); err == nil {
-		c.groupsLogSize.Store(info.Size())
+		c.groupsLogSize = info.Size()
 	}
 }
 
@@ -2763,7 +2758,6 @@ func (c *Cluster) loadSessionState() error {
 
 // closeOpenFiles closes all open file handles for persistence.
 func (c *Cluster) closeOpenFiles() {
-	c.groupsLogMu.Lock()
 	if c.groupsLogFile != nil {
 		if c.cfg.syncWrites {
 			c.groupsLogFile.Sync()
@@ -2771,7 +2765,6 @@ func (c *Cluster) closeOpenFiles() {
 		c.groupsLogFile.Close()
 		c.groupsLogFile = nil
 	}
-	c.groupsLogMu.Unlock()
 	if c.pidsLogFile != nil {
 		if c.cfg.syncWrites {
 			c.pidsLogFile.Sync()
