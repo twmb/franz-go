@@ -15,11 +15,7 @@ import (
 
 func TestACLsDisabled(t *testing.T) {
 	t.Parallel()
-	c, err := NewCluster(NumBrokers(1), SeedTopics(1, "test-topic"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "test-topic"))
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -40,17 +36,13 @@ func TestACLsDisabled(t *testing.T) {
 
 func TestACLsEnabled(t *testing.T) {
 	t.Parallel()
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, "test-topic"),
 		EnableACLs(),
 		EnableSASL(),
 		User("PLAIN", "testuser", "testpass"), // no ACLs
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -78,7 +70,7 @@ func TestACLsEnabled(t *testing.T) {
 
 func TestACLsWithPermission(t *testing.T) {
 	t.Parallel()
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, "test-topic"),
 		EnableACLs(),
@@ -88,10 +80,6 @@ func TestACLsWithPermission(t *testing.T) {
 			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-topic", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationDescribe, Allow: true},
 		),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -115,16 +103,12 @@ func TestACLsWithPermission(t *testing.T) {
 
 func TestACLsSuperuser(t *testing.T) {
 	t.Parallel()
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, "test-topic"),
 		EnableACLs(),
 		Superuser("PLAIN", "admin", "adminpass"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -148,15 +132,11 @@ func TestACLsSuperuser(t *testing.T) {
 
 func TestACLCreateDescribeDelete(t *testing.T) {
 	t.Parallel()
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		EnableACLs(),
 		Superuser("PLAIN", "admin", "adminpass"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -245,7 +225,7 @@ func TestACLCreateDescribeDelete(t *testing.T) {
 
 func TestACLDenyTakesPrecedence(t *testing.T) {
 	t.Parallel()
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, "test-topic"),
 		EnableACLs(),
@@ -256,10 +236,6 @@ func TestACLDenyTakesPrecedence(t *testing.T) {
 			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-topic", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationWrite, Allow: false}, // DENY
 		),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -287,7 +263,7 @@ func TestACLDenyTakesPrecedence(t *testing.T) {
 
 func TestACLPrefixPattern(t *testing.T) {
 	t.Parallel()
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, "test-topic"),
 		SeedTopics(1, "test-topic-2"),
@@ -299,10 +275,6 @@ func TestACLPrefixPattern(t *testing.T) {
 			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-", Pattern: kmsg.ACLResourcePatternTypePrefixed, Operation: kmsg.ACLOperationDescribe, Allow: true},
 		),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
