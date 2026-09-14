@@ -1148,19 +1148,12 @@ func TestTransactionOffsetCommit(t *testing.T) {
 	}
 
 	// Verify the offsets were committed
-	adm := kadm.NewClient(txnClient)
-	offsets, err := adm.FetchOffsets(ctx, groupID)
-	if err != nil {
-		t.Fatalf("failed to fetch offsets: %v", err)
-	}
-
-	offset, ok := offsets.Lookup(inputTopic, 0)
+	offset, ok := groupCommits(c, groupID)[inputTopic][0]
 	if !ok {
 		t.Fatal("offset not found for input topic")
 	}
-
-	if offset.At != int64(consumed) {
-		t.Errorf("expected committed offset %d, got %d", consumed, offset.At)
+	if offset.Offset != int64(consumed) {
+		t.Errorf("expected committed offset %d, got %d", consumed, offset.Offset)
 	}
 
 	// Verify output messages are readable
@@ -2879,13 +2872,9 @@ func TestDeleteRecordsThenProduce(t *testing.T) {
 		}
 	}
 
-	// Step 2: Delete all records (sets logStartOffset to HWM, trimLeft
-	// removes all batches and segment files).
-	adm := kadm.NewClient(cl)
-	deleteOffsets := kadm.Offsets{}
-	deleteOffsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: -1}) // -1 = high watermark
-	_, err = adm.DeleteRecords(ctx, deleteOffsets)
-	if err != nil {
+	// Step 2: Delete all records; -1 sets logStartOffset to the high
+	// watermark, and trimLeft removes all batches and segment files.
+	if err := c.DeleteRecords(topic, 0, -1); err != nil {
 		t.Fatalf("delete records: %v", err)
 	}
 
@@ -3435,11 +3424,10 @@ func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
 
 	// Recreate the topic: the new incarnation gets a new topic ID, and
 	// the client keeps producing with the old one.
-	adm := kadm.NewClient(cl)
-	if _, err := adm.DeleteTopics(ctx, testTopic); err != nil {
+	if err := c.DeleteTopic(testTopic); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adm.CreateTopics(ctx, 1, 1, nil, testTopic); err != nil {
+	if err := c.CreateTopic(testTopic, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -4320,21 +4308,11 @@ func TestEndTxnUnconfirmedAbortRetry(t *testing.T) {
 	}
 	defer c.Close()
 
-	var endTxns, initPIDs atomic.Int32
-	c.ControlKey(int16(kmsg.EndTxn), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if endTxns.Add(1) == 1 {
-			resp := kreq.ResponseKind().(*kmsg.EndTxnResponse)
-			resp.ErrorCode = kerr.UnknownServerError.Code
-			return resp, nil, true
-		}
-		return nil, nil, false
-	})
-	c.ControlKey(int16(kmsg.InitProducerID), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		initPIDs.Add(1)
-		return nil, nil, false
-	})
+	// The observers go in first: a faulted request hits every fault it
+	// matches, and only the erroring one answers.
+	endTxns := c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Observe: true, Count: -1})
+	initPIDs := c.Fault(Fault{Keys: []kmsg.Key{kmsg.InitProducerID}, Observe: true, Count: -1})
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -4359,14 +4337,14 @@ func TestEndTxnUnconfirmedAbortRetry(t *testing.T) {
 		t.Fatal("expected an error from the hijacked EndTxn commit")
 	}
 
-	preInits := initPIDs.Load()
+	preInits := initPIDs.Hits()
 	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
 		t.Fatalf("abort retry after unconfirmed commit errored: %v", err)
 	}
-	if got := endTxns.Load(); got != 1 {
+	if got := endTxns.Hits(); got != 1 {
 		t.Errorf("abort retry sent an EndTxn (saw %d total); the producer id reload is the abort", got)
 	}
-	if got := initPIDs.Load(); got != preInits+1 {
+	if got := initPIDs.Hits(); got != preInits+1 {
 		t.Errorf("abort retry did not reload the producer id (%d inits before, %d after)", preInits, got)
 	}
 
@@ -4421,16 +4399,7 @@ func TestEndTxnUnconfirmedCommitRetryRefused(t *testing.T) {
 	}
 	defer c.Close()
 
-	var endTxns atomic.Int32
-	c.ControlKey(int16(kmsg.EndTxn), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if endTxns.Add(1) == 1 {
-			resp := kreq.ResponseKind().(*kmsg.EndTxnResponse)
-			resp.ErrorCode = kerr.UnknownServerError.Code
-			return resp, nil, true
-		}
-		return nil, nil, false
-	})
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -4785,14 +4754,9 @@ func TestIssue1422(t *testing.T) {
 
 			// Delete the first two records, leaving a log start offset in the
 			// middle of batch 0. The answer must not point below it.
-			adm := kadm.NewClient(cl)
 			deleteTo := func(at int64) {
 				t.Helper()
-				del, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: at}}})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := del.Error(); err != nil {
+				if err := c.DeleteRecords(topic, 0, at); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -4905,14 +4869,9 @@ func TestListOffsetsMaxTimestampFirstRecord(t *testing.T) {
 			}
 			check(1)
 
-			adm := kadm.NewClient(cl)
 			deleteTo := func(at int64) {
 				t.Helper()
-				del, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: at}}})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := del.Error(); err != nil {
+				if err := c.DeleteRecords(topic, 0, at); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -4990,12 +4949,7 @@ func TestListOffsetsTimestampSkipsDeletedBatches(t *testing.T) {
 
 	// Delete all but the last record, then restart from the snapshot.
 	// The reloaded index lists every batch again.
-	adm := kadm.NewClient(pcl)
-	del, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: n - 1}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := del.Error(); err != nil {
+	if err := c.DeleteRecords(topic, 0, n-1); err != nil {
 		t.Fatal(err)
 	}
 	pcl.Close()
@@ -5313,8 +5267,7 @@ func TestListOffsetsNoTimestampSegments(t *testing.T) {
 
 			// Deleting offsets 0 and 1 removes their segments when they
 			// have their own, and the lookup at 5_000 reaches offset 2.
-			adm := kadm.NewClient(cl)
-			if _, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: 2}}}); err != nil {
+			if err := c.DeleteRecords(topic, 0, 2); err != nil {
 				t.Fatal(err)
 			}
 			check("5_000 after delete", listOffsetsAt(t, cl, -1, topic, 0, 5_000, -1, 0), 2, 5_000)
@@ -5406,8 +5359,7 @@ func TestListOffsetsV0(t *testing.T) {
 	check("mid", list(mid, 10), want)
 
 	// After deleting offset 0, segment 0 lists from the log start offset.
-	adm := kadm.NewClient(newPlainClient(t, c))
-	if _, err := adm.DeleteRecords(ctx, kadm.Offsets{topic: {0: {Topic: topic, Partition: 0, At: 1}}}); err != nil {
+	if err := c.DeleteRecords(topic, 0, 1); err != nil {
 		t.Fatal(err)
 	}
 	check("-1 all after delete", list(-1, 10), []int64{3, 2, 1})

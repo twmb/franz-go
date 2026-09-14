@@ -212,18 +212,12 @@ func TestPersistGroupCommitsRestart(t *testing.T) {
 		}
 		defer c.Close()
 
-		// Check committed offset via admin
-		adm := kadm.NewClient(newPlainClient(t, c))
-		offsets, err := adm.FetchOffsets(context.Background(), group)
-		if err != nil {
-			t.Fatal(err)
-		}
-		o, ok := offsets.Lookup(topic, 0)
+		o, ok := groupCommits(c, group)[topic][0]
 		if !ok {
 			t.Fatal("expected committed offset for partition 0")
 		}
-		if o.At < 5 {
-			t.Fatalf("expected committed offset >= 5, got %d", o.At)
+		if o.Offset < 5 {
+			t.Fatalf("expected committed offset >= 5, got %d", o.Offset)
 		}
 		if o.LeaderEpoch < 0 {
 			t.Fatalf("expected leaderEpoch >= 0, got %d", o.LeaderEpoch)
@@ -829,17 +823,12 @@ func TestPersistSyncWritesGroupCommitCrash(t *testing.T) {
 		}
 		defer c.Close()
 
-		adm := kadm.NewClient(newPlainClient(t, c))
-		offsets, err := adm.FetchOffsets(context.Background(), group)
-		if err != nil {
-			t.Fatal(err)
-		}
-		o, ok := offsets.Lookup(topic, 0)
+		o, ok := groupCommits(c, group)[topic][0]
 		if !ok {
 			t.Fatal("expected committed offset to survive crash with SyncWrites")
 		}
-		if o.At < 5 {
-			t.Fatalf("expected committed offset >= 5, got %d", o.At)
+		if o.Offset < 5 {
+			t.Fatalf("expected committed offset >= 5, got %d", o.Offset)
 		}
 	}
 }
@@ -919,16 +908,7 @@ func TestPersistSyncWritesOffsetDeleteCrash(t *testing.T) {
 		}
 		defer c.Close()
 
-		adm := kadm.NewClient(newPlainClient(t, c))
-		offsets, err := adm.FetchOffsets(context.Background(), group)
-		if errors.Is(err, kerr.GroupIDNotFound) {
-			return // group has no state - valid after offset delete
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, ok := offsets.Lookup(topic, 0)
-		if ok {
+		if _, ok := groupCommits(c, group)[topic][0]; ok {
 			t.Fatal("expected deleted offset to remain deleted after crash with SyncWrites")
 		}
 	}
@@ -1053,17 +1033,12 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 		}
 		defer c.Close()
 
-		adm := kadm.NewClient(newPlainClient(t, c))
-		offsets, err := adm.FetchOffsets(context.Background(), group)
-		if err != nil {
-			t.Fatal(err)
-		}
-		o, ok := offsets.Lookup(topic, 0)
+		o, ok := groupCommits(c, group)[topic][0]
 		if !ok {
 			t.Fatal("expected transactional committed offset to survive crash with SyncWrites")
 		}
-		if o.At != 7 {
-			t.Fatalf("expected transactional committed offset 7, got %d", o.At)
+		if o.Offset != 7 {
+			t.Fatalf("expected transactional committed offset 7, got %d", o.Offset)
 		}
 	}
 }
@@ -1534,19 +1509,14 @@ func TestPersistSaveGroupsLogCloseBeforeTruncate(t *testing.T) {
 		}
 		defer c.Close()
 
-		adm := kadm.NewClient(newPlainClient(t, c))
 		for i := range 3 {
 			group := fmt.Sprintf("trunc-group-%d", i)
-			offsets, err := adm.FetchOffsets(context.Background(), group)
-			if err != nil {
-				t.Fatalf("group %s: %v", group, err)
-			}
-			o, ok := offsets.Lookup(topic, 0)
+			o, ok := groupCommits(c, group)[topic][0]
 			if !ok {
 				t.Fatalf("group %s: expected committed offset", group)
 			}
-			if o.At <= 0 {
-				t.Fatalf("group %s: expected positive offset, got %d", group, o.At)
+			if o.Offset <= 0 {
+				t.Fatalf("group %s: expected positive offset, got %d", group, o.Offset)
 			}
 		}
 	}
@@ -3127,17 +3097,12 @@ func TestPersistLogCompaction(t *testing.T) {
 	}
 
 	// Verify state is correct after compaction - offsets still readable.
-	adm := kadm.NewClient(newPlainClient(t, c))
-	offsets, err := adm.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatal(err)
-	}
-	o, ok := offsets.Lookup(topic, 0)
+	o, ok := groupCommits(c, group)[topic][0]
 	if !ok {
 		t.Fatal("expected committed offset for partition 0")
 	}
-	if o.At != 50 {
-		t.Fatalf("expected committed offset 50, got %d", o.At)
+	if o.Offset != 50 {
+		t.Fatalf("expected committed offset 50, got %d", o.Offset)
 	}
 
 	c.Close()
@@ -3155,17 +3120,12 @@ func TestPersistLogCompaction(t *testing.T) {
 	}
 	defer c2.Close()
 
-	adm2 := kadm.NewClient(newPlainClient(t, c2))
-	offsets2, err := adm2.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatal(err)
-	}
-	o2, ok := offsets2.Lookup(topic, 0)
+	o2, ok := groupCommits(c2, group)[topic][0]
 	if !ok {
 		t.Fatal("expected committed offset after restart")
 	}
-	if o2.At != 50 {
-		t.Fatalf("expected committed offset 50 after restart, got %d", o2.At)
+	if o2.Offset != 50 {
+		t.Fatalf("expected committed offset 50 after restart, got %d", o2.Offset)
 	}
 }
 
@@ -3246,19 +3206,14 @@ func TestPersistLogCompactionCrashGroups(t *testing.T) {
 	copyDir(t, dir, crashDir)
 
 	// Record what the live cluster thinks the offsets are.
-	adm := kadm.NewClient(newPlainClient(t, c))
 	liveOffsets := make(map[string]int64)
 	for g := range nGroups {
 		group := fmt.Sprintf("crash-group-%d", g)
-		offsets, err := adm.FetchOffsets(ctx, group)
-		if err != nil {
-			t.Fatal(err)
-		}
-		offsets.Each(func(o kadm.OffsetResponse) {
-			if o.Err == nil {
-				liveOffsets[fmt.Sprintf("%s/%s-%d", group, o.Topic, o.Partition)] = o.At
+		for tname, ps := range groupCommits(c, group) {
+			for p, o := range ps {
+				liveOffsets[fmt.Sprintf("%s/%s-%d", group, tname, p)] = o.Offset
 			}
-		})
+		}
 	}
 	c.Close()
 
@@ -3272,23 +3227,16 @@ func TestPersistLogCompactionCrashGroups(t *testing.T) {
 	}
 	defer c2.Close()
 
-	adm2 := kadm.NewClient(newPlainClient(t, c2))
 	for g := range nGroups {
 		group := fmt.Sprintf("crash-group-%d", g)
-		offsets, err := adm2.FetchOffsets(ctx, group)
-		if err != nil {
-			t.Fatal(err)
+		for tname, ps := range groupCommits(c2, group) {
+			for p, o := range ps {
+				key := fmt.Sprintf("%s/%s-%d", group, tname, p)
+				if live := liveOffsets[key]; o.Offset != live {
+					t.Errorf("crash recovery %s: expected offset %d, got %d", key, live, o.Offset)
+				}
+			}
 		}
-		offsets.Each(func(o kadm.OffsetResponse) {
-			if o.Err != nil {
-				return
-			}
-			key := fmt.Sprintf("%s/%s-%d", group, o.Topic, o.Partition)
-			live := liveOffsets[key]
-			if o.At != live {
-				t.Errorf("crash recovery %s: expected offset %d, got %d", key, live, o.At)
-			}
-		})
 	}
 }
 
@@ -3566,14 +3514,8 @@ func TestPersistShareGroupConfigRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-
-		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
-		setShareAutoOffsetReset(t, cl, group)
+		c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 		produceN(t, c, topic, 10)
-		cl.Close()
 		c.Close()
 	}
 

@@ -112,13 +112,8 @@ func TestFetchSessionDeletedTopic(t *testing.T) {
 		t.Fatalf("session not established: err %v", kerr.ErrorForCode(first.ErrorCode))
 	}
 
-	del := kmsg.NewPtrDeleteTopicsRequest()
-	del.TopicNames = []string{topic}
-	dt := kmsg.NewDeleteTopicsRequestTopic()
-	dt.Topic = kmsg.StringPtr(topic)
-	del.Topics = append(del.Topics, dt)
-	if dresp, err := del.RequestWith(ctx, cl); err != nil || dresp.Topics[0].ErrorCode != 0 {
-		t.Fatalf("delete topic: %v %v", err, kerr.ErrorForCode(dresp.Topics[0].ErrorCode))
+	if err := c.DeleteTopic(topic); err != nil {
+		t.Fatalf("delete topic: %v", err)
 	}
 
 	incr, err := fetchByID(first.SessionID, 1, 100, id).RequestWith(ctx, cl)
@@ -164,7 +159,7 @@ func TestFetchSessionRecreatedTopicResend(t *testing.T) {
 	if first.SessionID <= 0 {
 		t.Fatalf("session not established: err %v", kerr.ErrorForCode(first.ErrorCode))
 	}
-	recreateTopicRaw(t, cl, topic)
+	recreateTopic(t, c, topic)
 
 	resend, err := fetchByID(first.SessionID, 1, 100, oldID, 0).RequestWith(ctx, cl)
 	if err != nil {

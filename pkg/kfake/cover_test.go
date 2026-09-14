@@ -1895,19 +1895,10 @@ func TestTxnAbortDiscardsOffsets(t *testing.T) {
 		t.Fatal(kerr.ErrorForCode(endResp.ErrorCode))
 	}
 
-	// Verify offsets were NOT committed to the group.
-	// GROUP_ID_NOT_FOUND is expected: the group was never created because
-	// the abort discarded the staged offsets.
-	adm := kadm.NewClient(cl)
-	offsets, err := adm.FetchOffsets(ctx, group)
-	if err != nil {
-		if err != kerr.GroupIDNotFound {
-			t.Fatal(err)
-		}
-		return // group doesn't exist = offsets weren't committed
-	}
-	if o, ok := offsets.Lookup(topic, 0); ok && o.At >= 0 {
-		t.Errorf("expected no committed offset after abort, got %d", o.At)
+	// Verify offsets were NOT committed to the group. The group was never
+	// created, because the abort discarded the staged offsets.
+	if o, ok := groupCommits(c, group)[topic][0]; ok {
+		t.Errorf("expected no committed offset after abort, got %d", o.Offset)
 	}
 }
 

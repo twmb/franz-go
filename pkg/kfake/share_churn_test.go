@@ -452,7 +452,7 @@ func TestShareFetchPiggybackAckForgetNoLeak(t *testing.T) {
 
 	// Seed exactly one record on partition 0; partition 1 stays empty.
 	pcl := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
-	setShareAutoOffsetReset(t, pcl, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 	if err := pcl.ProduceSync(context.Background(),
 		&kgo.Record{Topic: topic, Partition: 0, Value: []byte("v")}).FirstErr(); err != nil {
 		t.Fatalf("produce: %v", err)

@@ -24,16 +24,10 @@ func saslPlainOpts(c *Cluster) []kgo.Opt {
 	}
 }
 
-// countHandshakes installs a persistent observer control that counts every
+// countHandshakes installs an observing fault that counts every
 // SASLHandshake the cluster receives.
-func countHandshakes(c *Cluster) *atomic.Int32 {
-	var n atomic.Int32
-	c.ControlKey(17, func(kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		n.Add(1)
-		return nil, nil, false
-	})
-	return &n
+func countHandshakes(c *Cluster) *FaultHandle {
+	return c.Fault(Fault{Keys: []kmsg.Key{kmsg.SASLHandshake}, Observe: true, Count: -1})
 }
 
 // discoverBroker returns a Broker handle for the cluster's single broker,
@@ -169,7 +163,7 @@ func TestAuditSaslReauthPipelinedNoCorruption(t *testing.T) {
 	if _, err := br.Request(ctx, kmsg.NewPtrMetadataRequest()); err != nil {
 		t.Fatalf("warm request failed: %v", err)
 	}
-	base := handshakes.Load()
+	base := handshakes.Hits()
 
 	// A: stalled server-side for 1.5s; its response is in flight across
 	// the expiry boundary.
@@ -217,7 +211,7 @@ func TestAuditSaslReauthPipelinedNoCorruption(t *testing.T) {
 	// handshake must exist by now. A postpone-only behavior fails here
 	// with zero reauths (B would have been issued on the old session and
 	// nothing afterward reauthenticated).
-	if got := handshakes.Load(); got != base+1 {
+	if got := handshakes.Hits(); got != base+1 {
 		t.Errorf("expected exactly one reauthentication handshake once the parked request completed: handshakes went %d -> %d", base, got)
 	}
 }
@@ -454,7 +448,7 @@ func TestAuditSaslReauthLifetimeClearedWhenDisabled(t *testing.T) {
 	if _, err := br.Request(ctx, kmsg.NewPtrMetadataRequest()); err != nil {
 		t.Fatalf("reauth-triggering request failed: %v", err)
 	}
-	base := handshakes.Load()
+	base := handshakes.Hits()
 
 	// Subsequent requests must not re-handshake: the expiry was cleared.
 	for i := 0; i < 3; i++ {
@@ -462,7 +456,7 @@ func TestAuditSaslReauthLifetimeClearedWhenDisabled(t *testing.T) {
 			t.Fatalf("request %d failed: %v", i, err)
 		}
 	}
-	if got := handshakes.Load(); got != base {
+	if got := handshakes.Hits(); got != base {
 		t.Errorf("connection kept reauthenticating after the broker stopped requiring it: handshakes went %d -> %d across 3 plain requests", base, got)
 	}
 }

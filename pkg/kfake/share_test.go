@@ -15,29 +15,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func setShareAutoOffsetReset(t *testing.T, cl *kgo.Client, group string) {
-	t.Helper()
-	req := kmsg.NewPtrIncrementalAlterConfigsRequest()
-	res := kmsg.NewIncrementalAlterConfigsRequestResource()
-	res.ResourceType = kmsg.ConfigResourceTypeGroupConfig
-	res.ResourceName = group
-	cfg := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
-	cfg.Name = "share.auto.offset.reset"
-	cfg.Op = 0
-	cfg.Value = kmsg.StringPtr("earliest")
-	res.Configs = append(res.Configs, cfg)
-	req.Resources = append(req.Resources, res)
-	resp, err := req.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("IncrementalAlterConfigs: %v", err)
-	}
-	for _, r := range resp.Resources {
-		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-			t.Fatalf("IncrementalAlterConfigs resource error: %v", err)
-		}
-	}
-}
-
 func TestShareGroupBasic(t *testing.T) {
 	t.Parallel()
 
@@ -82,7 +59,7 @@ func TestShareGroupAckAndRedelivery(t *testing.T) {
 
 	admin := newPlainClient(t, c, kgo.DefaultProduceTopic("share-ack"))
 
-	setShareAutoOffsetReset(t, admin, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	// Produce 10 records with numeric keys.
 	const total = 10
@@ -414,7 +391,7 @@ func TestShareGroupSessionEpoch(t *testing.T) {
 
 	cl := newPlainClient(t, c, kgo.RetryTimeout(0))
 
-	setShareAutoOffsetReset(t, cl, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	// Join the share group.
 	memberID, topicID := joinShareGroupRaw(t, cl, group, "share-epoch")
@@ -670,7 +647,7 @@ func TestShareGroupMultiPartition(t *testing.T) {
 		kgo.RecordPartitioner(kgo.RoundRobinPartitioner()),
 	)
 
-	setShareAutoOffsetReset(t, admin, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	// Produce records that will be spread across partitions.
 	const total = 50
@@ -1040,7 +1017,7 @@ func TestShareGroupAsyncEarlyReturn(t *testing.T) {
 		kgo.DefaultProduceTopic("share-async-early"),
 		kgo.RecordPartitioner(kgo.RoundRobinPartitioner()),
 	)
-	setShareAutoOffsetReset(t, admin, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	// Produce 30 records spread across all 3 partitions via
 	// round-robin so each broker has data.
@@ -1211,7 +1188,7 @@ func TestShareGroupAsyncMultiSourceRecordIntegrity(t *testing.T) {
 		kgo.RecordPartitioner(kgo.RoundRobinPartitioner()),
 	)
 
-	setShareAutoOffsetReset(t, admin, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	const total = 90
 	for i := range total {
@@ -1853,7 +1830,7 @@ func TestShareGroupSubscriptionPurge(t *testing.T) {
 	// share.auto.offset.reset=earliest picks them up.
 	prodCl := newPlainClient(t, c)
 	defer prodCl.Close()
-	setShareAutoOffsetReset(t, prodCl, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 	for i := range perTopic {
 		v := []byte(strconv.Itoa(i))
 		prodCl.Produce(context.Background(), &kgo.Record{Topic: topicA, Value: v}, nil)
@@ -2186,7 +2163,7 @@ func TestShareGroupAckCallbackSuccessPath(t *testing.T) {
 
 	admin := newPlainClient(t, c)
 	defer admin.Close()
-	setShareAutoOffsetReset(t, admin, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	for i := range total {
 		admin.Produce(context.Background(), &kgo.Record{
@@ -2573,7 +2550,7 @@ func TestShareGroupLeaderMoveInFlightAcks(t *testing.T) {
 
 	prodCl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	defer prodCl.Close()
-	setShareAutoOffsetReset(t, prodCl, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 	for i := range total {
 		if err := prodCl.ProduceSync(context.Background(), &kgo.Record{Value: []byte(strconv.Itoa(i))}).FirstErr(); err != nil {
 			t.Fatalf("produce: %v", err)

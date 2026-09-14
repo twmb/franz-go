@@ -76,7 +76,6 @@ func Test848ConsumerLeaveReassigns(t *testing.T) {
 	nPartitions := 4
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-	adm := newAdminClient(t, c)
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
@@ -92,7 +91,7 @@ func Test848ConsumerLeaveReassigns(t *testing.T) {
 	// after a single poll, head is still at 0 so the revoke commits
 	// nothing for the revoked partitions, and c1 re-reads those
 	// records when it retakes them after c2 leaves.
-	waitForStableGroup(t, adm, group, 2, 10*time.Second)
+	waitStable(t, c, group, 2)
 
 	// Consume all existing records.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -163,18 +162,12 @@ func Test848OffsetCommitAndFetch(t *testing.T) {
 		t.Fatalf("commit failed: %v", err)
 	}
 
-	// Verify via kadm that offsets are committed.
-	adm := newAdminClient(t, c)
-	offsets, err := adm.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	off, ok := offsets.Lookup(topic, 0)
+	off, ok := groupCommits(c, group)[topic][0]
 	if !ok {
 		t.Fatal("no committed offset for partition 0")
 	}
-	if off.At != int64(nRecords) {
-		t.Fatalf("expected committed offset %d, got %d", nRecords, off.At)
+	if off.Offset != int64(nRecords) {
+		t.Fatalf("expected committed offset %d, got %d", nRecords, off.Offset)
 	}
 }
 
@@ -315,17 +308,12 @@ func Test848TxnOffsetCommit(t *testing.T) {
 	}
 
 	// Verify committed offsets.
-	adm := newAdminClient(t, c)
-	offsets, err := adm.FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	off, ok := offsets.Lookup(topic, 0)
+	off, ok := groupCommits(c, group)[topic][0]
 	if !ok {
 		t.Fatal("no committed offset for partition 0")
 	}
-	if off.At != int64(nRecords) {
-		t.Fatalf("expected committed offset %d, got %d", nRecords, off.At)
+	if off.Offset != int64(nRecords) {
+		t.Fatalf("expected committed offset %d, got %d", nRecords, off.Offset)
 	}
 }
 
@@ -382,14 +370,12 @@ func Test848FencedEpochRecovery(t *testing.T) {
 	// Inject a FencedMemberEpoch error on the next regular heartbeat.
 	// The control is consumed after one use, so only one heartbeat is
 	// affected. kgo should rejoin with epoch 0 and resume consuming.
-	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		req := kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
-		if req.MemberEpoch > 0 {
-			resp := kmsg.NewPtrConsumerGroupHeartbeatResponse()
-			resp.ErrorCode = kerr.FencedMemberEpoch.Code
-			return resp, nil, true
-		}
-		return nil, nil, false
+	c.Fault(kfake.Fault{
+		Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
+		Err:  kerr.FencedMemberEpoch,
+		When: func(kreq kmsg.Request) bool {
+			return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch > 0
+		},
 	})
 
 	// Produce more records. The consumer should recover from fencing
@@ -423,7 +409,6 @@ func Test848SessionTimeout(t *testing.T) {
 			"group.consumer.session.timeout.ms": "3000",
 		}),
 	)
-	adm := newAdminClient(t, c)
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
@@ -441,7 +426,7 @@ func Test848SessionTimeout(t *testing.T) {
 	// head offsets, which with default autocommit lag one poll behind
 	// dirty, so the revoke commits nothing and c1 later re-reads
 	// those records.
-	waitForStableGroup(t, adm, group, 2, 10*time.Second)
+	waitStable(t, c, group, 2)
 
 	// Consume all records.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -514,31 +499,26 @@ func Test848ReconciliationGroupStateTransitions(t *testing.T) {
 	nPartitions := 6
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-	adm := newAdminClient(t, c)
 
 	// c1 joins and stabilizes with all partitions.
 	c1 := newGroupConsumer(t, c, topic, group)
-	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
-	if total := totalAssignedPartitions(dg); total != nPartitions {
+	dg := waitStable(t, c, group, 1)
+	if total := dg.NumAssigned(); total != nPartitions {
 		t.Fatalf("c1 should own all %d partitions, got %d", nPartitions, total)
 	}
 
 	// c2 joins. The group should eventually stabilize with 2 members.
 	c2 := newGroupConsumer(t, c, topic, group)
 
-	dg = waitForStableGroup(t, adm, group, 2, 10*time.Second)
+	dg = waitStable(t, c, group, 2)
 
 	// Verify the assignment is split: each member should have partitions.
 	for _, m := range dg.Members {
-		nParts := 0
-		for _, parts := range m.Assignment {
-			nParts += len(parts)
-		}
-		if nParts == 0 {
+		if m.NumAssigned() == 0 {
 			t.Errorf("member %s has no partitions", m.MemberID)
 		}
 	}
-	if total := totalAssignedPartitions(dg); total != nPartitions {
+	if total := dg.NumAssigned(); total != nPartitions {
 		t.Errorf("expected %d total partitions, got %d", nPartitions, total)
 	}
 
@@ -559,27 +539,22 @@ func Test848ReconciliationThreeMembers(t *testing.T) {
 	nPartitions := 9
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-	adm := newAdminClient(t, c)
 
 	// c1 and c2 join and stabilize.
 	_ = newGroupConsumer(t, c, topic, group)
 	_ = newGroupConsumer(t, c, topic, group)
-	waitForStableGroup(t, adm, group, 2, 10*time.Second)
+	waitStable(t, c, group, 2)
 
 	// c3 joins, triggering reassignment.
 	_ = newGroupConsumer(t, c, topic, group)
 
 	// Wait for all 3 members to be stable.
-	dg := waitForStableGroup(t, adm, group, 3, 15*time.Second)
+	dg := waitStable(t, c, group, 3)
 
 	// Each member should have exactly nPartitions/3 = 3 partitions.
 	for _, m := range dg.Members {
-		nParts := 0
-		for _, parts := range m.Assignment {
-			nParts += len(parts)
-		}
-		if nParts != nPartitions/3 {
-			t.Errorf("member %s has %d partitions, expected %d", m.MemberID, nParts, nPartitions/3)
+		if n := m.NumAssigned(); n != nPartitions/3 {
+			t.Errorf("member %s has %d partitions, expected %d", m.MemberID, n, nPartitions/3)
 		}
 	}
 }
@@ -596,15 +571,14 @@ func Test848StableToUnrevokedPartitions(t *testing.T) {
 	nRecords := 30
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-	adm := newAdminClient(t, c)
 
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
 	// c1 owns all partitions initially.
 	c1 := newGroupConsumer(t, c, topic, group)
-	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
-	if total := totalAssignedPartitions(dg); total != nPartitions {
+	dg := waitStable(t, c, group, 1)
+	if total := dg.NumAssigned(); total != nPartitions {
 		t.Fatalf("c1 should own all %d partitions, got %d", nPartitions, total)
 	}
 
@@ -620,19 +594,15 @@ func Test848StableToUnrevokedPartitions(t *testing.T) {
 	c2 := newGroupConsumer(t, c, topic, group)
 
 	// Wait for both to be stable.
-	dg = waitForStableGroup(t, adm, group, 2, 10*time.Second)
+	dg = waitStable(t, c, group, 2)
 
 	// Verify both have partitions.
 	for _, m := range dg.Members {
-		nParts := 0
-		for _, parts := range m.Assignment {
-			nParts += len(parts)
-		}
-		if nParts == 0 {
+		if m.NumAssigned() == 0 {
 			t.Errorf("member %s has no partitions after rebalance", m.MemberID)
 		}
 	}
-	if total := totalAssignedPartitions(dg); total != nPartitions {
+	if total := dg.NumAssigned(); total != nPartitions {
 		t.Errorf("expected %d total partitions, got %d", nPartitions, total)
 	}
 
@@ -652,13 +622,12 @@ func Test848UnreleasedPartitionsWaitForRevocation(t *testing.T) {
 	nPartitions := 9
 
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-	adm := newAdminClient(t, c)
 
 	// c1 and c2 stabilize.
 	c1 := newGroupConsumer(t, c, topic, group)
 	c2 := newGroupConsumer(t, c, topic, group)
-	dg := waitForStableGroup(t, adm, group, 2, 10*time.Second)
-	if total := totalAssignedPartitions(dg); total != nPartitions {
+	dg := waitStable(t, c, group, 2)
+	if total := dg.NumAssigned(); total != nPartitions {
 		t.Fatalf("expected %d total partitions with 2 members, got %d", nPartitions, total)
 	}
 
@@ -667,19 +636,15 @@ func Test848UnreleasedPartitionsWaitForRevocation(t *testing.T) {
 	c3 := newGroupConsumer(t, c, topic, group)
 
 	// Wait for all 3 to stabilize.
-	dg = waitForStableGroup(t, adm, group, 3, 15*time.Second)
+	dg = waitStable(t, c, group, 3)
 
 	// All 3 should have partitions.
 	for _, m := range dg.Members {
-		nParts := 0
-		for _, parts := range m.Assignment {
-			nParts += len(parts)
-		}
-		if nParts == 0 {
+		if m.NumAssigned() == 0 {
 			t.Errorf("member %s has no partitions", m.MemberID)
 		}
 	}
-	if total := totalAssignedPartitions(dg); total != nPartitions {
+	if total := dg.NumAssigned(); total != nPartitions {
 		t.Errorf("expected %d total partitions, got %d", nPartitions, total)
 	}
 
