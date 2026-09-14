@@ -118,6 +118,12 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 			for _, sg := range c.shareGroups.gs {
 				delete(sg.partitions, td.topic)
 			}
+			c.dropGroupCommits(td.topic)
+		}
+		if len(toDeletes) > 0 {
+			c.notifyTopicChange()
+			c.refreshCompactTicker()
+			c.persistTopicsState()
 		}
 	}()
 	for _, rt := range req.Topics {
@@ -158,15 +164,6 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 				watch.deleted()
 			}
 		}
-	}
-
-	if len(toDeletes) > 0 {
-		for _, td := range toDeletes {
-			c.dropGroupCommits(td.topic)
-		}
-		c.notifyTopicChange()
-		c.refreshCompactTicker()
-		c.persistTopicsState()
 	}
 
 	return resp, nil

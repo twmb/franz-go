@@ -196,9 +196,9 @@ func (c *Cluster) dropGroupCommits(topic string) {
 // added. Every group is recomputed before we return, so the response to
 // the request that changed the topic cannot beat the recomputation.
 //
-// Note that on a delete we run BEFORE the topic leaves c.data: DeleteTopics
-// drops it in a deferred block that runs after us, so the recomputation
-// here still sees the topic and still assigns its partitions.
+// Note that on a delete, DeleteTopics calls us from the deferred block that
+// drops the topic from c.data, after the drop: the recomputation no longer
+// sees the topic and stops assigning its partitions.
 //
 // The generation bump matches Kafka's behavior where topic changes bump
 // the group epoch. This ensures heartbeat responses keep re-sending the
