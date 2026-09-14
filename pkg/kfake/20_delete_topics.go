@@ -116,10 +116,14 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 			// explicitly: a recreated topic starts share consumption
 			// fresh (SPSO per group config, no acquired records).
 			for _, sg := range c.shareGroups.gs {
-				sg.mu.Lock()
 				delete(sg.partitions, td.topic)
-				sg.mu.Unlock()
 			}
+			c.dropGroupCommits(td.topic)
+		}
+		if len(toDeletes) > 0 {
+			c.notifyTopicChange()
+			c.refreshCompactTicker()
+			c.persistTopicsState()
 		}
 	}()
 	for _, rt := range req.Topics {
@@ -160,15 +164,6 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 				watch.deleted()
 			}
 		}
-	}
-
-	if len(toDeletes) > 0 {
-		for _, td := range toDeletes {
-			c.dropGroupCommits(td.topic)
-		}
-		c.notifyTopicChange()
-		c.refreshCompactTicker()
-		c.persistTopicsState()
 	}
 
 	return resp, nil

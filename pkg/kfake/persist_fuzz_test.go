@@ -585,27 +585,26 @@ func TestChaosGroupCommitsCrashRecover(t *testing.T) {
 		groupNames := []string{"g1", "g2", "g3"}
 		expectedCommits := make(map[string]map[string]int64) // group -> topic -> offset
 		for _, gn := range groupNames {
-			if c.groups.gs == nil {
-				c.groups.gs = make(map[string]*group)
-			}
-			g := c.groups.newGroup(gn)
-			c.groups.gs[gn] = g
-			go g.manage(func() {})
+			var g *group
+			c.admin(func() {
+				g = c.groups.newGroup(gn)
+				c.groups.gs[gn] = g
+			})
 
 			expectedCommits[gn] = make(map[string]int64)
 			for _, topic := range []string{"t1", "t2"} {
 				offset := int64(rng.Intn(1000))
 				expectedCommits[gn][topic] = offset
-				g.waitControl(func() {
+				c.admin(func() {
 					g.commits.set(topic, 0, offsetCommit{offset: offset, leaderEpoch: -1})
-				})
-				c.persistGroupEntry(groupLogEntry{
-					Type:   "commit",
-					Group:  gn,
-					Topic:  topic,
-					Part:   0,
-					Offset: offset,
-					Epoch:  -1,
+					c.persistGroupEntry(groupLogEntry{
+						Type:   "commit",
+						Group:  gn,
+						Topic:  topic,
+						Part:   0,
+						Offset: offset,
+						Epoch:  -1,
+					})
 				})
 			}
 		}
@@ -629,7 +628,7 @@ func TestChaosGroupCommitsCrashRecover(t *testing.T) {
 			for topic, expectedOffset := range topics {
 				var actualOffset int64
 				var found bool
-				g.waitControl(func() {
+				c2.admin(func() {
 					oc, ok := g.commits.getp(topic, 0)
 					if ok {
 						actualOffset = oc.offset
@@ -897,31 +896,28 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 	}
 
 	// Create a group and set up 848 metadata.
-	if c.groups.gs == nil {
-		c.groups.gs = make(map[string]*group)
-	}
-	g := c.groups.newGroup("test-848-group")
-	c.groups.gs["test-848-group"] = g
-	go g.manage(func() {})
+	var g *group
+	c.admin(func() {
+		g = c.groups.newGroup("test-848-group")
+		c.groups.gs["test-848-group"] = g
 
-	g.waitControl(func() {
 		g.typ = "consumer"
 		g.assignorName = "uniform"
 		g.groupEpoch = 7
-	})
 
-	// Persist the 848 metadata entry.
-	c.persistGroupEntry(groupLogEntry{
-		Type:       "meta848",
-		Group:      "test-848-group",
-		GroupType:  "consumer",
-		Assignor:   "uniform",
-		GroupEpoch: 7,
+		// Persist the 848 metadata entry.
+		c.persistGroupEntry(groupLogEntry{
+			Type:       "meta848",
+			Group:      "test-848-group",
+			GroupType:  "consumer",
+			Assignor:   "uniform",
+			GroupEpoch: 7,
+		})
 	})
 
 	// Also set a commit to verify it coexists with meta848.
 	var meta string
-	g.waitControl(func() {
+	c.admin(func() {
 		g.commits.set("t", 0, offsetCommit{
 			offset:      42,
 			leaderEpoch: 1,
@@ -1193,36 +1189,35 @@ func TestPersistOffsetDeleteRoundTrip(t *testing.T) {
 	}
 
 	// Create a group with committed offsets
-	if c.groups.gs == nil {
-		c.groups.gs = make(map[string]*group)
-	}
-	g := c.groups.newGroup("g1")
-	c.groups.gs["g1"] = g
-	go g.manage(func() {})
+	var g *group
+	c.admin(func() {
+		g = c.groups.newGroup("g1")
+		c.groups.gs["g1"] = g
+	})
 
 	// Commit offsets for partitions 0 and 1 (topic has 1 partition,
 	// but the group commit map is independent of actual partition count)
-	g.waitControl(func() {
+	c.admin(func() {
 		g.commits.set("t1", 0, offsetCommit{offset: 100, leaderEpoch: -1})
-	})
-	c.persistGroupEntry(groupLogEntry{
-		Type:   "commit",
-		Group:  "g1",
-		Topic:  "t1",
-		Part:   0,
-		Offset: 100,
-		Epoch:  -1,
+		c.persistGroupEntry(groupLogEntry{
+			Type:   "commit",
+			Group:  "g1",
+			Topic:  "t1",
+			Part:   0,
+			Offset: 100,
+			Epoch:  -1,
+		})
 	})
 
 	// Delete partition 0's offset
-	g.waitControl(func() {
+	c.admin(func() {
 		g.commits.delp("t1", 0)
-	})
-	c.persistGroupEntry(groupLogEntry{
-		Type:  "delete",
-		Group: "g1",
-		Topic: "t1",
-		Part:  0,
+		c.persistGroupEntry(groupLogEntry{
+			Type:  "delete",
+			Group: "g1",
+			Topic: "t1",
+			Part:  0,
+		})
 	})
 
 	c.Close()
@@ -1241,7 +1236,7 @@ func TestPersistOffsetDeleteRoundTrip(t *testing.T) {
 	}
 
 	var found bool
-	g2.waitControl(func() {
+	c2.admin(func() {
 		_, found = g2.commits.getp("t1", 0)
 	})
 	if found {

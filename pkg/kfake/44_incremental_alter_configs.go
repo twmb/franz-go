@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"maps"
 	"strconv"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -74,11 +75,9 @@ outer:
 					continue outer
 				}
 			}
-			old := c.loadBcfgs()
-			dup := make(map[string]*string, len(old))
-			for k, v := range old {
-				dup[k] = v
-			}
+			// We apply every op to a clone: a ValidateOnly request
+			// must not leave the ops it walked behind.
+			dup := maps.Clone(c.bcfgs)
 			var invalid bool
 			for i := range rr.Configs {
 				rc := &rr.Configs[i]
@@ -114,7 +113,7 @@ outer:
 			if req.ValidateOnly {
 				continue
 			}
-			c.storeBcfgs(dup)
+			c.bcfgs = dup
 			c.persistBrokerConfigsState()
 
 		case kmsg.ConfigResourceTypeTopic:
@@ -223,5 +222,6 @@ outer:
 	}
 
 	c.refreshCompactTicker()
+	c.shareGroups.refreshSweepTicker()
 	return resp, nil
 }

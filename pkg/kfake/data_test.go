@@ -42,10 +42,32 @@ func TestValidServerAssignor(t *testing.T) {
 	}
 }
 
-// testGroup builds a group with the given assignor and members for
-// testing computeTargetAssignment.
-func testGroup(assignor string, members map[string][]string) *group {
+// testTopic is one topic for testGroup: the ID the test wants it to
+// have, and how many partitions it has.
+type testTopic struct {
+	id    uuid
+	parts int32
+}
+
+// testGroup builds a group whose cluster knows the given topics, with
+// the given assignor and members, for testing computeTargetAssignment.
+func testGroup(assignor string, topics map[string]testTopic, members map[string][]string) *group {
+	c := new(Cluster)
+	c.data.c = c
+	c.data.tps = make(tps[partData], len(topics))
+	c.data.t2id = make(map[string]uuid, len(topics))
+	c.data.id2t = make(map[uuid]string, len(topics))
+	for topic, tt := range topics {
+		ps := make(map[int32]*partData, tt.parts)
+		for p := int32(0); p < tt.parts; p++ {
+			ps[p] = new(partData)
+		}
+		c.data.tps[topic] = ps
+		c.data.t2id[topic] = tt.id
+		c.data.id2t[tt.id] = topic
+	}
 	g := &group{
+		c:               c,
 		assignorName:    assignor,
 		consumerMembers: make(map[string]*consumerMember, len(members)),
 		partitionEpochs: make(map[uuid]map[int32]int32),
@@ -64,16 +86,14 @@ func TestAssignUniform(t *testing.T) {
 	t.Parallel()
 	idA := uuid{1}
 	idB := uuid{2}
-	snap := topicMetaSnap{
-		"topicA": {id: idA, partitions: 3},
-		"topicB": {id: idB, partitions: 3},
-	}
-
-	g := testGroup("uniform", map[string][]string{
+	g := testGroup("uniform", map[string]testTopic{
+		"topicA": {id: idA, parts: 3},
+		"topicB": {id: idB, parts: 3},
+	}, map[string][]string{
 		"m0": {"topicA", "topicB"},
 		"m1": {"topicA", "topicB"},
 	})
-	g.computeTargetAssignment(snap)
+	g.computeTargetAssignment()
 
 	// Uniform round-robin: 6 total partitions across 2 members => 3 each.
 	for _, mid := range []string{"m0", "m1"} {
@@ -92,16 +112,14 @@ func TestAssignRangeTwoMembersTwoTopics(t *testing.T) {
 	t.Parallel()
 	idA := uuid{1}
 	idB := uuid{2}
-	snap := topicMetaSnap{
-		"topicA": {id: idA, partitions: 3},
-		"topicB": {id: idB, partitions: 3},
-	}
-
-	g := testGroup("range", map[string][]string{
+	g := testGroup("range", map[string]testTopic{
+		"topicA": {id: idA, parts: 3},
+		"topicB": {id: idB, parts: 3},
+	}, map[string][]string{
 		"m0": {"topicA", "topicB"},
 		"m1": {"topicA", "topicB"},
 	})
-	g.computeTargetAssignment(snap)
+	g.computeTargetAssignment()
 
 	// Range: topicA [0,1] to m0, [2] to m1; topicB [0,1] to m0, [2] to m1.
 	// (3 partitions / 2 members = 1 base + 1 extra for first member)
@@ -124,15 +142,13 @@ func TestAssignRangeTwoMembersTwoTopics(t *testing.T) {
 func TestAssignRangeUnevenPartitions(t *testing.T) {
 	t.Parallel()
 	id := uuid{1}
-	snap := topicMetaSnap{
-		"topic": {id: id, partitions: 7},
-	}
-
-	g := testGroup("range", map[string][]string{
+	g := testGroup("range", map[string]testTopic{
+		"topic": {id: id, parts: 7},
+	}, map[string][]string{
 		"m0": {"topic"},
 		"m1": {"topic"},
 	})
-	g.computeTargetAssignment(snap)
+	g.computeTargetAssignment()
 
 	// 7 partitions, 2 members => m0 gets [0,1,2,3], m1 gets [4,5,6].
 	m0 := g.consumerMembers["m0"]
@@ -148,16 +164,14 @@ func TestAssignRangeUnevenPartitions(t *testing.T) {
 func TestAssignRangeMoreMembersThanPartitions(t *testing.T) {
 	t.Parallel()
 	id := uuid{1}
-	snap := topicMetaSnap{
-		"topic": {id: id, partitions: 2},
-	}
-
-	g := testGroup("range", map[string][]string{
+	g := testGroup("range", map[string]testTopic{
+		"topic": {id: id, parts: 2},
+	}, map[string][]string{
 		"m0": {"topic"},
 		"m1": {"topic"},
 		"m2": {"topic"},
 	})
-	g.computeTargetAssignment(snap)
+	g.computeTargetAssignment()
 
 	// 2 partitions, 3 members => m0 gets [0], m1 gets [1], m2 gets nothing.
 	m0 := g.consumerMembers["m0"]
@@ -178,18 +192,16 @@ func TestAssignRangeHeterogeneousSubscriptions(t *testing.T) {
 	t.Parallel()
 	idA := uuid{1}
 	idB := uuid{2}
-	snap := topicMetaSnap{
-		"topicA": {id: idA, partitions: 4},
-		"topicB": {id: idB, partitions: 4},
-	}
-
 	// m0 subscribes to both, m1 only topicA, m2 only topicB.
-	g := testGroup("range", map[string][]string{
+	g := testGroup("range", map[string]testTopic{
+		"topicA": {id: idA, parts: 4},
+		"topicB": {id: idB, parts: 4},
+	}, map[string][]string{
 		"m0": {"topicA", "topicB"},
 		"m1": {"topicA"},
 		"m2": {"topicB"},
 	})
-	g.computeTargetAssignment(snap)
+	g.computeTargetAssignment()
 
 	// topicA: subscribed by m0, m1 => m0 gets [0,1], m1 gets [2,3]
 	// topicB: subscribed by m0, m2 => m0 gets [0,1], m2 gets [2,3]
@@ -213,19 +225,17 @@ func TestAssignRangeHeterogeneousSubscriptions(t *testing.T) {
 func TestAssignUniformStickyOnLeave(t *testing.T) {
 	t.Parallel()
 	id := uuid{1}
-	snap := topicMetaSnap{
-		"topic": {id: id, partitions: 31},
-	}
-
 	// Start with 5 members all subscribing to the same topic.
-	g := testGroup("uniform", map[string][]string{
+	g := testGroup("uniform", map[string]testTopic{
+		"topic": {id: id, parts: 31},
+	}, map[string][]string{
 		"m0": {"topic"},
 		"m1": {"topic"},
 		"m2": {"topic"},
 		"m3": {"topic"},
 		"m4": {"topic"},
 	})
-	g.computeTargetAssignment(snap)
+	g.computeTargetAssignment()
 
 	// Record the initial assignment for all members.
 	before := make(map[string][]int32)
@@ -244,7 +254,7 @@ func TestAssignUniformStickyOnLeave(t *testing.T) {
 
 	// Remove m4 (simulating a leave).
 	delete(g.consumerMembers, "m4")
-	g.computeTargetAssignment(snap)
+	g.computeTargetAssignment()
 
 	// After leave: 4 members, 31 partitions => 7,8,8,8.
 	// ALL of each remaining member's old partitions must
@@ -270,11 +280,9 @@ func TestAssignUniformStickyOnLeave(t *testing.T) {
 func TestAssignUniformStickyRapidJoinsThenLeave(t *testing.T) {
 	t.Parallel()
 	id := uuid{1}
-	snap := topicMetaSnap{
-		"topic": {id: id, partitions: 31},
-	}
-
-	g := testGroup("uniform", map[string][]string{})
+	g := testGroup("uniform", map[string]testTopic{
+		"topic": {id: id, parts: 31},
+	}, map[string][]string{})
 	allMembers := []string{"m0", "m1", "m2", "m3", "m4"}
 
 	// Simulate rapid joins: each member joins and triggers
@@ -285,7 +293,7 @@ func TestAssignUniformStickyRapidJoinsThenLeave(t *testing.T) {
 			subscribedTopics: []string{"topic"},
 			targetAssignment: make(map[uuid][]int32),
 		}
-		g.computeTargetAssignment(snap)
+		g.computeTargetAssignment()
 	}
 
 	// Record the converged assignment (after all 5 joins).
@@ -296,7 +304,7 @@ func TestAssignUniformStickyRapidJoinsThenLeave(t *testing.T) {
 
 	// Now remove m4.
 	delete(g.consumerMembers, "m4")
-	g.computeTargetAssignment(snap)
+	g.computeTargetAssignment()
 
 	// Every remaining member must keep ALL of their converged
 	// partitions (sticky). They should only gain partitions,

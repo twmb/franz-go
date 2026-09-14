@@ -31,6 +31,14 @@ type (
 		wakeCh       chan *slept
 		watchFetchCh chan *watchFetch
 
+		// groupWorkCh carries timer-driven group work back to run(),
+		// which owns all group state. Timers cannot touch that state
+		// themselves, so they hand us a closure instead. This is
+		// unbuffered so that a timer waits for the loop rather than
+		// stacking work behind it, and so that nothing can come to
+		// depend on a queue depth.
+		groupWorkCh chan func()
+
 		controlMu      sync.Mutex
 		control        map[int16][]*controlCtx
 		currentBroker  *broker
@@ -47,7 +55,7 @@ type (
 		groups             groups
 		sasls              sasls
 		acls               clusterACLs
-		bcfgs              atomic.Pointer[map[string]*string]
+		bcfgs              map[string]*string
 		quotas             map[string]quotaEntry
 		telem              map[[16]byte]int32
 		telemNextID        int32
@@ -64,12 +72,11 @@ type (
 		// groups.log, pids.log, etc.) only write when persist().
 		storageDir         string
 		fs                 fs
-		groupsLogMu        sync.Mutex
 		groupsLogFile      file
 		pidsLogFile        file
-		groupsLogSize      atomic.Int64
-		pidsLogSize        atomic.Int64
-		needsGroupsCompact atomic.Bool
+		groupsLogSize      int64
+		pidsLogSize        int64
+		needsGroupsCompact bool
 
 		die  chan struct{}
 		dead atomic.Bool
@@ -151,6 +158,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		reqCh:        make(chan *clientReq, 20),
 		wakeCh:       make(chan *slept, 10),
 		watchFetchCh: make(chan *watchFetch, 20),
+		groupWorkCh:  make(chan func()),
 		control:      make(map[int16][]*controlCtx),
 		controlSleep: make(chan sleepChs, 1),
 
@@ -163,7 +171,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			tcfgs:     make(map[string]map[string]*string),
 			tnorms:    make(map[string]string),
 		},
-		// bcfgs initialized below via storeBcfgs
+		bcfgs:    make(map[string]*string, len(cfg.brokerConfigs)),
 		quotas:   make(map[string]quotaEntry),
 		telem:    make(map[[16]byte]int32),
 		features: defaultFinalizedFeatures(),
@@ -180,23 +188,19 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		c.fs = newMemFS()
 		c.storageDir = "/kfake"
 	}
-	{
-		m := make(map[string]*string, len(cfg.brokerConfigs))
-		for k, v := range cfg.brokerConfigs {
-			if v == "" {
-				m[k] = nil
-			} else {
-				v := v
-				m[k] = &v
-			}
+	for k, v := range cfg.brokerConfigs {
+		if v == "" {
+			c.bcfgs[k] = nil
+		} else {
+			v := v
+			c.bcfgs[k] = &v
 		}
-		c.storeBcfgs(m)
 	}
 	c.data.c = c
 	c.groups.c = c
+	c.groups.gs = make(map[string]*group)
 	c.shareGroups.c = c
 	c.shareGroups.gs = make(map[string]*shareGroup)
-	c.shareGroups.sweepCh = make(chan *shareGroup, 16)
 	c.shareGroups.sessions = make(map[shareSessionKey]*shareSession)
 	c.shareGroups.connWatch = make(map[*clientConn]struct{})
 	c.shareGroups.disconnCh = make(chan *clientConn, 16)
@@ -214,6 +218,9 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 				b.ln.Close()
 			}
 			c.closeOpenFiles()
+			// Loading from disk can recreate share groups, which
+			// starts the sweep ticker before run() exists to stop it.
+			c.shareGroups.stopSweepTicker()
 			close(c.die)
 		}
 	}()
@@ -369,21 +376,20 @@ func (c *Cluster) Close() {
 }
 
 // drainReqChForShutdown processes any pending OffsetCommit requests in
-// c.reqCh, dispatching them to the appropriate group goroutines. This
-// is called at the start of the shutdown admin function, before
-// saveToDisk. Without this, Go's select in run() may pick adminCh over
-// reqCh, causing committed offsets to be lost across restarts.
+// c.reqCh. This is called at the start of the shutdown admin function,
+// before saveToDisk. Without this, Go's select in run() may pick adminCh
+// over reqCh, causing committed offsets to be lost across restarts.
 //
-// TxnOffsetCommitRequest is not handled here: transactional offset
-// staging is processed inline in run() (not dispatched to a group
-// goroutine), so any in-flight TxnOffsetCommit simply fails on the
-// client side and the client must abort/retry the transaction.
+// TxnOffsetCommitRequest is not handled here: transactional offsets are
+// staged on the producer ID and only mirrored into the group when the
+// transaction commits, so any in-flight TxnOffsetCommit simply fails on
+// the client side and the client must abort/retry the transaction.
 func (c *Cluster) drainReqChForShutdown() {
 	for {
 		select {
 		case creq := <-c.reqCh:
 			if _, ok := creq.kreq.(*kmsg.OffsetCommitRequest); ok {
-				c.groups.handleOffsetCommit(creq)
+				creq.reply(c.groups.handleOffsetCommit(creq))
 			}
 		default:
 			return
@@ -432,8 +438,21 @@ func (c *Cluster) run() {
 			c.compactTicker.Stop()
 		}
 		c.offsetExpireTicker.Stop()
+		c.shareGroups.stopSweepTicker()
+		// An unfired timer holds its group, and the group holds the
+		// cluster: without this a closed cluster and all its data stay
+		// reachable until the last session timeout expires.
+		for _, g := range c.groups.gs {
+			g.stopTimers()
+		}
+		for _, g := range c.shareGroups.gs {
+			g.stopTimers()
+		}
 	}()
 	c.offsetExpireTicker = time.NewTicker(time.Duration(c.offsetsRetentionCheckIntervalMs()) * time.Millisecond)
+	// Loading from disk can create share groups, and it also loads the
+	// broker configs the interval comes from.
+	c.shareGroups.refreshSweepTicker()
 outer:
 	for {
 		var (
@@ -447,41 +466,16 @@ outer:
 			handled bool
 		)
 
-		// Drain ready watchers before the main select so that
-		// completed long-polls are dispatched promptly. Under
-		// heavy parallel load (many tests with -race), the
-		// main select's random pick can starve watchers in
-		// favor of reqCh, causing fetch timeouts.
-		for {
-			select {
-			case w = <-c.watchFetchCh:
-				if w.cleaned {
-					w = nil
-					continue
-				}
-				w.cleanup()
-				creq = w.creq
-			case wsf = <-c.shareGroups.watchFetchCh:
-				if wsf.cleaned {
-					wsf = nil
-					continue
-				}
-				wsf.cleanup()
-				creq = wsf.creq
-			default:
-				goto mainSelect
-			}
-			break
-		}
-		goto handleReq
-
-	mainSelect:
 		select {
 		case <-c.die:
 			return
 
 		case <-c.pids.txTimer.C:
 			c.pids.handleTimeout()
+			continue
+
+		case fn := <-c.groupWorkCh:
+			fn()
 			continue
 
 		case <-c.compactTickerC():
@@ -492,8 +486,8 @@ outer:
 			c.expireGroupOffsets()
 			continue
 
-		case sg := <-c.shareGroups.sweepCh:
-			sg.fireAllShareWatchers()
+		case <-c.shareGroups.sweepTickerC():
+			c.shareGroups.sweepAllExpiredAcquisitions()
 			continue
 
 		case cc := <-c.shareGroups.disconnCh:
@@ -550,6 +544,18 @@ outer:
 				case admin := <-c.adminCh:
 					admin()
 					continue inner
+				case fn := <-c.groupWorkCh:
+					fn()
+					continue inner
+				case <-c.compactTickerC():
+					c.compactAll()
+					continue inner
+				case <-c.offsetExpireTicker.C:
+					c.expireGroupOffsets()
+					continue inner
+				case <-c.shareGroups.sweepTickerC():
+					c.shareGroups.sweepAllExpiredAcquisitions()
+					continue inner
 				case res := <-s.res:
 					c.finishSleptControl(s)
 					cctx := s.cctx
@@ -581,7 +587,6 @@ outer:
 			creq = wsf.creq
 		}
 
-	handleReq:
 		kresp, err, handled = c.tryControl(creq)
 		if handled {
 			goto afterControl
@@ -730,7 +735,7 @@ outer:
 		c.pids.updateTimer()
 
 	afterControl:
-		if c.needsGroupsCompact.Load() {
+		if c.needsGroupsCompact {
 			c.compactGroupsLog()
 		}
 		// If s is non-nil, this is either a previously slept control
@@ -741,22 +746,18 @@ outer:
 			s.continueDequeue <- struct{}{}
 		}
 		if kresp == nil && err == nil {
-			// Group requests (JoinGroup, SyncGroup, Heartbeat, etc.)
-			// are dispatched to goroutines that send the response
-			// later via creq.reply(). The mute stays held until
-			// cc.write() processes the response.
+			// A group request (JoinGroup, SyncGroup) can park in
+			// the group as a member's waitingReply; a later state
+			// transition on this loop replies to it. The mute stays
+			// held until cc.write() processes the response.
 			//
 			// acks=0 produce requests have no response at all, but
-			// cc.write() serializes responses by sequence number;
-			// if we simply skipped this request's sequence, every
-			// later response on the connection would wait forever
-			// in the out-of-order buffer (a real broker responds
-			// to later requests on such a connection normally).
-			// Send a skip sentinel: write() advances its sequence
-			// and unmutes without writing anything.
+			// the mute is held until write() runs. Send a skip
+			// sentinel: write() unmutes without writing anything so
+			// that read() can submit the next request.
 			if req, ok := kreq.(*kmsg.ProduceRequest); ok && req.Acks == 0 {
 				select {
-				case creq.cc.respCh <- clientResp{corr: creq.corr, seq: creq.seq, skip: true}:
+				case creq.cc.respCh <- clientResp{corr: creq.corr, skip: true}:
 				case <-creq.cc.done:
 				case <-c.die:
 					return
@@ -766,12 +767,26 @@ outer:
 		}
 
 		select {
-		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err, seq: creq.seq}:
+		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err}:
 		case <-creq.cc.done:
 		case <-c.die:
 			return
 		}
 	}
+}
+
+// afterFuncOnLoop starts a timer that, on expiry, hands fn to run(), which
+// owns all group state. The timer goroutine must not touch that state
+// itself. Stopping the timer is best effort: a timer that already fired
+// cannot be retracted, so fn must tolerate running late and check for
+// itself that the state it acts on is still there.
+func (c *Cluster) afterFuncOnLoop(d time.Duration, fn func()) *time.Timer {
+	return time.AfterFunc(d, func() {
+		select {
+		case <-c.die:
+		case c.groupWorkCh <- fn:
+		}
+	})
 }
 
 // Control is a function to call on any client request the cluster handles.
@@ -926,6 +941,18 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 			select {
 			case admin := <-c.adminCh:
 				admin()
+				continue
+			case fn := <-c.groupWorkCh:
+				fn()
+				continue
+			case <-c.compactTickerC():
+				c.compactAll()
+				continue
+			case <-c.offsetExpireTicker.C:
+				c.expireGroupOffsets()
+				continue
+			case <-c.shareGroups.sweepTickerC():
+				c.shareGroups.sweepAllExpiredAcquisitions()
 				continue
 			case res := <-res:
 				c.maybePopControl(res.handled, cctx)
@@ -1166,8 +1193,8 @@ func (bs *bsleep) wait() {
 
 // For out of order control, all control functions run concurrently, serially.
 // Whenever they wake up, they send themselves down setWake. waitSet manages
-// handling the wake up and interacting with the serial manage goroutine to
-// run everything properly.
+// handling the wake up and scheduling the control function back onto the run
+// loop to run everything properly.
 func (bs *bsleep) waitSet() {
 	for {
 		bs.mu.Lock()
@@ -1373,7 +1400,7 @@ func (c *Cluster) AddNode(nodeID int32, port int) (int32, int, error) {
 		}
 		c.bs = append(c.bs, b)
 		c.cfg.nbrokers++
-		c.shufflePartitionsLocked()
+		c.shufflePartitions()
 		go b.listen()
 	})
 	return nodeID, port, err
@@ -1397,7 +1424,7 @@ func (c *Cluster) RemoveNode(nodeID int32) error {
 			c.bs[i] = c.bs[len(c.bs)-1]
 			c.bs[i].bsIdx = i
 			c.bs = c.bs[:len(c.bs)-1]
-			c.shufflePartitionsLocked()
+			c.shufflePartitions()
 			return
 		}
 		err = fmt.Errorf("node %d not found", nodeID)
@@ -1410,11 +1437,11 @@ func (c *Cluster) RemoveNode(nodeID int32) error {
 // bumped.
 func (c *Cluster) ShufflePartitionLeaders() {
 	c.admin(func() {
-		c.shufflePartitionsLocked()
+		c.shufflePartitions()
 	})
 }
 
-func (c *Cluster) shufflePartitionsLocked() {
+func (c *Cluster) shufflePartitions() {
 	c.data.tps.each(func(_ string, _ int32, p *partData) {
 		var leader *broker
 		if len(c.bs) == 0 {
@@ -1488,7 +1515,7 @@ func (c *Cluster) compactTickerC() <-chan time.Time {
 }
 
 func (c *Cluster) compactIntervalMs() int64 {
-	if v, ok := c.loadBcfgs()["log.cleaner.backoff.ms"]; ok && v != nil {
+	if v, ok := c.bcfgs["log.cleaner.backoff.ms"]; ok && v != nil {
 		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
 			return n
 		}
@@ -1526,19 +1553,8 @@ func (c *Cluster) expireGroupOffsets() {
 	retentionMs := c.offsetsRetentionMs()
 	for name, g := range c.groups.gs {
 		unstable := c.pids.hasUnstableOffsets(name)
-		var shouldDelete bool
-		if !g.waitControl(func() {
-			shouldDelete = g.expireOffsets(retentionMs, unstable)
-			if shouldDelete {
-				g.quitOnce()
-			}
-		}) {
-			continue
-		}
-		select {
-		case <-g.quitCh:
-			delete(c.groups.gs, name)
-		default:
+		if g.expireOffsets(retentionMs, unstable) {
+			g.kill()
 		}
 	}
 }

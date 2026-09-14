@@ -67,8 +67,6 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		broker:   creq.cc.b.node,
 	}
 
-	id2t := c.data.id2t
-	maxDelivery := c.shareMaxDeliveryAttempts()
 	maxAckType := shareAckReject
 	if req.Version >= 2 && req.IsRenewAck {
 		maxAckType = shareAckRenew
@@ -117,10 +115,8 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 			return resp, nil
 		}
 		ackTs := ackTopicsFromAcknowledge(req.Topics)
-		sg.mu.Lock()
-		toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onPartition, onNotLeader)
-		released := sg.releaseRecordsForSessionLocked(memberID, session, id2t, maxDelivery)
-		sg.mu.Unlock()
+		toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, onPartition, onNotLeader)
+		released := sg.releaseRecordsForSession(memberID, session)
 		fireAll(toFire)
 		if released {
 			sg.fireAllShareWatchers()
@@ -146,9 +142,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 	}
 
 	ackTs := ackTopicsFromAcknowledge(req.Topics)
-	sg.mu.Lock()
-	toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onPartition, onNotLeader)
-	sg.mu.Unlock()
+	toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, onPartition, onNotLeader)
 	fireAll(toFire)
 
 	session.bumpEpoch()

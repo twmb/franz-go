@@ -694,7 +694,7 @@ func (c *Cluster) brokerConfigs(node int32, fn func(k string, v *string, src kms
 		}
 	}
 
-	for k, v := range c.loadBcfgs() {
+	for k, v := range c.bcfgs {
 		fn(k, v, kmsg.ConfigSourceDynamicBrokerConfig, false)
 	}
 }
@@ -713,7 +713,7 @@ func (d *data) configs(t string, fn func(k string, v *string, src kmsg.ConfigSou
 			fn(k, &v, kmsg.ConfigSourceDefaultConfig, false)
 		}
 	}
-	for k, v := range d.c.loadBcfgs() {
+	for k, v := range d.c.bcfgs {
 		if topicEquiv, ok := validBrokerConfigs[k]; ok && topicEquiv != "" {
 			fn(k, v, kmsg.ConfigSourceDynamicBrokerConfig, false)
 		}
@@ -721,14 +721,6 @@ func (d *data) configs(t string, fn func(k string, v *string, src kmsg.ConfigSou
 	for k, v := range d.tcfgs[t] {
 		fn(k, v, kmsg.ConfigSourceDynamicTopicConfig, false)
 	}
-}
-
-func (c *Cluster) loadBcfgs() map[string]*string {
-	return *c.bcfgs.Load()
-}
-
-func (c *Cluster) storeBcfgs(m map[string]*string) {
-	c.bcfgs.Store(&m)
 }
 
 // configListAppend appends val to a comma-separated list config value.
@@ -876,12 +868,11 @@ const (
 )
 
 // defHeartbeatInterval is the default group.consumer.heartbeat.interval.ms.
-// Real Kafka defaults to 5s; in test binaries we use 100ms so that
-// KIP-848 reconciliation completes quickly.
-var defHeartbeatInterval = 5000
+// This is 5s, the same as Kafka; you lower it with the config itself.
+const defHeartbeatInterval = 5000
 
 // defSessionTimeout is the default group.consumer.session.timeout.ms.
-var defSessionTimeout = 45000
+const defSessionTimeout = 45000
 
 // Default topic and broker configs. Topic/broker pairs that share the same
 // underlying setting (e.g. max.message.bytes / message.max.bytes) both
@@ -986,7 +977,7 @@ var configTypes = map[string]kmsg.ConfigType{
 var brokerRack = "krack"
 
 func (c *Cluster) brokerConfigInt(key string, def int) int32 {
-	if v, ok := c.loadBcfgs()[key]; ok && v != nil {
+	if v, ok := c.bcfgs[key]; ok && v != nil {
 		n, _ := strconv.Atoi(*v)
 		return int32(n)
 	}
@@ -998,7 +989,7 @@ func (c *Cluster) brokerConfigInt(key string, def int) int32 {
 // the value as SessionLifetimeMillis, and an authenticated connection may
 // re-handshake. Zero (the default, matching real Kafka) disables it.
 func (c *Cluster) connectionsMaxReauthMs() int64 {
-	if v, ok := c.loadBcfgs()["connections.max.reauth.ms"]; ok && v != nil {
+	if v, ok := c.bcfgs["connections.max.reauth.ms"]; ok && v != nil {
 		n, _ := strconv.ParseInt(*v, 10, 64)
 		return n
 	}
@@ -1014,7 +1005,7 @@ func (c *Cluster) segmentBytes(topic string) int64 {
 			}
 		}
 	}
-	if v, ok := c.loadBcfgs()["log.segment.bytes"]; ok && v != nil {
+	if v, ok := c.bcfgs["log.segment.bytes"]; ok && v != nil {
 		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
 			return n
 		}
@@ -1071,7 +1062,7 @@ const defOffsetsRetentionMinutes = 10080 // 7 days
 
 func (c *Cluster) offsetsRetentionMs() int64 {
 	// offset.retention.ms takes precedence when present (kfake extension for testing).
-	if v, ok := c.loadBcfgs()["offset.retention.ms"]; ok && v != nil {
+	if v, ok := c.bcfgs["offset.retention.ms"]; ok && v != nil {
 		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
 			return n
 		}
@@ -1139,7 +1130,7 @@ func (d *data) maxMessageBytes(t string) int {
 			return n
 		}
 	}
-	if v, ok := d.c.loadBcfgs()["message.max.bytes"]; ok && v != nil {
+	if v, ok := d.c.bcfgs["message.max.bytes"]; ok && v != nil {
 		n, _ := strconv.Atoi(*v)
 		return n
 	}
@@ -1155,7 +1146,7 @@ func (d *data) retentionMs(t string) int64 {
 			return n
 		}
 	}
-	if v, ok := d.c.loadBcfgs()["log.retention.ms"]; ok && v != nil {
+	if v, ok := d.c.bcfgs["log.retention.ms"]; ok && v != nil {
 		n, _ := strconv.ParseInt(*v, 10, 64)
 		return n
 	}
@@ -1171,7 +1162,7 @@ func (d *data) retentionBytes(t string) int64 {
 			return n
 		}
 	}
-	if v, ok := d.c.loadBcfgs()["log.retention.bytes"]; ok && v != nil {
+	if v, ok := d.c.bcfgs["log.retention.bytes"]; ok && v != nil {
 		n, _ := strconv.ParseInt(*v, 10, 64)
 		return n
 	}

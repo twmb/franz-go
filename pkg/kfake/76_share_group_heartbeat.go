@@ -14,7 +14,6 @@ import (
 // * epoch -1: Leave group (release records, rebalance remaining members)
 // * epoch >0: Regular heartbeat (subscription changes, assignment delivery)
 // * Validates memberID format (non-empty, <=36 chars, client-generated UUID)
-// * Dispatched to the share group's manage goroutine for serialized access
 //
 // Version notes:
 // * v0: Initial share group heartbeat (KIP-932)
@@ -61,7 +60,5 @@ func (c *Cluster) handleShareGroupHeartbeat(creq *clientReq) (kmsg.Response, err
 		}
 	}
 
-	// Hijack to the share group's manage goroutine.
-	c.shareGroups.handleHeartbeat(creq)
-	return nil, nil
+	return c.shareGroups.handleHeartbeat(creq), nil
 }
