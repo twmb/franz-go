@@ -1070,7 +1070,8 @@ func (g *group) handleHeartbeat(creq *clientReq) kmsg.Response {
 }
 
 // Handles a leave. We trigger a rebalance for every member leaving in a batch
-// request, but that's fine because of our manage serialization.
+// request, but that's fine: the whole batch runs on the cluster loop before
+// anything else touches the group.
 func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.LeaveGroupRequest)
 	resp := req.ResponseKind().(*kmsg.LeaveGroupResponse)

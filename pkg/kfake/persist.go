@@ -884,8 +884,8 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 }
 
 // saveGroupsLog writes a compacted groups.log from live group state.
-// Called only at shutdown, where run() is blocked in the admin function
-// and no new requests can be dispatched to group reqCh channels.
+// Called only at shutdown, where run() is inside the admin function and
+// so is not handling requests that could change a group.
 func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 	var allEntries []groupLogEntry
 	for _, g := range c.groups.gs {

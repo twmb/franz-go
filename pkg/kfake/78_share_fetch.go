@@ -257,15 +257,10 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		maxRecordLocks = c.shareMaxRecordLocks()
 	)
 
-	// Parse piggybacked acks before taking the lock (pure request
-	// transformation, no shared state).
 	var ackTs []ackTopic
 	if w == nil {
 		ackTs = ackTopicsFromFetch(req.Topics)
 	}
-
-	// Lock the share group's partition state for ack processing and
-	// record acquisition. Batch I/O happens after unlocking.
 
 	// Process piggybacked acks first (skipped on watcher re-invocation,
 	// since acks were already processed in the initial call).

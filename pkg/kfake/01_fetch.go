@@ -282,7 +282,6 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		w := &watchFetch{
 			need:          int(req.MinBytes) - nbytes,
 			needp:         needp,
-			deadline:      deadline,
 			readCommitted: readCommitted,
 			creq:          creq,
 		}
@@ -487,10 +486,9 @@ full:
 }
 
 type watchFetch struct {
-	need     int
-	needp    tps[int]
-	deadline time.Time
-	creq     *clientReq
+	need  int
+	needp tps[int]
+	creq  *clientReq
 
 	in []*partData
 	cb func()
