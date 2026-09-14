@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -233,27 +232,21 @@ func TestAudit848StaleEpochRejoinStrandsOldMember(t *testing.T) {
 	// Let the rejoined incarnation settle, then count members. Correct
 	// behavior: exactly one member. Buggy behavior: the pre-reset
 	// incarnation ghosts in the group until the session timeout.
-	adm := kadm.NewClient(newPlainClient(t, c))
-	var dg kadm.DescribedConsumerGroup
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		described, err := adm.DescribeConsumerGroups(context.Background(), group)
-		if err == nil {
-			dg = described[group]
-			cur, _ := consumer.GroupMetadata()
-			var hasCurrent bool
-			for _, m := range dg.Members {
-				if m.MemberID == cur {
-					hasCurrent = true
-				}
-			}
-			if hasCurrent && dg.State == "Stable" {
-				break
+	settleCtx, settleCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer settleCancel()
+	dg, _ := c.WaitGroupInfo(settleCtx, group, func(g *kfake.GroupInfo) bool {
+		if g == nil || g.State != "Stable" {
+			return false
+		}
+		cur, _ := consumer.GroupMetadata()
+		for _, m := range g.Members {
+			if m.MemberID == cur {
+				return true
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if len(dg.Members) != 1 {
+		return false
+	})
+	if dg == nil || len(dg.Members) != 1 {
 		var ids []string
 		for _, m := range dg.Members {
 			ids = append(ids, m.MemberID)
@@ -280,17 +273,12 @@ func TestAudit848LeaveGroupNotRetried(t *testing.T) {
 	consumer := newGroupConsumer(t, c, topic, "audit-848-leave-g")
 	consumeN(t, consumer, 1, 10*time.Second) // fully joined
 
-	var injected atomic.Int64
-	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		hreq := kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
-		if hreq.MemberEpoch >= 0 || injected.Load() > 0 {
-			return nil, nil, false
-		}
-		injected.Add(1)
-		resp := hreq.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.NotCoordinator.Code
-		return resp, nil, true
+	injected := c.Fault(kfake.Fault{
+		Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
+		Err:  kerr.NotCoordinator,
+		When: func(kreq kmsg.Request) bool {
+			return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch < 0
+		},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -298,7 +286,7 @@ func TestAudit848LeaveGroupNotRetried(t *testing.T) {
 	if err := consumer.LeaveGroupContext(ctx); err != nil {
 		t.Fatalf("BUG REPRODUCED: one transient NOT_COORDINATOR lost the 848 leave entirely (no retry): %v; member ghosts until the session timeout", err)
 	}
-	if injected.Load() == 0 {
+	if injected.Hits() == 0 {
 		t.Fatal("test setup issue: leave heartbeat was never intercepted")
 	}
 }
@@ -318,15 +306,13 @@ func TestAudit848LeaveUnknownMemberIsSuccess(t *testing.T) {
 	consumer := newGroupConsumer(t, c, topic, "audit-848-leave-unknown-g")
 	consumeN(t, consumer, 1, 10*time.Second) // fully joined
 
-	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		hreq := kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
-		if hreq.MemberEpoch >= 0 {
-			return nil, nil, false
-		}
-		resp := hreq.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.UnknownMemberID.Code
-		return resp, nil, true
+	c.Fault(kfake.Fault{
+		Keys:  []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
+		Err:   kerr.UnknownMemberID,
+		Count: -1,
+		When: func(kreq kmsg.Request) bool {
+			return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch < 0
+		},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -354,23 +340,15 @@ func TestAuditClassicLeaveGroupRetried(t *testing.T) {
 	)
 	consumeN(t, consumer, 1, 10*time.Second)
 
-	var attempts atomic.Int64
-	c.ControlKey(int16(kmsg.LeaveGroup), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if attempts.Add(1) > 1 {
-			return nil, nil, false
-		}
-		resp := kreq.(*kmsg.LeaveGroupRequest).ResponseKind().(*kmsg.LeaveGroupResponse)
-		resp.ErrorCode = kerr.NotCoordinator.Code
-		return resp, nil, true
-	})
+	attempts := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.LeaveGroup}, Observe: true, Count: -1})
+	c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.LeaveGroup}, Err: kerr.NotCoordinator})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := consumer.LeaveGroupContext(ctx); err != nil {
 		t.Fatalf("classic leave did not survive one transient NOT_COORDINATOR: %v", err)
 	}
-	if attempts.Load() < 2 {
-		t.Fatalf("classic leave was not retried: %d attempts", attempts.Load())
+	if attempts.Hits() < 2 {
+		t.Fatalf("classic leave was not retried: %d attempts", attempts.Hits())
 	}
 }

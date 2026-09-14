@@ -106,16 +106,12 @@ func TestAssignAndCommitSyncAllConsumed(t *testing.T) {
 	}
 
 	// Verify committed offset.
-	fetched, err := adm.FetchOffsets(ctx, groupID)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok := fetched.Lookup(assignTestTopic, 0)
+	o, ok := groupCommits(c, groupID)[assignTestTopic][0]
 	if !ok {
 		t.Fatal("committed offset not found")
 	}
-	if o.At != int64(assignTestRecords) {
-		t.Errorf("committed offset: expected %d, got %d", assignTestRecords, o.At)
+	if o.Offset != int64(assignTestRecords) {
+		t.Errorf("committed offset: expected %d, got %d", assignTestRecords, o.Offset)
 	}
 }
 
@@ -129,19 +125,9 @@ func TestAssignAndCommitAsyncNotCommitted(t *testing.T) {
 	// Create a consumer that doesn't poll - just assigns.
 	_ = assignConsumer(t, c, kgo.NewOffset().AtStart())
 
-	adm := newAdminClient(t, c)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	// No offsets should be committed for the group. The group may not even
-	// exist, which is also correct.
-	fetched, err := adm.FetchOffsets(ctx, groupID)
-	if err != nil {
-		// GROUP_ID_NOT_FOUND is expected - no group means no commits.
-		return
-	}
-	_, ok := fetched.Lookup(assignTestTopic, 0)
-	if ok {
+	// exist, which is also correct: groupCommits is nil then.
+	if _, ok := groupCommits(c, groupID)[assignTestTopic][0]; ok {
 		t.Error("expected no committed offset for a consumer that hasn't polled")
 	}
 }
@@ -173,17 +159,12 @@ func TestAssignAndFetchCommittedOffsets(t *testing.T) {
 	}
 
 	// Consumer 2 reads the committed offset.
-	adm2 := newAdminClient(t, c)
-	fetched, err := adm2.FetchOffsets(ctx, groupID)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok := fetched.Lookup(assignTestTopic, 0)
+	o, ok := groupCommits(c, groupID)[assignTestTopic][0]
 	if !ok {
 		t.Fatal("committed offset not found")
 	}
-	if o.At != int64(assignTestRecords) {
-		t.Errorf("expected committed offset %d, got %d", assignTestRecords, o.At)
+	if o.Offset != int64(assignTestRecords) {
+		t.Errorf("expected committed offset %d, got %d", assignTestRecords, o.Offset)
 	}
 }
 
@@ -212,16 +193,12 @@ func TestAssignAndConsumeFromCommittedOffsets(t *testing.T) {
 	}
 
 	// Fetch committed offset and consume from there.
-	fetched, err := adm.FetchOffsets(ctx, groupID)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok := fetched.Lookup(assignTestTopic, 0)
+	o, ok := groupCommits(c, groupID)[assignTestTopic][0]
 	if !ok {
 		t.Fatal("committed offset not found")
 	}
 
-	consumer := assignConsumer(t, c, kgo.NewOffset().At(o.At))
+	consumer := assignConsumer(t, c, kgo.NewOffset().At(o.Offset))
 	remaining := assignTestRecords - int(halfway)
 	records := consumeN(t, consumer, remaining, 5*time.Second)
 	if records[0].Offset != halfway {
@@ -294,16 +271,12 @@ func TestAssignAndCommitMetadata(t *testing.T) {
 		t.Fatalf("commit failed: %v", err)
 	}
 
-	fetched, err := adm.FetchOffsets(ctx, groupID)
-	if err != nil {
-		t.Fatalf("fetch offsets failed: %v", err)
-	}
-	o, ok := fetched.Lookup(assignTestTopic, 0)
+	o, ok := groupCommits(c, groupID)[assignTestTopic][0]
 	if !ok {
 		t.Fatal("committed offset not found")
 	}
-	if o.At != 3 {
-		t.Errorf("expected offset 3, got %d", o.At)
+	if o.Offset != 3 {
+		t.Errorf("expected offset 3, got %d", o.Offset)
 	}
 	if o.Metadata != metadata {
 		t.Errorf("expected metadata %q, got %q", metadata, o.Metadata)

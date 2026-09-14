@@ -3,6 +3,7 @@ package kfake
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,29 +15,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
-
-func setShareAutoOffsetReset(t *testing.T, cl *kgo.Client, group string) {
-	t.Helper()
-	req := kmsg.NewPtrIncrementalAlterConfigsRequest()
-	res := kmsg.NewIncrementalAlterConfigsRequestResource()
-	res.ResourceType = kmsg.ConfigResourceTypeGroupConfig
-	res.ResourceName = group
-	cfg := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
-	cfg.Name = "share.auto.offset.reset"
-	cfg.Op = 0
-	cfg.Value = kmsg.StringPtr("earliest")
-	res.Configs = append(res.Configs, cfg)
-	req.Resources = append(req.Resources, res)
-	resp, err := req.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("IncrementalAlterConfigs: %v", err)
-	}
-	for _, r := range resp.Resources {
-		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-			t.Fatalf("IncrementalAlterConfigs resource error: %v", err)
-		}
-	}
-}
 
 func TestShareGroupBasic(t *testing.T) {
 	t.Parallel()
@@ -82,7 +60,7 @@ func TestShareGroupAckAndRedelivery(t *testing.T) {
 
 	admin := newPlainClient(t, c, kgo.DefaultProduceTopic("share-ack"))
 
-	setShareAutoOffsetReset(t, admin, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	// Produce 10 records with numeric keys.
 	const total = 10
@@ -414,7 +392,7 @@ func TestShareGroupSessionEpoch(t *testing.T) {
 
 	cl := newPlainClient(t, c, kgo.RetryTimeout(0))
 
-	setShareAutoOffsetReset(t, cl, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	// Join the share group.
 	memberID, topicID := joinShareGroupRaw(t, cl, group, "share-epoch")
@@ -670,7 +648,7 @@ func TestShareGroupMultiPartition(t *testing.T) {
 		kgo.RecordPartitioner(kgo.RoundRobinPartitioner()),
 	)
 
-	setShareAutoOffsetReset(t, admin, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	// Produce records that will be spread across partitions.
 	const total = 50
@@ -1040,7 +1018,7 @@ func TestShareGroupAsyncEarlyReturn(t *testing.T) {
 		kgo.DefaultProduceTopic("share-async-early"),
 		kgo.RecordPartitioner(kgo.RoundRobinPartitioner()),
 	)
-	setShareAutoOffsetReset(t, admin, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	// Produce 30 records spread across all 3 partitions via
 	// round-robin so each broker has data.
@@ -1211,7 +1189,7 @@ func TestShareGroupAsyncMultiSourceRecordIntegrity(t *testing.T) {
 		kgo.RecordPartitioner(kgo.RoundRobinPartitioner()),
 	)
 
-	setShareAutoOffsetReset(t, admin, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	const total = 90
 	for i := range total {
@@ -1596,51 +1574,21 @@ func TestShareGroupRebalanceOccurs(t *testing.T) {
 	c := newCluster(t, SeedTopics(int32(partitions), topic))
 	produceShareN(t, c, topic, group, total)
 
-	admin := newPlainClient(t, c)
-	defer admin.Close()
-
-	// describeEpoch returns (epoch, members). If the group has not
-	// been created yet (GROUP_ID_NOT_FOUND -- happens briefly before
-	// any consumer has heartbeated), it returns (0, 0) rather than
-	// fatal-ing so the polling helper below can wait it out.
-	describeEpoch := func() (epoch int32, members int) {
-		req := kmsg.NewPtrShareGroupDescribeRequest()
-		req.GroupIDs = []string{group}
-		resp, err := req.RequestWith(context.Background(), admin)
-		if err != nil {
-			t.Fatalf("describe: %v", err)
-		}
-		if len(resp.Groups) != 1 {
-			t.Fatalf("expected 1 group, got %d", len(resp.Groups))
-		}
-		g := resp.Groups[0]
-		if errors.Is(kerr.ErrorForCode(g.ErrorCode), kerr.GroupIDNotFound) {
-			return 0, 0
-		}
-		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
-			t.Fatalf("describe error: %v", err)
-		}
-		return g.GroupEpoch, len(g.Members)
-	}
-
-	waitForMembers := func(want int) int32 {
-		t.Helper()
-		deadline := time.Now().Add(15 * time.Second)
-		var lastE int32
-		var lastM int
-		for time.Now().Before(deadline) {
-			lastE, lastM = describeEpoch()
-			if lastM == want {
-				return lastE
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		t.Fatalf("timeout waiting for %d members (last: epoch=%d, members=%d)", want, lastE, lastM)
-		return 0
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+
+	// waitForMembers waits for the group to carry want members and
+	// returns the epoch it settled on.
+	waitForMembers := func(want int) int32 {
+		t.Helper()
+		g, err := c.WaitGroupInfo(ctx, group, func(g *GroupInfo) bool {
+			return g != nil && len(g.Members) == want
+		})
+		if err != nil {
+			t.Fatalf("waiting for %d members: %v", want, err)
+		}
+		return g.Epoch
+	}
 
 	// seen is shared between both consumers; a record acquired twice
 	// (e.g. released on one member's leave) appears in `deliveries`
@@ -1853,7 +1801,7 @@ func TestShareGroupSubscriptionPurge(t *testing.T) {
 	// share.auto.offset.reset=earliest picks them up.
 	prodCl := newPlainClient(t, c)
 	defer prodCl.Close()
-	setShareAutoOffsetReset(t, prodCl, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 	for i := range perTopic {
 		v := []byte(strconv.Itoa(i))
 		prodCl.Produce(context.Background(), &kgo.Record{Topic: topicA, Value: v}, nil)
@@ -1936,30 +1884,13 @@ func TestShareGroupSubscriptionPurge(t *testing.T) {
 		r.Ack(kgo.AckAccept)
 	}
 
-	// Phase 3: verify broker sees the updated subscription. Poll
-	// ShareGroupDescribe until the member's SubscribedTopicNames lists
-	// only topicB.
-	admin := newPlainClient(t, c)
-	defer admin.Close()
-	deadline = time.Now().Add(10 * time.Second)
-	var lastSubscribed []string
-	for time.Now().Before(deadline) {
-		req := kmsg.NewPtrShareGroupDescribeRequest()
-		req.GroupIDs = []string{group}
-		resp, err := req.RequestWith(context.Background(), admin)
-		if err != nil {
-			t.Fatalf("describe: %v", err)
-		}
-		if len(resp.Groups) == 1 && len(resp.Groups[0].Members) == 1 {
-			lastSubscribed = resp.Groups[0].Members[0].SubscribedTopicNames
-			if len(lastSubscribed) == 1 && lastSubscribed[0] == topicB {
-				break
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if !(len(lastSubscribed) == 1 && lastSubscribed[0] == topicB) {
-		t.Fatalf("broker never saw subscription change: last observed SubscribedTopicNames=%v", lastSubscribed)
+	// Phase 3: verify the broker sees the updated subscription, which
+	// the next heartbeat carries.
+	g, err := c.WaitGroupInfo(ctx, group, func(g *GroupInfo) bool {
+		return g != nil && len(g.Members) == 1 && slices.Equal(g.Members[0].SubscribedTopics, []string{topicB})
+	})
+	if err != nil {
+		t.Fatalf("broker never saw the subscription change: group %+v", g)
 	}
 
 	// Phase 4: continue consuming. Verify only B records arrive and
@@ -2186,7 +2117,7 @@ func TestShareGroupAckCallbackSuccessPath(t *testing.T) {
 
 	admin := newPlainClient(t, c)
 	defer admin.Close()
-	setShareAutoOffsetReset(t, admin, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	for i := range total {
 		admin.Produce(context.Background(), &kgo.Record{
@@ -2573,7 +2504,7 @@ func TestShareGroupLeaderMoveInFlightAcks(t *testing.T) {
 
 	prodCl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	defer prodCl.Close()
-	setShareAutoOffsetReset(t, prodCl, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 	for i := range total {
 		if err := prodCl.ProduceSync(context.Background(), &kgo.Record{Value: []byte(strconv.Itoa(i))}).FirstErr(); err != nil {
 			t.Fatalf("produce: %v", err)

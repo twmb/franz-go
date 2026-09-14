@@ -188,12 +188,22 @@ func produceBatches(t *testing.T, c *Cluster, topic string, batches [][]int64) {
 	}
 }
 
+// groupCommits returns the group's committed offsets, or nil if the group
+// does not exist.
+func groupCommits(c *Cluster, group string) map[string]map[int32]GroupCommit {
+	g := c.GroupInfo(group)
+	if g == nil {
+		return nil
+	}
+	return g.Commits
+}
+
 // produceShareN creates a plain client, sets share.auto.offset.reset=earliest
 // for the given group, produces n string records to the topic, and flushes.
 func produceShareN(t *testing.T, c *Cluster, topic, group string, n int) {
 	t.Helper()
 	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
-	setShareAutoOffsetReset(t, cl, group)
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 	for i := range n {
 		cl.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
 			if err != nil {

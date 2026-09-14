@@ -7,7 +7,6 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
-	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -35,32 +34,14 @@ func fetchByID(sessionID, sessionEpoch, maxWait int32, id [16]byte, partitions .
 	return req
 }
 
-func recreateTopicRaw(t *testing.T, cl *kgo.Client, topic string) {
+// recreateTopic deletes and creates the topic, giving the new incarnation a
+// new topic ID.
+func recreateTopic(t *testing.T, c *kfake.Cluster, topic string) {
 	t.Helper()
-	ctx := context.Background()
-	del := kmsg.NewPtrDeleteTopicsRequest()
-	del.TopicNames = []string{topic}
-	dt := kmsg.NewDeleteTopicsRequestTopic()
-	dt.Topic = kmsg.StringPtr(topic)
-	del.Topics = append(del.Topics, dt)
-	dresp, err := del.RequestWith(ctx, cl)
-	if err == nil {
-		err = kerr.ErrorForCode(dresp.Topics[0].ErrorCode)
-	}
-	if err != nil {
+	if err := c.DeleteTopic(topic); err != nil {
 		t.Fatalf("delete topic: %v", err)
 	}
-	cr := kmsg.NewPtrCreateTopicsRequest()
-	ct := kmsg.NewCreateTopicsRequestTopic()
-	ct.Topic = topic
-	ct.NumPartitions = 1
-	ct.ReplicationFactor = 1
-	cr.Topics = append(cr.Topics, ct)
-	cresp, err := cr.RequestWith(ctx, cl)
-	if err == nil {
-		err = kerr.ErrorForCode(cresp.Topics[0].ErrorCode)
-	}
-	if err != nil {
+	if err := c.CreateTopic(topic, 1, nil); err != nil {
 		t.Fatalf("create topic: %v", err)
 	}
 }
@@ -113,7 +94,7 @@ func TestFetchSessionRecreatedTopic(t *testing.T) {
 		t.Fatalf("session not established: err %v, session %d", kerr.ErrorForCode(first.ErrorCode), first.SessionID)
 	}
 
-	recreateTopicRaw(t, cl, topic)
+	recreateTopic(t, c, topic)
 	if c.TopicInfo(topic).TopicID == oldID {
 		t.Fatal("recreation kept the topic ID")
 	}

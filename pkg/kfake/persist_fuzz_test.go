@@ -473,10 +473,7 @@ func TestChaosProduceCloseCrashRecover(t *testing.T) {
 			topics[i] = topicNames[rng.Intn(len(topicNames))]
 		}
 
-		c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, topics...))
-		if err != nil {
-			t.Fatalf("iter %d: %v", iter, err)
-		}
+		c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, topics...))
 
 		// Push random batches directly via internal API
 		totalPerTopic := make(map[string]int64)
@@ -507,10 +504,7 @@ func TestChaosProduceCloseCrashRecover(t *testing.T) {
 		// For crash: just abandon the cluster (writes are always synced)
 
 		// Reopen and verify
-		c2, err := NewCluster(DataDir(dir), NumBrokers(1))
-		if err != nil {
-			t.Fatalf("iter %d reopen: %v", iter, err)
-		}
+		c2 := newCluster(t, DataDir(dir), NumBrokers(1))
 
 		for _, topic := range topics {
 			pd, ok := c2.data.tps.getp(topic, 0)
@@ -575,11 +569,8 @@ func TestChaosGroupCommitsCrashRecover(t *testing.T) {
 		cleanShutdown := iter%2 == 0
 		dir := t.TempDir()
 
-		c, err := NewCluster(DataDir(dir), NumBrokers(1),
+		c := newCluster(t, DataDir(dir), NumBrokers(1),
 			SeedTopics(1, "t1", "t2"))
-		if err != nil {
-			t.Fatalf("iter %d: %v", iter, err)
-		}
 
 		// Create some groups with committed offsets
 		groupNames := []string{"g1", "g2", "g3"}
@@ -614,11 +605,8 @@ func TestChaosGroupCommitsCrashRecover(t *testing.T) {
 		}
 
 		// Reopen
-		c2, err := NewCluster(DataDir(dir), NumBrokers(1),
+		c2 := newCluster(t, DataDir(dir), NumBrokers(1),
 			SeedTopics(1, "t1", "t2"))
-		if err != nil {
-			t.Fatalf("iter %d reopen: %v", iter, err)
-		}
 
 		for gn, topics := range expectedCommits {
 			g, ok := c2.groups.gs[gn]
@@ -662,10 +650,7 @@ func TestChaosTopicCreateDeleteRestart(t *testing.T) {
 
 	allTopics := []string{"alpha", "beta", "gamma", "delta", "epsilon"}
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newCluster(t, DataDir(dir), NumBrokers(1))
 
 	existing := make(map[string]bool)
 	for range 15 {
@@ -704,10 +689,7 @@ func TestChaosTopicCreateDeleteRestart(t *testing.T) {
 	c.Close()
 
 	// Reopen
-	c2, err := NewCluster(DataDir(dir), NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
 	defer c2.Close()
 
 	for topic := range expectedTopics {
@@ -738,17 +720,11 @@ func TestPersistTopicURLEscaping(t *testing.T) {
 		"topic/with/slashes",
 	}
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1),
+	c := newCluster(t, DataDir(dir), NumBrokers(1),
 		SeedTopics(1, specialTopics...))
-	if err != nil {
-		t.Fatal(err)
-	}
 	c.Close()
 
-	c2, err := NewCluster(DataDir(dir), NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
 	defer c2.Close()
 
 	for _, topic := range specialTopics {
@@ -764,11 +740,8 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1),
+	c := newCluster(t, DataDir(dir), NumBrokers(1),
 		SeedTopics(1, "t"))
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// PID 100: init, then endtx commit (epoch bump to 2).
 	p100 := &pidinfo{
@@ -820,10 +793,7 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 	// Reopen - the pids.log has live entries (init+endtx+timeout).
 	// On shutdown, savePIDsLog rewrites as compacted "init" entries.
 	// So this tests both the live replay path AND the compacted path.
-	c2, err := NewCluster(DataDir(dir), NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
 	defer c2.Close()
 
 	// PID 100: endtx committed, epoch should be 2.
@@ -889,11 +859,8 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1),
+	c := newCluster(t, DataDir(dir), NumBrokers(1),
 		SeedTopics(1, "t"))
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// Create a group and set up 848 metadata.
 	var g *group
@@ -928,10 +895,7 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 	c.Close()
 
 	// Reopen.
-	c2, err := NewCluster(DataDir(dir), NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
 	defer c2.Close()
 
 	g2, ok := c2.groups.gs["test-848-group"]
@@ -965,20 +929,14 @@ func TestPersistSASLCredentials(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1), EnableSASL(),
+	c := newCluster(t, DataDir(dir), NumBrokers(1), EnableSASL(),
 		Superuser("PLAIN", "admin", "adminpass"),
 		User("PLAIN", "user1", "pass1"),
 		User("SCRAM-SHA-256", "user2", "pass2"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	c.Close()
 
-	c2, err := NewCluster(DataDir(dir), NumBrokers(1), EnableSASL())
-	if err != nil {
-		t.Fatal(err)
-	}
+	c2 := newCluster(t, DataDir(dir), NumBrokers(1), EnableSASL())
 	defer c2.Close()
 
 	// Check PLAIN credentials
@@ -1001,15 +959,12 @@ func TestPersistLiveSyncThenShutdown(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1),
+	c := newCluster(t, DataDir(dir), NumBrokers(1),
 		SeedTopics(1, "live"),
 		BrokerConfigs(map[string]string{
 			"log.segment.bytes": "100",
 		}),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// Push batches directly to trigger segment rollover
 	pd, _ := c.data.tps.getp("live", 0)
@@ -1027,10 +982,7 @@ func TestPersistLiveSyncThenShutdown(t *testing.T) {
 	c.Close()
 
 	// Reopen
-	c2, err := NewCluster(DataDir(dir), NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
 	defer c2.Close()
 
 	pd2, ok := c2.data.tps.getp("live", 0)
@@ -1047,18 +999,12 @@ func TestPersistEmptyPartition(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1),
+	c := newCluster(t, DataDir(dir), NumBrokers(1),
 		SeedTopics(3, "empty"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	// Don't produce anything - all partitions are empty
 	c.Close()
 
-	c2, err := NewCluster(DataDir(dir), NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
 	defer c2.Close()
 
 	if _, ok := c2.data.tps.gett("empty"); !ok {
@@ -1081,12 +1027,9 @@ func TestPersistRepeatedCloseReopen(t *testing.T) {
 	dir := t.TempDir()
 
 	var totalBatches int
-	for cycle := range 3 {
-		c, err := NewCluster(DataDir(dir), NumBrokers(1),
+	for range 3 {
+		c := newCluster(t, DataDir(dir), NumBrokers(1),
 			SeedTopics(1, "cycle"))
-		if err != nil {
-			t.Fatalf("cycle %d: %v", cycle, err)
-		}
 		// Add some batches each cycle
 		pd, _ := c.data.tps.getp("cycle", 0)
 		for range 3 {
@@ -1098,10 +1041,7 @@ func TestPersistRepeatedCloseReopen(t *testing.T) {
 	}
 
 	// Final reopen - verify all batches survived
-	c, err := NewCluster(DataDir(dir), NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newCluster(t, DataDir(dir), NumBrokers(1))
 	defer c.Close()
 
 	pd, ok := c.data.tps.getp("cycle", 0)
@@ -1120,11 +1060,8 @@ func TestPersistSeqWindowsCleanShutdown(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1),
+	c := newCluster(t, DataDir(dir), NumBrokers(1),
 		SeedTopics(1, "seq"))
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// Create a PID with sequence windows
 	pidinf := &pidinfo{
@@ -1147,10 +1084,7 @@ func TestPersistSeqWindowsCleanShutdown(t *testing.T) {
 	c.Close()
 
 	// Reopen - sequence windows should be restored
-	c2, err := NewCluster(DataDir(dir), NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
 	defer c2.Close()
 
 	p2, ok := c2.pids.ids[42]
@@ -1182,11 +1116,8 @@ func TestPersistOffsetDeleteRoundTrip(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1),
+	c := newCluster(t, DataDir(dir), NumBrokers(1),
 		SeedTopics(1, "t1"))
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// Create a group with committed offsets
 	var g *group
@@ -1223,11 +1154,8 @@ func TestPersistOffsetDeleteRoundTrip(t *testing.T) {
 	c.Close()
 
 	// Reopen and verify deleted offset is gone
-	c2, err := NewCluster(DataDir(dir), NumBrokers(1),
+	c2 := newCluster(t, DataDir(dir), NumBrokers(1),
 		SeedTopics(1, "t1"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer c2.Close()
 
 	g2, ok := c2.groups.gs["g1"]
@@ -1255,11 +1183,8 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 
 	// Phase 1: produce data and shut down cleanly to create snapshot
 	{
-		c, err := NewCluster(DataDir(dir), NumBrokers(1),
+		c := newCluster(t, DataDir(dir), NumBrokers(1),
 			SeedTopics(3, "conv"))
-		if err != nil {
-			t.Fatal(err)
-		}
 		pd, _ := c.data.tps.getp("conv", 0)
 		for i := range 20 {
 			b := makeTestBatch(pd.highWatermark, int32(1+i%3))
@@ -1280,10 +1205,7 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 
 	var snapState partState
 	{
-		c, err := NewCluster(DataDir(dir), NumBrokers(1))
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := newCluster(t, DataDir(dir), NumBrokers(1))
 		pd, ok := c.data.tps.getp("conv", 0)
 		if !ok {
 			t.Fatal("partition missing after snapshot load")
@@ -1307,10 +1229,7 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 
 	// Phase 3: open via full replay, compare state
 	{
-		c, err := NewCluster(DataDir(dir), NumBrokers(1))
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := newCluster(t, DataDir(dir), NumBrokers(1))
 		defer c.Close()
 
 		pd, ok := c.data.tps.getp("conv", 0)
@@ -1365,11 +1284,8 @@ func TestPersistSnapshotLogStartOffsetClamp(t *testing.T) {
 
 	// Phase 1: produce 10 records, advance logStartOffset to 7, shut down.
 	{
-		c, err := NewCluster(DataDir(dir), NumBrokers(1),
+		c := newCluster(t, DataDir(dir), NumBrokers(1),
 			SeedTopics(1, "lso"))
-		if err != nil {
-			t.Fatal(err)
-		}
 		pd, _ := c.data.tps.getp("lso", 0)
 		for range 10 {
 			b := makeTestBatch(pd.highWatermark, 1)
@@ -1394,10 +1310,7 @@ func TestPersistSnapshotLogStartOffsetClamp(t *testing.T) {
 
 	// Phase 2: reopen via snapshot, verify logStartOffset <= HWM.
 	{
-		c, err := NewCluster(DataDir(dir), NumBrokers(1))
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := newCluster(t, DataDir(dir), NumBrokers(1))
 		defer c.Close()
 
 		pd, ok := c.data.tps.getp("lso", 0)
@@ -1417,10 +1330,7 @@ func TestTrimLeftDeletesSegmentFiles(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "trim"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "trim"))
 	defer c.Close()
 
 	pd, _ := c.data.tps.getp("trim", 0)
@@ -1462,10 +1372,7 @@ func TestTrimLeftAllThenProduce(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "trim-all"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "trim-all"))
 	defer c.Close()
 
 	pd, _ := c.data.tps.getp("trim-all", 0)
@@ -1513,10 +1420,7 @@ func TestTrimLeftAllThenProduce(t *testing.T) {
 func TestSearchOffsetEmptyPartition(t *testing.T) {
 	t.Parallel()
 
-	c, err := NewCluster(NumBrokers(1), SeedTopics(1, "empty"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "empty"))
 	defer c.Close()
 
 	pd, _ := c.data.tps.getp("empty", 0)
@@ -1543,10 +1447,7 @@ func TestSearchOffsetAfterTrimLeft(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "search-trim"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "search-trim"))
 	defer c.Close()
 
 	pd, _ := c.data.tps.getp("search-trim", 0)
@@ -1599,10 +1500,7 @@ func TestCompactBailsOnPartialReadError(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "compact-err"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "compact-err"))
 	defer c.Close()
 
 	pd, _ := c.data.tps.getp("compact-err", 0)
@@ -1667,10 +1565,7 @@ func TestSnapshotNbytesWithPartialTrim(t *testing.T) {
 
 	// Phase 1: produce records, partially trim, clean shutdown.
 	{
-		c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, topic))
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, topic))
 
 		pd, _ := c.data.tps.getp(topic, 0)
 		for range 10 {
@@ -1694,10 +1589,7 @@ func TestSnapshotNbytesWithPartialTrim(t *testing.T) {
 
 	// Phase 2: reopen from snapshot, verify nbytes matches.
 	{
-		c, err := NewCluster(DataDir(dir), NumBrokers(1))
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := newCluster(t, DataDir(dir), NumBrokers(1))
 		defer c.Close()
 
 		pd, ok := c.data.tps.getp(topic, 0)
@@ -1719,10 +1611,7 @@ func TestRebuildSegmentsWritesSynced(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "sync-rebuild"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "sync-rebuild"))
 	defer c.Close()
 
 	pd, _ := c.data.tps.getp("sync-rebuild", 0)
@@ -1770,11 +1659,8 @@ func TestRebuildSegmentsSegmentSplitting(t *testing.T) {
 
 	// Set a very small segment.bytes to force multiple segments.
 	segBytes := "200"
-	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "split"),
+	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "split"),
 		BrokerConfigs(map[string]string{"log.segment.bytes": segBytes}))
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer c.Close()
 
 	pd, _ := c.data.tps.getp("split", 0)
@@ -1828,11 +1714,8 @@ func TestTrimLeftPartialSegment(t *testing.T) {
 	dir := t.TempDir()
 
 	// Use a large segment.bytes so all batches land in one segment.
-	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "partial"),
+	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "partial"),
 		BrokerConfigs(map[string]string{"log.segment.bytes": "1073741824"}))
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer c.Close()
 
 	pd, _ := c.data.tps.getp("partial", 0)
@@ -1871,10 +1754,7 @@ func TestMaxTimestampBatchAfterCompaction(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c, err := NewCluster(DataDir(dir), NumBrokers(1), SeedTopics(1, "ts-compact"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "ts-compact"))
 	defer c.Close()
 
 	pd, _ := c.data.tps.getp("ts-compact", 0)
@@ -1919,10 +1799,7 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 	t.Parallel()
 
 	// Use memFS (no DataDir) so we can inject faults.
-	c, err := NewCluster(NumBrokers(1), SeedTopics(1, "fail-trunc"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "fail-trunc"))
 	defer c.Close()
 
 	mfs := c.fs.(*memFS)

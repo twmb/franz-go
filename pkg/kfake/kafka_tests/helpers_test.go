@@ -42,6 +42,29 @@ func newClient848(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
 	return cl
 }
 
+// groupCommits returns the group's committed offsets, or nil if the group
+// does not exist.
+func groupCommits(c *kfake.Cluster, group string) map[string]map[int32]kfake.GroupCommit {
+	g := c.GroupInfo(group)
+	if g == nil {
+		return nil
+	}
+	return g.Commits
+}
+
+// waitStable waits for the group to be Stable with nMembers members. This
+// covers classic and 848 groups alike.
+func waitStable(t *testing.T, c *kfake.Cluster, group string, nMembers int) *kfake.GroupInfo {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	g, err := c.WaitGroupStable(ctx, group, nMembers)
+	if err != nil {
+		t.Fatalf("group %s not stable with %d members: %v", group, nMembers, err)
+	}
+	return g
+}
+
 // newAdminClient creates a kadm client connected to the given cluster and
 // registers cleanup on test completion.
 func newAdminClient(t *testing.T, c *kfake.Cluster) *kadm.Client {
@@ -133,38 +156,4 @@ func poll1FromEachClient(t *testing.T, timeout time.Duration, clients ...*kgo.Cl
 			t.Fatalf("timeout waiting for all clients to get records: %d/%d remaining", len(remaining), len(clients))
 		}
 	}
-}
-
-// waitForStableGroup polls DescribeConsumerGroups until the group is Stable
-// with the expected number of members, then returns the described group.
-func waitForStableGroup(t *testing.T, adm *kadm.Client, group string, nMembers int, timeout time.Duration) kadm.DescribedConsumerGroup {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	for {
-		described, err := adm.DescribeConsumerGroups(ctx, group)
-		if err != nil {
-			t.Fatalf("describe failed: %v", err)
-		}
-		dg := described[group]
-		if dg.State == "Stable" && len(dg.Members) == nMembers {
-			return dg
-		}
-		if ctx.Err() != nil {
-			t.Fatalf("timeout waiting for stable group %q with %d members (state=%s, members=%d)", group, nMembers, dg.State, len(dg.Members))
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-}
-
-// totalAssignedPartitions returns the total number of partitions assigned
-// across all members of a described consumer group.
-func totalAssignedPartitions(dg kadm.DescribedConsumerGroup) int {
-	n := 0
-	for _, m := range dg.Members {
-		for _, parts := range m.Assignment {
-			n += len(parts)
-		}
-	}
-	return n
 }

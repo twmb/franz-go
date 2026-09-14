@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -33,10 +32,9 @@ func TestStaticMember848RejoinGetsAssignmentBack(t *testing.T) {
 	// First consumer with instanceID.
 	c1 := newGroupConsumer(t, c, topic, group, kgo.InstanceID(instanceID))
 	consumeN(t, c1, nRecords, 10*time.Second)
-	adm := newAdminClient(t, c)
-	dg := waitForStableGroup(t, adm, group, 1, 10*time.Second)
-	if totalAssignedPartitions(dg) != 2 {
-		t.Fatalf("expected 2 partitions, got %d", totalAssignedPartitions(dg))
+	dg := waitStable(t, c, group, 1)
+	if dg.NumAssigned() != 2 {
+		t.Fatalf("expected 2 partitions, got %d", dg.NumAssigned())
 	}
 
 	// Close c1 (epoch -2 leave, static mapping preserved).
@@ -46,9 +44,9 @@ func TestStaticMember848RejoinGetsAssignmentBack(t *testing.T) {
 	// Rejoin with same instanceID.
 	c2 := newGroupConsumer(t, c, topic, group, kgo.InstanceID(instanceID))
 	_ = c2
-	dg = waitForStableGroup(t, adm, group, 1, 10*time.Second)
-	if totalAssignedPartitions(dg) != 2 {
-		t.Fatalf("expected 2 partitions after rejoin, got %d", totalAssignedPartitions(dg))
+	dg = waitStable(t, c, group, 1)
+	if dg.NumAssigned() != 2 {
+		t.Fatalf("expected 2 partitions after rejoin, got %d", dg.NumAssigned())
 	}
 }
 
@@ -70,8 +68,7 @@ func TestStaticMember848FencedInstanceID(t *testing.T) {
 
 	c1 := newGroupConsumer(t, c, topic, group, kgo.InstanceID(instanceID))
 	consumeN(t, c1, nRecords, 10*time.Second)
-	adm := newAdminClient(t, c)
-	waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	waitStable(t, c, group, 1)
 
 	// A heartbeat from a different memberID but the same instanceID
 	// must get FENCED_INSTANCE_ID.
@@ -129,8 +126,7 @@ func TestStaticMemberClassicRejoinNoRebalance(t *testing.T) {
 		t.Fatal(err)
 	}
 	consumeN(t, cl1, 20, 10*time.Second)
-	adm := kadm.NewClient(newPlainClient(t, c))
-	waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+	waitStable(t, c, group, 1)
 
 	// Close (static member - no leave sent).
 	cl1.Close()
@@ -150,7 +146,7 @@ func TestStaticMemberClassicRejoinNoRebalance(t *testing.T) {
 	}
 	defer cl2.Close()
 
-	dg := waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+	dg := waitStable(t, c, group, 1)
 	found := false
 	for _, m := range dg.Members {
 		if m.InstanceID != nil && *m.InstanceID == instanceID {
@@ -188,8 +184,7 @@ func TestGroupMaxSizeClassic(t *testing.T) {
 	}
 	defer cl1.Close()
 
-	adm := kadm.NewClient(newPlainClient(t, c))
-	waitForStableClassicGroup(t, adm, group, 1, 10*time.Second)
+	waitStable(t, c, group, 1)
 
 	// Second consumer: send a raw JoinGroup and expect GROUP_MAX_SIZE_REACHED.
 	raw := newPlainClient(t, c)
@@ -230,8 +225,7 @@ func TestGroupMaxSize848(t *testing.T) {
 
 	// First consumer joins successfully.
 	c1 := newGroupConsumer(t, c, topic, group)
-	adm := newAdminClient(t, c)
-	waitForStableGroup(t, adm, group, 1, 10*time.Second)
+	waitStable(t, c, group, 1)
 	_ = c1
 
 	// Second consumer: send raw heartbeat and expect GROUP_MAX_SIZE_REACHED.
@@ -335,26 +329,4 @@ func newPlainClient(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client
 	}
 	t.Cleanup(cl.Close)
 	return cl
-}
-
-// waitForStableClassicGroup polls DescribeGroups until the classic group
-// is Stable with the expected member count.
-func waitForStableClassicGroup(t *testing.T, adm *kadm.Client, group string, nMembers int, timeout time.Duration) kadm.DescribedGroup {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	for {
-		described, err := adm.DescribeGroups(ctx, group)
-		if err != nil {
-			t.Fatalf("describe failed: %v", err)
-		}
-		dg := described[group]
-		if dg.State == "Stable" && len(dg.Members) == nMembers {
-			return dg
-		}
-		if ctx.Err() != nil {
-			t.Fatalf("timeout waiting for stable classic group %q with %d members (state=%s, members=%d)", group, nMembers, dg.State, len(dg.Members))
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
 }

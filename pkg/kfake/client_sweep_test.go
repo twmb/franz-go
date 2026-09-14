@@ -3,7 +3,6 @@ package kfake
 import (
 	"context"
 	"errors"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -135,19 +134,13 @@ func TestAuditCloseSendsTerminatingTelemetryPush(t *testing.T) {
 		return resp, nil, true
 	})
 
-	var termPushes atomic.Int32
-	gotTerm := make(chan struct{}, 8)
-	c.ControlKey(int16(kmsg.PushTelemetry), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		req := kreq.(*kmsg.PushTelemetryRequest)
-		if req.Terminating {
-			termPushes.Add(1)
-			select {
-			case gotTerm <- struct{}{}:
-			default:
-			}
-		}
-		return nil, nil, false
+	termPushes := c.Fault(Fault{
+		Keys:    []kmsg.Key{kmsg.PushTelemetry},
+		Observe: true,
+		Count:   -1,
+		When: func(kreq kmsg.Request) bool {
+			return kreq.(*kmsg.PushTelemetryRequest).Terminating
+		},
 	})
 
 	cl := newPlainClient(t, c)
@@ -170,12 +163,12 @@ func TestAuditCloseSendsTerminatingTelemetryPush(t *testing.T) {
 
 	cl.Close()
 
-	select {
-	case <-gotTerm:
-	case <-time.After(2 * time.Second):
+	termCtx, termCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer termCancel()
+	if err := termPushes.Wait(termCtx, 1); err != nil {
 		t.Fatal("no terminating telemetry push was delivered during Close")
 	}
-	if n := termPushes.Load(); n != 1 {
+	if n := termPushes.Hits(); n != 1 {
 		t.Errorf("got %d terminating pushes, want exactly 1", n)
 	}
 }

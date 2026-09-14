@@ -73,20 +73,8 @@ func TestOutOfRangeBelowStartResetsToStart(t *testing.T) {
 
 	// Delete through offset 7: the cursor is now below the log start, and
 	// every record that survives is one we have not consumed.
-	req := kmsg.NewPtrDeleteRecordsRequest()
-	rt := kmsg.NewDeleteRecordsRequestTopic()
-	rt.Topic = topic
-	rp := kmsg.NewDeleteRecordsRequestTopicPartition()
-	rp.Partition = 0
-	rp.Offset = delTo
-	rt.Partitions = append(rt.Partitions, rp)
-	req.Topics = append(req.Topics, rt)
-	resp, err := req.RequestWith(ctx, pcl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code := resp.Topics[0].Partitions[0].ErrorCode; code != 0 {
-		t.Fatalf("delete records: %v", kerr.ErrorForCode(code))
+	if err := c.DeleteRecords(topic, 0, delTo); err != nil {
+		t.Fatalf("delete records: %v", err)
 	}
 
 	cl.ResumeFetchTopics(topic)

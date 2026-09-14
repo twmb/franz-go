@@ -48,6 +48,25 @@ type Fault struct {
 
 	Err   *kerr.Error // nil defaults to UNKNOWN_SERVER_ERROR
 	Count int         // requests to fault; 0 means one, -1 means until Remove is called
+
+	// When further filters by the request itself, for what the selectors
+	// cannot reach: a field inside the request body, such as the member
+	// epoch on a heartbeat or the topics a heartbeat subscribes to. nil
+	// means every request the selectors match.
+	//
+	// When runs on the cluster goroutine. It must not block and must not
+	// call back into the cluster. Returning false means the request is not
+	// faulted; you can use this for observing.
+	When func(kmsg.Request) bool
+
+	// Observe counts matching requests rather than faulting them: the
+	// request proceeds as it would have while the fault is counted for
+	// Hits and Wait.
+	//
+	// Note that a control that answers a request bypasses faults, so an
+	// observing fault does not see it, nor does an observing fault
+	// without TopLevel see a request a TopLevel fault answers.
+	Observe bool
 }
 
 // FaultHandle refers to the faults installed by one Fault call.
@@ -66,6 +85,8 @@ type fault struct {
 	txnID      string
 	resource   string
 	topLevel   bool
+	when       func(kmsg.Request) bool
+	observe    bool
 	err        *kerr.Error
 	hits       atomic.Int64
 
@@ -95,6 +116,8 @@ func (c *Cluster) Fault(faults ...Fault) *FaultHandle {
 			txnID:      in.TxnID,
 			resource:   in.Resource,
 			topLevel:   in.TopLevel,
+			when:       in.When,
+			observe:    in.Observe,
 			err:        in.Err,
 			left:       in.Count,
 		}
@@ -211,6 +234,7 @@ func (f *fault) matches(k faultKey) bool {
 type faultCheck struct {
 	c    *Cluster
 	key  int16
+	kreq kmsg.Request
 	fs   []*fault
 	hits []*fault
 }
@@ -237,7 +261,7 @@ func (c *Cluster) faultsFor(creq *clientReq) *faultCheck {
 	if len(fs) == 0 {
 		return nil
 	}
-	return &faultCheck{c: c, key: key, fs: fs}
+	return &faultCheck{c: c, key: key, kreq: creq.kreq, fs: fs}
 }
 
 // check returns the error to answer the entity named by k with, if a fault
@@ -248,15 +272,24 @@ func (fc *faultCheck) check(k faultKey) *kerr.Error {
 	}
 	for _, f := range fc.fs {
 		// A TopLevel fault answers only in topLevel.
-		if f.topLevel || !f.matches(k) {
+		if f.topLevel || !f.matches(k) || !fc.when(f) {
 			continue
 		}
 		if !fc.hit(f) {
 			continue
 		}
+		if f.observe {
+			continue // counted, but the entity is not faulted
+		}
 		return f.err
 	}
 	return nil
+}
+
+// when reports whether f's When accepts this request. A fault with no When
+// accepts every request its selectors matched.
+func (fc *faultCheck) when(f *fault) bool {
+	return f.when == nil || f.when(fc.kreq)
 }
 
 // afterApply is the requests a broker can answer REQUEST_TIMED_OUT after
@@ -312,7 +345,7 @@ func (fc *faultCheck) topLevel(kreq kmsg.Request) kmsg.Response {
 	}
 	for _, f := range fc.fs {
 		answers := f.topLevel || entityless[fc.key] && f.matches(faultKey{})
-		if !answers {
+		if !answers || !fc.when(f) {
 			continue
 		}
 		resp := kreq.ResponseKind()
@@ -322,6 +355,9 @@ func (fc *faultCheck) topLevel(kreq kmsg.Request) kmsg.Response {
 		}
 		if !fc.hit(f) {
 			continue
+		}
+		if f.observe {
+			continue // counted, but the request is not answered
 		}
 		code.SetInt(int64(f.err.Code))
 		return resp
@@ -367,8 +403,12 @@ func (fc *faultCheck) hit(f *fault) bool {
 	return true
 }
 
-// anyHit reports whether anything in this request was faulted.
-func (fc *faultCheck) anyHit() bool { return fc != nil && len(fc.hits) > 0 }
+// anyHit reports whether anything in this request was faulted. An observing
+// fault takes a unit like any other, but it answers nothing, so a site that
+// changes what it does once something was faulted must not see it.
+func (fc *faultCheck) anyHit() bool {
+	return fc != nil && slices.ContainsFunc(fc.hits, func(f *fault) bool { return !f.observe })
+}
 
 // deny answers the error to fail the entity named by k with, either because
 // the user is not allowed the operation or because a fault matches.

@@ -34,7 +34,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,33 +135,28 @@ func TestAudit848StaleUnresolvedJoin(t *testing.T) {
 
 	// Fence the member once on a regular heartbeat. The client keeps its
 	// member ID and rejoins at epoch 0 - with stale unresolved t2 in its
-	// owned Topics pre-fix. The recorder (FIFO before the injector)
-	// counts epoch-0 requests so we only assert consumption after the
-	// rejoin was actually attempted; without the wait, the pre-fence
-	// cursor could deliver the fresh records before the fence lands.
-	var joinAttempts atomic.Int64
-	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch == 0 {
-			joinAttempts.Add(1)
-		}
-		return nil, nil, false
+	// owned Topics pre-fix. The observing fault counts epoch-0 requests
+	// so we only assert consumption after the rejoin was actually
+	// attempted; without the wait, the pre-fence cursor could deliver the
+	// fresh records before the fence lands.
+	joinAttempts := c.Fault(kfake.Fault{
+		Keys:    []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
+		Observe: true,
+		Count:   -1,
+		When: func(kreq kmsg.Request) bool {
+			return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch == 0
+		},
 	})
-	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		req := kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
-		if req.MemberEpoch <= 0 {
-			c.KeepControl()
-			return nil, nil, false
-		}
-		resp := req.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.FencedMemberEpoch.Code
-		return resp, nil, true
+	c.Fault(kfake.Fault{
+		Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
+		Err:  kerr.FencedMemberEpoch,
+		When: func(kreq kmsg.Request) bool {
+			return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch > 0
+		},
 	})
-	waitDeadline := time.Now().Add(5 * time.Second)
-	for joinAttempts.Load() == 0 && time.Now().Before(waitDeadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if joinAttempts.Load() == 0 {
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer waitCancel()
+	if err := joinAttempts.Wait(waitCtx, 1); err != nil {
 		t.Fatal("member was never fenced into rejoining")
 	}
 
@@ -198,18 +192,8 @@ func TestAudit848TransientRestartNotification(t *testing.T) {
 	)
 	consumeN(t, cl, 3, 10*time.Second)
 
-	var stopInject atomic.Bool
-	defer stopInject.Store(true) // let the leave during cleanup succeed
-	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if stopInject.Load() {
-			return nil, nil, false
-		}
-		req := kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
-		resp := req.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
-		resp.ErrorCode = kerr.NotCoordinator.Code
-		return resp, nil, true
-	})
+	h := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat}, Err: kerr.NotCoordinator, Count: -1})
+	defer h.Remove() // let the leave during cleanup succeed
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -270,34 +254,21 @@ func TestAudit848RegexExcludesSkipsInternalTopics(t *testing.T) {
 
 	producer := newClient848(t, c)
 
-	// Create the internal topic (kfake marks topics internal via the
-	// kfake.is_internal topic config).
-	creq := kmsg.NewPtrCreateTopicsRequest()
-	ct := kmsg.NewCreateTopicsRequestTopic()
-	ct.Topic = internal
-	ct.NumPartitions = 1
-	ct.ReplicationFactor = 1
-	ccfg := kmsg.NewCreateTopicsRequestTopicConfig()
-	ccfg.Name = "kfake.is_internal"
-	ccfg.Value = kmsg.StringPtr("true")
-	ct.Configs = append(ct.Configs, ccfg)
-	creq.Topics = append(creq.Topics, ct)
-	cresp, err := creq.RequestWith(context.Background(), producer)
-	if err != nil || cresp.Topics[0].ErrorCode != 0 {
-		t.Fatalf("create internal topic: err=%v code=%d", err, cresp.Topics[0].ErrorCode)
+	// kfake marks topics internal via the kfake.is_internal topic config.
+	if err := c.CreateTopic(internal, 1, map[string]string{"kfake.is_internal": "true"}); err != nil {
+		t.Fatalf("create internal topic: %v", err)
 	}
 
 	produceNStrings(t, producer, regular, 3)
 	produceNStrings(t, producer, internal, 3)
 
-	var subscribedInternal atomic.Bool
-	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		req := kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
-		if slices.Contains(req.SubscribedTopicNames, internal) {
-			subscribedInternal.Store(true)
-		}
-		return nil, nil, false
+	subscribedInternal := c.Fault(kfake.Fault{
+		Keys:    []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
+		Observe: true,
+		Count:   -1,
+		When: func(kreq kmsg.Request) bool {
+			return slices.Contains(kreq.(*kmsg.ConsumerGroupHeartbeatRequest).SubscribedTopicNames, internal)
+		},
 	})
 
 	cl := newClient848(t, c,
@@ -315,7 +286,7 @@ func TestAudit848RegexExcludesSkipsInternalTopics(t *testing.T) {
 			t.Fatalf("consumed record from %q; regex+excludes consumers must not consume internal topics", r.Topic)
 		}
 	}
-	if subscribedInternal.Load() {
+	if subscribedInternal.Hits() > 0 {
 		t.Fatal("heartbeat SubscribedTopicNames contained the internal topic; the regex+excludes fallback must skip internal topics like classic regex consuming")
 	}
 }
@@ -336,16 +307,15 @@ func TestAudit848NegativeEpochIgnored(t *testing.T) {
 	producer := newClient848(t, c)
 	produceNStrings(t, producer, topic, 3)
 
-	// Recorder first (FIFO): flags any request that carries a negative
-	// epoch, i.e. a leave this test never asks for.
-	var sentLeave atomic.Bool
-	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		req := kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
-		if req.MemberEpoch < 0 {
-			sentLeave.Store(true)
-		}
-		return nil, nil, false
+	// Count any request that carries a negative epoch, i.e. a leave this
+	// test never asks for.
+	sentLeave := c.Fault(kfake.Fault{
+		Keys:    []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
+		Observe: true,
+		Count:   -1,
+		When: func(kreq kmsg.Request) bool {
+			return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch < 0
+		},
 	})
 
 	cl := newClient848(t, c,
@@ -374,7 +344,7 @@ func TestAudit848NegativeEpochIgnored(t *testing.T) {
 	// the client must never echo the poisoned epoch back as a leave, and
 	// consumption must continue undisturbed.
 	time.Sleep(1500 * time.Millisecond)
-	if sentLeave.Load() {
+	if sentLeave.Hits() > 0 {
 		t.Fatal("client stored a negative MemberEpoch from a success response and sent an unintended leave heartbeat")
 	}
 	produceNStrings(t, producer, topic, 3)
@@ -422,12 +392,7 @@ func TestAudit848DuplicatePartitionAssignmentNoRewind(t *testing.T) {
 	// Any OffsetFetch from here on can only be the re-fetch caused by the
 	// duplicate-partition reassignment bounce: autocommit is off and the
 	// group is otherwise stable.
-	var refetches atomic.Int64
-	c.ControlKey(int16(kmsg.OffsetFetch), func(kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		refetches.Add(1)
-		return nil, nil, false
-	})
+	refetches := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.OffsetFetch}, Observe: true, Count: -1})
 
 	ti := c.TopicInfo(topic)
 	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
@@ -463,7 +428,7 @@ func TestAudit848DuplicatePartitionAssignmentNoRewind(t *testing.T) {
 			t.Fatalf("offset %d consumed %d times: duplicated partition in assignment rewound the live cursor", off, n)
 		}
 	}
-	if n := refetches.Load(); n > 0 {
+	if n := refetches.Hits(); n > 0 {
 		t.Fatalf("duplicated partition in the assignment caused %d offset re-fetches (live-cursor rewind to the committed offset)", n)
 	}
 }

@@ -3,7 +3,6 @@ package kfake
 import (
 	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -141,10 +140,9 @@ func TestAuditFetchTopLevelErrorBackoff(t *testing.T) {
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	produceN(t, c, topic, 1)
 
-	var (
-		mu    sync.Mutex
-		times []time.Time
-	)
+	// The observer goes in first: the fault below answers every fetch, so
+	// only a fault ahead of it counts them.
+	attempts := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Fetch}, TopLevel: true, Observe: true, Count: -1})
 	// An unexpected top-level code (not a fetch-session code) routes to the
 	// default arm.
 	c.Fault(Fault{
@@ -152,13 +150,6 @@ func TestAuditFetchTopLevelErrorBackoff(t *testing.T) {
 		TopLevel: true,
 		Err:      kerr.UnknownServerError,
 		Count:    -1,
-	})
-	c.ControlKey(int16(kmsg.Fetch), func(kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		mu.Lock()
-		times = append(times, time.Now())
-		mu.Unlock()
-		return nil, nil, false
 	})
 
 	cl := newPlainClient(t, c,
@@ -179,23 +170,12 @@ func TestAuditFetchTopLevelErrorBackoff(t *testing.T) {
 	}()
 
 	// Wait for the first Fetch, then measure a 2s window.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		mu.Lock()
-		n := len(times)
-		mu.Unlock()
-		if n > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no Fetch arrived")
-		}
-		time.Sleep(10 * time.Millisecond)
+	if err := attempts.Wait(ctx, 1); err != nil {
+		t.Fatal("no Fetch arrived")
 	}
+	first := attempts.Hits()
 	time.Sleep(2 * time.Second)
-	mu.Lock()
-	n := len(times)
-	mu.Unlock()
+	n := attempts.Hits() - first
 
 	// Post-fix pacing: retryBackoff walks 250ms, 500ms, 750ms, 1s with
 	// jitter, so a 2s window sees ~4-6 attempts. Allow 12 for CI noise.

@@ -7,7 +7,6 @@ package kfake
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -28,19 +27,13 @@ func TestAuditTxnInitPidConcurrentTransactions(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "audit-init-ct"))
 
-	var injected atomic.Int32
-	c.ControlKey(int16(kmsg.InitProducerID), func(req kmsg.Request) (kmsg.Response, error, bool) {
-		injected.Add(1)
-		resp := req.ResponseKind().(*kmsg.InitProducerIDResponse)
-		resp.ErrorCode = kerr.ConcurrentTransactions.Code
-		return resp, nil, true
-	})
+	injected := c.Fault(Fault{Keys: []kmsg.Key{kmsg.InitProducerID}, Err: kerr.ConcurrentTransactions})
 
 	cl := newPlainClient(t, c, kgo.TransactionalID("audit-init-ct"))
 	if err := cl.BeginTransaction(); err != nil {
-		t.Fatalf("BUG REPRODUCED: BeginTransaction failed after one transient CONCURRENT_TRANSACTIONS (injected %d): %v", injected.Load(), err)
+		t.Fatalf("BUG REPRODUCED: BeginTransaction failed after one transient CONCURRENT_TRANSACTIONS (injected %d): %v", injected.Hits(), err)
 	}
-	if injected.Load() == 0 {
+	if injected.Hits() == 0 {
 		t.Fatal("control was not consumed; the test did not exercise the injection")
 	}
 	if err := cl.EndTransaction(context.Background(), kgo.TryAbort); err != nil {
@@ -60,19 +53,13 @@ func TestAuditTxnInitPidRetriableLoadFailure(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "audit-init-retriable"))
 
-	var injected atomic.Int32
-	c.ControlKey(int16(kmsg.InitProducerID), func(req kmsg.Request) (kmsg.Response, error, bool) {
-		injected.Add(1)
-		resp := req.ResponseKind().(*kmsg.InitProducerIDResponse)
-		resp.ErrorCode = kerr.NotEnoughReplicas.Code
-		return resp, nil, true
-	})
+	injected := c.Fault(Fault{Keys: []kmsg.Key{kmsg.InitProducerID}, Err: kerr.NotEnoughReplicas})
 
 	cl := newPlainClient(t, c, kgo.TransactionalID("audit-init-retriable"))
 	if err := cl.BeginTransaction(); err != nil {
-		t.Fatalf("BUG REPRODUCED: BeginTransaction failed on a transient retriable InitProducerID error (injected %d): %v", injected.Load(), err)
+		t.Fatalf("BUG REPRODUCED: BeginTransaction failed on a transient retriable InitProducerID error (injected %d): %v", injected.Hits(), err)
 	}
-	if injected.Load() == 0 {
+	if injected.Hits() == 0 {
 		t.Fatal("control was not consumed; the test did not exercise the injection")
 	}
 	// The producer ID is flagged for reload; the first produce re-runs
@@ -99,16 +86,10 @@ func failAllProduces(c *Cluster, topic string) {
 	})
 }
 
-// observeEndTxns installs a keep-forever control that counts EndTxn requests
+// observeEndTxns installs an observing fault that counts EndTxn requests
 // without altering them.
-func observeEndTxns(c *Cluster) *atomic.Int32 {
-	var n atomic.Int32
-	c.ControlKey(int16(kmsg.EndTxn), func(kmsg.Request) (kmsg.Response, error, bool) {
-		n.Add(1)
-		c.KeepControl()
-		return nil, nil, false
-	})
-	return &n
+func observeEndTxns(c *Cluster) *FaultHandle {
+	return c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Observe: true, Count: -1})
 }
 
 // Under KIP-890 part 2 (transaction.version=2), partitions join the
@@ -137,7 +118,7 @@ func TestAuditTxnV2AbortAfterFailedProduces(t *testing.T) {
 	if err := cl.EndTransaction(context.Background(), kgo.TryAbort); err != nil {
 		t.Fatalf("EndTransaction: %v", err)
 	}
-	if endTxns.Load() == 0 {
+	if endTxns.Hits() == 0 {
 		t.Fatal("BUG REPRODUCED: EndTransaction(TryAbort) issued no EndTxn after failed transactional produces under KIP-890p2; the broker-side transaction is left ongoing until the transaction timeout")
 	}
 }
@@ -186,7 +167,7 @@ func TestAuditTxnV1AbortAfterFailedProducesControl(t *testing.T) {
 	if err := cl.EndTransaction(context.Background(), kgo.TryAbort); err != nil {
 		t.Fatalf("EndTransaction: %v", err)
 	}
-	if endTxns.Load() == 0 {
+	if endTxns.Hits() == 0 {
 		t.Fatal("TV1 control regressed: EndTransaction(TryAbort) issued no EndTxn after failed produces on a pre-890p2 cluster")
 	}
 }
@@ -234,18 +215,12 @@ func TestAuditTxnEndTxnNotCoordinatorRetried(t *testing.T) {
 		t.Fatalf("ProduceSync: %v", err)
 	}
 
-	var injected atomic.Int32
-	c.ControlKey(int16(kmsg.EndTxn), func(req kmsg.Request) (kmsg.Response, error, bool) {
-		injected.Add(1)
-		resp := req.ResponseKind().(*kmsg.EndTxnResponse)
-		resp.ErrorCode = kerr.NotCoordinator.Code
-		return resp, nil, true
-	})
+	injected := c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.NotCoordinator})
 
 	if err := cl.EndTransaction(context.Background(), kgo.TryCommit); err != nil {
-		t.Fatalf("EndTransaction did not survive one NOT_COORDINATOR (injected %d): %v", injected.Load(), err)
+		t.Fatalf("EndTransaction did not survive one NOT_COORDINATOR (injected %d): %v", injected.Hits(), err)
 	}
-	if injected.Load() != 1 {
-		t.Fatalf("expected exactly one injected NOT_COORDINATOR, got %d", injected.Load())
+	if injected.Hits() != 1 {
+		t.Fatalf("expected exactly one injected NOT_COORDINATOR, got %d", injected.Hits())
 	}
 }

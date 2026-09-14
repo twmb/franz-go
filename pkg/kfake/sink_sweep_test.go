@@ -170,7 +170,7 @@ func TestAuditTxnV1AddPartitionsFatalKeepsEarlierAdds(t *testing.T) {
 	// succeeded; the commit must not report success.
 	err := cl.EndTransaction(ctx, kgo.TryCommit)
 	if err == nil {
-		t.Fatalf("BUG REPRODUCED: EndTransaction(TryCommit) returned nil after a fatal AddPartitionsToTxn error; %s[0] was added and produced earlier in this transaction (its promise succeeded), so the commit must fail rather than silently abandon the appended batch to the transaction-timeout abort (EndTxns issued: %d)", topicP, endTxns.Load())
+		t.Fatalf("BUG REPRODUCED: EndTransaction(TryCommit) returned nil after a fatal AddPartitionsToTxn error; %s[0] was added and produced earlier in this transaction (its promise succeeded), so the commit must fail rather than silently abandon the appended batch to the transaction-timeout abort (EndTxns issued: %d)", topicP, endTxns.Hits())
 	}
 	if !errors.Is(err, kerr.OperationNotAttempted) {
 		t.Fatalf("EndTransaction(TryCommit) = %v; want kerr.OperationNotAttempted", err)
@@ -273,7 +273,7 @@ func TestAuditTxnAbortRetryAfterOperationNotAttempted(t *testing.T) {
 	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
 		t.Fatalf("EndTransaction(TryAbort) = %v", err)
 	}
-	if endTxns.Load() == 0 {
+	if endTxns.Hits() == 0 {
 		t.Fatal("BUG REPRODUCED: the documented TryAbort retry after OperationNotAttempted issued no EndTxn; the commit attempt consumed the transaction state (inTxn, addedToTxn), so the abort silently no-opped and the broker-side transaction stays ongoing until the transaction timeout")
 	}
 }
@@ -477,17 +477,12 @@ func TestProduceLeaderHintMovesWithoutBackoff(t *testing.T) {
 	if err := c.MoveTopicPartition(topic, 0, (old.Leader+1)%2); err != nil {
 		t.Fatal(err)
 	}
-	var produces atomic.Int32
-	c.ControlKey(int16(kmsg.Produce), func(kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		produces.Add(1)
-		return nil, nil, false
-	})
+	produces := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Produce}, Observe: true, Count: -1})
 
 	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("probe")}).FirstErr(); err != nil {
 		t.Fatal(err)
 	}
-	if got := produces.Load(); got != 2 {
+	if got := produces.Hits(); got != 2 {
 		t.Errorf("got %d produce requests, want the rejected attempt and its retry", got)
 	}
 	if got := backoffs.Load(); got != 0 {
