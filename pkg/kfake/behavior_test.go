@@ -1046,7 +1046,6 @@ func Test848RebalanceTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer raw.Close()
-	adm := kadm.NewClient(raw)
 
 	// A joins via kgo (automatic heartbeating).
 	a := newGroupConsumer(t, c, topic, group)
@@ -1108,15 +1107,11 @@ func Test848RebalanceTimeout(t *testing.T) {
 	// B may need additional heartbeats to fully reconcile if the
 	// epoch didn't advance on the first confirmation.
 	for i := range 20 {
-		described, err := adm.DescribeConsumerGroups(ctx, group)
-		if err != nil {
-			t.Fatalf("describe: %v", err)
-		}
-		if described[group].State == "Stable" && len(described[group].Members) == 2 {
+		if g := c.GroupInfo(group); g != nil && g.State == "Stable" && len(g.Members) == 2 {
 			break
 		}
 		if i == 19 {
-			t.Fatalf("timeout waiting for stable 2-member group (state=%s, members=%d)", described[group].State, len(described[group].Members))
+			t.Fatalf("timeout waiting for stable 2-member group: %+v", c.GroupInfo(group))
 		}
 		// Re-heartbeat B to nudge reconciliation.
 		hb2 := kmsg.NewConsumerGroupHeartbeatRequest()
@@ -1192,11 +1187,7 @@ func Test848RebalanceTimeout(t *testing.T) {
 	// (500ms) should fire and fence B.
 	time.Sleep(800 * time.Millisecond)
 
-	described, err := adm.DescribeConsumerGroups(ctx, group)
-	if err != nil {
-		t.Fatalf("describe after timeout: %v", err)
-	}
-	dg := described[group]
+	dg := c.GroupInfo(group)
 	for _, m := range dg.Members {
 		if m.MemberID == bMemberID {
 			t.Fatalf("member B (%s) should have been fenced by rebalance timeout, but is still in group (state=%s)", bMemberID, dg.State)
@@ -2603,15 +2594,8 @@ func TestClassicPendingSyncTimeout(t *testing.T) {
 	// Don't send SyncGroup. Wait for the pending sync timeout to fire.
 	time.Sleep(800 * time.Millisecond)
 
-	// The member should have been removed. Verify by describing
-	// the group - it should be empty or dead.
-	adm := kadm.NewClient(cl)
-	described, err := adm.DescribeGroups(ctx, group)
-	if err != nil {
-		t.Fatalf("describe: %v", err)
-	}
-	dg := described[group]
-	if len(dg.Members) > 0 {
+	// The member should have been removed: the group is empty or gone.
+	if dg := c.GroupInfo(group); dg != nil && len(dg.Members) > 0 {
 		t.Fatalf("expected 0 members after pending sync timeout, got %d (state=%s)", len(dg.Members), dg.State)
 	}
 }

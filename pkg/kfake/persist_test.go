@@ -2070,22 +2070,12 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		adm := kadm.NewClient(newPlainClient(t, c))
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		described, err := adm.DescribeGroups(ctx, group)
-		if err != nil {
-			t.Fatal(err)
+		g := c.GroupInfo(group)
+		if g == nil || g.State != "Stable" {
+			t.Fatalf("phase 2: expected Stable, got %+v", g)
 		}
-		dg := described[group]
-		if dg.Err != nil {
-			t.Fatalf("describe group: %v", dg.Err)
-		}
-		if dg.State != "Stable" {
-			t.Fatalf("phase 2: expected Stable, got %s", dg.State)
-		}
-		if len(dg.Members) != 1 {
-			t.Fatalf("phase 2: expected 1 phantom member, got %d", len(dg.Members))
+		if len(g.Members) != 1 {
+			t.Fatalf("phase 2: expected 1 phantom member, got %d", len(g.Members))
 		}
 		c.Close()
 	}
@@ -2110,22 +2100,12 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 		}
 		defer c.Close()
 
-		adm := kadm.NewClient(newPlainClient(t, c))
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		described, err := adm.DescribeGroups(ctx, group)
-		if err != nil {
-			t.Fatal(err)
+		g := c.GroupInfo(group)
+		if g == nil || g.State != "Empty" {
+			t.Fatalf("phase 3: expected Empty (phantom expired), got %+v", g)
 		}
-		dg := described[group]
-		if dg.Err != nil {
-			t.Fatalf("describe group: %v", dg.Err)
-		}
-		if dg.State != "Empty" {
-			t.Fatalf("phase 3: expected Empty (phantom expired), got %s", dg.State)
-		}
-		if len(dg.Members) != 0 {
-			t.Fatalf("phase 3: expected 0 members (phantom expired), got %d", len(dg.Members))
+		if len(g.Members) != 0 {
+			t.Fatalf("phase 3: expected 0 members (phantom expired), got %d", len(g.Members))
 		}
 	}
 }
@@ -2153,28 +2133,12 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 		"group.consumer.heartbeat.interval.ms": "100",
 	})
 
-	// describe848 uses ConsumerGroupDescribe (key 69) which reports
-	// 848 consumer members, unlike DescribeGroups (key 15) which
-	// only reports classic members.
-	describe848 := func(t *testing.T, c *Cluster) (string, int) {
-		t.Helper()
-		cl := newPlainClient(t, c)
-		req := kmsg.NewPtrConsumerGroupDescribeRequest()
-		req.Groups = []string{group}
-		resp, err := req.RequestWith(context.Background(), cl)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(resp.Groups) != 1 {
-			t.Fatalf("expected 1 group in response, got %d", len(resp.Groups))
-		}
-		g := resp.Groups[0]
-		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
-			// GroupIDNotFound means group doesn't exist (= Empty).
-			if err == kerr.GroupIDNotFound {
-				return "Empty", 0
-			}
-			t.Fatalf("describe group: %v", err)
+	// A group that does not exist is Empty, as ConsumerGroupDescribe
+	// answers GROUP_ID_NOT_FOUND for one.
+	describe848 := func(c *Cluster) (string, int) {
+		g := c.GroupInfo(group)
+		if g == nil {
+			return "Empty", 0
 		}
 		return g.State, len(g.Members)
 	}
@@ -2241,7 +2205,7 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		state, members := describe848(t, c)
+		state, members := describe848(c)
 		if state != "Stable" {
 			t.Fatalf("phase 2: expected Stable, got %s", state)
 		}
@@ -2269,7 +2233,7 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 		}
 		defer c.Close()
 
-		state, members := describe848(t, c)
+		state, members := describe848(c)
 		if state != "Empty" {
 			t.Fatalf("phase 3: expected Empty (phantom expired), got %s", state)
 		}
@@ -2590,31 +2554,10 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		cl := newPlainClient(t, c)
-		adm := kadm.NewClient(cl)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		// Produce to both topics.
-		for _, topic := range []string{keepTopic, deleteTopic} {
-			for i := range 5 {
-				r := &kgo.Record{Topic: topic, Value: fmt.Appendf(nil, "v%d", i)}
-				if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}
-
-		// Delete one topic.
-		resps, err := adm.DeleteTopics(ctx, deleteTopic)
-		if err != nil {
+		produceN(t, c, keepTopic, 5)
+		produceN(t, c, deleteTopic, 5)
+		if err := c.DeleteTopic(deleteTopic); err != nil {
 			t.Fatal(err)
-		}
-		for _, r := range resps {
-			if r.Err != nil {
-				t.Fatalf("delete %s: %v", r.Topic, r.Err)
-			}
 		}
 
 		c.Close()
@@ -2738,25 +2681,15 @@ func TestPersistSessionStateClassicGroup(t *testing.T) {
 			t.Fatal("session_state.json should be deleted after load")
 		}
 
-		// Describe the classic group - should have members in Stable state
-		adm := kadm.NewClient(newPlainClient(t, c))
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		described, err := adm.DescribeGroups(ctx, group)
-		if err != nil {
-			t.Fatalf("describe groups: %v", err)
+		// The restored classic group has members and is Stable.
+		g := c.GroupInfo(group)
+		if g == nil {
+			t.Fatal("the restored group does not exist")
 		}
-		dg, ok := described[group]
-		if !ok {
-			t.Fatal("group not found in describe response")
+		if g.State != "Stable" {
+			t.Fatalf("expected Stable state, got %s", g.State)
 		}
-		if dg.Err != nil {
-			t.Fatalf("describe group error: %v", dg.Err)
-		}
-		if dg.State != "Stable" {
-			t.Fatalf("expected Stable state, got %s", dg.State)
-		}
-		if len(dg.Members) == 0 {
+		if len(g.Members) == 0 {
 			t.Fatal("expected at least one member in restored group")
 		}
 	}
