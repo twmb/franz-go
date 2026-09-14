@@ -1305,7 +1305,19 @@ func (g *group) rebalance() {
 	if g.tRebalance != nil {
 		g.tRebalance.Stop()
 	}
-	g.tRebalance = g.timerWork(time.Duration(g.maxRebalanceTimeoutMs())*time.Millisecond, g.completeRebalance)
+	// The deadline belongs to this generation. completeRebalance's state
+	// check alone misses preparing to completing and back to preparing: a
+	// group back in preparing under a new generation has a new barrier,
+	// and a late run would clear it. Repeated rebalance() calls at the
+	// same generation are fine, completing early is what the deadline
+	// means.
+	gen := g.generation
+	g.tRebalance = g.timerWork(time.Duration(g.maxRebalanceTimeoutMs())*time.Millisecond, func() {
+		if g.generation != gen {
+			return
+		}
+		g.completeRebalance()
+	})
 }
 
 // Transitions the group to either dead or stable, depending on if any members
@@ -3063,23 +3075,25 @@ func (g *group) atConsumerSessionTimeout(m *consumerMember) {
 // scheduleConsumerRebalanceTimeout starts a per-member rebalance
 // timeout that fences the member if it does not complete partition
 // revocation within rebalanceTimeoutMs. Only active when the member
-// has partitions to release. If the member's epoch has advanced by
-// the time the timer fires, the timeout is ignored.
+// has partitions to release. If the member is gone or replaced, or its
+// epoch has advanced by the time the timer fires, the timeout is ignored.
 func (g *group) scheduleConsumerRebalanceTimeout(m *consumerMember) {
 	g.cancelConsumerRebalanceTimeout(m)
 	timeout := time.Duration(m.rebalanceTimeoutMs) * time.Millisecond
 	epoch := m.memberEpoch
 	memberID := m.memberID
 	m.tRebal = g.timerWork(timeout, func() {
-		// Check the member still exists and hasn't
-		// progressed past the epoch we were watching.
-		cur, ok := g.consumerMembers[memberID]
-		if !ok || cur.memberEpoch != epoch {
+		// Check the member is still this one and has not progressed
+		// past the epoch we were watching. Identity is checked as
+		// well as the epoch because a replacement can sit at the same
+		// number: a brand new member and one inheriting from an epoch
+		// -2 static predecessor are both at 0.
+		if g.consumerMembers[memberID] != m || m.memberEpoch != epoch {
 			return
 		}
 		g.c.cfg.logger.Logf(LogLevelWarn, "consumerRebalanceTimeout: group=%s member=%s epoch=%d remaining=%d",
 			g.logName(), memberID, epoch, len(g.consumerMembers)-1)
-		g.evictConsumerMember(cur)
+		g.evictConsumerMember(m)
 	})
 }
 

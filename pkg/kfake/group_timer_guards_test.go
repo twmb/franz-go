@@ -123,6 +123,53 @@ func TestClassicSessionTimerStaleFireKeepsProtocolCounts(t *testing.T) {
 	classicJoin(ctx, t, cl, "a later join, after the stale session timer", groupID, "")
 }
 
+// The classic rebalance deadline must check the generation it belongs to.
+// completeRebalance's state check alone misses preparing to completing and
+// back to preparing: the group is preparing again under a new generation, and
+// a stale run clears that new barrier, removing every member that is not
+// waiting in join.
+func TestClassicRebalanceTimerStaleFireKeepsNewBarrier(t *testing.T) {
+	t.Parallel()
+	const groupID = "g-classic-stale-rebalance-fire"
+
+	c, cl, ctx := newGuardCluster(t)
+
+	memberID := classicJoin(ctx, t, cl, "join", groupID, "").MemberID
+
+	// arm puts the group into a rebalance whose deadline fires at once.
+	// Inline, the member rejoins, which completes that rebalance under a
+	// new generation, and the group then enters another one. That second
+	// rebalance is the barrier the stale closure must not clear.
+	var gen int32
+	staleFire(t, c, groupID, func(g *group) {
+		m := g.members[memberID]
+		if m == nil {
+			t.Error("member is missing")
+			return
+		}
+		m.join.RebalanceTimeoutMillis = 10
+		g.rebalance()
+	}, func() {
+		gen = classicJoin(ctx, t, cl, "rejoin", groupID, memberID).Generation
+		onGroup(t, c, groupID, func(g *group) { g.rebalance() })
+	})
+
+	// The member is still in the group, waiting on the new barrier. A
+	// stale run completes the old rebalance instead, and the member is not
+	// waiting in join, so it is removed.
+	hb := kmsg.NewPtrHeartbeatRequest()
+	hb.Group = groupID
+	hb.MemberID = memberID
+	hb.Generation = gen
+	resp, err := hb.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if resp.ErrorCode != kerr.RebalanceInProgress.Code {
+		t.Fatalf("heartbeat answered %v, want REBALANCE_IN_PROGRESS: the stale rebalance deadline cleared the new barrier", kerr.ErrorForCode(resp.ErrorCode))
+	}
+}
+
 // consumer848 joins memberID into the group and acks the assignment it is
 // given, so the member is reconciled, and returns a sender for its later
 // heartbeats. The sender echoes that assignment back; a non-positive epoch is
@@ -206,4 +253,40 @@ func TestConsumerSessionTimerStaleFireKeepsRejoinedMember(t *testing.T) {
 			t.Error("the rejoined member lost its partitions to the stale session timer")
 		}
 	})
+}
+
+// The 848 per-member rebalance timeout must check identity as well as the
+// epoch it captured. A full leave deletes the member without touching its
+// epoch, so a member that leaves and rejoins under the same client supplied
+// ID leaves the captured object at the epoch the timer was watching, with a
+// different object now at that key.
+func TestConsumerRebalanceTimerStaleFireKeepsRejoinedMember(t *testing.T) {
+	t.Parallel()
+	const (
+		topic    = "t-848-stale-rebalance-fire"
+		groupID  = "g-848-stale-rebalance-fire"
+		memberID = "m-848-stale-rebalance-fire"
+	)
+
+	c, cl, ctx := newGuardCluster(t, SeedTopics(1, topic))
+	hb := consumer848(ctx, t, cl, topic, groupID, memberID, nil)
+
+	// The revocation deadline fires, and inline the member leaves and
+	// rejoins, which puts a new object at the same map key.
+	var epoch int32
+	staleFire(t, c, groupID, func(g *group) {
+		m := g.consumerMembers[memberID]
+		if m == nil {
+			t.Error("member is missing")
+			return
+		}
+		m.rebalanceTimeoutMs = 10
+		g.scheduleConsumerRebalanceTimeout(m)
+	}, func() {
+		hb("leave", -1)
+		epoch = hb("rejoin", 0).MemberEpoch
+	})
+
+	// The replacement must still be a member.
+	hb("heartbeat after the rejoin", epoch)
 }
