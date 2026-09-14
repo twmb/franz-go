@@ -54,7 +54,6 @@ type (
 		assignorName    string
 		consumerMembers map[string]*consumerMember
 		partitionEpochs map[uuid]map[int32]int32 // (topicID, partition) -> owning member's epoch; -1 or absent means free
-		lastTopicMeta   topicMetaSnap            // last snapshot received, for recomputation on member removal
 	}
 
 	groupMember struct {
@@ -115,15 +114,6 @@ type (
 		lastCommit  time.Time
 	}
 
-	// topicMetaSnap is a snapshot of topic metadata taken in Cluster.run
-	// and passed to group.manage for server-side assignment.
-	topicMetaSnap = map[string]topicSnapInfo
-
-	topicSnapInfo struct {
-		id         uuid
-		partitions int32
-	}
-
 	groupState int8
 )
 
@@ -181,12 +171,14 @@ func (c *Cluster) coordinator(id string) *broker {
 	return c.bs[n]
 }
 
-func (c *Cluster) snapshotTopicMeta() topicMetaSnap {
-	snap := make(topicMetaSnap, len(c.data.tps))
-	for topic, ps := range c.data.tps {
-		snap[topic] = topicSnapInfo{id: c.data.t2id[topic], partitions: int32(len(ps))}
+// topicInfo returns a topic's ID and partition count, and whether we
+// know the topic at all.
+func (c *Cluster) topicInfo(topic string) (id uuid, parts int32, ok bool) {
+	ps, ok := c.data.tps[topic]
+	if !ok {
+		return id, 0, false
 	}
-	return snap
+	return c.data.t2id[topic], int32(len(ps)), true
 }
 
 // dropGroupCommits removes every group's committed offsets for a deleted
@@ -217,12 +209,10 @@ func (c *Cluster) dropGroupCommits(topic string) {
 // topic ID (metadata not yet refreshed) would miss the assignment
 // permanently because the server recorded it as delivered.
 func (c *Cluster) notifyTopicChange() {
-	snap := c.snapshotTopicMeta()
 	for _, g := range c.groups.gs {
 		if len(g.consumerMembers) > 0 {
 			g.groupEpoch++
-			g.lastTopicMeta = snap
-			g.computeTargetAssignment(snap)
+			g.computeTargetAssignment()
 			g.updateConsumerStateField()
 			g.persistMeta848()
 		}
@@ -230,7 +220,6 @@ func (c *Cluster) notifyTopicChange() {
 	for _, sg := range c.shareGroups.gs {
 		if len(sg.members) > 0 {
 			sg.groupEpoch++
-			sg.lastTopicMeta = snap
 			sg.recomputeAssignments()
 		}
 	}
@@ -342,10 +331,6 @@ func (gs *groups) handleLeave(creq *clientReq) (kmsg.Response, bool) {
 
 func (gs *groups) handleOffsetCommit(creq *clientReq) *kmsg.OffsetCommitResponse {
 	req := creq.kreq.(*kmsg.OffsetCommitRequest)
-	// Snapshot topic metadata so we can validate that committed
-	// partitions exist, like a real broker's API layer does before the
-	// coordinator sees the commit.
-	creq.topicMeta = gs.c.snapshotTopicMeta()
 	g, isNew := gs.newOrExisting(req.Group)
 	kresp, ok := g.dispatchOffsetCommit(creq)
 	if isNew && !ok {
@@ -1183,8 +1168,7 @@ func setOffsetCommitPartitionErr(resp *kmsg.OffsetCommitResponse, topic string, 
 // per-partition existence checks. A real broker's API layer rejects commits
 // for partitions its metadata does not know with UNKNOWN_TOPIC_OR_PARTITION
 // before the group coordinator ever sees them (auth is checked first); the
-// coordinator itself stores offsets blindly. We validate against the topic
-// metadata snapshot taken when the request was dispatched to this group.
+// coordinator itself stores offsets blindly.
 // Returns the topics+partitions that passed and should be committed.
 func (g *group) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse) []kmsg.OffsetCommitRequestTopic {
 	var allowed []kmsg.OffsetCommitRequestTopic
@@ -1201,7 +1185,7 @@ func (g *group) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitR
 				st.Partitions = append(st.Partitions, sp)
 			}
 		} else {
-			meta, topicExists := creq.topicMeta[t.Topic]
+			_, nparts, topicExists := g.c.topicInfo(t.Topic)
 			at := t
 			at.Partitions = nil
 			for _, p := range t.Partitions {
@@ -1211,7 +1195,7 @@ func (g *group) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitR
 				switch {
 				case e != nil && creq.skipsWork(e): // a timed-out commit is still stored
 					sp.ErrorCode = e.Code
-				case creq.topicMeta != nil && (!topicExists || p.Partition < 0 || p.Partition >= meta.partitions):
+				case !topicExists || p.Partition < 0 || p.Partition >= nparts:
 					sp.ErrorCode = kerr.UnknownTopicOrPartition.Code
 				default:
 					if e != nil {
@@ -1715,8 +1699,6 @@ func (gs *groups) handleConsumerGroupHeartbeat(creq *clientReq) kmsg.Response {
 	}
 
 	g, _ := gs.newOrExisting(req.Group)
-	creq.topicMeta = gs.c.snapshotTopicMeta()
-	g.lastTopicMeta = creq.topicMeta
 	return g.handleConsumerHeartbeat(creq)
 }
 
@@ -1973,7 +1955,7 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 	// member (no prior static member), or subscription changed.
 	if g.groupEpoch == 0 || oldTopics == nil || !slices.Equal(oldTopics, m.subscribedTopics) {
 		g.groupEpoch++
-		g.computeTargetAssignment(g.lastTopicMeta)
+		g.computeTargetAssignment()
 		g.persistMeta848()
 	}
 	if m.instanceID != nil {
@@ -2056,7 +2038,7 @@ func (g *group) consumerRejoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeat
 	}
 	if hasSubscriptionChanged {
 		g.groupEpoch++
-		g.computeTargetAssignment(g.lastTopicMeta)
+		g.computeTargetAssignment()
 		g.persistMeta848()
 	}
 
@@ -2096,7 +2078,7 @@ func (g *group) consumerLeave(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kms
 	}
 
 	g.groupEpoch++
-	g.computeTargetAssignment(g.lastTopicMeta)
+	g.computeTargetAssignment()
 	g.updateConsumerStateField()
 	g.persistMeta848()
 
@@ -2128,7 +2110,7 @@ func (g *group) consumerStaticLeave(req *kmsg.ConsumerGroupHeartbeatRequest, res
 		g.fenceConsumerMember(m)
 		delete(g.consumerMembers, req.MemberID)
 		g.groupEpoch++
-		g.computeTargetAssignment(g.lastTopicMeta)
+		g.computeTargetAssignment()
 		g.updateConsumerStateField()
 		g.persistMeta848()
 		return resp
@@ -2217,7 +2199,7 @@ func (g *group) consumerRegularHeartbeat(req *kmsg.ConsumerGroupHeartbeatRequest
 
 	if hasSubscriptionChanged {
 		g.groupEpoch++
-		g.computeTargetAssignment(g.lastTopicMeta)
+		g.computeTargetAssignment()
 		g.persistMeta848()
 	}
 	resp.MemberID = &req.MemberID
@@ -2262,10 +2244,10 @@ type assignorTP struct {
 	part  int32
 }
 
-// computeTargetAssignment resolves subscriptions against the topic
-// metadata snapshot and dispatches to the appropriate assignor based on
+// computeTargetAssignment resolves subscriptions against the current
+// topics and dispatches to the appropriate assignor based on
 // g.assignorName. Updates targetAssignment on each consumerMember.
-func (g *group) computeTargetAssignment(snap topicMetaSnap) {
+func (g *group) computeTargetAssignment() {
 	memberSubs := make(map[string]map[string]struct{}, len(g.consumerMembers))
 	var allTPs []assignorTP
 
@@ -2282,7 +2264,7 @@ func (g *group) computeTargetAssignment(snap topicMetaSnap) {
 			subs[t] = struct{}{}
 		}
 		if m.subscribedTopicRegex != nil {
-			for topic := range snap {
+			for topic := range g.c.data.tps {
 				if m.subscribedTopicRegex.MatchString(topic) {
 					subs[topic] = struct{}{}
 				}
@@ -2294,12 +2276,12 @@ func (g *group) computeTargetAssignment(snap topicMetaSnap) {
 		}
 	}
 	for topic := range subscribedSet {
-		info, ok := snap[topic]
+		id, nparts, ok := g.c.topicInfo(topic)
 		if !ok {
 			continue
 		}
-		for p := int32(0); p < info.partitions; p++ {
-			allTPs = append(allTPs, assignorTP{topic: topic, id: info.id, part: p})
+		for p := int32(0); p < nparts; p++ {
+			allTPs = append(allTPs, assignorTP{topic: topic, id: id, part: p})
 		}
 	}
 
@@ -2707,16 +2689,15 @@ func (g *group) updateCurrentAssignment(m *consumerMember,
 ) {
 	// Compute subscribed topic IDs from subscriptions + regex.
 	subscribedIDs := make(map[uuid]struct{})
-	snap := g.lastTopicMeta
 	for _, topic := range m.subscribedTopics {
-		if info, ok := snap[topic]; ok {
-			subscribedIDs[info.id] = struct{}{}
+		if id, _, ok := g.c.topicInfo(topic); ok {
+			subscribedIDs[id] = struct{}{}
 		}
 	}
 	if m.subscribedTopicRegex != nil {
-		for topic, info := range snap {
+		for topic := range g.c.data.tps {
 			if m.subscribedTopicRegex.MatchString(topic) {
-				subscribedIDs[info.id] = struct{}{}
+				subscribedIDs[g.c.data.t2id[topic]] = struct{}{}
 			}
 		}
 	}
@@ -3079,7 +3060,7 @@ func (g *group) evictConsumerMember(m *consumerMember) {
 	g.fenceConsumerMember(m)
 	delete(g.consumerMembers, m.memberID)
 	g.groupEpoch++
-	g.computeTargetAssignment(g.lastTopicMeta)
+	g.computeTargetAssignment()
 	g.updateConsumerStateField()
 	g.persistMeta848()
 }
@@ -3204,8 +3185,8 @@ func (g *group) handleConsumerOffsetCommit(creq *clientReq) *kmsg.OffsetCommitRe
 			// Reject if the request epoch is older than when
 			// this partition was assigned to the member.
 			if cm != nil {
-				if id, ok := g.lastTopicMeta[t.Topic]; ok {
-					if epochs, ok := cm.partAssignmentEpochs[id.id]; ok {
+				if id, ok := g.c.data.t2id[t.Topic]; ok {
+					if epochs, ok := cm.partAssignmentEpochs[id]; ok {
 						if assignEpoch, ok := epochs[p.Partition]; ok && req.Generation < assignEpoch {
 							g.c.cfg.logger.Logf(LogLevelWarn, "OffsetCommit STALE: group=%s member=%s topic=%s p=%d reqEpoch=%d assignmentEpoch=%d",
 								g.logName(), req.MemberID, t.Topic[:min(16, len(t.Topic))], p.Partition, req.Generation, assignEpoch)

@@ -33,14 +33,13 @@ type (
 	}
 
 	clientReq struct {
-		cc        *clientConn
-		kreq      kmsg.Request
-		at        time.Time
-		cid       string
-		corr      int32
-		seq       uint32
-		topicMeta topicMetaSnap // snapshot for group assignment (consumer/share)
-		faults    *faultCheck   // faults that can match this request, see Fault
+		cc     *clientConn
+		kreq   kmsg.Request
+		at     time.Time
+		cid    string
+		corr   int32
+		seq    uint32
+		faults *faultCheck // faults that can match this request, see Fault
 
 		// Pre-validated error topics to merge into the response,
 		// used when TopicID resolution fails for some topics while
@@ -71,8 +70,8 @@ func (cc *clientConn) unmute(ok bool) {
 }
 
 // reply sends a response back to the client, respecting connection close
-// and cluster shutdown. Used by manage goroutines (groups, share groups)
-// that handle requests asynchronously.
+// and cluster shutdown. Used by the shutdown drain, which answers requests
+// outside the run loop's normal return path.
 func (creq *clientReq) reply(kresp kmsg.Response) {
 	select {
 	case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, seq: creq.seq}:
@@ -175,10 +174,10 @@ func (cc *clientConn) write() {
 
 		// If a request is by necessity slow (join&sync), and the
 		// client sends another request down the same conn, we can
-		// actually handle them out of order because group state is
-		// managed independently in its own loop. To ensure
-		// serialization, we capture out of order responses and only
-		// send them once the prior requests are replied to.
+		// actually handle them out of order because a parked join or
+		// sync is answered by a later group state transition. To
+		// ensure serialization, we capture out of order responses and
+		// only send them once the prior requests are replied to.
 		//
 		// (this is also why there is a seq in the clientReq)
 		oooresp = make(map[uint32]clientResp)

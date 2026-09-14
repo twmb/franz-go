@@ -41,9 +41,8 @@ type (
 		c    *Cluster
 		name string
 
-		groupEpoch    int32
-		members       map[string]*shareMember
-		lastTopicMeta topicMetaSnap // cached snapshot from run(), for recomputation on member removal/fencing
+		groupEpoch int32
+		members    map[string]*shareMember
 
 		// Per-(topic,partition) record acquisition state.
 		partitions tps[sharePartition]
@@ -239,9 +238,7 @@ func (sgs *shareGroups) handleHeartbeat(creq *clientReq) kmsg.Response {
 		return errResp()
 	}
 
-	creq.topicMeta = sgs.c.snapshotTopicMeta()
 	g := sgs.getOrCreate(req.GroupID)
-	g.lastTopicMeta = creq.topicMeta
 	return g.handleHeartbeat(creq)
 }
 
@@ -636,8 +633,6 @@ func (g *shareGroup) handleRegularHeartbeat(creq *clientReq, req *kmsg.ShareGrou
 // epoch is only bumped when it heartbeats and receives the updated assignment
 // (via reconcileMember).
 func (g *shareGroup) recomputeAssignments() {
-	snap := g.lastTopicMeta
-
 	memberIDs := slices.Sorted(maps.Keys(g.members))
 
 	// Build topic->subscribers index.
@@ -650,8 +645,8 @@ func (g *shareGroup) recomputeAssignments() {
 
 	// Reverse lookup: topicID -> topicName.
 	topicForID := make(map[uuid]string)
-	for topic, si := range snap {
-		topicForID[si.id] = topic
+	for topic := range g.c.data.tps {
+		topicForID[g.c.data.t2id[topic]] = topic
 	}
 
 	type partKey struct {
@@ -670,13 +665,13 @@ func (g *shareGroup) recomputeAssignments() {
 			if topic == "" {
 				continue // topic deleted
 			}
-			si := snap[topic]
+			_, nparts, _ := g.c.topicInfo(topic)
 			if _, ok := slices.BinarySearch(m.subscribedTopics, topic); !ok {
 				continue // unsubscribed
 			}
 			var kept []int32
 			for _, p := range parts {
-				if p >= si.partitions {
+				if p >= nparts {
 					continue // partition removed
 				}
 				pk := partKey{topic, p}
@@ -695,12 +690,12 @@ func (g *shareGroup) recomputeAssignments() {
 
 	// Phase 2: Per-topic rebalancing.
 	for topic, subs := range topicSubs {
-		si, ok := snap[topic]
-		if !ok || si.partitions == 0 {
+		tid, nparts, ok := g.c.topicInfo(topic)
+		if !ok || nparts == 0 {
 			continue
 		}
 		nSubs := len(subs)
-		nParts := int(si.partitions)
+		nParts := int(nparts)
 		desiredSharing := (nSubs + nParts - 1) / nParts
 		totalSlots := desiredSharing * nParts
 
@@ -717,22 +712,22 @@ func (g *shareGroup) recomputeAssignments() {
 		// Current count per member for this topic.
 		memberTopicCount := make(map[string]int, nSubs)
 		for _, id := range subs {
-			memberTopicCount[id] = len(g.members[id].assignment[si.id])
+			memberTopicCount[id] = len(g.members[id].assignment[tid])
 		}
 
 		// Phase 2a: Revoke from overfilled members.
 		for _, id := range subs {
 			m := g.members[id]
-			parts := m.assignment[si.id]
+			parts := m.assignment[tid]
 			desired := desiredCount[id]
 			if len(parts) <= desired {
 				continue
 			}
 			removed := parts[desired:]
 			if desired > 0 {
-				m.assignment[si.id] = parts[:desired]
+				m.assignment[tid] = parts[:desired]
 			} else {
-				delete(m.assignment, si.id)
+				delete(m.assignment, tid)
 			}
 			for _, p := range removed {
 				pk := partKey{topic, p}
@@ -748,7 +743,7 @@ func (g *shareGroup) recomputeAssignments() {
 			extra int // current - desired
 		}
 		cands := make([]candidate, 0, nSubs)
-		for p := int32(0); p < si.partitions; p++ {
+		for p := int32(0); p < nparts; p++ {
 			pk := partKey{topic, p}
 			members := partMembers[pk]
 			excess := len(members) - desiredSharing
@@ -772,9 +767,9 @@ func (g *shareGroup) recomputeAssignments() {
 				}
 				delete(members, c.id)
 				m := g.members[c.id]
-				m.assignment[si.id] = slices.DeleteFunc(m.assignment[si.id], func(v int32) bool { return v == p })
-				if len(m.assignment[si.id]) == 0 {
-					delete(m.assignment, si.id)
+				m.assignment[tid] = slices.DeleteFunc(m.assignment[tid], func(v int32) bool { return v == p })
+				if len(m.assignment[tid]) == 0 {
+					delete(m.assignment, tid)
 				}
 				memberTopicCount[c.id]--
 				excess--
@@ -798,7 +793,7 @@ func (g *shareGroup) recomputeAssignments() {
 		}
 
 		uidx := 0
-		for p := int32(0); p < si.partitions && len(uf) > 0; p++ {
+		for p := int32(0); p < nparts && len(uf) > 0; p++ {
 			pk := partKey{topic, p}
 			members := partMembers[pk]
 			if members == nil {
@@ -814,7 +809,7 @@ func (g *shareGroup) recomputeAssignments() {
 					if _, already := members[u.id]; !already {
 						members[u.id] = struct{}{}
 						m := g.members[u.id]
-						m.assignment[si.id] = append(m.assignment[si.id], p)
+						m.assignment[tid] = append(m.assignment[tid], p)
 						memberTopicCount[u.id]++
 						if memberTopicCount[u.id] >= u.desired {
 							i := uidx % len(uf)

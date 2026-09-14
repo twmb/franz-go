@@ -1628,7 +1628,6 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 	if c.groups.gs == nil {
 		c.groups.gs = make(map[string]*group)
 	}
-	topicSnap := c.snapshotTopicMeta()
 	for name, data := range r.metas {
 		var meta groupLogEntry
 		json.Unmarshal(data, &meta)
@@ -1640,7 +1639,6 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 			g.groupEpoch = meta.GroupEpoch
 			g.consumerMembers = make(map[string]*consumerMember)
 			g.partitionEpochs = make(map[uuid]map[int32]int32)
-			g.lastTopicMeta = topicSnap
 		default:
 			g.typ = meta.GroupType
 			g.protocolType = meta.ProtoType
