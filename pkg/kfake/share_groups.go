@@ -934,36 +934,32 @@ func (g *shareGroup) dropSessionsForMember(memberID string) {
 	}
 }
 
-// releaseRecordsForMember releases all records acquired by the given member.
-// If a record has hit max delivery count, it is archived instead. If any
-// records were released to AVAILABLE, we fire share watchers for waiting
-// consumers.
+// releaseRecordsForMember releases all records acquired by the given member
+// across all partitions. If a record has hit max delivery count, it is
+// archived instead. If any records were released to AVAILABLE, we fire share
+// watchers for waiting consumers.
 func (g *shareGroup) releaseRecordsForMember(memberID string) {
-	if g.releaseRecordsForMemberLocked(memberID, g.c.shareMaxDeliveryAttempts()) {
-		g.fireAllShareWatchers()
-	}
-}
-
-// releaseRecordsForMemberLocked releases all records acquired by memberID
-// across all partitions. Returns true if any records became available.
-func (g *shareGroup) releaseRecordsForMemberLocked(memberID string, maxDelivery int32) bool {
+	maxDelivery := g.c.shareMaxDeliveryAttempts()
 	released := false
 	g.partitions.each(func(_ string, _ int32, sp *sharePartition) {
 		if sp.releaseAcquiredBy(memberID, maxDelivery) {
 			released = true
 		}
 	})
-	return released
+	if released {
+		g.fireAllShareWatchers()
+	}
 }
 
-// releaseRecordsForSessionLocked releases records acquired by memberID only
-// for partitions tracked by the given session. This is used during session
+// releaseRecordsForSession releases records acquired by memberID only for
+// partitions tracked by the given session. This is used during session
 // close (ShareAcknowledge/ShareFetch epoch=-1) to avoid releasing records
 // from other sessions on different brokers.
-func (g *shareGroup) releaseRecordsForSessionLocked(memberID string, session *shareSession, id2t map[uuid]string, maxDelivery int32) bool {
+func (g *shareGroup) releaseRecordsForSession(memberID string, session *shareSession) bool {
+	maxDelivery := g.c.shareMaxDeliveryAttempts()
 	released := false
 	for topicID, parts := range session.partitions {
-		topicName := id2t[topicID]
+		topicName := g.c.data.id2t[topicID]
 		if topicName == "" {
 			continue
 		}
@@ -1119,13 +1115,12 @@ func (g *shareGroup) processShareAcks(
 	memberID string,
 	topics []ackTopic,
 	maxAckType int8,
-	id2t map[uuid]string,
-	maxDelivery int32,
 	onPartition func(tid uuid, p int32, ec int16),
 	onNotLeader func(tid uuid, p int32, pd *partData),
 ) (toFire []*partData) {
+	maxDelivery := g.c.shareMaxDeliveryAttempts()
 	for _, at := range topics {
-		topicName := id2t[at.topicID]
+		topicName := g.c.data.id2t[at.topicID]
 		if topicName == "" {
 			for _, ap := range at.partitions {
 				onPartition(at.topicID, ap.partition, kerr.UnknownTopicID.Code)
@@ -1500,8 +1495,6 @@ func (sp *sharePartition) advanceSPSO() {
 // drops, all sessions on that connection are removed and acquired records
 // are released. Must only be called from run().
 func (sgs *shareGroups) cleanupSessionsForConn(cc *clientConn) {
-	maxDelivery := sgs.c.shareMaxDeliveryAttempts()
-	id2t := sgs.c.data.id2t
 	for key, session := range sgs.sessions {
 		if session.cc != cc {
 			continue
@@ -1511,7 +1504,7 @@ func (sgs *shareGroups) cleanupSessionsForConn(cc *clientConn) {
 		if sg == nil {
 			continue
 		}
-		released := sg.releaseRecordsForSessionLocked(key.memberID, session, id2t, maxDelivery)
+		released := sg.releaseRecordsForSession(key.memberID, session)
 		if released {
 			sg.fireAllShareWatchers()
 		}

@@ -164,8 +164,8 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 		if sg != nil {
 			ackTs := ackTopicsFromFetch(req.Topics)
-			toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck, onAckNotLeader)
-			released := sg.releaseRecordsForSessionLocked(memberID, session, id2t, maxDelivery)
+			toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, onAck, onAckNotLeader)
+			released := sg.releaseRecordsForSession(memberID, session)
 			ensureAckedParts(resp, ackTs, addTopic)
 			// fireAllShareWatchers fires every partition in the
 			// group, which is a superset of the partitions in
@@ -212,7 +212,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		var toFire []*partData
 		if w == nil {
 			ackTs := ackTopicsFromFetch(req.Topics)
-			toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck, onAckNotLeader)
+			toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, onAck, onAckNotLeader)
 			ensureAckedParts(resp, ackTs, addTopic)
 		}
 		fireAll(toFire)
@@ -270,7 +270,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	// Process piggybacked acks first (skipped on watcher re-invocation,
 	// since acks were already processed in the initial call).
 	if len(ackTs) > 0 {
-		toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, id2t, maxDelivery, onAck, onAckNotLeader)
+		toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, onAck, onAckNotLeader)
 	}
 
 	// Build target list from session partitions.
