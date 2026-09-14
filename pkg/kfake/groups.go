@@ -1461,6 +1461,14 @@ func (g *group) assignmentOrEmpty(assignment []byte) []byte {
 
 func (g *group) updateHeartbeat(m *groupMember) {
 	g.atSessionTimeout(m, func() {
+		// A timer that already fired cannot be retracted: the member
+		// may have left and been removed since. removeMember is NOT
+		// idempotent, it decrements g.protocols and g.nJoining and
+		// drops the static mapping, so a second run skews counters
+		// that are never rebuilt.
+		if g.members[m.memberID] != m {
+			return
+		}
 		g.updateMemberAndRebalance(m, nil, nil)
 	})
 }
@@ -3509,11 +3517,16 @@ func (g *group) atConsumerSessionTimeoutIn(m *consumerMember, d time.Duration) {
 	}
 	m.last = time.Now()
 	m.t = g.timerWork(d, func() {
-		if time.Since(m.last) >= d {
-			g.c.cfg.logger.Logf(LogLevelWarn, "consumerSessionTimeout: group=%s member=%s epoch=%d remaining=%d",
-				g.logName(), m.memberID, m.memberEpoch, len(g.consumerMembers)-1)
-			g.evictConsumerMember(m)
+		// A timer that already fired cannot be retracted. Member IDs
+		// are client supplied, and a static member that leaves and
+		// rejoins is a new object at the same key, so identity has to
+		// be checked as well as staleness.
+		if g.consumerMembers[m.memberID] != m || time.Since(m.last) < d {
+			return
 		}
+		g.c.cfg.logger.Logf(LogLevelWarn, "consumerSessionTimeout: group=%s member=%s epoch=%d remaining=%d",
+			g.logName(), m.memberID, m.memberEpoch, len(g.consumerMembers)-1)
+		g.evictConsumerMember(m)
 	})
 }
 
