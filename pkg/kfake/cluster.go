@@ -600,7 +600,13 @@ outer:
 		}
 
 		kreq = creq.kreq
-		creq.faults = c.faultsFor(creq)
+		// A parked fetch comes back through here with the same
+		// clientReq. Keeping its fault check keeps the request one
+		// request: hit's dedup still knows what it already took, the
+		// way a control knows through lastReq.
+		if creq.faults == nil {
+			creq.faults = c.faultsFor(creq)
+		}
 		if kresp = creq.faults.topLevel(kreq); kresp != nil {
 			goto afterControl
 		}
