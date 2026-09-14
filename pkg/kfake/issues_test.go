@@ -64,25 +64,7 @@ func TestIssue885(t *testing.T) {
 	// forward (i.e. looping through the stages and never finishing).
 
 	// Inline anonymous function so that we can defer and cleanup within scope.
-	func() {
-		cl, err := kgo.NewClient(
-			kgo.DefaultProduceTopic(testTopic),
-			kgo.SeedBrokers(c.ListenAddrs()...),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
-
-		for i := 0; i < producedMessages; i++ {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			err := cl.ProduceSync(ctx, kgo.StringRecord(strconv.Itoa(i))).FirstErr()
-			cancel()
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}()
+	produceN(t, c, testTopic, producedMessages)
 
 	var followerOOOR bool
 
@@ -197,25 +179,7 @@ func TestIssue905(t *testing.T) {
 	// If we do not redirect back to follower within 2s, consider failure.
 
 	// Inline anonymous function so that we can defer and cleanup within scope.
-	func() {
-		cl, err := kgo.NewClient(
-			kgo.DefaultProduceTopic(testTopic),
-			kgo.SeedBrokers(c.ListenAddrs()...),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
-
-		for i := 0; i < producedMessages; i++ {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			err := cl.ProduceSync(ctx, kgo.StringRecord(strconv.Itoa(i))).FirstErr()
-			cancel()
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}()
+	produceN(t, c, testTopic, producedMessages)
 
 	ti := c.TopicInfo(testTopic)
 	pi := c.PartitionInfo(testTopic, 0)
@@ -397,25 +361,7 @@ func TestIssue906(t *testing.T) {
 	)
 
 	// Seed "foo" with two records.
-	func() {
-		cl, err := kgo.NewClient(
-			kgo.DefaultProduceTopic(testTopic),
-			kgo.SeedBrokers(c.ListenAddrs()...),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
-
-		for i := 0; i < 2; i++ {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			err := cl.ProduceSync(ctx, kgo.StringRecord(strconv.Itoa(i))).FirstErr()
-			cancel()
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}()
+	produceN(t, c, testTopic, 2)
 
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -643,25 +589,7 @@ func TestIssue1167(t *testing.T) {
 	)
 
 	// Produce messages to the topic
-	func() {
-		cl, err := kgo.NewClient(
-			kgo.DefaultProduceTopic(testTopic),
-			kgo.SeedBrokers(c.ListenAddrs()...),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
-
-		for i := 0; i < producedMessages; i++ {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			err := cl.ProduceSync(ctx, kgo.StringRecord(strconv.Itoa(i))).FirstErr()
-			cancel()
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}()
+	produceN(t, c, testTopic, producedMessages)
 
 	// Set up follower for the partition
 	ti := c.TopicInfo(testTopic)
@@ -1846,21 +1774,7 @@ func TestIssue1331(t *testing.T) {
 
 	// Produce a few records so the partition has a real, non-negative leader
 	// epoch for the consumer to consume and validate against.
-	func() {
-		cl, err := kgo.NewClient(
-			kgo.DefaultProduceTopic(testTopic),
-			kgo.SeedBrokers(c.ListenAddrs()...),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
-		for i := 0; i < nrecs; i++ {
-			if err := cl.ProduceSync(context.Background(), kgo.StringRecord(strconv.Itoa(i))).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}()
+	produceN(t, c, testTopic, nrecs)
 
 	// Once armed, every metadata refresh for our topic reports the partition
 	// as leaderless (leaderEpoch=-1) while keeping the leader reachable. We
@@ -2701,21 +2615,7 @@ func TestIssue1248(t *testing.T) {
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t1248"))
 
 	// Produce records for the consumer.
-	func() {
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
-			kgo.DefaultProduceTopic("t1248"),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cl.Close()
-		for i := 0; i < 10; i++ {
-			if err := cl.ProduceSync(context.Background(), kgo.StringRecord("v")).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}()
+	produceN(t, c, "t1248", 10)
 
 	// Run multiple iterations to increase the chance of the race
 	// detector catching the concurrent reset()/kill() access.
