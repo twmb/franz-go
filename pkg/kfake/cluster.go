@@ -1400,7 +1400,7 @@ func (c *Cluster) AddNode(nodeID int32, port int) (int32, int, error) {
 		}
 		c.bs = append(c.bs, b)
 		c.cfg.nbrokers++
-		c.shufflePartitionsLocked()
+		c.shufflePartitions()
 		go b.listen()
 	})
 	return nodeID, port, err
@@ -1424,7 +1424,7 @@ func (c *Cluster) RemoveNode(nodeID int32) error {
 			c.bs[i] = c.bs[len(c.bs)-1]
 			c.bs[i].bsIdx = i
 			c.bs = c.bs[:len(c.bs)-1]
-			c.shufflePartitionsLocked()
+			c.shufflePartitions()
 			return
 		}
 		err = fmt.Errorf("node %d not found", nodeID)
@@ -1437,11 +1437,11 @@ func (c *Cluster) RemoveNode(nodeID int32) error {
 // bumped.
 func (c *Cluster) ShufflePartitionLeaders() {
 	c.admin(func() {
-		c.shufflePartitionsLocked()
+		c.shufflePartitions()
 	})
 }
 
-func (c *Cluster) shufflePartitionsLocked() {
+func (c *Cluster) shufflePartitions() {
 	c.data.tps.each(func(_ string, _ int32, p *partData) {
 		var leader *broker
 		if len(c.bs) == 0 {
