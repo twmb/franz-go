@@ -52,7 +52,7 @@ type (
 		groups             groups
 		sasls              sasls
 		acls               clusterACLs
-		bcfgs              atomic.Pointer[map[string]*string]
+		bcfgs              map[string]*string
 		quotas             map[string]quotaEntry
 		telem              map[[16]byte]int32
 		telemNextID        int32
@@ -168,7 +168,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			tcfgs:     make(map[string]map[string]*string),
 			tnorms:    make(map[string]string),
 		},
-		// bcfgs initialized below via storeBcfgs
+		bcfgs:    make(map[string]*string, len(cfg.brokerConfigs)),
 		quotas:   make(map[string]quotaEntry),
 		telem:    make(map[[16]byte]int32),
 		features: defaultFinalizedFeatures(),
@@ -185,17 +185,13 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		c.fs = newMemFS()
 		c.storageDir = "/kfake"
 	}
-	{
-		m := make(map[string]*string, len(cfg.brokerConfigs))
-		for k, v := range cfg.brokerConfigs {
-			if v == "" {
-				m[k] = nil
-			} else {
-				v := v
-				m[k] = &v
-			}
+	for k, v := range cfg.brokerConfigs {
+		if v == "" {
+			c.bcfgs[k] = nil
+		} else {
+			v := v
+			c.bcfgs[k] = &v
 		}
-		c.storeBcfgs(m)
 	}
 	c.data.c = c
 	c.groups.c = c
@@ -1505,7 +1501,7 @@ func (c *Cluster) compactTickerC() <-chan time.Time {
 }
 
 func (c *Cluster) compactIntervalMs() int64 {
-	if v, ok := c.loadBcfgs()["log.cleaner.backoff.ms"]; ok && v != nil {
+	if v, ok := c.bcfgs["log.cleaner.backoff.ms"]; ok && v != nil {
 		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
 			return n
 		}

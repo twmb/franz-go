@@ -667,7 +667,7 @@ func (c *Cluster) saveSASL(fsys fs, dir string) error {
 
 func (c *Cluster) saveBrokerConfigs(fsys fs, dir string) error {
 	cfgs := make(map[string]string)
-	for k, v := range c.loadBcfgs() {
+	for k, v := range c.bcfgs {
 		if v != nil {
 			cfgs[k] = *v
 		}
@@ -1123,7 +1123,7 @@ func (c *Cluster) loadBrokerConfigs(fsys fs, dir string) error {
 			m[k] = &v
 		}
 	}
-	c.storeBcfgs(m)
+	c.bcfgs = m
 	return nil
 }
 
@@ -1956,7 +1956,7 @@ func (c *Cluster) persistState(name string, fn func(fs, string) error) {
 }
 
 func (c *Cluster) stateLogCompactBytes() int64 {
-	if v, ok := c.loadBcfgs()["state.log.compact.bytes"]; ok && v != nil {
+	if v, ok := c.bcfgs["state.log.compact.bytes"]; ok && v != nil {
 		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
 			return n
 		}

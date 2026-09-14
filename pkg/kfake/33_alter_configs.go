@@ -91,7 +91,7 @@ outer:
 			if req.ValidateOnly {
 				continue
 			}
-			c.storeBcfgs(newBcfgs)
+			c.bcfgs = newBcfgs
 			c.persistBrokerConfigsState()
 
 		case kmsg.ConfigResourceTypeTopic:
