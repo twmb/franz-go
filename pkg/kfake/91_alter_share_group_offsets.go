@@ -39,89 +39,64 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 	// Auto-create the share group if it doesn't exist.
 	sg := c.shareGroups.getOrCreate(req.GroupID)
 
-	// Pre-lookup topic IDs, valid partitions, and ACL results while
-	// in run() where c.data is safe to read.
-	type alterTopicInfo struct {
-		id    uuid
-		valid map[int32]struct{}
-		deny  *kerr.Error
-	}
-	topicInfo := make(map[string]alterTopicInfo, len(req.Topics))
-	for _, rt := range req.Topics {
-		info := alterTopicInfo{id: c.data.t2id[rt.Topic]}
-		// ACL: per-topic READ check.
-		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{topic: rt.Topic, topicID: info.id}); e != nil && creq.skipsWork(e) { // a timed-out reset falls through to the per-partition check
-			info.deny = e
-		} else {
-			info.valid = make(map[int32]struct{})
-			for _, rp := range rt.Partitions {
-				if _, ok := c.data.tps.getp(rt.Topic, rp.Partition); ok {
-					info.valid[rp.Partition] = struct{}{}
-				}
-			}
-		}
-		topicInfo[rt.Topic] = info
-	}
-
 	if len(sg.members) > 0 {
 		resp.ErrorCode = kerr.NonEmptyGroup.Code
 		return resp, nil
 	}
 
-	{
-		for i := range req.Topics {
-			rt := &req.Topics[i]
-			rst := kmsg.NewAlterShareGroupOffsetsResponseTopic()
-			rst.Topic = rt.Topic
-			info := topicInfo[rt.Topic]
-			rst.TopicID = info.id
+	for i := range req.Topics {
+		rt := &req.Topics[i]
+		rst := kmsg.NewAlterShareGroupOffsetsResponseTopic()
+		rst.Topic = rt.Topic
+		id := c.data.t2id[rt.Topic]
+		rst.TopicID = id
 
-			if info.deny != nil {
-				for j := range rt.Partitions {
-					rsp := kmsg.NewAlterShareGroupOffsetsResponseTopicPartition()
-					rsp.Partition = rt.Partitions[j].Partition
-					rsp.ErrorCode = info.deny.Code
-					rst.Partitions = append(rst.Partitions, rsp)
-				}
-				resp.Topics = append(resp.Topics, rst)
-				continue
-			}
-
+		// ACL: per-topic READ check.
+		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{topic: rt.Topic, topicID: id}); e != nil && creq.skipsWork(e) { // a timed-out reset falls through to the per-partition check
 			for j := range rt.Partitions {
-				rp := &rt.Partitions[j]
 				rsp := kmsg.NewAlterShareGroupOffsetsResponseTopicPartition()
-				rsp.Partition = rp.Partition
-
-				e := creq.faults.check(faultKey{group: req.GroupID, topic: rt.Topic, topicID: info.id}.part(rp.Partition))
-				if e != nil {
-					rsp.ErrorCode = e.Code
-					if creq.skipsWork(e) { // a timed-out reset still resets
-						rst.Partitions = append(rst.Partitions, rsp)
-						continue
-					}
-				}
-				if _, ok := info.valid[rp.Partition]; !ok {
-					if e == nil {
-						rsp.ErrorCode = kerr.UnknownTopicOrPartition.Code
-					}
-					rst.Partitions = append(rst.Partitions, rsp)
-					continue
-				}
-
-				// Reset SPSO, scan cursor, end offset, and all record state.
-				sp := sg.partitions.mkp(rt.Topic, rp.Partition, func() *sharePartition {
-					return new(sharePartition)
-				})
-				*sp = sharePartition{
-					spso:       rp.StartOffset,
-					scanOffset: rp.StartOffset,
-					acquireEnd: rp.StartOffset,
-					records:    make(map[int64]shareRecord),
-				}
+				rsp.Partition = rt.Partitions[j].Partition
+				rsp.ErrorCode = e.Code
 				rst.Partitions = append(rst.Partitions, rsp)
 			}
 			resp.Topics = append(resp.Topics, rst)
+			continue
 		}
+
+		for j := range rt.Partitions {
+			rp := &rt.Partitions[j]
+			rsp := kmsg.NewAlterShareGroupOffsetsResponseTopicPartition()
+			rsp.Partition = rp.Partition
+
+			e := creq.faults.check(faultKey{group: req.GroupID, topic: rt.Topic, topicID: id}.part(rp.Partition))
+			if e != nil {
+				rsp.ErrorCode = e.Code
+				if creq.skipsWork(e) { // a timed-out reset still resets
+					rst.Partitions = append(rst.Partitions, rsp)
+					continue
+				}
+			}
+			if _, ok := c.data.tps.getp(rt.Topic, rp.Partition); !ok {
+				if e == nil {
+					rsp.ErrorCode = kerr.UnknownTopicOrPartition.Code
+				}
+				rst.Partitions = append(rst.Partitions, rsp)
+				continue
+			}
+
+			// Reset SPSO, scan cursor, end offset, and all record state.
+			sp := sg.partitions.mkp(rt.Topic, rp.Partition, func() *sharePartition {
+				return new(sharePartition)
+			})
+			*sp = sharePartition{
+				spso:       rp.StartOffset,
+				scanOffset: rp.StartOffset,
+				acquireEnd: rp.StartOffset,
+				records:    make(map[int64]shareRecord),
+			}
+			rst.Partitions = append(rst.Partitions, rsp)
+		}
+		resp.Topics = append(resp.Topics, rst)
 	}
 
 	return resp, nil

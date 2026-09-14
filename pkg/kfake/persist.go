@@ -2200,64 +2200,62 @@ type (
 func (c *Cluster) saveSessionState() error {
 	ss := sessionState{ShutdownAt: time.Now()}
 	for _, g := range c.groups.gs {
-		{
-			c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: group=%s state=%s members=%d consumerMembers=%d",
-				g.name, g.state, len(g.members), len(g.consumerMembers))
-			switch {
-			case len(g.members) > 0:
-				sg := sessionClassicGroup{Leader: g.leader, State: g.state}
-				for _, m := range g.members {
-					sm := sessionClassicMember{
-						ID:                 m.memberID,
-						InstanceID:         m.instanceID,
-						ClientID:           m.clientID,
-						ClientHost:         m.clientHost,
-						Assignment:         m.assignment,
-						SessionTimeoutMs:   m.join.SessionTimeoutMillis,
-						RebalanceTimeoutMs: m.join.RebalanceTimeoutMillis,
-						LastHeartbeat:      m.last,
-					}
-					for _, p := range m.join.Protocols {
-						sm.Protocols = append(sm.Protocols, p.Name)
-					}
-					sg.Members = append(sg.Members, sm)
+		c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: group=%s state=%s members=%d consumerMembers=%d",
+			g.name, g.state, len(g.members), len(g.consumerMembers))
+		switch {
+		case len(g.members) > 0:
+			sg := sessionClassicGroup{Leader: g.leader, State: g.state}
+			for _, m := range g.members {
+				sm := sessionClassicMember{
+					ID:                 m.memberID,
+					InstanceID:         m.instanceID,
+					ClientID:           m.clientID,
+					ClientHost:         m.clientHost,
+					Assignment:         m.assignment,
+					SessionTimeoutMs:   m.join.SessionTimeoutMillis,
+					RebalanceTimeoutMs: m.join.RebalanceTimeoutMillis,
+					LastHeartbeat:      m.last,
 				}
-				if ss.ClassicGroups == nil {
-					ss.ClassicGroups = make(map[string]sessionClassicGroup)
+				for _, p := range m.join.Protocols {
+					sm.Protocols = append(sm.Protocols, p.Name)
 				}
-				ss.ClassicGroups[g.name] = sg
-
-			case len(g.consumerMembers) > 0:
-				sg := sessionConsumerGroup{
-					PartitionEpochs:       g.partitionEpochs,
-					TargetAssignmentEpoch: g.targetAssignmentEpoch,
-				}
-				for _, m := range g.consumerMembers {
-					sm := sessionConsumerMember{
-						ID:                   m.memberID,
-						InstanceID:           m.instanceID,
-						ClientID:             m.clientID,
-						ClientHost:           m.clientHost,
-						Epoch:                m.memberEpoch,
-						PrevEpoch:            m.previousMemberEpoch,
-						Topics:               m.subscribedTopics,
-						Reconciled:           m.lastReconciledSent,
-						PendingRevoke:        m.partitionsPendingRevocation,
-						Target:               m.targetAssignment,
-						PartAssignmentEpochs: m.partAssignmentEpochs,
-						CmState:              int8(m.state),
-						Rack:                 m.rackID,
-						Assignor:             m.serverAssignor,
-						RebalanceTimeoutMs:   m.rebalanceTimeoutMs,
-						LastHeartbeat:        m.last,
-					}
-					sg.Members = append(sg.Members, sm)
-				}
-				if ss.ConsumerGroups == nil {
-					ss.ConsumerGroups = make(map[string]sessionConsumerGroup)
-				}
-				ss.ConsumerGroups[g.name] = sg
+				sg.Members = append(sg.Members, sm)
 			}
+			if ss.ClassicGroups == nil {
+				ss.ClassicGroups = make(map[string]sessionClassicGroup)
+			}
+			ss.ClassicGroups[g.name] = sg
+
+		case len(g.consumerMembers) > 0:
+			sg := sessionConsumerGroup{
+				PartitionEpochs:       g.partitionEpochs,
+				TargetAssignmentEpoch: g.targetAssignmentEpoch,
+			}
+			for _, m := range g.consumerMembers {
+				sm := sessionConsumerMember{
+					ID:                   m.memberID,
+					InstanceID:           m.instanceID,
+					ClientID:             m.clientID,
+					ClientHost:           m.clientHost,
+					Epoch:                m.memberEpoch,
+					PrevEpoch:            m.previousMemberEpoch,
+					Topics:               m.subscribedTopics,
+					Reconciled:           m.lastReconciledSent,
+					PendingRevoke:        m.partitionsPendingRevocation,
+					Target:               m.targetAssignment,
+					PartAssignmentEpochs: m.partAssignmentEpochs,
+					CmState:              int8(m.state),
+					Rack:                 m.rackID,
+					Assignor:             m.serverAssignor,
+					RebalanceTimeoutMs:   m.rebalanceTimeoutMs,
+					LastHeartbeat:        m.last,
+				}
+				sg.Members = append(sg.Members, sm)
+			}
+			if ss.ConsumerGroups == nil {
+				ss.ConsumerGroups = make(map[string]sessionConsumerGroup)
+			}
+			ss.ConsumerGroups[g.name] = sg
 		}
 	}
 	// Save share group partition state (SPSO + per-record tracking)
@@ -2266,55 +2264,53 @@ func (c *Cluster) saveSessionState() error {
 	// triggering a fresh join + full-group rebalance on every --restart
 	// cycle, which otherwise starves net-forward consumption progress.
 	for name, sg := range c.shareGroups.gs {
-		{
-			ssg := sessionShareGroup{
-				GroupEpoch: sg.groupEpoch,
-				Partitions: make(map[string]map[int32]sessionSharePartition),
+		ssg := sessionShareGroup{
+			GroupEpoch: sg.groupEpoch,
+			Partitions: make(map[string]map[int32]sessionSharePartition),
+		}
+		sg.partitions.each(func(topic string, partition int32, sp *sharePartition) {
+			if _, ok := ssg.Partitions[topic]; !ok {
+				ssg.Partitions[topic] = make(map[int32]sessionSharePartition)
 			}
-			sg.partitions.each(func(topic string, partition int32, sp *sharePartition) {
-				if _, ok := ssg.Partitions[topic]; !ok {
-					ssg.Partitions[topic] = make(map[int32]sessionSharePartition)
-				}
-				ssp := sessionSharePartition{
-					SPSO: sp.spso,
-				}
-				if len(sp.records) > 0 {
-					ssp.Records = make(map[int64]sessionShareRecord, len(sp.records))
-					for offset, sr := range sp.records {
-						ssp.Records[offset] = sessionShareRecord{
-							State:         int8(sr.state),
-							DeliveryCount: sr.deliveryCount,
-							AcquiredBy:    sr.acquiredBy,
-						}
+			ssp := sessionSharePartition{
+				SPSO: sp.spso,
+			}
+			if len(sp.records) > 0 {
+				ssp.Records = make(map[int64]sessionShareRecord, len(sp.records))
+				for offset, sr := range sp.records {
+					ssp.Records[offset] = sessionShareRecord{
+						State:         int8(sr.state),
+						DeliveryCount: sr.deliveryCount,
+						AcquiredBy:    sr.acquiredBy,
 					}
 				}
-				ssg.Partitions[topic][partition] = ssp
-			})
-			for _, m := range sg.members {
-				sm := sessionShareMember{
-					ID:               m.memberID,
-					ClientID:         m.clientID,
-					ClientHost:       m.clientHost,
-					Rack:             m.rackID,
-					Epoch:            m.memberEpoch,
-					PrevEpoch:        m.previousMemberEpoch,
-					SubscribedTopics: slices.Clone(m.subscribedTopics),
-					LastHeartbeat:    m.last,
-				}
-				if len(m.assignment) > 0 {
-					sm.Assignment = make(map[uuid][]int32, len(m.assignment))
-					for tid, parts := range m.assignment {
-						sm.Assignment[tid] = slices.Clone(parts)
-					}
-				}
-				ssg.Members = append(ssg.Members, sm)
 			}
-			if len(ssg.Partitions) > 0 || len(ssg.Members) > 0 {
-				if ss.ShareGroups == nil {
-					ss.ShareGroups = make(map[string]sessionShareGroup)
-				}
-				ss.ShareGroups[name] = ssg
+			ssg.Partitions[topic][partition] = ssp
+		})
+		for _, m := range sg.members {
+			sm := sessionShareMember{
+				ID:               m.memberID,
+				ClientID:         m.clientID,
+				ClientHost:       m.clientHost,
+				Rack:             m.rackID,
+				Epoch:            m.memberEpoch,
+				PrevEpoch:        m.previousMemberEpoch,
+				SubscribedTopics: slices.Clone(m.subscribedTopics),
+				LastHeartbeat:    m.last,
 			}
+			if len(m.assignment) > 0 {
+				sm.Assignment = make(map[uuid][]int32, len(m.assignment))
+				for tid, parts := range m.assignment {
+					sm.Assignment[tid] = slices.Clone(parts)
+				}
+			}
+			ssg.Members = append(ssg.Members, sm)
+		}
+		if len(ssg.Partitions) > 0 || len(ssg.Members) > 0 {
+			if ss.ShareGroups == nil {
+				ss.ShareGroups = make(map[string]sessionShareGroup)
+			}
+			ss.ShareGroups[name] = ssg
 		}
 	}
 
@@ -2512,52 +2508,50 @@ func (c *Cluster) loadSessionState() error {
 	acquisitionStale := time.Since(ss.ShutdownAt) >= shareLockDuration
 	for name, ssg := range ss.ShareGroups {
 		sg := c.shareGroups.getOrCreate(name)
-		{
-			sg.groupEpoch = ssg.GroupEpoch
-			restoredMembers := restoreMembers(sg, ssg.Members)
-			for topic, parts := range ssg.Partitions {
-				for partition, ssp := range parts {
-					sp := sg.partitions.mkp(topic, partition, func() *sharePartition {
-						return &sharePartition{
-							spso:    ssp.SPSO,
-							records: make(map[int64]shareRecord),
-						}
-					})
-					sp.spso = ssp.SPSO
-					sp.scanOffset = ssp.SPSO
-					for offset, ssr := range ssp.Records {
-						state := shareRecordState(ssr.State)
-						acquiredBy := ssr.AcquiredBy
-						// Release the acquisition if the member that
-						// held it did not survive the save-to-load
-						// window, or if we have sat past the lock
-						// duration already. Either case lets a fresh
-						// owner re-acquire on the next fetch.
-						_, memberSurvived := restoredMembers[acquiredBy]
-						if state == shareRecordAcquired && (!memberSurvived || acquisitionStale) {
-							if ssr.DeliveryCount >= c.shareMaxDeliveryAttempts() {
-								state = shareRecordArchived
-							} else {
-								state = shareRecordAvailable
-							}
-							acquiredBy = ""
-						}
-						sp.records[offset] = shareRecord{
-							state:         state,
-							deliveryCount: ssr.DeliveryCount,
-							acquiredBy:    acquiredBy,
-						}
-						// Track acquireEnd as one past the highest restored offset.
-						if offset+1 > sp.acquireEnd {
-							sp.acquireEnd = offset + 1
-						}
+		sg.groupEpoch = ssg.GroupEpoch
+		restoredMembers := restoreMembers(sg, ssg.Members)
+		for topic, parts := range ssg.Partitions {
+			for partition, ssp := range parts {
+				sp := sg.partitions.mkp(topic, partition, func() *sharePartition {
+					return &sharePartition{
+						spso:    ssp.SPSO,
+						records: make(map[int64]shareRecord),
 					}
-					sp.advanceSPSO()
+				})
+				sp.spso = ssp.SPSO
+				sp.scanOffset = ssp.SPSO
+				for offset, ssr := range ssp.Records {
+					state := shareRecordState(ssr.State)
+					acquiredBy := ssr.AcquiredBy
+					// Release the acquisition if the member that
+					// held it did not survive the save-to-load
+					// window, or if we have sat past the lock
+					// duration already. Either case lets a fresh
+					// owner re-acquire on the next fetch.
+					_, memberSurvived := restoredMembers[acquiredBy]
+					if state == shareRecordAcquired && (!memberSurvived || acquisitionStale) {
+						if ssr.DeliveryCount >= c.shareMaxDeliveryAttempts() {
+							state = shareRecordArchived
+						} else {
+							state = shareRecordAvailable
+						}
+						acquiredBy = ""
+					}
+					sp.records[offset] = shareRecord{
+						state:         state,
+						deliveryCount: ssr.DeliveryCount,
+						acquiredBy:    acquiredBy,
+					}
+					// Track acquireEnd as one past the highest restored offset.
+					if offset+1 > sp.acquireEnd {
+						sp.acquireEnd = offset + 1
+					}
 				}
+				sp.advanceSPSO()
 			}
-			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored share group=%s epoch=%d members=%d",
-				name, sg.groupEpoch, len(sg.members))
 		}
+		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored share group=%s epoch=%d members=%d",
+			name, sg.groupEpoch, len(sg.members))
 	}
 
 	if len(ss.GroupConfigs) > 0 {

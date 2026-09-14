@@ -1739,28 +1739,26 @@ func (gs *groups) handleConsumerGroupDescribe(creq *clientReq) *kmsg.ConsumerGro
 			}
 			continue
 		}
-		{
-			sg.State = g.state.String()
-			sg.Epoch = g.groupEpoch
-			sg.AssignmentEpoch = g.targetAssignmentEpoch
-			sg.AssignorName = g.assignorName
-			for _, m := range g.consumerMembers {
-				sm := kmsg.NewConsumerGroupDescribeResponseGroupMember()
-				sm.MemberID = m.memberID
-				sm.InstanceID = m.instanceID
-				sm.RackID = m.rackID
-				sm.MemberEpoch = m.memberEpoch
-				sm.ClientID = m.clientID
-				sm.ClientHost = m.clientHost
-				sm.SubscribedTopics = m.subscribedTopics
-				sm.MemberType = 1 // consumer
-				sm.Assignment = uuidAssignmentToKmsg(m.lastReconciledSent)
-				sm.TargetAssignment = uuidAssignmentToKmsg(m.targetAssignment)
-				sg.Members = append(sg.Members, sm)
-			}
-			if req.IncludeAuthorizedOperations {
-				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
-			}
+		sg.State = g.state.String()
+		sg.Epoch = g.groupEpoch
+		sg.AssignmentEpoch = g.targetAssignmentEpoch
+		sg.AssignorName = g.assignorName
+		for _, m := range g.consumerMembers {
+			sm := kmsg.NewConsumerGroupDescribeResponseGroupMember()
+			sm.MemberID = m.memberID
+			sm.InstanceID = m.instanceID
+			sm.RackID = m.rackID
+			sm.MemberEpoch = m.memberEpoch
+			sm.ClientID = m.clientID
+			sm.ClientHost = m.clientHost
+			sm.SubscribedTopics = m.subscribedTopics
+			sm.MemberType = 1 // consumer
+			sm.Assignment = uuidAssignmentToKmsg(m.lastReconciledSent)
+			sm.TargetAssignment = uuidAssignmentToKmsg(m.targetAssignment)
+			sg.Members = append(sg.Members, sm)
+		}
+		if req.IncludeAuthorizedOperations {
+			sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
 		}
 	}
 	return resp
