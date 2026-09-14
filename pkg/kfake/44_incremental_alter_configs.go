@@ -196,25 +196,7 @@ outer:
 			if req.ValidateOnly {
 				continue
 			}
-			if c.groupConfigs == nil {
-				c.groupConfigs = make(map[string]map[string]*string)
-			}
-			gc := c.groupConfigs[rr.ResourceName]
-			if gc == nil {
-				gc = make(map[string]*string)
-				c.groupConfigs[rr.ResourceName] = gc
-			}
-			for i := range rr.Configs {
-				rc := &rr.Configs[i]
-				switch rc.Op {
-				case kmsg.IncrementalAlterConfigOpSet:
-					gc[rc.Name] = rc.Value
-				case kmsg.IncrementalAlterConfigOpDelete:
-					delete(gc, rc.Name)
-				case kmsg.IncrementalAlterConfigOpAppend, kmsg.IncrementalAlterConfigOpSubtract:
-					// rejected above
-				}
-			}
+			c.setGroupConfigs(rr.ResourceName, rr.Configs)
 
 		default:
 			doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
@@ -224,4 +206,30 @@ outer:
 	c.refreshCompactTicker()
 	c.shareGroups.refreshSweepTicker()
 	return resp, nil
+}
+
+// setGroupConfigs applies group config ops: a Set writes the value, a Delete
+// drops it. Any other op is rejected before we are called. Share group
+// behavior follows these configs, so we refresh the share sweep after.
+func (c *Cluster) setGroupConfigs(group string, configs []kmsg.IncrementalAlterConfigsRequestResourceConfig) {
+	if c.groupConfigs == nil {
+		c.groupConfigs = make(map[string]map[string]*string)
+	}
+	gc := c.groupConfigs[group]
+	if gc == nil {
+		gc = make(map[string]*string)
+		c.groupConfigs[group] = gc
+	}
+	for i := range configs {
+		rc := &configs[i]
+		switch rc.Op {
+		case kmsg.IncrementalAlterConfigOpSet:
+			gc[rc.Name] = rc.Value
+		case kmsg.IncrementalAlterConfigOpDelete:
+			delete(gc, rc.Name)
+		case kmsg.IncrementalAlterConfigOpAppend, kmsg.IncrementalAlterConfigOpSubtract:
+			// rejected before we are called
+		}
+	}
+	c.shareGroups.refreshSweepTicker()
 }
