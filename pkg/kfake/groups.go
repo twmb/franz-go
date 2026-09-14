@@ -52,7 +52,16 @@ type (
 		// KIP-848 consumer group fields
 		assignorName    string
 		consumerMembers map[string]*consumerMember
-		partitionEpochs map[uuid]map[int32]int32 // (topicID, partition) -> owning member's epoch; -1 or absent means free
+		partitionEpochs map[uuid]map[int32]partitionOwner // (topicID, partition) -> who owns it and at what epoch; absent means free
+	}
+
+	// partitionOwner is the member holding a partition and the epoch it
+	// held when it took it. The epoch does not identify the member: two
+	// members legitimately sit at the same epoch, both at the group's
+	// target assignment epoch, so we key ownership on the member.
+	partitionOwner struct {
+		Member string `json:"member"`
+		Epoch  int32  `json:"epoch"`
 	}
 
 	groupMember struct {
@@ -1814,7 +1823,7 @@ func (g *group) handleConsumerHeartbeat(creq *clientReq) kmsg.Response {
 		}
 		g.typ = "consumer"
 		g.consumerMembers = make(map[string]*consumerMember)
-		g.partitionEpochs = make(map[uuid]map[int32]int32)
+		g.partitionEpochs = make(map[uuid]map[int32]partitionOwner)
 	}
 
 	switch req.MemberEpoch {
@@ -1969,7 +1978,7 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 	// Add to epoch map so other members can't claim these
 	// partitions until this member releases them. Old state
 	// is empty (new member or fenced rejoin).
-	g.updateMemberEpochs(m, nil, nil, 0)
+	g.updateMemberEpochs(m, nil, nil)
 
 	g.updateConsumerStateField()
 	g.atConsumerSessionTimeout(m)
@@ -2120,17 +2129,15 @@ func (g *group) consumerStaticLeave(req *kmsg.ConsumerGroupHeartbeatRequest, res
 	// Mark as temporarily departed - do NOT fence, do NOT
 	// delete from consumerMembers, do NOT bump generation.
 	//
-	// Re-stamp epoch map: remove entries at the current epoch,
-	// free pending revocation partitions, and add sent entries
-	// at -2. This keeps lastReconciledSent partitions reserved
-	// while allowing fenceConsumerMember (which uses
-	// m.memberEpoch for epoch-matching) to clean up on rejoin.
-	oldEpoch := m.memberEpoch
-	g.removePartitionEpochs(m.lastReconciledSent, oldEpoch)
-	g.removePartitionEpochs(m.partitionsPendingRevocation, oldEpoch)
+	// Re-stamp epoch map: drop this member's entries, free its
+	// pending revocation partitions, and add its sent entries back
+	// at -2. This keeps lastReconciledSent partitions reserved for
+	// the member until it rejoins.
+	g.removePartitionEpochs(m.lastReconciledSent, m.memberID)
+	g.removePartitionEpochs(m.partitionsPendingRevocation, m.memberID)
 	m.partitionsPendingRevocation = make(map[uuid][]int32)
 	m.memberEpoch = -2
-	g.addPartitionEpochs(m.lastReconciledSent, -2)
+	g.addPartitionEpochs(m.lastReconciledSent, m.memberID, -2)
 	if m.t != nil {
 		m.t.Stop()
 		m.t = nil
@@ -2757,8 +2764,8 @@ func (g *group) clearConfirmedRevocations(m *consumerMember,
 	}
 
 	// Update epoch map: remove old pending, add new.
-	g.removePartitionEpochs(oldPending, m.memberEpoch)
-	g.addPartitionEpochs(m.partitionsPendingRevocation, m.memberEpoch)
+	g.removePartitionEpochs(oldPending, m.memberID)
+	g.addPartitionEpochs(m.partitionsPendingRevocation, m.memberID, m.memberEpoch)
 }
 
 // maybeReconcile dispatches to the appropriate reconciliation path
@@ -2808,12 +2815,12 @@ func (g *group) maybeReconcile(m *consumerMember, hasSubscriptionChanged bool,
 	if changed {
 		m.lastReconciledSent = newAssigned
 		m.partitionsPendingRevocation = newPending
-		g.updateMemberEpochs(m, oldSent, oldPending, oldEpoch)
+		g.updateMemberEpochs(m, oldSent, oldPending)
 		m.updatePartAssignmentEpochs(newAssigned)
 	} else if m.memberEpoch != oldEpoch {
 		// Epoch advanced but assignment didn't change.
 		// Re-stamp epoch map entries at the new epoch.
-		g.updateMemberEpochs(m, oldSent, oldPending, oldEpoch)
+		g.updateMemberEpochs(m, oldSent, oldPending)
 	}
 
 	return changed
@@ -2978,7 +2985,12 @@ func (g *group) expireOffsets(retentionMs int64, hasUnstableOffsets bool) bool {
 		return false
 	}
 	if g.typ == "consumer" {
-		return g.activeConsumerCount() == 0
+		// A static member parked at epoch -2 is still a member: it
+		// keeps the instance ID mapping it rejoins through, and Kafka
+		// calls the group empty only when it holds no members at all.
+		// Deleting the group here would throw that mapping away while
+		// the member is briefly gone.
+		return len(g.consumerMembers) == 0
 	}
 	return g.state == groupEmpty
 }
@@ -3124,11 +3136,10 @@ func (g *group) fenceConsumerMember(m *consumerMember) {
 		m.t.Stop()
 	}
 	g.cancelConsumerRebalanceTimeout(m)
-	// Remove this member's epoch contribution. Epoch-matching
-	// is safe here because updateMemberEpochs at the epoch
-	// bump keeps epoch values in sync with memberEpoch.
-	g.removePartitionEpochs(m.lastReconciledSent, m.memberEpoch)
-	g.removePartitionEpochs(m.partitionsPendingRevocation, m.memberEpoch)
+	// Free what this member owns, and only what it owns: another
+	// member may hold a partition this one still has a record of.
+	g.removePartitionEpochs(m.lastReconciledSent, m.memberID)
+	g.removePartitionEpochs(m.partitionsPendingRevocation, m.memberID)
 }
 
 // Handles a commit for consumer groups with relaxed validation per KIP-1251.
@@ -3298,57 +3309,57 @@ func isSubsetAssignment(owned []kmsg.ConsumerGroupHeartbeatRequestTopic, target 
 // owns the given partition, or -1 if no member owns it.
 func (g *group) currentPartitionEpoch(topicID uuid, partition int32) int32 {
 	if pm := g.partitionEpochs[topicID]; pm != nil {
-		if epoch, ok := pm[partition]; ok {
-			return epoch
+		if o, ok := pm[partition]; ok {
+			return o.Epoch
 		}
 	}
 	return -1
 }
 
 // updateMemberEpochs updates the partition epoch map when a member's
-// state changes. Removes old contribution (epoch-matching to avoid
-// clobbering another member's entry), then adds new contribution
-// from the member's current fields. Caller must save old state
-// before mutating the member.
-func (g *group) updateMemberEpochs(m *consumerMember, oldSent, oldPending map[uuid][]int32, oldEpoch int32) {
-	g.removePartitionEpochs(oldSent, oldEpoch)
-	g.removePartitionEpochs(oldPending, oldEpoch)
-	g.addPartitionEpochs(m.lastReconciledSent, m.memberEpoch)
-	g.addPartitionEpochs(m.partitionsPendingRevocation, m.memberEpoch)
+// state changes. Removes the member's old contribution, then adds its
+// new contribution from the member's current fields. Caller must save
+// old state before mutating the member.
+func (g *group) updateMemberEpochs(m *consumerMember, oldSent, oldPending map[uuid][]int32) {
+	g.removePartitionEpochs(oldSent, m.memberID)
+	g.removePartitionEpochs(oldPending, m.memberID)
+	g.addPartitionEpochs(m.lastReconciledSent, m.memberID, m.memberEpoch)
+	g.addPartitionEpochs(m.partitionsPendingRevocation, m.memberID, m.memberEpoch)
 }
 
 // addPartitionEpochs records that a member at the given epoch owns the
-// given partitions. If a partition already has a higher or equal epoch,
-// the caller has a logic bug (double assignment) - we log and skip the
-// update to avoid masking the real owner.
-func (g *group) addPartitionEpochs(a map[uuid][]int32, epoch int32) {
+// given partitions. If a partition is already owned by a different
+// member, the caller has a logic bug (double assignment) - we log and
+// skip the update to avoid masking the real owner.
+func (g *group) addPartitionEpochs(a map[uuid][]int32, memberID string, epoch int32) {
 	for id, parts := range a {
 		pm := g.partitionEpochs[id]
 		if pm == nil {
-			pm = make(map[int32]int32, len(parts))
+			pm = make(map[int32]partitionOwner, len(parts))
 			g.partitionEpochs[id] = pm
 		}
 		for _, p := range parts {
-			if existing, ok := pm[p]; ok && existing >= epoch {
-				g.c.cfg.logger.Logf(LogLevelError, "group %s: addPartitionEpochs: partition %d of topic %v already has epoch %d >= %d, skipping", g.name, p, id, existing, epoch)
+			if o, ok := pm[p]; ok && o.Member != memberID {
+				g.c.cfg.logger.Logf(LogLevelError, "group %s: addPartitionEpochs: partition %d of topic %v is owned by member %s at epoch %d, skipping the claim by %s at epoch %d", g.name, p, id, o.Member, o.Epoch, memberID, epoch)
 				continue
 			}
-			pm[p] = epoch
+			pm[p] = partitionOwner{Member: memberID, Epoch: epoch}
 		}
 	}
 }
 
-// removePartitionEpochs clears epoch entries for the given partitions,
-// but only if the stored epoch matches expectedEpoch. This prevents a
-// stale removal from clearing a newer owner's entry.
-func (g *group) removePartitionEpochs(a map[uuid][]int32, expectedEpoch int32) {
+// removePartitionEpochs clears the given partitions, but only those the
+// given member owns. Matching on the epoch instead would clear an entry
+// belonging to another member sitting at the same epoch, which then lets
+// a third member claim a partition that is still assigned.
+func (g *group) removePartitionEpochs(a map[uuid][]int32, memberID string) {
 	for id, parts := range a {
 		pm := g.partitionEpochs[id]
 		if pm == nil {
 			continue
 		}
 		for _, p := range parts {
-			if pm[p] == expectedEpoch {
+			if o, ok := pm[p]; ok && o.Member == memberID {
 				delete(pm, p)
 			}
 		}
