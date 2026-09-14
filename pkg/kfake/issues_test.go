@@ -31,15 +31,11 @@ func TestIssue885(t *testing.T) {
 		followerLogStart = 3
 	)
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(2),
 		SleepOutOfOrder(),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	// Flow:
 	//
@@ -178,15 +174,11 @@ func TestIssue905(t *testing.T) {
 		producedMessages = 5
 	)
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(2),
 		SleepOutOfOrder(),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	// Flow:
 	//
@@ -397,16 +389,12 @@ func TestIssue906(t *testing.T) {
 	t.Parallel()
 	const testTopic = "foo"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SleepOutOfOrder(),
 		SeedTopics(1, testTopic),
 		AllowAutoTopicCreation(),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	// Seed "foo" with two records.
 	func() {
@@ -473,14 +461,10 @@ func TestIssueTimestampInclusivity(t *testing.T) {
 		followerLogStart = 3
 	)
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(2),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	// Inline anonymous function so that we can defer and cleanup within scope.
 	func() {
@@ -595,16 +579,12 @@ func TestIssue1142(t *testing.T) {
 	t.Parallel()
 	const testTopic = "foo"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SleepOutOfOrder(),
 		SeedTopics(1, testTopic),
 		AllowAutoTopicCreation(),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	client, err := kadm.NewOptClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -657,14 +637,10 @@ func TestIssue1167(t *testing.T) {
 	)
 
 	// Create kfake cluster with 2 brokers to enable replica migration
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(2),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	// Produce messages to the topic
 	func() {
@@ -762,14 +738,10 @@ func TestTransactionCommit(t *testing.T) {
 	t.Parallel()
 	const testTopic = "txn-test"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -836,14 +808,10 @@ func TestTransactSessionEndNeverJoined(t *testing.T) {
 	t.Parallel()
 	const produceTopic = "txn-end-never-joined"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, produceTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	sess, err := kgo.NewGroupTransactSession(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -894,14 +862,10 @@ func TestTransactionAbort(t *testing.T) {
 	t.Parallel()
 	const testTopic = "txn-abort-test"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -994,14 +958,10 @@ func TestTransactionReadUncommitted(t *testing.T) {
 	t.Parallel()
 	const testTopic = "txn-uncommitted-test"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1066,14 +1026,10 @@ func TestTransactionOffsetCommit(t *testing.T) {
 		groupID     = "txn-group"
 	)
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, inputTopic, outputTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1184,14 +1140,10 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	t.Parallel()
 	const testTopic = "minbytes-test"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -1403,14 +1355,10 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 	t.Parallel()
 	const testTopic = "rebalance-test"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(2, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1604,14 +1552,10 @@ func TestKIP447RequireStable(t *testing.T) {
 		txnID     = "kip447-txn"
 	)
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1785,14 +1729,10 @@ func TestKIP447RequireStable(t *testing.T) {
 func TestFirstMetadataPartitionErrors(t *testing.T) {
 	const testTopic = "foo"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ti := c.TopicInfo(testTopic)
 
@@ -1894,14 +1834,10 @@ func TestIssue1331(t *testing.T) {
 		nrecs     = 5
 	)
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ti := c.TopicInfo(testTopic)
 	pi := c.PartitionInfo(testTopic, 0)
@@ -2050,14 +1986,10 @@ func TestIssue1331(t *testing.T) {
 
 func TestRequestCachedMetadata(t *testing.T) {
 	t.Parallel()
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(2, "topic1", "topic2", "internal_topic"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -2371,14 +2303,10 @@ func TestRequestCachedMetadata(t *testing.T) {
 
 func TestKadmCachedMetadata(t *testing.T) {
 	t.Parallel()
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(2, "t1", "t2", "t_internal"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -2484,15 +2412,11 @@ func TestIssue1217(t *testing.T) {
 	t.Parallel()
 	const testTopic = "foo"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SleepOutOfOrder(),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	produceErr := func(kreq kmsg.Request, errCode int16) (kmsg.Response, error, bool) {
 		req := kreq.(*kmsg.ProduceRequest)
@@ -2702,14 +2626,10 @@ func TestIssue1245(t *testing.T) {
 	t.Parallel()
 	const testTopic = "foo"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	// Track the number of new broker connections.
 	connects := new(atomic.Int32)
@@ -2778,11 +2698,7 @@ func TestIssue1245(t *testing.T) {
 // fields. Run with -race to detect.
 func TestIssue1248(t *testing.T) {
 	t.Parallel()
-	c, err := NewCluster(NumBrokers(1), SeedTopics(1, "t1248"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t1248"))
 
 	// Produce records for the consumer.
 	func() {
@@ -2847,11 +2763,7 @@ func TestDeleteRecordsThenProduce(t *testing.T) {
 	t.Parallel()
 	const topic = "delete-then-produce"
 
-	c, err := NewCluster(NumBrokers(1), SeedTopics(1, topic))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
@@ -3005,11 +2917,7 @@ func TestIssue1296(t *testing.T) {
 		softwareVer = "v9.9.9"
 	)
 
-	c, err := NewCluster(NumBrokers(1), SeedTopics(1, topic))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 
 	type seen struct {
 		name    string
@@ -3105,16 +3013,12 @@ func TestIssue1296(t *testing.T) {
 func TestDescribeTopicPartitionsCursor(t *testing.T) {
 	t.Parallel()
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(3, "a"),
 		SeedTopics(5, "b"),
 		SeedTopics(2, "c"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
 	if err != nil {
@@ -3293,14 +3197,10 @@ func TestIssue1328(t *testing.T) {
 		numPartitions = 10
 	)
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(numPartitions, topic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ti := c.TopicInfo(topic)
 	host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
@@ -3387,14 +3287,10 @@ func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
 	t.Parallel()
 	const testTopic = "foo"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	// MetadataMaxAge is long so that no periodic refresh can observe the
 	// sub-millisecond delete/create window below and fail the topic's
@@ -3456,14 +3352,10 @@ func TestProduceUnknownFailLimitNotResetByOtherErrors(t *testing.T) {
 	t.Parallel()
 	const testTopic = "foo"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	// Fail every produce request, alternating UNKNOWN_TOPIC_OR_PARTITION
 	// with the retriable NOT_ENOUGH_REPLICAS. Only the unknown errors may
@@ -3534,14 +3426,10 @@ func TestEndTxnUnconfirmedErrorNoSilentJoin(t *testing.T) {
 	t.Parallel()
 	const testTopic = "txn-unconfirmed-endtxn"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -3645,14 +3533,10 @@ func TestOnBrokerDisconnectReentrantHook(t *testing.T) {
 	t.Parallel()
 	const testTopic = "hook-reentry"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -3699,11 +3583,7 @@ func TestMetadataZeroPartitionsNoFakeSuccess(t *testing.T) {
 	t.Parallel()
 	const testTopic = "zero-partitions"
 
-	c, err := NewCluster(NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	c := newCluster(t, NumBrokers(1))
 
 	addr := c.ListenAddrs()[0]
 	host, portStr, err := net.SplitHostPort(addr)
@@ -3780,14 +3660,10 @@ func TestOffsetFetchTopicIDOldWire(t *testing.T) {
 		group     = "offset-fetch-by-id-group"
 	)
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -3883,14 +3759,10 @@ func TestShareGroupIDNotFoundRejoin(t *testing.T) {
 		group     = "share-gid-not-found-group"
 	)
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -4036,14 +3908,10 @@ func TestFetchUnbufferedHookReentrancy(t *testing.T) {
 	t.Parallel()
 	const testTopic = "fetch-hook-reentry"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -4105,14 +3973,10 @@ func TestOnDataLossCallbackReentrancy(t *testing.T) {
 	t.Parallel()
 	const testTopic = "on-data-loss-reentry"
 
-	c, err := NewCluster(
+	c := newCluster(t,
 		NumBrokers(1),
 		SeedTopics(1, testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -4130,7 +3994,7 @@ func TestOnDataLossCallbackReentrancy(t *testing.T) {
 	var cl *kgo.Client
 	hookDone := make(chan error, 1)
 	var hookOnce sync.Once
-	cl, err = kgo.NewClient(
+	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(c.ListenAddrs()...),
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.ProducerOnDataLossDetected(func(topic string, partition int32) {
@@ -4170,11 +4034,7 @@ func TestKadmACLDefaultPatternRoundTrip(t *testing.T) {
 	t.Parallel()
 	const testTopic = "kadm-acl-defaults"
 
-	c, err := NewCluster(NumBrokers(1), EnableACLs(), Superuser("PLAIN", "admin", "pass"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	c := newCluster(t, NumBrokers(1), EnableACLs(), Superuser("PLAIN", "admin", "pass"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -4255,11 +4115,7 @@ func TestKadmACLDefaultPatternRoundTrip(t *testing.T) {
 func TestApiVersionsSoftwareNameValidation(t *testing.T) {
 	t.Parallel()
 
-	c, err := NewCluster(NumBrokers(1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	c := newCluster(t, NumBrokers(1))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -4302,11 +4158,7 @@ func TestEndTxnUnconfirmedAbortRetry(t *testing.T) {
 	t.Parallel()
 	const topic = "txn-unconfirmed-abort"
 
-	c, err := NewCluster(NumBrokers(1), SeedTopics(1, topic))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 
 	// The observers go in first: a faulted request hits every fault it
 	// matches, and only the erroring one answers.
@@ -4393,11 +4245,7 @@ func TestEndTxnUnconfirmedCommitRetryRefused(t *testing.T) {
 	t.Parallel()
 	const topic = "txn-unconfirmed-commit"
 
-	c, err := NewCluster(NumBrokers(1), SeedTopics(1, topic))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 
 	c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError})
 
