@@ -154,6 +154,7 @@ func TestIssue905(t *testing.T) {
 	const (
 		testTopic        = "foo"
 		producedMessages = 5
+		recheckInterval  = 100 * time.Millisecond
 	)
 
 	c := newCluster(t,
@@ -172,13 +173,21 @@ func TestIssue905(t *testing.T) {
 	//
 	// TEST
 	//
-	// * We set recheck period to 1s
-	// * We fetch -- leader should be hit once, then follower
-	// * We sleep >1s before polling again. Follower should be hit a second time (buffering a fetch), then redirect to leader, then follower.
+	// * We fetch: the leader is hit once and hands back the follower.
 	//
-	// If we do not redirect back to follower within 2s, consider failure.
+	// * We hold a follower fetch longer than the recheck interval. A
+	// cursor that is in a fetch is not rechecked, so nothing moves while
+	// we hold it, and once we answer, the client builds its next request
+	// past the interval and has to go back to the leader.
+	//
+	// * The leader hands back the follower again and we consume the rest.
+	//
+	// The client must NOT go back to the leader before the interval
+	// elapses. We check that on every fetch the leader receives, rather
+	// than counting leader fetches after each poll: a test that is
+	// starved past the interval between two polls sees one more leader
+	// fetch, and that fetch is the client doing the right thing.
 
-	// Inline anonymous function so that we can defer and cleanup within scope.
 	produceN(t, c, testTopic, producedMessages)
 
 	ti := c.TopicInfo(testTopic)
@@ -186,9 +195,12 @@ func TestIssue905(t *testing.T) {
 	follower := (pi.Leader + 1) % 2
 	c.SetFollowers(testTopic, 0, []int32{follower})
 
-	var leaderReqs, followerReqs atomic.Int32
-	allowFollower := make(chan struct{}, 1)
-	followerHandled := make(chan struct{}, 5)
+	var (
+		leaderReqs, followerReqs atomic.Int32
+		movedAt                  atomic.Int64 // when we last pointed the client at the follower
+	)
+	allowFollower := make(chan struct{})
+	followerArrived := make(chan struct{}, 1) // we hold every follower fetch, so only one is ever in flight
 	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
 
@@ -204,6 +216,17 @@ func TestIssue905(t *testing.T) {
 
 		// Every leader request we redirect back to the follower.
 		if c.CurrentNode() == pi.Leader {
+			// Once we have moved the client to the follower, it comes
+			// back to us only to recheck, and only once the recheck
+			// interval has elapsed. We stamp the move before the
+			// client does, so what we measure here is at least what
+			// the client measured: a client that comes back early
+			// always fails this, a slow test never does.
+			if at := movedAt.Load(); at > 0 {
+				if since := time.Since(time.Unix(0, at)); since < recheckInterval {
+					t.Errorf("leader fetched %s after we moved the client to the follower, within the %s recheck interval", since, recheckInterval)
+				}
+			}
 			leaderReqs.Add(1)
 
 			resp := req.ResponseKind().(*kmsg.FetchResponse)
@@ -224,13 +247,17 @@ func TestIssue905(t *testing.T) {
 			rpp.LastStableOffset = pi.LastStableOffset
 			rpp.LogStartOffset = 0
 
-			rpp.PreferredReadReplica = (pi.Leader + 1) % 2
+			rpp.PreferredReadReplica = follower
+			movedAt.Store(time.Now().UnixNano())
 			return resp, nil, true
 		}
 
+		select {
+		case followerArrived <- struct{}{}:
+		default: // the test is done gating fetches
+		}
 		<-allowFollower
 		followerReqs.Add(1)
-		followerHandled <- struct{}{}
 
 		return nil, nil, false
 	})
@@ -240,17 +267,19 @@ func TestIssue905(t *testing.T) {
 		kgo.ConsumeTopics(testTopic),
 		kgo.Rack("foo"),
 		kgo.DisableFetchSessions(),
-		kgo.RecheckPreferredReplicaInterval(100*time.Millisecond),
+		kgo.RecheckPreferredReplicaInterval(recheckInterval),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cl.Close()
+	defer close(allowFollower) // deferred after Close so it runs first: a held fetch finishes and the cluster can shut down
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	chkfs := func(fs kgo.Fetches, expOffset int64) {
+		t.Helper()
 		if fs.NumRecords() != 1 {
 			t.Errorf("got %d records != exp 1", fs.NumRecords())
 		} else {
@@ -264,89 +293,65 @@ func TestIssue905(t *testing.T) {
 		}
 	}
 
-	// First poll. Standard; triggers us to fetch from the follower.
-	// We guard if the broker can reply to ensure our followerReqs
-	// check does not race against a client internally buffering
-	// another fetch quickly.
-	{
-		allowFollower <- struct{}{}
-		fs := cl.PollFetches(ctx)
-		<-followerHandled // drain signal from the first follower fetch
-		chkfs(fs, 0)
-		if lr := leaderReqs.Load(); lr != 1 {
-			t.Errorf("stage 1 leader reqs %d != exp 1", lr)
-		}
-		if fr := followerReqs.Load(); fr != 1 {
-			t.Errorf("stage 1 follower reqs reqs %d != exp 1", fr)
-		}
-		allowFollower <- struct{}{} // allow a background buffered fetch
-	}
-
-	// Wait for the background fetch to complete. After the follower
-	// handler fires, the source is either processing the response or
-	// blocked on its internal semaphore (waiting for PollFetches to
-	// drain the buffer). Either way, no new createReq has run, so
-	// leaderReqs is stable -- check it now.
-	<-followerHandled
-	if lr := leaderReqs.Load(); lr != 1 {
-		t.Errorf("stage 2 leader reqs %d != exp 1", lr)
-	}
-
-	// Sleep past the recheck interval WHILE the source is blocked on
-	// its semaphore. The cursor's moveAt (set in stage 1) becomes
-	// stale (>100ms old). When PollFetches below drains the buffer and
-	// unblocks the semaphore, the source's next createReq will see
-	// the stale moveAt and trigger a recheck.
-	time.Sleep(150 * time.Millisecond)
-
-	{
-		fs := cl.PollFetches(ctx)
-		chkfs(fs, 1)
-		if fr := followerReqs.Load(); fr != 2 {
-			t.Errorf("stage 2 follower reqs reqs %d != exp 2", fr)
+	// waitFollower returns once we are holding a fetch to the follower.
+	// The cursor is in that fetch until we answer it, so everything we
+	// count stands still while we look at it.
+	waitFollower := func() {
+		t.Helper()
+		select {
+		case <-followerArrived:
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for a fetch to the follower")
 		}
 	}
 
-	// PollFetches unblocked the source. Its createReq sees stale
-	// moveAt and triggers a recheck: cursor goes to leader
-	// (leaderReqs=2), redirected back to follower, follower fetch
-	// blocks on allowFollower. Send a token and poll again.
-	{
-		allowFollower <- struct{}{}
-		fs := cl.PollFetches(ctx)
-		chkfs(fs, 2)
-		if lr := leaderReqs.Load(); lr != 2 {
-			t.Errorf("stage 3 leader reqs %d != exp 2", lr)
+	// consume answers the fetch we are holding and polls the record it
+	// returns.
+	consume := func(expOffset int64) {
+		t.Helper()
+		select {
+		case allowFollower <- struct{}{}:
+		case <-ctx.Done():
+			t.Fatal("timed out answering a fetch to the follower")
 		}
-		if fr := followerReqs.Load(); fr != 3 {
-			t.Errorf("stage 3 follower reqs reqs %d != exp 3", fr)
-		}
-		close(allowFollower) // allow all reqs; the next check is our last
-	}
-
-	// We should stay with the follower, no more leader.
-	{
-		fs := cl.PollFetches(ctx)
-		chkfs(fs, 3)
-		if lr := leaderReqs.Load(); lr != 2 {
-			t.Errorf("stage 4 leader reqs %d != exp 2", lr)
-		}
-		if fr := followerReqs.Load(); fr != 4 {
-			t.Errorf("stage 4 follower reqs reqs %d != exp 4", fr)
-		}
-	}
-	{
-		fs := cl.PollFetches(ctx)
-		chkfs(fs, 4)
-		if lr := leaderReqs.Load(); lr != 2 {
-			t.Errorf("stage 5 leader reqs %d != exp 2", lr)
-		}
-		if fr := followerReqs.Load(); fr != 5 {
-			t.Errorf("stage 5 follower reqs reqs %d != exp 5", fr)
+		chkfs(cl.PollFetches(ctx), expOffset)
+		if fr, exp := followerReqs.Load(), int32(expOffset)+1; fr != exp {
+			t.Errorf("follower reqs %d != exp %d", fr, exp)
 		}
 	}
 
-	// Success.
+	// The client fetches the leader, the leader hands back the follower,
+	// and the follower serves us the first record.
+	waitFollower()
+	consume(0)
+
+	// We hold the next fetch past the recheck interval. The client cannot
+	// move while we hold it, so when we answer, its next request is built
+	// past the interval no matter how the test is scheduled.
+	waitFollower()
+	beforeRecheck := leaderReqs.Load()
+	time.Sleep(2 * recheckInterval)
+	consume(1)
+
+	// Past the interval, the client goes back to the leader before it
+	// fetches the follower again.
+	waitFollower()
+	if lr := leaderReqs.Load(); lr == beforeRecheck {
+		t.Errorf("leader reqs %d unchanged: the client did not go back to the leader once the recheck interval elapsed", lr)
+	}
+	consume(2)
+
+	// The recheck left us on the follower and reset its interval. We hold
+	// the next fetch for half the interval, so the request after it is
+	// built inside the interval and must still go to the follower: a
+	// client that rechecks too eagerly fetches the leader here and fails
+	// the check above.
+	waitFollower()
+	time.Sleep(recheckInterval / 2)
+	consume(3)
+
+	waitFollower()
+	consume(4)
 }
 
 func TestIssue906(t *testing.T) {
