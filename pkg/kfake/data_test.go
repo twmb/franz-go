@@ -70,7 +70,7 @@ func testGroup(assignor string, topics map[string]testTopic, members map[string]
 		c:               c,
 		assignorName:    assignor,
 		consumerMembers: make(map[string]*consumerMember, len(members)),
-		partitionEpochs: make(map[uuid]map[int32]int32),
+		partitionEpochs: make(map[uuid]map[int32]partitionOwner),
 	}
 	for mid, topics := range members {
 		g.consumerMembers[mid] = &consumerMember{

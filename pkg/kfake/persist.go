@@ -1635,7 +1635,7 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 			g.assignorName = meta.Assignor
 			g.groupEpoch = meta.GroupEpoch
 			g.consumerMembers = make(map[string]*consumerMember)
-			g.partitionEpochs = make(map[uuid]map[int32]int32)
+			g.partitionEpochs = make(map[uuid]map[int32]partitionOwner)
 		default:
 			g.typ = meta.GroupType
 			g.protocolType = meta.ProtoType
@@ -2136,9 +2136,9 @@ type (
 	}
 
 	sessionConsumerGroup struct {
-		PartitionEpochs       map[uuid]map[int32]int32 `json:"partitionEpochs"`
-		TargetAssignmentEpoch int32                    `json:"targetAssignmentEpoch"`
-		Members               []sessionConsumerMember  `json:"members"`
+		PartitionEpochs       map[uuid]map[int32]partitionOwner `json:"partitionEpochs"`
+		TargetAssignmentEpoch int32                             `json:"targetAssignmentEpoch"`
+		Members               []sessionConsumerMember           `json:"members"`
 	}
 
 	sessionConsumerMember struct {

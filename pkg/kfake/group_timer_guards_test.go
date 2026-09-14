@@ -170,14 +170,14 @@ func TestClassicRebalanceTimerStaleFireKeepsNewBarrier(t *testing.T) {
 	}
 }
 
-// consumer848 joins memberID into the group and acks the assignment it is
-// given, so the member is reconciled, and returns a sender for its later
-// heartbeats. The sender echoes that assignment back; a non-positive epoch is
-// a join or a leave, which must own nothing.
-func consumer848(ctx context.Context, t *testing.T, cl *kgo.Client, topic, groupID, memberID string, instanceID *string) func(what string, epoch int32) *kmsg.ConsumerGroupHeartbeatResponse {
+// member848 returns a sender for memberID's heartbeats. The sender echoes
+// back the assignment the group last gave it, the way a client does, so the
+// group sees a revocation confirmed. A non-positive epoch is a join or a
+// leave, which must own nothing. what names the step in any failure.
+func member848(ctx context.Context, t *testing.T, cl *kgo.Client, topic, groupID, memberID string, instanceID *string) func(what string, epoch int32) *kmsg.ConsumerGroupHeartbeatResponse {
 	t.Helper()
 	var owned []kmsg.ConsumerGroupHeartbeatRequestTopic
-	send := func(what string, epoch int32) *kmsg.ConsumerGroupHeartbeatResponse {
+	return func(what string, epoch int32) *kmsg.ConsumerGroupHeartbeatResponse {
 		t.Helper()
 		req := kmsg.NewPtrConsumerGroupHeartbeatRequest()
 		req.Group = groupID
@@ -188,7 +188,7 @@ func consumer848(ctx context.Context, t *testing.T, cl *kgo.Client, topic, group
 		req.SubscribedTopicNames = []string{topic}
 		req.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
 		if epoch > 0 {
-			req.Topics = owned
+			req.Topics = append(req.Topics, owned...)
 		}
 		resp, err := req.RequestWith(ctx, cl)
 		if err != nil {
@@ -197,17 +197,27 @@ func consumer848(ctx context.Context, t *testing.T, cl *kgo.Client, topic, group
 		if resp.ErrorCode != 0 {
 			t.Fatalf("%s: %v", what, kerr.ErrorForCode(resp.ErrorCode))
 		}
+		if resp.Assignment != nil {
+			owned = owned[:0]
+			for _, at := range resp.Assignment.Topics {
+				tp := kmsg.NewConsumerGroupHeartbeatRequestTopic()
+				tp.TopicID = at.TopicID
+				tp.Partitions = at.Partitions
+				owned = append(owned, tp)
+			}
+		}
 		return resp
 	}
+}
+
+// consumer848 joins memberID into the group and acks the assignment it is
+// given, so the member is reconciled, and returns its sender.
+func consumer848(ctx context.Context, t *testing.T, cl *kgo.Client, topic, groupID, memberID string, instanceID *string) func(what string, epoch int32) *kmsg.ConsumerGroupHeartbeatResponse {
+	t.Helper()
+	send := member848(ctx, t, cl, topic, groupID, memberID, instanceID)
 	joined := send("848 join", 0)
 	if joined.Assignment == nil || len(joined.Assignment.Topics) == 0 {
 		t.Fatal("the 848 join returned no assignment")
-	}
-	for _, at := range joined.Assignment.Topics {
-		tp := kmsg.NewConsumerGroupHeartbeatRequestTopic()
-		tp.TopicID = at.TopicID
-		tp.Partitions = at.Partitions
-		owned = append(owned, tp)
 	}
 	send("848 ack", joined.MemberEpoch)
 	return send
