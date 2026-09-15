@@ -99,91 +99,6 @@ func FuzzDecodeBatchRaw(f *testing.F) {
 	})
 }
 
-// TestReadEntriesTruncatedHeader verifies truncated headers are handled.
-func TestReadEntriesTruncatedHeader(t *testing.T) {
-	t.Parallel()
-	// Less than header size
-	for size := 0; size < entryHeaderSize; size++ {
-		entries, validBytes := readEntries(make([]byte, size))
-		if len(entries) != 0 {
-			t.Fatalf("size %d: expected 0 entries, got %d", size, len(entries))
-		}
-		if validBytes != 0 {
-			t.Fatalf("size %d: expected validBytes 0, got %d", size, validBytes)
-		}
-	}
-}
-
-// TestReadEntriesBadCRC verifies CRC mismatch stops parsing.
-func TestReadEntriesBadCRC(t *testing.T) {
-	t.Parallel()
-
-	makeEntry := func(data []byte) []byte {
-		length := uint32(2 + len(data))
-		var hdr [10]byte
-		binary.LittleEndian.PutUint32(hdr[0:4], length)
-		binary.LittleEndian.PutUint16(hdr[8:10], currentPersistVersion)
-		crcVal := crc32.New(crc32c)
-		var vbuf [2]byte
-		binary.LittleEndian.PutUint16(vbuf[:], currentPersistVersion)
-		crcVal.Write(vbuf[:])
-		crcVal.Write(data)
-		binary.LittleEndian.PutUint32(hdr[4:8], crcVal.Sum32())
-		return append(hdr[:], data...)
-	}
-
-	good := makeEntry([]byte("good entry"))
-	bad := makeEntry([]byte("bad entry"))
-	bad[5] ^= 0xFF // corrupt CRC byte
-
-	// Good + bad: should parse 1 entry
-	combined := append(append([]byte{}, good...), bad...)
-	entries, validBytes := readEntries(combined)
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(entries))
-	}
-	if validBytes != len(good) {
-		t.Fatalf("expected validBytes %d, got %d", len(good), validBytes)
-	}
-
-	// Bad alone: should parse 0 entries
-	entries, validBytes = readEntries(bad)
-	if len(entries) != 0 {
-		t.Fatalf("expected 0 entries, got %d", len(entries))
-	}
-	if validBytes != 0 {
-		t.Fatalf("expected validBytes 0, got %d", validBytes)
-	}
-}
-
-// TestReadEntriesLengthTooSmall verifies length < 2 stops parsing.
-func TestReadEntriesLengthTooSmall(t *testing.T) {
-	t.Parallel()
-	var buf [14]byte
-	binary.LittleEndian.PutUint32(buf[0:4], 1) // length = 1, too small
-	entries, validBytes := readEntries(buf[:])
-	if len(entries) != 0 {
-		t.Fatalf("expected 0 entries, got %d", len(entries))
-	}
-	if validBytes != 0 {
-		t.Fatalf("expected validBytes 0, got %d", validBytes)
-	}
-}
-
-// TestReadEntriesLengthExceedsFile verifies overlength entries stop parsing.
-func TestReadEntriesLengthExceedsFile(t *testing.T) {
-	t.Parallel()
-	var buf [10]byte
-	binary.LittleEndian.PutUint32(buf[0:4], 1000) // claims 1000 bytes but only 10 available
-	entries, validBytes := readEntries(buf[:])
-	if len(entries) != 0 {
-		t.Fatalf("expected 0 entries, got %d", len(entries))
-	}
-	if validBytes != 0 {
-		t.Fatalf("expected validBytes 0, got %d", validBytes)
-	}
-}
-
 // TestWriteReadEntryRoundTrip verifies write + read produces identical data.
 func TestWriteReadEntryRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -276,17 +191,6 @@ func TestEncodeBatchRoundTrip(t *testing.T) {
 	}
 	if inTx != batch.inTx {
 		t.Fatalf("inTx: expected %v, got %v", batch.inTx, inTx)
-	}
-}
-
-// TestDecodeBatchRawTooShort verifies short input returns error.
-func TestDecodeBatchRawTooShort(t *testing.T) {
-	t.Parallel()
-	for size := range 12 {
-		_, err := decodeBatchRaw(make([]byte, size))
-		if err != nil {
-			return // any error is fine
-		}
 	}
 }
 
@@ -690,7 +594,6 @@ func TestChaosTopicCreateDeleteRestart(t *testing.T) {
 
 	// Reopen
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	for topic := range expectedTopics {
 		if _, ok := c2.data.tps.gett(topic); !ok {
@@ -725,7 +628,6 @@ func TestPersistTopicURLEscaping(t *testing.T) {
 	c.Close()
 
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	for _, topic := range specialTopics {
 		if _, ok := c2.data.tps.gett(topic); !ok {
@@ -794,7 +696,6 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 	// On shutdown, savePIDsLog rewrites as compacted "init" entries.
 	// So this tests both the live replay path AND the compacted path.
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	// PID 100: endtx committed, epoch should be 2.
 	r100, ok := c2.pids.ids[100]
@@ -896,7 +797,6 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 
 	// Reopen.
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	g2, ok := c2.groups.gs["test-848-group"]
 	if !ok {
@@ -937,7 +837,6 @@ func TestPersistSASLCredentials(t *testing.T) {
 	c.Close()
 
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1), EnableSASL())
-	defer c2.Close()
 
 	// Check PLAIN credentials
 	if c2.sasls.plain["admin"] != "adminpass" {
@@ -983,7 +882,6 @@ func TestPersistLiveSyncThenShutdown(t *testing.T) {
 
 	// Reopen
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	pd2, ok := c2.data.tps.getp("live", 0)
 	if !ok {
@@ -1005,7 +903,6 @@ func TestPersistEmptyPartition(t *testing.T) {
 	c.Close()
 
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	if _, ok := c2.data.tps.gett("empty"); !ok {
 		t.Fatal("topic missing after restart")
@@ -1042,7 +939,6 @@ func TestPersistRepeatedCloseReopen(t *testing.T) {
 
 	// Final reopen - verify all batches survived
 	c := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c.Close()
 
 	pd, ok := c.data.tps.getp("cycle", 0)
 	if !ok {
@@ -1085,7 +981,6 @@ func TestPersistSeqWindowsCleanShutdown(t *testing.T) {
 
 	// Reopen - sequence windows should be restored
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	p2, ok := c2.pids.ids[42]
 	if !ok {
@@ -1156,7 +1051,6 @@ func TestPersistOffsetDeleteRoundTrip(t *testing.T) {
 	// Reopen and verify deleted offset is gone
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1),
 		SeedTopics(1, "t1"))
-	defer c2.Close()
 
 	g2, ok := c2.groups.gs["g1"]
 	if !ok {
@@ -1230,7 +1124,6 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 	// Phase 3: open via full replay, compare state
 	{
 		c := newCluster(t, DataDir(dir), NumBrokers(1))
-		defer c.Close()
 
 		pd, ok := c.data.tps.getp("conv", 0)
 		if !ok {
@@ -1311,7 +1204,6 @@ func TestPersistSnapshotLogStartOffsetClamp(t *testing.T) {
 	// Phase 2: reopen via snapshot, verify logStartOffset <= HWM.
 	{
 		c := newCluster(t, DataDir(dir), NumBrokers(1))
-		defer c.Close()
 
 		pd, ok := c.data.tps.getp("lso", 0)
 		if !ok {
@@ -1331,7 +1223,6 @@ func TestTrimLeftDeletesSegmentFiles(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "trim"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("trim", 0)
 
@@ -1373,7 +1264,6 @@ func TestTrimLeftAllThenProduce(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "trim-all"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("trim-all", 0)
 
@@ -1421,7 +1311,6 @@ func TestSearchOffsetEmptyPartition(t *testing.T) {
 	t.Parallel()
 
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "empty"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("empty", 0)
 
@@ -1448,7 +1337,6 @@ func TestSearchOffsetAfterTrimLeft(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "search-trim"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("search-trim", 0)
 
@@ -1501,7 +1389,6 @@ func TestCompactBailsOnPartialReadError(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "compact-err"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("compact-err", 0)
 
@@ -1590,7 +1477,6 @@ func TestSnapshotNbytesWithPartialTrim(t *testing.T) {
 	// Phase 2: reopen from snapshot, verify nbytes matches.
 	{
 		c := newCluster(t, DataDir(dir), NumBrokers(1))
-		defer c.Close()
 
 		pd, ok := c.data.tps.getp(topic, 0)
 		if !ok {
@@ -1612,7 +1498,6 @@ func TestRebuildSegmentsWritesSynced(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "sync-rebuild"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("sync-rebuild", 0)
 
@@ -1661,7 +1546,6 @@ func TestRebuildSegmentsSegmentSplitting(t *testing.T) {
 	segBytes := "200"
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "split"),
 		BrokerConfigs(map[string]string{"log.segment.bytes": segBytes}))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("split", 0)
 
@@ -1716,7 +1600,6 @@ func TestTrimLeftPartialSegment(t *testing.T) {
 	// Use a large segment.bytes so all batches land in one segment.
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "partial"),
 		BrokerConfigs(map[string]string{"log.segment.bytes": "1073741824"}))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("partial", 0)
 
@@ -1755,7 +1638,6 @@ func TestMaxTimestampBatchAfterCompaction(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "ts-compact"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("ts-compact", 0)
 
@@ -1800,7 +1682,6 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 
 	// Use memFS (no DataDir) so we can inject faults.
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "fail-trunc"))
-	defer c.Close()
 
 	mfs := c.fs.(*memFS)
 	pd, _ := c.data.tps.getp("fail-trunc", 0)
@@ -1864,5 +1745,66 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 	})
 	if readCount != 6 {
 		t.Fatalf("expected 6 readable batches, got %d", readCount)
+	}
+}
+
+// persistEntry frames data the way the persist writer does: length, CRC
+// over version plus payload, then version.
+func persistEntry(data []byte) []byte {
+	var hdr [10]byte
+	binary.LittleEndian.PutUint32(hdr[0:4], uint32(2+len(data)))
+	binary.LittleEndian.PutUint16(hdr[8:10], currentPersistVersion)
+	crcVal := crc32.New(crc32c)
+	var vbuf [2]byte
+	binary.LittleEndian.PutUint16(vbuf[:], currentPersistVersion)
+	crcVal.Write(vbuf[:])
+	crcVal.Write(data)
+	binary.LittleEndian.PutUint32(hdr[4:8], crcVal.Sum32())
+	return append(hdr[:], data...)
+}
+
+// TestReadEntries feeds readEntries malformed input. It stops at the first
+// entry it cannot trust and reports how many bytes ahead of that were good.
+func TestReadEntries(t *testing.T) {
+	t.Parallel()
+	good := persistEntry([]byte("good entry"))
+	bad := persistEntry([]byte("bad entry"))
+	bad[5] ^= 0xFF // corrupt a CRC byte
+
+	var truncated [][]byte
+	for size := range entryHeaderSize {
+		truncated = append(truncated, make([]byte, size))
+	}
+
+	tooSmall := make([]byte, 14)
+	binary.LittleEndian.PutUint32(tooSmall[0:4], 1) // below the 2 byte version
+
+	tooLong := make([]byte, 10)
+	binary.LittleEndian.PutUint32(tooLong[0:4], 1000) // claims 1000 bytes of a 10 byte file
+
+	for _, tc := range []struct {
+		name      string
+		ins       [][]byte
+		wantN     int
+		wantValid int
+	}{
+		{"truncated-header", truncated, 0, 0},
+		{"bad-crc", [][]byte{bad}, 0, 0},
+		{"good-then-bad-crc", [][]byte{append(append([]byte{}, good...), bad...)}, 1, len(good)},
+		{"length-too-small", [][]byte{tooSmall}, 0, 0},
+		{"length-exceeds-file", [][]byte{tooLong}, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			for i, in := range tc.ins {
+				entries, validBytes := readEntries(in)
+				if len(entries) != tc.wantN {
+					t.Fatalf("input %d: expected %d entries, got %d", i, tc.wantN, len(entries))
+				}
+				if validBytes != tc.wantValid {
+					t.Fatalf("input %d: expected validBytes %d, got %d", i, tc.wantValid, validBytes)
+				}
+			}
+		})
 	}
 }

@@ -1,4 +1,4 @@
-package kfake_test
+package kfake
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -36,7 +35,7 @@ func fetchByID(sessionID, sessionEpoch, maxWait int32, id [16]byte, partitions .
 
 // recreateTopic deletes and creates the topic, giving the new incarnation a
 // new topic ID.
-func recreateTopic(t *testing.T, c *kfake.Cluster, topic string) {
+func recreateTopic(t *testing.T, c *Cluster, topic string) {
 	t.Helper()
 	if err := c.DeleteTopic(topic); err != nil {
 		t.Fatalf("delete topic: %v", err)
@@ -51,7 +50,7 @@ func recreateTopic(t *testing.T, c *kfake.Cluster, topic string) {
 func TestFetchPartitionErrorCompletesImmediately(t *testing.T) {
 	t.Parallel()
 	const topic = "t"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -81,7 +80,7 @@ func TestFetchPartitionErrorCompletesImmediately(t *testing.T) {
 func TestFetchSessionRecreatedTopic(t *testing.T) {
 	t.Parallel()
 	const topic = "t"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 

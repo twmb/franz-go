@@ -1,4 +1,4 @@
-package kfake_test
+package kfake
 
 // Regression tests for broker death / leader moves mid-rebalance. Each
 // fails before its corresponding kgo fix:
@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -30,7 +29,7 @@ import (
 // injectOffsetFetchErr persistently intercepts OffsetFetch and, while
 // injecting() is true, answers with the given group-level error code.
 // Returns a counter of injected responses.
-func injectOffsetFetchErr(c *kfake.Cluster, injecting *atomic.Bool, code int16) *atomic.Int64 {
+func injectOffsetFetchErr(c *Cluster, injecting *atomic.Bool, code int16) *atomic.Int64 {
 	var n atomic.Int64
 	c.ControlKey(int16(kmsg.OffsetFetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
@@ -119,7 +118,7 @@ func waitInjections(t *testing.T, n *atomic.Int64, atLeast, maxBound int64, time
 func TestAudit848OffsetFetchErrorStallsAssignment(t *testing.T) {
 	t.Parallel()
 	const topic = "audit-848-stall"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 3)
@@ -164,7 +163,7 @@ func TestAudit848OffsetFetchErrorStallsAssignment(t *testing.T) {
 func TestAuditClassicOffsetFetchErrorRecovers(t *testing.T) {
 	t.Parallel()
 	const topic = "audit-classic-recover"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 3)
@@ -201,7 +200,7 @@ func TestAudit848StaleEpochRejoinStrandsOldMember(t *testing.T) {
 	t.Parallel()
 	const topic = "audit-848-stale"
 	const group = "audit-848-stale-g"
-	c := newCluster(t, kfake.SeedTopics(2, topic))
+	c := newCluster(t, SeedTopics(2, topic))
 
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 4)
@@ -234,7 +233,7 @@ func TestAudit848StaleEpochRejoinStrandsOldMember(t *testing.T) {
 	// incarnation ghosts in the group until the session timeout.
 	settleCtx, settleCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer settleCancel()
-	dg, _ := c.WaitGroupInfo(settleCtx, group, func(g *kfake.GroupInfo) bool {
+	dg, _ := c.WaitGroupInfo(settleCtx, group, func(g *GroupInfo) bool {
 		if g == nil || g.State != "Stable" {
 			return false
 		}
@@ -265,7 +264,7 @@ func TestAudit848StaleEpochRejoinStrandsOldMember(t *testing.T) {
 func TestAudit848LeaveGroupNotRetried(t *testing.T) {
 	t.Parallel()
 	const topic = "audit-848-leave"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 1)
@@ -273,7 +272,7 @@ func TestAudit848LeaveGroupNotRetried(t *testing.T) {
 	consumer := newGroupConsumer(t, c, topic, "audit-848-leave-g")
 	consumeN(t, consumer, 1, 10*time.Second) // fully joined
 
-	injected := c.Fault(kfake.Fault{
+	injected := c.Fault(Fault{
 		Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
 		Err:  kerr.NotCoordinator,
 		When: func(kreq kmsg.Request) bool {
@@ -298,7 +297,7 @@ func TestAudit848LeaveGroupNotRetried(t *testing.T) {
 func TestAudit848LeaveUnknownMemberIsSuccess(t *testing.T) {
 	t.Parallel()
 	const topic = "audit-848-leave-unknown"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 1)
@@ -306,7 +305,7 @@ func TestAudit848LeaveUnknownMemberIsSuccess(t *testing.T) {
 	consumer := newGroupConsumer(t, c, topic, "audit-848-leave-unknown-g")
 	consumeN(t, consumer, 1, 10*time.Second) // fully joined
 
-	c.Fault(kfake.Fault{
+	c.Fault(Fault{
 		Keys:  []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
 		Err:   kerr.UnknownMemberID,
 		Count: -1,
@@ -327,7 +326,7 @@ func TestAudit848LeaveUnknownMemberIsSuccess(t *testing.T) {
 func TestAuditClassicLeaveGroupRetried(t *testing.T) {
 	t.Parallel()
 	const topic = "audit-classic-leave"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 1)
@@ -340,8 +339,8 @@ func TestAuditClassicLeaveGroupRetried(t *testing.T) {
 	)
 	consumeN(t, consumer, 1, 10*time.Second)
 
-	attempts := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.LeaveGroup}, Observe: true, Count: -1})
-	c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.LeaveGroup}, Err: kerr.NotCoordinator})
+	attempts := c.Fault(Fault{Keys: []kmsg.Key{kmsg.LeaveGroup}, Observe: true, Count: -1})
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.LeaveGroup}, Err: kerr.NotCoordinator})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

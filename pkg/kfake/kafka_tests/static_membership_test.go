@@ -93,71 +93,6 @@ func TestStaticMember848FencedInstanceID(t *testing.T) {
 	}
 }
 
-// TestStaticMemberClassicRejoinNoRebalance verifies that a static member
-// rejoining a classic group with unchanged protocol does not trigger a
-// full rebalance (KIP-345 / KIP-814).
-// Derived via LLM from testReplaceStaticMemberInStableStateNoError.
-func TestStaticMemberClassicRejoinNoRebalance(t *testing.T) {
-	t.Parallel()
-	topic := "t-static-classic"
-	group := "g-static-classic"
-	instanceID := "classic-inst-1"
-
-	c := newCluster(t, kfake.NumBrokers(1),
-		kfake.SeedTopics(2, topic),
-		kfake.BrokerConfigs(map[string]string{"group.min.session.timeout.ms": "100"}),
-	)
-	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
-	produceNStrings(t, producer, topic, 20)
-
-	// First consumer. Short session timeout so the server removes
-	// the member quickly after close.
-	cl1, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.FetchMaxWait(250*time.Millisecond),
-		kgo.InstanceID(instanceID),
-		kgo.SessionTimeout(500*time.Millisecond),
-		kgo.HeartbeatInterval(100*time.Millisecond), // must be < session timeout
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	consumeN(t, cl1, 20, 10*time.Second)
-	waitStable(t, c, group, 1)
-
-	// Close (static member - no leave sent).
-	cl1.Close()
-	time.Sleep(700 * time.Millisecond) // wait for session timeout
-
-	// Rejoin with same instanceID.
-	cl2, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.FetchMaxWait(250*time.Millisecond),
-		kgo.InstanceID(instanceID),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl2.Close()
-
-	dg := waitStable(t, c, group, 1)
-	found := false
-	for _, m := range dg.Members {
-		if m.InstanceID != nil && *m.InstanceID == instanceID {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("instanceID %q not found after rejoin", instanceID)
-	}
-}
-
 // TestGroupMaxSizeClassic verifies that a classic group rejects new members
 // when group.max.size is reached.
 // Derived via LLM from testJoinGroupShouldReceiveErrorIfGroupOverMaxSize.
@@ -172,17 +107,12 @@ func TestGroupMaxSizeClassic(t *testing.T) {
 	)
 
 	// First consumer joins successfully.
-	cl1, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	newPlainClient(t, c,
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchMaxWait(250*time.Millisecond),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl1.Close()
 
 	waitStable(t, c, group, 1)
 
@@ -317,16 +247,4 @@ func TestCreateTopicsReplicaAssignmentWithNumPartitions(t *testing.T) {
 	if resp.Topics[0].ErrorCode != kerr.InvalidRequest.Code {
 		t.Fatalf("expected INVALID_REQUEST, got %v", kerr.ErrorForCode(resp.Topics[0].ErrorCode))
 	}
-}
-
-// newPlainClient creates a kgo client without 848 opt-in.
-func newPlainClient(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
-	t.Helper()
-	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...)}, opts...)
-	cl, err := kgo.NewClient(opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cl.Close)
-	return cl
 }

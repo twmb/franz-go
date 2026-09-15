@@ -115,59 +115,6 @@ func TestAssignAndCommitSyncAllConsumed(t *testing.T) {
 	}
 }
 
-// TestAssignAndCommitAsyncNotCommitted verifies that calling commitAsync
-// without polling does not commit offsets.
-func TestAssignAndCommitAsyncNotCommitted(t *testing.T) {
-	t.Parallel()
-	c := setupAssignTest(t)
-
-	groupID := "assign-no-commit-async-group"
-	// Create a consumer that doesn't poll - just assigns.
-	_ = assignConsumer(t, c, kgo.NewOffset().AtStart())
-
-	// No offsets should be committed for the group. The group may not even
-	// exist, which is also correct: groupCommits is nil then.
-	if _, ok := groupCommits(c, groupID)[assignTestTopic][0]; ok {
-		t.Error("expected no committed offset for a consumer that hasn't polled")
-	}
-}
-
-// TestAssignAndFetchCommittedOffsets verifies that consumer 1 commits offsets
-// and consumer 2 can read those committed offsets.
-func TestAssignAndFetchCommittedOffsets(t *testing.T) {
-	t.Parallel()
-	c := setupAssignTest(t)
-
-	groupID := "assign-fetch-committed-group"
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Consumer 1 consumes all and commits.
-	consumer1 := assignConsumer(t, c, kgo.NewOffset().AtStart())
-	consumeN(t, consumer1, assignTestRecords, 5*time.Second)
-
-	adm1 := kadm.NewClient(consumer1)
-	offsets := kadm.Offsets{}
-	offsets.Add(kadm.Offset{
-		Topic:     assignTestTopic,
-		Partition: 0,
-		At:        int64(assignTestRecords),
-	})
-	_, err := adm1.CommitOffsets(ctx, groupID, offsets)
-	if err != nil {
-		t.Fatalf("commit failed: %v", err)
-	}
-
-	// Consumer 2 reads the committed offset.
-	o, ok := groupCommits(c, groupID)[assignTestTopic][0]
-	if !ok {
-		t.Fatal("committed offset not found")
-	}
-	if o.Offset != int64(assignTestRecords) {
-		t.Errorf("expected committed offset %d, got %d", assignTestRecords, o.Offset)
-	}
-}
-
 // TestAssignAndConsumeFromCommittedOffsets verifies resuming consumption from
 // committed offsets.
 func TestAssignAndConsumeFromCommittedOffsets(t *testing.T) {

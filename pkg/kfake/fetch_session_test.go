@@ -1,11 +1,10 @@
-package kfake_test
+package kfake
 
 import (
 	"context"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -34,7 +33,7 @@ func fetchPartitionErr(t *testing.T, resp *kmsg.FetchResponse, id [16]byte) erro
 func TestFetchSessionUnknownID(t *testing.T) {
 	t.Parallel()
 	const topic = "t"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -99,7 +98,7 @@ func TestFetchSessionUnknownID(t *testing.T) {
 func TestFetchSessionDeletedTopic(t *testing.T) {
 	t.Parallel()
 	const topic = "t"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -147,7 +146,7 @@ func TestFetchSessionDeletedTopic(t *testing.T) {
 func TestFetchSessionRecreatedTopicResend(t *testing.T) {
 	t.Parallel()
 	const topic = "t"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 

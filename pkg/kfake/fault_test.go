@@ -1001,79 +1001,6 @@ func TestFaultBatch(t *testing.T) {
 	}
 }
 
-// An idempotent producer retries a timed-out append. The record lands once.
-func TestFaultAfterApplyIdempotent(t *testing.T) {
-	t.Parallel()
-	const topic = "t"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	cl := newPlainClient(t, c,
-		kgo.RetryBackoffFn(func(int) time.Duration { return 50 * time.Millisecond }),
-	)
-
-	h := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Produce}, Topic: topic, Err: kerr.RequestTimedOut})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	r := &kgo.Record{Topic: topic, Value: []byte("v")}
-	if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
-		t.Fatalf("produce: %v", err)
-	}
-	if n := h.Hits(); n != 1 {
-		t.Errorf("fault fired %d times != 1", n)
-	}
-	if i := c.PartitionInfo(topic, 0); i.HighWatermark != 1 {
-		t.Errorf("high watermark %d != 1: the timed out append was not deduplicated", i.HighWatermark)
-	}
-	if r.Offset != 0 {
-		t.Errorf("record landed at offset %d != 0", r.Offset)
-	}
-}
-
-// A producer with no producer ID retries a timed-out append. The record
-// lands twice.
-func TestFaultAfterApplyDuplicates(t *testing.T) {
-	t.Parallel()
-	const topic = "t"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	cl := newPlainClient(t, c,
-		kgo.DisableIdempotentWrite(),
-		kgo.RetryBackoffFn(func(int) time.Duration { return 50 * time.Millisecond }),
-	)
-
-	c.Fault(Fault{Keys: []kmsg.Key{kmsg.Produce}, Topic: topic, Err: kerr.RequestTimedOut})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("v")}).FirstErr(); err != nil {
-		t.Fatalf("produce: %v", err)
-	}
-	if i := c.PartitionInfo(topic, 0); i.HighWatermark != 2 {
-		t.Errorf("high watermark %d != 2: the timed out append did not happen", i.HighWatermark)
-	}
-}
-
-// NOT_ENOUGH_REPLICAS_AFTER_APPEND is the produce error a broker answers
-// after appending.
-func TestFaultAfterApplyNotEnoughReplicas(t *testing.T) {
-	t.Parallel()
-	const topic = "t"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	cl := newPlainClient(t, c,
-		kgo.RetryBackoffFn(func(int) time.Duration { return 50 * time.Millisecond }),
-	)
-
-	c.Fault(Fault{Keys: []kmsg.Key{kmsg.Produce}, Topic: topic, Err: kerr.NotEnoughReplicasAfterAppend})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("v")}).FirstErr(); err != nil {
-		t.Fatalf("produce: %v", err)
-	}
-	if i := c.PartitionInfo(topic, 0); i.HighWatermark != 1 {
-		t.Errorf("high watermark %d != 1", i.HighWatermark)
-	}
-}
-
 // A timed-out commit is stored. The next fetch reads it.
 func TestFaultAfterApplyOffsetCommit(t *testing.T) {
 	t.Parallel()
@@ -1471,5 +1398,70 @@ func TestFaultAfterApplyCreateTopics(t *testing.T) {
 	}
 	if c.TopicInfo(topic) == nil {
 		t.Error("the topic does not exist: the timed out create did not happen")
+	}
+}
+
+// TestFaultAfterApplyProduce covers the produce errors a broker answers
+// after it has already appended: the record is in the log, and what the
+// client does with the retry is up to the client.
+func TestFaultAfterApplyProduce(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		opts      []kgo.Opt
+		err       *kerr.Error
+		wantHWM   int64
+		wantHits  int  // 0 skips the check
+		checkZero bool // the record landed at offset 0
+	}{
+		{
+			// An idempotent producer retries, and the append is deduplicated.
+			name:      "idempotent",
+			err:       kerr.RequestTimedOut,
+			wantHWM:   1,
+			wantHits:  1,
+			checkZero: true,
+		},
+		{
+			// With no producer ID there is nothing to deduplicate against,
+			// so the retried append lands a second time.
+			name:    "duplicates",
+			opts:    []kgo.Opt{kgo.DisableIdempotentWrite()},
+			err:     kerr.RequestTimedOut,
+			wantHWM: 2,
+		},
+		{
+			name:    "not-enough-replicas",
+			err:     kerr.NotEnoughReplicasAfterAppend,
+			wantHWM: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const topic = "t"
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			opts := append(tc.opts, kgo.RetryBackoffFn(func(int) time.Duration { return 50 * time.Millisecond }))
+			cl := newPlainClient(t, c, opts...)
+
+			h := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Produce}, Topic: topic, Err: tc.err})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r := &kgo.Record{Topic: topic, Value: []byte("v")}
+			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+				t.Fatalf("produce: %v", err)
+			}
+			if tc.wantHits > 0 {
+				if n := h.Hits(); n != tc.wantHits {
+					t.Errorf("fault fired %d times != %d", n, tc.wantHits)
+				}
+			}
+			if i := c.PartitionInfo(topic, 0); i.HighWatermark != tc.wantHWM {
+				t.Errorf("high watermark %d != %d", i.HighWatermark, tc.wantHWM)
+			}
+			if tc.checkZero && r.Offset != 0 {
+				t.Errorf("record landed at offset %d != 0", r.Offset)
+			}
+		})
 	}
 }

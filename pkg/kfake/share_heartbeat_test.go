@@ -1,11 +1,10 @@
-package kfake_test
+package kfake
 
 import (
 	"context"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -18,7 +17,7 @@ func TestShareHeartbeatAssignmentDelivery(t *testing.T) {
 		topic = "t"
 		group = "g"
 	)
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 

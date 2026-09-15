@@ -1,4 +1,4 @@
-package kfake_test
+package kfake
 
 // Regression tests for classic consumer_group.go + topics_and_partitions.go.
 // Each fails before its corresponding kgo fix:
@@ -40,7 +40,6 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -64,7 +63,7 @@ func TestAuditOverlappingCommitsBlockAutocommit(t *testing.T) {
 		msgs  = 200
 	)
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, msgs)
 
@@ -185,7 +184,7 @@ func TestAuditCommit848StaleDroppedSynthesis(t *testing.T) {
 		group = "audit-848-stale-commit-g"
 	)
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
 
 	producer := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
 	for p := int32(0); p < 2; p++ {
@@ -325,7 +324,7 @@ func TestAuditOffsetFetchOmittedPartition(t *testing.T) {
 		msgs  = 5 // per partition
 	)
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
 
 	producer := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
 	for p := int32(0); p < 2; p++ {
@@ -439,7 +438,7 @@ func TestAuditOffsetFetchDuplicateInjectAcrossRetries(t *testing.T) {
 		group = "audit-offsetfetch-dupinject-g"
 	)
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
 
 	var reqs atomic.Int64
 	c.ControlKey(int16(kmsg.OffsetFetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {

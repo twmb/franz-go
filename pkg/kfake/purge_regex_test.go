@@ -1,11 +1,10 @@
-package kfake_test
+package kfake
 
 import (
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -24,7 +23,7 @@ func TestPurgeRegexTopic(t *testing.T) {
 			t.Parallel()
 			topic := "t-purge-regex-" + protocol
 			group := "g-purge-regex-" + protocol
-			c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 			prod := newPlainClient(t, c)
 			produceNStrings(t, prod, topic, 3)
 
@@ -73,7 +72,7 @@ func TestPurgeRegexTopicRediscoveredFirst(t *testing.T) {
 		topic = "t-purge-regex-held"
 		group = "g-purge-regex-held"
 	)
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	prod := newPlainClient(t, c)
 	produceNStrings(t, prod, topic, 3)
 

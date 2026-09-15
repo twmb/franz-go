@@ -183,7 +183,7 @@ func TestGroupInfoAndWaits(t *testing.T) {
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchMaxWait(250*time.Millisecond),
 	)
-	collectRecords(t, cl, 4, 10*time.Second)
+	consumeN(t, cl, 4, 10*time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

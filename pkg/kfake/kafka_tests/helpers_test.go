@@ -157,3 +157,15 @@ func poll1FromEachClient(t *testing.T, timeout time.Duration, clients ...*kgo.Cl
 		}
 	}
 }
+
+// newPlainClient creates a kgo client without 848 opt-in.
+func newPlainClient(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
+	t.Helper()
+	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...)}, opts...)
+	cl, err := kgo.NewClient(opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cl.Close)
+	return cl
+}

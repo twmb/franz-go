@@ -1,4 +1,4 @@
-package kfake_test
+package kfake
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -32,7 +31,7 @@ func TestIssue1365CooperativeDowngrade(t *testing.T) {
 		group      = "issue-1365-downgrade-g"
 		partitions = 6
 	)
-	c := newCluster(t, kfake.SeedTopics(partitions, topic))
+	c := newCluster(t, SeedTopics(partitions, topic))
 
 	// Keep epoch/list loads in flight longer: pre-fix, the race window is
 	// a load completing while records are buffered and being polled.

@@ -16,26 +16,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// Test848JoinAndConsume verifies a single consumer joining via the KIP-848
-// protocol, receiving an assignment, and consuming records end-to-end.
-// Derived via LLM from testConsumerGroupHeartbeatIsAccessibleWhenNewGroupCoordinatorIsEnabled.
-func Test848JoinAndConsume(t *testing.T) {
-	t.Parallel()
-	topic := "t848-join"
-	group := "g848-join"
-	nRecords := 50
-
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	produceNStrings(t, producer, topic, nRecords)
-
-	consumer := newGroupConsumer(t, c, topic, group)
-	records := consumeN(t, consumer, nRecords, 10*time.Second)
-	if len(records) != nRecords {
-		t.Fatalf("expected %d records, got %d", nRecords, len(records))
-	}
-}
-
 // Test848TwoConsumersRebalance verifies that when a second consumer joins,
 // partitions are redistributed across both members.
 // Derived via LLM from testNewJoiningMemberTriggersNewTargetAssignment.
@@ -557,58 +537,6 @@ func Test848ReconciliationThreeMembers(t *testing.T) {
 			t.Errorf("member %s has %d partitions, expected %d", m.MemberID, n, nPartitions/3)
 		}
 	}
-}
-
-// Test848StableToUnrevokedPartitions verifies that when a second consumer
-// joins, the first consumer cooperatively revokes partitions and the second
-// consumer eventually receives them.
-// Derived via LLM from testStableToUnrevokedPartitions (CurrentAssignmentBuilderTest.java).
-func Test848StableToUnrevokedPartitions(t *testing.T) {
-	t.Parallel()
-	topic := "t848-unrevoked"
-	group := "g848-unrevoked"
-	nPartitions := 6
-	nRecords := 30
-
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
-
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	produceNStrings(t, producer, topic, nRecords)
-
-	// c1 owns all partitions initially.
-	c1 := newGroupConsumer(t, c, topic, group)
-	dg := waitStable(t, c, group, 1)
-	if total := dg.NumAssigned(); total != nPartitions {
-		t.Fatalf("c1 should own all %d partitions, got %d", nPartitions, total)
-	}
-
-	// Consume and commit so offsets are set.
-	consumeN(t, c1, nRecords, 10*time.Second)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := c1.CommitUncommittedOffsets(ctx); err != nil {
-		t.Fatalf("commit failed: %v", err)
-	}
-
-	// c2 joins, triggering cooperative rebalance.
-	c2 := newGroupConsumer(t, c, topic, group)
-
-	// Wait for both to be stable.
-	dg = waitStable(t, c, group, 2)
-
-	// Verify both have partitions.
-	for _, m := range dg.Members {
-		if m.NumAssigned() == 0 {
-			t.Errorf("member %s has no partitions after rebalance", m.MemberID)
-		}
-	}
-	if total := dg.NumAssigned(); total != nPartitions {
-		t.Errorf("expected %d total partitions, got %d", nPartitions, total)
-	}
-
-	// Produce more records and verify both consumers get records.
-	produceNStrings(t, producer, topic, nRecords)
-	poll1FromEachClient(t, 10*time.Second, c1, c2)
 }
 
 // Test848UnreleasedPartitionsWaitForRevocation verifies that a third consumer

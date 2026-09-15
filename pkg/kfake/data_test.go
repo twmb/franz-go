@@ -108,120 +108,6 @@ func TestAssignUniform(t *testing.T) {
 	}
 }
 
-func TestAssignRangeTwoMembersTwoTopics(t *testing.T) {
-	t.Parallel()
-	idA := uuid{1}
-	idB := uuid{2}
-	g := testGroup("range", map[string]testTopic{
-		"topicA": {id: idA, parts: 3},
-		"topicB": {id: idB, parts: 3},
-	}, map[string][]string{
-		"m0": {"topicA", "topicB"},
-		"m1": {"topicA", "topicB"},
-	})
-	g.computeTargetAssignment()
-
-	// Range: topicA [0,1] to m0, [2] to m1; topicB [0,1] to m0, [2] to m1.
-	// (3 partitions / 2 members = 1 base + 1 extra for first member)
-	m0 := g.consumerMembers["m0"]
-	m1 := g.consumerMembers["m1"]
-	if !slices.Equal(m0.targetAssignment[idA], []int32{0, 1}) {
-		t.Errorf("m0 topicA = %v, want [0 1]", m0.targetAssignment[idA])
-	}
-	if !slices.Equal(m1.targetAssignment[idA], []int32{2}) {
-		t.Errorf("m1 topicA = %v, want [2]", m1.targetAssignment[idA])
-	}
-	if !slices.Equal(m0.targetAssignment[idB], []int32{0, 1}) {
-		t.Errorf("m0 topicB = %v, want [0 1]", m0.targetAssignment[idB])
-	}
-	if !slices.Equal(m1.targetAssignment[idB], []int32{2}) {
-		t.Errorf("m1 topicB = %v, want [2]", m1.targetAssignment[idB])
-	}
-}
-
-func TestAssignRangeUnevenPartitions(t *testing.T) {
-	t.Parallel()
-	id := uuid{1}
-	g := testGroup("range", map[string]testTopic{
-		"topic": {id: id, parts: 7},
-	}, map[string][]string{
-		"m0": {"topic"},
-		"m1": {"topic"},
-	})
-	g.computeTargetAssignment()
-
-	// 7 partitions, 2 members => m0 gets [0,1,2,3], m1 gets [4,5,6].
-	m0 := g.consumerMembers["m0"]
-	m1 := g.consumerMembers["m1"]
-	if !slices.Equal(m0.targetAssignment[id], []int32{0, 1, 2, 3}) {
-		t.Errorf("m0 = %v, want [0 1 2 3]", m0.targetAssignment[id])
-	}
-	if !slices.Equal(m1.targetAssignment[id], []int32{4, 5, 6}) {
-		t.Errorf("m1 = %v, want [4 5 6]", m1.targetAssignment[id])
-	}
-}
-
-func TestAssignRangeMoreMembersThanPartitions(t *testing.T) {
-	t.Parallel()
-	id := uuid{1}
-	g := testGroup("range", map[string]testTopic{
-		"topic": {id: id, parts: 2},
-	}, map[string][]string{
-		"m0": {"topic"},
-		"m1": {"topic"},
-		"m2": {"topic"},
-	})
-	g.computeTargetAssignment()
-
-	// 2 partitions, 3 members => m0 gets [0], m1 gets [1], m2 gets nothing.
-	m0 := g.consumerMembers["m0"]
-	m1 := g.consumerMembers["m1"]
-	m2 := g.consumerMembers["m2"]
-	if !slices.Equal(m0.targetAssignment[id], []int32{0}) {
-		t.Errorf("m0 = %v, want [0]", m0.targetAssignment[id])
-	}
-	if !slices.Equal(m1.targetAssignment[id], []int32{1}) {
-		t.Errorf("m1 = %v, want [1]", m1.targetAssignment[id])
-	}
-	if len(m2.targetAssignment) != 0 {
-		t.Errorf("m2 = %v, want empty", m2.targetAssignment)
-	}
-}
-
-func TestAssignRangeHeterogeneousSubscriptions(t *testing.T) {
-	t.Parallel()
-	idA := uuid{1}
-	idB := uuid{2}
-	// m0 subscribes to both, m1 only topicA, m2 only topicB.
-	g := testGroup("range", map[string]testTopic{
-		"topicA": {id: idA, parts: 4},
-		"topicB": {id: idB, parts: 4},
-	}, map[string][]string{
-		"m0": {"topicA", "topicB"},
-		"m1": {"topicA"},
-		"m2": {"topicB"},
-	})
-	g.computeTargetAssignment()
-
-	// topicA: subscribed by m0, m1 => m0 gets [0,1], m1 gets [2,3]
-	// topicB: subscribed by m0, m2 => m0 gets [0,1], m2 gets [2,3]
-	m0 := g.consumerMembers["m0"]
-	m1 := g.consumerMembers["m1"]
-	m2 := g.consumerMembers["m2"]
-	if !slices.Equal(m0.targetAssignment[idA], []int32{0, 1}) {
-		t.Errorf("m0 topicA = %v, want [0 1]", m0.targetAssignment[idA])
-	}
-	if !slices.Equal(m1.targetAssignment[idA], []int32{2, 3}) {
-		t.Errorf("m1 topicA = %v, want [2 3]", m1.targetAssignment[idA])
-	}
-	if !slices.Equal(m0.targetAssignment[idB], []int32{0, 1}) {
-		t.Errorf("m0 topicB = %v, want [0 1]", m0.targetAssignment[idB])
-	}
-	if !slices.Equal(m2.targetAssignment[idB], []int32{2, 3}) {
-		t.Errorf("m2 topicB = %v, want [2 3]", m2.targetAssignment[idB])
-	}
-}
-
 func TestAssignUniformStickyOnLeave(t *testing.T) {
 	t.Parallel()
 	id := uuid{1}
@@ -318,5 +204,80 @@ func TestAssignUniformStickyRapidJoinsThenLeave(t *testing.T) {
 					mid, p, converged[mid], newTarget)
 			}
 		}
+	}
+}
+
+// TestAssignRange checks the range assignor: for each topic, the members
+// subscribed to it take contiguous runs of its partitions, and the earlier
+// members take the remainder.
+func TestAssignRange(t *testing.T) {
+	t.Parallel()
+	idA, idB := uuid{1}, uuid{2}
+	for _, tc := range []struct {
+		name    string
+		topics  map[string]testTopic
+		members map[string][]string
+		want    map[string]map[string][]int32 // member -> topic -> partitions
+	}{
+		{
+			// 3 partitions over 2 members is 1 each plus 1 for the first.
+			name:    "two-members-two-topics",
+			topics:  map[string]testTopic{"topicA": {id: idA, parts: 3}, "topicB": {id: idB, parts: 3}},
+			members: map[string][]string{"m0": {"topicA", "topicB"}, "m1": {"topicA", "topicB"}},
+			want: map[string]map[string][]int32{
+				"m0": {"topicA": {0, 1}, "topicB": {0, 1}},
+				"m1": {"topicA": {2}, "topicB": {2}},
+			},
+		},
+		{
+			name:    "uneven-partitions",
+			topics:  map[string]testTopic{"topicA": {id: idA, parts: 7}},
+			members: map[string][]string{"m0": {"topicA"}, "m1": {"topicA"}},
+			want: map[string]map[string][]int32{
+				"m0": {"topicA": {0, 1, 2, 3}},
+				"m1": {"topicA": {4, 5, 6}},
+			},
+		},
+		{
+			// m2 gets nothing at all, not an empty entry.
+			name:    "more-members-than-partitions",
+			topics:  map[string]testTopic{"topicA": {id: idA, parts: 2}},
+			members: map[string][]string{"m0": {"topicA"}, "m1": {"topicA"}, "m2": {"topicA"}},
+			want: map[string]map[string][]int32{
+				"m0": {"topicA": {0}},
+				"m1": {"topicA": {1}},
+				"m2": {},
+			},
+		},
+		{
+			// Each topic is split only across the members that asked for it.
+			name:    "heterogeneous-subscriptions",
+			topics:  map[string]testTopic{"topicA": {id: idA, parts: 4}, "topicB": {id: idB, parts: 4}},
+			members: map[string][]string{"m0": {"topicA", "topicB"}, "m1": {"topicA"}, "m2": {"topicB"}},
+			want: map[string]map[string][]int32{
+				"m0": {"topicA": {0, 1}, "topicB": {0, 1}},
+				"m1": {"topicA": {2, 3}},
+				"m2": {"topicB": {2, 3}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g := testGroup("range", tc.topics, tc.members)
+			g.computeTargetAssignment()
+
+			for mid, wantTopics := range tc.want {
+				m := g.consumerMembers[mid]
+				if len(m.targetAssignment) != len(wantTopics) {
+					t.Errorf("member %s assigned %v, want %v", mid, m.targetAssignment, wantTopics)
+					continue
+				}
+				for topic, wantParts := range wantTopics {
+					if got := m.targetAssignment[tc.topics[topic].id]; !slices.Equal(got, wantParts) {
+						t.Errorf("member %s %s = %v, want %v", mid, topic, got, wantParts)
+					}
+				}
+			}
+		})
 	}
 }
