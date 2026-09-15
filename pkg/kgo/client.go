@@ -1936,12 +1936,22 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 		return shards(cl.handleCoordinatorReq(ctx, t)), nil
 
 	case *kmsg.ApiVersionsRequest:
-		// As of v3, software name and version are required.
-		// If they are missing, we use the config options.
-		if t.ClientSoftwareName == "" && t.ClientSoftwareVersion == "" {
+		// As of v3, software name and version are required. If they are
+		// missing, we use the config options. As of v5, NodeID pairs
+		// with ClusterID and defaults to -1; a zero value literal has 0,
+		// which a broker rejects as a node named without a cluster. We
+		// unset NodeID whenever ClusterID is unset.
+		noSoftware := t.ClientSoftwareName == "" && t.ClientSoftwareVersion == ""
+		noCluster := t.ClusterID == nil && t.NodeID != -1
+		if noSoftware || noCluster {
 			dup := *t
-			dup.ClientSoftwareName = cl.cfg.softwareName
-			dup.ClientSoftwareVersion = cl.cfg.softwareVersion
+			if noSoftware {
+				dup.ClientSoftwareName = cl.cfg.softwareName
+				dup.ClientSoftwareVersion = cl.cfg.softwareVersion
+			}
+			if noCluster {
+				dup.NodeID = -1
+			}
 			req = &dup
 		}
 	}

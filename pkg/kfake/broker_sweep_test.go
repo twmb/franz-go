@@ -559,3 +559,28 @@ func TestApiVersionsRebootstrapRequired(t *testing.T) {
 		})
 	}
 }
+
+// A user-built ApiVersionsRequest literal has NodeID 0 rather than kmsg's
+// default of -1, which a v5 broker rejects as a node named without a
+// cluster. kgo unsets NodeID when ClusterID is unset, the way it fills a
+// missing software name.
+func TestApiVersionsLiteralRequest(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1))
+	cl := newPlainClient(t, c)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	kresp, err := cl.Request(ctx, &kmsg.ApiVersionsRequest{ClientSoftwareName: "kgo", ClientSoftwareVersion: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := kresp.(*kmsg.ApiVersionsResponse)
+	if resp.Version < 5 {
+		t.Fatalf("request went out at v%d, want v5+", resp.Version)
+	}
+	if resp.ErrorCode != 0 || len(resp.ApiKeys) == 0 {
+		t.Fatalf("got error code %d with %d keys, want no error and the key table", resp.ErrorCode, len(resp.ApiKeys))
+	}
+}
