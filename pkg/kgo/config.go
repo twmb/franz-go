@@ -126,6 +126,7 @@ type cfg struct {
 	maxProduceInflight                 int                // if idempotency is disabled, we allow a configurable max inflight
 	compression                        []CompressionCodec // order of preference
 
+	rackAwarePartitioning     bool
 	defaultProduceTopic       string
 	defaultProduceTopicAlways bool
 	maxRecordBatchBytes       func(string) int32
@@ -1326,6 +1327,26 @@ func RecordPartitioner(partitioner Partitioner) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.partitioner = partitioner }}
 }
 
+// RackAwarePartitioning prefers partitions whose leader is in this client's
+// rack when producing records that do not require a consistent partition
+// (unkeyed records, with the default partitioner), overriding the default of
+// considering every partition. This implements KIP-1123. [Rack] must also be
+// set; this option does nothing otherwise.
+//
+// Producing to a same-rack leader avoids cross rack, and often cross
+// datacenter, traffic. If no leader is in your rack, every partition is
+// considered. The filtering happens before your partitioner is consulted, so
+// this works with any partitioner, not only the default one as in the Java
+// client. Records that your partitioner requires consistency for (keyed
+// records, by default) are never filtered.
+//
+// Note that this skews which partitions receive records: if your producers are
+// not spread across racks in the same proportion as partition leaders, the
+// partitions led from racks with more producers receive more records.
+func RackAwarePartitioning() ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.rackAwarePartitioning = true }}
+}
+
 // ProduceRequestTimeout sets how long Kafka broker's are allowed to respond to
 // produce requests, overriding the default 10s. If a broker exceeds this
 // duration, it will reply with a request timeout error.
@@ -1663,7 +1684,8 @@ func ConsumeResetOffset(offset Offset) ConsumerOpt {
 //
 // Consuming from a preferred replica can increase latency but can decrease
 // cross datacenter costs. See KIP-392 for more information, and see
-// [BalanceRacks] to also take racks into account when assigning partitions.
+// [BalanceRacks] to also take racks into account when assigning partitions
+// or [RackAwarePartitioning] to prefer same-rack leaders when producing.
 func Rack(rack string) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.rack = rack }}
 }

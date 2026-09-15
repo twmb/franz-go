@@ -925,6 +925,23 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 		// with the partition's actual load error. The Java client
 		// falls back identically when no partition is available.
 		mapping = partsData.partitions
+	} else if cl.cfg.rackAwarePartitioning && cl.cfg.rack != "" {
+		// KIP-1123: prefer partitions whose leader is in our rack. We
+		// filter once per metadata update, which always stores a new
+		// partsData. If no leader is in our rack we use every writable
+		// partition, as the Java client does.
+		if parts.rackData != partsData {
+			racks := cl.brokerRacks()
+			parts.rackData, parts.rackParts = partsData, nil
+			for _, p := range mapping {
+				if racks[p.leader] == cl.cfg.rack {
+					parts.rackParts = append(parts.rackParts, p)
+				}
+			}
+		}
+		if len(parts.rackParts) > 0 {
+			mapping = parts.rackParts
+		}
 	}
 	if len(mapping) == 0 {
 		cl.producer.promiseRecord(pr, errors.New("unable to partition record due to no usable partitions"))
