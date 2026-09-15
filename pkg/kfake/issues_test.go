@@ -1570,14 +1570,7 @@ func TestFirstMetadataPartitionErrors(t *testing.T) {
 		// LEADER_NOT_AVAILABLE on all partitions.
 		resp := req.ResponseKind().(*kmsg.MetadataResponse)
 
-		host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
-		port, _ := strconv.Atoi(portStr)
-		sb := kmsg.NewMetadataResponseBroker()
-		sb.NodeID = 0
-		sb.Host = host
-		sb.Port = int32(port)
-		resp.Brokers = append(resp.Brokers, sb)
-		resp.ControllerID = 0
+		soleBroker(c, resp, 0)
 
 		st := kmsg.NewMetadataResponseTopic()
 		st.Topic = kmsg.StringPtr(testTopic)
@@ -1658,8 +1651,6 @@ func TestIssue1331(t *testing.T) {
 
 	ti := c.TopicInfo(testTopic)
 	pi := c.PartitionInfo(testTopic, 0)
-	host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
-	port, _ := strconv.Atoi(portStr)
 
 	// Produce a few records so the partition has a real, non-negative leader
 	// epoch for the consumer to consume and validate against.
@@ -1691,12 +1682,7 @@ func TestIssue1331(t *testing.T) {
 		fires.Add(1)
 
 		resp := req.ResponseKind().(*kmsg.MetadataResponse)
-		sb := kmsg.NewMetadataResponseBroker()
-		sb.NodeID = pi.Leader
-		sb.Host = host
-		sb.Port = int32(port)
-		resp.Brokers = append(resp.Brokers, sb)
-		resp.ControllerID = pi.Leader
+		soleBroker(c, resp, pi.Leader)
 
 		st := kmsg.NewMetadataResponseTopic()
 		st.Topic = kmsg.StringPtr(testTopic)
@@ -2278,8 +2264,6 @@ func TestIssue1217(t *testing.T) {
 	// the RecordRetries limit.
 	t.Run("load_errors_do_not_fail_poisoned_batch", func(t *testing.T) {
 		ti := c.TopicInfo(testTopic)
-		host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
-		port, _ := strconv.Atoi(portStr)
 
 		// The poison retries on the produce backoff without touching
 		// metadata; the NOT_LEADER on the next attempt sends the
@@ -2311,12 +2295,7 @@ func TestIssue1217(t *testing.T) {
 				return nil, nil, false
 			}
 			resp := req.ResponseKind().(*kmsg.MetadataResponse)
-			sb := kmsg.NewMetadataResponseBroker()
-			sb.NodeID = 0
-			sb.Host = host
-			sb.Port = int32(port)
-			resp.Brokers = append(resp.Brokers, sb)
-			resp.ControllerID = 0
+			soleBroker(c, resp, 0)
 			st := kmsg.NewMetadataResponseTopic()
 			st.Topic = kmsg.StringPtr(testTopic)
 			st.TopicID = ti.TopicID
@@ -2952,8 +2931,6 @@ func TestIssue1328(t *testing.T) {
 	)
 
 	ti := c.TopicInfo(topic)
-	host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
-	port, _ := strconv.Atoi(portStr)
 
 	// Build partitions in reverse order so sort.Slice in fetchTopicMetadata
 	// actually swaps elements -- already-sorted input sorts without writes,
@@ -2962,12 +2939,7 @@ func TestIssue1328(t *testing.T) {
 		c.KeepControl()
 
 		resp := kreq.(*kmsg.MetadataRequest).ResponseKind().(*kmsg.MetadataResponse)
-		sb := kmsg.NewMetadataResponseBroker()
-		sb.NodeID = 0
-		sb.Host = host
-		sb.Port = int32(port)
-		resp.Brokers = append(resp.Brokers, sb)
-		resp.ControllerID = 0
+		soleBroker(c, resp, 0)
 
 		st := kmsg.NewMetadataResponseTopic()
 		st.Topic = kmsg.StringPtr(topic)
@@ -3299,28 +3271,13 @@ func TestMetadataZeroPartitionsNoFakeSuccess(t *testing.T) {
 
 	c := newCluster(t, NumBrokers(1))
 
-	addr := c.ListenAddrs()[0]
-	host, portStr, err := net.SplitHostPort(addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	// Every metadata response reports requested topics as existing with
 	// no error and zero partitions.
 	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
 		req := kreq.(*kmsg.MetadataRequest)
 		resp := req.ResponseKind().(*kmsg.MetadataResponse)
-		b := kmsg.NewMetadataResponseBroker()
-		b.NodeID = 0
-		b.Host = host
-		b.Port = int32(port)
-		resp.Brokers = append(resp.Brokers, b)
-		resp.ControllerID = 0
+		soleBroker(c, resp, 0)
 		for _, rt := range req.Topics {
 			mt := kmsg.NewMetadataResponseTopic()
 			mt.Topic = rt.Topic

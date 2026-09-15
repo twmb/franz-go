@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
+	"net"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -504,4 +506,53 @@ func produceRawV11(t *testing.T, cl *kgo.Client, topic string, batch []byte) kms
 		t.Fatalf("produce: %v", err)
 	}
 	return resp.Topics[0].Partitions[0]
+}
+
+// shareAckCollector gathers every ShareAckResult the client reports, for a
+// test to sift through once the run is over.
+type shareAckCollector struct {
+	mu      sync.Mutex
+	results []kgo.ShareAckResult
+}
+
+// opt installs the collector on a client.
+func (s *shareAckCollector) opt() kgo.Opt {
+	return kgo.ShareAckCallback(func(_ *kgo.Client, res kgo.ShareAckResults) {
+		s.mu.Lock()
+		s.results = append(s.results, res...)
+		s.mu.Unlock()
+	})
+}
+
+// snapshot copies what has been collected so far.
+func (s *shareAckCollector) snapshot() []kgo.ShareAckResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.results)
+}
+
+// leaveShareGroupRaw sends the epoch -1 heartbeat that takes a member out
+// of a share group.
+func leaveShareGroupRaw(t *testing.T, cl *kgo.Client, group, memberID string) {
+	t.Helper()
+	req := kmsg.NewPtrShareGroupHeartbeatRequest()
+	req.GroupID = group
+	req.MemberID = memberID
+	req.MemberEpoch = -1
+	if _, err := req.RequestWith(context.Background(), cl); err != nil {
+		t.Fatalf("leave heartbeat: %v", err)
+	}
+}
+
+// soleBroker adds the cluster's first listener to a crafted metadata
+// response as the given node, and makes it the controller.
+func soleBroker(c *Cluster, resp *kmsg.MetadataResponse, id int32) {
+	host, portStr, _ := net.SplitHostPort(c.ListenAddrs()[0])
+	port, _ := strconv.Atoi(portStr)
+	b := kmsg.NewMetadataResponseBroker()
+	b.NodeID = id
+	b.Host = host
+	b.Port = int32(port)
+	resp.Brokers = append(resp.Brokers, b)
+	resp.ControllerID = id
 }

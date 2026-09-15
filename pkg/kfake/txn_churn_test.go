@@ -131,27 +131,9 @@ func TestAuditTxnV1AbortAfterFailedProducesControl(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "audit-v1-abort"))
 
-	// Downgrade the cluster to transaction.version=0 so the client does
-	// not opt into KIP-890p2.
-	admin := newPlainClient(t, c)
-	req := kmsg.NewPtrUpdateFeaturesRequest()
-	fu := kmsg.NewUpdateFeaturesRequestFeatureUpdate()
-	fu.Feature = "transaction.version"
-	fu.MaxVersionLevel = 0
-	fu.UpgradeType = 2 // safe downgrade
-	req.FeatureUpdates = append(req.FeatureUpdates, fu)
-	resp, err := req.RequestWith(context.Background(), admin)
-	if err != nil {
-		t.Fatalf("UpdateFeatures: %v", err)
-	}
-	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-		t.Fatalf("UpdateFeatures: %v", err)
-	}
-	for _, res := range resp.Results {
-		if err := kerr.ErrorForCode(res.ErrorCode); err != nil {
-			t.Fatalf("UpdateFeatures %s: %v", res.Feature, err)
-		}
-	}
+	// The client does not opt into KIP-890p2 against a
+	// transaction.version=0 cluster.
+	downgradeToTxnV0(t, c)
 
 	endTxns := observeEndTxns(c)
 	failAllProduces(c, "audit-v1-abort")
