@@ -2,7 +2,6 @@ package kgo
 
 import (
 	"bytes"
-	"compress/gzip"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/klauspost/compress/gzip" // same format as compress/gzip, faster in both directions
 	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
@@ -220,6 +220,7 @@ out:
 				zstd.WithWindowSize(64 << 10),
 				zstd.WithEncoderConcurrency(1),
 				zstd.WithZeroFrames(true),
+				zstd.WithEncoderCRC(false), // the record batch CRC already covers these bytes
 			}
 			fn := func() any {
 				zstdEnc, _ := zstd.NewWriter(nil, opts...)
@@ -342,10 +343,16 @@ type streamCompressor struct {
 	put func()
 }
 
+var (
+	streamPool = sync.Pool{New: func() any { return new(streamCompressor) }}
+	xerialPool = sync.Pool{New: func() any { return new(xerialWriter) }}
+)
+
 // newStream returns a streaming compressor writing into dst, or nil if the
 // codec cannot stream.
 func (c *compressor) newStream(codec CompressionCodecType, dst *bytes.Buffer) *streamCompressor {
-	sc := &streamCompressor{dst: dst}
+	sc := streamPool.Get().(*streamCompressor)
+	sc.dst, sc.buf = dst, sc.buf[:0]
 	switch codec {
 	case CodecGzip:
 		gz := c.gzPool.Get().(*gzip.Writer)
@@ -357,8 +364,10 @@ func (c *compressor) newStream(codec CompressionCodecType, dst *bytes.Buffer) *s
 		ze := c.zstdPool.Get().(*zstdEncoder)
 		sc.w, sc.put = ze.inner, func() { c.zstdPool.Put(ze) }
 	case CodecSnappy:
-		sc.w, sc.put = new(xerialWriter), func() {}
+		xw := xerialPool.Get().(*xerialWriter)
+		sc.w, sc.put = xw, func() { xerialPool.Put(xw) }
 	default:
+		streamPool.Put(sc)
 		return nil
 	}
 	sc.w.Reset(dst)
@@ -411,8 +420,8 @@ func (sc *streamCompressor) flush() error {
 	return sc.w.Flush()
 }
 
-// finish closes the stream and returns the codec to its pool. On success,
-// dst holds the complete compressed frame.
+// finish closes the stream and returns the codec and the compressor to
+// their pools. On success, dst holds the complete compressed frame.
 func (sc *streamCompressor) finish() error {
 	err := sc.write(true)
 	if err == nil {
@@ -420,6 +429,8 @@ func (sc *streamCompressor) finish() error {
 	}
 	sc.w.Reset(nil) // drop the codec's reference to dst before pooling it
 	sc.put()
+	sc.dst, sc.w, sc.put = nil, nil, nil
+	streamPool.Put(sc)
 	return err
 }
 

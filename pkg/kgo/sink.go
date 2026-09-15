@@ -2063,10 +2063,14 @@ const recordBatchOverhead = 4 + // array len
 	4 // record array length
 
 // newRecordBatch returns a new record batch for a topic and partition.
-func (recBuf *recBuf) newRecordBatch() *recBatch {
+func (recBuf *recBuf) newRecordBatch() *recBatch { return recBuf.newRecordBatchN(0) }
+
+// newRecordBatchN returns a new record batch with room for n records, so a
+// merge grows its slice once rather than doubling per append.
+func (recBuf *recBuf) newRecordBatchN(n int) *recBatch {
 	return &recBatch{
 		owner:      recBuf,
-		records:    recBuf.cl.prsPool.get()[:0],
+		records:    slices.Grow(recBuf.cl.prsPool.get(), n),
 		wireLength: recordBatchOverhead,
 
 		canFailFromLoadErrs: true, // until we send this batch, we can fail it
@@ -2606,13 +2610,16 @@ func (recBuf *recBuf) mergeBacklog(cc *compressor, codec CompressionCodecType) {
 		recBuf.mu.Unlock()
 		return
 	}
+	var total, size int
 	for _, b := range span {
 		b.frozen = true
+		total += len(b.records)
+		size += int(b.wireLength)
 	}
 	recBuf.merging = true
 	recBuf.mu.Unlock()
 
-	m, tail, consumed, ok := recBuf.mergeSpan(span, cc, codec)
+	m, tail, consumed, ok := recBuf.mergeSpan(span, total, size, cc, codec)
 
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
@@ -2676,11 +2683,12 @@ func (recBuf *recBuf) mergeBacklog(cc *compressor, codec CompressionCodecType) {
 // on the next drain. Returns how many sources were consumed, the cut one
 // included, and false if the merge must be discarded, in which case the
 // caller recycles m and the tail.
-func (recBuf *recBuf) mergeSpan(span []*recBatch, cc *compressor, codec CompressionCodecType) (m, tail *recBatch, consumed int, ok bool) {
+func (recBuf *recBuf) mergeSpan(span []*recBatch, total, size int, cc *compressor, codec CompressionCodecType) (m, tail *recBatch, consumed int, ok bool) {
 	buf := byteBuffers.Get().(*bytes.Buffer)
 	buf.Reset()
+	buf.Grow(min(size, int(recBuf.maxRecordBatchBytes))) // the blob's ceiling; one allocation for a fresh buffer rather than doubling up to it
 	sc := cc.newStream(codec, buf)
-	m = recBuf.newRecordBatch()
+	m = recBuf.newRecordBatchN(total)
 	m.frozen = true
 	m.stream = &batchStream{buf: buf, codec: codec} // m owns buf from here; recycling m returns it
 
@@ -2704,7 +2712,7 @@ func (recBuf *recBuf) mergeSpan(span []*recBatch, cc *compressor, codec Compress
 				return true
 			}
 			for i, pr := range src.records {
-				nums := m.calculateRecordNumbers(pr.Record)
+				nums := m.renumber(pr, int32(i))
 				n := int(nums.wireLength())
 				if !fits(n) && since > 0 {
 					if err = sc.flush(); err != nil {
@@ -2714,9 +2722,9 @@ func (recBuf *recBuf) mergeSpan(span []*recBatch, cc *compressor, codec Compress
 				}
 				if !fits(n) {
 					if i > 0 {
-						tail = recBuf.newRecordBatch()
-						for _, pr := range src.records[i:] {
-							tail.appendRecord(pr, tail.calculateRecordNumbers(pr.Record))
+						tail = recBuf.newRecordBatchN(len(src.records) - i)
+						for j, pr := range src.records[i:] {
+							tail.appendRecord(pr, tail.renumber(pr, int32(i+j)))
 						}
 						consumed++
 					}
@@ -2770,6 +2778,29 @@ func (recBuf *recBuf) mergeSpan(span []*recBatch, cc *compressor, codec Compress
 	m.stream.blob, m.stream.uncompressed = buf.Bytes(), uncompressed
 	m.wireLength = recordBatchOverhead + int32(len(m.stream.blob))
 	return m, tail, consumed, true
+}
+
+// renumber returns the numbers a record stamped for position oldOff in
+// another batch would have if appended to b. Only the varint widths of the
+// timestamp and offset deltas can differ, so we adjust the stamped length
+// rather than walk the record again.
+//
+// NOTE: a record's length and timestamp stamps live on the user's Record
+// and describe its position in exactly one batch. A merge re-stamps the
+// records of its sources for the merged batch while those sources are
+// frozen and skipped by createReq, so nothing can serialize them with the
+// wrong stamps; if the merge is discarded, restoreStamps puts the sources'
+// own stamps back.
+func (b *recBatch) renumber(pr promisedRec, oldOff int32) recordNumbers {
+	length, oldTs := pr.lengthAndTimestampDelta()
+	nums := recordNumbers{tsDelta: pr.Timestamp.UnixNano()/1e6 - b.firstTimestamp}
+	if len(b.records) == 0 {
+		nums.tsDelta = 0
+	}
+	nums.lengthField = length +
+		int32(kbin.VarlongLen(nums.tsDelta)-kbin.VarlongLen(oldTs)) +
+		int32(kbin.VarintLen(int32(len(b.records)))-kbin.VarintLen(oldOff))
+	return nums
 }
 
 // restoreStamps re-stamps every record's length and timestamp delta for
