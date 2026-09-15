@@ -1,4 +1,4 @@
-package kfake_test
+package kfake
 
 import (
 	"context"
@@ -16,146 +16,10 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
 )
-
-func newCluster(t *testing.T, opts ...kfake.Opt) *kfake.Cluster {
-	t.Helper()
-	opts = append([]kfake.Opt{kfake.BrokerConfigs(map[string]string{
-		"group.consumer.heartbeat.interval.ms": "100",
-	})}, opts...)
-	c, err := kfake.NewCluster(opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(c.Close)
-	return c
-}
-
-// newClient848 creates a kgo client with the KIP-848 context opt-in enabled.
-func newClient848(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
-	t.Helper()
-	ctx := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
-	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...), kgo.WithContext(ctx)}, opts...)
-	cl, err := kgo.NewClient(opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cl.Close)
-	return cl
-}
-
-func produceSync(t *testing.T, cl *kgo.Client, records ...*kgo.Record) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := cl.ProduceSync(ctx, records...).FirstErr(); err != nil {
-		t.Fatalf("produce failed: %v", err)
-	}
-}
-
-func produceNStrings(t *testing.T, cl *kgo.Client, topic string, n int) {
-	t.Helper()
-	var records []*kgo.Record
-	for i := range n {
-		r := kgo.StringRecord("value-" + strconv.Itoa(i))
-		r.Topic = topic
-		r.Key = []byte("key-" + strconv.Itoa(i))
-		records = append(records, r)
-	}
-	produceSync(t, cl, records...)
-}
-
-func consumeN(t *testing.T, cl *kgo.Client, n int, timeout time.Duration) []*kgo.Record {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	var records []*kgo.Record
-	for len(records) < n {
-		fs := cl.PollFetches(ctx)
-		if errs := fs.Errors(); len(errs) > 0 {
-			for _, e := range errs {
-				if e.Err == context.DeadlineExceeded || e.Err == context.Canceled {
-					t.Fatalf("timeout consuming records: got %d/%d", len(records), n)
-				}
-			}
-			t.Fatalf("consume errors: %v", errs)
-		}
-		fs.EachRecord(func(r *kgo.Record) {
-			records = append(records, r)
-		})
-	}
-	return records
-}
-
-// isInitialJoin reports whether a heartbeat is a member's first: KIP-848
-// joins at epoch 0.
-func isInitialJoin(kreq kmsg.Request) bool {
-	return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch == 0
-}
-
-// groupCommits returns the group's committed offsets, or nil if the group
-// does not exist.
-func groupCommits(c *kfake.Cluster, group string) map[string]map[int32]kfake.GroupCommit {
-	g := c.GroupInfo(group)
-	if g == nil {
-		return nil
-	}
-	return g.Commits
-}
-
-// waitStable waits for the group to be Stable with nMembers members. This
-// covers classic and 848 groups alike.
-func waitStable(t *testing.T, c *kfake.Cluster, group string, nMembers int) *kfake.GroupInfo {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	g, err := c.WaitGroupStable(ctx, group, nMembers)
-	if err != nil {
-		t.Fatalf("group %s not stable with %d members: %v", group, nMembers, err)
-	}
-	return g
-}
-
-// newGroupConsumer creates a kgo client configured for group consuming with
-// sensible test defaults: ConsumeTopics, ConsumerGroup, AtStart reset,
-// and 250ms FetchMaxWait. Additional opts are appended after the defaults.
-func newGroupConsumer(t *testing.T, c *kfake.Cluster, topic, group string, opts ...kgo.Opt) *kgo.Client {
-	t.Helper()
-	base := []kgo.Opt{
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.FetchMaxWait(250 * time.Millisecond),
-	}
-	return newClient848(t, c, append(base, opts...)...)
-}
-
-// poll1FromEachClient polls each client until every one has received at least
-// one record, or the timeout expires.
-func poll1FromEachClient(t *testing.T, timeout time.Duration, clients ...*kgo.Client) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	remaining := make(map[int]*kgo.Client, len(clients))
-	for i, cl := range clients {
-		remaining[i] = cl
-	}
-	for len(remaining) > 0 {
-		for i, cl := range remaining {
-			fs := cl.PollRecords(ctx, 10)
-			if fs.NumRecords() > 0 {
-				delete(remaining, i)
-			}
-		}
-		if ctx.Err() != nil {
-			t.Fatalf("timeout waiting for all clients to get records: %d/%d remaining", len(remaining), len(clients))
-		}
-	}
-}
 
 // Test848RegexSubscription verifies that server-side regex subscription
 // matches the correct topics and excludes non-matching topics.
@@ -167,10 +31,10 @@ func Test848RegexSubscription(t *testing.T) {
 	group := "g848-regex"
 	nRecords := 10
 
-	c := newCluster(t, kfake.NumBrokers(1),
-		kfake.SeedTopics(2, matchA),
-		kfake.SeedTopics(2, matchB),
-		kfake.SeedTopics(2, noMatch),
+	c := newCluster(t, NumBrokers(1),
+		SeedTopics(2, matchA),
+		SeedTopics(2, matchB),
+		SeedTopics(2, noMatch),
 	)
 	producer := newClient848(t, c)
 
@@ -231,7 +95,7 @@ func Test848GroupTypeIsConsumer(t *testing.T) {
 	topic := "t848-type"
 	group := "g848-type"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 10)
 
@@ -273,7 +137,7 @@ func Test848DeleteGroup(t *testing.T) {
 	topic := "t848-delete"
 	group := "g848-delete"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 10)
 
@@ -325,7 +189,7 @@ func Test848ResumeAfterRestart(t *testing.T) {
 	group := "g848-resume"
 	nRecords := 20
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
@@ -376,9 +240,9 @@ func Test848MultipleTopics(t *testing.T) {
 	group := "g848-multi"
 	nRecords := 10
 
-	c := newCluster(t, kfake.NumBrokers(1),
-		kfake.SeedTopics(3, topicA),
-		kfake.SeedTopics(6, topicB),
+	c := newCluster(t, NumBrokers(1),
+		SeedTopics(3, topicA),
+		SeedTopics(6, topicB),
 	)
 	producer := newClient848(t, c)
 
@@ -418,7 +282,7 @@ func Test848TransactionalConsume(t *testing.T) {
 	topic := "t848-txn"
 	group := "g848-txn"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 
 	// Produce 10 records in a committed transaction.
 	txnClient := newClient848(t, c,
@@ -499,9 +363,9 @@ func Test848AddTopicSubscription(t *testing.T) {
 	group := "g848-addsub"
 	nRecords := 10
 
-	c := newCluster(t, kfake.NumBrokers(1),
-		kfake.SeedTopics(1, topicA),
-		kfake.SeedTopics(1, topicB),
+	c := newCluster(t, NumBrokers(1),
+		SeedTopics(1, topicA),
+		SeedTopics(1, topicB),
 	)
 	producer := newClient848(t, c)
 
@@ -557,7 +421,7 @@ func Test848TopicCreatedAfterJoin(t *testing.T) {
 	group := "g848-dynamic"
 	nRecords := 10
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, existingTopic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, existingTopic))
 	producer := newClient848(t, c)
 	produceNStrings(t, producer, existingTopic, nRecords)
 
@@ -615,7 +479,7 @@ func Test848TopicCreatedAfterJoinNoPeriodicMeta(t *testing.T) {
 	group := "g848-nopermeta"
 	nRecords := 10
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, existingTopic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, existingTopic))
 	producer := newClient848(t, c)
 	produceNStrings(t, producer, existingTopic, nRecords)
 
@@ -667,7 +531,7 @@ func Test848RangeAssignorContiguousBlocks(t *testing.T) {
 	group := "g848-range"
 	nPartitions := 6
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(int32(nPartitions), topic))
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 60)
 
@@ -701,7 +565,7 @@ func Test848UnsupportedAssignor(t *testing.T) {
 	t.Parallel()
 	group := "g848-bad-assignor"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, "t"))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t"))
 
 	// Send a raw ConsumerGroupHeartbeat with an unknown assignor.
 	cl := newClient848(t, c)
@@ -734,7 +598,7 @@ func TestOffsetCommitAfterLeaveClassic(t *testing.T) {
 	topic := "commit-after-leave"
 	group := "commit-after-leave-group"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 10)
 
@@ -786,14 +650,14 @@ func TestOffsetCommitAfterLeave848(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		opts []kfake.Opt
+		opts []Opt
 	}{
 		{"v10", nil},
-		{"v9", func() []kfake.Opt {
+		{"v9", func() []Opt {
 			v := kversion.Stable()
 			v.SetMaxKeyVersion(8, 9)
 			v.SetMaxKeyVersion(9, 9)
-			return []kfake.Opt{kfake.MaxVersions(v)}
+			return []Opt{MaxVersions(v)}
 		}()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -801,7 +665,7 @@ func TestOffsetCommitAfterLeave848(t *testing.T) {
 			topic := "commit-after-leave-848-" + tc.name
 			group := "commit-after-leave-848-group-" + tc.name
 
-			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			opts := append([]Opt{NumBrokers(1), SeedTopics(1, topic)}, tc.opts...)
 			c := newCluster(t, opts...)
 			producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 			produceNStrings(t, producer, topic, 10)
@@ -889,7 +753,7 @@ func Test848PartitionHandoffNoDuplicates(t *testing.T) {
 	nPartitions := 6
 	nRecords := 60
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(int32(nPartitions), topic))
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
@@ -953,7 +817,7 @@ func Test848CooperativeRevocationDuringConsumption(t *testing.T) {
 	nPartitions := 6
 	nRecords := 60
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(int32(nPartitions), topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(int32(nPartitions), topic))
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
@@ -1024,9 +888,9 @@ func Test848RebalanceTimeout(t *testing.T) {
 	nPartitions := 6
 
 	c := newCluster(t,
-		kfake.NumBrokers(1),
-		kfake.SeedTopics(int32(nPartitions), topic),
-		kfake.BrokerConfigs(map[string]string{
+		NumBrokers(1),
+		SeedTopics(int32(nPartitions), topic),
+		BrokerConfigs(map[string]string{
 			// Long session timeout so it doesn't interfere.
 			"group.consumer.session.timeout.ms": "30000",
 		}),
@@ -1146,7 +1010,7 @@ func Test848RebalanceTimeout(t *testing.T) {
 	// Wait for the group to leave Stable (rebalance triggered).
 	deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if _, err := c.WaitGroupInfo(deadline, group, func(g *kfake.GroupInfo) bool {
+	if _, err := c.WaitGroupInfo(deadline, group, func(g *GroupInfo) bool {
 		return g != nil && g.State != "Stable"
 	}); err != nil {
 		t.Fatal("timeout waiting for rebalance to start")
@@ -1187,18 +1051,6 @@ func Test848RebalanceTimeout(t *testing.T) {
 	}
 }
 
-// newPlainClient creates a kgo client without 848 opt-in.
-func newPlainClient(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
-	t.Helper()
-	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...)}, opts...)
-	cl, err := kgo.NewClient(opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cl.Close)
-	return cl
-}
-
 // initProducerID sends a raw InitProducerID request with the given
 // parameters and returns the response.
 func initProducerID(t *testing.T, cl *kgo.Client, txid string, pid int64, epoch int16, timeout int32) *kmsg.InitProducerIDResponse {
@@ -1224,7 +1076,7 @@ func initProducerID(t *testing.T, cl *kgo.Client, txid string, pid int64, epoch 
 func TestTxnInitProducerIDStaleEpochRecovery(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 	cl := newPlainClient(t, c)
 
 	// Init with a transactional ID.
@@ -1267,7 +1119,7 @@ func TestTxnInitProducerIDAbortOngoing(t *testing.T) {
 	t.Parallel()
 	topic := "t-init-abort"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 
 	// Start a transactional producer and begin a transaction.
@@ -1320,7 +1172,7 @@ func TestTxnEndTxnTV1Retry(t *testing.T) {
 	t.Parallel()
 	topic := "t-endtxn-retry"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	// Pin EndTxn (key 26) to v4 so we get TV1 behavior.
 	// kgo overrides req.Version to the negotiated max, so we
 	// must use MaxVersions to cap it.
@@ -1390,7 +1242,7 @@ func TestTxnEndTxnTV1Retry(t *testing.T) {
 func TestTxnEndTxnTV2EmptyAbort(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -1421,7 +1273,7 @@ func TestTxnEndTxnTV2EmptyAbort(t *testing.T) {
 func TestTxnEpochBumpMonotonic(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 	cl := newPlainClient(t, c)
 
 	// Init producer - epoch starts at 0.
@@ -1461,7 +1313,7 @@ func TestProduceDuplicateReturnsOriginalOffset(t *testing.T) {
 	t.Parallel()
 	topic := "t-dup-offset"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	// Pin Produce to v11 (topic names, not IDs) so our raw requests work.
 	v := kversion.Stable()
 	v.SetMaxKeyVersion(0, 11) // Produce key = 0
@@ -1562,7 +1414,7 @@ func TestProduceDuplicateReturnsOriginalOffset(t *testing.T) {
 func TestTxnConcurrentDescribeAndInit(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 	cl := newPlainClient(t, c)
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
@@ -1599,7 +1451,7 @@ func TestTxnConcurrentDescribeAndInit(t *testing.T) {
 func TestTxnAddOffsetsWithoutGroup(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -1659,7 +1511,7 @@ func TestTxnDescribeTransactions(t *testing.T) {
 	t.Parallel()
 	topic := "t-describe-txn"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -1771,7 +1623,7 @@ func TestTxnDescribeTransactions(t *testing.T) {
 func TestProduceSyncUnlinger(t *testing.T) {
 	t.Parallel()
 	topic := "produce-sync-unlinger"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 
 	producer := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(topic),
@@ -1824,7 +1676,7 @@ func TestTxnEndTxnTV2RetryMismatchedDirection(t *testing.T) {
 	t.Parallel()
 	topic := "t-endtxn-v5-mismatch"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -1893,7 +1745,7 @@ func TestTxnEndTxnTV2RetryMismatchedDirection(t *testing.T) {
 func TestTxnEndTxnTV2EmptyAbortBumpsEpoch(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -1926,7 +1778,7 @@ func TestTxnEndTxnTV2EmptyAbortBumpsEpoch(t *testing.T) {
 func TestTxnInitProducerIDMaxTimeout(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.BrokerConfigs(map[string]string{
+	c := newCluster(t, NumBrokers(1), BrokerConfigs(map[string]string{
 		"transaction.max.timeout.ms": "5000",
 	}))
 	cl := newPlainClient(t, c)
@@ -1950,7 +1802,7 @@ func TestProduceControlBatchRejected(t *testing.T) {
 	t.Parallel()
 	topic := "t-control-batch"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	v := kversion.Stable()
 	v.SetMaxKeyVersion(0, 11)
 	cl := newPlainClient(t, c, kgo.MaxVersions(v))
@@ -2007,7 +1859,7 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	t.Parallel()
 	topic := "t-non-txn-during-tx"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	v := kversion.Stable()
 	v.SetMaxKeyVersion(0, 11)
 	cl := newPlainClient(t, c, kgo.MaxVersions(v))
@@ -2105,7 +1957,7 @@ func TestProduceUnknownProducerIDPre360(t *testing.T) {
 			v := kversion.Stable()
 			v.SetMaxKeyVersion(0, 11) // Produce v11: partitions are added explicitly
 			v.SetMaxKeyVersion(22, test.initMax)
-			c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic), kfake.MaxVersions(v))
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), MaxVersions(v))
 			cl := newPlainClient(t, c, kgo.MaxVersions(v))
 			ctx := context.Background()
 
@@ -2191,7 +2043,7 @@ func TestProduceUnknownProducerIDPre360(t *testing.T) {
 // idempotentProduceRaw sends a one record idempotent produce for the given
 // producer ID, epoch, and first sequence, and returns the partition's error
 // code.
-func idempotentProduceRaw(t *testing.T, c *kfake.Cluster, cl *kgo.Client, topic string, pid int64, epoch int16, firstSeq int32) int16 {
+func idempotentProduceRaw(t *testing.T, c *Cluster, cl *kgo.Client, topic string, pid int64, epoch int16, firstSeq int32) int16 {
 	t.Helper()
 	rec := kmsg.Record{Key: []byte("k"), Value: []byte("v")}
 	rec.Length = int32(len(rec.AppendTo(nil)) - 1)
@@ -2275,9 +2127,9 @@ func TestProduceNeverWrittenPartitionFirstSeq(t *testing.T) {
 			t.Parallel()
 			topic := "t-never-written-" + test.name
 
-			opts := []kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}
+			opts := []Opt{NumBrokers(1), SeedTopics(1, topic)}
 			if test.capped {
-				opts = append(opts, kfake.MaxVersions(kversion.V4_2_0()))
+				opts = append(opts, MaxVersions(kversion.V4_2_0()))
 			}
 			c := newCluster(t, opts...)
 			cl := newPlainClient(t, c)
@@ -2355,9 +2207,9 @@ func TestProduceRecreatedTopicFirstSeq(t *testing.T) {
 			t.Parallel()
 			topic := "t-recreate-seq-" + test.name
 
-			opts := []kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}
+			opts := []Opt{NumBrokers(1), SeedTopics(1, topic)}
 			if test.capped {
-				opts = append(opts, kfake.MaxVersions(kversion.V4_2_0()))
+				opts = append(opts, MaxVersions(kversion.V4_2_0()))
 			}
 			c := newCluster(t, opts...)
 
@@ -2478,7 +2330,7 @@ func TestClassicIncompatibleProtocolRejected(t *testing.T) {
 	topic := "t-incompat-proto"
 	group := "g-incompat-proto"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -2553,7 +2405,7 @@ func TestClassicPendingSyncTimeout(t *testing.T) {
 	topic := "t-pending-sync"
 	group := "g-pending-sync"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -2600,7 +2452,7 @@ func TestClassicProtocolVoting(t *testing.T) {
 	topic := "t-proto-vote"
 	group := "g-proto-vote"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
 	ctx := context.Background()
 
 	makeJoinReq := func(protos []string) *kmsg.JoinGroupRequest {
@@ -2697,7 +2549,7 @@ func TestFetchSessionEviction(t *testing.T) {
 	t.Parallel()
 	topic := "t-session-evict"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic), kfake.BrokerConfigs(map[string]string{
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), BrokerConfigs(map[string]string{
 		"max.incremental.fetch.session.cache.slots": "3",
 	}))
 	v := kversion.Stable()
@@ -2813,7 +2665,7 @@ func TestIncrementalFetchOmitsUnchanged(t *testing.T) {
 	t.Parallel()
 	topic := "t-incr-fetch"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	v := kversion.Stable()
 	v.SetMaxKeyVersion(1, 11)
 	cl := newPlainClient(t, c, kgo.MaxVersions(v))
@@ -2904,7 +2756,7 @@ func TestIncrementalFetchIncludesErrors(t *testing.T) {
 	topic := "t-incr-err"
 
 	// Only 1 partition exists. We'll fetch p0 (exists) and p99 (does not).
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	v := kversion.Stable()
 	v.SetMaxKeyVersion(1, 11)
 	cl := newPlainClient(t, c, kgo.MaxVersions(v))
@@ -2954,7 +2806,7 @@ func TestIncrementalFetchEndToEnd(t *testing.T) {
 	t.Parallel()
 	topic := "t-incr-e2e"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(3, topic))
 	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
@@ -2991,7 +2843,7 @@ func TestAbortedTxnIndexOverlap(t *testing.T) {
 	t.Parallel()
 	topic := "t-abort-idx"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	v := kversion.Stable()
 	v.SetMaxKeyVersion(1, 11)
 	cl := newPlainClient(t, c, kgo.MaxVersions(v))
@@ -3073,13 +2925,11 @@ func TestAbortedTxnIndexOverlap(t *testing.T) {
 	}
 }
 
-func stringp(s string) *string { return &s }
-
 // TestCompactBasic verifies key deduplication, null-key dropping, and
 // the active segment invariant (single batch is never compacted).
 func TestCompactBasic(t *testing.T) {
 	t.Parallel()
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 
 	cl := newPlainClient(t, c)
 
@@ -3135,7 +2985,7 @@ func TestCompactBasic(t *testing.T) {
 func TestCompactTombstone(t *testing.T) {
 	t.Parallel()
 	topic := "compact-tombstone"
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 
 	cl := newPlainClient(t, c)
 	if err := c.CreateTopic(topic, 1, map[string]string{"cleanup.policy": "compact", "delete.retention.ms": "0"}); err != nil {
@@ -3167,7 +3017,7 @@ func TestCompactTombstone(t *testing.T) {
 func TestCompactOffsetGaps(t *testing.T) {
 	t.Parallel()
 	topic := "compact-gaps"
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 
 	cl := newPlainClient(t, c)
 	if err := c.CreateTopic(topic, 1, map[string]string{"cleanup.policy": "compact"}); err != nil {
@@ -3201,7 +3051,7 @@ func TestCompactOffsetGaps(t *testing.T) {
 func TestCompactControlBatch(t *testing.T) {
 	t.Parallel()
 	topic := "compact-ctrl"
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 
 	cl := newPlainClient(t, c)
 	if err := c.CreateTopic(topic, 1, map[string]string{"cleanup.policy": "compact"}); err != nil {
@@ -3268,7 +3118,7 @@ func TestCompactBackgroundTicker(t *testing.T) {
 	t.Parallel()
 	topic := "compact-ticker"
 	backoff := "50"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.BrokerConfigs(map[string]string{"log.cleaner.backoff.ms": backoff}))
+	c := newCluster(t, NumBrokers(1), BrokerConfigs(map[string]string{"log.cleaner.backoff.ms": backoff}))
 
 	cl := newPlainClient(t, c)
 	if err := c.CreateTopic(topic, 1, map[string]string{"cleanup.policy": "compact"}); err != nil {
@@ -3303,7 +3153,7 @@ func TestCompactBackgroundTicker(t *testing.T) {
 func TestCompactMultiRecordBatch(t *testing.T) {
 	t.Parallel()
 	topic := "compact-multi"
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 
 	cl := newPlainClient(t, c,
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
@@ -3355,7 +3205,7 @@ func TestCompactTombstoneRetained(t *testing.T) {
 	t.Parallel()
 	topic := "compact-tombstone-retained"
 	// Default delete.retention.ms is 24h - tombstone should survive.
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 
 	cl := newPlainClient(t, c)
 	if err := c.CreateTopic(topic, 1, map[string]string{"cleanup.policy": "compact"}); err != nil {
@@ -3398,7 +3248,7 @@ func TestCompactTombstoneRetained(t *testing.T) {
 func TestCompactDoubleCompaction(t *testing.T) {
 	t.Parallel()
 	topic := "compact-double"
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 
 	cl := newPlainClient(t, c)
 	if err := c.CreateTopic(topic, 1, map[string]string{"cleanup.policy": "compact"}); err != nil {
@@ -3441,7 +3291,7 @@ func TestCompactDoubleCompaction(t *testing.T) {
 func TestRetentionTime(t *testing.T) {
 	t.Parallel()
 	topic := "retention-time"
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 
 	cl := newPlainClient(t, c)
 	if err := c.CreateTopic(topic, 1, map[string]string{"retention.ms": "100"}); err != nil {
@@ -3484,7 +3334,7 @@ func TestRetentionBytes(t *testing.T) {
 	topic := "retention-bytes"
 	// A single-record batch is ~70 bytes. Set retention to 100 so only
 	// the last batch survives out of three.
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 
 	cl := newPlainClient(t, c)
 	if err := c.CreateTopic(topic, 1, map[string]string{"retention.bytes": "100"}); err != nil {
@@ -3522,9 +3372,9 @@ func TestStaticMemberClassicRejoin(t *testing.T) {
 	group := "static-classic-rejoin-group"
 	instanceID := "static-instance-1"
 
-	c := newCluster(t, kfake.NumBrokers(1),
-		kfake.SeedTopics(2, topic),
-		kfake.BrokerConfigs(map[string]string{"group.min.session.timeout.ms": "100"}),
+	c := newCluster(t, NumBrokers(1),
+		SeedTopics(2, topic),
+		BrokerConfigs(map[string]string{"group.min.session.timeout.ms": "100"}),
 	)
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 20)
@@ -3590,7 +3440,7 @@ func TestStaticMemberClassicFencing(t *testing.T) {
 	group := "static-classic-fence-group"
 	instanceID := "fence-instance-1"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 20)
 
@@ -3646,7 +3496,7 @@ func TestStaticMemberClassicLeaveByInstance(t *testing.T) {
 	group := "static-classic-leave-inst-group"
 	instanceID := "leave-instance-1"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 10)
 
@@ -3698,7 +3548,7 @@ func TestStaticMember848Leave(t *testing.T) {
 	group := "static-848-leave-group"
 	instanceID := "static-848-instance-1"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(2, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, 20)
 
@@ -3743,9 +3593,9 @@ func TestStaticMember848SessionTimeout(t *testing.T) {
 	group := "static-848-timeout-group"
 	instanceID := "static-848-timeout-inst"
 
-	c := newCluster(t, kfake.NumBrokers(1),
-		kfake.SeedTopics(2, topic),
-		kfake.BrokerConfigs(map[string]string{
+	c := newCluster(t, NumBrokers(1),
+		SeedTopics(2, topic),
+		BrokerConfigs(map[string]string{
 			"group.consumer.session.timeout.ms": "500",
 		}),
 	)
@@ -3788,7 +3638,7 @@ func TestRetentionTicker(t *testing.T) {
 	t.Parallel()
 	topic := "retention-ticker"
 	backoff := "50"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.BrokerConfigs(map[string]string{"log.cleaner.backoff.ms": backoff}))
+	c := newCluster(t, NumBrokers(1), BrokerConfigs(map[string]string{"log.cleaner.backoff.ms": backoff}))
 
 	cl := newPlainClient(t, c)
 	if err := c.CreateTopic(topic, 1, map[string]string{"retention.ms": "1"}); err != nil {
@@ -3814,7 +3664,7 @@ func TestRetentionTicker(t *testing.T) {
 func Test848FetchOffsetsStaleEpochRetry(t *testing.T) {
 	t.Parallel()
 	topic := "t-stale-epoch"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 
 	pCl := newPlainClient(t, c)
 	for i := 0; i < 10; i++ {
@@ -3882,7 +3732,7 @@ func TestFetchOffsetsUnstableRetryCancel(t *testing.T) {
 	t.Parallel()
 	topic := "t-unstable-retry-cancel"
 	group := "test-unstable-retry-cancel"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(4, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(4, topic))
 
 	// Produce one record to every partition so cl1 will have records to
 	// consume after the rebalance completes (which is how the test exits).
@@ -3986,7 +3836,7 @@ func TestElectLeaders(t *testing.T) {
 	t.Parallel()
 	topic := "t-elect-leaders"
 
-	c := newCluster(t, kfake.NumBrokers(3), kfake.SeedTopics(3, topic))
+	c := newCluster(t, NumBrokers(3), SeedTopics(3, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -4097,7 +3947,7 @@ func TestElectLeaders(t *testing.T) {
 func TestIncrementalAlterConfigAppendSubtract(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, "t-incr-cfg"))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t-incr-cfg"))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -4228,7 +4078,7 @@ func TestIncrementalAlterConfigAppendSubtract(t *testing.T) {
 func TestApiVersionsSupportedFeatures(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, kfake.NumBrokers(1))
+	c := newCluster(t, NumBrokers(1))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -4284,7 +4134,7 @@ func TestApiVersionsSupportedFeatures(t *testing.T) {
 	// With Produce capped below v12, transaction.version should be absent.
 	v := kversion.Stable()
 	v.SetMaxKeyVersion(0, 11) // Produce max v11
-	c2 := newCluster(t, kfake.NumBrokers(1), kfake.MaxVersions(v))
+	c2 := newCluster(t, NumBrokers(1), MaxVersions(v))
 	cl2 := newPlainClient(t, c2)
 	resp2, err := req.RequestWith(ctx, cl2)
 	if err != nil {
@@ -4308,8 +4158,8 @@ func TestOffsetExpiration(t *testing.T) {
 	group := "offset-expire-group"
 
 	// 50ms retention, 50ms check interval for fast expiration.
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic),
-		kfake.BrokerConfigs(map[string]string{
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic),
+		BrokerConfigs(map[string]string{
 			"group.consumer.heartbeat.interval.ms": "100",
 			"offset.retention.ms":                  "50",
 			"offsets.retention.check.interval.ms":  "50",
@@ -4351,8 +4201,8 @@ func TestOffsetExpirationActiveGroup(t *testing.T) {
 	topic := "offset-expire-active"
 	group := "offset-expire-active-group"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic),
-		kfake.BrokerConfigs(map[string]string{
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic),
+		BrokerConfigs(map[string]string{
 			"group.consumer.heartbeat.interval.ms": "100",
 			"offset.retention.ms":                  "50",
 			"offsets.retention.check.interval.ms":  "50",
@@ -4404,14 +4254,14 @@ func TestOffsetCommitTopicID(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		opts []kfake.Opt // additional cluster options
+		opts []Opt // additional cluster options
 	}{
 		{"v10", nil},
-		{"v9", func() []kfake.Opt {
+		{"v9", func() []Opt {
 			v := kversion.Stable()
 			v.SetMaxKeyVersion(8, 9) // OffsetCommit
 			v.SetMaxKeyVersion(9, 9) // OffsetFetch
-			return []kfake.Opt{kfake.MaxVersions(v)}
+			return []Opt{MaxVersions(v)}
 		}()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4419,7 +4269,7 @@ func TestOffsetCommitTopicID(t *testing.T) {
 			topic := "commit-topicid-" + tc.name
 			group := "commit-topicid-group-" + tc.name
 
-			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			opts := append([]Opt{NumBrokers(1), SeedTopics(1, topic)}, tc.opts...)
 			c := newCluster(t, opts...)
 			raw := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 			produceNStrings(t, raw, topic, 10)
@@ -4484,14 +4334,14 @@ func Test848OffsetCommitTopicID(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		opts []kfake.Opt
+		opts []Opt
 	}{
 		{"v10", nil},
-		{"v9", func() []kfake.Opt {
+		{"v9", func() []Opt {
 			v := kversion.Stable()
 			v.SetMaxKeyVersion(8, 9)
 			v.SetMaxKeyVersion(9, 9)
-			return []kfake.Opt{kfake.MaxVersions(v)}
+			return []Opt{MaxVersions(v)}
 		}()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4499,7 +4349,7 @@ func Test848OffsetCommitTopicID(t *testing.T) {
 			topic := "commit-topicid-848-" + tc.name
 			group := "commit-topicid-848-group-" + tc.name
 
-			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			opts := append([]Opt{NumBrokers(1), SeedTopics(1, topic)}, tc.opts...)
 			c := newCluster(t, opts...)
 			producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 			produceNStrings(t, producer, topic, 10)
@@ -4546,14 +4396,14 @@ func TestOffsetCommitTopicIDByID(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		opts []kfake.Opt
+		opts []Opt
 	}{
 		{"v10", nil},
-		{"v9", func() []kfake.Opt {
+		{"v9", func() []Opt {
 			v := kversion.Stable()
 			v.SetMaxKeyVersion(8, 9)
 			v.SetMaxKeyVersion(9, 9)
-			return []kfake.Opt{kfake.MaxVersions(v)}
+			return []Opt{MaxVersions(v)}
 		}()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4561,7 +4411,7 @@ func TestOffsetCommitTopicIDByID(t *testing.T) {
 			topic := "commit-byid-" + tc.name
 			group := "commit-byid-group-" + tc.name
 
-			opts := append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topic)}, tc.opts...)
+			opts := append([]Opt{NumBrokers(1), SeedTopics(1, topic)}, tc.opts...)
 			c := newCluster(t, opts...)
 			raw := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 			produceNStrings(t, raw, topic, 10)
@@ -4627,7 +4477,7 @@ func TestOffsetCommitUnknownTopicID(t *testing.T) {
 	topic := "commit-unknown-id"
 	group := "commit-unknown-id-group"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	raw := newClient848(t, c)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -4668,11 +4518,11 @@ func TestOffsetCommitUnknownTopicID(t *testing.T) {
 // waitShareGroupEmpty waits until the share group has no members. This is
 // needed after cl.Close() because the leave heartbeat may not have been
 // processed yet.
-func waitShareGroupEmpty(t *testing.T, c *kfake.Cluster, group string) {
+func waitShareGroupEmpty(t *testing.T, c *Cluster, group string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := c.WaitGroupInfo(ctx, group, func(g *kfake.GroupInfo) bool {
+	_, err := c.WaitGroupInfo(ctx, group, func(g *GroupInfo) bool {
 		return g == nil || len(g.Members) == 0
 	})
 	if err != nil {
@@ -4686,7 +4536,7 @@ func TestShareGroupDescribe(t *testing.T) {
 	t.Parallel()
 	topic := "sg-describe"
 	group := "sg-describe-group"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
@@ -4758,7 +4608,7 @@ func TestShareGroupDescribeEmpty(t *testing.T) {
 	t.Parallel()
 	topic := "sg-describe-empty"
 	group := "sg-describe-empty-group"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
@@ -4830,7 +4680,7 @@ func TestDescribeShareGroupOffsets(t *testing.T) {
 	t.Parallel()
 	topic := "sg-desc-offsets"
 	group := "sg-desc-offsets-group"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
@@ -4941,7 +4791,7 @@ func TestAlterShareGroupOffsets(t *testing.T) {
 	t.Parallel()
 	topic := "sg-alter-offsets"
 	group := "sg-alter-offsets-group"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
@@ -5046,7 +4896,7 @@ func TestAlterShareGroupOffsetsNonEmpty(t *testing.T) {
 	t.Parallel()
 	topic := "sg-alter-nonempty"
 	group := "sg-alter-nonempty-group"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
@@ -5102,7 +4952,7 @@ func TestDeleteShareGroupOffsets(t *testing.T) {
 	t.Parallel()
 	topic := "sg-delete-offsets"
 	group := "sg-delete-offsets-group"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
@@ -5209,7 +5059,7 @@ func TestDeleteShareGroupOffsetsNonEmpty(t *testing.T) {
 	t.Parallel()
 	topic := "sg-delete-nonempty"
 	group := "sg-delete-nonempty-group"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
@@ -5263,7 +5113,7 @@ func TestShareGroupForgottenTopics(t *testing.T) {
 	topic := "share-forgotten"
 	group := "share-test-forgotten"
 
-	c := newCluster(t, kfake.SeedTopics(1, topic), kfake.BrokerConfigs(map[string]string{
+	c := newCluster(t, SeedTopics(1, topic), BrokerConfigs(map[string]string{
 		"group.share.heartbeat.interval.ms": "100",
 	}))
 
@@ -5391,7 +5241,7 @@ func TestShareGroupAckRequeue(t *testing.T) {
 	t.Parallel()
 
 	topic, group := "share-ack-requeue", "share-test-ack-requeue"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	defer admin.Close()
@@ -5527,8 +5377,8 @@ func TestShareGroupCurrentLeaderMove(t *testing.T) {
 	t.Parallel()
 	topic := "share-leader-move"
 	c := newCluster(t,
-		kfake.NumBrokers(2),
-		kfake.SeedTopics(1, topic),
+		NumBrokers(2),
+		SeedTopics(1, topic),
 	)
 	defer c.Close()
 
@@ -5624,8 +5474,8 @@ func TestShareGroupFencedLeaderEpochMove(t *testing.T) {
 	t.Parallel()
 	topic := "share-fenced-epoch"
 	c := newCluster(t,
-		kfake.NumBrokers(2),
-		kfake.SeedTopics(1, topic),
+		NumBrokers(2),
+		SeedTopics(1, topic),
 	)
 	defer c.Close()
 
@@ -5804,7 +5654,7 @@ func testShareGroupFetchCascade(t *testing.T, maxConcurrent int, failPartitions 
 
 	// 5 partitions on 5 brokers: 1 partition per broker, so each
 	// broker is a source. Failing a partition fails exactly one broker.
-	c := newCluster(t, kfake.NumBrokers(5), kfake.SeedTopics(5, topic), kfake.BrokerConfigs(map[string]string{
+	c := newCluster(t, NumBrokers(5), SeedTopics(5, topic), BrokerConfigs(map[string]string{
 		"group.share.heartbeat.interval.ms": "100",
 	}))
 
@@ -5899,9 +5749,9 @@ func TestUnreleasedInstanceIDCapFires(t *testing.T) {
 	topic := "t848-unreleased-cap"
 	group := "g848-unreleased-cap"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 
-	initialJoinAttempts := c.Fault(kfake.Fault{
+	initialJoinAttempts := c.Fault(Fault{
 		Keys:  []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
 		Err:   kerr.UnreleasedInstanceID,
 		Count: -1,
@@ -5954,12 +5804,12 @@ func TestUnreleasedInstanceIDRaceResolves(t *testing.T) {
 	group := "g848-unreleased-race"
 	nRecords := 10
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
 	produceNStrings(t, producer, topic, nRecords)
 
 	// The first two joins fail; the third reaches the real handler.
-	initialJoinAttempts := c.Fault(kfake.Fault{
+	initialJoinAttempts := c.Fault(Fault{
 		Keys:  []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
 		Err:   kerr.UnreleasedInstanceID,
 		Count: 2,
@@ -6007,7 +5857,7 @@ func TestConsumeRecordHeaders(t *testing.T) {
 	t.Parallel()
 	topic := "t-record-headers"
 
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	consumer := newPlainClient(t, c,
 		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
@@ -6106,7 +5956,7 @@ func (p *testRecordPool) PutRecords(r []kgo.Record) {
 func TestShareGroupRecyclePoolAliasing(t *testing.T) {
 	t.Parallel()
 	topic, group := "share-pool-reuse", "share-pool-reuse-g"
-	c := newCluster(t, kfake.SeedTopics(1, topic))
+	c := newCluster(t, SeedTopics(1, topic))
 
 	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
@@ -6273,7 +6123,7 @@ func TestCommitFatalMemberErrorTriggersRejoin(t *testing.T) {
 			group := "g-commit-fatal-" + test.name
 			const nRecords = 10
 
-			c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 			produceNStrings(t, newPlainClient(t, c), topic, nRecords)
 
 			cl := newPlainClient(t, c,
@@ -6287,8 +6137,8 @@ func TestCommitFatalMemberErrorTriggersRejoin(t *testing.T) {
 
 			// Count JoinGroups to observe the rejoin; the group is
 			// stable now, so any join from here on is the rejoin.
-			joins := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.JoinGroup}, Observe: true, Count: -1})
-			c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.OffsetCommit}, Err: test.err})
+			joins := c.Fault(Fault{Keys: []kmsg.Key{kmsg.JoinGroup}, Observe: true, Count: -1})
+			c.Fault(Fault{Keys: []kmsg.Key{kmsg.OffsetCommit}, Err: test.err})
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()

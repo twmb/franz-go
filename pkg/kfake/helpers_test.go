@@ -23,6 +23,9 @@ func (m *testMemFS) opt() Opt  { return withFS(m.fs) }
 
 func newCluster(t *testing.T, opts ...Opt) *Cluster {
 	t.Helper()
+	opts = append([]Opt{BrokerConfigs(map[string]string{
+		"group.consumer.heartbeat.interval.ms": "100",
+	})}, opts...)
 	c, err := NewCluster(opts...)
 	if err != nil {
 		t.Fatal(err)
@@ -56,25 +59,6 @@ func newShareConsumer(t *testing.T, c *Cluster, topic, group string, opts ...kgo
 	}
 	t.Cleanup(cl.Close)
 	return cl
-}
-
-// collectRecords polls until at least n records are collected or the timeout
-// expires. It fatals if fewer than n records arrive.
-func collectRecords(t *testing.T, cl *kgo.Client, n int, timeout time.Duration) []*kgo.Record {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	var records []*kgo.Record
-	for ctx.Err() == nil && len(records) < n {
-		fetches := cl.PollFetches(ctx)
-		fetches.EachRecord(func(r *kgo.Record) {
-			records = append(records, r)
-		})
-	}
-	if len(records) < n {
-		t.Fatalf("collectRecords: wanted %d, got %d (timeout %v)", n, len(records), timeout)
-	}
-	return records
 }
 
 // verifyZeroRecords polls for the given duration and fails if any records
@@ -275,4 +259,118 @@ func rawShareFetch(t *testing.T, cl *kgo.Client, group, memberID string, topicID
 		}
 	}
 	return sfResp, acquired
+}
+
+// newClient848 creates a kgo client with the KIP-848 context opt-in enabled.
+func newClient848(t *testing.T, c *Cluster, opts ...kgo.Opt) *kgo.Client {
+	t.Helper()
+	ctx := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
+	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...), kgo.WithContext(ctx)}, opts...)
+	cl, err := kgo.NewClient(opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cl.Close)
+	return cl
+}
+
+func produceSync(t *testing.T, cl *kgo.Client, records ...*kgo.Record) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := cl.ProduceSync(ctx, records...).FirstErr(); err != nil {
+		t.Fatalf("produce failed: %v", err)
+	}
+}
+
+func produceNStrings(t *testing.T, cl *kgo.Client, topic string, n int) {
+	t.Helper()
+	var records []*kgo.Record
+	for i := range n {
+		r := kgo.StringRecord("value-" + strconv.Itoa(i))
+		r.Topic = topic
+		r.Key = []byte("key-" + strconv.Itoa(i))
+		records = append(records, r)
+	}
+	produceSync(t, cl, records...)
+}
+
+// consumeN polls until n records arrive, fataling on a fetch error or on the
+// timeout.
+func consumeN(t *testing.T, cl *kgo.Client, n int, timeout time.Duration) []*kgo.Record {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var records []*kgo.Record
+	for len(records) < n {
+		fs := cl.PollFetches(ctx)
+		if errs := fs.Errors(); len(errs) > 0 {
+			for _, e := range errs {
+				if e.Err == context.DeadlineExceeded || e.Err == context.Canceled {
+					t.Fatalf("timeout consuming records: got %d/%d", len(records), n)
+				}
+			}
+			t.Fatalf("consume errors: %v", errs)
+		}
+		fs.EachRecord(func(r *kgo.Record) {
+			records = append(records, r)
+		})
+	}
+	return records
+}
+
+// isInitialJoin reports whether a heartbeat is a member's first: KIP-848
+// joins at epoch 0.
+func isInitialJoin(kreq kmsg.Request) bool {
+	return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch == 0
+}
+
+// waitStable waits for the group to be Stable with nMembers members. This
+// covers classic and 848 groups alike.
+func waitStable(t *testing.T, c *Cluster, group string, nMembers int) *GroupInfo {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	g, err := c.WaitGroupStable(ctx, group, nMembers)
+	if err != nil {
+		t.Fatalf("group %s not stable with %d members: %v", group, nMembers, err)
+	}
+	return g
+}
+
+// newGroupConsumer creates a kgo client configured for group consuming with
+// sensible test defaults: ConsumeTopics, ConsumerGroup, AtStart reset,
+// and 250ms FetchMaxWait. Additional opts are appended after the defaults.
+func newGroupConsumer(t *testing.T, c *Cluster, topic, group string, opts ...kgo.Opt) *kgo.Client {
+	t.Helper()
+	base := []kgo.Opt{
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.FetchMaxWait(250 * time.Millisecond),
+	}
+	return newClient848(t, c, append(base, opts...)...)
+}
+
+// poll1FromEachClient polls each client until every one has received at least
+// one record, or the timeout expires.
+func poll1FromEachClient(t *testing.T, timeout time.Duration, clients ...*kgo.Client) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	remaining := make(map[int]*kgo.Client, len(clients))
+	for i, cl := range clients {
+		remaining[i] = cl
+	}
+	for len(remaining) > 0 {
+		for i, cl := range remaining {
+			fs := cl.PollRecords(ctx, 10)
+			if fs.NumRecords() > 0 {
+				delete(remaining, i)
+			}
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("timeout waiting for all clients to get records: %d/%d remaining", len(remaining), len(clients))
+		}
+	}
 }

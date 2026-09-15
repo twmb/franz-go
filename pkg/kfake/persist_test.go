@@ -73,7 +73,7 @@ func TestPersistProduceCloseReopen(t *testing.T) {
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
 
-		records := collectRecords(t, cl, 10, 5*time.Second)
+		records := consumeN(t, cl, 10, 5*time.Second)
 		if len(records) != 10 {
 			t.Fatalf("expected 10 records, got %d", len(records))
 		}
@@ -135,7 +135,7 @@ func TestPersistSyncWritesCrashRecovery(t *testing.T) {
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
 
-		records := collectRecords(t, cl, 5, 5*time.Second)
+		records := consumeN(t, cl, 5, 5*time.Second)
 		if len(records) != 5 {
 			t.Fatalf("expected 5 records, got %d", len(records))
 		}
@@ -557,7 +557,7 @@ func TestPersistCRCCorruption(t *testing.T) {
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
 
-		records := collectRecords(t, cl, 1, 3*time.Second)
+		records := consumeN(t, cl, 1, 3*time.Second)
 		if len(records) >= 5 {
 			t.Fatalf("expected fewer than 5 records after corruption, got %d", len(records))
 		}
@@ -623,7 +623,7 @@ func TestPersistSegmentRollover(t *testing.T) {
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
 
-		records := collectRecords(t, cl, 20, 5*time.Second)
+		records := consumeN(t, cl, 20, 5*time.Second)
 		if len(records) != 20 {
 			t.Fatalf("expected 20 records after segment rollover restart, got %d", len(records))
 		}
@@ -1321,7 +1321,7 @@ func TestPersistAbortedTxnsRestart(t *testing.T) {
 						topic: {0: kgo.NewOffset().AtStart()},
 					}),
 				)
-				records := collectRecords(t, cl, 3, 3*time.Second)
+				records := consumeN(t, cl, 3, 3*time.Second)
 				if len(records) != 3 {
 					var vals []string
 					for _, r := range records {
@@ -1582,7 +1582,7 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 			}),
 		)
 
-		committed := collectRecords(t, committedCl, 3, 3*time.Second)
+		committed := consumeN(t, committedCl, 3, 3*time.Second)
 		if len(committed) != 3 {
 			var vals []string
 			for _, r := range committed {
@@ -1608,7 +1608,7 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 			}),
 		)
 
-		all := collectRecords(t, uncommittedCl, 5, 3*time.Second)
+		all := consumeN(t, uncommittedCl, 5, 3*time.Second)
 		// 3 committed + 2 in-flight = 5 data records. Control batches
 		// (commit + implicit abort) are not returned to consumers.
 		if len(all) < 5 {
@@ -1724,7 +1724,7 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 			}),
 		)
 
-		committed := collectRecords(t, committedCl, 3, 3*time.Second)
+		committed := consumeN(t, committedCl, 3, 3*time.Second)
 		if len(committed) != 3 {
 			t.Fatalf("read_committed before EndTxn: expected 3 records, got %d", len(committed))
 		}
@@ -1763,7 +1763,7 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 			}),
 		)
 
-		all := collectRecords(t, committedCl2, 5, 3*time.Second)
+		all := consumeN(t, committedCl2, 5, 3*time.Second)
 		if len(all) != 5 {
 			var vals []string
 			for _, r := range all {
@@ -2292,7 +2292,7 @@ func TestPersistSnapshotTruncatedSegment(t *testing.T) {
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
 
-		collectRecords(t, cl, 1, 3*time.Second)
+		consumeN(t, cl, 1, 3*time.Second)
 	}
 }
 
@@ -2439,7 +2439,7 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
 
-		records := collectRecords(t, cl, 5, 3*time.Second)
+		records := consumeN(t, cl, 5, 3*time.Second)
 		if len(records) != 5 {
 			t.Fatalf("expected 5 records in kept topic, got %d", len(records))
 		}
@@ -2668,7 +2668,7 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 			}),
 		)
 
-		records := collectRecords(t, consumer, 4, 3*time.Second)
+		records := consumeN(t, consumer, 4, 3*time.Second)
 		if len(records) != 4 {
 			var offsets []int64
 			for _, r := range records {
@@ -3215,7 +3215,7 @@ func TestPersistShareGroupAcquiredReleasedOnRestart(t *testing.T) {
 		defer c.Close()
 
 		cl := newShareConsumer(t, c, topic, group)
-		records := collectRecords(t, cl, total, 10*time.Second)
+		records := consumeN(t, cl, total, 10*time.Second)
 		if len(records) < total {
 			t.Fatalf("phase 2: expected %d redelivered, got %d", total, len(records))
 		}
@@ -3246,7 +3246,7 @@ func TestPersistShareGroupConfigRestart(t *testing.T) {
 		defer c.Close()
 
 		cl := newShareConsumer(t, c, topic, group)
-		records := collectRecords(t, cl, 10, 10*time.Second)
+		records := consumeN(t, cl, 10, 10*time.Second)
 		if len(records) < 10 {
 			t.Fatalf("phase 2: expected 10 records (earliest), got %d", len(records))
 		}

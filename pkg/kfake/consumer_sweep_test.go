@@ -67,7 +67,7 @@ func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 
 	// Consume everything so the cursor sits at the log end with a
 	// non-negative last consumed epoch.
-	collectRecords(t, cl, msgs, 8*time.Second)
+	consumeN(t, cl, msgs, 8*time.Second)
 
 	// Fence the next fetch so the client queues an epoch validation at
 	// offset 10, and fail that validation retriably so it stays pending.
@@ -86,7 +86,7 @@ func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 		topic: {0: {Epoch: -1, Offset: seek}},
 	})
 
-	got := collectRecords(t, cl, 1, 8*time.Second)
+	got := consumeN(t, cl, 1, 8*time.Second)
 	if got[0].Offset != seek {
 		t.Fatalf("BUG REPRODUCED: first record after SetOffsets(%d) has offset %d; the pending epoch validation overwrote the seek", seek, got[0].Offset)
 	}
@@ -118,7 +118,7 @@ func TestAuditStopSessionPromptWhilePendingReload(t *testing.T) {
 		kgo.FetchMaxWait(100*time.Millisecond),
 		kgo.MetadataMinAge(10*time.Second), // widen the pre-fix spin so the assert is unambiguous
 	)
-	collectRecords(t, cl, msgs, 8*time.Second)
+	consumeN(t, cl, msgs, 8*time.Second)
 
 	ofle := failNextOFLE(c)
 	fenceNextFetch(c, topic)
@@ -350,7 +350,7 @@ func TestAuditShareAddConsumeTopics(t *testing.T) {
 	produceShareN(t, c, t1, group, msgs)
 
 	cl := newShareConsumer(t, c, t1, group)
-	collectRecords(t, cl, msgs, 8*time.Second)
+	consumeN(t, cl, msgs, 8*time.Second)
 
 	cl.AddConsumeTopics(t2)
 
@@ -364,7 +364,7 @@ func TestAuditShareAddConsumeTopics(t *testing.T) {
 	}
 
 	produceShareN(t, c, t2, group, msgs)
-	records := collectRecords(t, cl, msgs, 8*time.Second)
+	records := consumeN(t, cl, msgs, 8*time.Second)
 	for _, r := range records {
 		if r.Topic != t2 {
 			t.Fatalf("expected only %q records after consuming %q fully, got one from %q", t2, t1, r.Topic)

@@ -249,7 +249,7 @@ func TestShareAssignedNewPartitionStaleMetadata(t *testing.T) {
 	hbEpochs := observeHeartbeatEpochs(c, int16(kmsg.ShareGroupHeartbeat))
 
 	sc := newShareConsumer(t, c, "t", group)
-	collectRecords(t, sc, 3, 15*time.Second)
+	consumeN(t, sc, 3, 15*time.Second)
 	ackedEpoch := hbEpochs.Load()
 
 	// From here, all Metadata responses replay the pre-grow single
@@ -278,7 +278,7 @@ func TestShareAssignedNewPartitionStaleMetadata(t *testing.T) {
 		}
 	}
 
-	recs := collectRecords(t, sc, 3, 20*time.Second)
+	recs := consumeN(t, sc, 3, 20*time.Second)
 	for _, r := range recs {
 		if !strings.HasPrefix(string(r.Value), "p1-") {
 			t.Fatalf("unexpected record %q; want only new-partition records", r.Value)
@@ -310,7 +310,7 @@ func Test848AssignedNewPartitionStaleMetadata(t *testing.T) {
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchMaxWait(250*time.Millisecond),
 	)
-	collectRecords(t, cl, 3, 15*time.Second)
+	consumeN(t, cl, 3, 15*time.Second)
 	ackedEpoch := hbEpochs.Load()
 
 	stop := serveStaleMetadata(c, captureMetadata(t, cl, "t"))
@@ -333,7 +333,7 @@ func Test848AssignedNewPartitionStaleMetadata(t *testing.T) {
 			t.Fatalf("produce to new partition: %v", err)
 		}
 	}
-	recs := collectRecords(t, cl, 3, 20*time.Second)
+	recs := consumeN(t, cl, 3, 20*time.Second)
 	for _, r := range recs {
 		if !strings.HasPrefix(string(r.Value), "p1-") {
 			t.Fatalf("unexpected record %q; want only new-partition records", r.Value)

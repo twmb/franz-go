@@ -88,7 +88,7 @@ func TestAuditPoolsReleasedNoRecordsKept(t *testing.T) {
 		kgo.FetchMaxWait(250*time.Millisecond),
 	)
 
-	recs := collectRecords(t, consumer, 1, 10*time.Second)
+	recs := consumeN(t, consumer, 1, 10*time.Second)
 	if string(recs[0].Value) != "committed" {
 		t.Fatalf("got record %q != exp %q", recs[0].Value, "committed")
 	}

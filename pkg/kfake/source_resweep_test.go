@@ -80,7 +80,7 @@ func TestAuditOFLEUndefinedEpochOffsetNotDataLoss(t *testing.T) {
 	// non-negative last consumed epoch: the client only issues an
 	// OffsetForLeaderEpoch validation on the next fence when it has a real
 	// epoch to validate against.
-	collectRecords(t, cl, initial, 8*time.Second)
+	consumeN(t, cl, initial, 8*time.Second)
 
 	// Fence the next fetch (queues the validation at offset 5) and answer
 	// that validation with the UNDEFINED sentinel.

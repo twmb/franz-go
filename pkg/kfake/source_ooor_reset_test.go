@@ -79,7 +79,7 @@ func TestOutOfRangeBelowStartResetsToStart(t *testing.T) {
 
 	cl.ResumeFetchTopics(topic)
 
-	got := collectRecords(t, cl, nrecs-delTo, 8*time.Second)
+	got := consumeN(t, cl, nrecs-delTo, 8*time.Second)
 	for i, r := range got {
 		if want := int64(delTo + i); r.Offset != want {
 			t.Errorf("record %d is offset %d, want %d", i, r.Offset, want)
@@ -149,11 +149,11 @@ func TestOutOfRangePastEndResetsByTime(t *testing.T) {
 		kgo.DisableFetchSessions(),
 		kgo.FetchMaxWait(100*time.Millisecond),
 	)
-	collectRecords(t, cl, nrecs, 8*time.Second)
+	consumeN(t, cl, nrecs, 8*time.Second)
 
 	// The reset lists by the last consumed timestamp and finds record 9,
 	// which we read a second time.
-	got := collectRecords(t, cl, 1, 8*time.Second)
+	got := consumeN(t, cl, 1, 8*time.Second)
 	if got[0].Offset != nrecs-1 {
 		t.Fatalf("resumed at offset %d, want %d", got[0].Offset, nrecs-1)
 	}
@@ -290,7 +290,7 @@ func TestOutOfRangeInRangeNeverSkipsForward(t *testing.T) {
 
 			cl.ResumeFetchTopics(topic)
 
-			got := collectRecords(t, cl, 1, 8*time.Second)
+			got := consumeN(t, cl, 1, 8*time.Second)
 			if !fired.Load() {
 				t.Fatal("the fetch at the cursor was never answered out of range")
 			}

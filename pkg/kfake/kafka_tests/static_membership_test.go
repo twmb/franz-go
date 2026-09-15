@@ -318,15 +318,3 @@ func TestCreateTopicsReplicaAssignmentWithNumPartitions(t *testing.T) {
 		t.Fatalf("expected INVALID_REQUEST, got %v", kerr.ErrorForCode(resp.Topics[0].ErrorCode))
 	}
 }
-
-// newPlainClient creates a kgo client without 848 opt-in.
-func newPlainClient(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
-	t.Helper()
-	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...)}, opts...)
-	cl, err := kgo.NewClient(opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cl.Close)
-	return cl
-}

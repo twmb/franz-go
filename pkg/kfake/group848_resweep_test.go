@@ -1,11 +1,10 @@
-package kfake_test
+package kfake
 
 import (
 	"time"
 
 	"testing"
 
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -27,7 +26,7 @@ func TestAudit848PurgeReconcilesViaHeartbeat(t *testing.T) {
 		drop  = "a848-purge-drop"
 		group = "a848-purge-g"
 	)
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, keep, drop))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, keep, drop))
 	producer := newClient848(t, c)
 	produceNStrings(t, producer, keep, 3)
 	produceNStrings(t, producer, drop, 3)

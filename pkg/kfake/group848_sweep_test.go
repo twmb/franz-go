@@ -1,4 +1,4 @@
-package kfake_test
+package kfake
 
 // Regression tests for the KIP-848 client state machine. Each fails before
 // its corresponding kgo fix:
@@ -38,7 +38,6 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
@@ -48,7 +47,7 @@ import (
 // with a hand-built response that contains broker 0 and ONLY the given
 // topics: any other topic (requested or not) is simply absent, so the
 // client can never resolve its ID.
-func metadataHiding(c *kfake.Cluster, visible ...string) {
+func metadataHiding(c *Cluster, visible ...string) {
 	type vt struct {
 		topic string
 		id    [16]byte
@@ -111,7 +110,7 @@ func TestAudit848StaleUnresolvedJoin(t *testing.T) {
 		t2    = "a848-unres-2"
 		group = "a848-unres-g"
 	)
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, t1, t2))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, t1, t2))
 
 	producer := newClient848(t, c)
 	produceNStrings(t, producer, t1, 3)
@@ -139,7 +138,7 @@ func TestAudit848StaleUnresolvedJoin(t *testing.T) {
 	// so we only assert consumption after the rejoin was actually
 	// attempted; without the wait, the pre-fence cursor could deliver the
 	// fresh records before the fence lands.
-	joinAttempts := c.Fault(kfake.Fault{
+	joinAttempts := c.Fault(Fault{
 		Keys:    []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
 		Observe: true,
 		Count:   -1,
@@ -147,7 +146,7 @@ func TestAudit848StaleUnresolvedJoin(t *testing.T) {
 			return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch == 0
 		},
 	})
-	c.Fault(kfake.Fault{
+	c.Fault(Fault{
 		Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
 		Err:  kerr.FencedMemberEpoch,
 		When: func(kreq kmsg.Request) bool {
@@ -178,7 +177,7 @@ func TestAudit848TransientRestartNotification(t *testing.T) {
 		topic = "a848-restart-t"
 		group = "a848-restart-g"
 	)
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newClient848(t, c)
 	produceNStrings(t, producer, topic, 3)
 
@@ -192,7 +191,7 @@ func TestAudit848TransientRestartNotification(t *testing.T) {
 	)
 	consumeN(t, cl, 3, 10*time.Second)
 
-	h := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat}, Err: kerr.NotCoordinator, Count: -1})
+	h := c.Fault(Fault{Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat}, Err: kerr.NotCoordinator, Count: -1})
 	defer h.Remove() // let the leave during cleanup succeed
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -221,7 +220,7 @@ func TestAudit848MaxVersionsV0FallsBackToClassic(t *testing.T) {
 		topic = "a848-v0-t"
 		group = "a848-v0-g"
 	)
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newClient848(t, c)
 	produceNStrings(t, producer, topic, 3)
 
@@ -250,7 +249,7 @@ func TestAudit848RegexExcludesSkipsInternalTopics(t *testing.T) {
 		internal = "a848x-int"
 		group    = "a848x-g"
 	)
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, regular))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, regular))
 
 	producer := newClient848(t, c)
 
@@ -262,7 +261,7 @@ func TestAudit848RegexExcludesSkipsInternalTopics(t *testing.T) {
 	produceNStrings(t, producer, regular, 3)
 	produceNStrings(t, producer, internal, 3)
 
-	subscribedInternal := c.Fault(kfake.Fault{
+	subscribedInternal := c.Fault(Fault{
 		Keys:    []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
 		Observe: true,
 		Count:   -1,
@@ -303,13 +302,13 @@ func TestAudit848NegativeEpochIgnored(t *testing.T) {
 		topic = "a848-neg-t"
 		group = "a848-neg-g"
 	)
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newClient848(t, c)
 	produceNStrings(t, producer, topic, 3)
 
 	// Count any request that carries a negative epoch, i.e. a leave this
 	// test never asks for.
-	sentLeave := c.Fault(kfake.Fault{
+	sentLeave := c.Fault(Fault{
 		Keys:    []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
 		Observe: true,
 		Count:   -1,
@@ -361,7 +360,7 @@ func TestAudit848DuplicatePartitionAssignmentNoRewind(t *testing.T) {
 		topic = "a848-dup-t"
 		group = "a848-dup-g"
 	)
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newClient848(t, c)
 	produceNStrings(t, producer, topic, 50)
 
@@ -392,7 +391,7 @@ func TestAudit848DuplicatePartitionAssignmentNoRewind(t *testing.T) {
 	// Any OffsetFetch from here on can only be the re-fetch caused by the
 	// duplicate-partition reassignment bounce: autocommit is off and the
 	// group is otherwise stable.
-	refetches := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.OffsetFetch}, Observe: true, Count: -1})
+	refetches := c.Fault(Fault{Keys: []kmsg.Key{kmsg.OffsetFetch}, Observe: true, Count: -1})
 
 	ti := c.TopicInfo(topic)
 	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
@@ -441,7 +440,7 @@ func TestAudit848ForceRebalanceNoDisruption(t *testing.T) {
 		topic = "a848-force-t"
 		group = "a848-force-g"
 	)
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	producer := newClient848(t, c)
 	produceNStrings(t, producer, topic, 3)
 
