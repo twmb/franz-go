@@ -9,7 +9,7 @@ DescribeTopicPartitionsRequest => key 75, max version 0, flexible v0+
     // Topic is a topic name.
     Topic: string
   // The maximum nuber of partitions included in the response.
-  ResponsePartitionLimit: int32(200)
+  ResponsePartitionLimit: int32(2000)
   // If non-nil, cursor is the first topic and partition to fetch details for.
   Cursor: nullable=>
     // Topic is the topic to start with.

@@ -1,6 +1,6 @@
 // DescribeLogDirsRequest requests directory information for topic partitions.
 // This request was added in support of KIP-113.
-DescribeLogDirsRequest => key 35, max version 4, flexible v2+
+DescribeLogDirsRequest => key 35, max version 5, flexible v2+
   // Topics is an array of topics to describe the log dirs of. If this is
   // null, the response includes all topics and all of their partitions.
   Topics: nullable[=>]
@@ -55,3 +55,5 @@ DescribeLogDirsResponse =>
     // UsableBytes is the usable size in bytes of the volume the log directory
     // is in.
     UsableBytes: int64(-1) // v4+
+    // IsCordoned is true if this log directory is cordoned.
+    IsCordoned: bool // v5+
