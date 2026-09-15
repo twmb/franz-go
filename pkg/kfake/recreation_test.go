@@ -681,8 +681,11 @@ func TestRecreationCommitQueuedBehindPurge(t *testing.T) {
 }
 
 // A transactional session cannot commit when a topic it used was recreated.
-// Its offsets go through TxnOffsetCommit, which carries names only, so the
-// broker cannot refuse them itself; and records it produced to a recreated
+// Below v6, TxnOffsetCommit carries names only and the broker cannot refuse
+// the offsets itself, so the client refuses them once it has confirmed the
+// recreation. From v6 the commit carries the id the offsets were fetched
+// under and the broker refuses it too, which also covers a commit sent
+// before the client confirms. Records the session produced to a recreated
 // topic are gone with the old topic.
 func TestRecreationTxnSessionAborts(t *testing.T) {
 	t.Parallel()
@@ -691,10 +694,15 @@ func TestRecreationTxnSessionAborts(t *testing.T) {
 		// produced recreates the topic the session produces to rather
 		// than the one it consumes.
 		produced bool
-		wantErrs []error
+		// unconfirmed ends the transaction right after the recreation,
+		// before the client has confirmed it: only the broker's v6 id
+		// check stands between the commit and the new topic.
+		unconfirmed bool
+		wantErrs    []error
 	}{
-		{"consumed-topic", false, []error{kerr.UnknownTopicID}},
-		{"produced-topic", true, []error{kerr.TransactionAbortable, kerr.UnknownTopicID}},
+		{"consumed-topic", false, false, []error{kerr.UnknownTopicID}},
+		{"consumed-topic-unconfirmed", false, true, []error{kerr.UnknownTopicID}},
+		{"produced-topic", true, false, []error{kerr.TransactionAbortable, kerr.UnknownTopicID}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -709,17 +717,50 @@ func TestRecreationTxnSessionAborts(t *testing.T) {
 				t.Fatalf("produce in transaction: %v", err)
 			}
 
-			// A transactional commit carries no topic ID, so one sent
-			// before the client confirms the recreation lands: wait
-			// for the confirmation, not just for the fetch errors.
-			if test.produced {
+			// Below v6 a transactional commit carries no topic ID, so
+			// one sent before the client confirms the recreation
+			// lands: wait for the confirmation, not just for the fetch
+			// errors. The unconfirmed case ends right away instead,
+			// holding metadata replies until the commit has reached
+			// the broker so that the client cannot learn the new id
+			// first, and checks that the commit carried the old id:
+			// the broker refused it, not the client.
+			var sawOldID atomic.Bool
+			switch {
+			case test.unconfirmed:
+				oldID := r.c.TopicInfo(r.topic).TopicID
+				commitSeen := make(chan struct{})
+				var once sync.Once
+				r.c.ControlKey(int16(kmsg.TxnOffsetCommit), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+					r.c.KeepControl()
+					for _, rt := range kreq.(*kmsg.TxnOffsetCommitRequest).Topics {
+						if rt.TopicID == oldID {
+							sawOldID.Store(true)
+						}
+					}
+					once.Do(func() { close(commitSeen) })
+					return nil, nil, false
+				})
+				r.c.ControlKey(int16(kmsg.Metadata), func(kmsg.Request) (kmsg.Response, error, bool) {
+					r.c.KeepControl()
+					r.c.SleepControl(func() {
+						select {
+						case <-commitSeen:
+						case <-time.After(5 * time.Second):
+						}
+					})
+					return nil, nil, false
+				})
+				recreateTopic(t, r.c, r.topic)
+			case test.produced:
 				recreateTopic(t, r.c, out)
 				r.cl.ForceMetadataRefresh()
-			} else {
+				r.confirmed()
+			default:
 				recreateTopic(t, r.c, r.topic)
 				r.stall(1)
+				r.confirmed()
 			}
-			r.confirmed()
 
 			committed, err := r.s.End(r.ctx, kgo.TryCommit)
 			if committed {
@@ -732,6 +773,9 @@ func TestRecreationTxnSessionAborts(t *testing.T) {
 			}
 			if at := r.committed(); at != -1 {
 				t.Fatalf("the input has a committed offset of %d after the abort, want none", at)
+			}
+			if test.unconfirmed && !sawOldID.Load() {
+				t.Fatal("no TxnOffsetCommit carrying the old topic id reached the broker")
 			}
 			// The abort left the session usable.
 			if err := r.s.Begin(); err != nil {

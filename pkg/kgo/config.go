@@ -1060,6 +1060,14 @@ func ConsiderMissingTopicDeletedAfter(t time.Duration) Opt {
 // call UpdateSeedBrokers with the seeds you return. All other live connections
 // to brokers are stopped and active requests are failed.
 //
+// The same function is called when a broker answers REBOOTSTRAP_REQUIRED to
+// the ApiVersions request (KIP-1242, Kafka 4.4). The client names the cluster
+// and broker it expects on every connection, and a broker that is not the
+// node the client says it should be answers REBOOTSTRAP_REQUIRED. In that
+// case the client drops all discovered brokers and rediscovers the cluster
+// from the seeds whether or not this option is set; the option only lets you
+// replace the seeds first.
+//
 // The REBOOTSTRAP_REQUIRED error was introduced in Kafka 4.0, as a way for
 // Kafka to tell the client that the client needs to stop all non seed broker
 // connections to stop and for the client to query the seed brokers again.

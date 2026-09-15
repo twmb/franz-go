@@ -309,9 +309,9 @@ func (l *resetThenServeListener) serve(conn net.Conn, n int) {
 // connection's lifetime on any transient RST).
 //
 // Post-fix expectations: attempts go max, max, v0 (three connections, first
-// request versions [4, 4, 0]), the two reset connections get disconnect
+// request versions [5, 5, 0]), the two reset connections get disconnect
 // hooks, and the request then succeeds. Pre-fix: two connections with
-// versions [4, 0] and zero disconnect hooks.
+// versions [5, 0] and zero disconnect hooks.
 func TestAuditApiVersionsResetRetryClosesConns(t *testing.T) {
 	t.Parallel()
 	l := newResetThenServeListener(t)
@@ -339,8 +339,8 @@ func TestAuditApiVersionsResetRetryClosesConns(t *testing.T) {
 		t.Fatalf("request failed after reset retries: %v", err)
 	}
 
-	if got := l.versions(); len(got) != 3 || got[0] != 4 || got[1] != 4 || got[2] != 0 {
-		t.Errorf("expected connection first-request versions [4 4 0] (max, max, then v0 downgrade), got %v", got)
+	if got := l.versions(); len(got) != 3 || got[0] != 5 || got[1] != 5 || got[2] != 0 {
+		t.Errorf("expected connection first-request versions [5 5 0] (max, max, then v0 downgrade), got %v", got)
 	}
 
 	// The live third connection stays open; both reset connections must

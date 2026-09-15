@@ -86,15 +86,67 @@ jobs:
           name: kfake-logs-${{ matrix.version }}${{ matrix.data-dir && '-persist' || '' }}
           path: /tmp/kfake.log
 
-  integration-test-kafka:
+  # A release candidate staged for a vote at dist.apache.org gets its own
+  # integration run next to the latest release, while its version is newer
+  # than every release. There is no Docker Hub image for an RC, so the job
+  # builds one from Kafka's Dockerfile and the staged tarball.
+  detect-kafka-rc:
     if: github.repository == 'twmb/franz-go'
     runs-on: ubuntu-latest
-    name: "integration test kafka"
+    name: "detect Kafka release candidate"
+    outputs:
+      matrix: ${{ steps.detect.outputs.matrix }}
+    steps:
+      - id: detect
+        run: |
+          REL=$(git ls-remote --tags https://github.com/apache/kafka.git \
+            | sed -n 's|.*refs/tags/\([0-9]*\.[0-9]*\.[0-9]*\)$|\1|p' \
+            | sort -V | tail -1 || true)
+          RC=$(curl -sf https://dist.apache.org/repos/dist/dev/kafka/ \
+            | sed -n 's|.*href="\([0-9]*\.[0-9]*\.[0-9]*-rc[0-9]*\)/".*|\1|p' \
+            | sort -V | tail -1 || true)
+          VER=${RC%-rc*}
+          MATRIX='[{"name":"","image":"apache/kafka:latest","rc":""}]'
+          if [ -n "$RC" ] && [ "$VER" != "$REL" ] && [ "$(printf '%s\n%s\n' "$REL" "$VER" | sort -V | tail -1)" = "$VER" ]; then
+            MATRIX="[{\"name\":\"\",\"image\":\"apache/kafka:latest\",\"rc\":\"\"},{\"name\":\" $RC\",\"image\":\"kafka:$RC\",\"rc\":\"$RC\"}]"
+          fi
+          echo "release ${REL:-unknown}, release candidate ${RC:-none}: $MATRIX"
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  integration-test-kafka:
+    if: github.repository == 'twmb/franz-go'
+    needs: detect-kafka-rc
+    runs-on: ubuntu-latest
+    name: "integration test kafka${{ matrix.name }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.detect-kafka-rc.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: 'stable'
+      - name: Build the release candidate image
+        if: matrix.rc != ''
+        run: |
+          RC=${{ matrix.rc }}
+          VER=${RC%-rc*}
+          BASE=https://dist.apache.org/repos/dist/dev/kafka/$RC
+          mkdir rc && cd rc
+          curl -sSfL "$BASE/kafka-$VER-src.tgz" | tar xz --strip-components=1 "kafka-$VER-src/docker"
+          cp docker/server.properties docker/jvm/
+          cp -r docker/resources docker/jvm/
+          # The Dockerfile's local-tarball path skips gcompat, which
+          # snappy's native library needs on Alpine; without it every
+          # snappy produce fails with UNKNOWN_SERVER_ERROR. Its kafka_url
+          # path installs gcompat but also gpg-verifies the tarball against
+          # the released KEYS file, which lacks a release manager's key
+          # until the release. So: local tarball, plus gcompat.
+          curl -sSfL -o docker/jvm/kafka.tgz "$BASE/kafka_2.13-$VER.tgz"
+          test "$(grep -c 'apk add --no-cache bash procps-ng;' docker/jvm/Dockerfile)" = 2
+          sed -i 's/apk add --no-cache bash procps-ng;/apk add --no-cache bash procps-ng gcompat;/' docker/jvm/Dockerfile
+          docker build -t "${{ matrix.image }}" docker/jvm
       - name: Create Kafka configuration files
         run: |
           mkdir -p kafka-config
@@ -106,7 +158,7 @@ jobs:
           cat > docker-compose.yml << 'EOF'
           services:
             kafka:
-              image: apache/kafka:latest
+              image: ${{ matrix.image }}
               hostname: kafka
               ports:
                 - "9092:9092"

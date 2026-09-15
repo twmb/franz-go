@@ -870,7 +870,7 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 		tocReq.Generation = -1
 		tocReq.MemberID = ""
 		tocT := kmsg.NewTxnOffsetCommitRequestTopic()
-		tocT.Topic = topic
+		tocT.Topic, tocT.TopicID = topic, c.TopicInfo(topic).TopicID
 		tocP := kmsg.NewTxnOffsetCommitRequestTopicPartition()
 		tocP.Partition = 0
 		tocP.Offset = 7

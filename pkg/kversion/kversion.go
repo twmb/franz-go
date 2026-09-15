@@ -313,7 +313,7 @@ func relversion(fns ...func() *release) *Versions {
 // This is the default version used in kgo to avoid breaking tip changes.
 // The stable version is only bumped once kgo internally supports all
 // features in the release.
-func Stable() *Versions { return relversion(b43, c43, z39) }
+func Stable() *Versions { return relversion(b44, c44, z39) }
 
 // Tip is the latest defined Kafka key versions; this may be slightly out of date.
 func Tip() *Versions { return relversion(ztip) }
@@ -351,3 +351,4 @@ func V4_0_0() *Versions  { return relversion(b40) }
 func V4_1_0() *Versions  { return relversion(b41) }
 func V4_2_0() *Versions  { return relversion(b42) }
 func V4_3_0() *Versions  { return relversion(b43) }
+func V4_4_0() *Versions  { return relversion(b44) }

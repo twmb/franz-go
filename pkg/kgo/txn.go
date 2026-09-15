@@ -231,11 +231,11 @@ func (s *GroupTransactSession) failed() bool {
 // No returned error is retryable. Either the transactional ID has entered a
 // failed state, or the client retried so much that the retry limit was hit,
 // and odds are you should not continue. The exception is a transaction that
-// produced to a topic which was then deleted and recreated: this aborts and
-// returns an error wrapping kerr.UnknownTopicID, and you can continue once
-// you purge the topic and add it back; see EndTransaction. While a context is
-// allowed, canceling it will likely leave the client in an invalid state.
-// Canceling should only be done if you want to shut down.
+// produced to or consumed from a topic which was then deleted and recreated:
+// this aborts and returns an error wrapping kerr.UnknownTopicID, and you can
+// continue once you purge the topic and add it back; see EndTransaction.
+// While a context is allowed, canceling it will likely leave the client in
+// an invalid state. Canceling should only be done if you want to shut down.
 func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry) (committed bool, err error) {
 	defer func() {
 		s.failMu.Lock()
@@ -308,6 +308,13 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 			case errors.Is(err, kerr.IllegalGeneration),
 				errors.Is(err, kerr.UnknownMemberID),
 				errors.Is(err, kerr.StaleMemberEpoch),
+				// GROUP_ID_NOT_FOUND: TxnOffsetCommit v6+ (KIP-1319)
+				// returns this directly where older versions mapped it
+				// to ILLEGAL_GENERATION (already abortable above). The
+				// group state vanished; the manage loop recreates it
+				// by rejoining, so abort and let the caller retry on a
+				// fresh session.
+				errors.Is(err, kerr.GroupIDNotFound),
 				errors.Is(err, kerr.RebalanceInProgress),
 				errors.Is(err, kerr.CoordinatorNotAvailable),
 				errors.Is(err, kerr.CoordinatorLoadInProgress),
@@ -1292,14 +1299,21 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 	}
 
 	// The offsets of a recreated topic never go to the broker; we answer
-	// them with UNKNOWN_TOPIC_ID. TxnOffsetCommit carries names only, so
-	// the broker cannot refuse them itself. See uncommittedFrom; g.mu is
-	// held here.
+	// them with UNKNOWN_TOPIC_ID. Below v6, TxnOffsetCommit carries names
+	// only, so the broker cannot refuse them itself. See uncommittedFrom;
+	// g.mu is held here.
+	//
+	// As in commit, offsets are committed under the ID they were fetched
+	// under: if the topic is gone from our metadata, or our metadata has
+	// no ID for it, the ID the cursors loaded it under is what v6 sends.
 	var dropped []kmsg.TxnOffsetCommitResponseTopic
 	groupTopics := g.tps.load()
 	kept := req.Topics[:0:0]
 	for _, rt := range req.Topics {
-		if _, recreated := g.uncommittedFrom(groupTopics, rt.Topic); !recreated {
+		if from, recreated := g.uncommittedFrom(groupTopics, rt.Topic); !recreated {
+			if from != noID {
+				rt.TopicID = from
+			}
 			kept = append(kept, rt)
 			continue
 		}
@@ -1360,11 +1374,65 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 		ctx := ctx
 		if !tx890p2 {
 			ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4}) // v5 is only supported with KIP-890 part 2
+		} else {
+			// TxnOffsetCommit v6 switched Topic to TopicID (KIP-1319),
+			// like OffsetCommit v10. If any topic in the request has no
+			// TopicID, pin to v5 so the broker matches by name; a zero
+			// TopicID on a v6+ wire would commit to no topic. This is
+			// computed HERE, at send time, and not in
+			// prepareTxnOffsetCommit: the PreTxnCommitFnContext fn runs
+			// after the topic build and may add topics (with or without
+			// ids), and this commit is transactional -- an unnoticed
+			// id-less topic on a v6 wire is offset loss inside an
+			// otherwise-committed transaction. The pin is per-request
+			// and never recomputed lower mid-flight: both Topic and
+			// TopicID are always populated in the request, so whatever
+			// version an individual retry negotiates serializes
+			// correctly. Missing ids are near-unreachable against v6
+			// brokers (their metadata always supplies ids; see the
+			// OffsetCommit pinV9 precedent and #1312 for the class of
+			// broker that omits them, none of which serve v6), so this
+			// pin is expected to be dead safety.
+			var pinV5 bool
+			for i := range req.Topics {
+				if req.Topics[i].TopicID == noID {
+					pinV5 = true
+					break
+				}
+			}
+			if pinV5 {
+				ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 5})
+			}
 		}
 		resp, err := req.RequestWith(ctx, g.cl)
 		if err != nil {
 			onDone(req, nil, err)
 			return
+		}
+
+		// v6 responses carry TopicID with no topic name. Resolve names
+		// from the client's id2t, falling back to the request (which
+		// always carries both) for a topic the PreTxnCommitFnContext fn
+		// added or the old id of a recreated topic, so the response
+		// handed to onDone -- and the per-partition error messages End
+		// builds from it -- name the topics.
+		if resp.Version >= 6 {
+			id2t := g.cl.id2tMap()
+			for i := range resp.Topics {
+				rt := &resp.Topics[i]
+				if rt.Topic != "" {
+					continue
+				}
+				rt.Topic = id2t[rt.TopicID]
+				if rt.Topic == "" {
+					for j := range req.Topics {
+						if req.Topics[j].TopicID == rt.TopicID {
+							rt.Topic = req.Topics[j].Topic
+							break
+						}
+					}
+				}
+			}
 		}
 		g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
 
@@ -1391,9 +1459,13 @@ func (g *groupConsumer) prepareTxnOffsetCommit(ctx context.Context, uncommitted 
 	req.MemberID = memberID
 	req.InstanceID = g.cfg.instanceID
 
+	groupTopics := g.tps.load()
 	for topic, partitions := range uncommitted {
 		reqTopic := kmsg.NewTxnOffsetCommitRequestTopic()
 		reqTopic.Topic = topic
+		if td := groupTopics.loadTopic(topic); td != nil {
+			reqTopic.TopicID = td.id
+		}
 		for partition, eo := range partitions {
 			reqPartition := kmsg.NewTxnOffsetCommitRequestTopicPartition()
 			reqPartition.Partition = partition

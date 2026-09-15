@@ -464,6 +464,11 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 				errCode = err.Code
 			} else {
 				errCode = g.validateMemberGeneration(req.MemberID, req.Generation)
+				// Before v6, a stale member epoch was reported as
+				// ILLEGAL_GENERATION (KIP-1319).
+				if errCode == kerr.StaleMemberEpoch.Code && req.Version < 6 {
+					errCode = kerr.IllegalGeneration.Code
+				}
 			}
 			if errCode != 0 {
 				doneall(errCode)
@@ -471,7 +476,13 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 			}
 		}
 	} else if req.Generation >= 0 {
-		doneall(kerr.IllegalGeneration.Code)
+		// A group that does not exist is GROUP_ID_NOT_FOUND from v6;
+		// older versions mapped it to ILLEGAL_GENERATION (KIP-1319).
+		if req.Version >= 6 {
+			doneall(kerr.GroupIDNotFound.Code)
+		} else {
+			doneall(kerr.IllegalGeneration.Code)
+		}
 		return resp
 	}
 

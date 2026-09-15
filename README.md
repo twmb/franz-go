@@ -435,6 +435,7 @@ generation.
 | [KIP-890](https://cwiki.apache.org/confluence/display/KAFKA/KIP-890%3A+Transactions+Server-Side+Defense) — Transactions server side defense | 3.8, 4.0 | Supported |
 | [KIP-893](https://cwiki.apache.org/confluence/display/KAFKA/KIP-893%3A+The+Kafka+protocol+should+support+nullable+structs) — Nullable structs in the protocol | 3.5 | Supported |
 | [KIP-899](https://cwiki.apache.org/confluence/display/KAFKA/KIP-899%3A+Allow+clients+to+rebootstrap) — Allow clients to rebootstrap | ? | Supported (`UpdateSeedBrokers`) |
+| [KIP-909](https://cwiki.apache.org/confluence/display/KAFKA/KIP-909%3A+DNS+Resolution+Failure+Should+Not+Fail+the+Clients) - DNS resolution failure does not fail the client | 4.4 | Supported (existing) |
 | [KIP-903](https://cwiki.apache.org/confluence/display/KAFKA/KIP-903%3A+Replicas+with+stale+broker+epoch+should+not+be+allowed+to+join+the+ISR) — Stale broker epoch fencing | 3.5 | Supported (proto) |
 | [KIP-919](https://cwiki.apache.org/confluence/display/KAFKA/KIP-919%3A+Allow+AdminClient+to+Talk+Directly+with+the+KRaft+Controller+Quorum+and+add+Controller+Registration) — Admin client to KRaft, Controller registration | 3.7 | Supported |
 | [KIP-932](https://cwiki.apache.org/confluence/display/KAFKA/KIP-932%3A+Queues+for+Kafka) — Share groups (queues) | 4.1 | Supported (via `ShareGroup`) |
@@ -466,7 +467,11 @@ generation.
 | [KIP-1226](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1226%3A+Introducing+Share+Partition+Lag+Persistence+and+Retrieval) — Share partition lag in DescribeShareGroupOffsets | 4.2 | Supported (kadm) |
 | [KIP-1227](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1227%3A+Expose+Rack+ID+in+MemberDescription+and+ShareMemberDescription) — Rack ID in (Share)MemberDescription | 4.2 | Supported (kadm) |
 | [KIP-1228](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1228%3A+Add+Transaction+Version+to+WriteTxnMarkersRequest) — WriteTxnMarkers TransactionVersion | 4.2 | Supported |
+| [KIP-1242](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1242%3A+Detection+and+handling+of+misrouted+connections) - Detection and handling of misrouted connections | 4.4 | Supported |
 | [KIP-1258](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1258%3A+Add+Support+for+OAuth+Client+Assertion+to+client_credentials+Grant+Type) — OAuth client assertion in client_credentials grant | 4.3 | Supported (user callback) |
+| [KIP-1319](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1319%3A+Align+TxnOffsetCommit+API+with+OffsetCommit+API) — TxnOffsetCommit by topic ID | 4.4 | Supported |
+| [KIP-1331](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1331%3A+Streams+Group+Topology+Description+Plugin) — Streams group topology descriptions | 4.4 | Supported (proto) |
+| [KIP-1357](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1357%3A+Add+broker+side+custom+assignors+for+%22streams%22+groups) - Broker side custom assignors for streams groups | 4.4 | Supported (proto) |
 
 KIPs intentionally not implemented (with rationale):
 

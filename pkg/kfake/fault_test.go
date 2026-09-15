@@ -228,7 +228,7 @@ func coverageReq(key int16, topic string, id [16]byte, group, txnID string) kmsg
 		req.ProducerEpoch = -1
 		req.Generation = -1
 		rt := kmsg.NewTxnOffsetCommitRequestTopic()
-		rt.Topic = topic
+		rt.Topic, rt.TopicID = topic, id
 		rp := kmsg.NewTxnOffsetCommitRequestTopicPartition()
 		rp.LeaderEpoch = -1
 		rt.Partitions = append(rt.Partitions, rp)
@@ -774,7 +774,7 @@ func TestFaultTxnID(t *testing.T) {
 	tc.Group = group
 	tc.ProducerEpoch, tc.Generation = -1, -1
 	tct := kmsg.NewTxnOffsetCommitRequestTopic()
-	tct.Topic = topic
+	tct.Topic, tct.TopicID = topic, c.TopicInfo(topic).TopicID
 	tcp := kmsg.NewTxnOffsetCommitRequestTopicPartition()
 	tcp.LeaderEpoch = -1
 	tct.Partitions = append(tct.Partitions, tcp)
@@ -1224,7 +1224,7 @@ func TestFaultAfterApplyTxnOffsetCommit(t *testing.T) {
 	commit.ProducerID, commit.ProducerEpoch = pid, epoch
 	commit.Generation = -1
 	ct := kmsg.NewTxnOffsetCommitRequestTopic()
-	ct.Topic = topic
+	ct.Topic, ct.TopicID = topic, id
 	cp := kmsg.NewTxnOffsetCommitRequestTopicPartition()
 	cp.Offset, cp.LeaderEpoch = 7, -1
 	ct.Partitions = append(ct.Partitions, cp)

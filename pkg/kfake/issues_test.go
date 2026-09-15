@@ -1245,7 +1245,7 @@ func TestKIP447RequireStable(t *testing.T) {
 	txnCommitReq.ProducerEpoch = epoch
 	txnCommitReq.Generation = -1
 	topic := kmsg.NewTxnOffsetCommitRequestTopic()
-	topic.Topic = testTopic
+	topic.Topic, topic.TopicID = testTopic, c.TopicInfo(testTopic).TopicID
 	part := kmsg.NewTxnOffsetCommitRequestTopicPartition()
 	part.Partition = 0
 	part.Offset = 5
@@ -4731,5 +4731,80 @@ func TestTransactionLifecycle(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// If a PreCommitFnContext fn adds a topic without a TopicID to an offset
+// commit, the whole request must pin to v9 and commit by name: a zero TopicID
+// on a v10 wire commits to no topic. The pin is decided after the fn runs.
+func TestOffsetCommitV10PinAfterPreCommitFn(t *testing.T) {
+	t.Parallel()
+	const (
+		topic = "commit-v10pin"
+		extra = "commit-v10pin-extra"
+		group = "g-commit-v10pin"
+	)
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic, extra))
+
+	var version atomic.Int32
+	var zeroID atomic.Bool
+	c.ControlKey(int16(kmsg.OffsetCommit), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.OffsetCommitRequest)
+		version.Store(int32(req.Version))
+		for _, rt := range req.Topics {
+			if rt.TopicID == ([16]byte{}) {
+				zeroID.Store(true)
+			}
+		}
+		return nil, nil, false
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cl := newClient848(t, c,
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+		kgo.DisableAutoCommit(),
+		kgo.FetchMaxWait(250*time.Millisecond),
+	)
+	produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte("v")})
+	for polled := 0; polled == 0; {
+		fs := cl.PollFetches(ctx)
+		if err := fs.Err0(); err != nil {
+			t.Fatalf("poll: %v", err)
+		}
+		polled = fs.NumRecords()
+	}
+
+	commitCtx := kgo.PreCommitFnContext(ctx, func(req *kmsg.OffsetCommitRequest) error {
+		rt := kmsg.NewOffsetCommitRequestTopic()
+		rt.Topic = extra // deliberately no TopicID
+		rp := kmsg.NewOffsetCommitRequestTopicPartition()
+		rp.Partition = 0
+		rp.Offset = 7
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		return nil
+	})
+	if err := cl.CommitUncommittedOffsets(commitCtx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	if v := version.Load(); v != 9 {
+		t.Errorf("OffsetCommit with an id-less topic went out at v%d, want pinned v9", v)
+	}
+
+	adm := kadm.NewClient(cl)
+	os, err := adm.FetchOffsets(ctx, group)
+	if err != nil {
+		t.Fatalf("fetch offsets: %v", err)
+	}
+	if o, ok := os.Lookup(topic, 0); !ok || o.At != 1 {
+		t.Errorf("committed offset for %s: got %+v (ok=%v), want offset 1", topic, o, ok)
+	}
+	if o, ok := os.Lookup(extra, 0); !ok || o.At != 7 {
+		t.Errorf("committed offset for %s: got %+v (ok=%v), want offset 7", extra, o, ok)
 	}
 }
