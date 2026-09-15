@@ -170,23 +170,12 @@ func TestPurgeRegexTopicRediscoveredFirst(t *testing.T) {
 	consumeN(t, cl, 3, 5*time.Second)
 	time.Sleep(500 * time.Millisecond) // the heartbeats settle into keepalives
 
-	var (
-		held     = make(chan struct{})
-		release  = make(chan struct{})
-		holdOnce sync.Once
-	)
-	c.ControlKey(int16(kmsg.ConsumerGroupHeartbeat), func(kmsg.Request) (kmsg.Response, error, bool) {
-		holdOnce.Do(func() {
-			close(held)
-			c.SleepControl(func() { <-release })
-		})
-		return nil, nil, false
-	})
+	held, release := hold(c, kmsg.ConsumerGroupHeartbeat, 0)
 	<-held
 	cl.PurgeTopicsFromClient(topic)
 	cl.ForceMetadataRefresh()
 	time.Sleep(300 * time.Millisecond) // the regex rediscovers the topic
-	close(release)
+	release()
 
 	produceNStrings(t, prod, topic, 2)
 	if got := consumeN(t, cl, 5, 15*time.Second); len(got) != 5 {

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -29,27 +28,11 @@ import (
 //////////////
 //
 // Everything to the next banner drives the broker rather than saying
-// anything about recreation. It is shaped like the kfake API we expect to
-// grow for this, so that adopting that is a delete rather than a rewrite.
+// anything about recreation.
 
-// holdReq selects requests to intercept: Skip lets that many matching
-// requests through first, Count is how many to then take (default 1), and
-// When filters by content.
-type holdReq struct {
-	Key   int16
-	Skip  int
-	Count int
-	When  func(kmsg.Request) bool
-	Fail  error // fail the requests rather than holding them
-}
-
-// hold intercepts requests at the broker. held closes once the last one is
-// taken, and release lets them all go. A holdReq with Fail set never holds,
-// so its release is a no-op.
-func hold(c *Cluster, h holdReq) (held <-chan struct{}, release func()) {
-	if h.Count == 0 {
-		h.Count = 1
-	}
+// hold intercepts one request at the broker: skip lets that many through
+// first, held closes once the request is taken, and release lets it go.
+func hold(c *Cluster, key kmsg.Key, skip int) (held <-chan struct{}, release func()) {
 	var (
 		fired   = make(chan struct{})
 		unblock = make(chan struct{})
@@ -57,50 +40,21 @@ func hold(c *Cluster, h holdReq) (held <-chan struct{}, release func()) {
 		matched int
 		relOnce sync.Once
 	)
-	c.ControlKey(h.Key, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+	c.ControlKey(int16(key), func(kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
-		if h.When != nil && !h.When(kreq) {
-			return nil, nil, false
-		}
 		mu.Lock()
 		matched++
 		n := matched
 		mu.Unlock()
-		if n <= h.Skip || n > h.Skip+h.Count {
+		if n != skip+1 {
 			return nil, nil, false
 		}
-		if n == h.Skip+h.Count {
-			close(fired)
-		}
-		if h.Fail != nil {
-			return nil, h.Fail, true
-		}
+		close(fired)
 		c.SleepControl(func() { <-unblock })
 		return nil, nil, false
 	})
 	return fired, func() { relOnce.Do(func() { close(unblock) }) }
 }
-
-// counter counts requests of one key at the broker.
-type counter struct {
-	n       atomic.Int32
-	stopped atomic.Bool
-}
-
-func countRequests(c *Cluster, key int16) *counter {
-	cnt := new(counter)
-	c.ControlKey(key, func(kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		if !cnt.stopped.Load() {
-			cnt.n.Add(1)
-		}
-		return nil, nil, false
-	})
-	return cnt
-}
-
-func (c *counter) Count() int32 { return c.n.Load() }
-func (c *counter) Stop()        { c.stopped.Store(true) }
 
 func topicMetadata(t *testing.T, cl *kgo.Client, topic string) *kmsg.MetadataResponse {
 	t.Helper()
@@ -190,41 +144,6 @@ func collectErrs(ctx context.Context, t *testing.T, errs <-chan error, n int) []
 	return got
 }
 
-func endOffset(t *testing.T, cl *kgo.Client, topic string, partition int32) int64 {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	ends, err := kadm.NewClient(cl).ListEndOffsets(ctx, topic)
-	if err != nil {
-		t.Fatalf("list end offsets: %v", err)
-	}
-	end, ok := ends.Lookup(topic, partition)
-	if !ok || end.Err != nil {
-		t.Fatalf("no end offset for %s/%d: ok=%v err=%v", topic, partition, ok, end.Err)
-	}
-	return end.Offset
-}
-
-// committedOffset returns the group's committed offset for the partition,
-// or -1 when nothing is committed.
-func committedOffset(t *testing.T, cl *kgo.Client, group, topic string, partition int32) int64 {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	offsets, err := kadm.NewClient(cl).FetchOffsets(ctx, group)
-	if err != nil {
-		t.Fatalf("fetch offsets: %v", err)
-	}
-	o, ok := offsets.Lookup(topic, partition)
-	if !ok {
-		return -1
-	}
-	if o.Err != nil {
-		t.Fatalf("fetch offsets %s/%d: %v", topic, partition, o.Err)
-	}
-	return o.At
-}
-
 // recreationLogger closes confirmed when the client logs that a topic was
 // recreated: the point after which the client refuses the topic's offsets.
 // The wire fails fetches before that, so a test that must reach the client's
@@ -239,6 +158,16 @@ func (*recreationLogger) Level() kgo.LogLevel { return kgo.LogLevelWarn }
 func (l *recreationLogger) Log(_ kgo.LogLevel, msg string, _ ...any) {
 	if strings.Contains(msg, "deleted and recreated") {
 		l.once.Do(func() { close(l.confirmed) })
+	}
+}
+
+// wait waits for the client to decide the topic was recreated.
+func (l *recreationLogger) wait(t *testing.T) {
+	t.Helper()
+	select {
+	case <-l.confirmed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the client never confirmed the recreation")
 	}
 }
 
@@ -267,9 +196,8 @@ type recreationCfg struct {
 }
 
 // recreation is the shape these tests share: one topic holding three
-// records, and a client that has consumed them. prod is a second client: it
-// writes those records, recreates the topic, and reads offsets back, so the
-// client under test never does any of that itself.
+// records, and a client that has consumed them. prod is a second client and
+// writes those records.
 type recreation struct {
 	t      *testing.T
 	ctx    context.Context
@@ -417,15 +345,7 @@ func (r *recreation) stall(partitions int) {
 	}
 }
 
-// confirmed waits for the client to decide the topic was recreated.
-func (r *recreation) confirmed() {
-	r.t.Helper()
-	select {
-	case <-r.logger.confirmed:
-	case <-time.After(10 * time.Second):
-		r.t.Fatal("the client never confirmed the recreation")
-	}
-}
+func (r *recreation) confirmed() { r.logger.wait(r.t) }
 
 // heal purges the topic and adds it back, then consumes the new topic from
 // its start.
@@ -438,9 +358,13 @@ func (r *recreation) heal() {
 	}
 }
 
+// committed is the group's committed offset for the topic's first
+// partition, or -1 when nothing is committed.
 func (r *recreation) committed() int64 {
-	r.t.Helper()
-	return committedOffset(r.t, r.prod, r.group, r.topic, 0)
+	if commit, ok := groupCommits(r.c, r.group)[r.topic][0]; ok {
+		return commit.Offset
+	}
+	return -1
 }
 
 ///////////////
@@ -458,8 +382,8 @@ func TestRecreationStallsAndHeals(t *testing.T) {
 		// parts is how many of the topic's partitions must stall.
 		parts int
 		// quiet bounds requests of quietKey in a second of not polling.
-		quietKey  int16
-		quietMax  int32
+		quietKey  kmsg.Key
+		quietMax  int
 		quietWhat string
 		recreate  func(*recreation)
 		heal      func(*recreation)
@@ -480,7 +404,7 @@ func TestRecreationStallsAndHeals(t *testing.T) {
 				opts:  []kgo.Opt{kgo.ConsumeTopics("t-recreate-sibling", "t-recreate-sibling-idle")},
 			},
 			parts:     1,
-			quietKey:  int16(kmsg.Fetch),
+			quietKey:  kmsg.Fetch,
 			quietMax:  10,
 			quietWhat: "fetch requests",
 		},
@@ -523,7 +447,7 @@ func TestRecreationStallsAndHeals(t *testing.T) {
 				opts: []kgo.Opt{kgo.MetadataMinAge(time.Second)},
 			},
 			parts:     1,
-			quietKey:  int16(kmsg.Metadata),
+			quietKey:  kmsg.Metadata,
 			quietMax:  5,
 			quietWhat: "metadata requests",
 		},
@@ -566,11 +490,10 @@ func TestRecreationStallsAndHeals(t *testing.T) {
 			r.stall(test.parts)
 
 			if test.quietWhat != "" {
-				n := countRequests(r.c, test.quietKey)
-				before := n.Count()
+				seen := r.c.Fault(Fault{Keys: []kmsg.Key{test.quietKey}, Count: -1, Observe: true})
 				time.Sleep(time.Second)
-				got := n.Count() - before
-				n.Stop()
+				got := seen.Hits()
+				seen.Remove()
 				if got > test.quietMax {
 					t.Fatalf("%d %s in a second while stalled and not polling", got, test.quietWhat)
 				}
@@ -737,7 +660,7 @@ func TestRecreationCommitQueuedBehindPurge(t *testing.T) {
 	r.stall(1)
 	r.confirmed()
 
-	held, release := hold(r.c, holdReq{Key: int16(kmsg.OffsetCommit)})
+	held, release := hold(r.c, kmsg.OffsetCommit, 0)
 	firstDone := make(chan struct{})
 	r.cl.CommitOffsets(r.ctx, map[string]map[int32]kgo.EpochOffset{other: {0: {Offset: 0}}}, func(*kgo.Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error) {
 		close(firstDone)
@@ -845,11 +768,7 @@ func TestRecreationTxnEndRefusesCommit(t *testing.T) {
 	}
 	recreateTopic(t, c, topic)
 	cl.ForceMetadataRefresh()
-	select {
-	case <-logger.confirmed:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the client never confirmed the recreation")
-	}
+	logger.wait(t)
 
 	if err := cl.EndTransaction(ctx, kgo.TryCommit); !errors.Is(err, kerr.TransactionAbortable) {
 		t.Fatalf("EndTransaction(TryCommit) returned %v, want TRANSACTION_ABORTABLE", err)
@@ -928,7 +847,7 @@ func TestRecreationProducerFails(t *testing.T) {
 			if took := time.Since(start); took > time.Second {
 				t.Fatalf("produce after the recreation took %v to fail; it should fail before buffering", took)
 			}
-			if end := endOffset(t, cl, topic, 0); end != 0 {
+			if end := c.PartitionInfo(topic, 0).HighWatermark; end != 0 {
 				t.Fatalf("the recreated topic holds %d records, want 0", end)
 			}
 
@@ -940,7 +859,7 @@ func TestRecreationProducerFails(t *testing.T) {
 			if err := collectErrs(ctx, t, healed, 1)[0]; err != nil {
 				t.Fatalf("produce after purging: %v", err)
 			}
-			if end := endOffset(t, cl, topic, 0); end != 1 {
+			if end := c.PartitionInfo(topic, 0).HighWatermark; end != 1 {
 				t.Fatalf("the recreated topic holds %d records after purging and producing, want 1", end)
 			}
 		})

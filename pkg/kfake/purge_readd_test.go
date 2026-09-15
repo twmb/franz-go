@@ -1,10 +1,10 @@
 package kfake
 
 import (
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -26,7 +26,7 @@ func TestPurgeAndReaddImmediately(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		cfg  recreationCfg
-		key  int16
+		key  kmsg.Key
 		// kill fails the first full heartbeat after the purge and
 		// re-add rather than holding the next one.
 		kill bool
@@ -39,13 +39,13 @@ func TestPurgeAndReaddImmediately(t *testing.T) {
 		{
 			name: "classic",
 			cfg:  recreationCfg{name: "purge-readd-classic", group: true, opts: []kgo.Opt{kgo.DisableAutoCommit()}},
-			key:  int16(kmsg.Heartbeat),
+			key:  kmsg.Heartbeat,
 			want: 5,
 		},
 		{
 			name: "848",
 			cfg:  recreationCfg{name: "purge-readd-848", next: true, opts: []kgo.Opt{kgo.DisableAutoCommit()}},
-			key:  int16(kmsg.ConsumerGroupHeartbeat),
+			key:  kmsg.ConsumerGroupHeartbeat,
 			want: 5,
 		},
 		{
@@ -56,13 +56,13 @@ func TestPurgeAndReaddImmediately(t *testing.T) {
 			// be assigned. The purge makes the next heartbeat full.
 			name: "share",
 			cfg:  recreationCfg{name: "purge-readd-share", share: true},
-			key:  int16(kmsg.ShareGroupHeartbeat),
+			key:  kmsg.ShareGroupHeartbeat,
 			want: 2,
 		},
 		{
 			name: "848-killed-heartbeat",
 			cfg:  recreationCfg{name: "purge-hberr", next: true, opts: []kgo.Opt{kgo.DisableAutoCommit()}},
-			key:  int16(kmsg.ConsumerGroupHeartbeat),
+			key:  kmsg.ConsumerGroupHeartbeat,
 			kill: true,
 			want: 5,
 		},
@@ -72,19 +72,21 @@ func TestPurgeAndReaddImmediately(t *testing.T) {
 			r := startRecreation(t, test.cfg)
 
 			if test.kill {
-				full := func(kreq kmsg.Request) bool {
-					return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).SubscribedTopicNames != nil
-				}
-				killed, _ := hold(r.c, holdReq{Key: test.key, When: full, Fail: errors.New("killing the first full heartbeat")})
+				killed := r.c.Fault(Fault{
+					Keys:     []kmsg.Key{test.key},
+					TopLevel: true,
+					Err:      kerr.RebalanceInProgress,
+					When: func(kreq kmsg.Request) bool {
+						return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).SubscribedTopicNames != nil
+					},
+				})
 				r.cl.PurgeTopicsFromClient(r.topic)
 				r.cl.AddConsumeTopics(r.topic)
-				select {
-				case <-killed:
-				case <-time.After(10 * time.Second):
-					t.Fatal("no full heartbeat followed the purge and re-add")
+				if err := killed.Wait(r.ctx, 1); err != nil {
+					t.Fatalf("no full heartbeat followed the purge and re-add: %v", err)
 				}
 			} else {
-				held, release := hold(r.c, holdReq{Key: test.key})
+				held, release := hold(r.c, test.key, 0)
 				<-held
 				r.cl.PurgeTopicsFromClient(r.topic)
 				r.cl.AddConsumeTopics(r.topic)
@@ -116,11 +118,20 @@ func TestPurgeUnsubscribedTopicThenAdd(t *testing.T) {
 		extra: []string{unsubscribed},
 		opts:  []kgo.Opt{kgo.DisableAutoCommit()},
 	})
+	beats := r.c.Fault(Fault{Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat}, Count: -1, Observe: true})
+	defer beats.Remove()
+	waitBeats := func(n int) {
+		t.Helper()
+		if err := beats.Wait(r.ctx, beats.Hits()+n); err != nil {
+			t.Fatalf("waiting for %d heartbeats: %v", n, err)
+		}
+	}
+
 	produceNStrings(t, r.prod, unsubscribed, 3)
-	time.Sleep(300 * time.Millisecond) // the heartbeats settle into keepalives
+	waitBeats(3) // the heartbeats settle into keepalives
 
 	r.cl.PurgeTopicsFromClient(unsubscribed)
-	time.Sleep(300 * time.Millisecond) // a few heartbeats without the topic
+	waitBeats(3) // a few heartbeats without the topic
 	r.cl.AddConsumeTopics(unsubscribed)
 	if got := consumeN(t, r.cl, 3, 15*time.Second); len(got) != 3 {
 		t.Fatalf("consumed %d records after adding the purged topic, want 3", len(got))
