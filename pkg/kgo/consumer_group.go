@@ -836,6 +836,18 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 			if g.is848 {
 				return
 			}
+			// We drop from lastAssigned too. lastAssigned is what
+			// the next session diffs against, and what we claim to
+			// already own in the next join, so a topic left there
+			// that we just stopped fetching is stranded: you purge
+			// a regex topic, which empties using. We get here and
+			// give the partition up. The regex then adds the topic
+			// back, and since we no longer own it,
+			// findNewAssignments notes nothing in reassign. We
+			// rejoin, subscribe to the topic again, and are
+			// assigned the same partition. The next session diffs
+			// that against a lastAssigned that still names the
+			// topic, so it adds nothing and fetches no offsets.
 			for topic, partitions := range nowAssigned {
 				if _, exists := g.using[topic]; !exists {
 					if lost == nil {
@@ -843,6 +855,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 					}
 					lost[topic] = partitions
 					delete(nowAssigned, topic)
+					delete(g.lastAssigned, topic)
 				}
 			}
 		})

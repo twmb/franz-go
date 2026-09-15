@@ -354,6 +354,27 @@ func newGroupConsumer(t *testing.T, c *Cluster, topic, group string, opts ...kgo
 	return newClient848(t, c, append(base, opts...)...)
 }
 
+// waitCh receives from ch, fataling with why if that takes too long.
+func waitCh[T any](t *testing.T, ch <-chan T, why string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(15 * time.Second):
+		t.Fatal(why)
+	}
+}
+
+// drainCh discards everything buffered in ch.
+func drainCh[T any](ch <-chan T) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
 // poll1FromEachClient polls each client until every one has received at least
 // one record, or the timeout expires.
 func poll1FromEachClient(t *testing.T, timeout time.Duration, clients ...*kgo.Client) {
