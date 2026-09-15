@@ -154,6 +154,64 @@ func consumeN(t *testing.T, cl *kgo.Client, n int, timeout time.Duration) []*kgo
 	return records
 }
 
+// consumeNAcross consumes n records total across all clients, polling each
+// client in its own goroutine. Polling the clients in turn does not work: a
+// poll blocks until its client has records, so the first client to drain its
+// partitions stops us from ever draining the others.
+func consumeNAcross(t *testing.T, n int, timeout time.Duration, cls ...*kgo.Client) []*kgo.Record {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var (
+		mu      sync.Mutex
+		records []*kgo.Record
+		perr    error
+	)
+	enough := make(chan struct{})
+	stop := sync.OnceFunc(func() { close(enough) })
+
+	var wg sync.WaitGroup
+	for _, cl := range cls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				fs := cl.PollRecords(ctx, n)
+				mu.Lock()
+				for _, e := range fs.Errors() {
+					if e.Err != context.DeadlineExceeded && e.Err != context.Canceled && perr == nil {
+						perr = e.Err
+						stop()
+					}
+				}
+				fs.EachRecord(func(r *kgo.Record) {
+					records = append(records, r)
+				})
+				if len(records) >= n {
+					stop()
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+
+	select {
+	case <-enough:
+	case <-ctx.Done():
+	}
+	cancel()
+	wg.Wait()
+
+	if perr != nil {
+		t.Fatalf("consume errors: %v", perr)
+	}
+	if len(records) < n {
+		t.Fatalf("timeout consuming records: got %d/%d", len(records), n)
+	}
+	return records
+}
+
 // newGroupConsumer creates a KIP-848 consumer group client with common
 // defaults: ConsumeTopics, ConsumerGroup, AtStart, and FetchMaxWait(250ms).
 func newGroupConsumer(t *testing.T, c *kfake.Cluster, topic, group string, opts ...kgo.Opt) *kgo.Client {
