@@ -150,6 +150,9 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 			switch rp.Timestamp {
 			case -2, -4:
 				sp.Offset = pd.logStartOffset
+				if c.cfg.synthetic != nil { // the canned batch is served from any offset
+					sp.Offset = 0
+				}
 				sp.LeaderEpoch = pd.epoch
 				// The epoch accompanying a listed offset is the epoch
 				// of the record at that offset (a real broker answers
@@ -164,6 +167,9 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 				sp.Offset = pd.highWatermark
 				if readCommitted {
 					sp.Offset = pd.lastStableOffset
+				}
+				if c.cfg.synthetic != nil {
+					sp.Offset = syntheticEnd
 				}
 				sp.LeaderEpoch = pd.epoch
 			case -5, -6:

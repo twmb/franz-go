@@ -209,8 +209,13 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		returnEarly   bool
 		needp         tps[int]
 		fc            = creq.faults
+		syn           = c.cfg.synthetic
 	)
-	if w == nil {
+	if syn != nil {
+		// A synthetic cluster serves its canned batch from any offset,
+		// so there is always data: we answer now rather than waiting.
+		returnEarly = true
+	} else if w == nil {
 		// Any partition that errors completes the fetch at once, as a
 		// real broker's fetch purgatory does; only partitions waiting
 		// on data hold the request for MaxWait.
@@ -403,6 +408,15 @@ full:
 			}
 		}
 		sp := donep(fp.topic, fp.topicID, fp.partition, 0)
+		if syn != nil {
+			sp.HighWatermark = syntheticEnd
+			sp.LastStableOffset = syntheticEnd
+			sp.LogStartOffset = 0
+			room := min(int(fp.maxBytes), int(req.MaxBytes)-nbytes)
+			sp.RecordBatches = syn.appendBatches(sp.RecordBatches, fp.fetchOffset, pd.epoch, room)
+			nbytes += len(sp.RecordBatches)
+			continue
+		}
 		sp.HighWatermark = pd.highWatermark
 		sp.LastStableOffset = pd.lastStableOffset
 		sp.LogStartOffset = pd.logStartOffset

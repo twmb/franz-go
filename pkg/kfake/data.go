@@ -261,43 +261,49 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 // If transactional, the producer's PID is registered in uncommittedPIDs
 // so the LSO stays at the earliest uncommitted offset.
 func (c *Cluster) pushBatch(pd *partData, nbytes int, b kmsg.RecordBatch, inTx bool) int64 {
-	maxEarlierTimestamp := b.MaxTimestamp
-	if pd.hasBatches() && pd.maxTimestampSeen > maxEarlierTimestamp {
-		maxEarlierTimestamp = pd.maxTimestampSeen
-	}
 	b.FirstOffset = pd.highWatermark
 	b.PartitionLeaderEpoch = pd.epoch
 
-	// Build the partBatch for segment encoding
-	pb := &partBatch{
-		RecordBatch:         b,
-		nbytes:              nbytes,
-		epoch:               pd.epoch,
-		maxEarlierTimestamp: maxEarlierTimestamp,
-		inTx:                inTx,
-	}
+	// A blackholed cluster skips the segment write and index but keeps
+	// the offset, txn, and lso accounting below, so the producer still
+	// sees a well formed response.
+	if !c.cfg.blackholeProduce {
+		maxEarlierTimestamp := b.MaxTimestamp
+		if pd.hasBatches() && pd.maxTimestampSeen > maxEarlierTimestamp {
+			maxEarlierTimestamp = pd.maxTimestampSeen
+		}
 
-	// Write to segment file and build index entry.
-	// persistBatchToSegment creates the segment if needed.
-	segPos := c.persistBatchToSegment(pd, pb)
-	if segPos < 0 {
-		return -1
+		// Build the partBatch for segment encoding
+		pb := &partBatch{
+			RecordBatch:         b,
+			nbytes:              nbytes,
+			epoch:               pd.epoch,
+			maxEarlierTimestamp: maxEarlierTimestamp,
+			inTx:                inTx,
+		}
+
+		// Write to segment file and build index entry.
+		// persistBatchToSegment creates the segment if needed.
+		segPos := c.persistBatchToSegment(pd, pb)
+		if segPos < 0 {
+			return -1
+		}
+		active := &pd.segments[len(pd.segments)-1]
+		meta := pb.meta(segPos)
+		active.index = append(active.index, meta)
+		active.updateEpochRange(pd.epoch)
+		active.updateMaxBatch(meta, segPos == 0)
+		active.lastModified = time.Now().UnixMilli()
+		if n := len(pd.segments); n > 1 {
+			active.maxEarlierTimestamp = max(active.largestTimestamp(), pd.segments[n-2].maxEarlierTimestamp)
+		} else {
+			active.maxEarlierTimestamp = active.largestTimestamp()
+		}
+		if active.maxTimestamp > pd.segments[pd.maxTimestampSeg].maxTimestamp {
+			pd.maxTimestampSeg = len(pd.segments) - 1
+		}
+		pd.maxTimestampSeen = maxEarlierTimestamp
 	}
-	active := &pd.segments[len(pd.segments)-1]
-	meta := pb.meta(segPos)
-	active.index = append(active.index, meta)
-	active.updateEpochRange(pd.epoch)
-	active.updateMaxBatch(meta, segPos == 0)
-	active.lastModified = time.Now().UnixMilli()
-	if n := len(pd.segments); n > 1 {
-		active.maxEarlierTimestamp = max(active.largestTimestamp(), pd.segments[n-2].maxEarlierTimestamp)
-	} else {
-		active.maxEarlierTimestamp = active.largestTimestamp()
-	}
-	if active.maxTimestamp > pd.segments[pd.maxTimestampSeg].maxTimestamp {
-		pd.maxTimestampSeg = len(pd.segments) - 1
-	}
-	pd.maxTimestampSeen = maxEarlierTimestamp
 
 	firstOffset := b.FirstOffset
 	pd.highWatermark += int64(b.NumRecords)

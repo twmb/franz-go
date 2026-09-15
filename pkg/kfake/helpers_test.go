@@ -2,9 +2,7 @@ package kfake
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"net"
 	"slices"
 	"strconv"
@@ -126,12 +124,7 @@ func timestampBatch(tss []int64) []byte {
 		NumRecords:           int32(len(tss)),
 		Records:              recs,
 	}
-	raw := rb.AppendTo(nil)
-	// Length covers every byte after FirstOffset(8)+Length(4), and the
-	// Castagnoli CRC covers from Attributes (byte 21) onward.
-	binary.BigEndian.PutUint32(raw[8:12], uint32(len(raw)-12))
-	binary.BigEndian.PutUint32(raw[17:21], crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
-	return raw
+	return sealBatch(rb.AppendTo(nil))
 }
 
 // produceBatches sends one Produce request per inner slice, each carrying a
@@ -491,11 +484,7 @@ func rawBatch(attrs int16, pid int64, epoch int16, firstSeq int32, rec kmsg.Reco
 		NumRecords:           1,
 		Records:              rec.AppendTo(nil),
 	}
-	raw := batch.AppendTo(nil)
-	batch.Length = int32(len(raw) - 12)
-	raw = batch.AppendTo(nil)
-	batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
-	return batch.AppendTo(nil)
+	return sealBatch(batch.AppendTo(nil))
 }
 
 // kvRecord is the one record rawBatch callers send when the bytes do not
