@@ -6,12 +6,14 @@ package kafka_tests
 import (
 	"context"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // newCluster creates a new kfake cluster with the given options and registers
@@ -40,6 +42,36 @@ func newClient848(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
 	}
 	t.Cleanup(cl.Close)
 	return cl
+}
+
+// fetchGate returns a function that waits until the cluster receives a fetch
+// for a partition that want accepts. A consumer fetches only after its start
+// offset resolves, so a fetch at a known offset proves the cursor is set and
+// anything produced after the wait is consumed. Register the gate before you
+// start the consumer.
+func fetchGate(t *testing.T, c *kfake.Cluster, want func(kmsg.FetchRequestTopicPartition) bool) func() {
+	t.Helper()
+	fetched := make(chan struct{})
+	closeFetched := sync.OnceFunc(func() { close(fetched) })
+	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.FetchRequest)
+		for _, topic := range req.Topics {
+			for _, p := range topic.Partitions {
+				if want(p) {
+					closeFetched()
+				}
+			}
+		}
+		return nil, nil, false
+	})
+	return func() {
+		t.Helper()
+		select {
+		case <-fetched:
+		case <-time.After(20 * time.Second):
+			t.Fatal("timeout waiting for the consumer to fetch")
+		}
+	}
 }
 
 // groupCommits returns the group's committed offsets, or nil if the group
@@ -118,6 +150,64 @@ func consumeN(t *testing.T, cl *kgo.Client, n int, timeout time.Duration) []*kgo
 		fs.EachRecord(func(r *kgo.Record) {
 			records = append(records, r)
 		})
+	}
+	return records
+}
+
+// consumeNAcross consumes n records total across all clients, polling each
+// client in its own goroutine. Polling the clients in turn does not work: a
+// poll blocks until its client has records, so the first client to drain its
+// partitions stops us from ever draining the others.
+func consumeNAcross(t *testing.T, n int, timeout time.Duration, cls ...*kgo.Client) []*kgo.Record {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var (
+		mu      sync.Mutex
+		records []*kgo.Record
+		perr    error
+	)
+	enough := make(chan struct{})
+	stop := sync.OnceFunc(func() { close(enough) })
+
+	var wg sync.WaitGroup
+	for _, cl := range cls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				fs := cl.PollRecords(ctx, n)
+				mu.Lock()
+				for _, e := range fs.Errors() {
+					if e.Err != context.DeadlineExceeded && e.Err != context.Canceled && perr == nil {
+						perr = e.Err
+						stop()
+					}
+				}
+				fs.EachRecord(func(r *kgo.Record) {
+					records = append(records, r)
+				})
+				if len(records) >= n {
+					stop()
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+
+	select {
+	case <-enough:
+	case <-ctx.Done():
+	}
+	cancel()
+	wg.Wait()
+
+	if perr != nil {
+		t.Fatalf("consume errors: %v", perr)
+	}
+	if len(records) < n {
+		t.Fatalf("timeout consuming records: got %d/%d", len(records), n)
 	}
 	return records
 }

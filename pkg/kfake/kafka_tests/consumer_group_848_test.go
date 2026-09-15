@@ -408,19 +408,13 @@ func Test848SessionTimeout(t *testing.T) {
 	// those records.
 	waitStable(t, c, group, 2)
 
-	// Consume all records.
+	// Consume all records, polling both consumers at once. Each consumer
+	// owns half the partitions, and whichever drains first would block a
+	// loop that polls them in turn.
+	consumeNAcross(t, nRecords, 10*time.Second, c1, c2)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	got := 0
-	for got < nRecords && ctx.Err() == nil {
-		fs := c1.PollRecords(ctx, 100)
-		fs.EachRecord(func(*kgo.Record) { got++ })
-		fs = c2.PollRecords(ctx, 100)
-		fs.EachRecord(func(*kgo.Record) { got++ })
-	}
-	if got < nRecords {
-		t.Fatalf("timeout consuming initial records: got %d/%d", got, nRecords)
-	}
 
 	// Commit both consumers' offsets so that when c1 picks up c2's
 	// partitions after timeout, it resumes from the correct offset.

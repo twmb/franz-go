@@ -1300,20 +1300,16 @@ func TestShareGroupAckRenew(t *testing.T) {
 // heartbeats; the next heartbeat returns UNKNOWN_MEMBER_ID and the
 // client must reset to epoch 0 and rejoin without losing records.
 //
-// Per-record processing is slow enough that the run straddles multiple
-// fence cycles. The test asserts (a) every record was eventually
-// consumed (rejoin must work; a broken rejoin would strand records)
-// and (b) the group's epoch bumped past the initial join, proving the
-// fence/rejoin path was actually exercised rather than silently skipped.
+// We consume half the records, wait for the fence and the rejoin with
+// the other half still outstanding, then consume the rest. A share
+// group's epoch bumps only when a member joins, so an epoch past the
+// first join, with the member back, is the rejoin. The remaining
+// records must arrive after it.
 func TestShareGroupClientRejoinAfterFence(t *testing.T) {
 	t.Parallel()
 
 	const topic = "share-rejoin"
 	const group = "share-test-rejoin"
-	// 100 records at 10ms each = ~1s of consumption, which spans one
-	// fence+rejoin cycle (session-timeout 500ms < 1s heartbeat floor
-	// means the fence fires ~500ms after each heartbeat; the next
-	// heartbeat at ~1s detects the fence and the client rejoins).
 	const total = 100
 
 	c := newCluster(t,
@@ -1332,8 +1328,6 @@ func TestShareGroupClientRejoinAfterFence(t *testing.T) {
 	)
 	produceShareN(t, c, topic, group, total)
 
-	admin := newPlainClient(t, c)
-
 	cl := newShareConsumer(t, c, topic, group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -1342,42 +1336,32 @@ func TestShareGroupClientRejoinAfterFence(t *testing.T) {
 	// produceShareN sets Value (not Key), so identify records by Value.
 	seen := make(map[string]bool, total)
 	var deliveries int
-	for len(seen) < total && ctx.Err() == nil {
-		fetches := cl.PollFetches(ctx)
-		for _, r := range fetches.Records() {
-			deliveries++
-			seen[string(r.Value)] = true
-			// Slow per-record processing so the run straddles at
-			// least one fence/rejoin cycle.
-			time.Sleep(10 * time.Millisecond)
-			r.Ack(kgo.AckAccept)
+	consume := func(want int) {
+		t.Helper()
+		for len(seen) < want && ctx.Err() == nil {
+			fetches := cl.PollFetches(ctx)
+			for _, r := range fetches.Records() {
+				deliveries++
+				seen[string(r.Value)] = true
+				r.Ack(kgo.AckAccept)
+			}
+		}
+		if len(seen) < want {
+			t.Fatalf("expected %d unique records, got %d (deliveries=%d)", want, len(seen), deliveries)
 		}
 	}
-	if len(seen) < total {
-		t.Fatalf("expected %d unique records, got %d (deliveries=%d)", total, len(seen), deliveries)
+
+	consume(total / 2)
+
+	g, err := c.WaitGroupInfo(ctx, group, func(g *GroupInfo) bool {
+		return g != nil && g.Epoch > 1 && len(g.Members) == 1
+	})
+	if err != nil {
+		t.Fatalf("waiting for the member to be fenced and rejoin: %v", err)
 	}
 
-	// Verify a fence actually happened: the member's epoch (tracked
-	// by the broker and returned via ShareGroupDescribe) bumps on
-	// each join. The first join sets epoch=1; every subsequent
-	// rejoin after a fence bumps it again. An epoch > 1 at end of
-	// test proves the fence/rejoin path was exercised.
-	req := kmsg.NewPtrShareGroupDescribeRequest()
-	req.GroupIDs = []string{group}
-	resp, err := req.RequestWith(context.Background(), admin)
-	if err != nil {
-		t.Fatalf("describe: %v", err)
-	}
-	if len(resp.Groups) != 1 || len(resp.Groups[0].Members) == 0 {
-		t.Fatalf("expected 1 group with >=1 member, got %+v", resp.Groups)
-	}
-	memberEpoch := resp.Groups[0].Members[0].MemberEpoch
-	if memberEpoch <= 1 {
-		t.Fatalf("expected member epoch > 1 (proof of rejoin), got %d; fence/rejoin cycle never fired or test ran too fast to trigger one",
-			memberEpoch)
-	}
-	t.Logf("deliveries=%d, unique=%d, final member epoch=%d (rejoin cycles observed)",
-		deliveries, len(seen), memberEpoch)
+	consume(total)
+	t.Logf("deliveries=%d, unique=%d, group epoch=%d", deliveries, len(seen), g.Epoch)
 }
 
 // TestShareGroupRebalanceOccurs verifies that the broker actually
