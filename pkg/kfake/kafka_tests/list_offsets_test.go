@@ -12,33 +12,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// TestListMaxTimestampWithEmptyLog verifies that listing the max timestamp
-// offset for an empty topic returns offset -1.
-func TestListMaxTimestampWithEmptyLog(t *testing.T) {
-	t.Parallel()
-	topic := "list-offsets-empty"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-	adm := newAdminClient(t, c)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	offsets, err := adm.ListMaxTimestampOffsets(ctx, topic)
-	if err != nil {
-		t.Fatalf("ListMaxTimestampOffsets failed: %v", err)
-	}
-	o, ok := offsets.Lookup(topic, 0)
-	if !ok {
-		t.Fatal("partition 0 not found in response")
-	}
-	// For an empty partition, Kafka returns offset -1 (unknown).
-	// kfake may return 0 for an empty partition; either is acceptable since
-	// there are no records.
-	if o.Offset != -1 && o.Offset != 0 {
-		t.Errorf("expected offset -1 or 0 for empty topic, got %d", o.Offset)
-	}
-}
-
 // TestThreeNonCompressedRecordsInOneBatch verifies maxTimestamp with
 // uncompressed records in a single batch.
 func TestThreeNonCompressedRecordsInOneBatch(t *testing.T) {

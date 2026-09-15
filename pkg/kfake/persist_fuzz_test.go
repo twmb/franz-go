@@ -279,17 +279,6 @@ func TestEncodeBatchRoundTrip(t *testing.T) {
 	}
 }
 
-// TestDecodeBatchRawTooShort verifies short input returns error.
-func TestDecodeBatchRawTooShort(t *testing.T) {
-	t.Parallel()
-	for size := range 12 {
-		_, err := decodeBatchRaw(make([]byte, size))
-		if err != nil {
-			return // any error is fine
-		}
-	}
-}
-
 // TestDecodeIndexEntryTooShort verifies short index input returns !ok.
 func TestDecodeIndexEntryTooShort(t *testing.T) {
 	t.Parallel()

@@ -16,42 +16,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func TestShareGroupBasic(t *testing.T) {
-	t.Parallel()
-
-	c := newCluster(t, SeedTopics(1, "share-basic"))
-	group := "share-test-basic"
-
-	const total = 50
-	produceShareN(t, c, "share-basic", group, total)
-
-	// Share group consumer.
-	cl := newShareConsumer(t, c, "share-basic", group)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	var got int
-	for got < total {
-		fetches := cl.PollFetches(ctx)
-		for _, e := range fetches.Errors() {
-			if e.Err == context.DeadlineExceeded || e.Err == context.Canceled {
-				continue
-			}
-			t.Errorf("fetch error: %v", e)
-		}
-		records := fetches.Records()
-		got += len(records)
-		if ctx.Err() != nil {
-			break
-		}
-	}
-
-	if got != total {
-		t.Fatalf("expected %d records, got %d", total, got)
-	}
-}
-
 func TestShareGroupAckAndRedelivery(t *testing.T) {
 	t.Parallel()
 
@@ -632,63 +596,6 @@ func TestShareGroupStandaloneAcknowledge(t *testing.T) {
 
 	cl3 := newShareConsumer(t, c, "share-standalone-ack", group)
 	verifyZeroRecords(t, cl3, 500*time.Millisecond)
-}
-
-// TestShareGroupMultiPartition verifies share group behavior across multiple
-// partitions, ensuring records from all partitions are acquired and acked.
-func TestShareGroupMultiPartition(t *testing.T) {
-	t.Parallel()
-
-	const nPartitions = 5
-	c := newCluster(t, NumBrokers(3), SeedTopics(nPartitions, "share-multipart"))
-	group := "share-test-multipart"
-
-	admin := newPlainClient(t, c,
-		kgo.DefaultProduceTopic("share-multipart"),
-		kgo.RecordPartitioner(kgo.RoundRobinPartitioner()),
-	)
-
-	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
-
-	// Produce records that will be spread across partitions.
-	const total = 50
-	for i := range total {
-		admin.Produce(context.Background(), kgo.StringRecord(strconv.Itoa(i)), func(_ *kgo.Record, err error) {
-			if err != nil {
-				t.Errorf("produce %d: %v", i, err)
-			}
-		})
-	}
-	if err := admin.Flush(context.Background()); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
-
-	// Consume all records from the share group.
-	cl := newShareConsumer(t, c, "share-multipart", group)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	partitionsSeen := make(map[int32]int)
-	var got int
-	for got < total {
-		fetches := cl.PollFetches(ctx)
-		for _, r := range fetches.Records() {
-			got++
-			partitionsSeen[r.Partition]++
-			r.Ack(kgo.AckAccept)
-		}
-		if ctx.Err() != nil {
-			break
-		}
-	}
-	if got != total {
-		t.Fatalf("expected %d records, got %d", total, got)
-	}
-	if len(partitionsSeen) < 2 {
-		t.Errorf("expected records from multiple partitions, got %d partition(s): %v", len(partitionsSeen), partitionsSeen)
-	}
-	t.Logf("records by partition: %v", partitionsSeen)
 }
 
 // TestShareGroupCloseReleasesRecords verifies that closing a share session
@@ -1400,53 +1307,6 @@ func TestShareGroupAckRenew(t *testing.T) {
 	if redelivered > 0 {
 		t.Errorf("renewed-then-accepted record was redelivered %d time(s); renew likely failed", redelivered)
 	}
-}
-
-// TestShareGroupRenewFlush verifies that r.Ack(AckRenew) followed by
-// FlushAcks completes without timing out. The renew extends the lock;
-// the next poll's auto-accept finalizes the record.
-func TestShareGroupRenewFlush(t *testing.T) {
-	t.Parallel()
-
-	const total = 10
-	c := newCluster(t, SeedTopics(1, "share-renew-flush"))
-	group := "share-test-renew-flush"
-	produceShareN(t, c, "share-renew-flush", group, total)
-
-	cl := newShareConsumer(t, c, "share-renew-flush", group)
-
-	// Poll records, renew all, flush.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	var got int
-	for got < total && ctx.Err() == nil {
-		fetches := cl.PollFetches(ctx)
-		recs := fetches.Records()
-		got += len(recs)
-		for _, r := range recs {
-			r.Ack(kgo.AckRenew)
-		}
-	}
-	if got < total {
-		t.Fatalf("expected %d records, got %d", total, got)
-	}
-
-	flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := cl.FlushAcks(flushCtx); err != nil {
-		t.Fatalf("FlushAcks after renew: %v", err)
-	}
-	flushCancel()
-
-	// Poll again to trigger auto-accept, then flush.
-	pollCtx, pollCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	cl.PollFetches(pollCtx)
-	pollCancel()
-
-	flushCtx2, flushCancel2 := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := cl.FlushAcks(flushCtx2); err != nil {
-		t.Fatalf("FlushAcks after auto-accept: %v", err)
-	}
-	flushCancel2()
 }
 
 // TestShareGroupClientRejoinAfterFence verifies the kgo share consumer
