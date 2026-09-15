@@ -2,10 +2,11 @@
 
 ## Running
 
-Standalone server (has `//go:build none` tag):
+Standalone server. main.go carries `//go:build none` so `go test ./...` skips it; naming the file makes go ignore that constraint:
 ```bash
-go run -tags none main.go -l debug    # -l/--log-level: none, error, warn, info, debug
+go run main.go -l debug    # -l/--log-level: none, error, warn, info, debug
 ```
+Do not add `-tags none`: it pulls main.go into package kfake and the build fails with "found packages kfake and main".
 
 Test suite:
 ```bash
@@ -13,10 +14,16 @@ Test suite:
   -t, --test PATTERN     Test pattern (Txn, Group, Txn/range, Group/sticky)
   -n, --iterations NUM   Max iterations (default: 50)
   -r, --records NUM      Number of records (default: 500000)
-  --race                 Enable race detector (uses 5min timeout)
+  --race                 Enable race detector
   -l, --log-level LEVEL  Log level for both client and server (debug, info)
   --client-log LEVEL     Log level for kgo test client only
   --server-log LEVEL     Log level for kfake server only
+  -v, --version VERSION  Kafka version to emulate (e.g., 2.8, 3.5)
+  --pprof ADDR           Enable pprof on the server (e.g., :6060)
+  --data-dir DIR         Persistence directory for the kfake server
+  --restart SECS         Kill and restart the server after SECS seconds (requires --data-dir)
+  --timeout DURATION     Test timeout (default: 180s, 450s with --race)
+  --keep-logs            Keep per-iteration logs (client_N.log, server_N.log)
   --clean                Kill servers and remove /tmp/kfake_test_logs
   -k, --kill             Kill processes on ports 9092-9094 and exit
 ```
@@ -48,7 +55,7 @@ Assignors: uniform (default, maps to kgo sticky balancer) and range.
 
 **Adding ACL checks to new handlers:**
 
-When implementing a new Kafka protocol handler, you MUST add ACL checks. I will provide links to Kafka documentation specifying which resources and operations to check.
+When implementing a new Kafka protocol handler, you MUST add ACL checks. Kafka's authorization documentation says which resources and operations each request checks.
 
 Handlers do not call allowedACL directly: c.deny and c.denyCluster check the
 ACL and the faults for that entity together (see the section below).
@@ -113,3 +120,9 @@ Tests after touching a handler:
 
 Comments:
 - ASCII, terse, plain statements. "we" is the broker, "you" is the caller.
+
+## Writing tests
+
+- `t.Parallel()` by default; each test gets its own cluster from `newCluster`.
+- Keep sleeps and timeouts minimal: kfake is in-process. Use `kgo.FetchMaxWait(250*time.Millisecond)` where partition discovery speed matters.
+- New tests go in an existing bucket file such as `issues_test.go`, not in a file named after the feature. Split a class out only when it is large on its own, about 1k lines: transactions, consumer, share consume.
