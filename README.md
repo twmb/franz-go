@@ -413,7 +413,7 @@ generation.
 | [KIP-709](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=173084258) — Batch OffsetFetch | 3.0 | Supported |
 | [KIP-714](https://cwiki.apache.org/confluence/display/KAFKA/KIP-714%3A+Client+metrics+and+observability) - Client Metrics | 3.7 | Supported |
 | [KIP-730](https://cwiki.apache.org/confluence/display/KAFKA/KIP-730%3A+Producer+ID+generation+in+KRaft+mode) - AllocateProducerIDs | 3.0 | Supported |
-| [KIP-734](https://cwiki.apache.org/confluence/display/KAFKA/KIP-734:+Improve+AdminClient.listOffsets+to+return+timestamp+and+offset+for+the+record+with+the+largest+timestamp) — Support MaxTimestamp in ListOffsets | 3.0 | Supported (simple version bump) |
+| [KIP-734](https://cwiki.apache.org/confluence/display/KAFKA/KIP-734:+Improve+AdminClient.listOffsets+to+return+timestamp+and+offset+for+the+record+with+the+largest+timestamp) — Support MaxTimestamp in ListOffsets | 3.0 | Supported (LookbackOffset) |
 | [KIP-735](https://cwiki.apache.org/confluence/display/KAFKA/KIP-735%3A+Increase+default+consumer+session+timeout) — Bump default session timeout | ? | Supported |
 | [KIP-768](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=186877575) — Extend SASL/OAUTHBEARER support for OIDC | 3.1 | Supported |
 | [KIP-778](https://wiki.apache.org/confluence/pages/viewpage.action?pageId=188746840) — KRaft Upgrades (protocol changes only) | 3.2 | Supported |
@@ -455,6 +455,7 @@ generation.
 | [KIP-1076](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1076%3A++Metrics+for+client+applications+KIP-714+extension) — User provided client metrics | 4.0 | Supported |
 | [KIP-1082](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1082%3A+Require+Client-Generated+IDs+over+the+ConsumerGroupHeartbeat+RPC) — ClientID in the next-gen rebalancer | 4.0 | Supported & hidden |
 | [KIP-1102](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1102%3A+Enable+clients+to+rebootstrap+based+on+timeout+or+error+code) — RebootstrapRequired | 4.0 | Supported |
+| [KIP-1106](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1106%3A+Add+duration+based+offset+reset+option+for+consumer+clients) — Duration-based offset reset | 4.0 | Supported (LookbackOffset) |
 | [KIP-1123](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1123%3A+Rack-aware+partitioning+for+Kafka+Producer) - Rack-aware producer partitioning | 4.4 | Supported |
 | [KIP-1139](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1139%3A+Add+support+for+OAuth+jwt-bearer+grant+type) - Oauth JWT bearer grant| 4.0 | Supported |
 | [KIP-1142](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1142%3A+Allow+to+list+non-existent+group+which+has+dynamic+config) - ListConfigResources | 4.1 | Supported (kadm v1.17+) |
@@ -484,4 +485,3 @@ KIPs intentionally not implemented (with rationale):
 - [KIP-436](https://cwiki.apache.org/confluence/display/KAFKA/KIP-436%3A+Add+a+metric+indicating+start+time), start-time metric; covered by hooks
 - [KIP-517](https://cwiki.apache.org/confluence/display/KAFKA/KIP-517%3A+Add+consumer+metrics+to+observe+user+poll+behavior), more consumer poll-behavior metrics; covered by hooks
 - [KIP-896](https://cwiki.apache.org/confluence/display/KAFKA/KIP-896%3A+Remove+old+client+protocol+API+versions+in+Kafka+4.0), which removes old client protocol API versions in Kafka 4.0; not relevant to clients, as clients do not control broker-supported protocol versions
-- [KIP-1106](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1106%3A+Add+duration+based+offset+reset+option+for+consumer+clients), for a duration-based offset reset option; not relevant, franz-go already does exact offset recovery via `OffsetForLeaderEpoch` for data loss and via `AfterMilli(lastConsumedTime)` on `OffsetOutOfRange`, picking up precisely where the consumer left off rather than approximating with a duration

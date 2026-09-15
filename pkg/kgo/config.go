@@ -487,11 +487,17 @@ func (cfg *cfg) validate() error {
 		if topic == "" {
 			return errors.New("invalid empty topic name in ConsumePartitions")
 		}
-		for p := range partitions {
+		for p, o := range partitions {
 			if p < 0 {
 				return fmt.Errorf("invalid negative partition %d for topic %q in ConsumePartitions", p, topic)
 			}
+			if o.at == atRewind {
+				return fmt.Errorf("RewindOffset is only valid as ConsumeResetOffset, not for topic %q partition %d in ConsumePartitions", topic, p)
+			}
 		}
+	}
+	if cfg.startOffset.at == atRewind {
+		return errors.New("RewindOffset is only valid as ConsumeResetOffset, not as ConsumeStartOffset")
 	}
 
 	// These options take a value; if explicitly set to "" it is a mistake (an
@@ -685,7 +691,7 @@ func defaultCfg() cfg {
 		maxBytes:       50 << 20,
 		maxPartBytes:   1 << 20,
 		startOffset:    NewOffset().AtStart(),
-		resetOffset:    NewOffset().AtStart(),
+		resetOffset:    RewindOffset(time.Minute),
 		isolationLevel: 0,
 
 		maxConcurrentFetches: -1, // unbounded default
@@ -1632,11 +1638,9 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 }
 
 // ConsumeStartOffset sets the offset to start consuming from when consuming a
-// partition for the first time. If you do not set [ConsumeResetOffset], this
-// is also the offset to reset to if the client sees an OffsetOutOfRange error
-// while consuming a partition. The default is NewOffset().AtStart(), i.e.,
-// start processing a partition from the earliest offset. If using this option,
-// it is strongly recommended to also set ConsumeResetOffset.
+// partition for the first time, overriding the default of
+// NewOffset().AtStart(), i.e., start processing a partition from the earliest
+// offset.
 //
 // If you use an exact or relative offsets and the offset ends up out of range,
 // the client chooses the nearest of either the log start offset or the log end
@@ -1655,62 +1659,72 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 //	relative?                         => start at the above, + / - the relative amount
 //	exact/relative are out of bounds? => start at the nearest boundary (start or end)
 //	after millisec?                   => start at first offset after millisec if one exists, else log end offset
+//	LookbackOffset(d)?                => start d before the newest record
 //
 // To match Kafka's auto.offset.reset which is used for both the start offset
 // and the reset offset,
 //
+//	LookbackOffset(d)         == auto.offset.reset "by_duration"
 //	NewOffset().AtStart()     == auto.offset.reset "earliest"
 //	NewOffset().AtEnd()       == auto.offset.reset "latest"
 //	NewOffset().AtCommitted() == auto.offset.reset "none"
 //
-// Be sure to check the documentation for [ConsumeResetOffset], especially if
-// you rely on this option as the reset offset as well.
+// This option only sets the start offset. [ConsumeResetOffset] handles every
+// OffsetOutOfRange, whether or not this option is set. The one exception is a
+// [NoResetOffset] start offset, including [Offset.AtCommitted]: as those
+// document, OffsetOutOfRange is then fatal.
 func ConsumeStartOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.startOffset, cfg.setStartOffset = offset, true }}
 }
 
-// ConsumeResetOffset sets the offset to reset to if the client ever sees
-// OffsetOutOfRange while fetching. If you do not set [ConsumeStartOffset],
-// this is also the offset to start consuming from when consuming a partition
-// for the first time. The default is NewOffset().AtStart(), i.e., reset to the
-// earliest offset. If using this option, it is strongly recommended to also
-// set ConsumeStartOffset.
+// ConsumeResetOffset sets where to resume consuming when the client detects
+// that the broker lost data at a point the client cannot determine,
+// overriding the default of RewindOffset(time.Minute).
 //
-// This option is *only* used if a consumer sees OffsetOutOfRange before it
-// has consumed anything from a partition. Once a partition has been consumed,
-// OffsetOutOfRange resets to the nearest offset that still exists: the log
-// start if the consumer fell below it, otherwise the first offset at or after
-// the last consumed record's timestamp, never ahead of where the consumer
-// was, and never past the log end. If you want to disable offset resetting
-// entirely, you can use [NoResetOffset].
+// When the client has a leader epoch to validate against, it first asks the
+// broker with OffsetForLeaderEpoch where the log diverged and resumes exactly
+// there. This option is used in the three cases where the client cannot
+// locate the loss:
 //
-// If you use an exact or relative offsets and the offset ends up out of range,
-// the client chooses the nearest of either the log start offset or the log end
-// offset. For example, using At(3) when the partition starts at 8 results in
-// the partition being consumed from offset 8.
+//   - The broker replied OffsetOutOfRange for an offset past the log end: the
+//     broker lost data, and the client had no leader epoch to validate against
+//     (with one, OffsetForLeaderEpoch catches this first).
+//   - The broker replied OffsetOutOfRange for an offset that is back within
+//     the log: the broker lost data, and by the time the client asked where
+//     the log ends, producers had written enough for the offset to be in
+//     range again.
+//   - OffsetForLeaderEpoch replied that the broker has no record of the epoch
+//     the client consumed at, so the broker cannot say where the log diverged.
 //
-// The following determines the offset for when a partition is seen for the
-// first time, or reset while fetching:
+// Each of these cases reports an [ErrDataLoss]. If instead the client fell
+// below the log start, it resumes at the log start: every record that still
+// exists is one it never consumed.
 //
-//	at start?                         => reset to the log start offset
-//	at end?                           => reset to the log end offset
-//	at exact?                         => reset to an exact offset (3 means offset 3)
-//	relative?                         => reset to the above, + / - the relative amount
-//	exact/relative are out of bounds? => reset to the nearest boundary (start or end)
-//	after millisec?                   => reset to the first offset after millisec if one exists, else the log end offset
+// This option also decides how an OffsetOutOfRange error is handled for a
+// partition that has not consumed anything yet. This happens when a committed
+// or requested offset is no longer in the log, most often a consumer resuming
+// a commit that fell below the log start. In this case, a RewindOffset resumes
+// from the log start.
+//
+// The default resumes at the first record stamped one minute before the last
+// consumed record. The client cannot know exactly where to resume to avoid
+// missing data: a larger rewind reduces your chance of skipping data but
+// increases the amount you may re-process. See [RewindOffset].
 //
 // To match Kafka's auto.offset.reset,
 //
-//	NewOffset().AtStart()     == auto.offset.reset "earliest"
-//	NewOffset().AtEnd()       == auto.offset.reset "latest"
-//	NewOffset().AtCommitted() == auto.offset.reset "none"
+//	RewindOffset(d)       == the default, with d of a minute; Kafka has no equivalent
+//	LookbackOffset(d)     == "by_duration": keep the last d of the log
+//	NewOffset().AtStart() == "earliest": never skip, at the cost of re-reading the log
+//	NewOffset().AtEnd()   == "latest": skip whatever was lost
+//	NoResetOffset()       == "none": the partition is fatal on any OffsetOutOfRange
 //
-// With the above, make sure to use [NoResetOffset] if you want to stop
-// consuming when you encounter OffsetOutOfRange. It is highly recommended
-// to read the docs for all Offset methods.
+// An exact or relative offset is bounded within the log: At(3) when the
+// partition starts at 8 resumes at offset 8.
 //
-// Be sure to check the documentation for [ConsumeStartOffset], especially if
-// you rely on this option as the start offset as well.
+// For historical compatibility, this option also sets [ConsumeStartOffset] if
+// you do not set it yourself (unless you use RewindOffset, in which case the
+// start offset stays at the start).
 func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset, cfg.setResetOffset = offset, true }}
 }

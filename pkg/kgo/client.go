@@ -539,10 +539,15 @@ func NewClient(opts ...Opt) (*Client, error) {
 	}
 
 	if cfg.setResetOffset && !cfg.setStartOffset {
-		cfg.startOffset = cfg.resetOffset
+		if cfg.resetOffset.at != atRewind { // a rewind cannot start a partition
+			cfg.startOffset = cfg.resetOffset
+		}
 	} else if cfg.setStartOffset && !cfg.setResetOffset {
-		cfg.resetOffset = cfg.startOffset
-	} // else they are both set (keep) or both unset (defaults)
+		// Only the noReset flag carries: AtCommitted documents that it opts
+		// into NoResetOffset. The reset offset itself stays the default, so
+		// a start offset of AtStart does not re-read the log on every loss.
+		cfg.resetOffset.noReset = cfg.startOffset.noReset
+	}
 
 	ctx := context.Background()
 
