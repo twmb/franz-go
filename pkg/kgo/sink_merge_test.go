@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -119,6 +120,29 @@ func TestMergeBacklog(t *testing.T) {
 	}
 }
 
+// renumber must agree with recomputing a record's numbers from scratch at
+// every varint width: timestamps spread over days and out of order, and
+// offsets past one byte.
+func TestRenumber(t *testing.T) {
+	t.Parallel()
+	_, _, r := sinkHarness(t)
+	src, dst := r.newRecordBatch(), r.newRecordBatch()
+	rng := rand.New(rand.NewSource(3))
+	base := time.Now()
+	for i := range 400 {
+		ts := base.Add(time.Duration(rng.Int63n(int64(6*24*time.Hour))) - 3*24*time.Hour).Truncate(time.Millisecond)
+		pr := promisedRec{Record: &Record{Value: []byte("v"), Timestamp: ts}}
+		src.appendRecord(pr, src.calculateRecordNumbers(pr.Record)) // stamps pr for src
+		if i%3 == 0 {                                               // move some, so dst positions differ from src positions
+			got, want := dst.renumber(pr, int32(i)), dst.calculateRecordNumbers(pr.Record)
+			if got != want {
+				t.Fatalf("record %d: renumber gave %+v, recomputing gives %+v", i, got, want)
+			}
+			dst.appendRecord(pr, got)
+		}
+	}
+}
+
 // discardHarness buffers records into exactly two batches under the small
 // limit, then raises the limit so a merge would span both.
 func discardHarness(t *testing.T, codec CompressionCodec, small, large int32, n int, random bool) (*sink, *recBuf) {
@@ -168,6 +192,20 @@ func TestMergeBacklogDiscard(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A source swept (records nil) before the merge reads it discards the merge.
+func TestMergeSpanSwept(t *testing.T) {
+	t.Parallel()
+	s, r := discardHarness(t, ZstdCompression(), 2200, 4096, 36, false)
+	span := append([]*recBatch(nil), r.batches...)
+	span[1].records = nil // as failAllRecords would, under mu
+	cc, codec := s.streamCodec()
+	m, tail, consumed, ok := r.mergeSpan(span, len(span[0].records), 4096, cc, codec)
+	if ok || consumed != 1 || tail != nil {
+		t.Fatalf("swept merge returned ok %v, consumed %d, tail %v", ok, consumed, tail != nil)
+	}
+	m.recycle()
 }
 
 // A head record that fits the uncompressed bound but not the compressed one
