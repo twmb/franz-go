@@ -261,12 +261,13 @@ func TestGuessVersions(t *testing.T) {
 		{V4_1_0(), "v4.1"},
 		{V4_2_0(), "v4.2"},
 		{V4_3_0(), "v4.3"},
+		{V4_4_0(), "v4.4"},
 
 		// Stable is zk, controller, broker merged; the guess ignores
 		// keys foreign to each comparison chain, so the broker chain
 		// answers exactly even though Stable also carries zk and
 		// controller keys.
-		{Stable(), "v4.3"},
+		{Stable(), "v4.4"},
 	} {
 		got := test.vs.VersionGuess()
 		if got != test.exp {
