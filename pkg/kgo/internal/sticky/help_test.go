@@ -199,3 +199,14 @@ func testPlanUsage(t *testing.T, plan Plan, topics map[string]int32, unused []st
 		}
 	}
 }
+
+// balanced runs a balance up to but not including the repair, for tests
+// that look at the balancer's state.
+func balanced(members []GroupMember, topics map[string]int32, partitionRacks map[string][]string) *balancer {
+	b := newBalancer(members, topics, partitionRacks)
+	b.parseMemberMetadata()
+	b.assignUnassignedAndInitGraph()
+	b.initPlanByNumPartitions()
+	b.balance()
+	return b
+}

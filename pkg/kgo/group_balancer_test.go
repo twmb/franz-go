@@ -116,10 +116,11 @@ func TestRangeBalancerRackAware(t *testing.T) {
 
 	rb := &rangeBalancer{}
 	b := &ConsumerBalancer{
-		b:         rb,
-		members:   members,
-		metadatas: metadatas,
-		topics:    map[string]struct{}{"t1": {}},
+		b:            rb,
+		members:      members,
+		metadatas:    metadatas,
+		topics:       map[string]struct{}{"t1": {}},
+		balanceRacks: true,
 		partitionRacks: map[string][]string{
 			"t1": {"rackA", "rackB", "rackA", "rackB"},
 		},
@@ -213,6 +214,7 @@ func rangeBalance(members []rangeMember, topics map[string]int32, partitionRacks
 		members:        jMembers,
 		metadatas:      metas,
 		topics:         allTopics,
+		balanceRacks:   true,
 		partitionRacks: partitionRacks,
 	}
 	return rb.Balance(b, topics).(*BalancePlan)
