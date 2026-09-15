@@ -9,6 +9,12 @@ on:
     branches: ["*"]
     paths-ignore:
       - '**/*.md'
+  # The integration jobs test whatever apache/kafka:latest, Redpanda, and a
+  # staged Kafka release candidate are at the time, so run weekly as well:
+  # without this, a new release or candidate produces no signal until
+  # someone happens to push.
+  schedule:
+    - cron: '0 8 * * 1'
 
 concurrency:
   group: ${{ github.ref }}
