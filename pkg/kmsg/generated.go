@@ -13,7 +13,7 @@ import (
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 92
+const MaxKey = 94
 
 type AssignmentTopicPartition struct {
 	TopicID [16]byte
@@ -59,6 +59,44 @@ func (v *TopicInfoConfig) Default() {
 // This is a shortcut for creating a struct and calling Default yourself.
 func NewTopicInfoConfig() TopicInfoConfig {
 	var v TopicInfoConfig
+	v.Default()
+	return v
+}
+
+// TopologyDescriptionNode is a processor node within a streams topology
+// description.
+type TopologyDescriptionNode struct {
+	// Name is the name of this node.
+	Name string
+
+	// NodeType is the type of this node.
+	NodeType int8
+
+	// SourceTopics are the source topics this node reads from.
+	SourceTopics []string
+
+	// SinkTopic is the sink topic this node writes to, or null.
+	SinkTopic *string
+
+	// Stores are the state stores connected to this node.
+	Stores []string
+
+	// Successors are the names of this node's successor nodes.
+	Successors []string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to TopologyDescriptionNode.
+func (v *TopologyDescriptionNode) Default() {
+}
+
+// NewTopologyDescriptionNode returns a default TopologyDescriptionNode
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewTopologyDescriptionNode() TopologyDescriptionNode {
+	var v TopologyDescriptionNode
 	v.Default()
 	return v
 }
@@ -17213,6 +17251,10 @@ func NewSASLHandshakeResponse() SASLHandshakeResponse {
 // understands, the broker replies with UNSUPPORTED_VERSIONS using the version
 // 0 message format but additionally includes the api versions the broker does
 // support.
+//
+// Version 5 adds ClusterID and NodeID (KIP-1242). If both are set, the broker
+// replies REBOOTSTRAP_REQUIRED when either does not match itself, so a client
+// can detect a connection that was routed to the wrong broker or cluster.
 type ApiVersionsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -17223,12 +17265,24 @@ type ApiVersionsRequest struct {
 	//
 	// If using v3, this field is required and must match the following pattern:
 	//
-	//	[a-zA-Z0-9](?:[a-zA-Z0-9\\-.]*[a-zA-Z0-9])?
+	//     [a-zA-Z0-9](?:[a-zA-Z0-9\\-.]*[a-zA-Z0-9])?
+	//
 	ClientSoftwareName string // v3+
 
 	// ClientSoftwareVersion is the version of the software name in the prior
 	// field. It must match the same regex (thus, this is also required).
 	ClientSoftwareVersion string // v3+
+
+	// ClusterID is the ID of the cluster the client believes it is connecting
+	// to, or null while bootstrapping. Set ClusterID and NodeID together or
+	// not at all: the broker replies INVALID_REQUEST if only one is set.
+	ClusterID *string // v5+
+
+	// NodeID is the ID of the broker the client believes it is connecting to,
+	// or -1 while bootstrapping.
+	//
+	// This field has a default of -1.
+	NodeID int32 // v5+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
@@ -17236,7 +17290,7 @@ type ApiVersionsRequest struct {
 }
 
 func (*ApiVersionsRequest) Key() int16                 { return 18 }
-func (*ApiVersionsRequest) MaxVersion() int16          { return 4 }
+func (*ApiVersionsRequest) MaxVersion() int16          { return 5 }
 func (v *ApiVersionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ApiVersionsRequest) GetVersion() int16        { return v.Version }
 func (v *ApiVersionsRequest) IsFlexible() bool         { return v.Version >= 3 }
@@ -17275,6 +17329,18 @@ func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 		} else {
 			dst = kbin.AppendString(dst, v)
 		}
+	}
+	if version >= 5 {
+		v := v.ClusterID
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	if version >= 5 {
+		v := v.NodeID
+		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
 		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -17330,6 +17396,27 @@ func (v *ApiVersionsRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		s.ClientSoftwareVersion = v
 	}
+	if version >= 5 {
+		var v *string
+		if isFlexible {
+			if unsafe {
+				v = b.UnsafeCompactNullableString()
+			} else {
+				v = b.CompactNullableString()
+			}
+		} else {
+			if unsafe {
+				v = b.UnsafeNullableString()
+			} else {
+				v = b.NullableString()
+			}
+		}
+		s.ClusterID = v
+	}
+	if version >= 5 {
+		v := b.Int32()
+		s.NodeID = v
+	}
 	if isFlexible {
 		s.UnknownTags = internalReadTags(&b)
 	}
@@ -17347,6 +17434,7 @@ func NewPtrApiVersionsRequest() *ApiVersionsRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ApiVersionsRequest.
 func (v *ApiVersionsRequest) Default() {
+	v.NodeID = -1
 }
 
 // NewApiVersionsRequest returns a default ApiVersionsRequest
@@ -17489,7 +17577,7 @@ type ApiVersionsResponse struct {
 }
 
 func (*ApiVersionsResponse) Key() int16                         { return 18 }
-func (*ApiVersionsResponse) MaxVersion() int16                  { return 4 }
+func (*ApiVersionsResponse) MaxVersion() int16                  { return 5 }
 func (v *ApiVersionsResponse) SetVersion(version int16)         { v.Version = version }
 func (v *ApiVersionsResponse) GetVersion() int16                { return v.Version }
 func (v *ApiVersionsResponse) IsFlexible() bool                 { return v.Version >= 3 }
@@ -23301,7 +23389,10 @@ func NewTxnOffsetCommitRequestTopicPartition() TxnOffsetCommitRequestTopicPartit
 
 type TxnOffsetCommitRequestTopic struct {
 	// Topic is a topic to add for a pending commit.
-	Topic string
+	Topic string // v0-v5
+
+	// TopicID is the topic ID of this topic.
+	TopicID [16]byte // v6+
 
 	// Partitions are partitions to add for pending commits.
 	Partitions []TxnOffsetCommitRequestTopicPartition
@@ -23366,7 +23457,7 @@ type TxnOffsetCommitRequest struct {
 }
 
 func (*TxnOffsetCommitRequest) Key() int16                   { return 28 }
-func (*TxnOffsetCommitRequest) MaxVersion() int16            { return 5 }
+func (*TxnOffsetCommitRequest) MaxVersion() int16            { return 6 }
 func (v *TxnOffsetCommitRequest) SetVersion(version int16)   { v.Version = version }
 func (v *TxnOffsetCommitRequest) GetVersion() int16          { return v.Version }
 func (v *TxnOffsetCommitRequest) IsFlexible() bool           { return v.Version >= 3 }
@@ -23444,13 +23535,17 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 0 && version <= 5 {
 				v := v.Topic
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
 				} else {
 					dst = kbin.AppendString(dst, v)
 				}
+			}
+			if version >= 6 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			{
 				v := v.Partitions
@@ -23613,7 +23708,7 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 			v := &a[i]
 			v.Default()
 			s := v
-			{
+			if version >= 0 && version <= 5 {
 				var v string
 				if unsafe {
 					if isFlexible {
@@ -23629,6 +23724,10 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 					}
 				}
 				s.Topic = v
+			}
+			if version >= 6 {
+				v := b.Uuid()
+				s.TopicID = v
 			}
 			{
 				v := s.Partitions
@@ -23786,7 +23885,10 @@ func NewTxnOffsetCommitResponseTopicPartition() TxnOffsetCommitResponseTopicPart
 
 type TxnOffsetCommitResponseTopic struct {
 	// Topic is the topic this response is for.
-	Topic string
+	Topic string // v0-v5
+
+	// TopicID is the topic ID of this topic.
+	TopicID [16]byte // v6+
 
 	// Partitions contains responses to the partitions in this topic.
 	Partitions []TxnOffsetCommitResponseTopicPartition
@@ -23831,7 +23933,7 @@ type TxnOffsetCommitResponse struct {
 }
 
 func (*TxnOffsetCommitResponse) Key() int16                 { return 28 }
-func (*TxnOffsetCommitResponse) MaxVersion() int16          { return 5 }
+func (*TxnOffsetCommitResponse) MaxVersion() int16          { return 6 }
 func (v *TxnOffsetCommitResponse) SetVersion(version int16) { v.Version = version }
 func (v *TxnOffsetCommitResponse) GetVersion() int16        { return v.Version }
 func (v *TxnOffsetCommitResponse) IsFlexible() bool         { return v.Version >= 3 }
@@ -23861,13 +23963,17 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 0 && version <= 5 {
 				v := v.Topic
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
 				} else {
 					dst = kbin.AppendString(dst, v)
 				}
+			}
+			if version >= 6 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			{
 				v := v.Partitions
@@ -23942,7 +24048,7 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 			v := &a[i]
 			v.Default()
 			s := v
-			{
+			if version >= 0 && version <= 5 {
 				var v string
 				if unsafe {
 					if isFlexible {
@@ -23958,6 +24064,10 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 					}
 				}
 				s.Topic = v
+			}
+			if version >= 6 {
+				v := b.Uuid()
+				s.TopicID = v
 			}
 			{
 				v := s.Partitions
@@ -31334,7 +31444,7 @@ type DeleteGroupsRequest struct {
 }
 
 func (*DeleteGroupsRequest) Key() int16                   { return 42 }
-func (*DeleteGroupsRequest) MaxVersion() int16            { return 2 }
+func (*DeleteGroupsRequest) MaxVersion() int16            { return 3 }
 func (v *DeleteGroupsRequest) SetVersion(version int16)   { v.Version = version }
 func (v *DeleteGroupsRequest) GetVersion() int16          { return v.Version }
 func (v *DeleteGroupsRequest) IsFlexible() bool           { return v.Version >= 2 }
@@ -31478,6 +31588,9 @@ type DeleteGroupsResponseGroup struct {
 	// not in the empty state.
 	ErrorCode int16
 
+	// ErrorMessage is the error message, or null if there was no error.
+	ErrorMessage *string // v3+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
 
@@ -31518,7 +31631,7 @@ type DeleteGroupsResponse struct {
 }
 
 func (*DeleteGroupsResponse) Key() int16                         { return 42 }
-func (*DeleteGroupsResponse) MaxVersion() int16                  { return 2 }
+func (*DeleteGroupsResponse) MaxVersion() int16                  { return 3 }
 func (v *DeleteGroupsResponse) SetVersion(version int16)         { v.Version = version }
 func (v *DeleteGroupsResponse) GetVersion() int16                { return v.Version }
 func (v *DeleteGroupsResponse) IsFlexible() bool                 { return v.Version >= 2 }
@@ -31555,6 +31668,14 @@ func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 			{
 				v := v.ErrorCode
 				dst = kbin.AppendInt16(dst, v)
+			}
+			if version >= 3 {
+				v := v.ErrorMessage
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -31626,6 +31747,23 @@ func (v *DeleteGroupsResponse) readFrom(src []byte, unsafe bool) error {
 			{
 				v := b.Int16()
 				s.ErrorCode = v
+			}
+			if version >= 3 {
+				var v *string
+				if isFlexible {
+					if unsafe {
+						v = b.UnsafeCompactNullableString()
+					} else {
+						v = b.CompactNullableString()
+					}
+				} else {
+					if unsafe {
+						v = b.UnsafeNullableString()
+					} else {
+						v = b.NullableString()
+					}
+				}
+				s.ErrorMessage = v
 			}
 			if isFlexible {
 				s.UnknownTags = internalReadTags(&b)
@@ -60074,7 +60212,7 @@ type StreamsGroupHeartbeatRequest struct {
 }
 
 func (*StreamsGroupHeartbeatRequest) Key() int16                   { return 88 }
-func (*StreamsGroupHeartbeatRequest) MaxVersion() int16            { return 0 }
+func (*StreamsGroupHeartbeatRequest) MaxVersion() int16            { return 1 }
 func (v *StreamsGroupHeartbeatRequest) SetVersion(version int16)   { v.Version = version }
 func (v *StreamsGroupHeartbeatRequest) GetVersion() int16          { return v.Version }
 func (v *StreamsGroupHeartbeatRequest) IsFlexible() bool           { return v.Version >= 0 }
@@ -61834,13 +61972,21 @@ type StreamsGroupHeartbeatResponse struct {
 	// HeartbeatIntervalMillis is the heartbeat interval in milliseconds.
 	HeartbeatIntervalMillis int32
 
-	// AcceptableRecoveryLag is the maximal lag a warm-up task can have to be
-	// considered caught-up.
-	AcceptableRecoveryLag int32
+	// AcceptableRecoveryLagLegacy is the maximal lag a warm-up task can have
+	// to be considered caught-up; deprecated in v1 in favor of the int64
+	// AcceptableRecoveryLag below.
+	AcceptableRecoveryLagLegacy int32
 
 	// TaskOffsetIntervalMillis is the interval in which the task changelog
 	// offsets on a client are updated on the broker.
 	TaskOffsetIntervalMillis int32
+
+	// AcceptableRecoveryLag is the maximal lag a warm-up task can have to be
+	// considered caught-up. -1 indicates the broker does not support this
+	// configuration.
+	//
+	// This field has a default of -1.
+	AcceptableRecoveryLag int64 // v1+
 
 	// Status indicates zero or more statuses for the group membership.
 	Status []StreamsGroupHeartbeatResponseStatus
@@ -61857,6 +62003,11 @@ type StreamsGroupHeartbeatResponse struct {
 	// heartbeat.
 	WarmupTasks []TaskIDs
 
+	// TopologyDescriptionRequired is true if the broker does not have an
+	// up-to-date topology description for this group; the client should send
+	// the description via StreamsGroupTopologyDescriptionUpdate.
+	TopologyDescriptionRequired bool // v1+
+
 	// EndpointInformationEpoch is the endpoint epoch set in the response.
 	EndpointInformationEpoch int32
 
@@ -61869,7 +62020,7 @@ type StreamsGroupHeartbeatResponse struct {
 }
 
 func (*StreamsGroupHeartbeatResponse) Key() int16                 { return 88 }
-func (*StreamsGroupHeartbeatResponse) MaxVersion() int16          { return 0 }
+func (*StreamsGroupHeartbeatResponse) MaxVersion() int16          { return 1 }
 func (v *StreamsGroupHeartbeatResponse) SetVersion(version int16) { v.Version = version }
 func (v *StreamsGroupHeartbeatResponse) GetVersion() int16        { return v.Version }
 func (v *StreamsGroupHeartbeatResponse) IsFlexible() bool         { return v.Version >= 0 }
@@ -61920,13 +62071,17 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 		v := v.HeartbeatIntervalMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
-	{
-		v := v.AcceptableRecoveryLag
+	if version >= 0 && version <= 0 {
+		v := v.AcceptableRecoveryLagLegacy
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
 		v := v.TaskOffsetIntervalMillis
 		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 1 {
+		v := v.AcceptableRecoveryLag
+		dst = kbin.AppendInt64(dst, v)
 	}
 	{
 		v := v.Status
@@ -62059,6 +62214,10 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
+	}
+	if version >= 1 {
+		v := v.TopologyDescriptionRequired
+		dst = kbin.AppendBool(dst, v)
 	}
 	{
 		v := v.EndpointInformationEpoch
@@ -62238,13 +62397,17 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		v := b.Int32()
 		s.HeartbeatIntervalMillis = v
 	}
-	{
+	if version >= 0 && version <= 0 {
 		v := b.Int32()
-		s.AcceptableRecoveryLag = v
+		s.AcceptableRecoveryLagLegacy = v
 	}
 	{
 		v := b.Int32()
 		s.TaskOffsetIntervalMillis = v
+	}
+	if version >= 1 {
+		v := b.Int64()
+		s.AcceptableRecoveryLag = v
 	}
 	{
 		v := s.Status
@@ -62507,6 +62670,10 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		v = a
 		s.WarmupTasks = v
 	}
+	if version >= 1 {
+		v := b.Bool()
+		s.TopologyDescriptionRequired = v
+	}
 	{
 		v := b.Int32()
 		s.EndpointInformationEpoch = v
@@ -62721,12 +62888,73 @@ func NewPtrStreamsGroupHeartbeatResponse() *StreamsGroupHeartbeatResponse {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to StreamsGroupHeartbeatResponse.
 func (v *StreamsGroupHeartbeatResponse) Default() {
+	v.AcceptableRecoveryLag = -1
 }
 
 // NewStreamsGroupHeartbeatResponse returns a default StreamsGroupHeartbeatResponse
 // This is a shortcut for creating a struct and calling Default yourself.
 func NewStreamsGroupHeartbeatResponse() StreamsGroupHeartbeatResponse {
 	var v StreamsGroupHeartbeatResponse
+	v.Default()
+	return v
+}
+
+// TopologyDescriptionSubtopology is a subtopology within a streams topology
+// description.
+type TopologyDescriptionSubtopology struct {
+	// SubtopologyID uniquely identifies the subtopology.
+	SubtopologyID string
+
+	// Nodes are the processor nodes of the subtopology.
+	Nodes []TopologyDescriptionNode
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to TopologyDescriptionSubtopology.
+func (v *TopologyDescriptionSubtopology) Default() {
+}
+
+// NewTopologyDescriptionSubtopology returns a default TopologyDescriptionSubtopology
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewTopologyDescriptionSubtopology() TopologyDescriptionSubtopology {
+	var v TopologyDescriptionSubtopology
+	v.Default()
+	return v
+}
+
+// TopologyDescriptionGlobalStore is a global store within a streams topology
+// description.
+type TopologyDescriptionGlobalStore struct {
+	// Source is the source node of the global store.
+	Source TopologyDescriptionNode
+
+	// Processor is the processor node of the global store.
+	Processor TopologyDescriptionNode
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to TopologyDescriptionGlobalStore.
+func (v *TopologyDescriptionGlobalStore) Default() {
+	{
+		v := &v.Source
+		_ = v
+	}
+	{
+		v := &v.Processor
+		_ = v
+	}
+}
+
+// NewTopologyDescriptionGlobalStore returns a default TopologyDescriptionGlobalStore
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewTopologyDescriptionGlobalStore() TopologyDescriptionGlobalStore {
+	var v TopologyDescriptionGlobalStore
 	v.Default()
 	return v
 }
@@ -62772,12 +63000,16 @@ type StreamsGroupDescribeRequest struct {
 	// operations.
 	IncludeAuthorizedOperations bool
 
+	// IncludeTopologyDescription controls whether to include the full
+	// topology description in the response.
+	IncludeTopologyDescription bool // v1+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
 
 func (*StreamsGroupDescribeRequest) Key() int16                 { return 89 }
-func (*StreamsGroupDescribeRequest) MaxVersion() int16          { return 0 }
+func (*StreamsGroupDescribeRequest) MaxVersion() int16          { return 1 }
 func (v *StreamsGroupDescribeRequest) SetVersion(version int16) { v.Version = version }
 func (v *StreamsGroupDescribeRequest) GetVersion() int16        { return v.Version }
 func (v *StreamsGroupDescribeRequest) IsFlexible() bool         { return v.Version >= 0 }
@@ -62819,6 +63051,10 @@ func (v *StreamsGroupDescribeRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.IncludeAuthorizedOperations
+		dst = kbin.AppendBool(dst, v)
+	}
+	if version >= 1 {
+		v := v.IncludeTopologyDescription
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
@@ -62880,6 +63116,10 @@ func (v *StreamsGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 	{
 		v := b.Bool()
 		s.IncludeAuthorizedOperations = v
+	}
+	if version >= 1 {
+		v := b.Bool()
+		s.IncludeTopologyDescription = v
 	}
 	if isFlexible {
 		s.UnknownTags = internalReadTags(&b)
@@ -63095,6 +63335,30 @@ func NewStreamsGroupDescribeResponseGroupMember() StreamsGroupDescribeResponseGr
 	return v
 }
 
+type StreamsGroupDescribeResponseGroupTopologyDescription struct {
+	// Subtopologies are the subtopologies that make up this topology.
+	Subtopologies []TopologyDescriptionSubtopology
+
+	// GlobalStores are the global stores of this topology.
+	GlobalStores []TopologyDescriptionGlobalStore
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to StreamsGroupDescribeResponseGroupTopologyDescription.
+func (v *StreamsGroupDescribeResponseGroupTopologyDescription) Default() {
+}
+
+// NewStreamsGroupDescribeResponseGroupTopologyDescription returns a default StreamsGroupDescribeResponseGroupTopologyDescription
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewStreamsGroupDescribeResponseGroupTopologyDescription() StreamsGroupDescribeResponseGroupTopologyDescription {
+	var v StreamsGroupDescribeResponseGroupTopologyDescription
+	v.Default()
+	return v
+}
+
 type StreamsGroupDescribeResponseGroup struct {
 	// ErrorCode is the describe error, or 0 if there was no error.
 	ErrorCode int16
@@ -63128,6 +63392,21 @@ type StreamsGroupDescribeResponseGroup struct {
 	// This field has a default of -2147483648.
 	AuthorizedOperations int32
 
+	// TopologyDescription is the full topology description for this group;
+	// non-null if and only if TopologyDescriptionStatus is AVAILABLE (3).
+	TopologyDescription *StreamsGroupDescribeResponseGroupTopologyDescription // v1+
+
+	// TopologyDescriptionStatus is the status of the topology description:
+	// 0=NOT_REQUESTED, 1=NOT_STORED, 2=ERROR, 3=AVAILABLE.
+	TopologyDescriptionStatus int8 // v1+
+
+	// AssignorName is the task assignor the group coordinator will use for
+	// the next assignment (KIP-1357). This may differ from the assignor that
+	// computed the current assignment, because changing the assignor
+	// configuration does not trigger a rebalance. Null in case of a describe
+	// error.
+	AssignorName *string // v1+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
@@ -63140,6 +63419,10 @@ func (v *StreamsGroupDescribeResponseGroup) Default() {
 		_ = v
 	}
 	v.AuthorizedOperations = -2147483648
+	{
+		v := &v.TopologyDescription
+		_ = v
+	}
 }
 
 // NewStreamsGroupDescribeResponseGroup returns a default StreamsGroupDescribeResponseGroup
@@ -63167,7 +63450,7 @@ type StreamsGroupDescribeResponse struct {
 }
 
 func (*StreamsGroupDescribeResponse) Key() int16                 { return 89 }
-func (*StreamsGroupDescribeResponse) MaxVersion() int16          { return 0 }
+func (*StreamsGroupDescribeResponse) MaxVersion() int16          { return 1 }
 func (v *StreamsGroupDescribeResponse) SetVersion(version int16) { v.Version = version }
 func (v *StreamsGroupDescribeResponse) GetVersion() int16        { return v.Version }
 func (v *StreamsGroupDescribeResponse) IsFlexible() bool         { return v.Version >= 0 }
@@ -63849,6 +64132,301 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 			{
 				v := v.AuthorizedOperations
 				dst = kbin.AppendInt32(dst, v)
+			}
+			if version >= 1 {
+				v := v.TopologyDescription
+				if v == nil {
+					dst = append(dst, 255)
+				} else {
+					dst = append(dst, 1)
+					{
+						v := v.Subtopologies
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := &v[i]
+							{
+								v := v.SubtopologyID
+								if isFlexible {
+									dst = kbin.AppendCompactString(dst, v)
+								} else {
+									dst = kbin.AppendString(dst, v)
+								}
+							}
+							{
+								v := v.Nodes
+								if isFlexible {
+									dst = kbin.AppendCompactArrayLen(dst, len(v))
+								} else {
+									dst = kbin.AppendArrayLen(dst, len(v))
+								}
+								for i := range v {
+									v := &v[i]
+									{
+										v := v.Name
+										if isFlexible {
+											dst = kbin.AppendCompactString(dst, v)
+										} else {
+											dst = kbin.AppendString(dst, v)
+										}
+									}
+									{
+										v := v.NodeType
+										dst = kbin.AppendInt8(dst, v)
+									}
+									{
+										v := v.SourceTopics
+										if isFlexible {
+											dst = kbin.AppendCompactArrayLen(dst, len(v))
+										} else {
+											dst = kbin.AppendArrayLen(dst, len(v))
+										}
+										for i := range v {
+											v := v[i]
+											if isFlexible {
+												dst = kbin.AppendCompactString(dst, v)
+											} else {
+												dst = kbin.AppendString(dst, v)
+											}
+										}
+									}
+									{
+										v := v.SinkTopic
+										if isFlexible {
+											dst = kbin.AppendCompactNullableString(dst, v)
+										} else {
+											dst = kbin.AppendNullableString(dst, v)
+										}
+									}
+									{
+										v := v.Stores
+										if isFlexible {
+											dst = kbin.AppendCompactArrayLen(dst, len(v))
+										} else {
+											dst = kbin.AppendArrayLen(dst, len(v))
+										}
+										for i := range v {
+											v := v[i]
+											if isFlexible {
+												dst = kbin.AppendCompactString(dst, v)
+											} else {
+												dst = kbin.AppendString(dst, v)
+											}
+										}
+									}
+									{
+										v := v.Successors
+										if isFlexible {
+											dst = kbin.AppendCompactArrayLen(dst, len(v))
+										} else {
+											dst = kbin.AppendArrayLen(dst, len(v))
+										}
+										for i := range v {
+											v := v[i]
+											if isFlexible {
+												dst = kbin.AppendCompactString(dst, v)
+											} else {
+												dst = kbin.AppendString(dst, v)
+											}
+										}
+									}
+									if isFlexible {
+										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+										dst = v.UnknownTags.AppendEach(dst)
+									}
+								}
+							}
+							if isFlexible {
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
+							}
+						}
+					}
+					{
+						v := v.GlobalStores
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := &v[i]
+							{
+								v := &v.Source
+								{
+									v := v.Name
+									if isFlexible {
+										dst = kbin.AppendCompactString(dst, v)
+									} else {
+										dst = kbin.AppendString(dst, v)
+									}
+								}
+								{
+									v := v.NodeType
+									dst = kbin.AppendInt8(dst, v)
+								}
+								{
+									v := v.SourceTopics
+									if isFlexible {
+										dst = kbin.AppendCompactArrayLen(dst, len(v))
+									} else {
+										dst = kbin.AppendArrayLen(dst, len(v))
+									}
+									for i := range v {
+										v := v[i]
+										if isFlexible {
+											dst = kbin.AppendCompactString(dst, v)
+										} else {
+											dst = kbin.AppendString(dst, v)
+										}
+									}
+								}
+								{
+									v := v.SinkTopic
+									if isFlexible {
+										dst = kbin.AppendCompactNullableString(dst, v)
+									} else {
+										dst = kbin.AppendNullableString(dst, v)
+									}
+								}
+								{
+									v := v.Stores
+									if isFlexible {
+										dst = kbin.AppendCompactArrayLen(dst, len(v))
+									} else {
+										dst = kbin.AppendArrayLen(dst, len(v))
+									}
+									for i := range v {
+										v := v[i]
+										if isFlexible {
+											dst = kbin.AppendCompactString(dst, v)
+										} else {
+											dst = kbin.AppendString(dst, v)
+										}
+									}
+								}
+								{
+									v := v.Successors
+									if isFlexible {
+										dst = kbin.AppendCompactArrayLen(dst, len(v))
+									} else {
+										dst = kbin.AppendArrayLen(dst, len(v))
+									}
+									for i := range v {
+										v := v[i]
+										if isFlexible {
+											dst = kbin.AppendCompactString(dst, v)
+										} else {
+											dst = kbin.AppendString(dst, v)
+										}
+									}
+								}
+								if isFlexible {
+									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+									dst = v.UnknownTags.AppendEach(dst)
+								}
+							}
+							{
+								v := &v.Processor
+								{
+									v := v.Name
+									if isFlexible {
+										dst = kbin.AppendCompactString(dst, v)
+									} else {
+										dst = kbin.AppendString(dst, v)
+									}
+								}
+								{
+									v := v.NodeType
+									dst = kbin.AppendInt8(dst, v)
+								}
+								{
+									v := v.SourceTopics
+									if isFlexible {
+										dst = kbin.AppendCompactArrayLen(dst, len(v))
+									} else {
+										dst = kbin.AppendArrayLen(dst, len(v))
+									}
+									for i := range v {
+										v := v[i]
+										if isFlexible {
+											dst = kbin.AppendCompactString(dst, v)
+										} else {
+											dst = kbin.AppendString(dst, v)
+										}
+									}
+								}
+								{
+									v := v.SinkTopic
+									if isFlexible {
+										dst = kbin.AppendCompactNullableString(dst, v)
+									} else {
+										dst = kbin.AppendNullableString(dst, v)
+									}
+								}
+								{
+									v := v.Stores
+									if isFlexible {
+										dst = kbin.AppendCompactArrayLen(dst, len(v))
+									} else {
+										dst = kbin.AppendArrayLen(dst, len(v))
+									}
+									for i := range v {
+										v := v[i]
+										if isFlexible {
+											dst = kbin.AppendCompactString(dst, v)
+										} else {
+											dst = kbin.AppendString(dst, v)
+										}
+									}
+								}
+								{
+									v := v.Successors
+									if isFlexible {
+										dst = kbin.AppendCompactArrayLen(dst, len(v))
+									} else {
+										dst = kbin.AppendArrayLen(dst, len(v))
+									}
+									for i := range v {
+										v := v[i]
+										if isFlexible {
+											dst = kbin.AppendCompactString(dst, v)
+										} else {
+											dst = kbin.AppendString(dst, v)
+										}
+									}
+								}
+								if isFlexible {
+									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+									dst = v.UnknownTags.AppendEach(dst)
+								}
+							}
+							if isFlexible {
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
+							}
+						}
+					}
+					if isFlexible {
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
+					}
+				}
+			}
+			if version >= 1 {
+				v := v.TopologyDescriptionStatus
+				dst = kbin.AppendInt8(dst, v)
+			}
+			if version >= 1 {
+				v := v.AssignorName
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -65082,6 +65660,590 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 			{
 				v := b.Int32()
 				s.AuthorizedOperations = v
+			}
+			if version >= 1 {
+				if present := b.Int8(); present != -1 && b.Ok() {
+					s.TopologyDescription = new(StreamsGroupDescribeResponseGroupTopologyDescription)
+					v := s.TopologyDescription
+					v.Default()
+					s := v
+					{
+						v := s.Subtopologies
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						a = a[:0]
+						if l > 0 {
+							a = append(a, make([]TopologyDescriptionSubtopology, l)...)
+						}
+						for i := int32(0); i < l; i++ {
+							v := &a[i]
+							v.Default()
+							s := v
+							{
+								var v string
+								if unsafe {
+									if isFlexible {
+										v = b.UnsafeCompactString()
+									} else {
+										v = b.UnsafeString()
+									}
+								} else {
+									if isFlexible {
+										v = b.CompactString()
+									} else {
+										v = b.String()
+									}
+								}
+								s.SubtopologyID = v
+							}
+							{
+								v := s.Nodes
+								a := v
+								var l int32
+								if isFlexible {
+									l = b.CompactArrayLen()
+								} else {
+									l = b.ArrayLen()
+								}
+								if !b.Ok() {
+									return b.Complete()
+								}
+								a = a[:0]
+								if l > 0 {
+									a = append(a, make([]TopologyDescriptionNode, l)...)
+								}
+								for i := int32(0); i < l; i++ {
+									v := &a[i]
+									v.Default()
+									s := v
+									{
+										var v string
+										if unsafe {
+											if isFlexible {
+												v = b.UnsafeCompactString()
+											} else {
+												v = b.UnsafeString()
+											}
+										} else {
+											if isFlexible {
+												v = b.CompactString()
+											} else {
+												v = b.String()
+											}
+										}
+										s.Name = v
+									}
+									{
+										v := b.Int8()
+										s.NodeType = v
+									}
+									{
+										v := s.SourceTopics
+										a := v
+										var l int32
+										if isFlexible {
+											l = b.CompactArrayLen()
+										} else {
+											l = b.ArrayLen()
+										}
+										if !b.Ok() {
+											return b.Complete()
+										}
+										a = a[:0]
+										if l > 0 {
+											a = append(a, make([]string, l)...)
+										}
+										for i := int32(0); i < l; i++ {
+											var v string
+											if unsafe {
+												if isFlexible {
+													v = b.UnsafeCompactString()
+												} else {
+													v = b.UnsafeString()
+												}
+											} else {
+												if isFlexible {
+													v = b.CompactString()
+												} else {
+													v = b.String()
+												}
+											}
+											a[i] = v
+										}
+										v = a
+										s.SourceTopics = v
+									}
+									{
+										var v *string
+										if isFlexible {
+											if unsafe {
+												v = b.UnsafeCompactNullableString()
+											} else {
+												v = b.CompactNullableString()
+											}
+										} else {
+											if unsafe {
+												v = b.UnsafeNullableString()
+											} else {
+												v = b.NullableString()
+											}
+										}
+										s.SinkTopic = v
+									}
+									{
+										v := s.Stores
+										a := v
+										var l int32
+										if isFlexible {
+											l = b.CompactArrayLen()
+										} else {
+											l = b.ArrayLen()
+										}
+										if !b.Ok() {
+											return b.Complete()
+										}
+										a = a[:0]
+										if l > 0 {
+											a = append(a, make([]string, l)...)
+										}
+										for i := int32(0); i < l; i++ {
+											var v string
+											if unsafe {
+												if isFlexible {
+													v = b.UnsafeCompactString()
+												} else {
+													v = b.UnsafeString()
+												}
+											} else {
+												if isFlexible {
+													v = b.CompactString()
+												} else {
+													v = b.String()
+												}
+											}
+											a[i] = v
+										}
+										v = a
+										s.Stores = v
+									}
+									{
+										v := s.Successors
+										a := v
+										var l int32
+										if isFlexible {
+											l = b.CompactArrayLen()
+										} else {
+											l = b.ArrayLen()
+										}
+										if !b.Ok() {
+											return b.Complete()
+										}
+										a = a[:0]
+										if l > 0 {
+											a = append(a, make([]string, l)...)
+										}
+										for i := int32(0); i < l; i++ {
+											var v string
+											if unsafe {
+												if isFlexible {
+													v = b.UnsafeCompactString()
+												} else {
+													v = b.UnsafeString()
+												}
+											} else {
+												if isFlexible {
+													v = b.CompactString()
+												} else {
+													v = b.String()
+												}
+											}
+											a[i] = v
+										}
+										v = a
+										s.Successors = v
+									}
+									if isFlexible {
+										s.UnknownTags = internalReadTags(&b)
+									}
+								}
+								v = a
+								s.Nodes = v
+							}
+							if isFlexible {
+								s.UnknownTags = internalReadTags(&b)
+							}
+						}
+						v = a
+						s.Subtopologies = v
+					}
+					{
+						v := s.GlobalStores
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						a = a[:0]
+						if l > 0 {
+							a = append(a, make([]TopologyDescriptionGlobalStore, l)...)
+						}
+						for i := int32(0); i < l; i++ {
+							v := &a[i]
+							v.Default()
+							s := v
+							{
+								v := &s.Source
+								v.Default()
+								s := v
+								{
+									var v string
+									if unsafe {
+										if isFlexible {
+											v = b.UnsafeCompactString()
+										} else {
+											v = b.UnsafeString()
+										}
+									} else {
+										if isFlexible {
+											v = b.CompactString()
+										} else {
+											v = b.String()
+										}
+									}
+									s.Name = v
+								}
+								{
+									v := b.Int8()
+									s.NodeType = v
+								}
+								{
+									v := s.SourceTopics
+									a := v
+									var l int32
+									if isFlexible {
+										l = b.CompactArrayLen()
+									} else {
+										l = b.ArrayLen()
+									}
+									if !b.Ok() {
+										return b.Complete()
+									}
+									a = a[:0]
+									if l > 0 {
+										a = append(a, make([]string, l)...)
+									}
+									for i := int32(0); i < l; i++ {
+										var v string
+										if unsafe {
+											if isFlexible {
+												v = b.UnsafeCompactString()
+											} else {
+												v = b.UnsafeString()
+											}
+										} else {
+											if isFlexible {
+												v = b.CompactString()
+											} else {
+												v = b.String()
+											}
+										}
+										a[i] = v
+									}
+									v = a
+									s.SourceTopics = v
+								}
+								{
+									var v *string
+									if isFlexible {
+										if unsafe {
+											v = b.UnsafeCompactNullableString()
+										} else {
+											v = b.CompactNullableString()
+										}
+									} else {
+										if unsafe {
+											v = b.UnsafeNullableString()
+										} else {
+											v = b.NullableString()
+										}
+									}
+									s.SinkTopic = v
+								}
+								{
+									v := s.Stores
+									a := v
+									var l int32
+									if isFlexible {
+										l = b.CompactArrayLen()
+									} else {
+										l = b.ArrayLen()
+									}
+									if !b.Ok() {
+										return b.Complete()
+									}
+									a = a[:0]
+									if l > 0 {
+										a = append(a, make([]string, l)...)
+									}
+									for i := int32(0); i < l; i++ {
+										var v string
+										if unsafe {
+											if isFlexible {
+												v = b.UnsafeCompactString()
+											} else {
+												v = b.UnsafeString()
+											}
+										} else {
+											if isFlexible {
+												v = b.CompactString()
+											} else {
+												v = b.String()
+											}
+										}
+										a[i] = v
+									}
+									v = a
+									s.Stores = v
+								}
+								{
+									v := s.Successors
+									a := v
+									var l int32
+									if isFlexible {
+										l = b.CompactArrayLen()
+									} else {
+										l = b.ArrayLen()
+									}
+									if !b.Ok() {
+										return b.Complete()
+									}
+									a = a[:0]
+									if l > 0 {
+										a = append(a, make([]string, l)...)
+									}
+									for i := int32(0); i < l; i++ {
+										var v string
+										if unsafe {
+											if isFlexible {
+												v = b.UnsafeCompactString()
+											} else {
+												v = b.UnsafeString()
+											}
+										} else {
+											if isFlexible {
+												v = b.CompactString()
+											} else {
+												v = b.String()
+											}
+										}
+										a[i] = v
+									}
+									v = a
+									s.Successors = v
+								}
+								if isFlexible {
+									s.UnknownTags = internalReadTags(&b)
+								}
+							}
+							{
+								v := &s.Processor
+								v.Default()
+								s := v
+								{
+									var v string
+									if unsafe {
+										if isFlexible {
+											v = b.UnsafeCompactString()
+										} else {
+											v = b.UnsafeString()
+										}
+									} else {
+										if isFlexible {
+											v = b.CompactString()
+										} else {
+											v = b.String()
+										}
+									}
+									s.Name = v
+								}
+								{
+									v := b.Int8()
+									s.NodeType = v
+								}
+								{
+									v := s.SourceTopics
+									a := v
+									var l int32
+									if isFlexible {
+										l = b.CompactArrayLen()
+									} else {
+										l = b.ArrayLen()
+									}
+									if !b.Ok() {
+										return b.Complete()
+									}
+									a = a[:0]
+									if l > 0 {
+										a = append(a, make([]string, l)...)
+									}
+									for i := int32(0); i < l; i++ {
+										var v string
+										if unsafe {
+											if isFlexible {
+												v = b.UnsafeCompactString()
+											} else {
+												v = b.UnsafeString()
+											}
+										} else {
+											if isFlexible {
+												v = b.CompactString()
+											} else {
+												v = b.String()
+											}
+										}
+										a[i] = v
+									}
+									v = a
+									s.SourceTopics = v
+								}
+								{
+									var v *string
+									if isFlexible {
+										if unsafe {
+											v = b.UnsafeCompactNullableString()
+										} else {
+											v = b.CompactNullableString()
+										}
+									} else {
+										if unsafe {
+											v = b.UnsafeNullableString()
+										} else {
+											v = b.NullableString()
+										}
+									}
+									s.SinkTopic = v
+								}
+								{
+									v := s.Stores
+									a := v
+									var l int32
+									if isFlexible {
+										l = b.CompactArrayLen()
+									} else {
+										l = b.ArrayLen()
+									}
+									if !b.Ok() {
+										return b.Complete()
+									}
+									a = a[:0]
+									if l > 0 {
+										a = append(a, make([]string, l)...)
+									}
+									for i := int32(0); i < l; i++ {
+										var v string
+										if unsafe {
+											if isFlexible {
+												v = b.UnsafeCompactString()
+											} else {
+												v = b.UnsafeString()
+											}
+										} else {
+											if isFlexible {
+												v = b.CompactString()
+											} else {
+												v = b.String()
+											}
+										}
+										a[i] = v
+									}
+									v = a
+									s.Stores = v
+								}
+								{
+									v := s.Successors
+									a := v
+									var l int32
+									if isFlexible {
+										l = b.CompactArrayLen()
+									} else {
+										l = b.ArrayLen()
+									}
+									if !b.Ok() {
+										return b.Complete()
+									}
+									a = a[:0]
+									if l > 0 {
+										a = append(a, make([]string, l)...)
+									}
+									for i := int32(0); i < l; i++ {
+										var v string
+										if unsafe {
+											if isFlexible {
+												v = b.UnsafeCompactString()
+											} else {
+												v = b.UnsafeString()
+											}
+										} else {
+											if isFlexible {
+												v = b.CompactString()
+											} else {
+												v = b.String()
+											}
+										}
+										a[i] = v
+									}
+									v = a
+									s.Successors = v
+								}
+								if isFlexible {
+									s.UnknownTags = internalReadTags(&b)
+								}
+							}
+							if isFlexible {
+								s.UnknownTags = internalReadTags(&b)
+							}
+						}
+						v = a
+						s.GlobalStores = v
+					}
+					if isFlexible {
+						s.UnknownTags = internalReadTags(&b)
+					}
+				}
+			}
+			if version >= 1 {
+				v := b.Int8()
+				s.TopologyDescriptionStatus = v
+			}
+			if version >= 1 {
+				var v *string
+				if isFlexible {
+					if unsafe {
+						v = b.UnsafeCompactNullableString()
+					} else {
+						v = b.CompactNullableString()
+					}
+				} else {
+					if unsafe {
+						v = b.UnsafeNullableString()
+					} else {
+						v = b.NullableString()
+					}
+				}
+				s.AssignorName = v
 			}
 			if isFlexible {
 				s.UnknownTags = internalReadTags(&b)
@@ -67031,6 +68193,1379 @@ func NewDeleteShareGroupOffsetsResponse() DeleteShareGroupOffsetsResponse {
 	return v
 }
 
+// TopologyDescription is a full streams topology description, sent by a
+// client when the broker requests it via TopologyDescriptionRequired in a
+// StreamsGroupHeartbeatResponse.
+type TopologyDescription struct {
+	// Subtopologies are the subtopologies that make up this topology.
+	Subtopologies []TopologyDescriptionSubtopology
+
+	// GlobalStores are the global stores of this topology.
+	GlobalStores []TopologyDescriptionGlobalStore
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to TopologyDescription.
+func (v *TopologyDescription) Default() {
+}
+
+// NewTopologyDescription returns a default TopologyDescription
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewTopologyDescription() TopologyDescription {
+	var v TopologyDescription
+	v.Default()
+	return v
+}
+
+// StreamsGroupTopologyDescriptionUpdateRequest sends a group's topology
+// description to the broker; part of KIP-1331.
+type StreamsGroupTopologyDescriptionUpdateRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// Group is the group identifier.
+	Group string
+
+	// MemberID is the member ID.
+	MemberID string
+
+	// TopologyEpoch is the epoch of the topology this description describes.
+	TopologyEpoch int32
+
+	// TopologyDescription is the full topology description.
+	TopologyDescription TopologyDescription
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+func (*StreamsGroupTopologyDescriptionUpdateRequest) Key() int16                   { return 93 }
+func (*StreamsGroupTopologyDescriptionUpdateRequest) MaxVersion() int16            { return 0 }
+func (v *StreamsGroupTopologyDescriptionUpdateRequest) SetVersion(version int16)   { v.Version = version }
+func (v *StreamsGroupTopologyDescriptionUpdateRequest) GetVersion() int16          { return v.Version }
+func (v *StreamsGroupTopologyDescriptionUpdateRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *StreamsGroupTopologyDescriptionUpdateRequest) IsGroupCoordinatorRequest() {}
+func (v *StreamsGroupTopologyDescriptionUpdateRequest) ResponseKind() Response {
+	r := &StreamsGroupTopologyDescriptionUpdateResponse{Version: v.Version}
+	r.Default()
+	return r
+}
+
+// RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
+func (v *StreamsGroupTopologyDescriptionUpdateRequest) RequestWith(ctx context.Context, r Requestor) (*StreamsGroupTopologyDescriptionUpdateResponse, error) {
+	kresp, err := r.Request(ctx, v)
+	resp, _ := kresp.(*StreamsGroupTopologyDescriptionUpdateResponse)
+	return resp, err
+}
+
+func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.Group
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	{
+		v := v.MemberID
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	{
+		v := v.TopologyEpoch
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := &v.TopologyDescription
+		{
+			v := v.Subtopologies
+			if isFlexible {
+				dst = kbin.AppendCompactArrayLen(dst, len(v))
+			} else {
+				dst = kbin.AppendArrayLen(dst, len(v))
+			}
+			for i := range v {
+				v := &v[i]
+				{
+					v := v.SubtopologyID
+					if isFlexible {
+						dst = kbin.AppendCompactString(dst, v)
+					} else {
+						dst = kbin.AppendString(dst, v)
+					}
+				}
+				{
+					v := v.Nodes
+					if isFlexible {
+						dst = kbin.AppendCompactArrayLen(dst, len(v))
+					} else {
+						dst = kbin.AppendArrayLen(dst, len(v))
+					}
+					for i := range v {
+						v := &v[i]
+						{
+							v := v.Name
+							if isFlexible {
+								dst = kbin.AppendCompactString(dst, v)
+							} else {
+								dst = kbin.AppendString(dst, v)
+							}
+						}
+						{
+							v := v.NodeType
+							dst = kbin.AppendInt8(dst, v)
+						}
+						{
+							v := v.SourceTopics
+							if isFlexible {
+								dst = kbin.AppendCompactArrayLen(dst, len(v))
+							} else {
+								dst = kbin.AppendArrayLen(dst, len(v))
+							}
+							for i := range v {
+								v := v[i]
+								if isFlexible {
+									dst = kbin.AppendCompactString(dst, v)
+								} else {
+									dst = kbin.AppendString(dst, v)
+								}
+							}
+						}
+						{
+							v := v.SinkTopic
+							if isFlexible {
+								dst = kbin.AppendCompactNullableString(dst, v)
+							} else {
+								dst = kbin.AppendNullableString(dst, v)
+							}
+						}
+						{
+							v := v.Stores
+							if isFlexible {
+								dst = kbin.AppendCompactArrayLen(dst, len(v))
+							} else {
+								dst = kbin.AppendArrayLen(dst, len(v))
+							}
+							for i := range v {
+								v := v[i]
+								if isFlexible {
+									dst = kbin.AppendCompactString(dst, v)
+								} else {
+									dst = kbin.AppendString(dst, v)
+								}
+							}
+						}
+						{
+							v := v.Successors
+							if isFlexible {
+								dst = kbin.AppendCompactArrayLen(dst, len(v))
+							} else {
+								dst = kbin.AppendArrayLen(dst, len(v))
+							}
+							for i := range v {
+								v := v[i]
+								if isFlexible {
+									dst = kbin.AppendCompactString(dst, v)
+								} else {
+									dst = kbin.AppendString(dst, v)
+								}
+							}
+						}
+						if isFlexible {
+							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+							dst = v.UnknownTags.AppendEach(dst)
+						}
+					}
+				}
+				if isFlexible {
+					dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+					dst = v.UnknownTags.AppendEach(dst)
+				}
+			}
+		}
+		{
+			v := v.GlobalStores
+			if isFlexible {
+				dst = kbin.AppendCompactArrayLen(dst, len(v))
+			} else {
+				dst = kbin.AppendArrayLen(dst, len(v))
+			}
+			for i := range v {
+				v := &v[i]
+				{
+					v := &v.Source
+					{
+						v := v.Name
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
+					}
+					{
+						v := v.NodeType
+						dst = kbin.AppendInt8(dst, v)
+					}
+					{
+						v := v.SourceTopics
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := v[i]
+							if isFlexible {
+								dst = kbin.AppendCompactString(dst, v)
+							} else {
+								dst = kbin.AppendString(dst, v)
+							}
+						}
+					}
+					{
+						v := v.SinkTopic
+						if isFlexible {
+							dst = kbin.AppendCompactNullableString(dst, v)
+						} else {
+							dst = kbin.AppendNullableString(dst, v)
+						}
+					}
+					{
+						v := v.Stores
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := v[i]
+							if isFlexible {
+								dst = kbin.AppendCompactString(dst, v)
+							} else {
+								dst = kbin.AppendString(dst, v)
+							}
+						}
+					}
+					{
+						v := v.Successors
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := v[i]
+							if isFlexible {
+								dst = kbin.AppendCompactString(dst, v)
+							} else {
+								dst = kbin.AppendString(dst, v)
+							}
+						}
+					}
+					if isFlexible {
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
+					}
+				}
+				{
+					v := &v.Processor
+					{
+						v := v.Name
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
+					}
+					{
+						v := v.NodeType
+						dst = kbin.AppendInt8(dst, v)
+					}
+					{
+						v := v.SourceTopics
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := v[i]
+							if isFlexible {
+								dst = kbin.AppendCompactString(dst, v)
+							} else {
+								dst = kbin.AppendString(dst, v)
+							}
+						}
+					}
+					{
+						v := v.SinkTopic
+						if isFlexible {
+							dst = kbin.AppendCompactNullableString(dst, v)
+						} else {
+							dst = kbin.AppendNullableString(dst, v)
+						}
+					}
+					{
+						v := v.Stores
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := v[i]
+							if isFlexible {
+								dst = kbin.AppendCompactString(dst, v)
+							} else {
+								dst = kbin.AppendString(dst, v)
+							}
+						}
+					}
+					{
+						v := v.Successors
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := v[i]
+							if isFlexible {
+								dst = kbin.AppendCompactString(dst, v)
+							} else {
+								dst = kbin.AppendString(dst, v)
+							}
+						}
+					}
+					if isFlexible {
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
+					}
+				}
+				if isFlexible {
+					dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+					dst = v.UnknownTags.AppendEach(dst)
+				}
+			}
+		}
+		if isFlexible {
+			dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+			dst = v.UnknownTags.AppendEach(dst)
+		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
+	}
+	return dst
+}
+func (v *StreamsGroupTopologyDescriptionUpdateRequest) ReadFrom(src []byte) error {
+	return v.readFrom(src, false)
+}
+func (v *StreamsGroupTopologyDescriptionUpdateRequest) UnsafeReadFrom(src []byte) error {
+	return v.readFrom(src, true)
+}
+func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsafe bool) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		var v string
+		if unsafe {
+			if isFlexible {
+				v = b.UnsafeCompactString()
+			} else {
+				v = b.UnsafeString()
+			}
+		} else {
+			if isFlexible {
+				v = b.CompactString()
+			} else {
+				v = b.String()
+			}
+		}
+		s.Group = v
+	}
+	{
+		var v string
+		if unsafe {
+			if isFlexible {
+				v = b.UnsafeCompactString()
+			} else {
+				v = b.UnsafeString()
+			}
+		} else {
+			if isFlexible {
+				v = b.CompactString()
+			} else {
+				v = b.String()
+			}
+		}
+		s.MemberID = v
+	}
+	{
+		v := b.Int32()
+		s.TopologyEpoch = v
+	}
+	{
+		v := &s.TopologyDescription
+		v.Default()
+		s := v
+		{
+			v := s.Subtopologies
+			a := v
+			var l int32
+			if isFlexible {
+				l = b.CompactArrayLen()
+			} else {
+				l = b.ArrayLen()
+			}
+			if !b.Ok() {
+				return b.Complete()
+			}
+			a = a[:0]
+			if l > 0 {
+				a = append(a, make([]TopologyDescriptionSubtopology, l)...)
+			}
+			for i := int32(0); i < l; i++ {
+				v := &a[i]
+				v.Default()
+				s := v
+				{
+					var v string
+					if unsafe {
+						if isFlexible {
+							v = b.UnsafeCompactString()
+						} else {
+							v = b.UnsafeString()
+						}
+					} else {
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
+					}
+					s.SubtopologyID = v
+				}
+				{
+					v := s.Nodes
+					a := v
+					var l int32
+					if isFlexible {
+						l = b.CompactArrayLen()
+					} else {
+						l = b.ArrayLen()
+					}
+					if !b.Ok() {
+						return b.Complete()
+					}
+					a = a[:0]
+					if l > 0 {
+						a = append(a, make([]TopologyDescriptionNode, l)...)
+					}
+					for i := int32(0); i < l; i++ {
+						v := &a[i]
+						v.Default()
+						s := v
+						{
+							var v string
+							if unsafe {
+								if isFlexible {
+									v = b.UnsafeCompactString()
+								} else {
+									v = b.UnsafeString()
+								}
+							} else {
+								if isFlexible {
+									v = b.CompactString()
+								} else {
+									v = b.String()
+								}
+							}
+							s.Name = v
+						}
+						{
+							v := b.Int8()
+							s.NodeType = v
+						}
+						{
+							v := s.SourceTopics
+							a := v
+							var l int32
+							if isFlexible {
+								l = b.CompactArrayLen()
+							} else {
+								l = b.ArrayLen()
+							}
+							if !b.Ok() {
+								return b.Complete()
+							}
+							a = a[:0]
+							if l > 0 {
+								a = append(a, make([]string, l)...)
+							}
+							for i := int32(0); i < l; i++ {
+								var v string
+								if unsafe {
+									if isFlexible {
+										v = b.UnsafeCompactString()
+									} else {
+										v = b.UnsafeString()
+									}
+								} else {
+									if isFlexible {
+										v = b.CompactString()
+									} else {
+										v = b.String()
+									}
+								}
+								a[i] = v
+							}
+							v = a
+							s.SourceTopics = v
+						}
+						{
+							var v *string
+							if isFlexible {
+								if unsafe {
+									v = b.UnsafeCompactNullableString()
+								} else {
+									v = b.CompactNullableString()
+								}
+							} else {
+								if unsafe {
+									v = b.UnsafeNullableString()
+								} else {
+									v = b.NullableString()
+								}
+							}
+							s.SinkTopic = v
+						}
+						{
+							v := s.Stores
+							a := v
+							var l int32
+							if isFlexible {
+								l = b.CompactArrayLen()
+							} else {
+								l = b.ArrayLen()
+							}
+							if !b.Ok() {
+								return b.Complete()
+							}
+							a = a[:0]
+							if l > 0 {
+								a = append(a, make([]string, l)...)
+							}
+							for i := int32(0); i < l; i++ {
+								var v string
+								if unsafe {
+									if isFlexible {
+										v = b.UnsafeCompactString()
+									} else {
+										v = b.UnsafeString()
+									}
+								} else {
+									if isFlexible {
+										v = b.CompactString()
+									} else {
+										v = b.String()
+									}
+								}
+								a[i] = v
+							}
+							v = a
+							s.Stores = v
+						}
+						{
+							v := s.Successors
+							a := v
+							var l int32
+							if isFlexible {
+								l = b.CompactArrayLen()
+							} else {
+								l = b.ArrayLen()
+							}
+							if !b.Ok() {
+								return b.Complete()
+							}
+							a = a[:0]
+							if l > 0 {
+								a = append(a, make([]string, l)...)
+							}
+							for i := int32(0); i < l; i++ {
+								var v string
+								if unsafe {
+									if isFlexible {
+										v = b.UnsafeCompactString()
+									} else {
+										v = b.UnsafeString()
+									}
+								} else {
+									if isFlexible {
+										v = b.CompactString()
+									} else {
+										v = b.String()
+									}
+								}
+								a[i] = v
+							}
+							v = a
+							s.Successors = v
+						}
+						if isFlexible {
+							s.UnknownTags = internalReadTags(&b)
+						}
+					}
+					v = a
+					s.Nodes = v
+				}
+				if isFlexible {
+					s.UnknownTags = internalReadTags(&b)
+				}
+			}
+			v = a
+			s.Subtopologies = v
+		}
+		{
+			v := s.GlobalStores
+			a := v
+			var l int32
+			if isFlexible {
+				l = b.CompactArrayLen()
+			} else {
+				l = b.ArrayLen()
+			}
+			if !b.Ok() {
+				return b.Complete()
+			}
+			a = a[:0]
+			if l > 0 {
+				a = append(a, make([]TopologyDescriptionGlobalStore, l)...)
+			}
+			for i := int32(0); i < l; i++ {
+				v := &a[i]
+				v.Default()
+				s := v
+				{
+					v := &s.Source
+					v.Default()
+					s := v
+					{
+						var v string
+						if unsafe {
+							if isFlexible {
+								v = b.UnsafeCompactString()
+							} else {
+								v = b.UnsafeString()
+							}
+						} else {
+							if isFlexible {
+								v = b.CompactString()
+							} else {
+								v = b.String()
+							}
+						}
+						s.Name = v
+					}
+					{
+						v := b.Int8()
+						s.NodeType = v
+					}
+					{
+						v := s.SourceTopics
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						a = a[:0]
+						if l > 0 {
+							a = append(a, make([]string, l)...)
+						}
+						for i := int32(0); i < l; i++ {
+							var v string
+							if unsafe {
+								if isFlexible {
+									v = b.UnsafeCompactString()
+								} else {
+									v = b.UnsafeString()
+								}
+							} else {
+								if isFlexible {
+									v = b.CompactString()
+								} else {
+									v = b.String()
+								}
+							}
+							a[i] = v
+						}
+						v = a
+						s.SourceTopics = v
+					}
+					{
+						var v *string
+						if isFlexible {
+							if unsafe {
+								v = b.UnsafeCompactNullableString()
+							} else {
+								v = b.CompactNullableString()
+							}
+						} else {
+							if unsafe {
+								v = b.UnsafeNullableString()
+							} else {
+								v = b.NullableString()
+							}
+						}
+						s.SinkTopic = v
+					}
+					{
+						v := s.Stores
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						a = a[:0]
+						if l > 0 {
+							a = append(a, make([]string, l)...)
+						}
+						for i := int32(0); i < l; i++ {
+							var v string
+							if unsafe {
+								if isFlexible {
+									v = b.UnsafeCompactString()
+								} else {
+									v = b.UnsafeString()
+								}
+							} else {
+								if isFlexible {
+									v = b.CompactString()
+								} else {
+									v = b.String()
+								}
+							}
+							a[i] = v
+						}
+						v = a
+						s.Stores = v
+					}
+					{
+						v := s.Successors
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						a = a[:0]
+						if l > 0 {
+							a = append(a, make([]string, l)...)
+						}
+						for i := int32(0); i < l; i++ {
+							var v string
+							if unsafe {
+								if isFlexible {
+									v = b.UnsafeCompactString()
+								} else {
+									v = b.UnsafeString()
+								}
+							} else {
+								if isFlexible {
+									v = b.CompactString()
+								} else {
+									v = b.String()
+								}
+							}
+							a[i] = v
+						}
+						v = a
+						s.Successors = v
+					}
+					if isFlexible {
+						s.UnknownTags = internalReadTags(&b)
+					}
+				}
+				{
+					v := &s.Processor
+					v.Default()
+					s := v
+					{
+						var v string
+						if unsafe {
+							if isFlexible {
+								v = b.UnsafeCompactString()
+							} else {
+								v = b.UnsafeString()
+							}
+						} else {
+							if isFlexible {
+								v = b.CompactString()
+							} else {
+								v = b.String()
+							}
+						}
+						s.Name = v
+					}
+					{
+						v := b.Int8()
+						s.NodeType = v
+					}
+					{
+						v := s.SourceTopics
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						a = a[:0]
+						if l > 0 {
+							a = append(a, make([]string, l)...)
+						}
+						for i := int32(0); i < l; i++ {
+							var v string
+							if unsafe {
+								if isFlexible {
+									v = b.UnsafeCompactString()
+								} else {
+									v = b.UnsafeString()
+								}
+							} else {
+								if isFlexible {
+									v = b.CompactString()
+								} else {
+									v = b.String()
+								}
+							}
+							a[i] = v
+						}
+						v = a
+						s.SourceTopics = v
+					}
+					{
+						var v *string
+						if isFlexible {
+							if unsafe {
+								v = b.UnsafeCompactNullableString()
+							} else {
+								v = b.CompactNullableString()
+							}
+						} else {
+							if unsafe {
+								v = b.UnsafeNullableString()
+							} else {
+								v = b.NullableString()
+							}
+						}
+						s.SinkTopic = v
+					}
+					{
+						v := s.Stores
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						a = a[:0]
+						if l > 0 {
+							a = append(a, make([]string, l)...)
+						}
+						for i := int32(0); i < l; i++ {
+							var v string
+							if unsafe {
+								if isFlexible {
+									v = b.UnsafeCompactString()
+								} else {
+									v = b.UnsafeString()
+								}
+							} else {
+								if isFlexible {
+									v = b.CompactString()
+								} else {
+									v = b.String()
+								}
+							}
+							a[i] = v
+						}
+						v = a
+						s.Stores = v
+					}
+					{
+						v := s.Successors
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						a = a[:0]
+						if l > 0 {
+							a = append(a, make([]string, l)...)
+						}
+						for i := int32(0); i < l; i++ {
+							var v string
+							if unsafe {
+								if isFlexible {
+									v = b.UnsafeCompactString()
+								} else {
+									v = b.UnsafeString()
+								}
+							} else {
+								if isFlexible {
+									v = b.CompactString()
+								} else {
+									v = b.String()
+								}
+							}
+							a[i] = v
+						}
+						v = a
+						s.Successors = v
+					}
+					if isFlexible {
+						s.UnknownTags = internalReadTags(&b)
+					}
+				}
+				if isFlexible {
+					s.UnknownTags = internalReadTags(&b)
+				}
+			}
+			v = a
+			s.GlobalStores = v
+		}
+		if isFlexible {
+			s.UnknownTags = internalReadTags(&b)
+		}
+	}
+	if isFlexible {
+		s.UnknownTags = internalReadTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrStreamsGroupTopologyDescriptionUpdateRequest returns a pointer to a default StreamsGroupTopologyDescriptionUpdateRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrStreamsGroupTopologyDescriptionUpdateRequest() *StreamsGroupTopologyDescriptionUpdateRequest {
+	var v StreamsGroupTopologyDescriptionUpdateRequest
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to StreamsGroupTopologyDescriptionUpdateRequest.
+func (v *StreamsGroupTopologyDescriptionUpdateRequest) Default() {
+	{
+		v := &v.TopologyDescription
+		_ = v
+	}
+}
+
+// NewStreamsGroupTopologyDescriptionUpdateRequest returns a default StreamsGroupTopologyDescriptionUpdateRequest
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewStreamsGroupTopologyDescriptionUpdateRequest() StreamsGroupTopologyDescriptionUpdateRequest {
+	var v StreamsGroupTopologyDescriptionUpdateRequest
+	v.Default()
+	return v
+}
+
+// StreamsGroupTopologyDescriptionUpdateResponse is returned from a
+// StreamsGroupTopologyDescriptionUpdateRequest.
+type StreamsGroupTopologyDescriptionUpdateResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// ErrorCode is the error code, or 0 if there was no error.
+	ErrorCode int16
+
+	// ErrorMessage is the error message, or null if there was no error.
+	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+func (*StreamsGroupTopologyDescriptionUpdateResponse) Key() int16        { return 93 }
+func (*StreamsGroupTopologyDescriptionUpdateResponse) MaxVersion() int16 { return 0 }
+func (v *StreamsGroupTopologyDescriptionUpdateResponse) SetVersion(version int16) {
+	v.Version = version
+}
+func (v *StreamsGroupTopologyDescriptionUpdateResponse) GetVersion() int16 { return v.Version }
+func (v *StreamsGroupTopologyDescriptionUpdateResponse) IsFlexible() bool  { return v.Version >= 0 }
+func (v *StreamsGroupTopologyDescriptionUpdateResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
+func (v *StreamsGroupTopologyDescriptionUpdateResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+func (v *StreamsGroupTopologyDescriptionUpdateResponse) RequestKind() Request {
+	return &StreamsGroupTopologyDescriptionUpdateRequest{Version: v.Version}
+}
+
+func (v *StreamsGroupTopologyDescriptionUpdateResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ErrorMessage
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
+	}
+	return dst
+}
+func (v *StreamsGroupTopologyDescriptionUpdateResponse) ReadFrom(src []byte) error {
+	return v.readFrom(src, false)
+}
+func (v *StreamsGroupTopologyDescriptionUpdateResponse) UnsafeReadFrom(src []byte) error {
+	return v.readFrom(src, true)
+}
+func (v *StreamsGroupTopologyDescriptionUpdateResponse) readFrom(src []byte, unsafe bool) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		var v *string
+		if isFlexible {
+			if unsafe {
+				v = b.UnsafeCompactNullableString()
+			} else {
+				v = b.CompactNullableString()
+			}
+		} else {
+			if unsafe {
+				v = b.UnsafeNullableString()
+			} else {
+				v = b.NullableString()
+			}
+		}
+		s.ErrorMessage = v
+	}
+	if isFlexible {
+		s.UnknownTags = internalReadTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrStreamsGroupTopologyDescriptionUpdateResponse returns a pointer to a default StreamsGroupTopologyDescriptionUpdateResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrStreamsGroupTopologyDescriptionUpdateResponse() *StreamsGroupTopologyDescriptionUpdateResponse {
+	var v StreamsGroupTopologyDescriptionUpdateResponse
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to StreamsGroupTopologyDescriptionUpdateResponse.
+func (v *StreamsGroupTopologyDescriptionUpdateResponse) Default() {
+}
+
+// NewStreamsGroupTopologyDescriptionUpdateResponse returns a default StreamsGroupTopologyDescriptionUpdateResponse
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewStreamsGroupTopologyDescriptionUpdateResponse() StreamsGroupTopologyDescriptionUpdateResponse {
+	var v StreamsGroupTopologyDescriptionUpdateResponse
+	v.Default()
+	return v
+}
+
+// UnregisterControllerRequest is an admin request to remove the registration
+// of a controller from the cluster, mirroring UnregisterBroker for brokers.
+// This is served by both the broker and controller listeners.
+type UnregisterControllerRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// The controller ID to unregister.
+	ControllerID int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+func (*UnregisterControllerRequest) Key() int16                 { return 94 }
+func (*UnregisterControllerRequest) MaxVersion() int16          { return 0 }
+func (v *UnregisterControllerRequest) SetVersion(version int16) { v.Version = version }
+func (v *UnregisterControllerRequest) GetVersion() int16        { return v.Version }
+func (v *UnregisterControllerRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *UnregisterControllerRequest) ResponseKind() Response {
+	r := &UnregisterControllerResponse{Version: v.Version}
+	r.Default()
+	return r
+}
+
+// RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
+func (v *UnregisterControllerRequest) RequestWith(ctx context.Context, r Requestor) (*UnregisterControllerResponse, error) {
+	kresp, err := r.Request(ctx, v)
+	resp, _ := kresp.(*UnregisterControllerResponse)
+	return resp, err
+}
+
+func (v *UnregisterControllerRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ControllerID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
+	}
+	return dst
+}
+func (v *UnregisterControllerRequest) ReadFrom(src []byte) error {
+	return v.readFrom(src, false)
+}
+func (v *UnregisterControllerRequest) UnsafeReadFrom(src []byte) error {
+	return v.readFrom(src, true)
+}
+func (v *UnregisterControllerRequest) readFrom(src []byte, unsafe bool) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ControllerID = v
+	}
+	if isFlexible {
+		s.UnknownTags = internalReadTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrUnregisterControllerRequest returns a pointer to a default UnregisterControllerRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrUnregisterControllerRequest() *UnregisterControllerRequest {
+	var v UnregisterControllerRequest
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to UnregisterControllerRequest.
+func (v *UnregisterControllerRequest) Default() {
+}
+
+// NewUnregisterControllerRequest returns a default UnregisterControllerRequest
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewUnregisterControllerRequest() UnregisterControllerRequest {
+	var v UnregisterControllerRequest
+	v.Default()
+	return v
+}
+
+// UnregisterControllerResponse is a response to an UnregisterControllerRequest.
+type UnregisterControllerResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// Any error code, or 0.
+	ErrorCode int16
+
+	// The error message, if any.
+	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+func (*UnregisterControllerResponse) Key() int16                 { return 94 }
+func (*UnregisterControllerResponse) MaxVersion() int16          { return 0 }
+func (v *UnregisterControllerResponse) SetVersion(version int16) { v.Version = version }
+func (v *UnregisterControllerResponse) GetVersion() int16        { return v.Version }
+func (v *UnregisterControllerResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *UnregisterControllerResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
+func (v *UnregisterControllerResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+func (v *UnregisterControllerResponse) RequestKind() Request {
+	return &UnregisterControllerRequest{Version: v.Version}
+}
+
+func (v *UnregisterControllerResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ErrorMessage
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
+	}
+	return dst
+}
+func (v *UnregisterControllerResponse) ReadFrom(src []byte) error {
+	return v.readFrom(src, false)
+}
+func (v *UnregisterControllerResponse) UnsafeReadFrom(src []byte) error {
+	return v.readFrom(src, true)
+}
+func (v *UnregisterControllerResponse) readFrom(src []byte, unsafe bool) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		var v *string
+		if isFlexible {
+			if unsafe {
+				v = b.UnsafeCompactNullableString()
+			} else {
+				v = b.CompactNullableString()
+			}
+		} else {
+			if unsafe {
+				v = b.UnsafeNullableString()
+			} else {
+				v = b.NullableString()
+			}
+		}
+		s.ErrorMessage = v
+	}
+	if isFlexible {
+		s.UnknownTags = internalReadTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrUnregisterControllerResponse returns a pointer to a default UnregisterControllerResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrUnregisterControllerResponse() *UnregisterControllerResponse {
+	var v UnregisterControllerResponse
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to UnregisterControllerResponse.
+func (v *UnregisterControllerResponse) Default() {
+}
+
+// NewUnregisterControllerResponse returns a default UnregisterControllerResponse
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewUnregisterControllerResponse() UnregisterControllerResponse {
+	var v UnregisterControllerResponse
+	v.Default()
+	return v
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -67223,6 +69758,10 @@ func RequestForKey(key int16) Request {
 		return NewPtrAlterShareGroupOffsetsRequest()
 	case 92:
 		return NewPtrDeleteShareGroupOffsetsRequest()
+	case 93:
+		return NewPtrStreamsGroupTopologyDescriptionUpdateRequest()
+	case 94:
+		return NewPtrUnregisterControllerRequest()
 	}
 }
 
@@ -67418,6 +69957,10 @@ func ResponseForKey(key int16) Response {
 		return NewPtrAlterShareGroupOffsetsResponse()
 	case 92:
 		return NewPtrDeleteShareGroupOffsetsResponse()
+	case 93:
+		return NewPtrStreamsGroupTopologyDescriptionUpdateResponse()
+	case 94:
+		return NewPtrUnregisterControllerResponse()
 	}
 }
 
@@ -67613,6 +70156,10 @@ func NameForKey(key int16) string {
 		return "AlterShareGroupOffsets"
 	case 92:
 		return "DeleteShareGroupOffsets"
+	case 93:
+		return "StreamsGroupTopologyDescriptionUpdate"
+	case 94:
+		return "UnregisterController"
 	}
 }
 
@@ -67620,99 +70167,101 @@ func NameForKey(key int16) string {
 type Key int16
 
 const (
-	Produce                      Key = 0
-	Fetch                        Key = 1
-	ListOffsets                  Key = 2
-	Metadata                     Key = 3
-	LeaderAndISR                 Key = 4
-	StopReplica                  Key = 5
-	UpdateMetadata               Key = 6
-	ControlledShutdown           Key = 7
-	OffsetCommit                 Key = 8
-	OffsetFetch                  Key = 9
-	FindCoordinator              Key = 10
-	JoinGroup                    Key = 11
-	Heartbeat                    Key = 12
-	LeaveGroup                   Key = 13
-	SyncGroup                    Key = 14
-	DescribeGroups               Key = 15
-	ListGroups                   Key = 16
-	SASLHandshake                Key = 17
-	ApiVersions                  Key = 18
-	CreateTopics                 Key = 19
-	DeleteTopics                 Key = 20
-	DeleteRecords                Key = 21
-	InitProducerID               Key = 22
-	OffsetForLeaderEpoch         Key = 23
-	AddPartitionsToTxn           Key = 24
-	AddOffsetsToTxn              Key = 25
-	EndTxn                       Key = 26
-	WriteTxnMarkers              Key = 27
-	TxnOffsetCommit              Key = 28
-	DescribeACLs                 Key = 29
-	CreateACLs                   Key = 30
-	DeleteACLs                   Key = 31
-	DescribeConfigs              Key = 32
-	AlterConfigs                 Key = 33
-	AlterReplicaLogDirs          Key = 34
-	DescribeLogDirs              Key = 35
-	SASLAuthenticate             Key = 36
-	CreatePartitions             Key = 37
-	CreateDelegationToken        Key = 38
-	RenewDelegationToken         Key = 39
-	ExpireDelegationToken        Key = 40
-	DescribeDelegationToken      Key = 41
-	DeleteGroups                 Key = 42
-	ElectLeaders                 Key = 43
-	IncrementalAlterConfigs      Key = 44
-	AlterPartitionAssignments    Key = 45
-	ListPartitionReassignments   Key = 46
-	OffsetDelete                 Key = 47
-	DescribeClientQuotas         Key = 48
-	AlterClientQuotas            Key = 49
-	DescribeUserSCRAMCredentials Key = 50
-	AlterUserSCRAMCredentials    Key = 51
-	Vote                         Key = 52
-	BeginQuorumEpoch             Key = 53
-	EndQuorumEpoch               Key = 54
-	DescribeQuorum               Key = 55
-	AlterPartition               Key = 56
-	UpdateFeatures               Key = 57
-	Envelope                     Key = 58
-	FetchSnapshot                Key = 59
-	DescribeCluster              Key = 60
-	DescribeProducers            Key = 61
-	BrokerRegistration           Key = 62
-	BrokerHeartbeat              Key = 63
-	UnregisterBroker             Key = 64
-	DescribeTransactions         Key = 65
-	ListTransactions             Key = 66
-	AllocateProducerIDs          Key = 67
-	ConsumerGroupHeartbeat       Key = 68
-	ConsumerGroupDescribe        Key = 69
-	ControllerRegistration       Key = 70
-	GetTelemetrySubscriptions    Key = 71
-	PushTelemetry                Key = 72
-	AssignReplicasToDirs         Key = 73
-	ListConfigResources          Key = 74
-	DescribeTopicPartitions      Key = 75
-	ShareGroupHeartbeat          Key = 76
-	ShareGroupDescribe           Key = 77
-	ShareFetch                   Key = 78
-	ShareAcknowledge             Key = 79
-	AddRaftVoter                 Key = 80
-	RemoveRaftVoter              Key = 81
-	UpdateRaftVoter              Key = 82
-	InitializeShareGroupState    Key = 83
-	ReadShareGroupState          Key = 84
-	WriteShareGroupState         Key = 85
-	DeleteShareGroupState        Key = 86
-	ReadShareGroupStateSummary   Key = 87
-	StreamsGroupHeartbeat        Key = 88
-	StreamsGroupDescribe         Key = 89
-	DescribeShareGroupOffsets    Key = 90
-	AlterShareGroupOffsets       Key = 91
-	DeleteShareGroupOffsets      Key = 92
+	Produce                               Key = 0
+	Fetch                                 Key = 1
+	ListOffsets                           Key = 2
+	Metadata                              Key = 3
+	LeaderAndISR                          Key = 4
+	StopReplica                           Key = 5
+	UpdateMetadata                        Key = 6
+	ControlledShutdown                    Key = 7
+	OffsetCommit                          Key = 8
+	OffsetFetch                           Key = 9
+	FindCoordinator                       Key = 10
+	JoinGroup                             Key = 11
+	Heartbeat                             Key = 12
+	LeaveGroup                            Key = 13
+	SyncGroup                             Key = 14
+	DescribeGroups                        Key = 15
+	ListGroups                            Key = 16
+	SASLHandshake                         Key = 17
+	ApiVersions                           Key = 18
+	CreateTopics                          Key = 19
+	DeleteTopics                          Key = 20
+	DeleteRecords                         Key = 21
+	InitProducerID                        Key = 22
+	OffsetForLeaderEpoch                  Key = 23
+	AddPartitionsToTxn                    Key = 24
+	AddOffsetsToTxn                       Key = 25
+	EndTxn                                Key = 26
+	WriteTxnMarkers                       Key = 27
+	TxnOffsetCommit                       Key = 28
+	DescribeACLs                          Key = 29
+	CreateACLs                            Key = 30
+	DeleteACLs                            Key = 31
+	DescribeConfigs                       Key = 32
+	AlterConfigs                          Key = 33
+	AlterReplicaLogDirs                   Key = 34
+	DescribeLogDirs                       Key = 35
+	SASLAuthenticate                      Key = 36
+	CreatePartitions                      Key = 37
+	CreateDelegationToken                 Key = 38
+	RenewDelegationToken                  Key = 39
+	ExpireDelegationToken                 Key = 40
+	DescribeDelegationToken               Key = 41
+	DeleteGroups                          Key = 42
+	ElectLeaders                          Key = 43
+	IncrementalAlterConfigs               Key = 44
+	AlterPartitionAssignments             Key = 45
+	ListPartitionReassignments            Key = 46
+	OffsetDelete                          Key = 47
+	DescribeClientQuotas                  Key = 48
+	AlterClientQuotas                     Key = 49
+	DescribeUserSCRAMCredentials          Key = 50
+	AlterUserSCRAMCredentials             Key = 51
+	Vote                                  Key = 52
+	BeginQuorumEpoch                      Key = 53
+	EndQuorumEpoch                        Key = 54
+	DescribeQuorum                        Key = 55
+	AlterPartition                        Key = 56
+	UpdateFeatures                        Key = 57
+	Envelope                              Key = 58
+	FetchSnapshot                         Key = 59
+	DescribeCluster                       Key = 60
+	DescribeProducers                     Key = 61
+	BrokerRegistration                    Key = 62
+	BrokerHeartbeat                       Key = 63
+	UnregisterBroker                      Key = 64
+	DescribeTransactions                  Key = 65
+	ListTransactions                      Key = 66
+	AllocateProducerIDs                   Key = 67
+	ConsumerGroupHeartbeat                Key = 68
+	ConsumerGroupDescribe                 Key = 69
+	ControllerRegistration                Key = 70
+	GetTelemetrySubscriptions             Key = 71
+	PushTelemetry                         Key = 72
+	AssignReplicasToDirs                  Key = 73
+	ListConfigResources                   Key = 74
+	DescribeTopicPartitions               Key = 75
+	ShareGroupHeartbeat                   Key = 76
+	ShareGroupDescribe                    Key = 77
+	ShareFetch                            Key = 78
+	ShareAcknowledge                      Key = 79
+	AddRaftVoter                          Key = 80
+	RemoveRaftVoter                       Key = 81
+	UpdateRaftVoter                       Key = 82
+	InitializeShareGroupState             Key = 83
+	ReadShareGroupState                   Key = 84
+	WriteShareGroupState                  Key = 85
+	DeleteShareGroupState                 Key = 86
+	ReadShareGroupStateSummary            Key = 87
+	StreamsGroupHeartbeat                 Key = 88
+	StreamsGroupDescribe                  Key = 89
+	DescribeShareGroupOffsets             Key = 90
+	AlterShareGroupOffsets                Key = 91
+	DeleteShareGroupOffsets               Key = 92
+	StreamsGroupTopologyDescriptionUpdate Key = 93
+	UnregisterController                  Key = 94
 )
 
 // Name returns the name for this key.

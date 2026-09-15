@@ -1,0 +1,14 @@
+// UnregisterControllerRequest is an admin request to remove the registration
+// of a controller from the cluster, mirroring UnregisterBroker for brokers.
+// This is served by both the broker and controller listeners.
+UnregisterControllerRequest => key 94, max version 0, flexible v0+
+  // The controller ID to unregister.
+  ControllerID: int32
+
+// UnregisterControllerResponse is a response to an UnregisterControllerRequest.
+UnregisterControllerResponse =>
+  ThrottleMillis
+  // Any error code, or 0.
+  ErrorCode: int16
+  // The error message, if any.
+  ErrorMessage: nullable-string
