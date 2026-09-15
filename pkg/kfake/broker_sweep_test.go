@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
@@ -457,5 +458,104 @@ func TestAuditSaslReauthLifetimeClearedWhenDisabled(t *testing.T) {
 	}
 	if got := handshakes.Hits(); got != base {
 		t.Errorf("connection kept reauthenticating after the broker stopped requiring it: handshakes went %d -> %d across 3 plain requests", base, got)
+	}
+}
+
+// kgo names the cluster and node on every connection to a broker it learned
+// from metadata and neither on a seed connection (KIP-1242). A broker
+// answering REBOOTSTRAP_REQUIRED to that ApiVersions means the address we
+// have for the node belongs to some other broker: kgo drops every discovered
+// broker, rediscovers the cluster from the seeds (through
+// OnRebootstrapRequired if set), and the request that opened the connection
+// retries to success.
+func TestApiVersionsRebootstrapRequired(t *testing.T) {
+	t.Parallel()
+	for _, withFn := range []bool{false, true} {
+		name := "default"
+		if withFn {
+			name = "OnRebootstrapRequired"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := newCluster(t, NumBrokers(2), ClusterID("kip-1242"))
+
+			// Reject the first connection that names a node; accept
+			// and count every one after it.
+			var mu sync.Mutex
+			var seeds int
+			var wrong []string
+			var injected atomic.Bool
+			var acceptedAfter atomic.Int32
+			c.ControlKey(18, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+				c.KeepControl()
+				req := kreq.(*kmsg.ApiVersionsRequest)
+				switch {
+				case req.ClusterID == nil && req.NodeID == -1:
+					mu.Lock()
+					seeds++
+					mu.Unlock()
+					return nil, nil, false
+				case req.ClusterID == nil || *req.ClusterID != "kip-1242" || req.NodeID < 0:
+					mu.Lock()
+					wrong = append(wrong, fmt.Sprintf("v%d cluster=%v node=%d", req.Version, req.ClusterID, req.NodeID))
+					mu.Unlock()
+					return nil, nil, false
+				}
+				if injected.CompareAndSwap(false, true) {
+					resp := req.ResponseKind().(*kmsg.ApiVersionsResponse)
+					resp.ErrorCode = kerr.RebootstrapRequired.Code
+					return resp, nil, true
+				}
+				acceptedAfter.Add(1)
+				return nil, nil, false
+			})
+
+			var rebootstraps atomic.Int32
+			var opts []kgo.Opt
+			if withFn {
+				opts = append(opts, kgo.OnRebootstrapRequired(func() ([]string, error) {
+					rebootstraps.Add(1)
+					return c.ListenAddrs(), nil
+				}))
+			}
+			cl := newPlainClient(t, c, opts...)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			// The first request opens a seed connection. The request
+			// pinned to a discovered broker opens the connection that
+			// is rejected; the client rebootstraps and the request
+			// retries.
+			meta, err := cl.Request(ctx, kmsg.NewPtrMetadataRequest())
+			if err != nil {
+				t.Fatalf("metadata: %v", err)
+			}
+			node := meta.(*kmsg.MetadataResponse).Brokers[0].NodeID
+			if _, err := cl.Broker(int(node)).RetriableRequest(ctx, kmsg.NewPtrMetadataRequest()); err != nil {
+				t.Fatalf("request to broker %d after a rebootstrap: %v", node, err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if seeds == 0 {
+				t.Error("no seed connection sent ApiVersions without a cluster and node")
+			}
+			if len(wrong) > 0 {
+				t.Errorf("ApiVersions requests naming only one of cluster and node, or the wrong cluster: %v", wrong)
+			}
+			if !injected.Load() {
+				t.Fatal("no ApiVersions request named a node, nothing was rejected")
+			}
+			if acceptedAfter.Load() == 0 {
+				t.Error("no connection named a node after the rebootstrap; the client did not rediscover the cluster")
+			}
+			var wantFn int32
+			if withFn {
+				wantFn = 1
+			}
+			if got := rebootstraps.Load(); got != wantFn {
+				t.Errorf("OnRebootstrapRequired was called %d times, want %d", got, wantFn)
+			}
+		})
 	}
 }
