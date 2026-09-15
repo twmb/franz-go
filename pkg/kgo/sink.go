@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -123,7 +124,12 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		recBuf.mu.Lock()
 		// A pending seq reset applies only to the first batch: stage
 		// nothing more until everything inflight finishes.
-		if recBuf.failing || len(recBuf.batches) == recBuf.batchDrainIdx || recBuf.needSeqReset && recBuf.inflight != 0 || recBuf.inflightOnSink != nil && recBuf.inflightOnSink != s || recBuf.inflight != 0 && !recBuf.okOnSink {
+		if recBuf.failing ||
+			recBuf.merging ||
+			len(recBuf.batches) == recBuf.batchDrainIdx ||
+			recBuf.needSeqReset && recBuf.inflight != 0 ||
+			recBuf.inflightOnSink != nil && recBuf.inflightOnSink != s ||
+			recBuf.inflight != 0 && !recBuf.okOnSink {
 			recBuf.mu.Unlock()
 			continue
 		}
@@ -270,6 +276,19 @@ func (s *sink) clearBackoff() {
 func (s *sink) drain() {
 	again := true
 	for again {
+		// We merge before waiting on an inflight sem slot. When we
+		// saturate the wire, we spend time waiting on the sem;
+		// compressing while we wait increases throughput rather than
+		// compressing after the sem slot.
+		//
+		// More batches can build up after our initial compression
+		// attempt (which does nothing if only one batch exists right
+		// now). Ideally, producing takes long enough that the NEXT time
+		// we loop here, we have multiple batches to compress again. In
+		// the steady state, one merge here amortizes to be the single
+		// good option needed.
+		s.mergeBacklogs()
+
 		sem := s.inflightSem.Load().(chan struct{})
 		select {
 		case sem <- struct{}{}:
@@ -1268,6 +1287,7 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 	batch.mu.Lock()
 	records, attrs := batch.records, batch.attrs
 	batch.records = nil
+	batch.releaseStream()
 	batch.mu.Unlock()
 
 	cl.producer.promiseBatch(batchPromise{
@@ -1466,6 +1486,11 @@ type recBuf struct {
 	// has been added to the transaction yet or not.
 	addedToTxn atomic.Bool
 
+	// merging is true while mergeBacklog compresses this partition's
+	// unsent batches outside of mu. createReq skips the partition until
+	// the merged batch is spliced in.
+	merging bool
+
 	// For LoadTopicPartitioner partitioning; atomically tracks the number
 	// of records buffered in total on this recBuf.
 	buffered atomic.Int64
@@ -1661,11 +1686,11 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 
 		switch {
 		case aborted: // not processed
-			recBuf.cl.prsPool.put(newBatch.records)
+			newBatch.recycle()
 			return false
 		case appended: // we return true below
 		default: // processed as failure
-			recBuf.cl.prsPool.put(newBatch.records)
+			newBatch.recycle()
 			recBuf.cl.producer.promiseRecord(pr,
 				fmt.Errorf("%w (uncompressed_bytes=%d)", kerr.MessageTooLarge, pr.userSize()),
 			)
@@ -1826,6 +1851,7 @@ func (recBuf *recBuf) failAllRecords(err error) {
 		batch.mu.Lock()
 		records := batch.records
 		batch.records = nil
+		batch.releaseStream()
 		batch.mu.Unlock()
 
 		recBuf.cl.producer.promiseBatch(batchPromise{
@@ -1919,6 +1945,39 @@ type recBatch struct {
 
 	mu      xsync.Mutex   // guards appendTo's reading of records against failAllRecords emptying it
 	records []promisedRec // record w/ length, ts calculated
+
+	// stream is set on a batch that mergeBacklog built: the records are
+	// already compressed, and appendTo writes the blob rather than
+	// serializing and compressing the records again. Guarded like
+	// records.
+	stream *batchStream
+}
+
+// batchStream holds a merged batch's compressed records.
+type batchStream struct {
+	buf          *bytes.Buffer // from byteBuffers; blob aliases it
+	blob         []byte
+	codec        CompressionCodecType
+	uncompressed int
+}
+
+// releaseStream returns a merged batch's buffer to the pool. Callers hold
+// batch.mu, since appendTo reads the blob under it.
+func (b *recBatch) releaseStream() {
+	if b.stream != nil {
+		byteBuffers.Put(b.stream.buf)
+		b.stream = nil
+	}
+}
+
+// recycle returns everything a batch holds from a pool, for a batch nothing
+// else references: one that never joined recBuf.batches, or a discarded
+// merge and its tail. Consumed merge sources qualify too, since their
+// records were copied into the merged batch.
+func (b *recBatch) recycle() {
+	b.releaseStream()
+	b.owner.cl.prsPool.put(b.records)
+	b.records = nil
 }
 
 // Returns an error if the batch should fail.
@@ -1965,24 +2024,27 @@ func (b *recBatch) appendRecord(pr promisedRec, nums recordNumbers) {
 		b.maxTimestampDelta = nums.tsDelta
 	}
 	b.records = append(b.records, pr)
+	pr.setLengthAndTimestampDelta(nums.lengthField, nums.tsDelta)
 }
+
+// recordBatchOverhead is the wire size of a record batch with no records.
+const recordBatchOverhead = 4 + // array len
+	8 + // firstOffset
+	4 + // batchLength
+	4 + // partitionLeaderEpoch
+	1 + // magic
+	4 + // crc
+	2 + // attributes
+	4 + // lastOffsetDelta
+	8 + // firstTimestamp
+	8 + // maxTimestamp
+	8 + // producerID
+	2 + // producerEpoch
+	4 + // seq
+	4 // record array length
 
 // newRecordBatch returns a new record batch for a topic and partition.
 func (recBuf *recBuf) newRecordBatch() *recBatch {
-	const recordBatchOverhead = 4 + // array len
-		8 + // firstOffset
-		4 + // batchLength
-		4 + // partitionLeaderEpoch
-		1 + // magic
-		4 + // crc
-		2 + // attributes
-		4 + // lastOffsetDelta
-		8 + // firstTimestamp
-		8 + // maxTimestamp
-		8 + // producerID
-		2 + // producerEpoch
-		4 + // seq
-		4 // record array length
 	return &recBatch{
 		owner:      recBuf,
 		records:    recBuf.cl.prsPool.get()[:0],
@@ -2343,16 +2405,20 @@ func messageSet1Length(r *Record) int32 {
 
 // Returns the numbers for a record if it were added to the record batch.
 func (b *recBatch) calculateRecordNumbers(r *Record) recordNumbers {
+	return b.recordNumbersAt(r, int32(len(b.records))) // called before adding the record, so the delta is the current end
+}
+
+// recordNumbersAt calculates the numbers for r at position offsetDelta in
+// the batch.
+func (b *recBatch) recordNumbersAt(r *Record, offsetDelta int32) recordNumbers {
 	tsMillis := r.Timestamp.UnixNano() / 1e6
 	tsDelta := tsMillis - b.firstTimestamp
 
 	// If this is to be the first record in the batch, then our timestamp
 	// delta is actually 0.
-	if len(b.records) == 0 {
+	if offsetDelta == 0 {
 		tsDelta = 0
 	}
-
-	offsetDelta := int32(len(b.records)) // since called before adding record, delta is the current end
 
 	l := 1 + // attributes, int8 unused
 		kbin.VarlongLen(tsDelta) +
@@ -2435,11 +2501,230 @@ func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32
 		return false, true
 	}
 	b.appendRecord(pr, nums)
-	pr.setLengthAndTimestampDelta(
-		nums.lengthField,
-		nums.tsDelta,
-	)
 	return true, false
+}
+
+// mergeBacklogs merges every partition's backlog of unsent batches into
+// compressed-size-bound batches. Compression runs on the drain goroutine
+// holding no locks, so producing never waits on it.
+func (s *sink) mergeBacklogs() {
+	cc, codec := s.streamCodec()
+	if cc == nil {
+		return
+	}
+	// We walk by index rather than snapshot the slice, to avoid an
+	// allocation per request. A concurrent remove swaps the last recBuf
+	// into the hole; if the hole is behind us, that recBuf is skipped this
+	// round and merged next round. Skipping only delays a merge: createReq
+	// sends a head batch merged or not.
+	for i := 0; ; i++ {
+		s.recBufsMu.Lock()
+		if i >= len(s.recBufs) {
+			s.recBufsMu.Unlock()
+			return
+		}
+		recBuf := s.recBufs[i]
+		s.recBufsMu.Unlock()
+		recBuf.mergeBacklog(s, cc, codec)
+	}
+}
+
+// streamCodec returns the compressor and codec to merge with, or nil if we
+// cannot merge: the option is off, the compressor is custom or picks no
+// codec, or we have not yet seen a produce response, since the codec
+// depends on the produce version. A merged batch keeps its codec; if its
+// partition later moves to a broker that cannot read it, that broker
+// rejects it as it would any batch it cannot read.
+func (s *sink) streamCodec() (*compressor, CompressionCodecType) {
+	cc, _ := s.cl.cfg.compressor.(*compressor)
+	v := s.produceVersion.Load()
+	if !s.cl.cfg.streamCompression || s.cl.producer.mergeOff.Load() || cc == nil || v < 3 {
+		return nil, CodecNone
+	}
+	codec := cc.pickCodec(v < 7)
+	if codec == CodecNone {
+		return nil, CodecNone
+	}
+	return cc, codec
+}
+
+// mergeMaxUncompressed caps how many uncompressed bytes one merged batch
+// holds, keeping the int32 wire length bookkeeping safe at any ratio.
+const mergeMaxUncompressed = 256 << 20
+
+// mergeBacklog merges this partition's unsent batches into one batch whose
+// compressed size stays under maxRecordBatchBytes: freeze them under mu so
+// nothing appends and createReq leaves them alone, stream their records
+// through the codec outside mu, then splice the merged batch in under mu.
+// A failure sweep during the merge owns every promise, so the merge is
+// discarded. Only never-frozen batches merge: a frozen batch may have been
+// sent and must be resent as is.
+func (recBuf *recBuf) mergeBacklog(s *sink, cc *compressor, codec CompressionCodecType) {
+	recBuf.mu.Lock()
+	span := make([]*recBatch, 0, 8)
+	if !recBuf.failing && !recBuf.merging {
+		for _, b := range recBuf.batches[recBuf.batchDrainIdx:] {
+			if b.frozen {
+				break
+			}
+			span = append(span, b)
+		}
+	}
+	if len(span) < 2 {
+		recBuf.mu.Unlock()
+		return
+	}
+	for _, b := range span {
+		b.frozen = true
+	}
+	recBuf.merging = true
+	recBuf.mu.Unlock()
+
+	m, tail, consumed, ok := recBuf.mergeSpan(span, cc, codec)
+
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+	recBuf.merging = false
+	if recBuf.sink != s {
+		// The partition moved to another sink while we merged. That
+		// sink's createReq skipped it for as long as merging was set,
+		// and if its drain loop has since finished, nothing else wakes
+		// it. This runs before the deferred unlock.
+		defer recBuf.maybeTriggerDrain()
+	}
+	at := slices.Index(recBuf.batches, span[0])
+	if !ok || at < 0 {
+		// The sources drain as they were, so their records must be
+		// stamped for them again. If a failure sweep took the batches,
+		// it nil'd their records and owns their promises, and there is
+		// nothing to restore.
+		for _, b := range span {
+			b.restoreStamps()
+			b.frozen = false
+		}
+		m.recycle()
+		if tail != nil {
+			tail.recycle()
+		}
+		return
+	}
+	for _, b := range span[consumed:] {
+		b.frozen = false
+	}
+	m.tries.Store(span[0].tries.Load()) // load errors counted against the head keep counting
+	for _, b := range span[:consumed] {
+		b.recycle()
+	}
+	merged := []*recBatch{m}
+	if tail != nil {
+		merged = append(merged, tail)
+	}
+	recBuf.batches = slices.Replace(recBuf.batches, at, at+consumed, merged...)
+}
+
+// mergeSpan streams the span's records through the codec into one batch,
+// cutting just before the compressed size would pass the limit; a cut mid
+// source moves that source's remaining records to a tail batch. The bound
+// is the size at the last flush plus the codec's worst case for everything
+// since: we flush only when that would overflow, and cut only if the record
+// still does not fit, so the codec only ever holds accepted records. The
+// worst case is measured from the codecs, so the finished blob is checked
+// too; if it is ever over, merging turns off for the client with a warning.
+// Returns how many sources were consumed, the cut one included, and false
+// if the merge must be discarded, in which case the caller recycles m and
+// the tail.
+func (recBuf *recBuf) mergeSpan(span []*recBatch, cc *compressor, codec CompressionCodecType) (m, tail *recBatch, consumed int, ok bool) {
+	buf := byteBuffers.Get().(*bytes.Buffer)
+	buf.Reset()
+	sc := cc.newStream(codec, buf)
+	m = recBuf.newRecordBatch()
+	m.frozen = true
+	m.stream = &batchStream{buf: buf, codec: codec} // m owns buf from here; recycling m returns it
+
+	var (
+		limit        = int(recBuf.maxRecordBatchBytes)
+		checkpoint   int // compressed size at the last flush
+		since        int // uncompressed bytes written since the last flush
+		uncompressed int
+		swept        bool
+		err          error
+	)
+	fits := func(n int) bool {
+		return uncompressed+n <= mergeMaxUncompressed && recordBatchOverhead+1+checkpoint+sc.worst(since+n) <= limit
+	}
+	for _, src := range span {
+		done := func() bool {
+			src.mu.Lock()
+			defer src.mu.Unlock()
+			if src.records == nil {
+				swept = true
+				return true
+			}
+			for i, pr := range src.records {
+				nums := m.calculateRecordNumbers(pr.Record)
+				n := int(nums.wireLength())
+				if !fits(n) && since > 0 {
+					if err = sc.flush(); err != nil {
+						return true
+					}
+					checkpoint, since = buf.Len(), 0
+				}
+				if !fits(n) {
+					if i > 0 {
+						tail = recBuf.newRecordBatch()
+						for _, pr := range src.records[i:] {
+							tail.appendRecord(pr, tail.calculateRecordNumbers(pr.Record))
+						}
+						consumed++
+					}
+					return true
+				}
+				m.appendRecord(pr, nums)
+				sc.buf = pr.appendTo(sc.buf, int32(len(m.records)-1))
+				if err = sc.write(false); err != nil {
+					return true
+				}
+				since += n
+				uncompressed += n
+			}
+			consumed++
+			return false
+		}()
+		if done {
+			break
+		}
+	}
+	if ferr := sc.finish(); err == nil {
+		err = ferr
+	}
+	if err == nil && recordBatchOverhead+buf.Len() > limit {
+		recBuf.cl.producer.mergeOff.Store(true)
+		recBuf.cl.cfg.logger.Log(LogLevelWarn, "a merged batch exceeded ProducerBatchMaxBytes after compression; disabling StreamingCompression for this client, please open an issue at https://github.com/twmb/franz-go",
+			"topic", recBuf.topic,
+			"partition", recBuf.partition,
+			"codec", codec,
+			"compressed_bytes", buf.Len(),
+			"uncompressed_bytes", uncompressed,
+			"max_bytes", limit,
+		)
+		err = errors.New("merged batch too large")
+	}
+	if err != nil || swept || consumed == 0 {
+		return m, tail, consumed, false
+	}
+	m.stream.blob, m.stream.uncompressed = buf.Bytes(), uncompressed
+	m.wireLength = recordBatchOverhead + int32(len(m.stream.blob))
+	return m, tail, consumed, true
+}
+
+// restoreStamps re-stamps every record's length and timestamp delta for
+// this batch. A discarded merge leaves the records stamped for the merged
+// batch, and appendTo serializes from the stamps.
+func (b *recBatch) restoreStamps() {
+	for i, pr := range b.records {
+		nums := b.recordNumbersAt(pr.Record, int32(i))
+		pr.setLengthAndTimestampDelta(nums.lengthField, nums.tsDelta)
+	}
 }
 
 //////////////
@@ -2636,12 +2921,24 @@ func (b seqRecBatch) appendTo(
 
 	dst = kbin.AppendArrayLen(dst, len(b.records))
 	recordsAt := len(dst)
+	m.NumRecords = len(b.records)
+
+	if st := b.stream; st != nil { // merged: the records are already compressed
+		dst = append(dst, st.blob...)
+		b.attrs |= int16(st.codec)
+		kbin.AppendInt16(dst[:attrsAt], b.attrs)
+		m.UncompressedBytes = st.uncompressed
+		m.CompressedBytes = len(st.blob)
+		m.CompressionType = uint8(st.codec)
+		kbin.AppendInt32(dst[:crcStart], int32(crc32.Checksum(dst[crcStart+4:], crc32c)))
+		return dst, m
+	}
+
 	for i, pr := range b.records {
 		dst = pr.appendTo(dst, int32(i))
 	}
 
 	toCompress := dst[recordsAt:]
-	m.NumRecords = len(b.records)
 	m.UncompressedBytes = len(toCompress)
 	m.CompressedBytes = m.UncompressedBytes
 

@@ -34,6 +34,7 @@ func TestTxnEtl(t *testing.T) {
 			TransactionalID("p"+randsha()),
 			TransactionTimeout(2*time.Minute),
 			MaxBufferedRecords(10000),
+			StreamingCompression(),
 			UnknownTopicRetries(-1), // see comment below
 		)
 		if err != nil {
