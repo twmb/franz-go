@@ -1814,6 +1814,17 @@ func (recBuf *recBuf) checkUnknownFailLimit(err error) bool {
 //   - if not idempotent && hit retry / timeout limit
 //   - if batch fails fatally when producing
 func (recBuf *recBuf) failAllRecords(err error) {
+	recBuf.lockedDrainBatches(func(records []promisedRec) {
+		recBuf.cl.producer.promiseBatch(batchPromise{
+			recs: records,
+			err:  err,
+		})
+	})
+}
+
+// lockedDrainBatches hands every buffered record to fn, batch by batch in
+// order, and empties the buffer. Called with the recBuf's mu held.
+func (recBuf *recBuf) lockedDrainBatches(fn func([]promisedRec)) {
 	recBuf.lockedStopLinger()
 	for _, batch := range recBuf.batches {
 		// We need to guard our clearing of records against a
@@ -1828,14 +1839,21 @@ func (recBuf *recBuf) failAllRecords(err error) {
 		batch.records = nil
 		batch.mu.Unlock()
 
-		recBuf.cl.producer.promiseBatch(batchPromise{
-			recs: records,
-			err:  err,
-		})
+		fn(records)
 	}
 	recBuf.resetBatchDrainIdx()
 	recBuf.buffered.Store(0)
 	recBuf.batches = nil
+}
+
+// holdDraining keeps the buffer from draining until something clears failing
+// again. A recreated topic's buffers are held this way when we follow the
+// recreation: the merge never clears a recreated topic's failing state, and
+// carryTopic takes the records.
+func (recBuf *recBuf) holdDraining() {
+	recBuf.mu.Lock()
+	recBuf.failing = true
+	recBuf.mu.Unlock()
 }
 
 // clearFailing clears a buffer's failing state if it is failing.

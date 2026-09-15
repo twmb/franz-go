@@ -8,6 +8,8 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 // consumeFollowing consumes n records, allowing the UNKNOWN_TOPIC_ID polls
@@ -100,41 +102,65 @@ func TestFollowRecreatedTopics(t *testing.T) {
 	}
 }
 
-// The producer resumes with the next record once the client has purged the
-// recreated topic; what was buffered for the old topic fails.
+// Records buffered for the old topic are produced to the new one, by ID and
+// by name, and nothing is produced twice or failed.
 func TestFollowRecreatedTopicsProducer(t *testing.T) {
 	t.Parallel()
-	const topic = "t-follow-produce"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	cl := newPlainClient(t, c,
-		kgo.FollowRecreatedTopics(),
-		kgo.DefaultProduceTopic(topic),
-		kgo.MetadataMinAge(50*time.Millisecond),
-	)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	produceNStrings(t, cl, topic, 3)
+	for _, byName := range []bool{false, true} {
+		name := "by-id"
+		if byName {
+			name = "by-name"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			topic := "t-follow-produce-" + name
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			opts := []kgo.Opt{
+				kgo.FollowRecreatedTopics(),
+				kgo.DefaultProduceTopic(topic),
+				kgo.ProducerLinger(time.Second),
+				kgo.MetadataMinAge(50 * time.Millisecond),
+			}
+			if byName {
+				v := kversion.Stable()
+				v.SetMaxKeyVersion(int16(kmsg.Produce), 12)
+				opts = append(opts, kgo.MaxVersions(v))
+			}
+			cl := newPlainClient(t, c, opts...)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
 
-	recreateTopic(t, c, topic)
-	cl.ForceMetadataRefresh()
+			noErrs := func(errs <-chan error, n int) {
+				t.Helper()
+				for _, err := range collectErrs(ctx, t, errs, n) {
+					if err != nil {
+						t.Fatalf("produce: %v", err)
+					}
+				}
+			}
 
-	// Records produced before the client adds the topic back fail; the
-	// first one after succeeds without a purge of our own.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		err := cl.ProduceSync(ctx, kgo.StringRecord("after")).FirstErr()
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, kerr.UnknownTopicID) {
-			t.Fatalf("produce after the recreation returned %v", err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("producing never resumed after the recreation")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if end := c.PartitionInfo(topic, 0).HighWatermark; end != 1 {
-		t.Fatalf("the recreated topic holds %d records, want 1", end)
+			before := produceAsync(ctx, cl, "value-", 3)
+			if err := cl.Flush(ctx); err != nil {
+				t.Fatalf("flush: %v", err)
+			}
+			noErrs(before, 3)
+
+			recreateTopic(t, c, topic)
+
+			// Buffered under the old topic and lingering; the refresh
+			// that reports the new ID carries them over.
+			buffered := produceAsync(ctx, cl, "value-", 3)
+			cl.ForceMetadataRefresh()
+			noErrs(buffered, 3)
+			if end := c.PartitionInfo(topic, 0).HighWatermark; end != 3 {
+				t.Fatalf("the recreated topic holds %d records, want the 3 carried over", end)
+			}
+			if err := cl.ProduceSync(ctx, kgo.StringRecord("after")).FirstErr(); err != nil {
+				t.Fatalf("produce after the recreation: %v", err)
+			}
+			if end := c.PartitionInfo(topic, 0).HighWatermark; end != 4 {
+				t.Fatalf("the recreated topic holds %d records, want 4", end)
+			}
+		})
 	}
 }

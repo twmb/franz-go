@@ -297,6 +297,12 @@ type topicPartitions struct {
 	partsMu     xsync.Mutex
 	partitioner TopicPartitioner
 	lb          *leastBackupInput // for partitioning if the partitioner is a LoadTopicPartitioner
+
+	// carried is set under partsMu once carryTopic emptied the buffers
+	// and removed the topic from the producer. A partitioner that loaded
+	// the topic before that produces its record anew instead of
+	// buffering into an emptied buffer.
+	carried bool
 }
 
 func (t *topicPartitions) load() *topicPartitionsData { return t.v.Load().(*topicPartitionsData) }

@@ -870,8 +870,18 @@ func (cl *Client) mergeTopicPartitions(
 				css.stop()
 			}
 			if isProduce {
+				// Produce requests below v13 carry the topic name,
+				// which the new topic answers to, so we fail the
+				// buffers ourselves rather than let them drain. When
+				// following the recreation the buffers are held
+				// instead, and followRecreatedTopic carries their
+				// records to the new topic.
 				for _, tp := range lv.partitions {
-					tp.records.abandon(kerr.UnknownTopicID)
+					if cl.cfg.followRecreatedTopics {
+						tp.records.holdDraining()
+					} else {
+						tp.records.abandon(kerr.UnknownTopicID)
+					}
 				}
 				if cl.cfg.txnID != nil {
 					cl.producer.noteRecreatedInTxn(topic, lv.partitions)
@@ -1135,7 +1145,9 @@ func (cl *Client) mergeTopicPartitions(
 		}
 		switch kind {
 		case partitionKindProduce:
-			if recreated {
+			if recreated && cl.cfg.followRecreatedTopics {
+				newTP.records.holdDraining() // never added to a sink; carried later
+			} else if recreated {
 				newTP.records.abandon(kerr.UnknownTopicID)
 			} else if newTP.records.recBufsIdx == -1 {
 				newTP.records.sink.addRecBuf(newTP.records)
@@ -1177,14 +1189,15 @@ func (cl *Client) mergeTopicPartitions(
 }
 
 // followRecreatedTopic purges a recreated topic and adds it back, for a
-// client that opted into FollowRecreatedTopics. Producing resumes when the
-// next record loads the topic anew. A direct consumer of specific partitions
-// gets them back at the reset offset: the offsets it was given belong to the
-// old topic. A regex consumer rediscovers the topic on its own.
+// client that opted into FollowRecreatedTopics. The records a producer had
+// buffered are produced anew once the topic loads again. A direct consumer
+// of specific partitions gets them back at the reset offset: the offsets it
+// was given belong to the old topic. A regex consumer rediscovers the topic
+// on its own.
 func (cl *Client) followRecreatedTopic(topic string, kind partitionKind) {
 	cl.cfg.logger.Log(LogLevelInfo, "purging and adding back a recreated topic", "topic", topic)
 	if kind == partitionKindProduce {
-		cl.PurgeTopicsFromProducing(topic)
+		cl.carryRecreatedTopic(topic)
 		return
 	}
 	c := &cl.consumer
@@ -1206,6 +1219,44 @@ func (cl *Client) followRecreatedTopic(topic string, kind partitionKind) {
 		cl.AddConsumePartitions(map[string]map[int32]Offset{topic: partitions})
 	default:
 		cl.AddConsumeTopics(topic)
+	}
+}
+
+// carryRecreatedTopic removes a recreated topic from the producer and
+// produces what it had buffered anew, so that following the recreation
+// loses no record. The buffers are held since the merge saw the new ID,
+// so nothing new goes out; we first wait for the requests already in flight
+// to finish, so that a batch the broker accepted by name is not produced
+// twice and one it rejected is carried. A request that never returns hits
+// the request timeout.
+func (cl *Client) carryRecreatedTopic(topic string) {
+	p := &cl.producer
+	deadline := time.Now().Add(cl.cfg.produceTimeout + cl.cfg.requestTimeoutOverhead)
+	for {
+		var inflight int32
+		if l := p.topics.load()[topic]; l != nil {
+			for _, tp := range l.load().partitions {
+				tp.records.mu.Lock()
+				inflight += tp.records.inflight
+				tp.records.mu.Unlock()
+			}
+		}
+		if inflight == 0 || time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-cl.ctx.Done():
+			return // closing fails everything buffered
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	var carried []promisedRec
+	cl.blockingMetadataFn(func() { carried = p.carryTopic(topic) })
+	if len(carried) > 0 {
+		cl.cfg.logger.Log(LogLevelInfo, "producing the records buffered for a recreated topic to the new topic", "topic", topic, "records", len(carried))
+	}
+	for _, pr := range carried {
+		cl.loadPartsAndPartition(pr)
 	}
 }
 

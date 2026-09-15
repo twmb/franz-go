@@ -230,8 +230,8 @@ once you produce again.
 `FollowRecreatedTopics` opts into the client doing this itself: when metadata
 reports a new ID for a topic, the client purges the topic and adds it back.
 Consumers resume from the group's committed offsets for the new topic, or per
-the reset policy. Records buffered for the old topic fail with
-`UNKNOWN_TOPIC_ID`, and producing resumes with the next record.
+the reset policy. Records buffered for the old topic are produced to the new
+one once it loads.
 
 Depending on your broker version, you may experience different side effects from
 trying to keep a client alive across topic recreation:

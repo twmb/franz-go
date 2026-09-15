@@ -290,6 +290,49 @@ func (p *producer) purgeTopics(topics []string) {
 	}
 }
 
+// carryTopic removes a topic from the producer as purgeTopics does, but
+// returns what its buffers hold rather than failing it: the records, in
+// partition and buffer order, still counted as buffered. The caller produces
+// them anew once the topic loads again. Once the topic is gone from p.topics
+// a produce for it waits on the topic as an unknown one, and a partitioner
+// that loaded the topic earlier sees carried and does the same, so nothing
+// buffers into the emptied buffers after this. Like purgeTopics, this runs
+// in a blocking metadata fn, so a buffer's sink cannot change under us.
+func (p *producer) carryTopic(topic string) []promisedRec {
+	p.topicsMu.Lock()
+	p.unknownTopicsMu.Lock()
+	toStore := p.topics.clone()
+	l := toStore[topic]
+	if l == nil {
+		p.unknownTopicsMu.Unlock()
+		p.topicsMu.Unlock()
+		return nil
+	}
+	delete(toStore, topic)
+	p.topics.storeData(toStore)
+	p.unknownTopicsMu.Unlock()
+	p.topicsMu.Unlock()
+
+	var carried []promisedRec
+	d := l.load()
+	l.partsMu.Lock()
+	l.carried = true
+	for _, tp := range d.partitions {
+		r := tp.records
+		r.mu.Lock()
+		r.abandoned = errPurged
+		r.lockedDrainBatches(func(records []promisedRec) {
+			carried = append(carried, records...)
+		})
+		r.mu.Unlock()
+	}
+	l.partsMu.Unlock()
+	for _, tp := range d.partitions {
+		tp.records.sink.removeRecBuf(tp.records)
+	}
+	return carried
+}
+
 func (p *producer) isAborting() bool { return p.aborting.Load() > 0 }
 
 // noteRecreatedInTxn records that the current transaction produced to a
@@ -905,6 +948,11 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 	}
 
 	parts.partsMu.Lock()
+	if parts.carried {
+		parts.partsMu.Unlock()
+		cl.loadPartsAndPartition(pr)
+		return
+	}
 	defer parts.partsMu.Unlock()
 	if parts.partitioner == nil {
 		parts.partitioner = cl.cfg.partitioner.ForTopic(pr.Topic)

@@ -1058,9 +1058,11 @@ func ConsiderMissingTopicDeletedAfter(t time.Duration) Opt {
 // topic and adding it back itself, rather than failing the topic with
 // UNKNOWN_TOPIC_ID until you do so; see the README. Consuming
 // resumes from the group's committed offsets for the new topic or, without
-// any, per the reset policy; producing resumes with the next record. Records
-// buffered for the old topic still fail with UNKNOWN_TOPIC_ID, and a consumer
-// can see the error on a poll before the topic is added back.
+// any, per the reset policy, and a consumer can see UNKNOWN_TOPIC_ID on a
+// poll before the topic is added back. Records buffered for the old topic
+// are produced to the new one once it loads; a produce request already in
+// flight is waited for first, and its records are produced anew only if the
+// broker did not accept them.
 func FollowRecreatedTopics() Opt {
 	return clientOpt{func(cfg *cfg) { cfg.followRecreatedTopics = true }}
 }
