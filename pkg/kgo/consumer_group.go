@@ -3620,7 +3620,6 @@ func (g *groupConsumer) commit(
 	// uncommittedFrom. A recreated topic's offsets never go to the
 	// broker; we answer them UNKNOWN_TOPIC_ID below.
 	groupTopics := g.tps.load()
-	pinV9 := false
 	var refused []kmsg.OffsetCommitRequestTopic
 	for topic, partitions := range uncommitted {
 		reqTopic := kmsg.NewOffsetCommitRequestTopic()
@@ -3643,9 +3642,6 @@ func (g *groupConsumer) commit(
 		if recreated {
 			refused = append(refused, reqTopic)
 			continue
-		}
-		if reqTopic.TopicID == noID {
-			pinV9 = true
 		}
 		req.Topics = append(req.Topics, reqTopic)
 	}
@@ -3677,6 +3673,13 @@ func (g *groupConsumer) commit(
 		}
 		g.cfg.logger.Log(LogLevelDebug, "issuing commit", "group", g.cfg.group, "uncommitted", uncommitted)
 
+		if fn, ok := ctx.Value(commitContextFn).(func(*kmsg.OffsetCommitRequest) error); ok {
+			if err := fn(req); err != nil {
+				onDone(g.cl, req, nil, err)
+				return
+			}
+		}
+
 		// OffsetCommit v10 switched Topic to TopicID. If we have no
 		// TopicID for some topic (e.g. broker caps Metadata below v10,
 		// like Azure Event Hubs), v10+ would put a zero TopicID on the
@@ -3684,23 +3687,24 @@ func (g *groupConsumer) commit(
 		// See #1312. Held in a separate variable from commitCtx so
 		// the cancel/retry-sleep paths keep using the unwrapped ctx.
 		//
-		// pinV9 is computed once here and not recomputed inside the
-		// STALE_MEMBER_EPOCH retry loop below because that loop only
-		// DROPS partitions from req.Topics; it never re-adds topics
-		// whose TopicID state could change pinV9. If a future change
-		// allows re-adding topics on retry, recompute pinV9 (and rebuild
-		// reqCtx) inside the loop so a topic-id-less topic never lands
-		// on a v10+ wire by accident.
+		// This is computed after the PreCommitFnContext fn ran, since
+		// the fn may add topics with or without ids, and not
+		// recomputed inside the STALE_MEMBER_EPOCH retry loop below
+		// because that loop only DROPS partitions from req.Topics; it
+		// never re-adds topics whose TopicID state could change the
+		// pin. If a future change allows re-adding topics on retry,
+		// recompute the pin (and rebuild reqCtx) inside the loop so a
+		// topic-id-less topic never lands on a v10+ wire by accident.
 		reqCtx := commitCtx
+		var pinV9 bool
+		for _, t := range req.Topics {
+			if t.TopicID == noID {
+				pinV9 = true
+				break
+			}
+		}
 		if pinV9 {
 			reqCtx = context.WithValue(commitCtx, ctxPinReq, &pinReq{pinMax: true, max: 9})
-		}
-
-		if fn, ok := ctx.Value(commitContextFn).(func(*kmsg.OffsetCommitRequest) error); ok {
-			if err := fn(req); err != nil {
-				onDone(g.cl, req, nil, err)
-				return
-			}
 		}
 
 		var resp *kmsg.OffsetCommitResponse
