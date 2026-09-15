@@ -15,90 +15,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// TestAutoCommitOnClose verifies that offsets are committed when a group
-// consumer explicitly commits before closing.
-func TestAutoCommitOnClose(t *testing.T) {
-	t.Parallel()
-	topic := "commit-auto-close"
-	group := "commit-auto-close-group"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-
-	// Produce some records.
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	for i := range 5 {
-		produceSync(t, producer, kgo.StringRecord("v-"+strconv.Itoa(i)))
-	}
-
-	// Create a group consumer, consume all records, explicitly commit, then close.
-	cl := newPlainClient(t, c,
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeTopics(topic),
-		kgo.DisableAutoCommit(),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	var consumed int
-	for consumed < 5 {
-		fs := cl.PollFetches(ctx)
-		if errs := fs.Errors(); len(errs) > 0 {
-			t.Fatalf("consume errors: %v", errs)
-		}
-		consumed += fs.NumRecords()
-	}
-
-	// Explicitly commit.
-	if err := cl.CommitUncommittedOffsets(ctx); err != nil {
-		t.Fatalf("commit failed: %v", err)
-	}
-
-	// Close the consumer.
-	cl.Close()
-
-	// Verify the committed offset.
-	o, ok := groupCommits(c, group)[topic][0]
-	if !ok {
-		t.Fatal("no committed offset found after close")
-	}
-	if o.Offset != 5 {
-		t.Errorf("expected committed offset 5, got %d", o.Offset)
-	}
-}
-
-// TestCommitMetadata verifies that offset commit metadata round-trips correctly.
-func TestCommitMetadata(t *testing.T) {
-	t.Parallel()
-	topic := "commit-metadata"
-	group := "commit-metadata-group"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-
-	adm := newAdminClient(t, c)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	metadata := "my-custom-metadata"
-	offsets := kadm.Offsets{}
-	offsets.Add(kadm.Offset{
-		Topic:     topic,
-		Partition: 0,
-		At:        5,
-		Metadata:  metadata,
-	})
-	_, err := adm.CommitOffsets(ctx, group, offsets)
-	if err != nil {
-		t.Fatalf("commit failed: %v", err)
-	}
-
-	o, ok := groupCommits(c, group)[topic][0]
-	if !ok {
-		t.Fatal("committed offset not found")
-	}
-	if o.Metadata != metadata {
-		t.Errorf("expected metadata %q, got %q", metadata, o.Metadata)
-	}
-}
-
 // TestNoCommittedOffsets verifies that fetching offsets for a group with no
 // commits returns no data (or an error indicating the group doesn't exist).
 func TestNoCommittedOffsets(t *testing.T) {
@@ -122,147 +38,114 @@ func TestNoCommittedOffsets(t *testing.T) {
 	}
 }
 
-// TestAsyncCommit verifies that async commit (via a separate goroutine)
-// eventually commits offsets.
-func TestAsyncCommit(t *testing.T) {
+// TestCommitOffsets commits through kadm and reads each commit back off the
+// cluster.
+func TestCommitOffsets(t *testing.T) {
 	t.Parallel()
-	topic := "commit-async"
-	group := "commit-async-group"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	for _, tc := range []struct {
+		name    string
+		commits []kadm.Offset // committed in order, each read back
+	}{
+		{"metadata", []kadm.Offset{{Partition: 0, At: 5, Metadata: "my-custom-metadata"}}},
+		{"specified-offsets", []kadm.Offset{{Partition: 0, At: 3}, {Partition: 0, At: 7}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "commit-" + tc.name
+			group := topic + "-group"
+			c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+			adm := newAdminClient(t, c)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	for i := range 5 {
-		produceSync(t, producer, kgo.StringRecord("v-"+strconv.Itoa(i)))
-	}
-
-	// Consume all records with group consumer.
-	cl := newPlainClient(t, c,
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeTopics(topic),
-		kgo.DisableAutoCommit(),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	var consumed int
-	for consumed < 5 {
-		fs := cl.PollFetches(ctx)
-		if errs := fs.Errors(); len(errs) > 0 {
-			t.Fatalf("consume errors: %v", errs)
-		}
-		consumed += fs.NumRecords()
-	}
-
-	// Async commit: commit in a goroutine and wait for it.
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := cl.CommitUncommittedOffsets(ctx); err != nil {
-			t.Errorf("async commit failed: %v", err)
-		}
-	}()
-	wg.Wait()
-
-	// Verify committed offset.
-	o, ok := groupCommits(c, group)[topic][0]
-	if !ok {
-		t.Fatal("committed offset not found")
-	}
-	if o.Offset != 5 {
-		t.Errorf("expected committed offset 5, got %d", o.Offset)
+			for _, want := range tc.commits {
+				want.Topic = topic
+				offsets := kadm.Offsets{}
+				offsets.Add(want)
+				if _, err := adm.CommitOffsets(ctx, group, offsets); err != nil {
+					t.Fatalf("commit at %d failed: %v", want.At, err)
+				}
+				o, ok := groupCommits(c, group)[topic][0]
+				if !ok {
+					t.Fatal("committed offset not found")
+				}
+				if o.Offset != want.At {
+					t.Errorf("expected offset %d, got %d", want.At, o.Offset)
+				}
+				if o.Metadata != want.Metadata {
+					t.Errorf("expected metadata %q, got %q", want.Metadata, o.Metadata)
+				}
+			}
+		})
 	}
 }
 
-// TestCommitSpecifiedOffsets verifies committing explicit offset values.
-func TestCommitSpecifiedOffsets(t *testing.T) {
+// TestCommitConsumed consumes, commits what it consumed, and reads the
+// commit back off the cluster.
+func TestCommitConsumed(t *testing.T) {
 	t.Parallel()
-	topic := "commit-specified"
-	group := "commit-specified-group"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	for _, tc := range []struct {
+		name      string
+		produce   int
+		consume   int
+		async     bool // commit from another goroutine
+		closeCl   bool // close the consumer before reading the commit back
+		wantAtGap bool // the commit may sit ahead of what we consumed
+	}{
+		{name: "sync-then-close", produce: 5, consume: 5, closeCl: true},
+		{name: "async", produce: 5, consume: 5, async: true},
+		{name: "partial", produce: 10, consume: 5, wantAtGap: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "commit-" + tc.name
+			group := topic + "-group"
+			c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
-	adm := newAdminClient(t, c)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+			producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			for i := range tc.produce {
+				produceSync(t, producer, kgo.StringRecord("v-"+strconv.Itoa(i)))
+			}
 
-	// Commit a specific offset.
-	offsets := kadm.Offsets{}
-	offsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: 3})
-	_, err := adm.CommitOffsets(ctx, group, offsets)
-	if err != nil {
-		t.Fatalf("commit 3 failed: %v", err)
-	}
+			cl := newPlainClient(t, c,
+				kgo.ConsumerGroup(group),
+				kgo.ConsumeTopics(topic),
+				kgo.DisableAutoCommit(),
+			)
+			consumeN(t, cl, tc.consume, 10*time.Second)
 
-	o, ok := groupCommits(c, group)[topic][0]
-	if !ok {
-		t.Fatal("committed offset not found")
-	}
-	if o.Offset != 3 {
-		t.Errorf("expected offset 3, got %d", o.Offset)
-	}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			commit := func() {
+				if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+					t.Errorf("commit failed: %v", err)
+				}
+			}
+			if tc.async {
+				var wg sync.WaitGroup
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					commit()
+				}()
+				wg.Wait()
+			} else {
+				commit()
+			}
+			if tc.closeCl {
+				cl.Close()
+			}
 
-	// Update to a different offset.
-	offsets2 := kadm.Offsets{}
-	offsets2.Add(kadm.Offset{Topic: topic, Partition: 0, At: 7})
-	_, err = adm.CommitOffsets(ctx, group, offsets2)
-	if err != nil {
-		t.Fatalf("commit 7 failed: %v", err)
-	}
-
-	o, ok = groupCommits(c, group)[topic][0]
-	if !ok {
-		t.Fatal("committed offset not found")
-	}
-	if o.Offset != 7 {
-		t.Errorf("expected offset 7, got %d", o.Offset)
-	}
-}
-
-// TestPositionAndCommit verifies the interaction between consuming position
-// and committed offsets.
-func TestPositionAndCommit(t *testing.T) {
-	t.Parallel()
-	topic := "commit-position"
-	group := "commit-position-group"
-	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	for i := range 10 {
-		produceSync(t, producer, kgo.StringRecord("v-"+strconv.Itoa(i)))
-	}
-
-	// Create a group consumer.
-	cl := newPlainClient(t, c,
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeTopics(topic),
-		kgo.DisableAutoCommit(),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Consume some records (not all).
-	var consumed int
-	for consumed < 5 {
-		fs := cl.PollFetches(ctx)
-		if errs := fs.Errors(); len(errs) > 0 {
-			t.Fatalf("consume errors: %v", errs)
-		}
-		consumed += fs.NumRecords()
-	}
-
-	// Commit what we've consumed.
-	if err := cl.CommitUncommittedOffsets(ctx); err != nil {
-		t.Fatalf("commit failed: %v", err)
-	}
-
-	// Verify committed offset matches what we consumed.
-	o, ok := groupCommits(c, group)[topic][0]
-	if !ok {
-		t.Fatal("committed offset not found")
-	}
-	if o.Offset < 5 {
-		t.Errorf("expected committed offset >= 5, got %d", o.Offset)
+			o, ok := groupCommits(c, group)[topic][0]
+			if !ok {
+				t.Fatal("committed offset not found")
+			}
+			switch {
+			case tc.wantAtGap && o.Offset < int64(tc.consume):
+				t.Errorf("expected committed offset >= %d, got %d", tc.consume, o.Offset)
+			case !tc.wantAtGap && o.Offset != int64(tc.consume):
+				t.Errorf("expected committed offset %d, got %d", tc.consume, o.Offset)
+			}
+		})
 	}
 }

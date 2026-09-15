@@ -99,91 +99,6 @@ func FuzzDecodeBatchRaw(f *testing.F) {
 	})
 }
 
-// TestReadEntriesTruncatedHeader verifies truncated headers are handled.
-func TestReadEntriesTruncatedHeader(t *testing.T) {
-	t.Parallel()
-	// Less than header size
-	for size := 0; size < entryHeaderSize; size++ {
-		entries, validBytes := readEntries(make([]byte, size))
-		if len(entries) != 0 {
-			t.Fatalf("size %d: expected 0 entries, got %d", size, len(entries))
-		}
-		if validBytes != 0 {
-			t.Fatalf("size %d: expected validBytes 0, got %d", size, validBytes)
-		}
-	}
-}
-
-// TestReadEntriesBadCRC verifies CRC mismatch stops parsing.
-func TestReadEntriesBadCRC(t *testing.T) {
-	t.Parallel()
-
-	makeEntry := func(data []byte) []byte {
-		length := uint32(2 + len(data))
-		var hdr [10]byte
-		binary.LittleEndian.PutUint32(hdr[0:4], length)
-		binary.LittleEndian.PutUint16(hdr[8:10], currentPersistVersion)
-		crcVal := crc32.New(crc32c)
-		var vbuf [2]byte
-		binary.LittleEndian.PutUint16(vbuf[:], currentPersistVersion)
-		crcVal.Write(vbuf[:])
-		crcVal.Write(data)
-		binary.LittleEndian.PutUint32(hdr[4:8], crcVal.Sum32())
-		return append(hdr[:], data...)
-	}
-
-	good := makeEntry([]byte("good entry"))
-	bad := makeEntry([]byte("bad entry"))
-	bad[5] ^= 0xFF // corrupt CRC byte
-
-	// Good + bad: should parse 1 entry
-	combined := append(append([]byte{}, good...), bad...)
-	entries, validBytes := readEntries(combined)
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(entries))
-	}
-	if validBytes != len(good) {
-		t.Fatalf("expected validBytes %d, got %d", len(good), validBytes)
-	}
-
-	// Bad alone: should parse 0 entries
-	entries, validBytes = readEntries(bad)
-	if len(entries) != 0 {
-		t.Fatalf("expected 0 entries, got %d", len(entries))
-	}
-	if validBytes != 0 {
-		t.Fatalf("expected validBytes 0, got %d", validBytes)
-	}
-}
-
-// TestReadEntriesLengthTooSmall verifies length < 2 stops parsing.
-func TestReadEntriesLengthTooSmall(t *testing.T) {
-	t.Parallel()
-	var buf [14]byte
-	binary.LittleEndian.PutUint32(buf[0:4], 1) // length = 1, too small
-	entries, validBytes := readEntries(buf[:])
-	if len(entries) != 0 {
-		t.Fatalf("expected 0 entries, got %d", len(entries))
-	}
-	if validBytes != 0 {
-		t.Fatalf("expected validBytes 0, got %d", validBytes)
-	}
-}
-
-// TestReadEntriesLengthExceedsFile verifies overlength entries stop parsing.
-func TestReadEntriesLengthExceedsFile(t *testing.T) {
-	t.Parallel()
-	var buf [10]byte
-	binary.LittleEndian.PutUint32(buf[0:4], 1000) // claims 1000 bytes but only 10 available
-	entries, validBytes := readEntries(buf[:])
-	if len(entries) != 0 {
-		t.Fatalf("expected 0 entries, got %d", len(entries))
-	}
-	if validBytes != 0 {
-		t.Fatalf("expected validBytes 0, got %d", validBytes)
-	}
-}
-
 // TestWriteReadEntryRoundTrip verifies write + read produces identical data.
 func TestWriteReadEntryRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -1830,5 +1745,66 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 	})
 	if readCount != 6 {
 		t.Fatalf("expected 6 readable batches, got %d", readCount)
+	}
+}
+
+// persistEntry frames data the way the persist writer does: length, CRC
+// over version plus payload, then version.
+func persistEntry(data []byte) []byte {
+	var hdr [10]byte
+	binary.LittleEndian.PutUint32(hdr[0:4], uint32(2+len(data)))
+	binary.LittleEndian.PutUint16(hdr[8:10], currentPersistVersion)
+	crcVal := crc32.New(crc32c)
+	var vbuf [2]byte
+	binary.LittleEndian.PutUint16(vbuf[:], currentPersistVersion)
+	crcVal.Write(vbuf[:])
+	crcVal.Write(data)
+	binary.LittleEndian.PutUint32(hdr[4:8], crcVal.Sum32())
+	return append(hdr[:], data...)
+}
+
+// TestReadEntries feeds readEntries malformed input. It stops at the first
+// entry it cannot trust and reports how many bytes ahead of that were good.
+func TestReadEntries(t *testing.T) {
+	t.Parallel()
+	good := persistEntry([]byte("good entry"))
+	bad := persistEntry([]byte("bad entry"))
+	bad[5] ^= 0xFF // corrupt a CRC byte
+
+	var truncated [][]byte
+	for size := range entryHeaderSize {
+		truncated = append(truncated, make([]byte, size))
+	}
+
+	tooSmall := make([]byte, 14)
+	binary.LittleEndian.PutUint32(tooSmall[0:4], 1) // below the 2 byte version
+
+	tooLong := make([]byte, 10)
+	binary.LittleEndian.PutUint32(tooLong[0:4], 1000) // claims 1000 bytes of a 10 byte file
+
+	for _, tc := range []struct {
+		name      string
+		ins       [][]byte
+		wantN     int
+		wantValid int
+	}{
+		{"truncated-header", truncated, 0, 0},
+		{"bad-crc", [][]byte{bad}, 0, 0},
+		{"good-then-bad-crc", [][]byte{append(append([]byte{}, good...), bad...)}, 1, len(good)},
+		{"length-too-small", [][]byte{tooSmall}, 0, 0},
+		{"length-exceeds-file", [][]byte{tooLong}, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			for i, in := range tc.ins {
+				entries, validBytes := readEntries(in)
+				if len(entries) != tc.wantN {
+					t.Fatalf("input %d: expected %d entries, got %d", i, tc.wantN, len(entries))
+				}
+				if validBytes != tc.wantValid {
+					t.Fatalf("input %d: expected validBytes %d, got %d", i, tc.wantValid, validBytes)
+				}
+			}
+		})
 	}
 }
