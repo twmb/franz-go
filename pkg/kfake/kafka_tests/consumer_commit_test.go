@@ -30,15 +30,11 @@ func TestAutoCommitOnClose(t *testing.T) {
 	}
 
 	// Create a group consumer, consume all records, explicitly commit, then close.
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topic),
 		kgo.DisableAutoCommit(),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -140,16 +136,11 @@ func TestAsyncCommit(t *testing.T) {
 	}
 
 	// Consume all records with group consumer.
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topic),
 		kgo.DisableAutoCommit(),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -242,16 +233,11 @@ func TestPositionAndCommit(t *testing.T) {
 	}
 
 	// Create a group consumer.
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topic),
 		kgo.DisableAutoCommit(),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

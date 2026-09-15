@@ -1038,7 +1038,6 @@ func TestShareGroupAsyncEarlyReturn(t *testing.T) {
 		kgo.ShareGroup(group),
 		kgo.FetchMaxWait(2*time.Second),
 	)
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -1132,14 +1131,10 @@ func TestShareGroupAsyncShutdownNoHang(t *testing.T) {
 
 	produceShareN(t, c, "share-shutdown", group, 50)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics("share-shutdown"),
 		kgo.ShareGroup(group),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// Poll once to establish sessions and start goroutines.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1494,7 +1489,6 @@ func TestShareGroupClientRejoinAfterFence(t *testing.T) {
 	produceShareN(t, c, topic, group, total)
 
 	admin := newPlainClient(t, c)
-	defer admin.Close()
 
 	cl := newShareConsumer(t, c, topic, group)
 
@@ -1623,7 +1617,6 @@ func TestShareGroupRebalanceOccurs(t *testing.T) {
 
 	// Consumer 1 starts alone.
 	cl1 := newShareConsumer(t, c, topic, group)
-	defer cl1.Close()
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); runConsumer("cl1", cl1, perRecordDelay) }()
@@ -1800,7 +1793,6 @@ func TestShareGroupSubscriptionPurge(t *testing.T) {
 	// Produce records to both topics before the consumer joins so that
 	// share.auto.offset.reset=earliest picks them up.
 	prodCl := newPlainClient(t, c)
-	defer prodCl.Close()
 	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 	for i := range perTopic {
 		v := []byte(strconv.Itoa(i))
@@ -1821,17 +1813,12 @@ func TestShareGroupSubscriptionPurge(t *testing.T) {
 		cbMu.Unlock()
 	}
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(topicA, topicB),
 		kgo.ShareGroup(group),
 		kgo.FetchMaxWait(200*time.Millisecond),
 		kgo.ShareAckCallback(ackCb),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -2039,17 +2026,12 @@ func TestShareGroupInvalidShareSessionResetOnAck(t *testing.T) {
 		cbMu.Unlock()
 	}
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ShareGroup(group),
 		kgo.FetchMaxWait(200*time.Millisecond),
 		kgo.ShareAckCallback(ackCb),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -2116,7 +2098,6 @@ func TestShareGroupAckCallbackSuccessPath(t *testing.T) {
 	c := newCluster(t, SeedTopics(partitions, topic))
 
 	admin := newPlainClient(t, c)
-	defer admin.Close()
 	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 
 	for i := range total {
@@ -2140,17 +2121,12 @@ func TestShareGroupAckCallbackSuccessPath(t *testing.T) {
 		cbMu.Unlock()
 	}
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ShareGroup(group),
 		kgo.FetchMaxWait(200*time.Millisecond),
 		kgo.ShareAckCallback(ackCb),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -2316,17 +2292,12 @@ func TestShareGroupNonRetryableAckError(t *testing.T) {
 		cbMu.Unlock()
 	}
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ShareGroup(group),
 		kgo.FetchMaxWait(200*time.Millisecond),
 		kgo.ShareAckCallback(ackCb),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -2503,7 +2474,6 @@ func TestShareGroupLeaderMoveInFlightAcks(t *testing.T) {
 	}
 
 	prodCl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
-	defer prodCl.Close()
 	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
 	for i := range total {
 		if err := prodCl.ProduceSync(context.Background(), &kgo.Record{Value: []byte(strconv.Itoa(i))}).FirstErr(); err != nil {
@@ -2519,17 +2489,12 @@ func TestShareGroupLeaderMoveInFlightAcks(t *testing.T) {
 		cbMu.Unlock()
 	}
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ShareGroup(group),
 		kgo.FetchMaxWait(200*time.Millisecond),
 		kgo.ShareAckCallback(ackCb),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

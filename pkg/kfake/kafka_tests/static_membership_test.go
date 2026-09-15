@@ -112,8 +112,7 @@ func TestStaticMemberClassicRejoinNoRebalance(t *testing.T) {
 
 	// First consumer. Short session timeout so the server removes
 	// the member quickly after close.
-	cl1, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl1 := newPlainClient(t, c,
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -122,9 +121,6 @@ func TestStaticMemberClassicRejoinNoRebalance(t *testing.T) {
 		kgo.SessionTimeout(500*time.Millisecond),
 		kgo.HeartbeatInterval(100*time.Millisecond), // must be < session timeout
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	consumeN(t, cl1, 20, 10*time.Second)
 	waitStable(t, c, group, 1)
 
@@ -133,18 +129,13 @@ func TestStaticMemberClassicRejoinNoRebalance(t *testing.T) {
 	time.Sleep(700 * time.Millisecond) // wait for session timeout
 
 	// Rejoin with same instanceID.
-	cl2, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	newPlainClient(t, c,
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchMaxWait(250*time.Millisecond),
 		kgo.InstanceID(instanceID),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl2.Close()
 
 	dg := waitStable(t, c, group, 1)
 	found := false
@@ -172,17 +163,12 @@ func TestGroupMaxSizeClassic(t *testing.T) {
 	)
 
 	// First consumer joins successfully.
-	cl1, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	newPlainClient(t, c,
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchMaxWait(250*time.Millisecond),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl1.Close()
 
 	waitStable(t, c, group, 1)
 

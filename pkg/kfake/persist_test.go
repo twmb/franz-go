@@ -33,10 +33,7 @@ func TestPersistProduceCloseReopen(t *testing.T) {
 			NumBrokers(1),
 			SeedTopics(1, "test-topic"),
 		)
-		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		cl := newPlainClient(t, c)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -66,7 +63,6 @@ func TestPersistProduceCloseReopen(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		cl := newPlainClient(t, c,
 			kgo.ConsumeTopics("test-topic"),
@@ -100,10 +96,7 @@ func TestPersistSyncWritesCrashRecovery(t *testing.T) {
 			NumBrokers(1),
 			SeedTopics(1, "sync-topic"),
 		)
-		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		cl := newPlainClient(t, c)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -128,7 +121,6 @@ func TestPersistSyncWritesCrashRecovery(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		cl := newPlainClient(t, c,
 			kgo.ConsumeTopics("sync-topic"),
@@ -164,16 +156,12 @@ func TestPersistGroupCommitsRestart(t *testing.T) {
 		defer cancel()
 
 		// Consume 5 records and commit
-		consCl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		consCl := newPlainClient(t, c,
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.HeartbeatInterval(100*time.Millisecond),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		var consumed int
 		for consumed < 5 {
 			fetches := consCl.PollFetches(ctx)
@@ -192,7 +180,6 @@ func TestPersistGroupCommitsRestart(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		o, ok := groupCommits(c, group)[topic][0]
 		if !ok {
@@ -220,13 +207,9 @@ func TestPersistPIDEpochRestart(t *testing.T) {
 			NumBrokers(1),
 			SeedTopics(1, "pid-topic"),
 		)
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.TransactionalID("test-txn"),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -266,7 +249,6 @@ func TestPersistPIDEpochRestart(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		// Init a new client with same txn ID - should get same PID with bumped epoch
 		cl := newPlainClient(t, c,
@@ -352,7 +334,6 @@ func TestPersistACLsRestart(t *testing.T) {
 			Superuser("PLAIN", "admin", "admin"),
 			EnableACLs(),
 		)
-		defer c.Close()
 
 		saslOpt := kgo.SASL(plain.Plain(func(_ context.Context) (plain.Auth, error) {
 			return plain.Auth{User: "admin", Pass: "admin"}, nil
@@ -396,7 +377,6 @@ func TestPersistBrokerConfigsRestart(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		cl := newPlainClient(t, c)
 		req := kmsg.NewDescribeConfigsRequest()
@@ -460,7 +440,6 @@ func TestPersistTopicConfigsRestart(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		cl := newPlainClient(t, c)
 		req := kmsg.NewDescribeConfigsRequest()
@@ -541,7 +520,6 @@ func TestPersistCRCCorruption(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		// HWM should reflect only the recovered (non-corrupt) batches.
 		pi := c.PartitionInfo("crc-topic", 0)
@@ -578,10 +556,7 @@ func TestPersistSegmentRollover(t *testing.T) {
 				"log.segment.bytes": "100", // tiny segment size
 			}),
 		)
-		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		cl := newPlainClient(t, c)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -616,7 +591,6 @@ func TestPersistSegmentRollover(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		cl := newPlainClient(t, c,
 			kgo.ConsumeTopics("seg-topic"),
@@ -662,10 +636,7 @@ func TestPersistMultipleTopics(t *testing.T) {
 			NumBrokers(1),
 			SeedTopics(2, topics...),
 		)
-		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		cl := newPlainClient(t, c)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -687,7 +658,6 @@ func TestPersistMultipleTopics(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		adm := kadm.NewClient(newPlainClient(t, c))
 		tl, err := adm.ListTopics(context.Background())
@@ -727,16 +697,12 @@ func TestPersistSyncWritesGroupCommitCrash(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		consCl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		consCl := newPlainClient(t, c,
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.HeartbeatInterval(100*time.Millisecond),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		var consumed int
 		for consumed < 5 {
 			fetches := consCl.PollFetches(ctx)
@@ -755,7 +721,6 @@ func TestPersistSyncWritesGroupCommitCrash(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		o, ok := groupCommits(c, group)[topic][0]
 		if !ok {
@@ -790,16 +755,12 @@ func TestPersistSyncWritesOffsetDeleteCrash(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		consCl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		consCl := newPlainClient(t, c,
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.HeartbeatInterval(100*time.Millisecond),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		var consumed int
 		for consumed < 5 {
 			fetches := consCl.PollFetches(ctx)
@@ -834,7 +795,6 @@ func TestPersistSyncWritesOffsetDeleteCrash(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		if _, ok := groupCommits(c, group)[topic][0]; ok {
 			t.Fatal("expected deleted offset to remain deleted after crash with SyncWrites")
@@ -953,7 +913,6 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		o, ok := groupCommits(c, group)[topic][0]
 		if !ok {
@@ -989,10 +948,7 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 		defer cancel()
 
 		// Produce a record so PollFetches completes quickly.
-		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		prodCl := newPlainClient(t, c)
 		if err := prodCl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("x")}).FirstErr(); err != nil {
 			t.Fatal(err)
 		}
@@ -1030,7 +986,6 @@ func TestPersistClassicGroupGenerationCrash(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1135,27 +1090,20 @@ func TestPersistStaticMemberDeleteCrash(t *testing.T) {
 		defer cancel()
 
 		// Produce a record so PollFetches completes quickly.
-		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		prodCl := newPlainClient(t, c)
 		if err := prodCl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("x")}).FirstErr(); err != nil {
 			t.Fatal(err)
 		}
 		prodCl.Close()
 
 		// Join with a static member via kgo.
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.InstanceID(instanceID),
 			kgo.HeartbeatInterval(100*time.Millisecond),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		cl.PollFetches(ctx)
 		// kgo does NOT send LeaveGroup on Close for static members
 		// (correct per KIP-345). Close without leaving.
@@ -1226,7 +1174,6 @@ func TestPersistStaticMemberDeleteCrash(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1313,7 +1260,6 @@ func TestPersistAbortedTxnsRestart(t *testing.T) {
 			// Phase 2: reopen and verify read_committed filters aborted records.
 			{
 				c := newCluster(t, DataDir(dir), NumBrokers(1))
-				defer c.Close()
 				cl := newPlainClient(t, c,
 					kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 					kgo.FetchMaxWait(250*time.Millisecond),
@@ -1405,7 +1351,6 @@ func TestPersistSaveGroupsLogCloseBeforeTruncate(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		for i := range 3 {
 			group := fmt.Sprintf("trunc-group-%d", i)
@@ -1487,15 +1432,11 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.TransactionalID("txn-inflight-test"),
 			kgo.TransactionTimeout(30*time.Second),
 			kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		// Transaction 1: produce 3 records and COMMIT.
 		if err := cl.BeginTransaction(); err != nil {
@@ -1536,7 +1477,6 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		// Verify LSO has advanced past all records (in-flight was aborted).
 		pi := c.PartitionInfo(topic, 0)
@@ -1646,15 +1586,11 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.TransactionalID("txn-clean-restart"),
 			kgo.TransactionTimeout(30*time.Second),
 			kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		// Transaction 1: produce 3 records and COMMIT.
 		if err := cl.BeginTransaction(); err != nil {
@@ -1700,7 +1636,6 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 			mfs.opt(),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		// LSO should be behind HWM (in-progress transaction).
 		pi := c.PartitionInfo(topic, 0)
@@ -1794,16 +1729,12 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.TransactionalID("txn-expire"),
 			// Short timeout so it's expired by the time we restart.
 			kgo.TransactionTimeout(200*time.Millisecond),
 			kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		if err := cl.BeginTransaction(); err != nil {
 			t.Fatal(err)
 		}
@@ -1827,7 +1758,6 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 			mfs.opt(),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		// LSO should equal HWM - the txn was aborted, not restored.
 		pi := c.PartitionInfo(topic, 0)
@@ -1894,17 +1824,13 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 		defer cancel()
 
 		// Produce a record so the consumer has something to fetch.
-		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		prodCl := newPlainClient(t, c)
 		if err := prodCl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("v")}).FirstErr(); err != nil {
 			t.Fatal(err)
 		}
 		prodCl.Close()
 
-		consCl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		consCl := newPlainClient(t, c,
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.HeartbeatInterval(50*time.Millisecond),
@@ -1912,9 +1838,6 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 			kgo.FetchMaxWait(50*time.Millisecond),
 			kgo.RetryTimeout(50*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		// Wait for group to stabilize.
 		for {
 			fetches := consCl.PollFetches(ctx)
@@ -1969,7 +1892,6 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 			NumBrokers(1),
 			GroupMinSessionTimeout(500*time.Millisecond),
 		)
-		defer c.Close()
 
 		g := c.GroupInfo(group)
 		if g == nil || g.State != "Empty" {
@@ -2027,26 +1949,19 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 		ctx, cancel := context.WithTimeout(ctx848, 5*time.Second)
 		defer cancel()
 
-		prodCl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		prodCl := newPlainClient(t, c)
 		if err := prodCl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("v")}).FirstErr(); err != nil {
 			t.Fatal(err)
 		}
 		prodCl.Close()
 
-		consCl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		consCl := newPlainClient(t, c,
 			kgo.WithContext(ctx848),
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.FetchMaxWait(50*time.Millisecond),
 			kgo.RetryTimeout(50*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		for {
 			fetches := consCl.PollFetches(ctx)
 			if fetches.NumRecords() > 0 {
@@ -2093,7 +2008,6 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 			NumBrokers(1),
 			brokerCfgs,
 		)
-		defer c.Close()
 
 		state, members := describe848(c)
 		if state != "Empty" {
@@ -2127,10 +2041,7 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		cl := newPlainClient(t, c)
 
 		for i := range 50 {
 			r := &kgo.Record{
@@ -2160,7 +2071,6 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		pi := c.PartitionInfo(topic, 0)
 		if pi == nil {
@@ -2192,10 +2102,7 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 		}
 
 		// Produce one more record to trigger retention compaction.
-		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		cl := newPlainClient(t, c)
 		r := &kgo.Record{Topic: topic, Value: []byte("trigger-retention")}
 		if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 			t.Fatal(err)
@@ -2273,7 +2180,6 @@ func TestPersistSnapshotTruncatedSegment(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		pi := c.PartitionInfo(topic, 0)
 		if pi == nil {
@@ -2340,7 +2246,6 @@ func TestPersistQuotasRestart(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		cl := newPlainClient(t, c)
 		req := kmsg.NewDescribeClientQuotasRequest()
@@ -2416,7 +2321,6 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		adm := kadm.NewClient(newPlainClient(t, c))
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2468,17 +2372,13 @@ func TestPersistSessionStateClassicGroup(t *testing.T) {
 		defer cancel()
 
 		// Create consumer group, consume some records, commit
-		consCl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		consCl := newPlainClient(t, c,
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.HeartbeatInterval(100*time.Millisecond),
 			kgo.FetchMaxWait(250*time.Millisecond),
 			kgo.SessionTimeout(45*time.Second),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		var consumed int
 		for consumed < 5 {
 			fetches := consCl.PollFetches(ctx)
@@ -2506,7 +2406,6 @@ func TestPersistSessionStateClassicGroup(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 
 		// session_state.json should be deleted after load
 		if _, err := os.Stat(ssPath); !os.IsNotExist(err) {
@@ -2626,7 +2525,6 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
-		defer c.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -2699,14 +2597,10 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 			DataDir(dir),
 			SeedTopics(-1, topic),
 		)
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.ConsumerGroup(group),
 			kgo.ConsumeTopics(topic),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		// Poll once to trigger JoinGroup/SyncGroup.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		cl.PollRecords(ctx, 1)
@@ -2731,7 +2625,6 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 			DataDir(dir),
 			Ports(0),
 		)
-		defer c.Close()
 
 		cl := newPlainClient(t, c)
 
@@ -2800,16 +2693,12 @@ func TestPersistLogCompaction(t *testing.T) {
 		}),
 	)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumerGroup(group),
 		kgo.HeartbeatInterval(100*time.Millisecond),
 		kgo.FetchMaxWait(250*time.Millisecond),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// Produce records
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -2865,7 +2754,6 @@ func TestPersistLogCompaction(t *testing.T) {
 			"state.log.compact.bytes": "1024",
 		}),
 	)
-	defer c2.Close()
 
 	o2, ok := groupCommits(c2, group)[topic][0]
 	if !ok {
@@ -2966,7 +2854,6 @@ func TestPersistLogCompactionCrashGroups(t *testing.T) {
 		DataDir(crashDir),
 		NumBrokers(1),
 	)
-	defer c2.Close()
 
 	for g := range nGroups {
 		group := fmt.Sprintf("crash-group-%d", g)
@@ -3006,14 +2893,10 @@ func TestPersistLogCompactionCrashPIDs(t *testing.T) {
 	const nTxns = 50
 	for i := range nTxns {
 		txid := fmt.Sprintf("txn-%d", i%5) // reuse 5 txn IDs
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.TransactionalID(txid),
 			kgo.TransactionTimeout(30*time.Second),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		if err := cl.BeginTransaction(); err != nil {
 			cl.Close()
 			t.Fatal(err)
@@ -3047,19 +2930,14 @@ func TestPersistLogCompactionCrashPIDs(t *testing.T) {
 		DataDir(crashDir),
 		NumBrokers(1),
 	)
-	defer c2.Close()
 
 	// Verify we can still produce with the same txn IDs (PIDs survived)
 	for i := range 5 {
 		txid := fmt.Sprintf("txn-%d", i)
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c2.ListenAddrs()...),
+		cl := newPlainClient(t, c2,
 			kgo.TransactionalID(txid),
 			kgo.TransactionTimeout(30*time.Second),
 		)
-		if err != nil {
-			t.Fatalf("txn %s: new client: %v", txid, err)
-		}
 		if err := cl.BeginTransaction(); err != nil {
 			cl.Close()
 			t.Fatalf("txn %s: begin: %v", txid, err)
@@ -3172,7 +3050,6 @@ func TestPersistShareGroupSPSO(t *testing.T) {
 	// Phase 2: reopen, verify no records are redelivered.
 	{
 		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-		defer c.Close()
 
 		cl := newShareConsumer(t, c, topic, group)
 		verifyZeroRecords(t, cl, 500*time.Millisecond)
@@ -3195,10 +3072,7 @@ func TestPersistShareGroupAcquiredReleasedOnRestart(t *testing.T) {
 
 		produceShareN(t, c, topic, group, total)
 
-		cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		cl := newPlainClient(t, c)
 		memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
 		_, acquired := rawShareFetch(t, cl, group, memberID, topicID, 0)
 		if acquired < total {
@@ -3212,7 +3086,6 @@ func TestPersistShareGroupAcquiredReleasedOnRestart(t *testing.T) {
 	// Phase 2: reopen, verify the records are available for redelivery.
 	{
 		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-		defer c.Close()
 
 		cl := newShareConsumer(t, c, topic, group)
 		records := consumeN(t, cl, total, 10*time.Second)
@@ -3243,7 +3116,6 @@ func TestPersistShareGroupConfigRestart(t *testing.T) {
 	// should start at 0 (earliest) and we should see the 10 records.
 	{
 		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-		defer c.Close()
 
 		cl := newShareConsumer(t, c, topic, group)
 		records := consumeN(t, cl, 10, 10*time.Second)
@@ -3322,7 +3194,6 @@ func TestPersistShareGroupArchivedNotRedelivered(t *testing.T) {
 				"group.share.delivery.count.limit": strconv.Itoa(maxDelivery),
 			}),
 		)
-		defer c.Close()
 
 		cl := newShareConsumer(t, c, topic, group)
 		verifyZeroRecords(t, cl, 500*time.Millisecond)

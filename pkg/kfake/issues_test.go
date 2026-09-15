@@ -125,16 +125,11 @@ func TestIssue885(t *testing.T) {
 		return nil, nil, false
 	})
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(testTopic),
 		kgo.Rack("foo"),
 		kgo.DisableFetchSessions(),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -262,17 +257,12 @@ func TestIssue905(t *testing.T) {
 		return nil, nil, false
 	})
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(testTopic),
 		kgo.Rack("foo"),
 		kgo.DisableFetchSessions(),
 		kgo.RecheckPreferredReplicaInterval(recheckInterval),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 	defer close(allowFollower) // deferred after Close so it runs first: a held fetch finishes and the cluster can shut down
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -447,13 +437,7 @@ func TestIssueTimestampInclusivity(t *testing.T) {
 		}
 	}()
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
+	cl := newPlainClient(t, c)
 	adm := kadm.NewClient(cl)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -680,15 +664,10 @@ func TestTransactionCommit(t *testing.T) {
 	defer cancel()
 
 	// Test basic transaction commit flow
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.TransactionalID("test-txn"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	// Produce messages in a transaction
 	if err := cl.BeginTransaction(); err != nil {
@@ -707,15 +686,10 @@ func TestTransactionCommit(t *testing.T) {
 	}
 
 	// Verify read_committed consumer sees the messages
-	consumer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	consumer := newPlainClient(t, c,
 		kgo.ConsumeTopics(testTopic),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer consumer.Close()
 
 	var consumed int
 	for consumed < 3 {
@@ -804,15 +778,10 @@ func TestTransactionAbort(t *testing.T) {
 	defer cancel()
 
 	// Test transaction abort flow
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.TransactionalID("test-txn-abort"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	// Produce messages in a transaction
 	if err := cl.BeginTransaction(); err != nil {
@@ -831,14 +800,9 @@ func TestTransactionAbort(t *testing.T) {
 	}
 
 	// Produce non-transactional messages after the abort
-	nonTxnProducer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	nonTxnProducer := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer nonTxnProducer.Close()
 
 	for i := 0; i < 2; i++ {
 		if err := nonTxnProducer.ProduceSync(ctx, kgo.StringRecord("committed-"+strconv.Itoa(i))).FirstErr(); err != nil {
@@ -853,15 +817,10 @@ func TestTransactionAbort(t *testing.T) {
 	}
 
 	// Verify read_committed consumer sees only the non-aborted messages
-	consumer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	consumer := newPlainClient(t, c,
 		kgo.ConsumeTopics(testTopic),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer consumer.Close()
 
 	var consumed int
 	var records []string
@@ -900,26 +859,16 @@ func TestTransactionReadUncommitted(t *testing.T) {
 	defer cancel()
 
 	// Start a read_uncommitted consumer first
-	consumer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	consumer := newPlainClient(t, c,
 		kgo.ConsumeTopics(testTopic),
 		kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer consumer.Close()
 
 	// Produce messages in a transaction but don't commit yet
-	producer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	producer := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.TransactionalID("test-txn-uncommitted"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer producer.Close()
 
 	if err := producer.BeginTransaction(); err != nil {
 		t.Fatalf("failed to begin transaction: %v", err)
@@ -968,13 +917,9 @@ func TestTransactionOffsetCommit(t *testing.T) {
 	defer cancel()
 
 	// Produce some input messages first
-	producer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	producer := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(inputTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	for i := 0; i < 5; i++ {
 		if err := producer.ProduceSync(ctx, kgo.StringRecord("input-"+strconv.Itoa(i))).FirstErr(); err != nil {
@@ -985,18 +930,13 @@ func TestTransactionOffsetCommit(t *testing.T) {
 
 	// Test transactional consume-transform-produce pattern
 	txnCtx := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
-	txnClient, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	txnClient := newPlainClient(t, c,
 		kgo.WithContext(txnCtx),
 		kgo.ConsumerGroup(groupID),
 		kgo.ConsumeTopics(inputTopic),
 		kgo.TransactionalID("test-txn-offsets"),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer txnClient.Close()
 
 	// Begin transaction
 	if err := txnClient.BeginTransaction(); err != nil {
@@ -1046,15 +986,10 @@ func TestTransactionOffsetCommit(t *testing.T) {
 	}
 
 	// Verify output messages are readable
-	outConsumer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	outConsumer := newPlainClient(t, c,
 		kgo.ConsumeTopics(outputTopic),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer outConsumer.Close()
 
 	outFs := outConsumer.PollFetches(ctx)
 	if outFs.NumRecords() != consumed {
@@ -1081,15 +1016,10 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	producer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	producer := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.TransactionalID("test-txn-minbytes"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer producer.Close()
 
 	// Committed data should satisfy MinBytes immediately.
 	if err := producer.BeginTransaction(); err != nil {
@@ -1107,16 +1037,12 @@ func TestReadCommittedMinBytes(t *testing.T) {
 		t.Fatalf("LSO should equal HWM after commit: LSO=%d, HWM=%d", pi.LastStableOffset, pi.HighWatermark)
 	}
 
-	consumer1, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	consumer1 := newPlainClient(t, c,
 		kgo.ConsumeTopics(testTopic),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 		kgo.FetchMinBytes(1),
 		kgo.FetchMaxWait(5*time.Second),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	start := time.Now()
 	fetches := consumer1.PollFetches(ctx)
@@ -1184,8 +1110,7 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	// arrives at the server, then commit. This avoids a flaky sleep.
 	fetchArrived := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Fetch}, Observe: true, Count: -1})
 
-	consumer3, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	consumer3 := newPlainClient(t, c,
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 		kgo.FetchMinBytes(1),
 		kgo.FetchMaxWait(5*time.Second),
@@ -1193,9 +1118,6 @@ func TestReadCommittedMinBytes(t *testing.T) {
 			testTopic: {0: kgo.NewOffset().At(hwmBeforeTxn)},
 		}),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	fetchDone := make(chan struct{})
 	var fetchResult kgo.Fetches
@@ -1240,8 +1162,7 @@ func TestReadCommittedMinBytes(t *testing.T) {
 
 	newLSO := c.PartitionInfo(testTopic, 0).LastStableOffset
 
-	consumer4, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	consumer4 := newPlainClient(t, c,
 		kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
 		kgo.FetchMinBytes(1),
 		kgo.FetchMaxWait(5*time.Second),
@@ -1249,9 +1170,6 @@ func TestReadCommittedMinBytes(t *testing.T) {
 			testTopic: {0: kgo.NewOffset().At(newLSO)},
 		}),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	start = time.Now()
 	fetches = consumer4.PollFetches(ctx)
@@ -1288,16 +1206,8 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 
 	groupID := "test-group-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 
-	cl1, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl1.Close()
-	cl2, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl2.Close()
+	cl1 := newPlainClient(t, c)
+	cl2 := newPlainClient(t, c)
 
 	joinGroup := func(cl *kgo.Client, memberID string, metadata []byte) (*kmsg.JoinGroupResponse, error) {
 		req := kmsg.NewJoinGroupRequest()
@@ -1476,23 +1386,16 @@ func TestKIP447RequireStable(t *testing.T) {
 	defer cancel()
 
 	// Commit an initial offset to create the group
-	adminClient, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	adminClient := newPlainClient(t, c)
 	adm := kadm.NewClient(adminClient)
 	offsets := kadm.Offsets{}
 	offsets.Add(kadm.Offset{Topic: testTopic, Partition: 0, At: 0})
-	if err = adm.CommitAllOffsets(ctx, groupID, offsets); err != nil {
+	if err := adm.CommitAllOffsets(ctx, groupID, offsets); err != nil {
 		t.Fatalf("CommitAllOffsets failed: %v", err)
 	}
 	adminClient.Close()
 
-	rawClient, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rawClient.Close()
+	rawClient := newPlainClient(t, c)
 
 	// InitProducerID
 	initReq := kmsg.NewInitProducerIDRequest()
@@ -1699,7 +1602,6 @@ func TestFirstMetadataPartitionErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cl.Close()
 
 	// The first produce triggers metadata for the topic. Since the first
 	// metadata returns LEADER_NOT_AVAILABLE, there are no writable
@@ -1812,16 +1714,11 @@ func TestIssue1331(t *testing.T) {
 
 	// Refresh metadata frequently so the leaderless window spans many
 	// refreshes quickly.
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(testTopic),
 		kgo.MetadataMaxAge(100*time.Millisecond),
 		kgo.MetadataMinAge(20*time.Millisecond),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -1892,14 +1789,9 @@ func TestRequestCachedMetadata(t *testing.T) {
 		SeedTopics(2, "topic1", "topic2", "internal_topic"),
 	)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.MetadataMinAge(5*time.Second),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx := context.Background()
 	adm := kadm.NewClient(cl)
@@ -2207,14 +2099,9 @@ func TestKadmCachedMetadata(t *testing.T) {
 		SeedTopics(2, "t1", "t2", "t_internal"),
 	)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.MetadataMinAge(5*time.Second),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx := context.Background()
 	adm := kadm.NewClient(cl)
@@ -2535,8 +2422,7 @@ func TestIssue1245(t *testing.T) {
 
 	idleTimeout := 200 * time.Millisecond
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.ConnIdleTimeout(idleTimeout),
 		kgo.ProducerLinger(0),
@@ -2546,10 +2432,6 @@ func TestIssue1245(t *testing.T) {
 		kgo.MetadataMaxAge(time.Hour),
 		kgo.WithHooks(&connCountHook{connects}),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -2606,17 +2488,13 @@ func TestIssue1248(t *testing.T) {
 	// detector catching the concurrent reset()/kill() access.
 	for i := 0; i < 20; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
-		cl, err := kgo.NewClient(
-			kgo.SeedBrokers(c.ListenAddrs()...),
+		cl := newPlainClient(t, c,
 			kgo.WithContext(ctx),
 			kgo.ConsumerGroup("g1248-"+strconv.Itoa(i)),
 			kgo.ConsumeTopics("t1248"),
 			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 			kgo.FetchMaxWait(250*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		// Poll until we get records, establishing fetch sessions.
 		pollCtx, pollCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2650,14 +2528,9 @@ func TestDeleteRecordsThenProduce(t *testing.T) {
 
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(topic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -2825,8 +2698,7 @@ func TestIssue1296(t *testing.T) {
 	// on every connection (not just the first to each broker).
 	connects := new(atomic.Int32)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.SoftwareNameAndVersion(softwareNm, softwareVer),
 		kgo.ConsumerGroup("g1296"),
 		kgo.ConsumeTopics(topic),
@@ -2835,10 +2707,6 @@ func TestIssue1296(t *testing.T) {
 		kgo.FetchMaxWait(250*time.Millisecond),
 		kgo.WithHooks(&connCountHook{connects}),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	// Produce a record to force a produce connection to the (sole) broker.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -2905,11 +2773,7 @@ func TestDescribeTopicPartitionsCursor(t *testing.T) {
 		SeedTopics(2, "c"),
 	)
 
-	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
+	cl := newPlainClient(t, c)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -3120,15 +2984,10 @@ func TestIssue1328(t *testing.T) {
 		return resp, nil, true
 	})
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.MetadataMinAge(10*time.Millisecond),
 		kgo.MetadataMaxAge(50*time.Millisecond),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	adm := kadm.NewClient(cl)
 
@@ -3181,18 +3040,13 @@ func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
 	// sub-millisecond delete/create window below and fail the topic's
 	// load with UNKNOWN_TOPIC_OR_PARTITION; we want the produce failures
 	// alone (always UNKNOWN_TOPIC_ID) to drive the test.
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.UnknownTopicRetries(2),
 		kgo.RetryBackoffFn(func(int) time.Duration { return time.Millisecond }),
 		kgo.MetadataMinAge(10*time.Millisecond),
 		kgo.MetadataMaxAge(time.Minute),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -3269,18 +3123,13 @@ func TestProduceUnknownFailLimitNotResetByOtherErrors(t *testing.T) {
 		return resp, nil, true
 	})
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.UnknownTopicRetries(2),
 		kgo.RetryBackoffFn(func(int) time.Duration { return time.Millisecond }),
 		kgo.MetadataMinAge(10*time.Millisecond),
 		kgo.MetadataMaxAge(time.Minute),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	done := make(chan error, 1)
 	go func() {
@@ -3323,15 +3172,10 @@ func TestEndTxnUnconfirmedErrorNoSilentJoin(t *testing.T) {
 	// processing it, leaving the broker-side transaction ongoing.
 	c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError})
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.TransactionalID("txn-unconfirmed"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	if err := cl.BeginTransaction(); err != nil {
 		t.Fatal(err)
@@ -3359,16 +3203,11 @@ func TestEndTxnUnconfirmedErrorNoSilentJoin(t *testing.T) {
 		t.Fatalf("second commit errored: %v", err)
 	}
 
-	consumer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	consumer := newPlainClient(t, c,
 		kgo.ConsumeTopics(testTopic),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 		kgo.FetchMaxWait(250*time.Millisecond),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer consumer.Close()
 
 	// The topic has one partition: if txn1's record were committed it
 	// would arrive before txn2's. Seeing txn2 first proves txn1 aborted.
@@ -3421,14 +3260,10 @@ func TestOnBrokerDisconnectReentrantHook(t *testing.T) {
 	defer cancel()
 
 	hook := new(reentrantDisconnectHook)
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.WithHooks(hook),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	hook.cl.Store(cl)
 
 	// Establish a live connection so Close has something to disconnect.
@@ -3495,17 +3330,12 @@ func TestMetadataZeroPartitionsNoFakeSuccess(t *testing.T) {
 		return resp, nil, true
 	})
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.UnknownTopicRetries(1),
 		kgo.MetadataMinAge(10*time.Millisecond),
 		kgo.MetadataMaxAge(50*time.Millisecond),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	promised := make(chan error, 1)
 	cl.Produce(context.Background(), kgo.StringRecord("v"), func(_ *kgo.Record, err error) {
@@ -3547,11 +3377,7 @@ func TestOffsetFetchTopicIDOldWire(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	setup, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer setup.Close()
+	setup := newPlainClient(t, c)
 
 	// Learn the topic's ID.
 	mreq := kmsg.NewPtrMetadataRequest()
@@ -3589,14 +3415,9 @@ func TestOffsetFetchTopicIDOldWire(t *testing.T) {
 	// A fresh client (empty id2t: it produces and consumes nothing),
 	// pinned below OffsetFetch v10 so the topic NAME is what matters on
 	// the wire.
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.MaxVersions(kversion.V3_5_0()),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	freq := kmsg.NewPtrOffsetFetchRequest()
 	fg := kmsg.NewOffsetFetchRequestGroup()
@@ -3646,14 +3467,9 @@ func TestShareGroupIDNotFoundRejoin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	producer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	producer := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer producer.Close()
 
 	// Share groups default share.auto.offset.reset to latest; set earliest
 	// so the consumer sees the record produced before it joined.
@@ -3663,16 +3479,11 @@ func TestShareGroupIDNotFoundRejoin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(testTopic),
 		kgo.ShareGroup(group),
 		kgo.FetchMaxWait(250*time.Millisecond),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	// Wait until the member is established (it received a record).
 	for {
@@ -3779,29 +3590,19 @@ func TestFetchUnbufferedHookReentrancy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	producer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	producer := newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer producer.Close()
 	if err := producer.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
 		t.Fatal(err)
 	}
 
 	hook := new(reentrantFetchHook)
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.ConsumeTopics(testTopic),
 		kgo.FetchMaxWait(250*time.Millisecond),
 		kgo.WithHooks(hook),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 	hook.cl.Store(cl)
 
 	polled := make(chan struct{})
@@ -3857,8 +3658,7 @@ func TestOnDataLossCallbackReentrancy(t *testing.T) {
 	var cl *kgo.Client
 	hookDone := make(chan error, 1)
 	var hookOnce sync.Once
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl = newPlainClient(t, c,
 		kgo.DefaultProduceTopic(testTopic),
 		kgo.ProducerOnDataLossDetected(func(topic string, partition int32) {
 			hookOnce.Do(func() {
@@ -3867,10 +3667,6 @@ func TestOnDataLossCallbackReentrancy(t *testing.T) {
 			})
 		}),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
 		t.Fatalf("produce after data-loss retry errored: %v", err)
@@ -3902,14 +3698,9 @@ func TestKadmACLDefaultPatternRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.SASL(plain.Auth{User: "admin", Pass: "pass"}.AsMechanism()),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 	adm := kadm.NewClient(cl)
 
 	// Create with pattern unset: defaults to literal per the docs.
@@ -3983,11 +3774,7 @@ func TestApiVersionsSoftwareNameValidation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
+	cl := newPlainClient(t, c)
 
 	req := kmsg.NewPtrApiVersionsRequest()
 	req.ClientSoftwareName = "bad name" // space: invalid
@@ -4032,15 +3819,10 @@ func TestEndTxnUnconfirmedAbortRetry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.TransactionalID("txn-unconfirmed-abort"),
 		kgo.DefaultProduceTopic(topic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	if err := cl.BeginTransaction(); err != nil {
 		t.Fatal(err)
@@ -4076,16 +3858,11 @@ func TestEndTxnUnconfirmedAbortRetry(t *testing.T) {
 
 	// read_committed sees only the second transaction: the first was
 	// fence-aborted by the reload.
-	consumer, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	consumer := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 		kgo.FetchMaxWait(250*time.Millisecond),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer consumer.Close()
 
 	var vals []string
 	for len(vals) == 0 {
@@ -4115,15 +3892,10 @@ func TestEndTxnUnconfirmedCommitRetryRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.TransactionalID("txn-unconfirmed-commit"),
 		kgo.DefaultProduceTopic(topic),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	if err := cl.BeginTransaction(); err != nil {
 		t.Fatal(err)
@@ -4134,7 +3906,7 @@ func TestEndTxnUnconfirmedCommitRetryRefused(t *testing.T) {
 	if err := cl.EndTransaction(ctx, kgo.TryCommit); err == nil {
 		t.Fatal("expected an error from the hijacked EndTxn commit")
 	}
-	err = cl.EndTransaction(ctx, kgo.TryCommit)
+	err := cl.EndTransaction(ctx, kgo.TryCommit)
 	if err == nil || !strings.Contains(err.Error(), "unconfirmed") {
 		t.Fatalf("commit retry: got %v, want an unconfirmed-refusal error", err)
 	}

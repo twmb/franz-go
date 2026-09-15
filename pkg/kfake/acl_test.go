@@ -17,14 +17,9 @@ func TestACLsDisabled(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "test-topic"))
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic("test-topic"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -44,22 +39,17 @@ func TestACLsEnabled(t *testing.T) {
 		User("PLAIN", "testuser", "testpass"), // no ACLs
 	)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic("test-topic"),
 		kgo.SASL(plain.Plain(func(_ context.Context) (plain.Auth, error) {
 			return plain.Auth{User: "testuser", Pass: "testpass"}, nil
 		})),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = cl.ProduceSync(ctx, kgo.StringRecord("test")).FirstErr()
+	err := cl.ProduceSync(ctx, kgo.StringRecord("test")).FirstErr()
 	if err == nil {
 		t.Fatal("produce should fail without WRITE ACL")
 	}
@@ -81,17 +71,12 @@ func TestACLsWithPermission(t *testing.T) {
 		),
 	)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic("test-topic"),
 		kgo.SASL(plain.Plain(func(_ context.Context) (plain.Auth, error) {
 			return plain.Auth{User: "testuser", Pass: "testpass"}, nil
 		})),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -110,17 +95,12 @@ func TestACLsSuperuser(t *testing.T) {
 		Superuser("PLAIN", "admin", "adminpass"),
 	)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic("test-topic"),
 		kgo.SASL(plain.Plain(func(_ context.Context) (plain.Auth, error) {
 			return plain.Auth{User: "admin", Pass: "adminpass"}, nil
 		})),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -138,16 +118,11 @@ func TestACLCreateDescribeDelete(t *testing.T) {
 		Superuser("PLAIN", "admin", "adminpass"),
 	)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.SASL(plain.Plain(func(_ context.Context) (plain.Auth, error) {
 			return plain.Auth{User: "admin", Pass: "adminpass"}, nil
 		})),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -237,22 +212,17 @@ func TestACLDenyTakesPrecedence(t *testing.T) {
 		),
 	)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.DefaultProduceTopic("test-topic"),
 		kgo.SASL(plain.Plain(func(_ context.Context) (plain.Auth, error) {
 			return plain.Auth{User: "testuser", Pass: "testpass"}, nil
 		})),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = cl.ProduceSync(ctx, kgo.StringRecord("test")).FirstErr()
+	err := cl.ProduceSync(ctx, kgo.StringRecord("test")).FirstErr()
 	if err == nil {
 		t.Fatal("produce should fail when DENY ACL is present")
 	}
@@ -276,16 +246,11 @@ func TestACLPrefixPattern(t *testing.T) {
 		),
 	)
 
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(c.ListenAddrs()...),
+	cl := newPlainClient(t, c,
 		kgo.SASL(plain.Plain(func(_ context.Context) (plain.Auth, error) {
 			return plain.Auth{User: "testuser", Pass: "testpass"}, nil
 		})),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

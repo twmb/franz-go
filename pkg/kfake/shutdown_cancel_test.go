@@ -33,10 +33,7 @@ func TestAuditProduceAfterCloseFailsKnownTopic(t *testing.T) {
 	// t.Cleanup(cl.Close), and a second Close would run failBufferedRecords
 	// again, sweeping (and thus failing) the orphaned record and masking the
 	// bug. We Close exactly once.
-	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	cl := newPlainClient(t, c)
 
 	// Produce once so the topic's partitions load and a recBuf is created:
 	// this is what makes the topic "known" and routes the post-close produce
@@ -83,10 +80,7 @@ func TestAuditProduceAfterCloseFailsUnknownTopic(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1))
 
-	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	cl := newPlainClient(t, c)
 	cl.Close()
 
 	ch := make(chan error, 1)

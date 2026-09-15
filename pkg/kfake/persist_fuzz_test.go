@@ -690,7 +690,6 @@ func TestChaosTopicCreateDeleteRestart(t *testing.T) {
 
 	// Reopen
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	for topic := range expectedTopics {
 		if _, ok := c2.data.tps.gett(topic); !ok {
@@ -725,7 +724,6 @@ func TestPersistTopicURLEscaping(t *testing.T) {
 	c.Close()
 
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	for _, topic := range specialTopics {
 		if _, ok := c2.data.tps.gett(topic); !ok {
@@ -794,7 +792,6 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 	// On shutdown, savePIDsLog rewrites as compacted "init" entries.
 	// So this tests both the live replay path AND the compacted path.
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	// PID 100: endtx committed, epoch should be 2.
 	r100, ok := c2.pids.ids[100]
@@ -896,7 +893,6 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 
 	// Reopen.
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	g2, ok := c2.groups.gs["test-848-group"]
 	if !ok {
@@ -937,7 +933,6 @@ func TestPersistSASLCredentials(t *testing.T) {
 	c.Close()
 
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1), EnableSASL())
-	defer c2.Close()
 
 	// Check PLAIN credentials
 	if c2.sasls.plain["admin"] != "adminpass" {
@@ -983,7 +978,6 @@ func TestPersistLiveSyncThenShutdown(t *testing.T) {
 
 	// Reopen
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	pd2, ok := c2.data.tps.getp("live", 0)
 	if !ok {
@@ -1005,7 +999,6 @@ func TestPersistEmptyPartition(t *testing.T) {
 	c.Close()
 
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	if _, ok := c2.data.tps.gett("empty"); !ok {
 		t.Fatal("topic missing after restart")
@@ -1042,7 +1035,6 @@ func TestPersistRepeatedCloseReopen(t *testing.T) {
 
 	// Final reopen - verify all batches survived
 	c := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c.Close()
 
 	pd, ok := c.data.tps.getp("cycle", 0)
 	if !ok {
@@ -1085,7 +1077,6 @@ func TestPersistSeqWindowsCleanShutdown(t *testing.T) {
 
 	// Reopen - sequence windows should be restored
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-	defer c2.Close()
 
 	p2, ok := c2.pids.ids[42]
 	if !ok {
@@ -1156,7 +1147,6 @@ func TestPersistOffsetDeleteRoundTrip(t *testing.T) {
 	// Reopen and verify deleted offset is gone
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1),
 		SeedTopics(1, "t1"))
-	defer c2.Close()
 
 	g2, ok := c2.groups.gs["g1"]
 	if !ok {
@@ -1230,7 +1220,6 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 	// Phase 3: open via full replay, compare state
 	{
 		c := newCluster(t, DataDir(dir), NumBrokers(1))
-		defer c.Close()
 
 		pd, ok := c.data.tps.getp("conv", 0)
 		if !ok {
@@ -1311,7 +1300,6 @@ func TestPersistSnapshotLogStartOffsetClamp(t *testing.T) {
 	// Phase 2: reopen via snapshot, verify logStartOffset <= HWM.
 	{
 		c := newCluster(t, DataDir(dir), NumBrokers(1))
-		defer c.Close()
 
 		pd, ok := c.data.tps.getp("lso", 0)
 		if !ok {
@@ -1331,7 +1319,6 @@ func TestTrimLeftDeletesSegmentFiles(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "trim"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("trim", 0)
 
@@ -1373,7 +1360,6 @@ func TestTrimLeftAllThenProduce(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "trim-all"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("trim-all", 0)
 
@@ -1421,7 +1407,6 @@ func TestSearchOffsetEmptyPartition(t *testing.T) {
 	t.Parallel()
 
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "empty"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("empty", 0)
 
@@ -1448,7 +1433,6 @@ func TestSearchOffsetAfterTrimLeft(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "search-trim"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("search-trim", 0)
 
@@ -1501,7 +1485,6 @@ func TestCompactBailsOnPartialReadError(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "compact-err"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("compact-err", 0)
 
@@ -1590,7 +1573,6 @@ func TestSnapshotNbytesWithPartialTrim(t *testing.T) {
 	// Phase 2: reopen from snapshot, verify nbytes matches.
 	{
 		c := newCluster(t, DataDir(dir), NumBrokers(1))
-		defer c.Close()
 
 		pd, ok := c.data.tps.getp(topic, 0)
 		if !ok {
@@ -1612,7 +1594,6 @@ func TestRebuildSegmentsWritesSynced(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "sync-rebuild"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("sync-rebuild", 0)
 
@@ -1661,7 +1642,6 @@ func TestRebuildSegmentsSegmentSplitting(t *testing.T) {
 	segBytes := "200"
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "split"),
 		BrokerConfigs(map[string]string{"log.segment.bytes": segBytes}))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("split", 0)
 
@@ -1716,7 +1696,6 @@ func TestTrimLeftPartialSegment(t *testing.T) {
 	// Use a large segment.bytes so all batches land in one segment.
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "partial"),
 		BrokerConfigs(map[string]string{"log.segment.bytes": "1073741824"}))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("partial", 0)
 
@@ -1755,7 +1734,6 @@ func TestMaxTimestampBatchAfterCompaction(t *testing.T) {
 	dir := t.TempDir()
 
 	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "ts-compact"))
-	defer c.Close()
 
 	pd, _ := c.data.tps.getp("ts-compact", 0)
 
@@ -1800,7 +1778,6 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 
 	// Use memFS (no DataDir) so we can inject faults.
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "fail-trunc"))
-	defer c.Close()
 
 	mfs := c.fs.(*memFS)
 	pd, _ := c.data.tps.getp("fail-trunc", 0)
