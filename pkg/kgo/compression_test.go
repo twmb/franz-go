@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 
@@ -432,24 +433,9 @@ func codecInputs(tb testing.TB, in []byte) []codecInput {
 		tb.Fatalf("zstd close: %v", err)
 	}
 	return append(inputs,
-		codecInput{name: "snappy-xerial", codec: CodecSnappy, src: xerialFrame(in, 32<<10)},
+		codecInput{name: "snappy-xerial", codec: CodecSnappy, src: appendXerialBlocks(slices.Clone(xerialHeader), in, 32<<10)},
 		codecInput{name: "zstd-stream", codec: CodecZstd, src: zstream.Bytes()},
 	)
-}
-
-// xerialFrame frames in the way the Java snappy stream does: a header,
-// then per chunk a big endian length and a raw snappy block.
-func xerialFrame(in []byte, chunkSize int) []byte {
-	xer := append([]byte{}, xerialPfx...)
-	xer = append(xer, make([]byte, 8)...) // version + compat fields
-	for len(in) > 0 {
-		n := min(chunkSize, len(in))
-		chunk := s2.EncodeSnappy(nil, in[:n])
-		xer = binary.BigEndian.AppendUint32(xer, uint32(len(chunk)))
-		xer = append(xer, chunk...)
-		in = in[n:]
-	}
-	return xer
 }
 
 // benchDecompressPool implements PoolDecompressBytes with a pre-allocated
