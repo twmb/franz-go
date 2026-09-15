@@ -150,6 +150,11 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	if cfg.injectFS != nil && cfg.dataDir == "" {
 		cfg.dataDir = "/kfake"
 	}
+	if cfg.synthetic != nil {
+		if err := cfg.synthetic.init(); err != nil {
+			return nil, err
+		}
+	}
 
 	c := &Cluster{
 		cfg: cfg,
