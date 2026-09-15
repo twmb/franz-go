@@ -12,7 +12,11 @@
 // understands, the broker replies with UNSUPPORTED_VERSIONS using the version
 // 0 message format but additionally includes the api versions the broker does
 // support.
-ApiVersionsRequest => key 18, max version 4, flexible v3+
+//
+// Version 5 adds ClusterID and NodeID (KIP-1242). If both are set, the broker
+// replies REBOOTSTRAP_REQUIRED when either does not match itself, so a client
+// can detect a connection that was routed to the wrong broker or cluster.
+ApiVersionsRequest => key 18, max version 5, flexible v3+
   // ClientSoftwareName, added for KIP-511 with Kafka 2.4.0, is the name of the
   // client issuing this request. The broker can use this to enrich its own
   // debugging information of which version of what clients are connected.
@@ -25,6 +29,13 @@ ApiVersionsRequest => key 18, max version 4, flexible v3+
   // ClientSoftwareVersion is the version of the software name in the prior
   // field. It must match the same regex (thus, this is also required).
   ClientSoftwareVersion: string // v3+
+  // ClusterID is the ID of the cluster the client believes it is connecting
+  // to, or null while bootstrapping. Set ClusterID and NodeID together or
+  // not at all: the broker replies INVALID_REQUEST if only one is set.
+  ClusterID: nullable-string // v5+
+  // NodeID is the ID of the broker the client believes it is connecting to,
+  // or -1 while bootstrapping.
+  NodeID: int32(-1) // v5+
 
 // ApiVersionsResponse is returned from an ApiVersionsRequest.
 ApiVersionsResponse =>

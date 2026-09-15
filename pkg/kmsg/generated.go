@@ -13,7 +13,7 @@ import (
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 93
+const MaxKey = 94
 
 type AssignmentTopicPartition struct {
 	TopicID [16]byte
@@ -17251,6 +17251,10 @@ func NewSASLHandshakeResponse() SASLHandshakeResponse {
 // understands, the broker replies with UNSUPPORTED_VERSIONS using the version
 // 0 message format but additionally includes the api versions the broker does
 // support.
+//
+// Version 5 adds ClusterID and NodeID (KIP-1242). If both are set, the broker
+// replies REBOOTSTRAP_REQUIRED when either does not match itself, so a client
+// can detect a connection that was routed to the wrong broker or cluster.
 type ApiVersionsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -17269,13 +17273,24 @@ type ApiVersionsRequest struct {
 	// field. It must match the same regex (thus, this is also required).
 	ClientSoftwareVersion string // v3+
 
+	// ClusterID is the ID of the cluster the client believes it is connecting
+	// to, or null while bootstrapping. Set ClusterID and NodeID together or
+	// not at all: the broker replies INVALID_REQUEST if only one is set.
+	ClusterID *string // v5+
+
+	// NodeID is the ID of the broker the client believes it is connecting to,
+	// or -1 while bootstrapping.
+	//
+	// This field has a default of -1.
+	NodeID int32 // v5+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
 
 }
 
 func (*ApiVersionsRequest) Key() int16                 { return 18 }
-func (*ApiVersionsRequest) MaxVersion() int16          { return 4 }
+func (*ApiVersionsRequest) MaxVersion() int16          { return 5 }
 func (v *ApiVersionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ApiVersionsRequest) GetVersion() int16        { return v.Version }
 func (v *ApiVersionsRequest) IsFlexible() bool         { return v.Version >= 3 }
@@ -17314,6 +17329,18 @@ func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 		} else {
 			dst = kbin.AppendString(dst, v)
 		}
+	}
+	if version >= 5 {
+		v := v.ClusterID
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	if version >= 5 {
+		v := v.NodeID
+		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
 		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -17369,6 +17396,27 @@ func (v *ApiVersionsRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		s.ClientSoftwareVersion = v
 	}
+	if version >= 5 {
+		var v *string
+		if isFlexible {
+			if unsafe {
+				v = b.UnsafeCompactNullableString()
+			} else {
+				v = b.CompactNullableString()
+			}
+		} else {
+			if unsafe {
+				v = b.UnsafeNullableString()
+			} else {
+				v = b.NullableString()
+			}
+		}
+		s.ClusterID = v
+	}
+	if version >= 5 {
+		v := b.Int32()
+		s.NodeID = v
+	}
 	if isFlexible {
 		s.UnknownTags = internalReadTags(&b)
 	}
@@ -17386,6 +17434,7 @@ func NewPtrApiVersionsRequest() *ApiVersionsRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ApiVersionsRequest.
 func (v *ApiVersionsRequest) Default() {
+	v.NodeID = -1
 }
 
 // NewApiVersionsRequest returns a default ApiVersionsRequest
@@ -17528,7 +17577,7 @@ type ApiVersionsResponse struct {
 }
 
 func (*ApiVersionsResponse) Key() int16                         { return 18 }
-func (*ApiVersionsResponse) MaxVersion() int16                  { return 4 }
+func (*ApiVersionsResponse) MaxVersion() int16                  { return 5 }
 func (v *ApiVersionsResponse) SetVersion(version int16)         { v.Version = version }
 func (v *ApiVersionsResponse) GetVersion() int16                { return v.Version }
 func (v *ApiVersionsResponse) IsFlexible() bool                 { return v.Version >= 3 }
@@ -69296,6 +69345,227 @@ func NewStreamsGroupTopologyDescriptionUpdateResponse() StreamsGroupTopologyDesc
 	return v
 }
 
+// UnregisterControllerRequest is an admin request to remove the registration
+// of a controller from the cluster, mirroring UnregisterBroker for brokers.
+// This is served by both the broker and controller listeners.
+type UnregisterControllerRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// The controller ID to unregister.
+	ControllerID int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+func (*UnregisterControllerRequest) Key() int16                 { return 94 }
+func (*UnregisterControllerRequest) MaxVersion() int16          { return 0 }
+func (v *UnregisterControllerRequest) SetVersion(version int16) { v.Version = version }
+func (v *UnregisterControllerRequest) GetVersion() int16        { return v.Version }
+func (v *UnregisterControllerRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *UnregisterControllerRequest) ResponseKind() Response {
+	r := &UnregisterControllerResponse{Version: v.Version}
+	r.Default()
+	return r
+}
+
+// RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
+func (v *UnregisterControllerRequest) RequestWith(ctx context.Context, r Requestor) (*UnregisterControllerResponse, error) {
+	kresp, err := r.Request(ctx, v)
+	resp, _ := kresp.(*UnregisterControllerResponse)
+	return resp, err
+}
+
+func (v *UnregisterControllerRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ControllerID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
+	}
+	return dst
+}
+func (v *UnregisterControllerRequest) ReadFrom(src []byte) error {
+	return v.readFrom(src, false)
+}
+func (v *UnregisterControllerRequest) UnsafeReadFrom(src []byte) error {
+	return v.readFrom(src, true)
+}
+func (v *UnregisterControllerRequest) readFrom(src []byte, unsafe bool) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ControllerID = v
+	}
+	if isFlexible {
+		s.UnknownTags = internalReadTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrUnregisterControllerRequest returns a pointer to a default UnregisterControllerRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrUnregisterControllerRequest() *UnregisterControllerRequest {
+	var v UnregisterControllerRequest
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to UnregisterControllerRequest.
+func (v *UnregisterControllerRequest) Default() {
+}
+
+// NewUnregisterControllerRequest returns a default UnregisterControllerRequest
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewUnregisterControllerRequest() UnregisterControllerRequest {
+	var v UnregisterControllerRequest
+	v.Default()
+	return v
+}
+
+// UnregisterControllerResponse is a response to an UnregisterControllerRequest.
+type UnregisterControllerResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// Any error code, or 0.
+	ErrorCode int16
+
+	// The error message, if any.
+	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+func (*UnregisterControllerResponse) Key() int16                 { return 94 }
+func (*UnregisterControllerResponse) MaxVersion() int16          { return 0 }
+func (v *UnregisterControllerResponse) SetVersion(version int16) { v.Version = version }
+func (v *UnregisterControllerResponse) GetVersion() int16        { return v.Version }
+func (v *UnregisterControllerResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *UnregisterControllerResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
+func (v *UnregisterControllerResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+func (v *UnregisterControllerResponse) RequestKind() Request {
+	return &UnregisterControllerRequest{Version: v.Version}
+}
+
+func (v *UnregisterControllerResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ErrorMessage
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
+	}
+	return dst
+}
+func (v *UnregisterControllerResponse) ReadFrom(src []byte) error {
+	return v.readFrom(src, false)
+}
+func (v *UnregisterControllerResponse) UnsafeReadFrom(src []byte) error {
+	return v.readFrom(src, true)
+}
+func (v *UnregisterControllerResponse) readFrom(src []byte, unsafe bool) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		var v *string
+		if isFlexible {
+			if unsafe {
+				v = b.UnsafeCompactNullableString()
+			} else {
+				v = b.CompactNullableString()
+			}
+		} else {
+			if unsafe {
+				v = b.UnsafeNullableString()
+			} else {
+				v = b.NullableString()
+			}
+		}
+		s.ErrorMessage = v
+	}
+	if isFlexible {
+		s.UnknownTags = internalReadTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrUnregisterControllerResponse returns a pointer to a default UnregisterControllerResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrUnregisterControllerResponse() *UnregisterControllerResponse {
+	var v UnregisterControllerResponse
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to UnregisterControllerResponse.
+func (v *UnregisterControllerResponse) Default() {
+}
+
+// NewUnregisterControllerResponse returns a default UnregisterControllerResponse
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewUnregisterControllerResponse() UnregisterControllerResponse {
+	var v UnregisterControllerResponse
+	v.Default()
+	return v
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -69490,6 +69760,8 @@ func RequestForKey(key int16) Request {
 		return NewPtrDeleteShareGroupOffsetsRequest()
 	case 93:
 		return NewPtrStreamsGroupTopologyDescriptionUpdateRequest()
+	case 94:
+		return NewPtrUnregisterControllerRequest()
 	}
 }
 
@@ -69687,6 +69959,8 @@ func ResponseForKey(key int16) Response {
 		return NewPtrDeleteShareGroupOffsetsResponse()
 	case 93:
 		return NewPtrStreamsGroupTopologyDescriptionUpdateResponse()
+	case 94:
+		return NewPtrUnregisterControllerResponse()
 	}
 }
 
@@ -69884,6 +70158,8 @@ func NameForKey(key int16) string {
 		return "DeleteShareGroupOffsets"
 	case 93:
 		return "StreamsGroupTopologyDescriptionUpdate"
+	case 94:
+		return "UnregisterController"
 	}
 }
 
@@ -69985,6 +70261,7 @@ const (
 	AlterShareGroupOffsets                Key = 91
 	DeleteShareGroupOffsets               Key = 92
 	StreamsGroupTopologyDescriptionUpdate Key = 93
+	UnregisterController                  Key = 94
 )
 
 // Name returns the name for this key.
