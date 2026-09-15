@@ -57,11 +57,22 @@ type cfg struct {
 	// persistence. This allows tests to share a memFS across
 	// cluster restarts without touching the real disk.
 	injectFS fs
+
+	blackholeProduce bool
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
 func NumBrokers(n int) Opt {
 	return opt{func(cfg *cfg) { cfg.nbrokers = n }}
+}
+
+// BlackholeProduce makes the cluster accept produce requests and reply
+// success without storing the records: offsets still advance and idempotent
+// and transactional sequences are still validated, but the record bytes are
+// discarded. This keeps broker side storage out of produce throughput
+// benchmarks. There is nothing to consume from a blackholed cluster.
+func BlackholeProduce() Opt {
+	return opt{func(cfg *cfg) { cfg.blackholeProduce = true }}
 }
 
 // Ports sets the ports to listen on, overriding randomly choosing NumBrokers
