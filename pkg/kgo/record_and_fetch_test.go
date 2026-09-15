@@ -83,7 +83,7 @@ func TestEachTopicPreservesTopicID(t *testing.T) {
 			}},
 		}
 		ids, _ := collect(fs)
-		if ids["foo"] != ([16]byte{}) {
+		if ids["foo"] != noID {
 			t.Errorf("foo TopicID: got %v, want zero", ids["foo"])
 		}
 	})

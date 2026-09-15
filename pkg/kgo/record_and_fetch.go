@@ -667,7 +667,7 @@ func (fs Fetches) EachTopic(fn func(FetchTopic)) {
 	for _, fetch := range fs {
 		for _, topic := range fetch.Topics {
 			topics[topic.Topic] = append(topics[topic.Topic], topic.Partitions...)
-			if topic.TopicID != ([16]byte{}) {
+			if topic.TopicID != noID {
 				ids[topic.Topic] = topic.TopicID
 			}
 		}

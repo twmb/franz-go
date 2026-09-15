@@ -2494,7 +2494,6 @@ func (f *fetchRequest) addCursor(c *cursor) {
 		f.usedOffsets[c.topic] = partitions
 		f.id2topic[c.topicID] = c.topic
 		f.topic2id[c.topic] = c.topicID
-		var noID [16]byte
 		if c.topicID == noID {
 			f.disableIDs = true
 		}
@@ -2875,7 +2874,6 @@ func (s *fetchSession) commitFromReq(topics []kmsg.FetchRequestTopic, forgotten 
 		s.used = make(map[string]map[int32]fetchSessionOffsetEpoch)
 		s.t2id = make(map[string][16]byte)
 	}
-	var noID [16]byte
 	for _, rt := range topics {
 		topic := rt.Topic
 		if topic == "" {
@@ -2956,7 +2954,7 @@ func (s *fetchSession) lookupTopic(topic string, t2id map[string][16]byte) fetch
 		s.used[topic] = t
 		id := t2id[topic]
 		s.t2id[topic] = id
-		if id == ([16]byte{}) {
+		if id == noID {
 			s.disableIDs = true
 		}
 	}

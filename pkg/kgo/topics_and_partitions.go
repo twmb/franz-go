@@ -539,6 +539,9 @@ type topicPartitionsData struct {
 	when               int64
 }
 
+// noID is the zero topic ID. Brokers below Kafka 2.8 have no topic IDs.
+var noID [16]byte
+
 type topicID [16]byte
 
 func (t topicID) String() string { return hex.EncodeToString(t[:]) }

@@ -2018,7 +2018,7 @@ start:
 		if td := groupTopics.loadTopic(topic); td != nil {
 			reqTopic.TopicID = td.id
 		}
-		if reqTopic.TopicID == ([16]byte{}) {
+		if reqTopic.TopicID == noID {
 			pinV9 = true
 		}
 		reqTopic.Partitions = partitions
@@ -3611,7 +3611,7 @@ func (g *groupConsumer) commit(
 			if td := groupTopics.loadTopic(topic); td != nil {
 				reqTopic.TopicID = td.id
 			}
-			if reqTopic.TopicID == ([16]byte{}) {
+			if reqTopic.TopicID == noID {
 				pinV9 = true
 			}
 			for partition, eo := range partitions {
@@ -3793,7 +3793,7 @@ func (g *groupConsumer) commit(
 				// mismatch then made updateCommitted skip the whole
 				// response.
 				t := &resp.Topics[i]
-				if d.id != ([16]byte{}) && t.TopicID == d.id || t.Topic != "" && t.Topic == d.name {
+				if d.id != noID && t.TopicID == d.id || t.Topic != "" && t.Topic == d.name {
 					rt = t
 					break
 				}
