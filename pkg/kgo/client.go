@@ -534,9 +534,13 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 	if cfg.setResetOffset && !cfg.setStartOffset {
 		cfg.startOffset = cfg.resetOffset
+		cfg.startOffset.hasLookback = false // a lookback only applies when resetting; as a start offset, it would skip everything older than the lookback
 	} else if cfg.setStartOffset && !cfg.setResetOffset {
-		cfg.resetOffset = cfg.startOffset
-	} // else they are both set (keep) or both unset (defaults)
+		// Only the noReset flag carries: AtCommitted documents that it opts
+		// into NoResetOffset. The position stays with the reset default, so
+		// a start offset of AtStart does not re-read the log on every loss.
+		cfg.resetOffset.noReset = cfg.startOffset.noReset
+	}
 
 	ctx := context.Background()
 
