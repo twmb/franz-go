@@ -721,27 +721,25 @@ func (cl *Client) PurgeTopicsFromClient(topics ...string) {
 		wg.Wait()
 
 		cl.metaCache.mu.Lock()
-		var purgedIDs [][16]byte
 		for _, t := range topics {
 			if ct, ok := cl.metaCache.topics[t]; ok {
 				if ct.id != noID {
 					delete(cl.metaCache.byID, ct.id)
-					purgedIDs = append(purgedIDs, ct.id)
 				}
 				delete(cl.metaCache.topics, t)
 			}
 		}
 		cl.metaCache.mu.Unlock()
 
-		if len(purgedIDs) > 0 {
-			old := cl.id2tMap()
-			merged := make(map[[16]byte]string, len(old))
-			maps.Copy(merged, old)
-			for _, id := range purgedIDs {
-				delete(merged, id)
+		// Drop the purged names from id2t.
+		old := cl.id2tMap()
+		merged := make(map[[16]byte]string, len(old))
+		for id, name := range old {
+			if !slices.Contains(topics, name) {
+				merged[id] = name
 			}
-			cl.id2t.Store(merged)
 		}
+		cl.id2t.Store(merged)
 	})
 }
 
