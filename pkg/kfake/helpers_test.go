@@ -374,3 +374,78 @@ func poll1FromEachClient(t *testing.T, timeout time.Duration, clients ...*kgo.Cl
 		}
 	}
 }
+
+// shareAdminTopic seeds a one partition topic, points the group at the start
+// of it, produces n records, and returns the cluster and the client that
+// produced them.
+func shareAdminTopic(t *testing.T, topic, group string, n int) (*Cluster, *kgo.Client) {
+	t.Helper()
+	c := newCluster(t, SeedTopics(1, topic))
+	admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
+	produceNStrings(t, admin, topic, n)
+	return c, admin
+}
+
+// pollShareOnce polls until one record arrives, which is how you know the
+// member joined and holds an assignment.
+func pollShareOnce(t *testing.T, cl *kgo.Client, timeout time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		if len(cl.PollFetches(ctx).Records()) > 0 {
+			return
+		}
+		if ctx.Err() != nil {
+			t.Fatal("timeout waiting for records")
+		}
+	}
+}
+
+// drainShareAccept polls n records, accepts each, and flushes after every
+// poll so the SPSO advances on the broker.
+func drainShareAccept(t *testing.T, cl *kgo.Client, n int, timeout time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var got int
+	for got < n {
+		fs := cl.PollFetches(ctx)
+		for _, r := range fs.Records() {
+			r.Ack(kgo.AckAccept)
+			got++
+		}
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cl.FlushAcks(flushCtx)
+		flushCancel()
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if got < n {
+		t.Fatalf("got %d/%d records", got, n)
+	}
+}
+
+// describeShareOffsets returns the group's DescribeShareGroupOffsets response
+// for partition 0 of the topic.
+func describeShareOffsets(t *testing.T, cl *kgo.Client, group, topic string) *kmsg.DescribeShareGroupOffsetsResponse {
+	t.Helper()
+	req := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+	rg := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+	rg.GroupID = group
+	rt := kmsg.NewDescribeShareGroupOffsetsRequestGroupTopic()
+	rt.Topic = topic
+	rt.Partitions = []int32{0}
+	rg.Topics = append(rg.Topics, rt)
+	req.Groups = append(req.Groups, rg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("describe offsets: %v", err)
+	}
+	return resp
+}
