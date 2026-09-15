@@ -3005,197 +3005,142 @@ func copyDir(t *testing.T, src, dst string) {
 	}
 }
 
-// TestPersistShareGroupSPSO verifies that acknowledged records are not
-// redelivered after a clean restart. The SPSO should advance past them.
-func TestPersistShareGroupSPSO(t *testing.T) {
+// TestPersistShareGroupRestart takes a share group through a clean restart.
+// Each case differs in how it treats the records before the restart, and in
+// how many the fresh consumer should see afterwards.
+func TestPersistShareGroupRestart(t *testing.T) {
 	t.Parallel()
-	tmem := newTestMemFS()
-
-	const topic = "share-persist-spso"
-	const group = "share-persist-spso-grp"
-	const total = 10
-
-	// Phase 1: produce, consume all records via share group, ack, close.
-	{
-		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-
-		produceShareN(t, c, topic, group, total)
-
-		cl := newShareConsumer(t, c, topic, group)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		var got int
-		for got < total {
-			fetches := cl.PollFetches(ctx)
-			for _, r := range fetches.Records() {
-				got++
-				r.Ack(kgo.AckAccept)
-			}
-			if ctx.Err() != nil {
-				break
-			}
-		}
-		if got < total {
-			t.Fatalf("phase 1: expected %d, got %d", total, got)
-		}
-		cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := cl.FlushAcks(cCtx); err != nil {
-			t.Fatal(err)
-		}
-		cCancel()
-		cl.Close()
-		c.Close()
-	}
-
-	// Phase 2: reopen, verify no records are redelivered.
-	{
-		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-
-		cl := newShareConsumer(t, c, topic, group)
-		verifyZeroRecords(t, cl, 500*time.Millisecond)
-	}
-}
-
-// TestPersistShareGroupAcquiredReleasedOnRestart verifies that records that
-// were acquired but not acked become available again after restart.
-func TestPersistShareGroupAcquiredReleasedOnRestart(t *testing.T) {
-	t.Parallel()
-	tmem := newTestMemFS()
-
-	const topic = "share-persist-acq"
-	const group = "share-persist-acq-grp"
-	const total = 5
-
-	// Phase 1: produce, acquire records via raw ShareFetch (no ack), close.
-	{
-		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-
-		produceShareN(t, c, topic, group, total)
-
-		cl := newPlainClient(t, c)
-		memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
-		_, acquired := rawShareFetch(t, cl, group, memberID, topicID, 0)
-		if acquired < total {
-			t.Fatalf("phase 1: expected %d acquired, got %d", total, acquired)
-		}
-		// Do NOT ack. Close cluster - acquired records should be saved.
-		cl.Close()
-		c.Close()
-	}
-
-	// Phase 2: reopen, verify the records are available for redelivery.
-	{
-		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-
-		cl := newShareConsumer(t, c, topic, group)
-		records := consumeN(t, cl, total, 10*time.Second)
-		if len(records) < total {
-			t.Fatalf("phase 2: expected %d redelivered, got %d", total, len(records))
-		}
-	}
-}
-
-// TestPersistShareGroupConfigRestart verifies that share group configs
-// (share.auto.offset.reset) survive a clean restart.
-func TestPersistShareGroupConfigRestart(t *testing.T) {
-	t.Parallel()
-	tmem := newTestMemFS()
-
-	const topic = "share-persist-cfg"
-	const group = "share-persist-cfg-grp"
-
-	// Phase 1: set share.auto.offset.reset=earliest, produce records, close.
-	{
-		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-		c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
-		produceN(t, c, topic, 10)
-		c.Close()
-	}
-
-	// Phase 2: reopen, join share group. If the config survived, the SPSO
-	// should start at 0 (earliest) and we should see the 10 records.
-	{
-		c := newCluster(t, tmem.opt(), NumBrokers(1), SeedTopics(1, topic))
-
-		cl := newShareConsumer(t, c, topic, group)
-		records := consumeN(t, cl, 10, 10*time.Second)
-		if len(records) < 10 {
-			t.Fatalf("phase 2: expected 10 records (earliest), got %d", len(records))
-		}
-	}
-}
-
-// TestPersistShareGroupArchivedNotRedelivered verifies that records archived
-// via max delivery count remain archived after restart and are not redelivered.
-// Java broker semantics: a single consumer can churn its own delivery count
-// up to the limit via kgo's background prefetch (see
-// TestShareGroupMaxDeliveryCount for the rationale). We exploit that here to
-// drive the records to archival with one consumer in one phase.
-func TestPersistShareGroupArchivedNotRedelivered(t *testing.T) {
-	t.Parallel()
-	tmem := newTestMemFS()
-
-	const topic = "share-persist-arch"
-	const group = "share-persist-arch-grp"
-	const total = 5
 	const maxDelivery = 2
-
-	// Phase 1: produce records, drain-with-release until archived, close.
-	{
-		c := newCluster(t, tmem.opt(), NumBrokers(1),
-			SeedTopics(1, topic),
-			BrokerConfigs(map[string]string{
-				"group.share.delivery.count.limit": strconv.Itoa(maxDelivery),
-			}),
-		)
-
-		produceShareN(t, c, topic, group, total)
-
-		cl := newShareConsumer(t, c, topic, group)
-		deadline := time.Now().Add(10 * time.Second)
-		quietDeadline := time.Now().Add(time.Second)
-		var total_delivered int
-		for time.Now().Before(deadline) {
-			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-			fetches := cl.PollFetches(ctx)
-			cancel()
-			recs := fetches.Records()
-			if len(recs) == 0 {
-				if time.Now().After(quietDeadline) {
-					break
+	for _, tc := range []struct {
+		name   string
+		opts   []Opt // extra cluster options, applied to both phases
+		before func(t *testing.T, c *Cluster, topic, group string)
+		want   int // records the consumer sees after the restart
+	}{
+		{
+			// Every record was accepted, so the SPSO sits past them.
+			name: "accepted",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				const total = 10
+				produceShareN(t, c, topic, group, total)
+				cl := newShareConsumer(t, c, topic, group)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				var got int
+				for got < total {
+					fetches := cl.PollFetches(ctx)
+					for _, r := range fetches.Records() {
+						got++
+						r.Ack(kgo.AckAccept)
+					}
+					if ctx.Err() != nil {
+						break
+					}
 				}
-				continue
-			}
-			quietDeadline = time.Now().Add(time.Second)
-			for _, r := range recs {
-				total_delivered++
-				r.Ack(kgo.AckRelease)
-			}
-		}
-		if total_delivered < total*maxDelivery {
-			t.Errorf("phase 1: expected >= %d total deliveries, got %d",
-				total*maxDelivery, total_delivered)
-		}
-		cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := cl.FlushAcks(cCtx); err != nil {
-			t.Fatal(err)
-		}
-		cCancel()
-		cl.Close()
-
-		c.Close()
-	}
-
-	// Phase 2: reopen with same max delivery config, verify no records.
-	{
-		c := newCluster(t, tmem.opt(), NumBrokers(1),
-			SeedTopics(1, topic),
-			BrokerConfigs(map[string]string{
+				if got < total {
+					t.Fatalf("phase 1: expected %d, got %d", total, got)
+				}
+				cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if err := cl.FlushAcks(cCtx); err != nil {
+					t.Fatal(err)
+				}
+				cCancel()
+				cl.Close()
+			},
+			want: 0,
+		},
+		{
+			// Acquired and never acked, so the restart releases them.
+			name: "acquired-unacked",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				const total = 5
+				produceShareN(t, c, topic, group, total)
+				cl := newPlainClient(t, c)
+				memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+				_, acquired := rawShareFetch(t, cl, group, memberID, topicID, 0)
+				if acquired < total {
+					t.Fatalf("phase 1: expected %d acquired, got %d", total, acquired)
+				}
+				cl.Close()
+			},
+			want: 5,
+		},
+		{
+			// Nothing consumed at all: this one is about the group
+			// config surviving, so the fresh consumer starts at 0.
+			name: "config-only",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
+				produceN(t, c, topic, 10)
+			},
+			want: 10,
+		},
+		{
+			// Released until the delivery count limit archived them.
+			// A single consumer can churn its own delivery count up
+			// through kgo's background prefetch, which is Java broker
+			// behavior, so one consumer in one phase is enough.
+			name: "archived",
+			opts: []Opt{BrokerConfigs(map[string]string{
 				"group.share.delivery.count.limit": strconv.Itoa(maxDelivery),
-			}),
-		)
+			})},
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				const total = 5
+				produceShareN(t, c, topic, group, total)
+				cl := newShareConsumer(t, c, topic, group)
+				deadline := time.Now().Add(10 * time.Second)
+				quietDeadline := time.Now().Add(time.Second)
+				var delivered int
+				for time.Now().Before(deadline) {
+					ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+					fetches := cl.PollFetches(ctx)
+					cancel()
+					recs := fetches.Records()
+					if len(recs) == 0 {
+						if time.Now().After(quietDeadline) {
+							break
+						}
+						continue
+					}
+					quietDeadline = time.Now().Add(time.Second)
+					for _, r := range recs {
+						delivered++
+						r.Ack(kgo.AckRelease)
+					}
+				}
+				if delivered < total*maxDelivery {
+					t.Errorf("phase 1: expected >= %d total deliveries, got %d", total*maxDelivery, delivered)
+				}
+				cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if err := cl.FlushAcks(cCtx); err != nil {
+					t.Fatal(err)
+				}
+				cCancel()
+				cl.Close()
+			},
+			want: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tmem := newTestMemFS()
+			topic := "share-persist-" + tc.name
+			group := topic + "-grp"
+			opts := append([]Opt{tmem.opt(), NumBrokers(1), SeedTopics(1, topic)}, tc.opts...)
 
-		cl := newShareConsumer(t, c, topic, group)
-		verifyZeroRecords(t, cl, 500*time.Millisecond)
+			c := newCluster(t, opts...)
+			tc.before(t, c, topic, group)
+			c.Close()
+
+			c = newCluster(t, opts...)
+			cl := newShareConsumer(t, c, topic, group)
+			if tc.want == 0 {
+				verifyZeroRecords(t, cl, 500*time.Millisecond)
+				return
+			}
+			if records := consumeN(t, cl, tc.want, 10*time.Second); len(records) < tc.want {
+				t.Fatalf("phase 2: expected %d records, got %d", tc.want, len(records))
+			}
+		})
 	}
 }

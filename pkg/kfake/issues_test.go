@@ -651,60 +651,6 @@ func TestIssue1167(t *testing.T) {
 	}
 }
 
-func TestTransactionCommit(t *testing.T) {
-	t.Parallel()
-	const testTopic = "txn-test"
-
-	c := newCluster(t,
-		NumBrokers(1),
-		SeedTopics(1, testTopic),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Test basic transaction commit flow
-	cl := newPlainClient(t, c,
-		kgo.DefaultProduceTopic(testTopic),
-		kgo.TransactionalID("test-txn"),
-	)
-
-	// Produce messages in a transaction
-	if err := cl.BeginTransaction(); err != nil {
-		t.Fatalf("failed to begin transaction: %v", err)
-	}
-
-	for i := 0; i < 3; i++ {
-		if err := cl.ProduceSync(ctx, kgo.StringRecord("msg-"+strconv.Itoa(i))).FirstErr(); err != nil {
-			t.Fatalf("failed to produce: %v", err)
-		}
-	}
-
-	// Commit the transaction
-	if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
-		t.Fatalf("failed to commit transaction: %v", err)
-	}
-
-	// Verify read_committed consumer sees the messages
-	consumer := newPlainClient(t, c,
-		kgo.ConsumeTopics(testTopic),
-		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
-	)
-
-	var consumed int
-	for consumed < 3 {
-		fs := consumer.PollFetches(ctx)
-		if errs := fs.Errors(); len(errs) > 0 {
-			t.Fatalf("fetch errors: %v", errs)
-		}
-		consumed += fs.NumRecords()
-	}
-
-	if consumed != 3 {
-		t.Errorf("expected 3 committed messages, got %d", consumed)
-	}
-}
-
 // TestTransactSessionEndNeverJoined ensures GroupTransactSession.End returns
 // when the group has never joined. The session consumes a topic that does not
 // exist, so the group manage loop never starts and nothing runs a heartbeat
@@ -762,141 +708,6 @@ func TestTransactSessionEndNeverJoined(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("End did not return; the pre-EndTxn heartbeat force hung with no group joined")
-	}
-}
-
-func TestTransactionAbort(t *testing.T) {
-	t.Parallel()
-	const testTopic = "txn-abort-test"
-
-	c := newCluster(t,
-		NumBrokers(1),
-		SeedTopics(1, testTopic),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Test transaction abort flow
-	cl := newPlainClient(t, c,
-		kgo.DefaultProduceTopic(testTopic),
-		kgo.TransactionalID("test-txn-abort"),
-	)
-
-	// Produce messages in a transaction
-	if err := cl.BeginTransaction(); err != nil {
-		t.Fatalf("failed to begin transaction: %v", err)
-	}
-
-	for i := 0; i < 3; i++ {
-		if err := cl.ProduceSync(ctx, kgo.StringRecord("aborted-"+strconv.Itoa(i))).FirstErr(); err != nil {
-			t.Fatalf("failed to produce: %v", err)
-		}
-	}
-
-	// Abort the transaction
-	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
-		t.Fatalf("failed to abort transaction: %v", err)
-	}
-
-	// Produce non-transactional messages after the abort
-	nonTxnProducer := newPlainClient(t, c,
-		kgo.DefaultProduceTopic(testTopic),
-	)
-
-	for i := 0; i < 2; i++ {
-		if err := nonTxnProducer.ProduceSync(ctx, kgo.StringRecord("committed-"+strconv.Itoa(i))).FirstErr(); err != nil {
-			t.Fatalf("failed to produce non-txn: %v", err)
-		}
-	}
-
-	// Verify LSO advanced past the aborted transaction.
-	pi := c.PartitionInfo(testTopic, 0)
-	if pi.LastStableOffset != pi.HighWatermark {
-		t.Errorf("LSO should equal HWM after abort, got LSO=%d HWM=%d", pi.LastStableOffset, pi.HighWatermark)
-	}
-
-	// Verify read_committed consumer sees only the non-aborted messages
-	consumer := newPlainClient(t, c,
-		kgo.ConsumeTopics(testTopic),
-		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
-	)
-
-	var consumed int
-	var records []string
-	for consumed < 2 {
-		fs := consumer.PollFetches(ctx)
-		if errs := fs.Errors(); len(errs) > 0 {
-			t.Fatalf("fetch errors: %v", errs)
-		}
-		fs.EachRecord(func(r *kgo.Record) {
-			records = append(records, string(r.Value))
-		})
-		consumed += fs.NumRecords()
-	}
-
-	// Verify we only got the committed messages, not the aborted ones
-	if consumed != 2 {
-		t.Errorf("expected 2 committed messages, got %d", consumed)
-	}
-	for _, rec := range records {
-		if len(rec) >= 7 && rec[:7] == "aborted" {
-			t.Errorf("read_committed consumer saw aborted message: %s", rec)
-		}
-	}
-}
-
-func TestTransactionReadUncommitted(t *testing.T) {
-	t.Parallel()
-	const testTopic = "txn-uncommitted-test"
-
-	c := newCluster(t,
-		NumBrokers(1),
-		SeedTopics(1, testTopic),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Start a read_uncommitted consumer first
-	consumer := newPlainClient(t, c,
-		kgo.ConsumeTopics(testTopic),
-		kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
-	)
-
-	// Produce messages in a transaction but don't commit yet
-	producer := newPlainClient(t, c,
-		kgo.DefaultProduceTopic(testTopic),
-		kgo.TransactionalID("test-txn-uncommitted"),
-	)
-
-	if err := producer.BeginTransaction(); err != nil {
-		t.Fatalf("failed to begin transaction: %v", err)
-	}
-
-	for i := 0; i < 3; i++ {
-		if err := producer.ProduceSync(ctx, kgo.StringRecord("msg-"+strconv.Itoa(i))).FirstErr(); err != nil {
-			t.Fatalf("failed to produce: %v", err)
-		}
-	}
-
-	// Read_uncommitted consumer should see the uncommitted messages immediately
-	var consumed int
-	for consumed < 3 {
-		fs := consumer.PollFetches(ctx)
-		if errs := fs.Errors(); len(errs) > 0 {
-			t.Fatalf("fetch errors: %v", errs)
-		}
-		consumed += fs.NumRecords()
-	}
-
-	if consumed != 3 {
-		t.Errorf("expected read_uncommitted to see 3 messages, got %d", consumed)
-	}
-
-	// Clean up - abort the transaction
-	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
-		t.Fatalf("failed to abort transaction: %v", err)
 	}
 }
 
@@ -4804,4 +4615,121 @@ func TestListOffsetsV0(t *testing.T) {
 	}
 	check("-1 all after delete", list(-1, 10), []int64{3, 2, 1})
 	check("-2 after delete", list(-2, 10), []int64{1})
+}
+
+// TestTransactionLifecycle produces three records inside a transaction and
+// reads them back at the given isolation level, before or after the
+// transaction ends.
+func TestTransactionLifecycle(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name          string
+		end           kgo.TransactionEndTry
+		endBeforeRead bool
+		isolation     kgo.IsolationLevel
+		nonTxnAfter   int // records produced outside the transaction after it ends
+		wantRead      int
+		wantLSO       bool // the last stable offset caught up to the high watermark
+		rejectTxn     bool // the reader must never see a transactional record
+	}{
+		{
+			name:          "commit-read-committed",
+			end:           kgo.TryCommit,
+			endBeforeRead: true,
+			isolation:     kgo.ReadCommitted(),
+			wantRead:      3,
+		},
+		{
+			name:          "abort-read-committed",
+			end:           kgo.TryAbort,
+			endBeforeRead: true,
+			isolation:     kgo.ReadCommitted(),
+			nonTxnAfter:   2,
+			wantRead:      2,
+			wantLSO:       true,
+			rejectTxn:     true,
+		},
+		{
+			// Nothing has ended yet, and read_uncommitted sees the
+			// records anyway.
+			name:      "open-read-uncommitted",
+			end:       kgo.TryAbort,
+			isolation: kgo.ReadUncommitted(),
+			wantRead:  3,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "txn-" + tc.name
+
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			consumer := newPlainClient(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.FetchIsolationLevel(tc.isolation),
+			)
+			producer := newPlainClient(t, c,
+				kgo.DefaultProduceTopic(topic),
+				kgo.TransactionalID("txnid-"+tc.name),
+			)
+
+			if err := producer.BeginTransaction(); err != nil {
+				t.Fatalf("failed to begin transaction: %v", err)
+			}
+			for i := range 3 {
+				if err := producer.ProduceSync(ctx, kgo.StringRecord("txn-"+strconv.Itoa(i))).FirstErr(); err != nil {
+					t.Fatalf("failed to produce: %v", err)
+				}
+			}
+			if tc.endBeforeRead {
+				if err := producer.EndTransaction(ctx, tc.end); err != nil {
+					t.Fatalf("failed to end transaction: %v", err)
+				}
+			}
+
+			if tc.nonTxnAfter > 0 {
+				plain := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+				for i := range tc.nonTxnAfter {
+					if err := plain.ProduceSync(ctx, kgo.StringRecord("plain-"+strconv.Itoa(i))).FirstErr(); err != nil {
+						t.Fatalf("failed to produce non-txn: %v", err)
+					}
+				}
+			}
+			if tc.wantLSO {
+				pi := c.PartitionInfo(topic, 0)
+				if pi.LastStableOffset != pi.HighWatermark {
+					t.Errorf("LSO should equal HWM after abort, got LSO=%d HWM=%d", pi.LastStableOffset, pi.HighWatermark)
+				}
+			}
+
+			var consumed int
+			var values []string
+			for consumed < tc.wantRead {
+				fs := consumer.PollFetches(ctx)
+				if errs := fs.Errors(); len(errs) > 0 {
+					t.Fatalf("fetch errors: %v", errs)
+				}
+				fs.EachRecord(func(r *kgo.Record) { values = append(values, string(r.Value)) })
+				consumed += fs.NumRecords()
+			}
+			if consumed != tc.wantRead {
+				t.Errorf("expected %d messages, got %d", tc.wantRead, consumed)
+			}
+			if tc.rejectTxn {
+				for _, v := range values {
+					if strings.HasPrefix(v, "txn-") {
+						t.Errorf("read_committed consumer saw aborted message: %s", v)
+					}
+				}
+			}
+
+			if !tc.endBeforeRead {
+				if err := producer.EndTransaction(ctx, tc.end); err != nil {
+					t.Fatalf("failed to end transaction: %v", err)
+				}
+			}
+		})
+	}
 }
