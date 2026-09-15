@@ -1174,6 +1174,7 @@ func (cl *Client) commitTransactionOffsets(
 		onDone(req, kmsg.NewPtrTxnOffsetCommitResponse(), err)
 		return g
 	}
+
 	if len(req.Topics) == 0 {
 		onDone(kmsg.NewPtrTxnOffsetCommitRequest(), kmsg.NewPtrTxnOffsetCommitResponse(), nil)
 		return g
@@ -1265,13 +1266,50 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
 	}
 
+	// The offsets of a recreated topic never go to the broker; we answer
+	// them with UNKNOWN_TOPIC_ID. TxnOffsetCommit carries names only, so
+	// the broker cannot refuse them itself. See uncommittedFrom; g.mu is
+	// held here.
+	var dropped []kmsg.TxnOffsetCommitResponseTopic
+	groupTopics := g.tps.load()
+	kept := req.Topics[:0:0]
+	for _, rt := range req.Topics {
+		if _, recreated := g.uncommittedFrom(groupTopics, rt.Topic); !recreated {
+			kept = append(kept, rt)
+			continue
+		}
+		st := kmsg.NewTxnOffsetCommitResponseTopic()
+		st.Topic = rt.Topic
+		for _, rp := range rt.Partitions {
+			sp := kmsg.NewTxnOffsetCommitResponseTopicPartition()
+			sp.Partition = rp.Partition
+			sp.ErrorCode = kerr.UnknownTopicID.Code
+			st.Partitions = append(st.Partitions, sp)
+		}
+		dropped = append(dropped, st)
+	}
+	req.Topics = kept
+	if len(dropped) > 0 {
+		inner := onDone
+		onDone = func(req *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
+			if err == nil && resp != nil {
+				resp.Topics = append(resp.Topics, dropped...)
+			}
+			inner(req, resp, err)
+		}
+	}
+
 	priorDone := g.commitDone
 	commitDone := make(chan struct{})
 	g.commitDone = commitDone
 
 	go func() {
 		defer close(commitDone) // allow future commits to continue when we are done
-		if priorDone != nil {   // wait for any prior request to finish
+		if len(req.Topics) == 0 {
+			onDone(req, kmsg.NewPtrTxnOffsetCommitResponse(), nil)
+			return
+		}
+		if priorDone != nil { // wait for any prior request to finish
 			// Same as commit(): we must NOT cancel the prior commit
 			// because canceling kills the TCP connection, and our
 			// subsequent request on a new connection can be processed

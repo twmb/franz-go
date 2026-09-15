@@ -2520,6 +2520,11 @@ type uncommit struct {
 	dirty     EpochOffset // if autocommitting, what will move to head on next Poll
 	head      EpochOffset // ready to commit
 	committed EpochOffset // what is committed
+
+	// topicID is the ID of the topic the offsets were fetched under, if
+	// the fetch carried one. We commit under it, and refuse the offsets
+	// once the name has a different ID; see uncommittedFrom.
+	topicID [16]byte
 }
 
 // EpochOffset combines a record offset with the leader epoch the broker
@@ -2603,10 +2608,15 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 					final.Offset + 1,
 				}
 				prior, ok := topicOffsets[partition.Partition]
-				if !ok {
+				// Records under a new ID come from a recreated topic
+				// that was purged and added back; the entry starts over.
+				if !ok || prior.topicID != noID && topic.TopicID != noID && prior.topicID != topic.TopicID {
 					uninit := EpochOffset{-1, 0}
-					uncommit := uncommit{uninit, uninit, uninit}
+					uncommit := uncommit{dirty: uninit, head: uninit, committed: uninit}
 					prior, topicOffsets[partition.Partition] = uncommit, uncommit
+				}
+				if prior.topicID == noID {
+					prior.topicID = topic.TopicID
 				}
 
 				if debug {
@@ -2933,6 +2943,7 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 				dirty:     epochOffset,
 				head:      epochOffset,
 				committed: epochOffset,
+				topicID:   current.topicID,
 			}
 			if current.dirty == epochOffset {
 				continue
@@ -2991,6 +3002,29 @@ func (cl *Client) CommittedOffsets() map[string]map[int32]EpochOffset {
 	defer g.mu.Unlock()
 
 	return g.getUncommittedLocked(false, false)
+}
+
+// uncommittedFrom returns the topic ID the topic's uncommitted offsets were
+// fetched under, and whether the name now has a different ID: the topic was
+// deleted and recreated. Must be called with g.mu held.
+func (g *groupConsumer) uncommittedFrom(tps topicsPartitionsData, topic string) (from [16]byte, recreated bool) {
+	for _, u := range g.uncommitted[topic] {
+		if u.topicID != noID {
+			from = u.topicID
+			break
+		}
+	}
+	td := tps.loadTopic(topic)
+	if from == noID && td != nil && len(td.partitions) > 0 {
+		// Offsets fetched from the group, or fetched below Kafka 3.1,
+		// carry no ID. The cursors hold the ID the topic was loaded
+		// under and keep it through a recreation.
+		from = td.partitions[0].cursor.topicID
+	}
+	if from == noID {
+		return from, false
+	}
+	return from, td != nil && td.id != noID && td.id != from
 }
 
 func (g *groupConsumer) getUncommitted(dirty bool) map[string]map[int32]EpochOffset {
@@ -3184,6 +3218,7 @@ func (cl *Client) MarkCommitRecords(rs ...*Record) {
 				dirty:     current.dirty,
 				committed: current.committed,
 				head:      newHead,
+				topicID:   current.topicID,
 			}
 		}
 	}
@@ -3221,6 +3256,7 @@ func (cl *Client) MarkCommitOffsets(unmarked map[string]map[int32]EpochOffset) {
 					dirty:     current.dirty,
 					committed: current.committed,
 					head:      newHead,
+					topicID:   current.topicID,
 				}
 			}
 		}
@@ -3576,6 +3612,44 @@ func (g *groupConsumer) commit(
 	req.InstanceID = g.cfg.instanceID
 	is848 := g.is848 // g.mu is held, per the function comment above
 
+	// Build the request under g.mu: a purge, which also holds g.mu,
+	// removes the topic from tps, and a request built after it would
+	// commit a recreated topic's offsets by name.
+	//
+	// Offsets are committed under the ID they were fetched under; see
+	// uncommittedFrom. A recreated topic's offsets never go to the
+	// broker; we answer them UNKNOWN_TOPIC_ID below.
+	groupTopics := g.tps.load()
+	pinV9 := false
+	var refused []kmsg.OffsetCommitRequestTopic
+	for topic, partitions := range uncommitted {
+		reqTopic := kmsg.NewOffsetCommitRequestTopic()
+		reqTopic.Topic = topic
+		if td := groupTopics.loadTopic(topic); td != nil {
+			reqTopic.TopicID = td.id
+		}
+		from, recreated := g.uncommittedFrom(groupTopics, topic)
+		if from != noID {
+			reqTopic.TopicID = from
+		}
+		for partition, eo := range partitions {
+			reqPartition := kmsg.NewOffsetCommitRequestTopicPartition()
+			reqPartition.Partition = partition
+			reqPartition.Offset = eo.Offset
+			reqPartition.LeaderEpoch = eo.Epoch // KIP-320
+			reqPartition.Metadata = &req.MemberID
+			reqTopic.Partitions = append(reqTopic.Partitions, reqPartition)
+		}
+		if recreated {
+			refused = append(refused, reqTopic)
+			continue
+		}
+		if reqTopic.TopicID == noID {
+			pinV9 = true
+		}
+		req.Topics = append(req.Topics, reqTopic)
+	}
+
 	go func() {
 		defer close(commitDone) // allow future commits to continue when we are done
 		defer commitCancel()
@@ -3602,28 +3676,6 @@ func (g *groupConsumer) commit(
 			}
 		}
 		g.cfg.logger.Log(LogLevelDebug, "issuing commit", "group", g.cfg.group, "uncommitted", uncommitted)
-
-		groupTopics := g.tps.load()
-		pinV9 := false
-		for topic, partitions := range uncommitted {
-			reqTopic := kmsg.NewOffsetCommitRequestTopic()
-			reqTopic.Topic = topic
-			if td := groupTopics.loadTopic(topic); td != nil {
-				reqTopic.TopicID = td.id
-			}
-			if reqTopic.TopicID == noID {
-				pinV9 = true
-			}
-			for partition, eo := range partitions {
-				reqPartition := kmsg.NewOffsetCommitRequestTopicPartition()
-				reqPartition.Partition = partition
-				reqPartition.Offset = eo.Offset
-				reqPartition.LeaderEpoch = eo.Epoch // KIP-320
-				reqPartition.Metadata = &req.MemberID
-				reqTopic.Partitions = append(reqTopic.Partitions, reqPartition)
-			}
-			req.Topics = append(req.Topics, reqTopic)
-		}
 
 		// OffsetCommit v10 switched Topic to TopicID. If we have no
 		// TopicID for some topic (e.g. broker caps Metadata below v10,
@@ -3681,10 +3733,14 @@ func (g *groupConsumer) commit(
 
 		staleRetries := 0
 		for {
+			if len(req.Topics) == 0 { // every topic was refused above
+				resp = kmsg.NewPtrOffsetCommitResponse()
+				break
+			}
 			start := time.Now()
 			resp, err = req.RequestWith(reqCtx, g.cl)
 			if err != nil {
-				req.Topics = origReqTopics
+				req.Topics = append(origReqTopics, refused...)
 				onDone(g.cl, req, nil, err)
 				return
 			}
@@ -3813,9 +3869,23 @@ func (g *groupConsumer) commit(
 			}
 		}
 
+		// Every partition of a refused topic is answered UNKNOWN_TOPIC_ID.
+		for _, rt := range refused {
+			st := kmsg.NewOffsetCommitResponseTopic()
+			st.Topic = rt.Topic
+			st.TopicID = rt.TopicID
+			for _, rp := range rt.Partitions {
+				sp := kmsg.NewOffsetCommitResponseTopicPartition()
+				sp.Partition = rp.Partition
+				sp.ErrorCode = kerr.UnknownTopicID.Code
+				st.Partitions = append(st.Partitions, sp)
+			}
+			resp.Topics = append(resp.Topics, st)
+		}
+
 		// Restore so updateCommitted and onDone see the caller's
 		// original request, not the wire-filtered one.
-		req.Topics = origReqTopics
+		req.Topics = append(origReqTopics, refused...)
 
 		// If the broker no longer recognizes our member (the session
 		// expired during a network blip, or the group rebalanced
