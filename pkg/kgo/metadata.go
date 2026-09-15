@@ -15,6 +15,34 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo/internal/xsync"
 )
 
+// PartitionMetadata contains information about a partition and its replicas.
+//
+// This mirrors kadm.PartitionDetail as a general type in kgo, alongside
+// TopicMetadata and BrokerMetadata.
+type PartitionMetadata struct {
+	Topic     string // Topic is the topic containing this partition.
+	Partition int32  // Partition is the partition number.
+
+	Leader          int32   // Leader is the broker leader, if there is one, otherwise -1.
+	LeaderEpoch     int32   // LeaderEpoch is the epoch of the broker leader, or -1 if the broker does not support leader epochs.
+	Replicas        []int32 // Replicas is the set of replica brokers.
+	ISR             []int32 // ISR is the set of in sync replica brokers.
+	OfflineReplicas []int32 // OfflineReplicas is the set of offline replica brokers.
+
+	Err error // Err is non-nil if the partition currently has a load error.
+}
+
+// TopicMetadata contains information about a topic and its partitions.
+//
+// This mirrors kadm.TopicDetail as a general type in kgo, alongside
+// PartitionMetadata and BrokerMetadata.
+type TopicMetadata struct {
+	Topic      string              // Topic is the topic name.
+	ID         [16]byte            // ID is the topic ID; all zero if the broker does not support topic IDs.
+	Partitions []PartitionMetadata // Partitions contains metadata for the topic's partitions, ordered by partition.
+	Err        error               // Err is non-nil if the topic currently has a load error.
+}
+
 type metawait struct {
 	mu         xsync.Mutex
 	c          *sync.Cond
