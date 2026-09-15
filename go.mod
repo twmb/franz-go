@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/klauspost/compress v1.19.2
 	github.com/pierrec/lz4/v4 v4.1.26
-	github.com/twmb/franz-go/pkg/kmsg v1.13.1
+	github.com/twmb/franz-go/pkg/kmsg v1.14.0
 )
 
 retract v1.11.4 // This version is actually a breaking change and requires a major version change.
