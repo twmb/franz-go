@@ -10,27 +10,41 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// ApiVersions: v0-4
+// ApiVersions: v0-5
 //
 // Behavior:
 // * Returns all registered API keys and their version ranges
 // * Advertises transaction.version feature for KIP-890 support
 // * Auto-downgrades to v0 response on unknown version
+// * v5+: REBOOTSTRAP_REQUIRED if the client names a cluster or node that is
+//   not us (KIP-1242)
 //
 // Version notes:
 // * v1: ThrottleMillis
 // * v3: ClientSoftwareName, ClientSoftwareVersion, flexible versions
 // * v3+: FinalizedFeatures, SupportedFeatures (KIP-584)
+// * v5: ClusterID, NodeID (KIP-1242)
 
-func init() { regKey(18, 0, 4) }
+func init() { regKey(18, 0, 5) }
 
 func (c *Cluster) handleApiVersions(creq *clientReq) (kmsg.Response, error) {
 	req := creq.kreq.(*kmsg.ApiVersionsRequest)
 	resp := req.ResponseKind().(*kmsg.ApiVersionsResponse)
 
-	if resp.Version > 3 && resp.Version > apiVersionsKeys[18].MaxVersion {
-		resp.Version = 0 // downgrades to 0 if the version is unknown
+	// A version above what we serve is answered the way a real broker
+	// answers it (KIP-511): a v0 response carrying UNSUPPORTED_VERSION and
+	// only our ApiVersions range, so that the client retries at that
+	// version and still learns our features. A cluster capped below the
+	// first version that had ApiVersions still answers v0.
+	if maxVersion := max(c.maxVersion(18), 0); resp.Version > maxVersion {
+		resp.Version = 0
 		resp.ErrorCode = kerr.UnsupportedVersion.Code
+		key := kmsg.NewApiVersionsResponseApiKey()
+		key.ApiKey = 18
+		key.MinVersion = apiVersionsKeys[18].MinVersion
+		key.MaxVersion = maxVersion
+		resp.ApiKeys = append(resp.ApiKeys, key)
+		return resp, nil
 	}
 
 	// v3+ carries the client software name and version; a real broker
@@ -42,6 +56,23 @@ func (c *Cluster) handleApiVersions(creq *clientReq) (kmsg.Response, error) {
 		(!validSoftwareNameVersion(req.ClientSoftwareName) || !validSoftwareNameVersion(req.ClientSoftwareVersion)) {
 		resp.ErrorCode = kerr.InvalidRequest.Code
 		return resp, nil
+	}
+
+	// v5+ names the cluster and node the client expects to have reached
+	// (KIP-1242). Both are set or neither is, else INVALID_REQUEST; if
+	// either is not us, REBOOTSTRAP_REQUIRED tells the client its metadata
+	// routed it to the wrong broker and it should start over from its
+	// seeds.
+	if resp.ErrorCode == 0 && req.Version >= 5 {
+		hasCluster, hasNode := req.ClusterID != nil, req.NodeID != -1
+		switch {
+		case hasCluster != hasNode:
+			resp.ErrorCode = kerr.InvalidRequest.Code
+			return resp, nil
+		case hasCluster && (*req.ClusterID != c.cfg.clusterID || req.NodeID != creq.cc.b.node):
+			resp.ErrorCode = kerr.RebootstrapRequired.Code
+			return resp, nil
+		}
 	}
 
 	// We do not checkReqVersion for ApiVersions; if the client uses a
