@@ -297,6 +297,11 @@ type topicPartitions struct {
 	partsMu     xsync.Mutex
 	partitioner TopicPartitioner
 	lb          *leastBackupInput // for partitioning if the partitioner is a LoadTopicPartitioner
+
+	// For RackAwarePartitioning: the writable partitions of rackData
+	// whose leader is in our rack, filtered once per metadata update.
+	rackData  *topicPartitionsData
+	rackParts []*topicPartition
 }
 
 func (t *topicPartitions) load() *topicPartitionsData { return t.v.Load().(*topicPartitionsData) }
