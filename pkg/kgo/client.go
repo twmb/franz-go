@@ -68,8 +68,9 @@ type Client struct {
 	prsPool prsPool // for sinks to reuse []promisedNumberedRecord
 
 	controllerIDMu xsync.Mutex
+	rebootstrapMu  xsync.Mutex // serializes rebootstrapMisrouted
 	controllerID   int32
-	clusterID      *string // we piggy back updating clusterID
+	clusterID      atomic.Pointer[string] // we piggy back updating clusterID
 
 	// The following two ensure that we only have one fetchBrokerMetadata
 	// at once. This avoids unnecessary broker metadata requests and
@@ -1174,17 +1175,57 @@ func (cl *Client) updateMetadataBrokers(resp *kmsg.MetadataResponse) {
 	if resp.ControllerID >= 0 {
 		cl.controllerID = resp.ControllerID
 	}
+	cl.controllerIDMu.Unlock()
 	// Clone ClusterID so cl.clusterID owns its own *string, independent
 	// of the broker response. Readers (dups in RequestCachedMetadata)
 	// would otherwise race a user mutating *resp.ClusterID on a
 	// previously-returned cl.Request(MetadataRequest) response.
-	cl.clusterID = nil
+	var clusterID *string
 	if resp.ClusterID != nil {
 		s := *resp.ClusterID
-		cl.clusterID = &s
+		clusterID = &s
 	}
-	cl.controllerIDMu.Unlock()
+	cl.clusterID.Store(clusterID)
 	cl.updateBrokers(resp.Brokers)
+}
+
+// rebootstrapMisrouted is called when broker b answered REBOOTSTRAP_REQUIRED
+// to an ApiVersions request that named the cluster and node we expected
+// (KIP-1242): the address our metadata has for b belongs to a different
+// broker or cluster, so every discovered broker is suspect. We drop them all
+// so that the next metadata request goes to a seed, after giving
+// OnRebootstrapRequired a chance to replace the seeds, and refresh metadata
+// now. Requests in flight to discovered brokers fail with errChosenBrokerDead
+// and retry once metadata rediscovers the cluster.
+//
+// Unlike a REBOOTSTRAP_REQUIRED metadata response, this rebootstraps even
+// without OnRebootstrapRequired: the mapping we hold is actively wrong, and
+// going back to the seeds is the only way to repair it.
+func (cl *Client) rebootstrapMisrouted(b *broker, clusterID string) {
+	cl.rebootstrapMu.Lock()
+	defer cl.rebootstrapMu.Unlock()
+
+	// Every connection that was mid-init when the first one rebootstrapped
+	// is answered the same way; once the first wipe finishes, its broker
+	// is already dead.
+	if b.dead.Load() {
+		return
+	}
+	cl.cfg.logger.Log(LogLevelWarn, "broker rejected our connection with REBOOTSTRAP_REQUIRED: the address we have for this node belongs to a different broker or cluster; dropping all discovered brokers and rebootstrapping from the seeds",
+		"broker", logID(b.meta.NodeID),
+		"addr", b.addr,
+		"cluster_id", clusterID,
+	)
+	if fn := cl.cfg.onRebootstrapRequired; fn != nil {
+		seeds, err := fn()
+		if err != nil || len(seeds) == 0 {
+			cl.cfg.logger.Log(LogLevelError, "OnRebootstrapRequired returned an error or no seeds, keeping the current seeds", "err", err)
+		} else if err := cl.UpdateSeedBrokers(seeds...); err != nil {
+			cl.cfg.logger.Log(LogLevelError, "unable to use the seeds from OnRebootstrapRequired, keeping the current seeds", "err", err)
+		}
+	}
+	cl.updateBrokers(nil)
+	cl.triggerUpdateMetadataNow("rebootstrap required after a misrouted connection")
 }
 
 // updateBrokers is called with the broker portion of every metadata response.
@@ -1632,8 +1673,8 @@ func (cl *Client) RequestCachedMetadata(ctx context.Context, req *kmsg.MetadataR
 	}
 	cl.brokersMu.RUnlock()
 
+	resp.ClusterID = dups(cl.clusterID.Load())
 	cl.controllerIDMu.Lock()
-	resp.ClusterID = dups(cl.clusterID)
 	resp.ControllerID = cl.controllerID
 	cl.controllerIDMu.Unlock()
 

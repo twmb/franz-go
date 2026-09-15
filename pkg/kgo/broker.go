@@ -677,6 +677,13 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 		return *pcxn, nil
 	}
 
+	// A stopped broker never comes back (stopForever is final): a metadata
+	// update or rebootstrap removed it. Fail fast rather than dial an
+	// address we no longer trust; the request retries on a live broker.
+	if b.dead.Load() {
+		return nil, errChosenBrokerDead
+	}
+
 	var tries int
 doConnect:
 	tries++
@@ -989,7 +996,7 @@ func (cxn *brokerCxn) init(isProduceCxn bool, tries int) error {
 }
 
 func (cxn *brokerCxn) requestAPIVersions(tries int) error {
-	maxVersion := int16(4)
+	maxVersion := int16(5)
 	if tries >= 3 { // on the third try, we pin to v0; see above in cxn initialization
 		maxVersion = 0
 	} else if cxn.cl.cfg.maxVersions != nil {
@@ -1008,6 +1015,14 @@ start:
 	req.Version = maxVersion
 	req.ClientSoftwareName = cxn.cl.cfg.softwareName
 	req.ClientSoftwareVersion = cxn.cl.cfg.softwareVersion
+	// KIP-1242: name the cluster and node we expect to reach. Seeds have
+	// no node ID and get neither.
+	if maxVersion >= 5 && cxn.b.meta.NodeID >= 0 {
+		if clusterID := cxn.cl.clusterID.Load(); clusterID != nil {
+			req.ClusterID = clusterID
+			req.NodeID = cxn.b.meta.NodeID
+		}
+	}
 	cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing api versions request", "broker", logID(cxn.b.meta.NodeID), "version", maxVersion)
 	corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr := cxn.writeRequest(nil, time.Now(), req)
 	if writeErr != nil {
@@ -1082,6 +1097,14 @@ start:
 	// Checked before ApiKeys below: an error can come with an empty key table.
 	if !sawUnsupportedVersion {
 		if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+			// The broker is not who our metadata says it is. Drop
+			// every discovered broker and rediscover the cluster
+			// from the seeds; the request that opened this
+			// connection retries once metadata has refreshed.
+			if errors.Is(err, kerr.RebootstrapRequired) && req.ClusterID != nil {
+				cxn.cl.rebootstrapMisrouted(cxn.b, *req.ClusterID)
+				return errChosenBrokerDead
+			}
 			return err
 		}
 	}
