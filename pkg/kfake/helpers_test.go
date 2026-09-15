@@ -449,3 +449,59 @@ func describeShareOffsets(t *testing.T, cl *kgo.Client, group, topic string) *km
 	}
 	return resp
 }
+
+// rawBatch builds the wire bytes of one v2 record batch carrying a single
+// record, patching Length and a valid Castagnoli CRC.
+func rawBatch(attrs int16, pid int64, epoch int16, firstSeq int32, rec kmsg.Record) []byte {
+	rec.Length = int32(len(rec.AppendTo(nil)) - 1)
+	now := time.Now().UnixMilli()
+	batch := kmsg.RecordBatch{
+		PartitionLeaderEpoch: -1,
+		Magic:                2,
+		Attributes:           attrs,
+		LastOffsetDelta:      0,
+		FirstTimestamp:       now,
+		MaxTimestamp:         now,
+		ProducerID:           pid,
+		ProducerEpoch:        epoch,
+		FirstSequence:        firstSeq,
+		NumRecords:           1,
+		Records:              rec.AppendTo(nil),
+	}
+	raw := batch.AppendTo(nil)
+	batch.Length = int32(len(raw) - 12)
+	raw = batch.AppendTo(nil)
+	batch.CRC = int32(crc32.Checksum(raw[21:], crc32.MakeTable(crc32.Castagnoli)))
+	return batch.AppendTo(nil)
+}
+
+// kvRecord is the one record rawBatch callers send when the bytes do not
+// matter.
+func kvRecord() kmsg.Record {
+	return kmsg.Record{Key: []byte("k"), Value: []byte("v")}
+}
+
+// produceRawV11 sends one batch as a Produce v11, which names the topic
+// rather than identifying it by ID, and returns the partition response.
+func produceRawV11(t *testing.T, cl *kgo.Client, topic string, batch []byte) kmsg.ProduceResponseTopicPartition {
+	t.Helper()
+	req := kmsg.NewProduceRequest()
+	req.Version = 11
+	req.Acks = -1
+	req.TimeoutMillis = 5000
+	rt := kmsg.NewProduceRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewProduceRequestTopicPartition()
+	rp.Partition = 0
+	rp.Records = batch
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("produce: %v", err)
+	}
+	return resp.Topics[0].Partitions[0]
+}
