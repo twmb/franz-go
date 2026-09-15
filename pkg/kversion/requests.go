@@ -1094,6 +1094,12 @@ func b41() *release {
 	now.addkeyver(77, 1) // 1 share group describe
 	now.addkeyver(78, 1) // 1 share fetch
 	now.addkeyver(79, 1) // 1 share acknowledge
+	// v0 of the four share group requests was never advertised: 4.0 marked
+	// it unstable, and 4.1 released them at v1 only.
+	now.setmin(76, 1)
+	now.setmin(77, 1)
+	now.setmin(78, 1)
+	now.setmin(79, 1)
 
 	// KAFKA-16950 fecbfb81332 KIP-932
 	now.addkey(83) // 0 initialize share group state
