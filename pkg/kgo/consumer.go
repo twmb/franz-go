@@ -848,6 +848,15 @@ func (c *consumer) purgeTopics(topics []string) {
 	if c.g != nil {
 		c.g.mu.Lock() // required when updating using
 		defer c.g.mu.Unlock()
+		// The rebalance this purge causes commits our uncommitted
+		// offsets. By then the topic is gone from tps and uncommittedFrom
+		// cannot tell it was recreated, so we drop its offsets now.
+		tps := c.g.tps.load()
+		for _, topic := range topics {
+			if _, recreated := c.g.uncommittedFrom(tps, topic); recreated {
+				delete(c.g.uncommitted, topic)
+			}
+		}
 		c.assignPartitions(purgeAssignments, assignPurgeMatching, c.g.tps, fmt.Sprintf("purge of %v requested", topics))
 		for _, topic := range topics {
 			delete(c.g.using, topic)

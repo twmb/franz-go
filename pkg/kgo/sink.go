@@ -134,7 +134,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 			moreToDrain = true
 			continue
 		}
-		if req.produceMax > 12 && recBuf.topicID == ([16]byte{}) {
+		if req.produceMax > 12 && recBuf.topicID == noID {
 			req.produceMax = 12
 		}
 
@@ -1423,11 +1423,16 @@ func (s *sink) addRecBuf(add *recBuf) {
 	add.clearFailing()
 }
 
-// removeRecBuf removes a record buffer from a sink.
+// removeRecBuf removes a record buffer from a sink. Removing a buffer that
+// is not in the sink is a no-op: a recreated topic's buffers are removed
+// when the recreation is detected and again when the topic is purged.
 func (s *sink) removeRecBuf(rm *recBuf) {
 	s.recBufsMu.Lock()
 	defer s.recBufsMu.Unlock()
 
+	if rm.recBufsIdx < 0 {
+		return
+	}
 	if rm.recBufsIdx != len(s.recBufs)-1 {
 		s.recBufs[rm.recBufsIdx], s.recBufs[len(s.recBufs)-1] = s.recBufs[len(s.recBufs)-1], nil
 		s.recBufs[rm.recBufsIdx].recBufsIdx = rm.recBufsIdx
@@ -1439,6 +1444,7 @@ func (s *sink) removeRecBuf(rm *recBuf) {
 	if s.recBufsStart == len(s.recBufs) {
 		s.recBufsStart = 0
 	}
+	rm.recBufsIdx = -1
 }
 
 // recBuf is a buffer of records being produced to a partition and being
@@ -1571,9 +1577,34 @@ type recBuf struct {
 	// It is always cleared on metadata update.
 	failing bool
 
-	// Only possibly set in PurgeTopics, this is used to fail anything that
-	// was in the process of being buffered.
-	purged bool
+	// abandoned is set once the buffer is done for good: the topic was
+	// purged, or it was deleted and recreated. Anything buffered after
+	// it is set fails with it at once.
+	abandoned error
+}
+
+// abandon removes the buffer from its sink and fails everything buffered, and
+// everything buffered later, with err.
+//
+// This runs in the metadata loop, so the sink cannot change under us and we
+// read it unlocked; recBuf.mu => sink.recBufsMu would invert the lock order.
+func (recBuf *recBuf) abandon(err error) {
+	// We set abandoned first, so that anything in the process of being
+	// buffered fails once it takes the lock.
+	recBuf.mu.Lock()
+	recBuf.abandoned = err
+	recBuf.mu.Unlock()
+
+	// Once removed from the sink, the buffer is not drained again. A
+	// produce request in flight may still finish; if it finishes after
+	// we fail the records below, its response no longer matches a batch
+	// we hold, but the records may have been produced. This is the
+	// duplicate risk of purging.
+	recBuf.sink.removeRecBuf(recBuf)
+
+	recBuf.mu.Lock()
+	recBuf.failAllRecords(err)
+	recBuf.mu.Unlock()
 }
 
 // bufferRecord usually buffers a record, but does not if abortOnNewBatch is
@@ -1593,8 +1624,8 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 	pr.Timestamp = pr.Timestamp.Truncate(time.Millisecond)
 	pr.Partition = recBuf.partition // set now, for the hook below
 
-	if recBuf.purged {
-		recBuf.cl.producer.promiseRecord(pr, errPurged)
+	if recBuf.abandoned != nil {
+		recBuf.cl.producer.promiseRecord(pr, recBuf.abandoned)
 		return true
 	}
 

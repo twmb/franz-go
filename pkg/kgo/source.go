@@ -1146,6 +1146,20 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		s.session.commitFromReq(req.committedTopics, req.committedForgotten)
 	}
 
+	// The broker resolves a session partition's name once, when the
+	// partition enters the session. If the topic is deleted and
+	// recreated, that partition now reaches the new topic and every
+	// fetch of the session answers it INCONSISTENT_TOPIC_ID. A full
+	// fetch carries our ID and is answered UNKNOWN_TOPIC_ID.
+	//
+	// We strip inconsistent_topic_id and unknown_topic_id, so we need
+	// to reset the session: if we don't, fetching can spin loop (brokers return
+	// error responses immediately, no waiting for other data on other partitions).
+	if updateWhy.has(kerr.InconsistentTopicID) {
+		s.cl.cfg.logger.Log(LogLevelInfo, "fetch partition has an inconsistent topic ID, resetting session", "broker", logID(s.nodeID))
+		s.session.reset()
+	}
+
 	// If we have a reason to update (per-partition fetch errors), and the
 	// reason is not just unknown topic or partition, then we immediately
 	// update metadata. We avoid updating for unknown because it _likely_
@@ -2495,7 +2509,6 @@ func (f *fetchRequest) addCursor(c *cursor) {
 		f.usedOffsets[c.topic] = partitions
 		f.id2topic[c.topicID] = c.topic
 		f.topic2id[c.topic] = c.topicID
-		var noID [16]byte
 		if c.topicID == noID {
 			f.disableIDs = true
 		}
@@ -2876,7 +2889,6 @@ func (s *fetchSession) commitFromReq(topics []kmsg.FetchRequestTopic, forgotten 
 		s.used = make(map[string]map[int32]fetchSessionOffsetEpoch)
 		s.t2id = make(map[string][16]byte)
 	}
-	var noID [16]byte
 	for _, rt := range topics {
 		topic := rt.Topic
 		if topic == "" {
@@ -2957,7 +2969,7 @@ func (s *fetchSession) lookupTopic(topic string, t2id map[string][16]byte) fetch
 		s.used[topic] = t
 		id := t2id[topic]
 		s.t2id[topic] = id
-		if id == ([16]byte{}) {
+		if id == noID {
 			s.disableIDs = true
 		}
 	}
