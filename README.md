@@ -227,6 +227,12 @@ purges all information about a topic from within the client, and then (for
 consumers) calling `AddConsumeTopics`. Producers will auto recover after purging
 once you produce again.
 
+`FollowRecreatedTopics` opts into the client doing this itself: when metadata
+reports a new ID for a topic, the client purges the topic and adds it back.
+Consumers resume from the group's committed offsets for the new topic, or per
+the reset policy. Records buffered for the old topic fail with
+`UNKNOWN_TOPIC_ID`, and producing resumes with the next record.
+
 Depending on your broker version, you may experience different side effects from
 trying to keep a client alive across topic recreation:
 * Producing pre-4.1 while recreating a topic may result in batch 2 being before

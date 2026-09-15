@@ -108,6 +108,7 @@ type cfg struct {
 
 	alwaysRetryEOF         bool
 	allowAutoTopicCreation bool
+	followRecreatedTopics  bool
 	disableClientMetrics   bool
 	userMetrics            func() iter.Seq[Metric]
 
@@ -1051,6 +1052,17 @@ func ConcurrentTransactionsBackoff(backoff time.Duration) Opt {
 // times until the cluster fully broadcasts the topic creation.
 func ConsiderMissingTopicDeletedAfter(t time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.missingTopicDelete = t }}
+}
+
+// FollowRecreatedTopics opts into the client purging a deleted and recreated
+// topic and adding it back itself, rather than failing the topic with
+// UNKNOWN_TOPIC_ID until you do so; see the README. Consuming
+// resumes from the group's committed offsets for the new topic or, without
+// any, per the reset policy; producing resumes with the next record. Records
+// buffered for the old topic still fail with UNKNOWN_TOPIC_ID, and a consumer
+// can see the error on a poll before the topic is added back.
+func FollowRecreatedTopics() Opt {
+	return clientOpt{func(cfg *cfg) { cfg.followRecreatedTopics = true }}
 }
 
 // OnRebootstrapRequired sets the function to call when a metadata response has

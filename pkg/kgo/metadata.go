@@ -882,6 +882,11 @@ func (cl *Client) mergeTopicPartitions(
 				"old_id", topicID(oldID),
 				"new_id", topicID(r.id),
 			)
+			// Purging runs a blocking metadata fn, and we are the
+			// metadata loop.
+			if cl.cfg.followRecreatedTopics {
+				go cl.followRecreatedTopic(topic, kind)
+			}
 		}
 	}
 	recreated := lv.recreatedFrom != noID
@@ -1168,6 +1173,39 @@ func (cl *Client) mergeTopicPartitions(
 				}
 			}
 		}
+	}
+}
+
+// followRecreatedTopic purges a recreated topic and adds it back, for a
+// client that opted into FollowRecreatedTopics. Producing resumes when the
+// next record loads the topic anew. A direct consumer of specific partitions
+// gets them back at the reset offset: the offsets it was given belong to the
+// old topic. A regex consumer rediscovers the topic on its own.
+func (cl *Client) followRecreatedTopic(topic string, kind partitionKind) {
+	cl.cfg.logger.Log(LogLevelInfo, "purging and adding back a recreated topic", "topic", topic)
+	if kind == partitionKindProduce {
+		cl.PurgeTopicsFromProducing(topic)
+		return
+	}
+	c := &cl.consumer
+	var partitions map[int32]Offset
+	if c.d != nil {
+		c.mu.Lock()
+		if ps := c.d.ps[topic]; len(ps) > 0 {
+			partitions = make(map[int32]Offset, len(ps))
+			for p := range ps {
+				partitions[p] = cl.cfg.resetOffset
+			}
+		}
+		c.mu.Unlock()
+	}
+	cl.PurgeTopicsFromConsuming(topic)
+	switch {
+	case cl.cfg.regex:
+	case partitions != nil:
+		cl.AddConsumePartitions(map[string]map[int32]Offset{topic: partitions})
+	default:
+		cl.AddConsumeTopics(topic)
 	}
 }
 
