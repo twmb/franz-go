@@ -12,6 +12,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // TestFetchInvalidOffset verifies that with NoResetOffset, consuming from an
@@ -86,7 +87,16 @@ func TestFetchOutOfRangeResetLatest(t *testing.T) {
 	c := newCluster(t, kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	produceSync(t, producer, kgo.StringRecord("old1"), kgo.StringRecord("old2"))
+	old := []*kgo.Record{kgo.StringRecord("old1"), kgo.StringRecord("old2")}
+	produceSync(t, producer, old...)
+
+	// The reset is three round trips: the fetch at 100 fails out of
+	// range, the client lists offsets, and it then fetches the end. Wait
+	// for that last fetch, otherwise producing can move the end past the
+	// record we want to see.
+	waitReset := fetchGate(t, c, func(p kmsg.FetchRequestTopicPartition) bool {
+		return p.Partition == 0 && p.FetchOffset == int64(len(old))
+	})
 
 	// Start at an out-of-range offset with reset to latest.
 	consumer := newClient848(t, c,
@@ -95,9 +105,7 @@ func TestFetchOutOfRangeResetLatest(t *testing.T) {
 		}),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
 	)
-
-	// Give the consumer time to reset.
-	time.Sleep(200 * time.Millisecond)
+	waitReset()
 
 	// Produce a new record after the consumer has reset to end.
 	produceSync(t, producer, kgo.StringRecord("new-after-reset"))

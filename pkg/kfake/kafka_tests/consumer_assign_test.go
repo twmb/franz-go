@@ -12,6 +12,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 const (
@@ -236,7 +237,15 @@ func TestAssignConsumeFromEnd(t *testing.T) {
 	t.Parallel()
 	c := setupAssignTest(t)
 
+	// Creating the client returns before the end offset is known: the
+	// client lists offsets and only then fetches. If we produce before
+	// that, the end moves past the record we want. Waiting for the fetch
+	// at the pre-produce end proves the cursor is where we need it.
+	waitFetch := fetchGate(t, c, func(p kmsg.FetchRequestTopicPartition) bool {
+		return p.Partition == 0 && p.FetchOffset == assignTestRecords
+	})
 	consumer := assignConsumer(t, c, kgo.NewOffset().AtEnd())
+	waitFetch()
 
 	// Produce one more record after the consumer is set up.
 	producer := newClient848(t, c, kgo.DefaultProduceTopic(assignTestTopic))

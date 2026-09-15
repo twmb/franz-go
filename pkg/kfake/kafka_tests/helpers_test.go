@@ -6,12 +6,14 @@ package kafka_tests
 import (
 	"context"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // newCluster creates a new kfake cluster with the given options and registers
@@ -40,6 +42,36 @@ func newClient848(t *testing.T, c *kfake.Cluster, opts ...kgo.Opt) *kgo.Client {
 	}
 	t.Cleanup(cl.Close)
 	return cl
+}
+
+// fetchGate returns a function that waits until the cluster receives a fetch
+// for a partition that want accepts. A consumer fetches only after its start
+// offset resolves, so a fetch at a known offset proves the cursor is set and
+// anything produced after the wait is consumed. Register the gate before you
+// start the consumer.
+func fetchGate(t *testing.T, c *kfake.Cluster, want func(kmsg.FetchRequestTopicPartition) bool) func() {
+	t.Helper()
+	fetched := make(chan struct{})
+	closeFetched := sync.OnceFunc(func() { close(fetched) })
+	c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.FetchRequest)
+		for _, topic := range req.Topics {
+			for _, p := range topic.Partitions {
+				if want(p) {
+					closeFetched()
+				}
+			}
+		}
+		return nil, nil, false
+	})
+	return func() {
+		t.Helper()
+		select {
+		case <-fetched:
+		case <-time.After(20 * time.Second):
+			t.Fatal("timeout waiting for the consumer to fetch")
+		}
+	}
 }
 
 // groupCommits returns the group's committed offsets, or nil if the group
