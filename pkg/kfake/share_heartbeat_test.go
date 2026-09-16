@@ -247,4 +247,18 @@ func TestShareGroupTypeExclusive(t *testing.T) {
 			t.Fatalf("listed types after a refused alter: got %v, want [classic]", got)
 		}
 	})
+
+	t.Run("ShareFetch to a consumer group", func(t *testing.T) {
+		const group = "commit-then-fetch"
+		if err := commit(group); err != nil {
+			t.Fatalf("creating the classic group: %v", err)
+		}
+		resp, _ := rawShareFetch(t, cl, group, "11111111-2222-3333-4444-555555555555", topicID, 0)
+		if err := kerr.ErrorForCode(resp.ErrorCode); !errors.Is(err, kerr.GroupIDNotFound) {
+			t.Fatalf("share fetching from a classic group: got %v, want GROUP_ID_NOT_FOUND", err)
+		}
+		if got := listedTypes(group); !slices.Equal(got, []string{"classic"}) {
+			t.Fatalf("listed types after a refused share fetch: got %v, want [classic]", got)
+		}
+	})
 }
