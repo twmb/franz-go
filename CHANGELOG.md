@@ -1,3 +1,247 @@
+v1.22.0
+===
+
+This release supports Kafka 4.3 and 4.4, has a few new APIs, and has a few
+big internal improvements. In particular, I recommend checking out the new
+`StreamingCompression` option, as well as evaluating if you'd like to use
+`RackAwarePartitioning`. There are some behavior changes that you should read
+about below. The "next gen" rebalancer is now usable via the new
+`ServerSideBalancer` option. It's had a few releases to shake out bugs
+internally (via integration tests and LLM audits), but if you do experience a
+bug, please open an issue straightaway.
+
+Some minor bug fixes (that were never reported) were found during the
+implementation that are not worth mentioning.
+
+kfake has also been significantly extended and I recommend checking out the
+new APIs, in particular:
+* A new Fault type to make it easier to inject errors without Control functions
+* Group introspection cluster APIs
+* BlackholeProduce and SyntheticFetch APIs for benchmarking / play testing
+
+My `kcl` CLI has been _significantly_ expanded as well and is worth checking
+out. It supports essentially everything you can do with a cluster, and now
+allows you to run a full broker locally via `kcl fake` (in memory or a dumb
+disk backed localhost broker) - as well as setup the fake broker with fault
+injection. I've been running LLM audits and extensions to `kcl` in particular
+to try to shape it up to a "finalized" CLI shape. If you use it and have ideas
+for improvements, please open an issue.
+
+## Behavior changes
+
+* **Rack aware group partition assignment (KIP-881) now requires `BalanceRacks`.**
+  v1.21.0 enabled group balancers to assign partitions based on the rack that
+  members were in if you used the range or sticky/cooperative-sticky balancers.
+  Well, `Rack` is also used to opt into preferred read replica assignment
+  when fetching by the broker itself. These two decisions conflict with each
+  other. Now, `BalanceRacks()` is required to opt into group balancers using
+  the rack while balancing. The client warns when balancing if `BalanceRacks`
+  is on and the brokers have preferred read replicas enabled.
+
+* **`ConsumeResetOffset` defaults to `RewindOffset(time.Minute)`** rather
+  than `NewOffset().AtStart()`. **Setting only `ConsumeStartOffset` no longer
+  sets `ConsumeResetOffset`**. I introduced `ConsumeStartOffset` a while back
+  because it was really weird IMO to use a reset offset for both how a consumer
+  starts _and_ for how it recovers in the event of data loss or falling behind.
+  They were bidirectional since introduction, but since start is newer and much
+  less commonly used and you often don't want to recover from the start, I've
+  removed the start -> reset mapping when you only set the start. I recommend
+  reading the docs on both options for an updated understanding of when and
+  how they apply. As well, I've introduced `RewindOffset(d)` which is _only_
+  relevant to the reset offset (rewind by `d` duration from the last consumed
+  offset on data loss we cannot exactly recover from) and `LookbackOffset(d)`
+  which is relevant to both options but more useful for the start offset
+  (start consuming `d` before the newest record; before Kafka 3.0 it is `d`
+  before the current time). If a committed offset has fallen below the log
+  start, the first fetch answers `OFFSET_OUT_OF_RANGE` and the reset offset
+  decides where to resume. Before, a start offset of `AtEnd` was copied into
+  the reset offset, so the consumer skipped to the end. Now, with the
+  defaults, it resumes at the log start.
+  **`ConsumeResetOffset`'s new default is `RewindOffset(time.Minute)`**.
+
+* **Topic recreation is now a hard failure.** The client always
+  produces to and consumes from the first instance of a topic. If you delete
+  and recreate a topic, the client refuses the new version: buffered records
+  fail with `UNKNOWN_TOPIC_ID`, fetches stop, offsets from the old topic cannot
+  be committed to the new one, and transactions on the old topic fail. This
+  needs a broker that reports topic IDs (Kafka 2.8+). Previously, some things
+  in the client continued to accidentally work, and the behavior was
+  unreliable and usually not good. If you want your application to stay alive
+  across topic recreations, you can `PurgeTopicsFromClient` and, for
+  consumers, `AddConsumeTopics`. More details about topic recreation are now in
+  a new section in the README.
+
+* **`MaxDecompressBatchBytes` now blocks decompression if a batch would
+  decompress too large (default 1GiB)**. Fetches when consuming can only
+  specify to the broker "give me X bytes of batches", but they cannot control
+  how large those batches decompress into. A hostile or buggy batch could OOM
+  your program. Now, a batch over the limit causes the partition to enter
+  a fatal state and return `ErrDecompressTooLarge` once from polling.
+  The application can recover by manually skipping the batch with `SetOffsets`
+  (with the fields in the error; see the docs), or by restarting the client
+  with a higher limit. This option does not apply to custom decompressors,
+  but, custom decompressors can still return `ErrMaxDecompress` to stop
+  the partition. This option is also closely related to streaming compression,
+  which is described below.
+
+## Improvements
+
+* **gzip now uses klauspost/compress** (same format). Its default level is
+  1.7x faster than stdlib's with a slightly better ratio; klauspost's default
+  maps to its level 5 where stdlib's mapped to 6, and level for level it is
+  1.1x to 1.2x faster. `WithLevel(n)` now selects klauspost's level `n`, so
+  the bytes a given level produces differ from before.
+
+* **The sticky balancers are now exactly optimal** on balance, then rack
+  placement (with `BalanceRacks`), then stickiness. Balancing was already
+  load optimal but had some very niche edge cases where maximal stickiness
+  was not preserved, especially if balancing used racks. Rack placement
+  outranks stickiness: turning `BalanceRacks` on in a running group
+  reassigns, at its next rebalance, every partition held by a member in a
+  different zone from the partition's leader.
+
+* Sticky balancing is much faster, most of all on rejoins and on groups whose
+  members subscribe to different topics. Against v1.21.7: a rejoin of 100
+  members over 1600 topics of 100 partitions goes from 351ms to 24ms; a regex
+  shaped group of 500 members over 20,000 topics from 176ms and 810MB to 12ms
+  and 9MB; 2001 members over 500 topics of 2000 partitions with one narrow
+  subscriber from 3.4s to 0.3s. Fresh uniform balances are unchanged.
+
+## Features
+
+### Streaming compression
+
+`StreamingCompression` is an opt-in producer option that compresses a
+partition's backlog of batches together, bounded by their _compressed_ size.
+By default a batch is cut at `ProducerBatchMaxBytes` measured on uncompressed
+records. Streaming compression will help reduce traffic to the broker and
+increase how effective compression actually is (by pulling more data in at
+once). A custom compressor makes this option a no-op.
+
+The client is implemented such that each compression codec's worst case
+overhead is tracked internally, which should avoid a compressed batch ever
+exceeding `ProducerBatchMaxBytes`. If this ever does happen, the client
+discards the merge, logs a warning, disables streaming compression for the
+client going forward (records are still compressed batch by batch), and asks
+you to file an issue.
+
+The client has a new option `MaxDecompressBatchBytes` to bound both (a) how
+much the producer can stuff into a merged batch (i.e. how much it will
+decompress into), and (b) the maximum size a consumer will decompress a batch
+to; the consumer never decompresses past the bound (preventing a zip bomb).
+The default is 1GiB.
+
+### Rack aware producer partitioning (KIP-1123)
+
+`RackAwarePartitioning` sends unkeyed records to partitions whose leader is in
+the client's `Rack` (which must also be set), falling back to all partitions
+when no leader is. Keyed records are never affected. Unlike the Java client,
+this works with any partitioner, since the eligible-broker filtering happens
+before your partitioner is consulted. Note that this option skews which
+partitions receive records if your producers are not spread across racks in
+proportion to partition leaders.
+
+### ServerSideBalancer (KIP-848)
+
+`ServerSideBalancer` opts into KIP-848 "next-gen" consumer groups, where the
+broker's group coordinator assigns partitions rather than the client. This
+requires Kafka 4.0+ and either a range or sticky / cooperative-sticky
+balancer. This replaces the hidden `opt_in_kafka_next_gen_balancer_beta`
+context key from v1.19.0; the key still works in this release and is removed
+in the next. The default remains the classic protocol, matching the Java
+client. I still think the classic client side balancers are better (and this
+client's implementation is way faster than the Java client), but if you want
+to use server side balancing, it is strongly recommended to only use it if
+your cluster is Kafka 4.3+. Before 4.3 (before KIP-1251), an offset commit
+that races with a heartbeat epoch bump can fail with `STALE_MEMBER_EPOCH`,
+which the client cannot detect nor handle.
+
+### BalanceInfo for custom balancers
+
+A balancer that implements `GroupMemberBalancerInfo` receives a `BalanceInfo`
+before balancing: the group, generation, leader member ID, and lazily built
+topic and broker metadata. `ConsumerBalancer` implements it, so balancers
+built on `NewConsumerBalancer` can call `Info()`. This allows, for example, a
+balancer that assigns every partition to the leader with the other members as
+hot standbys. Thanks [@michaelwilner](https://github.com/michaelwilner)!
+
+## API additions
+
+```go
+// Producing
+func StreamingCompression() ProducerOpt
+func RackAwarePartitioning() ProducerOpt
+
+// Consuming
+func BalanceRacks() ConsumerOpt
+func ServerSideBalancer() GroupOpt
+func RewindOffset(d time.Duration) Offset
+func LookbackOffset(d time.Duration) Offset
+
+// Decompression bound
+func MaxDecompressBatchBytes(n int) Opt
+var ErrMaxDecompress error
+type ErrDecompressTooLarge struct {
+    Topic      string
+    Partition  int32
+    Offset     int64
+    Epoch      int32
+    NextOffset int64
+}
+
+// Custom balancers
+type BalanceInfo struct {
+    Group      string
+    Generation int32
+    LeaderID   string
+    Topics     func() map[string]TopicMetadata
+    Brokers    func() map[int32]BrokerMetadata
+}
+type GroupMemberBalancerInfo interface {
+    GroupMemberBalancer
+    SetBalanceInfo(BalanceInfo)
+}
+func (*ConsumerBalancer) Info() BalanceInfo
+type TopicMetadata struct { ... }
+type PartitionMetadata struct { ... }
+
+// Records
+type RecordAttrsOpts struct {
+    Codec         CompressionCodecType
+    TimestampType int8
+    Transactional bool
+    Control       bool
+}
+func NewRecordAttrs(RecordAttrsOpts) RecordAttrs
+
+// kversion
+func (*Versions) EachSupportedFeature(fn func(name string, min, max int16))
+func (*Versions) EachFinalizedFeature(fn func(name string, level int16))
+func FeatureLevelDescription(name string, level int16) string
+```
+
+## Relevant commits
+
+There are many commits, but some of the more notable ones:
+
+- [`27d11286`](https://github.com/twmb/franz-go/commit/27d11286) **feature** kversion: FeatureLevelDescription
+- [`73358f62`](https://github.com/twmb/franz-go/commit/73358f62) **feature** kversion: supported and finalized feature levels per release
+- [`7be0be16`](https://github.com/twmb/franz-go/commit/7be0be16) **behavior change** kgo: add MaxDecompressedBatchBytes
+- [`b37f1041`](https://github.com/twmb/franz-go/commit/b37f1041) **feature** kgo: add ServerSideBalancer to opt into KIP-848
+- [`033a46c7`](https://github.com/twmb/franz-go/commit/033a46c7) **improvement** kgo: begin ApiVersions at the max a broker told us, for an hour
+- [`46a9b2ad`](https://github.com/twmb/franz-go/commit/46a9b2ad) **behavior change** kgo: use ConsumeResetOffset when the broker loses data we cannot locate
+- [`8b33e43d`](https://github.com/twmb/franz-go/commit/8b33e43d) **improvement** kgo: speed up compression on both the legacy and the merge path
+- [`9de0fa36`](https://github.com/twmb/franz-go/commit/9de0fa36) **feature** kgo: add StreamingCompression, compressed-size-bound batch merging
+- [`de7327e6`](https://github.com/twmb/franz-go/commit/de7327e6) **feature** kgo: detect misrouted connections (KIP-1242)
+- [`8ad36ec7`](https://github.com/twmb/franz-go/commit/8ad36ec7) **feature** kgo: support TxnOffsetCommit v6
+- [`e4f7bc43`](https://github.com/twmb/franz-go/commit/e4f7bc43) **feature** kgo: add rack-aware producer partitioning (KIP-1123)
+- [`123f2ffa`](https://github.com/twmb/franz-go/commit/123f2ffa) **improvement** kgo: repair the sticky plan to the best balance, rack, and stickiness
+- [`23ab9a0e`](https://github.com/twmb/franz-go/commit/23ab9a0e) **behavior change** kgo: add BalanceRacks, gate rack aware balancing behind it
+- [`d4f6db2f`](https://github.com/twmb/franz-go/commit/d4f6db2f) **improvement** kgo: drop reassigned partitions in one pass in AdjustCooperative
+- [`35efafc8`](https://github.com/twmb/franz-go/commit/35efafc8) **behavior change** kgo: fail records for a recreated topic instead of producing by name
+- [`4f10346a`](https://github.com/twmb/franz-go/commit/4f10346a) **feature** kgo: expose BalanceInfo for custom balancer implementations (thanks [@michaelwilner](https://github.com/michaelwilner)!)
+- [`cd7f9b4e`](https://github.com/twmb/franz-go/commit/cd7f9b4e) **feature** kgo: add NewRecordAttrs constructor (thanks [@pracucci](https://github.com/pracucci)!)
+
 v1.21.7
 ===
 
