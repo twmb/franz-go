@@ -235,6 +235,8 @@ var (
 	// Returned for all buffered produce records when a user purges topics.
 	errPurged = errors.New("topic purged while buffered")
 
+	errMergedBatchUnsupported = errors.New("merged batch cannot be sent: the partition moved to a broker that does not support the batch's compression or record format")
+
 	errMissingMetadataPartition = errors.New("metadata update is missing a partition that we were previously using")
 
 	errNoCommittedOffset = errors.New("partition has no prior committed offset")

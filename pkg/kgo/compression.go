@@ -2,7 +2,6 @@ package kgo
 
 import (
 	"bytes"
-	"compress/gzip"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/klauspost/compress/gzip" // same format as compress/gzip, faster in both directions
 	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
@@ -220,6 +220,7 @@ out:
 				zstd.WithWindowSize(64 << 10),
 				zstd.WithEncoderConcurrency(1),
 				zstd.WithZeroFrames(true),
+				zstd.WithEncoderCRC(false), // the record batch CRC already covers these bytes
 			}
 			fn := func() any {
 				zstdEnc, _ := zstd.NewWriter(nil, opts...)
@@ -255,14 +256,7 @@ func (c *compressor) Compress(dst *bytes.Buffer, src []byte, flags ...CompressFl
 		}
 	}
 
-	var use CompressionCodecType
-	for _, option := range c.options {
-		if option == CodecZstd && disableZstd {
-			continue
-		}
-		use = option
-		break
-	}
+	use := c.pickCodec(disableZstd)
 
 	var out []byte
 	switch use {
@@ -317,6 +311,127 @@ func (c *compressor) Compress(dst *bytes.Buffer, src []byte, flags ...CompressFl
 	}
 
 	return out, use
+}
+
+// pickCodec returns the first configured codec, skipping zstd if it is
+// disabled (produce versions before 7 cannot use it).
+func (c *compressor) pickCodec(disableZstd bool) CompressionCodecType {
+	for _, option := range c.options {
+		if option != CodecZstd || !disableZstd {
+			return option
+		}
+	}
+	return CodecNone
+}
+
+// streamWriter is a codec writer that can flush mid stream, which is what
+// lets us measure a batch's compressed size before adding one more record.
+type streamWriter interface {
+	io.Writer
+	Flush() error
+	Close() error
+	Reset(io.Writer)
+}
+
+// streamCompressor compresses records into dst. Records collect in buf and
+// reach the codec in chunks; after flush, dst.Len() is the exact compressed
+// size so far.
+type streamCompressor struct {
+	dst *bytes.Buffer
+	buf []byte
+	w   streamWriter
+	put func()
+}
+
+var (
+	streamPool = sync.Pool{New: func() any { return new(streamCompressor) }}
+	xerialPool = sync.Pool{New: func() any { return new(xerialWriter) }}
+)
+
+// newStream returns a streaming compressor writing into dst, or nil if the
+// codec cannot stream.
+func (c *compressor) newStream(codec CompressionCodecType, dst *bytes.Buffer) *streamCompressor {
+	sc := streamPool.Get().(*streamCompressor)
+	sc.dst, sc.buf = dst, sc.buf[:0]
+	switch codec {
+	case CodecGzip:
+		gz := c.gzPool.Get().(*gzip.Writer)
+		sc.w, sc.put = gz, func() { c.gzPool.Put(gz) }
+	case CodecLz4:
+		lz := c.lz4Pool.Get().(*lz4.Writer)
+		sc.w, sc.put = lz, func() { c.lz4Pool.Put(lz) }
+	case CodecZstd:
+		ze := c.zstdPool.Get().(*zstdEncoder)
+		sc.w, sc.put = ze.inner, func() { c.zstdPool.Put(ze) }
+	case CodecSnappy:
+		xw := xerialPool.Get().(*xerialWriter)
+		sc.w, sc.put = xw, func() { xerialPool.Put(xw) }
+	default:
+		streamPool.Put(sc)
+		return nil
+	}
+	sc.w.Reset(dst)
+	return sc
+}
+
+// worst bounds what n pending bytes can add to dst. gzip, lz4, and zstd
+// store a raw block when compressing would grow it, at worst 5 bytes per
+// 16KB, and their frames add under 30 bytes, so 1/1024 plus 64 covers all
+// three; that is measured from the codecs, so mergeSpan checks the finished
+// blob too. Snappy's format bounds a block at 32 + b + b/6, and we write
+// blocks of at most 32KB, each behind a 4 byte length, after a 16 byte
+// header.
+func (sc *streamCompressor) worst(n int) int {
+	if _, ok := sc.w.(*xerialWriter); ok {
+		return n + n/6 + 36*(n/xerialBlockSize+1) + 16
+	}
+	return n + n>>10 + 64
+}
+
+// streamChunk is how many record bytes collect before a codec Write. For
+// snappy and zstd, 4KB and 16KB measured slower (more codec calls), 32KB
+// through 128KB the same, and 256KB slower again (the chunk no longer sits
+// in cache next to the codec's own buffers); gzip does not care. 32KB is
+// the smallest size on that plateau and the xerial block size, so for
+// snappy one Write is one block.
+const streamChunk = 32 << 10
+
+// write hands whole chunks of buffered records to the codec, keeping the
+// remainder for the next write; forced, it hands over everything.
+func (sc *streamCompressor) write(force bool) error {
+	n := len(sc.buf)
+	if !force {
+		n -= n % streamChunk
+		if n == 0 {
+			return nil
+		}
+	}
+	_, err := sc.w.Write(sc.buf[:n])
+	sc.buf = append(sc.buf[:0], sc.buf[n:]...)
+	return err
+}
+
+// flush pushes everything through the codec, after which dst.Len() is the
+// exact compressed size so far.
+func (sc *streamCompressor) flush() error {
+	if err := sc.write(true); err != nil {
+		return err
+	}
+	return sc.w.Flush()
+}
+
+// finish closes the stream and returns the codec and the compressor to
+// their pools. On success, dst holds the complete compressed frame.
+func (sc *streamCompressor) finish() error {
+	err := sc.write(true)
+	if err == nil {
+		err = sc.w.Close()
+	}
+	sc.w.Reset(nil) // drop the codec's reference to dst before pooling it
+	sc.put()
+	sc.dst, sc.w, sc.put = nil, nil, nil
+	streamPool.Put(sc)
+	return err
 }
 
 type decompressor struct {
@@ -507,6 +622,52 @@ func (d *decompressor) decompressZstd(dst, src []byte) ([]byte, error) {
 }
 
 var xerialPfx = []byte{130, 83, 78, 65, 80, 80, 89, 0}
+
+// xerialHeader is the prefix followed by the version and the minimum
+// compatible version, both 1: the Java reader rejects a lower version.
+var xerialHeader = append(append([]byte{}, xerialPfx...), 0, 0, 0, 1, 0, 0, 0, 1)
+
+// xerialBlockSize is the block size the Java stream writes.
+const xerialBlockSize = 32 << 10
+
+// xerialWriter frames snappy the way the Java producer does: the header,
+// then per block a big endian length and a raw snappy block. Blocks are
+// independent, so there is nothing to flush or close.
+type xerialWriter struct {
+	dst     io.Writer
+	buf     []byte
+	started bool
+}
+
+func (w *xerialWriter) Reset(dst io.Writer) { w.dst, w.started = dst, false }
+func (*xerialWriter) Flush() error          { return nil }
+func (*xerialWriter) Close() error          { return nil }
+
+func (w *xerialWriter) Write(p []byte) (int, error) {
+	w.buf = w.buf[:0]
+	if !w.started {
+		w.buf = append(w.buf, xerialHeader...)
+		w.started = true
+	}
+	w.buf = appendXerialBlocks(w.buf, p, xerialBlockSize)
+	_, err := w.dst.Write(w.buf)
+	return len(p), err
+}
+
+// appendXerialBlocks appends in as xerial framed blocks of at most
+// chunkSize bytes: a big endian length, then a raw snappy block.
+func appendXerialBlocks(dst, in []byte, chunkSize int) []byte {
+	for len(in) > 0 {
+		n := min(chunkSize, len(in))
+		dst = slices.Grow(dst, 4+s2.MaxEncodedLen(n))
+		at := len(dst)
+		block := s2.EncodeSnappy(dst[at+4:cap(dst)], in[:n]) // encodes in place, given the room
+		dst = binary.BigEndian.AppendUint32(dst, uint32(len(block)))
+		dst = dst[:at+4+len(block)]
+		in = in[n:]
+	}
+	return dst
+}
 
 var errMalformedXerial = errors.New("malformed xerial framing")
 
