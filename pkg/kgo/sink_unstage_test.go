@@ -12,9 +12,9 @@ import (
 // still be inflight and each of their successes pops the head batch and
 // decrements the drain index.
 
-// unstageSinkHarness returns a client, a sink, and one recBuf on that sink,
+// sinkHarness returns a client, a sink, and one recBuf on that sink,
 // with the producer topics wired so Close can fail any still-buffered records.
-func unstageSinkHarness(t *testing.T) (*Client, *sink, *recBuf) {
+func sinkHarness(t *testing.T) (*Client, *sink, *recBuf) {
 	t.Helper()
 
 	cl, err := NewClient(
@@ -76,7 +76,7 @@ func stageOne(t *testing.T, s *sink) *produceRequest {
 func TestUndoStagedBatchesWithInflight(t *testing.T) {
 	t.Parallel()
 
-	cl, s, r := unstageSinkHarness(t)
+	cl, s, r := sinkHarness(t)
 
 	// Three batches, three staged requests: A and B "inflight", C undone.
 	b0 := bufferOne(t, r)
@@ -123,7 +123,7 @@ func TestUndoStagedBatchesWithInflight(t *testing.T) {
 func TestUndoStagedBatchesAfterFailAllRecords(t *testing.T) {
 	t.Parallel()
 
-	_, s, r := unstageSinkHarness(t)
+	_, s, r := sinkHarness(t)
 
 	bufferOne(t, r)
 	req := stageOne(t, s)
@@ -143,7 +143,7 @@ func TestUndoStagedBatchesAfterFailAllRecords(t *testing.T) {
 func TestCreateReqSkipsPendingSeqResetWithInflight(t *testing.T) {
 	t.Parallel()
 
-	cl, s, r := unstageSinkHarness(t)
+	cl, s, r := sinkHarness(t)
 
 	b0 := bufferOne(t, r)
 	stageOne(t, s)

@@ -25,6 +25,10 @@ type producer struct {
 	bufferedRecords int64
 	bufferedBytes   int64
 
+	// mergeOff is set if a merged batch ever exceeds its limit, which
+	// means the merge bound is wrong for some codec; see mergeSpan.
+	mergeOff atomic.Bool
+
 	cl *Client
 
 	topicsMu xsync.Mutex // locked to prevent concurrent updates; reads are always atomic

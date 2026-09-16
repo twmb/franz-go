@@ -41,6 +41,7 @@ func TestGroupETL(t *testing.T) {
 		producerOpts := []Opt{
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			MaxBufferedRecords(10000),
+			StreamingCompression(),
 			MaxBufferedBytes(50000),
 			UnknownTopicRetries(-1), // see txn_test comment
 		}

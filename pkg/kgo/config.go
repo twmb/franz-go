@@ -144,6 +144,8 @@ type cfg struct {
 	partitioner Partitioner
 	compressor  Compressor
 
+	streamCompression bool
+
 	stopOnDataLoss bool
 	onDataLoss     func(string, int32)
 
@@ -1445,6 +1447,33 @@ func ProducerLinger(linger time.Duration) ProducerOpt {
 // have already been produced and not flushed will return ErrMaxBuffered.
 func ManualFlushing() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.manualFlushing = true }}
+}
+
+// StreamingCompression opts the client into compressing as many batches as
+// possible together when producing. By default, the client creates batches
+// internally up to ProducerBatchMaxBytes in size, and each of these batches
+// goes into its own produce request. With streaming compression, the client
+// compresses all batches available when a produce request is about to be
+// cut, up until the point that the next batch would exceed
+// ProducerBatchMaxBytes. This effectively changes the max bytes option from
+// bounding uncompressed bytes to bounding compressed bytes.
+//
+// The two potential downsides of this option are:
+//
+//   - Consumers cannot bound how much memory they use as well, because a
+//     consumer cannot ask "I want only 1MiB per partition uncompressed":
+//     consumers can only ask for batch sizes and do not know how large a
+//     batch will inflate to.
+//   - The client hard codes compression overhead; if the client gets it
+//     wrong and the compressed batch exceeds ProducerBatchMaxBytes, the
+//     client backs out of streaming compression permanently and logs a
+//     warning for you to create an issue.
+//
+// Streaming compression is recommended for high throughput producers whose
+// consumers can afford the larger decompressed batches. It has no effect
+// with a custom Compressor.
+func StreamingCompression() ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.streamCompression = true }}
 }
 
 // RecordDeliveryTimeout sets a rough time of how long a record can sit around
