@@ -179,14 +179,26 @@ type broker struct {
 	dead atomic.Bool
 }
 
-// brokerVersions is loaded once (and potentially a few times concurrently if
-// multiple connections are opening at once) and then forever stored for a
+// brokerVersions is loaded on every connection (and potentially a few times
+// concurrently if multiple connections are opening at once) and stored for a
 // broker.
 type brokerVersions struct {
 	maxVers  map[int16]int16
 	minVers  map[int16]int16
 	features map[string]int16
+
+	// learnedAt is when we last began ApiVersions at our own max version
+	// and learned this broker's from the reply. A connection that begins
+	// at the cached version instead carries the time over, so that we ask
+	// at our own max again once the cache is relearnVersionsAfter old.
+	learnedAt time.Time
 }
+
+// relearnVersionsAfter is how long a connection begins ApiVersions at the
+// max version a broker previously told us before we ask at our own max
+// again. A broker upgraded in place is asked to check the cluster and node
+// we expect (KIP-1242) within this long.
+const relearnVersionsAfter = time.Hour
 
 func (v *brokerVersions) maxVersion(key int16) int16 {
 	if version, ok := v.maxVers[key]; ok {
@@ -1010,6 +1022,19 @@ func (cxn *brokerCxn) requestAPIVersions(tries int) error {
 		}
 	}
 
+	// A broker we connected to before told us its ApiVersions max. If it
+	// is below ours, begin there: a request above the broker's max is
+	// answered UNSUPPORTED_VERSION and retried, one extra round trip per
+	// connection. Once the cache is old enough, we ask at our own max
+	// again in case the broker was upgraded.
+	learnedAt := time.Now()
+	if v := cxn.b.loadVersions(); v != nil && time.Since(v.learnedAt) < relearnVersionsAfter {
+		if cached := v.maxVersion(18); cached >= 0 && cached < maxVersion {
+			maxVersion = cached
+			learnedAt = v.learnedAt
+		}
+	}
+
 start:
 	req := kmsg.NewPtrApiVersionsRequest()
 	req.Version = maxVersion
@@ -1112,6 +1137,7 @@ start:
 	}
 
 	v := newBrokerVersions(len(resp.ApiKeys))
+	v.learnedAt = learnedAt
 	for _, key := range resp.ApiKeys {
 		v.maxVers[key.ApiKey] = key.MaxVersion
 		v.minVers[key.ApiKey] = key.MinVersion
