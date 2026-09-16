@@ -4,14 +4,17 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 )
 
@@ -557,6 +560,99 @@ func TestApiVersionsRebootstrapRequired(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A connection to a broker we connected to before begins ApiVersions at the
+// max version that broker told us, so a pre-4.4 broker pays the
+// UNSUPPORTED_VERSION round trip once rather than on every connection. An
+// hour after we last asked at our own max, the next connection asks at it
+// again, so a broker upgraded in place is asked to check the cluster and node
+// we expect (KIP-1242). Connections in between must not reset that hour.
+//
+// The idle reaper closes connections between requests, so every request
+// after a sleep opens a new one. synctest advances the clock instantly.
+func TestApiVersionsCachedStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var stack VirtualNetwork
+		c, err := NewCluster(
+			NumBrokers(1),
+			Ports(19242),
+			MaxVersions(kversion.V4_3_0()), // ApiVersions max 4
+			ListenFn(stack.Listen),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+
+		var mu sync.Mutex
+		var versions []int16
+		c.ControlKey(18, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+			c.KeepControl()
+			mu.Lock()
+			versions = append(versions, kreq.GetVersion())
+			mu.Unlock()
+			return nil, nil, false
+		})
+		take := func() []int16 {
+			mu.Lock()
+			defer mu.Unlock()
+			got := versions
+			versions = nil
+			return got
+		}
+
+		// The metadata refresh at one hour must land inside the hour
+		// since we learned the broker's versions, not on its edge, so
+		// the first request waits a second after the client starts.
+		cl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.Dialer(stack.DialContext),
+			kgo.MetadataMaxAge(time.Hour),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+		time.Sleep(time.Second)
+
+		ctx := context.Background()
+		request := func() {
+			t.Helper()
+			if _, err := cl.Broker(0).RetriableRequest(ctx, kmsg.NewPtrMetadataRequest()); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// The seed connection and the first connection to the
+		// discovered broker each ask at v5 and are told v4.
+		if _, err := cl.Request(ctx, kmsg.NewPtrMetadataRequest()); err != nil {
+			t.Fatal(err)
+		}
+		request()
+		if got := take(); !slices.Equal(got, []int16{5, 4, 5, 4}) {
+			t.Fatalf("first connections sent ApiVersions %v, want [5 4 5 4]", got)
+		}
+
+		// A new connection within the hour begins at v4.
+		time.Sleep(time.Minute)
+		request()
+		if got := take(); !slices.Equal(got, []int16{4}) {
+			t.Fatalf("connection within the hour sent ApiVersions %v, want [4]", got)
+		}
+
+		// The metadata refresh at one hour opens a connection that also
+		// begins at v4 and must not count as asking at our max. Past the
+		// hour since we did, the next connection asks at v5 again.
+		time.Sleep(time.Hour)
+		if got := take(); !slices.Equal(got, []int16{4}) {
+			t.Fatalf("metadata refresh within the hour sent ApiVersions %v, want [4]", got)
+		}
+		request()
+		if got := take(); !slices.Equal(got, []int16{5, 4}) {
+			t.Fatalf("connection after the hour sent ApiVersions %v, want [5 4]", got)
+		}
+	})
 }
 
 // A user-built ApiVersionsRequest literal has NodeID 0 rather than kmsg's

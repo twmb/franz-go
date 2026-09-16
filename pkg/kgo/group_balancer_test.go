@@ -580,10 +580,10 @@ func TestConsumerBalancerInfo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Without SetBalanceInfo -- NewConsumerBalancer without a client --
-	// Info returns the zero value.
-	if info := b.Info(); info.Group != "" || info.Generation != 0 || info.LeaderID != "" || info.Topics != nil || info.Brokers != nil {
-		t.Errorf("got non-zero info %+v before SetBalanceInfo", info)
+	// Without SetBalanceInfo (NewConsumerBalancer without a client), Info
+	// is empty and the functions return nil rather than being nil.
+	if info := b.Info(); info.Group != "" || info.Generation != 0 || info.LeaderID != "" || info.Topics() != nil || info.Brokers() != nil {
+		t.Errorf("got non-empty info %+v before SetBalanceInfo", info)
 	}
 
 	expTopics := map[string]TopicMetadata{"t1": {Topic: "t1"}}

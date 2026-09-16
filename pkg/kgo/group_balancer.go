@@ -150,9 +150,10 @@ type ConsumerBalancer struct {
 	balanceRacks   bool
 
 	// info is everything we know about the group and cluster at balance
-	// time, set by the client before balancing (see balanceGroup). Zero
-	// when the balancer is constructed directly (NewConsumerBalancer) and
-	// balanced without a client.
+	// time, set by the client before balancing (see balanceGroup). When
+	// the balancer is constructed directly (NewConsumerBalancer) and
+	// balanced without a client, the strings are empty and the functions
+	// return nil.
 	info BalanceInfo
 
 	err error
@@ -204,7 +205,7 @@ func (b *ConsumerBalancer) PartitionRacks() map[string][]string {
 // is in. The client sets the info before balancing; if you construct a
 // ConsumerBalancer directly with NewConsumerBalancer and balance without a
 // client, the info is empty: LeaderID is unset and the Topics and Brokers
-// functions are nil.
+// functions return nil.
 func (b *ConsumerBalancer) Info() BalanceInfo {
 	return b.info
 }
@@ -295,6 +296,10 @@ func NewConsumerBalancer(balance ConsumerBalancerBalance, members []kmsg.JoinGro
 		members:   members,
 		metadatas: make([]kmsg.ConsumerMemberMetadata, len(members)),
 		topics:    make(map[string]struct{}),
+		info: BalanceInfo{
+			Topics:  func() map[string]TopicMetadata { return nil },
+			Brokers: func() map[int32]BrokerMetadata { return nil },
+		},
 	}
 
 	for i, member := range members {
