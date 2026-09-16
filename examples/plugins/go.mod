@@ -1,6 +1,6 @@
 module plugins
 
-go 1.26.0
+go 1.27.0
 
 require (
 	github.com/twmb/franz-go v1.21.7

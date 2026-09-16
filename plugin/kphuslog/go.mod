@@ -1,6 +1,6 @@
 module github.com/twmb/franz-go/plugin/kphuslog
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/phuslu/log v1.0.133

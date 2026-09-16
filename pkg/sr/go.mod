@@ -1,3 +1,3 @@
 module github.com/twmb/franz-go/pkg/sr
 
-go 1.24.0
+go 1.26.0
