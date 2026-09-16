@@ -1,6 +1,9 @@
 package kgo
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 	"time"
 
@@ -82,6 +85,46 @@ func TestOptValuesTxnIDAndShare(t *testing.T) {
 	}
 	if vs := shcl.OptValues(ShareAckCallback); vs == nil {
 		t.Errorf("OptValues(ShareAckCallback) = nil; the option exists and must be returned")
+	}
+}
+
+// Every exported option constructor in config.go must have a case in
+// OptValues; a new option is easy to add without touching the switch.
+func TestOptValuesCoversEveryOption(t *testing.T) {
+	t.Parallel()
+
+	f, err := parser.ParseFile(token.NewFileSet(), "config.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := NewClient(SeedBrokers("127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	var n int
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || !fn.Name.IsExported() || fn.Type.Results == nil || len(fn.Type.Results.List) != 1 {
+			continue
+		}
+		ret, ok := fn.Type.Results.List[0].Type.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		switch ret.Name {
+		case "Opt", "ProducerOpt", "ConsumerOpt", "GroupOpt":
+		default:
+			continue
+		}
+		n++
+		if cl.OptValues(fn.Name.Name) == nil {
+			t.Errorf("OptValues(%q) = nil; the option exists and must be returned", fn.Name.Name)
+		}
+	}
+	if n == 0 {
+		t.Fatal("found no option constructors in config.go")
 	}
 }
 
