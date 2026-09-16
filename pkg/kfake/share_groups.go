@@ -913,6 +913,19 @@ func (g *shareGroup) maybeQuit() {
 	g.c.shareGroups.refreshSweepTicker()
 }
 
+// kill drops the group from the cluster, with its partition state and any
+// share session still keyed by its name. The group must have no members.
+func (g *shareGroup) kill() {
+	sgs := &g.c.shareGroups
+	for key := range sgs.sessions {
+		if key.group == g.name {
+			delete(sgs.sessions, key)
+		}
+	}
+	delete(sgs.gs, g.name)
+	sgs.refreshSweepTicker()
+}
+
 // dropSessionsForMember removes every share session the member holds, on
 // any broker. This must happen BEFORE the member's records are released:
 // a parked ShareFetch only re-checks that its session is still the one in

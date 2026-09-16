@@ -471,6 +471,16 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 		}
 		g, ok := gs.gs[rg]
 		if !ok {
+			// Kafka deletes share groups through this API too;
+			// there is no share-specific delete.
+			if shg := gs.c.shareGroups.get(rg); shg != nil {
+				if len(shg.members) > 0 {
+					setErr(kerr.NonEmptyGroup.Code)
+				} else {
+					shg.kill()
+				}
+				continue
+			}
 			setErr(kerr.GroupIDNotFound.Code)
 			continue
 		}
