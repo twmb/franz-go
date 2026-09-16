@@ -74,7 +74,6 @@ func shardErrEachBroker(req kmsg.Request, shards []kgo.ResponseShard, fn func(Br
 	se := ShardErrors{
 		Name: kmsg.NameForKey(req.Key()),
 	}
-	var ae *AuthError
 	for _, shard := range shards {
 		if shard.Err != nil {
 			se.Errs = append(se.Errs, ShardError{
@@ -85,7 +84,7 @@ func shardErrEachBroker(req kmsg.Request, shards []kgo.ResponseShard, fn func(Br
 			continue
 		}
 		if err := fn(shard.Meta, shard.Resp); err != nil {
-			if errors.As(err, &ae) {
+			if ae, ok := errors.AsType[*AuthError](err); ok {
 				return ae
 			}
 			// A response-level error is a failed shard too. kgo
@@ -126,15 +125,16 @@ func mergeShardErrs(e1, e2 error) error {
 	if e2 == nil {
 		return e1
 	}
-	var se1, se2 *ShardErrors
 	// A non-ShardErrors error (e.g. *AuthError from a first round) must
 	// win, not vanish: returning e2 here previously dropped a round-one
 	// auth error whenever a rerequest round followed with no error of
 	// its own, reporting partial results as clean.
-	if !errors.As(e1, &se1) {
+	se1, ok := errors.AsType[*ShardErrors](e1)
+	if !ok {
 		return e1
 	}
-	if !errors.As(e2, &se2) {
+	se2, ok := errors.AsType[*ShardErrors](e2)
+	if !ok {
 		return e2
 	}
 	se1.Errs = append(se1.Errs, se2.Errs...)

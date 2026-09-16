@@ -92,8 +92,6 @@ func produceN(t *testing.T, c *Cluster, topic string, n int) {
 	}
 }
 
-func stringp(s string) *string { return &s }
-
 // timestampBatch builds the wire bytes of one v2 record batch whose records
 // carry the given millisecond timestamps, patching Length and a valid
 // Castagnoli CRC.

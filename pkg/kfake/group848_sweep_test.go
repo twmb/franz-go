@@ -200,8 +200,7 @@ func TestAudit848TransientRestartNotification(t *testing.T) {
 		fs := cl.PollFetches(ctx)
 		cancel()
 		for _, fe := range fs.Errors() {
-			var gs *kgo.ErrGroupSession
-			if errors.As(fe.Err, &gs) && strings.Contains(fe.Err.Error(), "consecutive attempts") {
+			if _, ok := errors.AsType[*kgo.ErrGroupSession](fe.Err); ok && strings.Contains(fe.Err.Error(), "consecutive attempts") {
 				return // notification surfaced
 			}
 		}

@@ -2276,9 +2276,9 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 			s.c.usingCursors.use(load.cursor)
 		}
 
-		var edl *ErrDataLoss
+		_, isDataLoss := errors.AsType[*ErrDataLoss](load.err)
 		switch {
-		case errors.As(load.err, &edl):
+		case isDataLoss:
 			s.c.addFakeReadyForDraining(load.topic, load.partition, load.err, "notification of data loss") // signal we lost data, but set the cursor to what we can
 			use()
 

@@ -61,7 +61,13 @@ func pollUntil(cl *kgo.Client, timeout time.Duration, match func(error) bool) (m
 // pollDataLoss polls until a fetch reports data loss or the timeout expires,
 // returning that loss and every record that arrived.
 func pollDataLoss(cl *kgo.Client, timeout time.Duration) (dl *kgo.ErrDataLoss, recs []*kgo.Record) {
-	_, recs = pollUntil(cl, timeout, func(err error) bool { return errors.As(err, &dl) })
+	_, recs = pollUntil(cl, timeout, func(err error) bool {
+		got, ok := errors.AsType[*kgo.ErrDataLoss](err)
+		if ok {
+			dl = got
+		}
+		return ok
+	})
 	return dl, recs
 }
 

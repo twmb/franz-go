@@ -980,8 +980,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// producingTxn stays false: produces between the failure and the
 	// retry fail fast rather than buffering against a failed id.
 	if err != nil {
-		var ke *kerr.Error
-		if errors.As(err, &ke) && !ke.Retriable && ke.Code != kerr.UnknownServerError.Code {
+		if ke, ok := errors.AsType[*kerr.Error](err); ok && !ke.Retriable && ke.Code != kerr.UnknownServerError.Code {
 			cl.failProducerID(id, epoch, err)
 		} else {
 			cl.failProducerID(id, epoch, errReloadProducerID)
@@ -1012,8 +1011,8 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 		return false, false, nil
 	}
 
-	var ke *kerr.Error
-	if ok := errors.As(err, &ke); !ok {
+	ke, ok := errors.AsType[*kerr.Error](err)
+	if !ok {
 		// The stored PID error is not a kerr (broker-side) error -- most
 		// likely a transient network error wrapped in errProducerIDLoadFail
 		// (dial refused, EOF, etc.) from a broker restart or transient
@@ -1282,8 +1281,7 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 	// error. Some brokers send this when things fail internally, we can
 	// just abort our commit and see if things are still bad in
 	// EndTransaction.
-	var ke *kerr.Error
-	if errors.As(err, &ke) && !ke.Retriable && ke.Code != kerr.UnknownServerError.Code {
+	if ke, ok := errors.AsType[*kerr.Error](err); ok && !ke.Retriable && ke.Code != kerr.UnknownServerError.Code {
 		cl.failProducerID(id, epoch, err)
 	}
 

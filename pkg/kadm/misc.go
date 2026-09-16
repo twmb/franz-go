@@ -26,8 +26,7 @@ type ErrAndMessage struct {
 }
 
 func (e *ErrAndMessage) Error() string {
-	var ke *kerr.Error
-	if errors.As(e.Err, &ke) && e.ErrMessage != "" {
+	if ke, ok := errors.AsType[*kerr.Error](e.Err); ok && e.ErrMessage != "" {
 		return ke.Message + ": " + e.ErrMessage
 	}
 	return e.Err.Error()

@@ -464,8 +464,7 @@ func Test848UnsupportedAssignor(t *testing.T) {
 	req.Group = group
 	req.MemberEpoch = 0
 	req.RebalanceTimeoutMillis = 5000
-	bad := "nonexistent"
-	req.ServerAssignor = &bad
+	req.ServerAssignor = new("nonexistent")
 	req.SubscribedTopicNames = []string{"t"}
 	// Joins must carry an empty (non-null) owned-partitions list; null is
 	// rejected with INVALID_REQUEST before assignor validation runs.
@@ -783,8 +782,7 @@ func Test848RebalanceTimeout(t *testing.T) {
 	join.Group = group
 	join.MemberEpoch = 0
 	join.RebalanceTimeoutMillis = 500
-	assignor := "uniform"
-	join.ServerAssignor = &assignor
+	join.ServerAssignor = new("uniform")
 	join.SubscribedTopicNames = []string{topic}
 	join.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
 	joinResp, err := join.RequestWith(ctx, raw)
@@ -1145,7 +1143,7 @@ func TestTxnConcurrentDescribeAndInit(t *testing.T) {
 			defer wg.Done()
 			for ctx.Err() == nil {
 				req := kmsg.NewInitProducerIDRequest()
-				req.TransactionalID = stringp("txid-race-" + strconv.Itoa(rand.Intn(100)))
+				req.TransactionalID = new("txid-race-" + strconv.Itoa(rand.Intn(100)))
 				req.TransactionTimeoutMillis = 60000
 				req.ProducerID = -1
 				req.ProducerEpoch = -1
@@ -3825,8 +3823,7 @@ func TestUnreleasedInstanceIDCapFires(t *testing.T) {
 	for !sawErr && ctx.Err() == nil {
 		fs := consumer.PollFetches(ctx)
 		fs.EachError(func(_ string, _ int32, err error) {
-			var gs *kgo.ErrGroupSession
-			if errors.As(err, &gs) && errors.Is(gs.Err, kerr.UnreleasedInstanceID) {
+			if gs, ok := errors.AsType[*kgo.ErrGroupSession](err); ok && errors.Is(gs.Err, kerr.UnreleasedInstanceID) {
 				sawErr = true
 			}
 		})
@@ -3881,8 +3878,7 @@ func TestUnreleasedInstanceIDRaceResolves(t *testing.T) {
 	for len(records) < nRecords && ctx.Err() == nil {
 		fs := consumer.PollFetches(ctx)
 		fs.EachError(func(_ string, _ int32, err error) {
-			var gs *kgo.ErrGroupSession
-			if errors.As(err, &gs) && errors.Is(gs.Err, kerr.UnreleasedInstanceID) {
+			if gs, ok := errors.AsType[*kgo.ErrGroupSession](err); ok && errors.Is(gs.Err, kerr.UnreleasedInstanceID) {
 				t.Fatalf("UnreleasedInstanceID should NOT have been surfaced, but got: %v", err)
 			}
 		})

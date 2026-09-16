@@ -128,8 +128,7 @@ outer:
 		// management.
 		if !known848Support {
 			if err != nil {
-				var ke *kerr.Error
-				if errors.As(err, &ke) {
+				if ke, ok := errors.AsType[*kerr.Error](err); ok {
 					if ke.Code == kerr.UnsupportedVersion.Code {
 						// It's okay to update is848 here. This is used while leaving
 						// and while heartbeating. We have not yet entered heartbeating.

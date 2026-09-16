@@ -1217,7 +1217,7 @@ func (m *multiUpdateWhy) add(t string, p int32, err error) {
 		*m = make(map[kerrOrString]map[string]map[int32]struct{})
 	}
 	var ks kerrOrString
-	if ke := (*kerr.Error)(nil); errors.As(err, &ke) {
+	if ke, ok := errors.AsType[*kerr.Error](err); ok {
 		ks = kerrOrString{k: ke}
 	} else {
 		ks = kerrOrString{s: err.Error()}

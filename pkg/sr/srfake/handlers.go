@@ -943,8 +943,7 @@ func (r *Registry) handleDeleteContext(w http.ResponseWriter, req *http.Request)
 // the correct HTTP response. It checks if the error is a registryError and uses
 // its properties, otherwise returns a generic 500 error.
 func (*Registry) handleAPIError(w http.ResponseWriter, err error) {
-	var regErr *registryError
-	if errors.As(err, &regErr) {
+	if regErr, ok := errors.AsType[*registryError](err); ok {
 		// This is a known registry error, use its properties.
 		writeError(w, regErr.HTTPStatus, regErr.SRCode, regErr.Message)
 	} else {

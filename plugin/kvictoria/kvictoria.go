@@ -208,8 +208,7 @@ func (m *Metrics) OnBrokerThrottle(meta kgo.BrokerMetadata, throttleInterval tim
 func (m *Metrics) OnGroupManageError(err error) {
 	labels := map[string]string{"client_id": m.clientID}
 
-	var kerr *kerr.Error
-	if errors.As(err, &kerr) {
+	if kerr, ok := errors.AsType[*kerr.Error](err); ok {
 		labels["error_message"] = kerr.Message
 	} else {
 		labels["error_message"] = err.Error()
