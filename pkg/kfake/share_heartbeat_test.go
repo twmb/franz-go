@@ -3,6 +3,7 @@ package kfake
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -149,4 +150,88 @@ func TestShareGroupDeleteGroups(t *testing.T) {
 	if err := deleteGroup(); !errors.Is(err, kerr.GroupIDNotFound) {
 		t.Fatalf("deleting a deleted share group: got %v, want GROUP_ID_NOT_FOUND", err)
 	}
+}
+
+// A group id is exclusively one type. The handlers that create a group
+// on demand refuse an id the other map already holds, as Kafka's
+// getOrMaybeCreateShareGroup and ShareGroup.validateOffsetCommit do, so
+// ListGroups never lists an id twice.
+func TestShareGroupTypeExclusive(t *testing.T) {
+	t.Parallel()
+	const topic = "t"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+	topicID := c.TopicInfo(topic).TopicID
+
+	// alterShare creates a share group with partition state, so it
+	// outlives having no members, and returns the top-level error.
+	alterShare := func(group string) error {
+		t.Helper()
+		req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
+		req.GroupID = group
+		at := kmsg.NewAlterShareGroupOffsetsRequestTopic()
+		at.Topic = topic
+		ap := kmsg.NewAlterShareGroupOffsetsRequestTopicPartition()
+		ap.Partition = 0
+		at.Partitions = append(at.Partitions, ap)
+		req.Topics = append(req.Topics, at)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return kerr.ErrorForCode(resp.ErrorCode)
+	}
+	// commit is a simple (generation -1) commit, which creates an empty
+	// classic group when the id is free, and returns the partition error.
+	commit := func(group string) error {
+		t.Helper()
+		req := kmsg.NewPtrOffsetCommitRequest()
+		req.Group = group
+		req.Generation = -1
+		rt := kmsg.NewOffsetCommitRequestTopic()
+		rt.Topic, rt.TopicID = topic, topicID // v10+ matches by TopicID
+		rp := kmsg.NewOffsetCommitRequestTopicPartition()
+		rp.Partition = 0
+		rp.Offset = 1
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+			t.Fatalf("unexpected OffsetCommit response topics: %+v", resp.Topics)
+		}
+		return kerr.ErrorForCode(resp.Topics[0].Partitions[0].ErrorCode)
+	}
+	// listedTypes returns the GroupType of every ListGroups entry for
+	// group: one entry when the id is exclusive, two when it is not.
+	listedTypes := func(group string) []string {
+		t.Helper()
+		resp, err := kmsg.NewPtrListGroupsRequest().RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var types []string
+		for _, g := range resp.Groups {
+			if g.Group == group {
+				types = append(types, g.GroupType)
+			}
+		}
+		return types
+	}
+
+	t.Run("OffsetCommit to a share group", func(t *testing.T) {
+		const group = "share-then-commit"
+		if err := alterShare(group); err != nil {
+			t.Fatalf("creating the share group: %v", err)
+		}
+		if err := commit(group); !errors.Is(err, kerr.GroupIDNotFound) {
+			t.Fatalf("committing to a share group: got %v, want GROUP_ID_NOT_FOUND", err)
+		}
+		if got := listedTypes(group); !slices.Equal(got, []string{"share"}) {
+			t.Fatalf("listed types after a refused commit: got %v, want [share]", got)
+		}
+	})
 }
