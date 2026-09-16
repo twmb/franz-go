@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"regexp"
 	"slices"
@@ -1219,5 +1220,63 @@ func TestPollWaitStateNoUnderflow(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("rebalance gate blocked after AllowRebalance raced a poll")
+	}
+}
+
+// A lookback is meaningful only alongside the position it was set with, so
+// every method that sets a new position has to drop it. If one stopped, an
+// offset you reset to a position would silently keep looking back from it.
+// Lookback itself sets one, clamping a negative duration that would look
+// forward.
+func TestOffsetLookback(t *testing.T) {
+	t.Parallel()
+	o := defaultCfg().resetOffset
+	if !o.hasLookback || o.lookback != time.Minute {
+		t.Fatalf("the default reset offset looks back %s (has %v), want 1m", o.lookback, o.hasLookback)
+	}
+	for _, test := range []struct {
+		name string
+		fn   func(Offset) Offset
+		has  bool
+		want time.Duration
+	}{
+		{"AfterMilli", func(o Offset) Offset { return o.AfterMilli(1000) }, false, 0},
+		{"AtStart", Offset.AtStart, false, 0},
+		{"AtEnd", Offset.AtEnd, false, 0},
+		{"AtCommitted", Offset.AtCommitted, false, 0},
+		{"Relative", func(o Offset) Offset { return o.Relative(-3) }, false, 0},
+		{"WithEpoch", func(o Offset) Offset { return o.WithEpoch(1) }, false, 0},
+		{"At", func(o Offset) Offset { return o.At(3) }, false, 0},
+		{"Lookback", func(o Offset) Offset { return o.Lookback(time.Hour) }, true, time.Hour},
+		{"Lookback negative", func(o Offset) Offset { return o.Lookback(-time.Hour) }, true, 0},
+	} {
+		got := test.fn(o)
+		if got.hasLookback != test.has || test.has && got.lookback != test.want {
+			t.Errorf("%s looks back %s (has %v), want %s (has %v)", test.name, got.lookback, got.hasLookback, test.want, test.has)
+		}
+	}
+}
+
+func TestLookbackMilli(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name  string
+		milli int64
+		d     time.Duration
+		want  int64
+	}{
+		{"no lookback", 1000000, 0, 1000000},
+		{"subtracts", 1000000, time.Second, 999000},
+		{"onto zero", 1000, time.Second, 1},
+		{"into the reserved range", 500, time.Second, 1},
+		{"a record below the epoch", -5000, time.Second, 1},
+		{"a subtraction that wraps", math.MinInt64 + 5, 24 * time.Hour, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := lookbackMilli(test.milli, test.d); got != test.want {
+				t.Errorf("lookbackMilli(%d, %s) = %d, want %d", test.milli, test.d, got, test.want)
+			}
+		})
 	}
 }

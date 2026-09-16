@@ -49,15 +49,16 @@ func undefinedNextOFLE(c *Cluster) (fired chan struct{}) {
 	return fired
 }
 
-// TestAuditOFLEUndefinedEpochOffsetNotDataLoss verifies that an
+// TestAuditOFLEUndefinedEpochOffsetResetsInBounds verifies that an
 // OffsetForLeaderEpoch validation answered with the KIP-320 UNDEFINED sentinel
-// (endOffset -1, leaderEpoch -1) is NOT reported as data loss. Pre-fix,
+// (endOffset -1, leaderEpoch -1) never pins the cursor at offset -1. Pre-fix,
 // loadEpochsForBrokerLoad compared endOffset (-1) against the validating
-// offset, saw `-1 < offset`, and surfaced a spurious ErrDataLoss while pinning
-// the cursor at offset -1. Post-fix the sentinel routes to the normal
-// OFFSET_OUT_OF_RANGE reset path with no false data-loss error, and the
-// consumer keeps consuming.
-func TestAuditOFLEUndefinedEpochOffsetNotDataLoss(t *testing.T) {
+// offset, saw `-1 < offset`, and reset the cursor to -1, reporting that as
+// where it had consumed to. The sentinel now routes to the same reset an out
+// of range fetch after consuming takes: we cannot locate where the log
+// diverged, so ConsumeResetOffset picks a real offset, we report the loss from
+// the offset we were at, and the consumer keeps consuming.
+func TestAuditOFLEUndefinedEpochOffsetResetsInBounds(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -108,7 +109,12 @@ func TestAuditOFLEUndefinedEpochOffsetNotDataLoss(t *testing.T) {
 		fetches.EachError(func(_ string, _ int32, err error) {
 			var dl *kgo.ErrDataLoss
 			if errors.As(err, &dl) {
-				t.Fatalf("BUG REPRODUCED: spurious ErrDataLoss on UNDEFINED_EPOCH_OFFSET (endOffset -1): %v", err)
+				if dl.ResetTo < 0 {
+					t.Fatalf("BUG REPRODUCED: reset to a negative offset on UNDEFINED_EPOCH_OFFSET (endOffset -1): %v", err)
+				}
+				if dl.ConsumedTo != initial {
+					t.Fatalf("data loss reports consuming to %d, want %d", dl.ConsumedTo, initial)
+				}
 			}
 		})
 		fetches.EachRecord(func(r *kgo.Record) {
@@ -119,6 +125,83 @@ func TestAuditOFLEUndefinedEpochOffsetNotDataLoss(t *testing.T) {
 	}
 	if !resumed {
 		t.Fatal("consumer did not resume after the UNDEFINED_EPOCH_OFFSET validation")
+	}
+}
+
+// TestUndefinedEpochStays requires a cursor to stay where it was when an
+// OffsetForLeaderEpoch validation cannot answer and there is nothing to reset
+// from: NoResetOffset, or nothing consumed yet. That reset is issued from the
+// validation rather than from a fetch, so it never passes the fetch path's
+// checks and has to repeat them. Without them the reset runs the policy: a
+// bare NoResetOffset is an end offset, which skips every record between where
+// we were and the end, and AtStart re-reads the log. A committed offset
+// carries an epoch, so the validation runs before the first record is read;
+// there is nothing to recover to and nothing lost to report, and if the offset
+// is out of the log the next fetch says so.
+func TestUndefinedEpochStays(t *testing.T) {
+	t.Parallel()
+
+	const (
+		topic = "ooor-undef"
+		nrecs = 8
+		at    = 5
+	)
+
+	for _, test := range []struct {
+		name     string
+		consumed bool
+		opts     []kgo.Opt
+	}{
+		{name: "no reset after consuming", consumed: true, opts: []kgo.Opt{
+			kgo.ConsumeTopics(topic),
+			kgo.ConsumeStartOffset(kgo.NewOffset().AtStart()),
+			kgo.ConsumeResetOffset(kgo.NoResetOffset()),
+		}},
+		// An exact offset with an epoch is validated before the first
+		// fetch, which is the shape of a group consumer resuming from a
+		// commit.
+		{name: "nothing consumed", opts: []kgo.Opt{
+			kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{topic: {0: kgo.NewOffset().At(at).WithEpoch(0)}}),
+			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			produceN(t, c, topic, nrecs)
+
+			if !test.consumed {
+				undefinedNextOFLE(c)
+			}
+			cl := newPlainClient(t, c, append([]kgo.Opt{
+				kgo.DisableFetchSessions(),
+				kgo.FetchMaxWait(100 * time.Millisecond),
+			}, test.opts...)...)
+			if test.consumed {
+				// Stop the cursor at 5 with the log end three above
+				// it, so resuming at the end is visibly different
+				// from staying put.
+				consumeThenPause(t, cl, topic, at)
+				fired := undefinedNextOFLE(c)
+				fenceNextFetch(c, topic)
+				cl.ResumeFetchTopics(topic)
+				waitCh(t, fired, "the epoch validation was never issued")
+			}
+
+			dl, got := pollDataLoss(cl, 4*time.Second)
+			if dl != nil {
+				t.Errorf("reported data loss: %v", dl)
+			}
+			if len(got) != nrecs-at {
+				t.Fatalf("consumed %d records after the validation, want %d", len(got), nrecs-at)
+			}
+			for i, r := range got {
+				if want := int64(at + i); r.Offset != want {
+					t.Errorf("record %d is offset %d, want %d", i, r.Offset, want)
+				}
+			}
+		})
 	}
 }
 
