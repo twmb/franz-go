@@ -36,6 +36,14 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 		return resp, nil
 	}
 
+	// Group type exclusivity: a consumer group under this id means
+	// there is no share group to create. Kafka's
+	// getOrMaybeCreateShareGroup throws GROUP_ID_NOT_FOUND.
+	if _, isConsumer := c.groups.gs[req.GroupID]; isConsumer {
+		resp.ErrorCode = kerr.GroupIDNotFound.Code
+		return resp, nil
+	}
+
 	// Auto-create the share group if it doesn't exist.
 	sg := c.shareGroups.getOrCreate(req.GroupID)
 

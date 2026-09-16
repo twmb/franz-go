@@ -332,6 +332,17 @@ func (gs *groups) handleLeave(creq *clientReq) (kmsg.Response, bool) {
 
 func (gs *groups) handleOffsetCommit(creq *clientReq) *kmsg.OffsetCommitResponse {
 	req := creq.kreq.(*kmsg.OffsetCommitRequest)
+
+	// Group type exclusivity: a share group holds no committed offsets,
+	// and creating a consumer group under its name would list the id
+	// twice. Kafka answers GROUP_ID_NOT_FOUND on every partition.
+	if _, isShare := gs.c.shareGroups.gs[req.Group]; isShare {
+		resp := req.ResponseKind().(*kmsg.OffsetCommitResponse)
+		fillOffsetCommit(req, resp, kerr.GroupIDNotFound.Code)
+		resp.Topics = append(resp.Topics, creq.offsetCommitErrTopics...)
+		return resp
+	}
+
 	g, isNew := gs.newOrExisting(req.Group)
 	kresp, ok := g.dispatchOffsetCommit(creq)
 	if isNew && !ok {
@@ -471,6 +482,16 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 		}
 		g, ok := gs.gs[rg]
 		if !ok {
+			// Kafka deletes share groups through this API too;
+			// there is no share-specific delete.
+			if shg := gs.c.shareGroups.get(rg); shg != nil {
+				if len(shg.members) > 0 {
+					setErr(kerr.NonEmptyGroup.Code)
+				} else {
+					shg.kill()
+				}
+				continue
+			}
 			setErr(kerr.GroupIDNotFound.Code)
 			continue
 		}

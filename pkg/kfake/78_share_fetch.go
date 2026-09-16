@@ -80,6 +80,17 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 	}
 
+	// Group type exclusivity: a consumer group under this id means
+	// there is no share group to fetch from, and neither createSession
+	// nor the recreate fallback below may make one. Kafka never asks the
+	// group coordinator here; its share coordinator refuses the
+	// uninitialized partitions one by one instead. We answer the same
+	// top-level GROUP_ID_NOT_FOUND that ShareGroupHeartbeat does.
+	if _, isConsumer := c.groups.gs[groupID]; isConsumer {
+		resp.ErrorCode = kerr.GroupIDNotFound.Code
+		return resp, nil
+	}
+
 	sg := c.shareGroups.get(groupID)
 	id2t := c.data.id2t
 	maxDelivery := c.shareMaxDeliveryAttempts()
