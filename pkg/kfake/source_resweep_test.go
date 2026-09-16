@@ -107,8 +107,7 @@ func TestAuditOFLEUndefinedEpochOffsetResetsInBounds(t *testing.T) {
 	for ctx.Err() == nil && !resumed {
 		fetches := cl.PollFetches(ctx)
 		fetches.EachError(func(_ string, _ int32, err error) {
-			var dl *kgo.ErrDataLoss
-			if errors.As(err, &dl) {
+			if dl, ok := errors.AsType[*kgo.ErrDataLoss](err); ok {
 				if dl.ResetTo < 0 {
 					t.Fatalf("BUG REPRODUCED: reset to a negative offset on UNDEFINED_EPOCH_OFFSET (endOffset -1): %v", err)
 				}

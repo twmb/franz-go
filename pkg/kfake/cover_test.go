@@ -823,8 +823,7 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	rr2.ResourceName = topic
 	rc2 := kmsg.NewAlterConfigsRequestResourceConfig()
 	rc2.Name = "retention.ms"
-	v2 := "86400000"
-	rc2.Value = &v2
+	rc2.Value = new("86400000")
 	rr2.Configs = append(rr2.Configs, rc2)
 	req2.Resources = append(req2.Resources, rr2)
 
@@ -887,8 +886,7 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	rr5.ResourceType = kmsg.ConfigResourceTypeBroker
 	rc5 := kmsg.NewAlterConfigsRequestResourceConfig()
 	rc5.Name = "log.retention.ms"
-	v5 := "999"
-	rc5.Value = &v5
+	rc5.Value = new("999")
 	rr5.Configs = append(rr5.Configs, rc5)
 	req5.Resources = append(req5.Resources, rr5)
 	resp5, err := req5.RequestWith(ctx, cl)
@@ -999,8 +997,7 @@ func TestIncrementalAlterConfigsOperations(t *testing.T) {
 	rr3.ResourceName = topic
 	rc3 := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 	rc3.Name = "retention.ms"
-	v3 := "172800000"
-	rc3.Value = &v3
+	rc3.Value = new("172800000")
 	rc3.Op = kmsg.IncrementalAlterConfigOpSet
 	rr3.Configs = append(rr3.Configs, rc3)
 	req3.Resources = append(req3.Resources, rr3)
@@ -1070,8 +1067,7 @@ func TestIncrementalAlterConfigsOperations(t *testing.T) {
 	rr6.ResourceType = kmsg.ConfigResourceTypeBroker
 	rc6 := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 	rc6.Name = "log.retention.ms"
-	v6 := "111"
-	rc6.Value = &v6
+	rc6.Value = new("111")
 	rc6.Op = kmsg.IncrementalAlterConfigOpSet
 	rr6.Configs = append(rr6.Configs, rc6)
 	req6.Resources = append(req6.Resources, rr6)
@@ -1234,8 +1230,7 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 	rt8.ReplicationFactor = 1
 	cfg := kmsg.NewCreateTopicsRequestTopicConfig()
 	cfg.Name = "retention.ms"
-	rv := "86400000"
-	cfg.Value = &rv
+	cfg.Value = new("86400000")
 	rt8.Configs = append(rt8.Configs, cfg)
 	req8.Topics = append(req8.Topics, rt8)
 	resp8, err := req8.RequestWith(ctx, cl)

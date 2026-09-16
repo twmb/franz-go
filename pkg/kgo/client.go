@@ -2051,7 +2051,7 @@ func (cl *Client) controller(ctx context.Context) (b *broker, err error) {
 	}
 
 	defer func() {
-		if ec := (*errUnknownController)(nil); errors.As(err, &ec) {
+		if ec, ok := errors.AsType[*errUnknownController](err); ok {
 			cl.forgetControllerID(ec.id)
 		}
 	}()
@@ -2977,7 +2977,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 				var errIsFromResp bool
 				if err == nil {
 					err = sharder.onResp(myIssue.req, resp) // perform some potential cleanup, and potentially receive an error to retry
-					if ke := (*kerr.Error)(nil); errors.As(err, &ke) {
+					if _, ok := errors.AsType[*kerr.Error](err); ok {
 						errIsFromResp = true
 					}
 				}
@@ -3742,7 +3742,7 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 
 	for _, group := range req.Groups {
 		berr := coordinators[group.Group]
-		var ke *kerr.Error
+		ke, isKerr := errors.AsType[*kerr.Error](berr.err)
 		switch {
 		case berr.err == nil:
 			brokerReq := brokerReqs[berr.b.meta.NodeID]
@@ -3751,7 +3751,7 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 				brokerReqs[berr.b.meta.NodeID] = brokerReq
 			}
 			brokerReq.Groups = append(brokerReq.Groups, group)
-		case errors.As(berr.err, &ke):
+		case isKerr:
 			kerrs[ke] = append(kerrs[ke], group)
 		default:
 			unkerrs = append(unkerrs, unkerr{berr.err, group})
@@ -4056,7 +4056,7 @@ func (cl *describeGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _
 
 	for _, group := range req.Groups {
 		berr := coordinators[group]
-		var ke *kerr.Error
+		ke, isKerr := errors.AsType[*kerr.Error](berr.err)
 		switch {
 		case berr.err == nil:
 			brokerReq := brokerReqs[berr.b.meta.NodeID]
@@ -4065,7 +4065,7 @@ func (cl *describeGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _
 				brokerReqs[berr.b.meta.NodeID] = brokerReq
 			}
 			brokerReq.Groups = append(brokerReq.Groups, group)
-		case errors.As(berr.err, &ke):
+		case isKerr:
 			kerrs[ke] = append(kerrs[ke], group)
 		default:
 			unkerrs = append(unkerrs, unkerr{berr.err, group})
@@ -4482,7 +4482,7 @@ func (cl *addPartitionsToTxnSharder) shard(ctx context.Context, kreq kmsg.Reques
 
 	for _, txn := range req.Transactions {
 		berr := coordinators[txn.TransactionalID]
-		var ke *kerr.Error
+		ke, isKerr := errors.AsType[*kerr.Error](berr.err)
 		switch {
 		case berr.err == nil:
 			brokerReq := brokerReqs[berr.b.meta.NodeID]
@@ -4492,7 +4492,7 @@ func (cl *addPartitionsToTxnSharder) shard(ctx context.Context, kreq kmsg.Reques
 			} else {
 				brokerReq.Transactions = append(brokerReq.Transactions, txn)
 			}
-		case errors.As(berr.err, &ke):
+		case isKerr:
 			kerrs[ke] = append(kerrs[ke], txn)
 		default:
 			unkerrs = append(unkerrs, unkerr{berr.err, txn})
@@ -5218,7 +5218,7 @@ func (cl *deleteGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _ e
 
 	for _, group := range req.Groups {
 		berr := coordinators[group]
-		var ke *kerr.Error
+		ke, isKerr := errors.AsType[*kerr.Error](berr.err)
 		switch {
 		case berr.err == nil:
 			brokerReq := brokerReqs[berr.b.meta.NodeID]
@@ -5227,7 +5227,7 @@ func (cl *deleteGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _ e
 				brokerReqs[berr.b.meta.NodeID] = brokerReq
 			}
 			brokerReq.Groups = append(brokerReq.Groups, group)
-		case errors.As(berr.err, &ke):
+		case isKerr:
 			kerrs[ke] = append(kerrs[ke], group)
 		default:
 			unkerrs = append(unkerrs, unkerr{berr.err, group})
@@ -5479,7 +5479,7 @@ func (cl *describeTransactionsSharder) shard(ctx context.Context, kreq kmsg.Requ
 
 	for _, txnID := range req.TransactionalIDs {
 		berr := coordinators[txnID]
-		var ke *kerr.Error
+		ke, isKerr := errors.AsType[*kerr.Error](berr.err)
 		switch {
 		case berr.err == nil:
 			brokerReq := brokerReqs[berr.b.meta.NodeID]
@@ -5488,7 +5488,7 @@ func (cl *describeTransactionsSharder) shard(ctx context.Context, kreq kmsg.Requ
 				brokerReqs[berr.b.meta.NodeID] = brokerReq
 			}
 			brokerReq.TransactionalIDs = append(brokerReq.TransactionalIDs, txnID)
-		case errors.As(berr.err, &ke):
+		case isKerr:
 			kerrs[ke] = append(kerrs[ke], txnID)
 		default:
 			unkerrs = append(unkerrs, unkerr{berr.err, txnID})
@@ -5614,7 +5614,7 @@ func (cl *consumerGroupDescribeSharder) shard(ctx context.Context, kreq kmsg.Req
 	}
 	for _, group := range req.Groups {
 		berr := coordinators[group]
-		var ke *kerr.Error
+		ke, isKerr := errors.AsType[*kerr.Error](berr.err)
 		switch {
 		case berr.err == nil:
 			brokerReq := brokerReqs[berr.b.meta.NodeID]
@@ -5623,7 +5623,7 @@ func (cl *consumerGroupDescribeSharder) shard(ctx context.Context, kreq kmsg.Req
 				brokerReqs[berr.b.meta.NodeID] = brokerReq
 			}
 			brokerReq.Groups = append(brokerReq.Groups, group)
-		case errors.As(berr.err, &ke):
+		case isKerr:
 			kerrs[ke] = append(kerrs[ke], group)
 		default:
 			unkerrs = append(unkerrs, unkerr{berr.err, group})
@@ -5696,7 +5696,7 @@ func (cl *shareGroupDescribeSharder) shard(ctx context.Context, kreq kmsg.Reques
 	}
 	for _, groupID := range req.GroupIDs {
 		berr := coordinators[groupID]
-		var ke *kerr.Error
+		ke, isKerr := errors.AsType[*kerr.Error](berr.err)
 		switch {
 		case berr.err == nil:
 			brokerReq := brokerReqs[berr.b.meta.NodeID]
@@ -5705,7 +5705,7 @@ func (cl *shareGroupDescribeSharder) shard(ctx context.Context, kreq kmsg.Reques
 				brokerReqs[berr.b.meta.NodeID] = brokerReq
 			}
 			brokerReq.GroupIDs = append(brokerReq.GroupIDs, groupID)
-		case errors.As(berr.err, &ke):
+		case isKerr:
 			kerrs[ke] = append(kerrs[ke], groupID)
 		default:
 			unkerrs = append(unkerrs, unkerr{berr.err, groupID})
@@ -5781,7 +5781,7 @@ func (cl *describeShareGroupOffsetsSharder) shard(ctx context.Context, kreq kmsg
 	}
 	for _, g := range req.Groups {
 		berr := coordinators[g.GroupID]
-		var ke *kerr.Error
+		ke, isKerr := errors.AsType[*kerr.Error](berr.err)
 		switch {
 		case berr.err == nil:
 			brokerReq := brokerReqs[berr.b.meta.NodeID]
@@ -5790,7 +5790,7 @@ func (cl *describeShareGroupOffsetsSharder) shard(ctx context.Context, kreq kmsg
 				brokerReqs[berr.b.meta.NodeID] = brokerReq
 			}
 			brokerReq.Groups = append(brokerReq.Groups, g)
-		case errors.As(berr.err, &ke):
+		case isKerr:
 			kerrs[ke] = append(kerrs[ke], g)
 		default:
 			unkerrs = append(unkerrs, unkerr{berr.err, g.GroupID})

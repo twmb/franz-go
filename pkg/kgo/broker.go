@@ -718,7 +718,7 @@ doConnect:
 		// retry twice. On the first and second attempt, we try our max
 		// version possible (as should be allowed). On the third try,
 		// we downgrade to v0 (see requestAPIVersions).
-		if er := (*errApiVersionsReset)(nil); errors.As(err, &er) && tries < 3 {
+		if _, ok := errors.AsType[*errApiVersionsReset](err); ok && tries < 3 {
 			cxn.die()
 			goto doConnect
 		}
@@ -1034,8 +1034,7 @@ start:
 	// api versions does *not* use flexible response headers; see comment in promisedResp
 	rawResp, err := cxn.readResponse(nil, req.Key(), req.GetVersion(), corrID, false, rt, bytesWritten, writeWait, timeToWrite, readEnqueue)
 	if err != nil {
-		var errno syscall.Errno
-		if errors.As(err, &errno) && isConnReset(errno) {
+		if errno, ok := errors.AsType[syscall.Errno](err); ok && isConnReset(errno) {
 			return &errApiVersionsReset{err}
 		} else if errors.Is(err, io.EOF) {
 			cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker received EOF during api versions discovery, which often happens when the broker requires TLS and the client is not using it (is TLS misconfigured?)", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)

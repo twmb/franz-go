@@ -430,8 +430,7 @@ func TestAuditSaslReauthLifetimeClearedWhenDisabled(t *testing.T) {
 	res.ResourceType = kmsg.ConfigResourceTypeBroker
 	cfg := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 	cfg.Name = "connections.max.reauth.ms"
-	val := "0"
-	cfg.Value = &val
+	cfg.Value = new("0")
 	res.Configs = append(res.Configs, cfg)
 	alter.Resources = append(alter.Resources, res)
 	alterResp, err := br.Request(ctx, alter)

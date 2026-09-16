@@ -152,7 +152,7 @@ func TestIssue769(t *testing.T) {
 		case <-timer.C:
 			t.Fatal("expected record to fail within 3s")
 		}
-		if pe := (*errProducerIDLoadFail)(nil); !errors.As(rerr, &pe) || !(errors.Is(pe.err, context.Canceled) || strings.Contains(pe.err.Error(), "canceled")) {
+		if pe, ok := errors.AsType[*errProducerIDLoadFail](rerr); !ok || !(errors.Is(pe.err, context.Canceled) || strings.Contains(pe.err.Error(), "canceled")) {
 			t.Errorf("got %v != exp errProducerIDLoadFail{context.Canceled}", rerr)
 		}
 	}
@@ -188,7 +188,7 @@ func TestIssue769(t *testing.T) {
 		case <-timer.C:
 			t.Fatal("expected record to fail within 3s")
 		}
-		if pe := (*errProducerIDLoadFail)(nil); errors.As(rerr, &pe) {
+		if _, ok := errors.AsType[*errProducerIDLoadFail](rerr); ok {
 			t.Error("unexpectedly got errProducerIDLoadFail")
 		}
 		if !errors.Is(rerr, context.Canceled) {
@@ -638,10 +638,9 @@ func TestMessageSetAppendTo(t *testing.T) {
 
 func BenchmarkAppendBatch(b *testing.B) {
 	// ** ourReq and ourBatch copied from above, with longer values **
-	txid := "tx"
 	ourReq := produceRequest{
 		version:       99,
-		txnID:         &txid,
+		txnID:         new("tx"),
 		acks:          -1,
 		timeout:       1000,
 		producerID:    12,

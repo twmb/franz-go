@@ -68,8 +68,8 @@ func TypedErrorForCode(code int16) *Error {
 
 // IsRetriable returns whether a Kafka error is considered retriable.
 func IsRetriable(err error) bool {
-	var kerr *Error
-	return errors.As(err, &kerr) && kerr.Retriable
+	kerr, ok := errors.AsType[*Error](err)
+	return ok && kerr.Retriable
 }
 
 var (

@@ -178,8 +178,7 @@ func TestUnexpectedFirstReadStillWarns(t *testing.T) {
 	serverConn.Close()
 
 	err := <-errCh
-	var firstReadErr *ErrFirstReadEOF
-	if !errors.As(err, &firstReadErr) {
+	if _, ok := errors.AsType[*ErrFirstReadEOF](err); !ok {
 		t.Fatalf("unexpected first read error = %v, want *ErrFirstReadEOF", err)
 	}
 	for _, entry := range logger.buf {

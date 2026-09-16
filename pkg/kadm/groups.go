@@ -330,9 +330,11 @@ func (cl *Client) DescribeGroups(ctx context.Context, groups ...string) (Describ
 	var seList *ShardErrors
 	if len(groups) == 0 {
 		listed, err := cl.ListGroupsByType(ctx, []string{"classic"})
+		var isShardErr bool
+		seList, isShardErr = errors.AsType[*ShardErrors](err)
 		switch {
 		case err == nil:
-		case errors.As(err, &seList):
+		case isShardErr:
 		default:
 			return nil, err
 		}
@@ -415,11 +417,11 @@ func (cl *Client) DescribeGroups(ctx context.Context, groups ...string) (Describ
 		return nil
 	})
 
-	var seDesc *ShardErrors
+	seDesc, isShardErr := errors.AsType[*ShardErrors](err)
 	switch {
 	case err == nil:
 		return described, seList.into()
-	case errors.As(err, &seDesc):
+	case isShardErr:
 		if seList != nil {
 			seDesc.Errs = append(seList.Errs, seDesc.Errs...)
 		}
@@ -1613,12 +1615,12 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 	// For shard errors, if we had some partial success, then we continue
 	// to the rest of the logic in this function.
 	// If every shard failed, or on all other errors, we return.
-	var ae *AuthError
-	var se *ShardErrors
+	_, isAuthErr := errors.AsType[*AuthError](err)
+	se, isShardErr := errors.AsType[*ShardErrors](err)
 	switch {
-	case errors.As(err, &ae):
+	case isAuthErr:
 		return nil, err
-	case errors.As(err, &se) && !se.AllFailed:
+	case isShardErr && !se.AllFailed:
 		for _, se := range se.Errs {
 			// can be ListGroupsRequest as well
 			req, ok := se.Req.(*kmsg.DescribeGroupsRequest)
@@ -1666,8 +1668,9 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 	// because we cannot calculate lag for it.
 	fetched := cl.FetchManyOffsets(ctx, rem()...)
 	for _, r := range fetched {
+		_, isAuthErr = errors.AsType[*AuthError](r.Err)
 		switch {
-		case errors.As(r.Err, &ae):
+		case isAuthErr:
 			return nil, r.Err
 		case r.Err != nil:
 			l := lags[r.Group]
@@ -1702,10 +1705,12 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 			// As above: return on auth error. If there are shard errors,
 			// the topics will be missing in the response and then
 			// CalculateGroupLag will return UnknownTopicOrPartition.
+			_, isAuthErr = errors.AsType[*AuthError](err)
+			_, isShardErr = errors.AsType[*ShardErrors](err)
 			switch {
-			case errors.As(err, &ae):
+			case isAuthErr:
 				return nil, err
-			case errors.As(err, &se):
+			case isShardErr:
 				// do nothing: these show up as errListMissing
 			case err != nil:
 				return nil, err
@@ -2215,9 +2220,11 @@ func (cl *Client) DescribeConsumerGroups(ctx context.Context, groups ...string) 
 	var seList *ShardErrors
 	if len(groups) == 0 {
 		listed, err := cl.ListGroupsByType(ctx, []string{"consumer"})
+		var isShardErr bool
+		seList, isShardErr = errors.AsType[*ShardErrors](err)
 		switch {
 		case err == nil:
-		case errors.As(err, &seList):
+		case isShardErr:
 		default:
 			return nil, err
 		}
@@ -2290,11 +2297,11 @@ func (cl *Client) DescribeConsumerGroups(ctx context.Context, groups ...string) 
 		return nil
 	})
 
-	var seDesc *ShardErrors
+	seDesc, isShardErr := errors.AsType[*ShardErrors](err)
 	switch {
 	case err == nil:
 		return described, seList.into()
-	case errors.As(err, &seDesc):
+	case isShardErr:
 		if seList != nil {
 			seDesc.Errs = append(seList.Errs, seDesc.Errs...)
 		}
@@ -2453,9 +2460,11 @@ func (cl *Client) DescribeShareGroups(ctx context.Context, groups ...string) (De
 	var seList *ShardErrors
 	if len(groups) == 0 {
 		listed, err := cl.ListGroupsByType(ctx, []string{"share"})
+		var isShardErr bool
+		seList, isShardErr = errors.AsType[*ShardErrors](err)
 		switch {
 		case err == nil:
-		case errors.As(err, &seList):
+		case isShardErr:
 		default:
 			return nil, err
 		}
@@ -2512,11 +2521,11 @@ func (cl *Client) DescribeShareGroups(ctx context.Context, groups ...string) (De
 		return nil
 	})
 
-	var seDesc *ShardErrors
+	seDesc, isShardErr := errors.AsType[*ShardErrors](err)
 	switch {
 	case err == nil:
 		return described, seList.into()
-	case errors.As(err, &seDesc):
+	case isShardErr:
 		if seList != nil {
 			seDesc.Errs = append(seList.Errs, seDesc.Errs...)
 		}
@@ -2926,9 +2935,11 @@ func (cl *Client) DescribeShareGroupOffsets(ctx context.Context, groups ...strin
 	var seList *ShardErrors
 	if len(groups) == 0 {
 		listed, err := cl.ListGroupsByType(ctx, []string{"share"})
+		var isShardErr bool
+		seList, isShardErr = errors.AsType[*ShardErrors](err)
 		switch {
 		case err == nil:
-		case errors.As(err, &seList):
+		case isShardErr:
 		default:
 			return nil, err
 		}
@@ -2978,11 +2989,11 @@ func (cl *Client) DescribeShareGroupOffsets(ctx context.Context, groups ...strin
 		return nil
 	})
 
-	var seDesc *ShardErrors
+	seDesc, isShardErr := errors.AsType[*ShardErrors](err)
 	switch {
 	case err == nil:
 		return described, seList.into()
-	case errors.As(err, &seDesc):
+	case isShardErr:
 		if seList != nil {
 			seDesc.Errs = append(seList.Errs, seDesc.Errs...)
 		}

@@ -418,9 +418,9 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 
 	id, epoch, err := s.cl.producerID(ctxFn)
 	if err != nil {
-		var pe *errProducerIDLoadFail
+		pe, isLoadFail := errors.AsType[*errProducerIDLoadFail](err)
 		switch {
-		case errors.As(err, &pe):
+		case isLoadFail:
 			if errors.Is(pe.err, context.Canceled) && isHolCtxDone() {
 				// Some head-of-line record in a partition had a context cancelation.
 				// We look for any partition with HOL cancelations and fail them all.

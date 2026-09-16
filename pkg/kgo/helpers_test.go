@@ -493,7 +493,7 @@ issue:
 	// If we run tests in a container _immediately_ after the container
 	// starts, we can receive dial errors for a bit if the container is not
 	// fully initialized. Handle this by retrying specifically dial errors.
-	if ne := (*net.OpError)(nil); errors.As(err, &ne) && ne.Op == "dial" && time.Since(start) < 30*time.Second {
+	if ne, ok := errors.AsType[*net.OpError](err); ok && ne.Op == "dial" && time.Since(start) < 30*time.Second {
 		time.Sleep(time.Second)
 		goto issue
 	}

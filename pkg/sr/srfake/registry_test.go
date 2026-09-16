@@ -1754,8 +1754,8 @@ func TestRaceConditionRegisterSchema(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Registration should have failed after referenced schema was deleted")
 	}
-	var respErr *sr.ResponseError
-	if !errors.As(err, &respErr) {
+	respErr, ok := errors.AsType[*sr.ResponseError](err)
+	if !ok {
 		t.Fatalf("expected ResponseError, got %T", err)
 	}
 	if respErr.ErrorCode != 42201 || respErr.StatusCode != http.StatusUnprocessableEntity {
@@ -2401,10 +2401,9 @@ func TestErrorHandling(t *testing.T) {
 			t.Fatalf("expected error, got nil")
 		}
 
-		// Test errors.As with ResponseError (the client-facing error type)
-		var respErr *sr.ResponseError
-		if !errors.As(err, &respErr) {
-			t.Errorf("errors.As failed: expected ResponseError, got %T", err)
+		// Test errors.AsType with ResponseError (the client-facing error type)
+		if respErr, ok := errors.AsType[*sr.ResponseError](err); !ok {
+			t.Errorf("errors.AsType failed: expected ResponseError, got %T", err)
 		} else {
 			if respErr.StatusCode != http.StatusNotFound {
 				t.Errorf("expected HTTP status %d, got %d", http.StatusNotFound, respErr.StatusCode)
@@ -2434,10 +2433,9 @@ func TestErrorHandling(t *testing.T) {
 			t.Fatalf("expected error, got nil")
 		}
 
-		// Test errors.As with ResponseError (the client-facing error type)
-		var respErr *sr.ResponseError
-		if !errors.As(err, &respErr) {
-			t.Errorf("errors.As failed: expected ResponseError, got %T", err)
+		// Test errors.AsType with ResponseError (the client-facing error type)
+		if respErr, ok := errors.AsType[*sr.ResponseError](err); !ok {
+			t.Errorf("errors.AsType failed: expected ResponseError, got %T", err)
 		} else {
 			if respErr.StatusCode != http.StatusUnprocessableEntity {
 				t.Errorf("expected HTTP status %d, got %d", http.StatusUnprocessableEntity, respErr.StatusCode)

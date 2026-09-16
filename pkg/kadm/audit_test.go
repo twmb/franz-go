@@ -96,8 +96,8 @@ func TestShardErrEachBrokerRecordsResponseErrors(t *testing.T) {
 	err := shardErrEachBroker(req, shards, func(BrokerDetail, kmsg.Response) error {
 		return kerr.CoordinatorLoadInProgress
 	})
-	var se *ShardErrors
-	if !errors.As(err, &se) {
+	se, ok := errors.AsType[*ShardErrors](err)
+	if !ok {
 		t.Fatalf("got %v, want ShardErrors", err)
 	}
 	if len(se.Errs) != 1 || !errors.Is(se.Errs[0].Err, kerr.CoordinatorLoadInProgress) {
@@ -112,8 +112,7 @@ func TestShardErrEachBrokerRecordsResponseErrors(t *testing.T) {
 	err = shardErrEachBroker(req, shards, func(BrokerDetail, kmsg.Response) error {
 		return autherr
 	})
-	var ae *AuthError
-	if !errors.As(err, &ae) {
+	if _, ok := errors.AsType[*AuthError](err); !ok {
 		t.Fatalf("got %v, want AuthError", err)
 	}
 }
@@ -134,8 +133,7 @@ func TestMergeShardErrs(t *testing.T) {
 		&ShardErrors{Errs: []ShardError{{}}},
 		&ShardErrors{Errs: []ShardError{{}}},
 	)
-	var mse *ShardErrors
-	if !errors.As(merged, &mse) || len(mse.Errs) != 2 {
+	if mse, ok := errors.AsType[*ShardErrors](merged); !ok || len(mse.Errs) != 2 {
 		t.Errorf("merge(se, se) = %v, want two merged shard errors", merged)
 	}
 }

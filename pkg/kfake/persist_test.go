@@ -417,11 +417,9 @@ func TestPersistTopicConfigsRestart(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		adm := kadm.NewClient(newPlainClient(t, c))
-		retBytes := "1048576"
-		retMs := "3600000"
 		resp, err := adm.AlterTopicConfigs(ctx, []kadm.AlterConfig{
-			{Name: "retention.bytes", Value: &retBytes},
-			{Name: "retention.ms", Value: &retMs},
+			{Name: "retention.bytes", Value: new("1048576")},
+			{Name: "retention.ms", Value: new("3600000")},
 		}, topic)
 		if err != nil {
 			t.Fatal(err)
@@ -833,7 +831,7 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 
 		// InitProducerID
 		initReq := kmsg.NewInitProducerIDRequest()
-		initReq.TransactionalID = stringp("txn-oc-txid")
+		initReq.TransactionalID = new("txn-oc-txid")
 		initReq.TransactionTimeoutMillis = 30000
 		initReq.ProducerID = -1
 		initReq.ProducerEpoch = -1
@@ -1040,8 +1038,8 @@ func rawJoinGeneration(ctx context.Context, t *testing.T, cl *kgo.Client, group,
 	syncReq.Group = group
 	syncReq.Generation = joinResp.Generation
 	syncReq.MemberID = joinResp.MemberID
-	syncReq.ProtocolType = stringp("consumer")
-	syncReq.Protocol = stringp("range")
+	syncReq.ProtocolType = new("consumer")
+	syncReq.Protocol = new("range")
 	if joinResp.LeaderID == joinResp.MemberID {
 		for _, m := range joinResp.Members {
 			ga := kmsg.NewSyncGroupRequestGroupAssignment()
@@ -1132,7 +1130,7 @@ func TestPersistStaticMemberDeleteCrash(t *testing.T) {
 		leaveReq.Group = group
 		leaveReq.Version = 3
 		lm := kmsg.NewLeaveGroupRequestMember()
-		lm.InstanceID = stringp(instanceID)
+		lm.InstanceID = new(instanceID)
 		leaveReq.Members = append(leaveReq.Members, lm)
 		leaveResp, err := leaveReq.RequestWith(ctx, plainCl)
 		if err != nil {
@@ -1497,8 +1495,7 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 		// KIP-890). The crash-abort bump adds 1, and InitProducerID
 		// recovery adds 1 more, so we expect epoch >= 3.
 		initReq := kmsg.NewInitProducerIDRequest()
-		txnID := "txn-inflight-test"
-		initReq.TransactionalID = &txnID
+		initReq.TransactionalID = new("txn-inflight-test")
 		initReq.TransactionTimeoutMillis = 30000
 		initReq.ProducerID = -1
 		initReq.ProducerEpoch = -1

@@ -657,8 +657,7 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 	c.pids.ids[100] = p100
 	c.pids.byTxid["tx-a"] = p100
 	c.persistPIDEntry(pidLogEntry{Type: "init", PID: 100, Epoch: 1, TxID: "tx-a", Timeout: 60000})
-	commit := true
-	c.persistPIDEntry(pidLogEntry{Type: "endtx", PID: 100, Epoch: 2, Commit: &commit})
+	c.persistPIDEntry(pidLogEntry{Type: "endtx", PID: 100, Epoch: 2, Commit: new(true)})
 	p100.epoch = 2
 	p100.lastWasCommit = true
 

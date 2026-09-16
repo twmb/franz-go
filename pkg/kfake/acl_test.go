@@ -272,8 +272,7 @@ func TestACLPrefixPattern(t *testing.T) {
 }
 
 func isAuthzError(err error) bool {
-	var kerror *kerr.Error
-	if errors.As(err, &kerror) {
+	if kerror, ok := errors.AsType[*kerr.Error](err); ok {
 		return kerror == kerr.TopicAuthorizationFailed ||
 			kerror == kerr.GroupAuthorizationFailed ||
 			kerror == kerr.ClusterAuthorizationFailed ||

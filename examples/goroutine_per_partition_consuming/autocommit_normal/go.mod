@@ -1,6 +1,6 @@
 module goroutine_per_partition_consuming_autocommit_normal
 
-go 1.25.0
+go 1.27.0
 
 require github.com/twmb/franz-go v1.21.7
 

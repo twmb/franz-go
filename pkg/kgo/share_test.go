@@ -174,12 +174,11 @@ func TestShareGroupETL(t *testing.T) {
 			// client reconnects and sends ApiVersions, but the old
 			// server closes the connection before responding. This is
 			// transient and the client will reconnect successfully.
-			var firstReadEOF *ErrFirstReadEOF
 			for _, fetchErr := range fetches.Errors() {
 				if fetchErr.Err == context.DeadlineExceeded || fetchErr.Err == context.Canceled {
 					continue
 				}
-				if errors.As(fetchErr.Err, &firstReadEOF) {
+				if _, ok := errors.AsType[*ErrFirstReadEOF](fetchErr.Err); ok {
 					continue
 				}
 				t.Errorf("%s: fetch error: %v", name, fetchErr)
@@ -766,9 +765,8 @@ func TestShareGroupAckOnClose(t *testing.T) {
 	var got int
 	for got < totalRecords {
 		fetches := cl1.PollFetches(ctx)
-		var firstReadEOF *ErrFirstReadEOF
 		for _, e := range fetches.Errors() {
-			if errors.As(e.Err, &firstReadEOF) {
+			if _, ok := errors.AsType[*ErrFirstReadEOF](e.Err); ok {
 				continue
 			}
 			t.Errorf("fetch error: %v", e)

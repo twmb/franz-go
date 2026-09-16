@@ -389,9 +389,11 @@ func (cl *Client) DescribeTransactions(ctx context.Context, txnIDs ...string) (D
 	var seList *ShardErrors
 	if len(txnIDs) == 0 {
 		listed, err := cl.ListTransactions(ctx, nil, nil)
+		var isShardErr bool
+		seList, isShardErr = errors.AsType[*ShardErrors](err)
 		switch {
 		case err == nil:
-		case errors.As(err, &seList):
+		case isShardErr:
 		default:
 			return nil, err
 		}
@@ -430,11 +432,11 @@ func (cl *Client) DescribeTransactions(ctx context.Context, txnIDs ...string) (D
 		return nil
 	})
 
-	var seDesc *ShardErrors
+	seDesc, isShardErr := errors.AsType[*ShardErrors](err)
 	switch {
 	case err == nil:
 		return described, seList.into()
-	case errors.As(err, &seDesc):
+	case isShardErr:
 		if seList != nil {
 			seDesc.Errs = append(seList.Errs, seDesc.Errs...)
 		}
