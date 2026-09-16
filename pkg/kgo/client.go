@@ -348,6 +348,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.compression}
 	case namefn(WithCompressor):
 		return []any{cfg.compressor}
+	case namefn(StreamingCompression):
+		return []any{cfg.streamCompression}
 	case namefn(ProducerBatchMaxBytes):
 		return []any{cfg.maxRecordBatchBytes("")}
 	case namefn(ProducerBatchMaxBytesFn):
@@ -358,6 +360,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.maxBufferedBytes}
 	case namefn(RecordPartitioner):
 		return []any{cfg.partitioner}
+	case namefn(RackAwarePartitioning):
+		return []any{cfg.rackAwarePartitioning}
 	case namefn(ProduceRequestTimeout):
 		return []any{cfg.produceTimeout}
 	case namefn(RecordRetries):
@@ -416,6 +420,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.maxConcurrentFetches}
 	case namefn(Rack):
 		return []any{cfg.rack}
+	case namefn(BalanceRacks):
+		return []any{cfg.balanceRacks}
 	case namefn(KeepRetryableFetchErrors):
 		return []any{cfg.keepRetryableFetchErrors}
 	case namefn(DisableFetchCRCValidation):
