@@ -234,4 +234,17 @@ func TestShareGroupTypeExclusive(t *testing.T) {
 			t.Fatalf("listed types after a refused commit: got %v, want [share]", got)
 		}
 	})
+
+	t.Run("AlterShareGroupOffsets to a consumer group", func(t *testing.T) {
+		const group = "commit-then-alter"
+		if err := commit(group); err != nil {
+			t.Fatalf("creating the classic group: %v", err)
+		}
+		if err := alterShare(group); !errors.Is(err, kerr.GroupIDNotFound) {
+			t.Fatalf("altering share offsets of a classic group: got %v, want GROUP_ID_NOT_FOUND", err)
+		}
+		if got := listedTypes(group); !slices.Equal(got, []string{"classic"}) {
+			t.Fatalf("listed types after a refused alter: got %v, want [classic]", got)
+		}
+	})
 }
