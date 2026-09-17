@@ -254,11 +254,10 @@ func rawShareFetch(t *testing.T, cl *kgo.Client, group, memberID string, topicID
 	return sfResp, acquired
 }
 
-// newClient848 creates a kgo client with the KIP-848 context opt-in enabled.
+// newClient848 creates a kgo client that opts into KIP-848.
 func newClient848(t *testing.T, c *Cluster, opts ...kgo.Opt) *kgo.Client {
 	t.Helper()
-	ctx := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
-	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...), kgo.WithContext(ctx)}, opts...)
+	opts = append([]kgo.Opt{kgo.SeedBrokers(c.ListenAddrs()...), kgo.ServerSideBalancer()}, opts...)
 	cl, err := kgo.NewClient(opts...)
 	if err != nil {
 		t.Fatal(err)

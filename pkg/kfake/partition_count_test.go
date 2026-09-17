@@ -302,9 +302,8 @@ func Test848AssignedNewPartitionStaleMetadata(t *testing.T) {
 
 	hbEpochs := observeHeartbeatEpochs(c, int16(kmsg.ConsumerGroupHeartbeat))
 
-	ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
 	cl := newPlainClient(t, c,
-		kgo.WithContext(ctx848),
+		kgo.ServerSideBalancer(),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics("t"),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),

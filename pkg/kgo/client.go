@@ -439,6 +439,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.autocommitMarks}
 	case namefn(Balancers):
 		return []any{cfg.balancers}
+	case namefn(ServerSideBalancer):
+		return []any{cfg.serverSideBalancer}
 	case namefn(BlockRebalanceOnPoll):
 		return []any{cfg.blockRebalanceOnPoll}
 	case namefn(ConsumerGroup):

@@ -1916,8 +1916,6 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 	const topic = "phantom-848-topic"
 	const group = "phantom-848-group"
 
-	ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
-
 	brokerCfgs := BrokerConfigs(map[string]string{
 		"group.consumer.session.timeout.ms":    "1000",
 		"group.consumer.heartbeat.interval.ms": "100",
@@ -1943,7 +1941,7 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 			brokerCfgs,
 		)
 
-		ctx, cancel := context.WithTimeout(ctx848, 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		prodCl := newPlainClient(t, c)
@@ -1953,7 +1951,7 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 		prodCl.Close()
 
 		consCl := newPlainClient(t, c,
-			kgo.WithContext(ctx848),
+			kgo.ServerSideBalancer(),
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.FetchMaxWait(50*time.Millisecond),

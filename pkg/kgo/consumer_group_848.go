@@ -31,10 +31,9 @@ func (g *groupConsumer) adoptAssignedTopic(topic string) {
 }
 
 func (g *groupConsumer) should848() bool {
-	if wantBeta := g.cl.ctx.Value("opt_in_kafka_next_gen_balancer_beta"); wantBeta == nil { // !!! TODO REMOVE ONCE BROKER IMPROVES
-		return false
-	}
-	if g.cl.cfg.disableNextGenBalancer {
+	// The context key was the hidden beta opt-in before ServerSideBalancer
+	// existed. It is honored for one release and then removed.
+	if !g.cfg.serverSideBalancer && g.cl.ctx.Value("opt_in_kafka_next_gen_balancer_beta") == nil {
 		return false
 	}
 	// We pin to v1, introduced in Kafka 4, which fully stabilizes KIP-848.
