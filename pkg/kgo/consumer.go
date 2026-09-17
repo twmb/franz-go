@@ -1230,7 +1230,12 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 							// re-enable the cursor ourselves. Safe here because
 							// the session is stopped (no source can use the
 							// cursor until the new session starts).
-							if loadOffsets.removeLoad(usedCursor.topic, usedCursor.partition) {
+							//
+							// A cursor stopped by a batch over
+							// MaxDecompressedBatchBytes is re-enabled
+							// the same way: the set offset is how the
+							// user skips the batch.
+							if loadOffsets.removeLoad(usedCursor.topic, usedCursor.partition) || usedCursor.fatal.Swap(false) {
 								usedCursor.allowUsable()
 							}
 						}

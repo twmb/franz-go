@@ -145,6 +145,37 @@ func TestMergeBacklog(t *testing.T) {
 	}
 }
 
+// MaxDecompressedBatchBytes caps a merged batch's uncompressed bytes, so a
+// consumer bounded the same way can decompress it.
+func TestMergeBacklogMaxDecompressed(t *testing.T) {
+	t.Parallel()
+	const n, limit, maxUncompressed = 500, 4096, 2048
+	s, r, want := mergeHarness(t, GzipCompression(), limit, n, false)
+	r.cl.cfg.maxDecompressedBatchBytes = maxUncompressed
+	var got []*Record
+	var merged int
+	for len(r.batches) > 0 {
+		s.mergeBacklogs()
+		b := r.batches[0]
+		got = append(got, verifyBatch(t, r, b)...)
+		if b.stream != nil {
+			merged++
+			if b.stream.uncompressed > maxUncompressed {
+				t.Fatalf("merged batch holds %d uncompressed bytes, max %d", b.stream.uncompressed, maxUncompressed)
+			}
+		}
+		r.batches = r.batches[1:]
+	}
+	if len(got) != n || merged == 0 {
+		t.Fatalf("saw %d of %d records across %d merged batches", len(got), n, merged)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("record %d is not the record produced %dth", i, i)
+		}
+	}
+}
+
 // renumber must agree with recomputing a record's numbers from scratch at
 // every varint width: timestamps spread over days and out of order, and
 // offsets past one byte.

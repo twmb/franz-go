@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"slices"
@@ -168,6 +169,12 @@ type cursor struct {
 	// request or when the source is stopped.
 	useState atomic.Bool
 
+	// fatal is set when a batch decompresses past
+	// MaxDecompressedBatchBytes. The cursor stays unusable, no matter
+	// what completes, until SetOffsets moves it past the batch or the
+	// partition is unassigned.
+	fatal atomic.Bool
+
 	topicPartitionData // updated in metadata when session is stopped
 
 	// cursorOffset is our epoch/offset that we are consuming. When a fetch
@@ -230,8 +237,10 @@ func (c *cursor) use() *cursorOffsetNext {
 // unset transitions a cursor to an unusable state when the cursor is no longer
 // to be consumed. This is called exclusively after sources are stopped.
 // This also unsets the cursor offset, which is assumed to be unused now.
+// A later assignment starts the cursor fresh, so a fatal batch is forgotten.
 func (c *cursor) unset() {
 	c.useState.Store(false)
+	c.fatal.Store(false)
 	c.setOffset(cursorOffset{
 		offset:            -1,
 		lastConsumedEpoch: -1,
@@ -252,6 +261,9 @@ func (c *cursor) usable() bool {
 // eligible for fetching. With kfake (in-process), a fetch can complete and
 // move() can overwrite c.source before we reach maybeConsume.
 func (c *cursor) allowUsable() {
+	if c.fatal.Load() {
+		return
+	}
 	s := c.source
 	c.useState.Swap(true)
 	s.maybeConsume()
@@ -1310,6 +1322,20 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					continue
 				}
 				updateWhy.add(topic, partition, fp.Err)
+
+				// Refetching the batch can only fail the same way.
+				// We keep the partition so the error reaches
+				// PollFetches, and the cursor stays unusable after
+				// the fetch is drained.
+				if tooLarge, ok := errors.AsType[*ErrDecompressTooLarge](fp.Err); ok {
+					partOffset.from.fatal.Store(true)
+					s.cl.cfg.logger.Log(LogLevelError, "batch decompresses larger than MaxDecompressedBatchBytes, stopping consuming the partition; skip the batch with SetOffsets",
+						"broker", logID(s.nodeID),
+						"topic", topic,
+						"partition", partition,
+						"offset", tooLarge.Offset,
+					)
+				}
 			}
 
 			// A response can carry batch data for a partition yet
@@ -1777,6 +1803,23 @@ func ProcessFetchPartition(o ProcessFetchPartitionOpts, rp *kmsg.FetchResponseTo
 	return fp, o.Offset
 }
 
+func (o *ProcessFetchPartitionOpts) decompress(decompressor Decompressor, src []byte, compression CompressionCodecType, offset, nextOffset int64, epoch int32) ([]byte, error) {
+	out, err := decompressor.Decompress(src, compression)
+	if err == nil {
+		return out, nil
+	}
+	if errors.Is(err, ErrMaxDecompressed) {
+		err = &ErrDecompressTooLarge{
+			Topic:      o.Topic,
+			Partition:  o.Partition,
+			Offset:     offset,
+			Epoch:      epoch,
+			NextOffset: nextOffset,
+		}
+	}
+	return nil, &errDecompress{err}
+}
+
 type aborter map[int64][]int64
 
 func buildAborter(rp *kmsg.FetchResponseTopicPartition) aborter {
@@ -1891,8 +1934,8 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	var decompressBytes []byte
 	if compression := CompressionCodecType(batch.Attributes & 0x0007); compression != 0 {
 		var err error
-		if rawRecords, err = decompressor.Decompress(rawRecords, compression); err != nil {
-			fp.Err = &errDecompress{err}
+		if rawRecords, err = o.decompress(decompressor, rawRecords, compression, batch.FirstOffset, lastOffset+1, batch.PartitionLeaderEpoch); err != nil {
+			fp.Err = err
 			return 0, 0 // truncated batch
 		}
 		// We only put back into the decompress pool IF we decompressed
@@ -2102,9 +2145,9 @@ func (o *ProcessFetchPartitionOpts) processV1OuterMessage(
 		return 1, 0
 	}
 
-	rawInner, err := decompressor.Decompress(message.Value, compression)
+	rawInner, err := o.decompress(decompressor, message.Value, compression, message.Offset, message.Offset+1, -1)
 	if err != nil {
-		fp.Err = &errDecompress{err}
+		fp.Err = err
 		return 0, 0 // truncated batch
 	}
 
@@ -2254,9 +2297,9 @@ func (o *ProcessFetchPartitionOpts) processV0OuterMessage(
 		return 1, 0 // uncompressed bytes is 0; set to compressed bytes on return
 	}
 
-	rawInner, err := decompressor.Decompress(message.Value, compression)
+	rawInner, err := o.decompress(decompressor, message.Value, compression, message.Offset, message.Offset+1, -1)
 	if err != nil {
-		fp.Err = &errDecompress{err}
+		fp.Err = err
 		return 0, 0 // truncated batch
 	}
 
