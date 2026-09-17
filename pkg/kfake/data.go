@@ -7,11 +7,13 @@ import (
 	"hash/crc32"
 	"math/rand"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -868,6 +870,71 @@ var validGroupConfigs = map[string]bool{
 	"share.max.size":                   true,
 }
 
+// validClientMetricsConfigs is the set of keys a KIP-714 client metrics
+// subscription accepts, a CLIENT_METRICS config resource, with the default
+// we describe when a key is unset. The metrics and match values are comma
+// separated lists.
+var validClientMetricsConfigs = map[string]string{
+	"metrics":     "",
+	"interval.ms": "300000",
+	"match":       "",
+}
+
+// validClientMetricsMatchKeys are the client properties a subscription's
+// match config can select on, each as key=regex.
+var validClientMetricsMatchKeys = map[string]bool{
+	"client_instance_id":      true,
+	"client_id":               true,
+	"client_software_name":    true,
+	"client_software_version": true,
+	"client_source_address":   true,
+	"client_source_port":      true,
+}
+
+// validateClientMetricsConfig returns the error Kafka answers for setting k
+// to v on a client metrics subscription, or nil if the value is valid. Kafka
+// answers INVALID_REQUEST for an unknown key or an interval outside 100ms to
+// one hour, and INVALID_CONFIG for a value that does not parse: a nil value,
+// a non-integer interval, or a match entry that is not key=regex with a
+// known key.
+func validateClientMetricsConfig(k string, v *string) *kerr.Error {
+	if _, ok := validClientMetricsConfigs[k]; !ok {
+		return kerr.InvalidRequest
+	}
+	if v == nil {
+		return kerr.InvalidConfig
+	}
+	switch k {
+	case "interval.ms":
+		n, err := strconv.Atoi(strings.TrimSpace(*v))
+		if err != nil {
+			return kerr.InvalidConfig
+		}
+		if n < 100 || n > 3600000 {
+			return kerr.InvalidRequest
+		}
+	case "match":
+		if strings.TrimSpace(*v) == "" {
+			return nil
+		}
+		for _, m := range strings.Split(*v, ",") {
+			// Kafka splits on every = and drops trailing empty
+			// pieces, so a=b=c and a= are both illegal.
+			parts := strings.Split(m, "=")
+			for len(parts) > 0 && parts[len(parts)-1] == "" {
+				parts = parts[:len(parts)-1]
+			}
+			if len(parts) != 2 || !validClientMetricsMatchKeys[strings.TrimSpace(parts[0])] {
+				return kerr.InvalidConfig
+			}
+			if _, err := regexp.Compile(strings.TrimSpace(parts[1])); err != nil {
+				return kerr.InvalidConfig
+			}
+		}
+	}
+	return nil
+}
+
 const (
 	defLogDir          = "/mem/kfake"
 	defMaxMessageBytes = 1048588
@@ -943,6 +1010,9 @@ var configTypes = map[string]kmsg.ConfigType{
 	"fetch.max.bytes":                           kmsg.ConfigTypeInt,
 	"max.incremental.fetch.session.cache.slots": kmsg.ConfigTypeInt,
 	"group.consumer.heartbeat.interval.ms":      kmsg.ConfigTypeInt,
+	"interval.ms":                               kmsg.ConfigTypeInt,
+	"match":                                     kmsg.ConfigTypeList,
+	"metrics":                                   kmsg.ConfigTypeList,
 	"group.consumer.session.timeout.ms":         kmsg.ConfigTypeInt,
 	"group.max.size":                            kmsg.ConfigTypeInt,
 	"group.min.session.timeout.ms":              kmsg.ConfigTypeInt,

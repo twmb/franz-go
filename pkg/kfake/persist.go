@@ -2060,6 +2060,7 @@ type (
 		ConsumerGroups map[string]sessionConsumerGroup `json:"consumerGroups,omitempty"`
 		ShareGroups    map[string]sessionShareGroup    `json:"shareGroups,omitempty"`
 		GroupConfigs   map[string]map[string]*string   `json:"groupConfigs,omitempty"`
+		ClientMetrics  map[string]map[string]*string   `json:"clientMetrics,omitempty"`
 		InProgressTxns []sessionInProgressTxn          `json:"inProgressTxns,omitempty"`
 		FetchSessions  map[int32][]sessionFetchSession `json:"fetchSessions,omitempty"` // broker node -> sessions
 	}
@@ -2315,6 +2316,9 @@ func (c *Cluster) saveSessionState() error {
 	if len(c.groupConfigs) > 0 {
 		ss.GroupConfigs = c.groupConfigs
 	}
+	if len(c.clientMetrics) > 0 {
+		ss.ClientMetrics = c.clientMetrics
+	}
 
 	// Save in-progress transaction state so records survive restart.
 	for pidinf := range c.pids.txs {
@@ -2555,6 +2559,9 @@ func (c *Cluster) loadSessionState() error {
 	if len(ss.GroupConfigs) > 0 {
 		c.groupConfigs = ss.GroupConfigs
 		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored %d group configs", len(ss.GroupConfigs))
+	}
+	if len(ss.ClientMetrics) > 0 {
+		c.clientMetrics = ss.ClientMetrics
 	}
 
 	// Restore in-progress transaction state: reconstruct txParts,
