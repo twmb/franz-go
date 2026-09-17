@@ -32,7 +32,7 @@ Logs go to `/tmp/kfake_test_logs/` (server.log, client.log). On test failure, th
 
 ## Consumer Group (Next-Gen / KIP-848)
 
-The kgo client gates 848 behind a context opt-in: `should848()` checks for context value `"opt_in_kafka_next_gen_balancer_beta"`. Test helpers (`newClient` in behavior_test.go and helpers_test.go) set it automatically; a direct `kgo.NewClient` with `kgo.ConsumerGroup` must add `kgo.WithContext(context.WithValue(ctx, "opt_in_kafka_next_gen_balancer_beta", true))` itself. No `//nolint` is needed: the lint config disables staticcheck's SA1029 globally and excludes revive's context-keys-type in `_test.go`, so the plain string key passes lint on its own.
+The kgo client gates 848 behind `kgo.ServerSideBalancer()`. `newClient848` in helpers_test.go passes it; a direct `kgo.NewClient` with `kgo.ConsumerGroup` must add the option itself.
 
 Assignors: uniform (default, maps to kgo sticky balancer) and range.
 

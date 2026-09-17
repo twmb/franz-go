@@ -740,9 +740,8 @@ func TestTransactionOffsetCommit(t *testing.T) {
 	producer.Close()
 
 	// Test transactional consume-transform-produce pattern
-	txnCtx := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
 	txnClient := newPlainClient(t, c,
-		kgo.WithContext(txnCtx),
+		kgo.ServerSideBalancer(),
 		kgo.ConsumerGroup(groupID),
 		kgo.ConsumeTopics(inputTopic),
 		kgo.TransactionalID("test-txn-offsets"),

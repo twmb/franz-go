@@ -218,7 +218,7 @@ type cfg struct {
 	autocommitInterval time.Duration
 	commitCallback     func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
 
-	disableNextGenBalancer bool
+	serverSideBalancer bool
 }
 
 func (cfg *cfg) validate() error {
@@ -2054,6 +2054,18 @@ func Balancers(balancers ...GroupBalancer) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.balancers = balancers }}
 }
 
+// ServerSideBalancer opts into KIP-848 "next-gen" consumer groups, where the
+// broker's group coordinator assigns partitions rather than the client. This
+// requires Kafka 4.0+ and either [RangeBalancer] or [StickyBalancer] as your
+// balancer; otherwise, the client uses the classic client-driven protocol.
+//
+// It is recommended to use this only if you are on Kafka 4.3+. Before that,
+// it is possible to receive a STALE_MEMBER_EPOCH error during an offset commit
+// during standard client behavior that the client cannot handle itself.
+func ServerSideBalancer() GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.serverSideBalancer = true }}
+}
+
 // SessionTimeout sets how long a member in the group can go between
 // heartbeats, overriding the default 45,000ms. If a member does not heartbeat
 // in this timeout, the broker will remove the member from the group and
@@ -2380,22 +2392,3 @@ func GroupProtocol(protocol string) GroupOpt {
 func AutoCommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.commitCallback = fn }}
 }
-
-// !!! Only uncomment once we trust the broker implementation!
-// !!! And add this option to Opt!
-//
-// DisableNextGenRebalancer opts out of the "next gen" rebalancer that is
-// the default as of Kafka 4.0+. The client opts in to the next gen rebalancer
-// automatically if the broker supports it AND if you are using either the
-// [RangeBalancer] or [StickyBalancer] or [CooperativeStickyBalancer]. If you
-// use your own rebalancer or use the [RoundRobinBalancer] or are talking to
-// a broker that does not support the next gen balancer, the client uses the
-// old client-driven group balancing behavior.
-//
-// You may want to use this function if you notice a regression or run into
-// a broker or client bug, or if you prefer the performance of the old
-// client driven rebalancers.
-//  func DisableNextGenRebalancer() GroupOpt {
-//  	return groupOpt{func(cfg *cfg) { cfg.disableNextGenBalancer = true }}
-//  }
-//

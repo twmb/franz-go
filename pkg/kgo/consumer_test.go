@@ -253,9 +253,8 @@ func Test848RegexBrokerResolves(t *testing.T) {
 		}
 	}
 
-	ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
 	cl, _ := newTestClient(
-		WithContext(ctx848),
+		ServerSideBalancer(),
 		ConsumerGroup(group),
 		ConsumeRegex(),
 		// A bare name: matched by the broker alone, only pfx-orders
@@ -1094,8 +1093,7 @@ func TestGroupSimple(t *testing.T) {
 				UnknownTopicRetries(-1),
 			}
 			if tc.enable848 {
-				ctx848 := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
-				opts = append(opts, WithContext(ctx848))
+				opts = append(opts, ServerSideBalancer())
 			}
 
 			cl, _ := newTestClient(opts...)
