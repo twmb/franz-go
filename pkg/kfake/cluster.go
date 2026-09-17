@@ -62,6 +62,7 @@ type (
 		features           map[string]int16 // KIP-584 finalized feature levels, see 18_api_versions.go
 		fetchSessions      fetchSessions
 		groupConfigs       map[string]map[string]*string // group -> config key -> config value
+		clientMetrics      map[string]map[string]*string // subscription -> config key -> config value, see data.go
 		shareGroups        shareGroups
 		compactTicker      *time.Ticker
 		offsetExpireTicker *time.Ticker

@@ -13,6 +13,8 @@ import (
 // Supported resource types:
 // * BROKER (2)
 // * TOPIC (4)
+// * CLIENT_METRICS (16)
+// * GROUP (32)
 //
 // Supported operations:
 // * SET (0)
@@ -168,6 +170,46 @@ outer:
 			}
 			c.persistTopicsState()
 
+		case kmsg.ConfigResourceTypeClientMetrics:
+			// A subscription is a cluster resource, like a broker:
+			// AlterConfigs on CLUSTER. A SET on a new name creates
+			// the subscription, and deleting its every key removes
+			// it, which is how kafka-client-metrics.sh --delete works.
+			if e := c.denyCluster(creq, kmsg.ACLOperationAlterConfigs); e != nil {
+				doner(rr.ResourceName, rr.ResourceType, e.Code)
+				answered[resource{rr.ResourceName, rr.ResourceType}] = true
+				if creq.skipsWork(e) { // a timed-out alter still applies
+					continue outer
+				}
+			}
+			if rr.ResourceName == "" {
+				doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
+				continue
+			}
+			// We apply every op to a clone and validate what results,
+			// as Kafka does: a ValidateOnly request must not leave
+			// the ops it walked behind.
+			dup := maps.Clone(c.clientMetrics[rr.ResourceName])
+			if dup == nil {
+				dup = make(map[string]*string)
+			}
+			if e := alterClientMetrics(dup, rr.Configs); e != nil {
+				doner(rr.ResourceName, rr.ResourceType, e.Code)
+				continue
+			}
+			doner(rr.ResourceName, rr.ResourceType, 0)
+			if req.ValidateOnly {
+				continue
+			}
+			if len(dup) == 0 {
+				delete(c.clientMetrics, rr.ResourceName)
+				continue
+			}
+			if c.clientMetrics == nil {
+				c.clientMetrics = make(map[string]map[string]*string)
+			}
+			c.clientMetrics[rr.ResourceName] = dup
+
 		case kmsg.ConfigResourceTypeGroupConfig:
 			// Group configs are scalar (e.g. share.auto.offset.reset);
 			// the protocol's Append/Subtract ops are list-valued and
@@ -232,4 +274,41 @@ func (c *Cluster) setGroupConfigs(group string, configs []kmsg.IncrementalAlterC
 		}
 	}
 	c.shareGroups.refreshSweepTicker()
+}
+
+// alterClientMetrics applies configs to a client metrics subscription and
+// returns the error Kafka answers if a key, op, or resulting value is not
+// valid. Kafka answers INVALID_REQUEST for an unknown key or op and
+// INVALID_CONFIG for a list op on interval.ms, the one scalar key.
+func alterClientMetrics(sub map[string]*string, configs []kmsg.IncrementalAlterConfigsRequestResourceConfig) *kerr.Error {
+	for i := range configs {
+		rc := &configs[i]
+		if _, ok := validClientMetricsConfigs[rc.Name]; !ok {
+			return kerr.InvalidRequest
+		}
+		switch rc.Op {
+		case kmsg.IncrementalAlterConfigOpSet:
+			sub[rc.Name] = rc.Value
+		case kmsg.IncrementalAlterConfigOpDelete:
+			delete(sub, rc.Name)
+		case kmsg.IncrementalAlterConfigOpAppend:
+			if !isListConfig(rc.Name) {
+				return kerr.InvalidConfig
+			}
+			sub[rc.Name] = configListAppend(sub[rc.Name], rc.Value)
+		case kmsg.IncrementalAlterConfigOpSubtract:
+			if !isListConfig(rc.Name) {
+				return kerr.InvalidConfig
+			}
+			sub[rc.Name] = configListSubtract(sub[rc.Name], rc.Value)
+		default:
+			return kerr.InvalidRequest
+		}
+	}
+	for k, v := range sub {
+		if e := validateClientMetricsConfig(k, v); e != nil {
+			return e
+		}
+	}
+	return nil
 }

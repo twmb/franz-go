@@ -2101,3 +2101,295 @@ func TestDeleteRecordsAdvancesStartOffset(t *testing.T) {
 		})
 	}
 }
+
+// A KIP-714 client metrics subscription is a CLIENT_METRICS config resource:
+// an IncrementalAlterConfigs SET creates or updates one, DescribeConfigs
+// reads it back with every unset key at its default, ListConfigResources
+// lists the names, and deleting every key removes it. A name with no
+// subscription describes as all defaults, as on Kafka, and is not listed.
+func TestClientMetricsSubscriptions(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1))
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	set := func(k, v string) kmsg.IncrementalAlterConfigsRequestResourceConfig {
+		rc := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+		rc.Name = k
+		rc.Value = &v
+		return rc
+	}
+	del := func(k string) kmsg.IncrementalAlterConfigsRequestResourceConfig {
+		rc := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+		rc.Name = k
+		rc.Op = kmsg.IncrementalAlterConfigOpDelete
+		return rc
+	}
+	setNil := func(k string) kmsg.IncrementalAlterConfigsRequestResourceConfig {
+		rc := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+		rc.Name = k
+		return rc
+	}
+
+	alter := func(t *testing.T, name string, validateOnly bool, cfgs []kmsg.IncrementalAlterConfigsRequestResourceConfig) int16 {
+		t.Helper()
+		req := kmsg.NewPtrIncrementalAlterConfigsRequest()
+		req.ValidateOnly = validateOnly
+		rr := kmsg.NewIncrementalAlterConfigsRequestResource()
+		rr.ResourceType = kmsg.ConfigResourceTypeClientMetrics
+		rr.ResourceName = name
+		rr.Configs = cfgs
+		req.Resources = append(req.Resources, rr)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Resources) != 1 {
+			t.Fatalf("alter answered %d resources, want 1", len(resp.Resources))
+		}
+		return resp.Resources[0].ErrorCode
+	}
+	describe := func(t *testing.T, name string) (int16, map[string]kmsg.DescribeConfigsResponseResourceConfig) {
+		t.Helper()
+		req := kmsg.NewPtrDescribeConfigsRequest()
+		rr := kmsg.NewDescribeConfigsRequestResource()
+		rr.ResourceType = kmsg.ConfigResourceTypeClientMetrics
+		rr.ResourceName = name
+		req.Resources = append(req.Resources, rr)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Resources) != 1 {
+			t.Fatalf("describe answered %d resources, want 1", len(resp.Resources))
+		}
+		got := make(map[string]kmsg.DescribeConfigsResponseResourceConfig)
+		for _, rc := range resp.Resources[0].Configs {
+			got[rc.Name] = rc
+		}
+		return resp.Resources[0].ErrorCode, got
+	}
+	list := func(t *testing.T) []string {
+		t.Helper()
+		req := kmsg.NewPtrListConfigResourcesRequest()
+		req.ResourceTypes = []int8{int8(kmsg.ConfigResourceTypeClientMetrics)}
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(resp.ErrorCode))
+		}
+		var names []string
+		for _, r := range resp.ConfigResources {
+			if r.Type != int8(kmsg.ConfigResourceTypeClientMetrics) {
+				t.Errorf("listed %s with type %d", r.Name, r.Type)
+			}
+			names = append(names, r.Name)
+		}
+		slices.Sort(names)
+		return names
+	}
+
+	type config struct {
+		value  string
+		source kmsg.ConfigSource
+	}
+	dynamic := kmsg.ConfigSourceClientMetricsConfig
+	def := kmsg.ConfigSourceDefaultConfig
+
+	// The cases run in order against one cluster: what one creates the
+	// next describes, lists, or deletes.
+	for _, tc := range []struct {
+		name string
+
+		alter        string // subscription to alter, "" for none
+		validateOnly bool
+		cfgs         []kmsg.IncrementalAlterConfigsRequestResourceConfig
+		alterErr     *kerr.Error
+
+		describe string // subscription to describe, "" for none
+		want     map[string]config
+
+		list []string // nil skips the check
+	}{
+		{
+			name:  "create with every key",
+			alter: "s1",
+			cfgs: []kmsg.IncrementalAlterConfigsRequestResourceConfig{
+				set("metrics", "org.apache.kafka.producer.,org.apache.kafka.consumer."),
+				set("interval.ms", "5000"),
+				set("match", "client_id=kcl.*,client_software_name=franz-go"),
+			},
+			describe: "s1",
+			want: map[string]config{
+				"metrics":     {"org.apache.kafka.producer.,org.apache.kafka.consumer.", dynamic},
+				"interval.ms": {"5000", dynamic},
+				"match":       {"client_id=kcl.*,client_software_name=franz-go", dynamic},
+			},
+			list: []string{"s1"},
+		},
+		{
+			name:     "create with one key describes the defaults",
+			alter:    "s2",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("metrics", "*")},
+			describe: "s2",
+			want: map[string]config{
+				"metrics":     {"*", dynamic},
+				"interval.ms": {"300000", def},
+				"match":       {"", def},
+			},
+			list: []string{"s1", "s2"},
+		},
+		{
+			name:     "update one key keeps the others",
+			alter:    "s1",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("interval.ms", "60000")},
+			describe: "s1",
+			want: map[string]config{
+				"metrics":     {"org.apache.kafka.producer.,org.apache.kafka.consumer.", dynamic},
+				"interval.ms": {"60000", dynamic},
+				"match":       {"client_id=kcl.*,client_software_name=franz-go", dynamic},
+			},
+		},
+		{
+			name:     "unknown name describes as all defaults and is not listed",
+			describe: "nope",
+			want: map[string]config{
+				"metrics":     {"", def},
+				"interval.ms": {"300000", def},
+				"match":       {"", def},
+			},
+			list: []string{"s1", "s2"},
+		},
+		{
+			name:     "unknown key",
+			alter:    "bad",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("push.ms", "1")},
+			alterErr: kerr.InvalidRequest,
+			list:     []string{"s1", "s2"},
+		},
+		{
+			name:     "interval not a number",
+			alter:    "bad",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("interval.ms", "soon")},
+			alterErr: kerr.InvalidConfig,
+		},
+		{
+			name:     "interval below 100ms",
+			alter:    "bad",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("interval.ms", "99")},
+			alterErr: kerr.InvalidRequest,
+		},
+		{
+			name:     "interval above one hour",
+			alter:    "bad",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("interval.ms", "3600001")},
+			alterErr: kerr.InvalidRequest,
+		},
+		{
+			name:     "match without a value",
+			alter:    "bad",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("match", "client_id")},
+			alterErr: kerr.InvalidConfig,
+		},
+		{
+			name:     "match on an unknown property",
+			alter:    "bad",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("match", "rack=a")},
+			alterErr: kerr.InvalidConfig,
+		},
+		{
+			name:     "match with a bad regex",
+			alter:    "bad",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("match", "client_id=(")},
+			alterErr: kerr.InvalidConfig,
+		},
+		{
+			name:     "nil value",
+			alter:    "bad",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{setNil("metrics")},
+			alterErr: kerr.InvalidConfig,
+		},
+		{
+			name:     "empty name",
+			alter:    "",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("metrics", "*")},
+			alterErr: kerr.InvalidRequest,
+		},
+		{
+			name:         "validate only creates nothing",
+			alter:        "vo",
+			validateOnly: true,
+			cfgs:         []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("metrics", "*")},
+			describe:     "vo",
+			want: map[string]config{
+				"metrics":     {"", def},
+				"interval.ms": {"300000", def},
+				"match":       {"", def},
+			},
+			list: []string{"s1", "s2"},
+		},
+		{
+			name:  "deleting every key removes the subscription",
+			alter: "s1",
+			cfgs: []kmsg.IncrementalAlterConfigsRequestResourceConfig{
+				del("metrics"), del("interval.ms"), del("match"),
+			},
+			describe: "s1",
+			want: map[string]config{
+				"metrics":     {"", def},
+				"interval.ms": {"300000", def},
+				"match":       {"", def},
+			},
+			list: []string{"s2"},
+		},
+		{
+			name:     "deleting one key keeps the subscription",
+			alter:    "s2",
+			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{del("interval.ms")},
+			describe: "s2",
+			want: map[string]config{
+				"metrics":     {"*", dynamic},
+				"interval.ms": {"300000", def},
+				"match":       {"", def},
+			},
+			list: []string{"s2"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.alter != "" || tc.cfgs != nil {
+				want := int16(0)
+				if tc.alterErr != nil {
+					want = tc.alterErr.Code
+				}
+				if got := alter(t, tc.alter, tc.validateOnly, tc.cfgs); got != want {
+					t.Fatalf("alter %q: got %v, want %v", tc.alter, kerr.ErrorForCode(got), kerr.ErrorForCode(want))
+				}
+			}
+			if tc.describe != "" {
+				code, got := describe(t, tc.describe)
+				if code != 0 {
+					t.Fatalf("describe %q: %v", tc.describe, kerr.ErrorForCode(code))
+				}
+				if len(got) != len(tc.want) {
+					t.Fatalf("describe %q: got %d configs, want %d", tc.describe, len(got), len(tc.want))
+				}
+				for k, w := range tc.want {
+					rc, ok := got[k]
+					if !ok || rc.Value == nil {
+						t.Fatalf("describe %q: %s missing", tc.describe, k)
+					}
+					if *rc.Value != w.value || rc.Source != w.source {
+						t.Errorf("describe %q: %s = %q (%v), want %q (%v)", tc.describe, k, *rc.Value, rc.Source, w.value, w.source)
+					}
+				}
+			}
+			if tc.list != nil {
+				if got := list(t); !slices.Equal(got, tc.list) {
+					t.Errorf("list: got %v, want %v", got, tc.list)
+				}
+			}
+		})
+	}
+}

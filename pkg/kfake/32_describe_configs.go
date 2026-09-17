@@ -1,6 +1,8 @@
 package kfake
 
 import (
+	"maps"
+	"slices"
 	"strconv"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -12,6 +14,7 @@ import (
 // Supported resource types:
 // * BROKER (2)
 // * TOPIC (4)
+// * CLIENT_METRICS (16)
 // * GROUP (32)
 //
 // Version notes:
@@ -126,6 +129,36 @@ outer:
 			}
 			r := doner(rr.ResourceName, rr.ResourceType, 0)
 			c.data.configs(rr.ResourceName, rfn(r))
+			filter(rr, r)
+
+		case kmsg.ConfigResourceTypeClientMetrics:
+			// A subscription is a cluster resource, like a broker:
+			// DescribeConfigs on CLUSTER. A name with no
+			// subscription answers every key at its default, as
+			// Kafka does; only an empty name is an error.
+			if e := c.denyCluster(creq, kmsg.ACLOperationDescribeConfigs); e != nil {
+				doner(rr.ResourceName, rr.ResourceType, e.Code)
+				continue
+			}
+			if rr.ResourceName == "" {
+				doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
+				continue
+			}
+			if e := creq.faults.check(faultKey{resource: rr.ResourceName}); e != nil {
+				doner(rr.ResourceName, rr.ResourceType, e.Code)
+				continue
+			}
+			sub := c.clientMetrics[rr.ResourceName]
+			r := doner(rr.ResourceName, rr.ResourceType, 0)
+			emit := rfn(r)
+			for _, k := range slices.Sorted(maps.Keys(validClientMetricsConfigs)) {
+				if v, dynamic := sub[k]; dynamic {
+					emit(k, v, kmsg.ConfigSourceClientMetricsConfig, false)
+					continue
+				}
+				def := validClientMetricsConfigs[k]
+				emit(k, &def, kmsg.ConfigSourceDefaultConfig, false)
+			}
 			filter(rr, r)
 
 		case kmsg.ConfigResourceTypeGroupConfig:
