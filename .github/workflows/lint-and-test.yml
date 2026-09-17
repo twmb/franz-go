@@ -148,11 +148,13 @@ jobs:
           # snappy produce fails with UNKNOWN_SERVER_ERROR. Its kafka_url
           # path installs gcompat but also gpg-verifies the tarball against
           # the released KEYS file, which lacks a release manager's key
-          # until the release. So: local tarball, plus gcompat.
+          # until the release. So: local tarball, plus gcompat. The
+          # Dockerfile tests kafka_url under set -u, so the ARG must be
+          # set, to empty, for the local-tarball branch to run.
           curl -sSfL -o docker/jvm/kafka.tgz "$BASE/kafka_2.13-$VER.tgz"
           test "$(grep -c 'apk add --no-cache bash procps-ng;' docker/jvm/Dockerfile)" = 2
           sed -i 's/apk add --no-cache bash procps-ng;/apk add --no-cache bash procps-ng gcompat;/' docker/jvm/Dockerfile
-          docker build -t "${{ matrix.image }}" docker/jvm
+          docker build --build-arg kafka_url= -t "${{ matrix.image }}" docker/jvm
       - name: Create Kafka configuration files
         run: |
           mkdir -p kafka-config
