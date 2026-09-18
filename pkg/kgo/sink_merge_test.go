@@ -285,46 +285,82 @@ func TestMergeSpanSwept(t *testing.T) {
 	m.recycle()
 }
 
-// A failure sweep during a merge waits for at most one chunk's compression,
-// not a whole source's: the merge releases the source while the codec
-// works. With 4MB sources of half random data at zstd's slowest level, a
-// source takes a few hundred milliseconds under the race detector and a
-// chunk a few milliseconds.
+// A failure sweep during a merge waits for at most one chunk, not a whole
+// source: the merge releases the source while the codec works. The first
+// source is a few records and the second is 4MB of half random data at
+// zstd's slowest level. The merge stamps each record for the merged batch
+// as it copies it, under the source's mu, so the stamps say how far it
+// has gotten each time the test takes the mu: a merge holding the source
+// across the codec would stamp all of it before the mu is free. Stamps
+// are read before the sweep, since finishing a promise resets them. At
+// the slowest level a chunk's compression takes milliseconds under the
+// race detector, so a descheduled test costs a few chunks.
 func TestMergeSweepWaitsOneChunk(t *testing.T) {
 	t.Parallel()
 	cl, s, r := sinkHarness(t)
 	cl.cfg.streamCompression = true
 	cl.cfg.compressor, _ = DefaultCompressor(ZstdCompression().WithLevel(4)) // zstd.SpeedBestCompression
-	cc := cl.cfg.compressor.(*compressor)
-	cc.newStream(CodecZstd, new(bytes.Buffer)).finish() // build the pooled encoder now, not inside the merge
-	r.maxRecordBatchBytes = 4 << 20
 	rng := rand.New(rand.NewSource(9))
 	words := bytes.Fields([]byte("the quick brown fox jumps over the lazy dog while brokers replicate partitions across racks"))
-	for range 8000 {
-		var v []byte
-		for len(v) < 1024 {
-			v = append(append(v, words[rng.Intn(len(words))]...), ' ')
+	base := time.Now()
+	buffer := func(n int, ts time.Time) []*Record {
+		var recs []*Record
+		for range n {
+			var v []byte
+			for len(v) < 1024 {
+				v = append(append(v, words[rng.Intn(len(words))]...), ' ')
+			}
+			rng.Read(v[512:]) // half random: slow to search, still merges
+			rec := &Record{Value: v, Timestamp: ts, Context: context.Background()}
+			r.bufferRecord(promisedRec{ctx: context.Background(), promise: func(*Record, error) {}, Record: rec}, false)
+			recs = append(recs, rec)
 		}
-		rng.Read(v[512:]) // half random: slow to search, still merges
-		r.bufferRecord(promisedRec{ctx: context.Background(), promise: func(*Record, error) {}, Record: &Record{Value: v, Context: context.Background()}}, false)
+		return recs
+	}
+	later := base.Add(time.Second)
+	r.maxRecordBatchBytes = 8 << 10
+	buffer(7, base)            // fills the first source
+	second := buffer(1, later) // does not fit: starts the second
+	r.maxRecordBatchBytes = 4 << 20
+	second = append(second, buffer(3799, later)...)
+	if len(r.batches) != 2 || len(r.batches[1].records) != len(second) {
+		t.Fatalf("buffered %d batches, want 2 with the second holding %d records", len(r.batches), len(second))
+	}
+	// In its own batch, every record of the second source has timestamp
+	// delta 0; in the merged batch, whose first timestamp is base, 1000.
+	src := r.batches[1]
+	stamped := func() int {
+		var n int
+		for _, rec := range second {
+			if _, tsDelta := rec.lengthAndTimestampDelta(); tsDelta == 1000 {
+				n++
+			}
+		}
+		return n
 	}
 	done := make(chan struct{})
 	go func() { defer close(done); s.mergeBacklogs() }()
-	for merging := false; !merging; runtime.Gosched() {
-		r.mu.Lock()
-		merging = r.merging
-		r.mu.Unlock()
+	const past = 128
+	var n int
+	for n <= past {
+		src.mu.Lock()
+		n = stamped()
+		src.mu.Unlock()
+		select {
+		case <-done:
+			t.Fatal("merge finished before reaching the second source")
+		default:
+			runtime.Gosched()
+		}
 	}
-	time.Sleep(20 * time.Millisecond) // into the compression of the first source
-	start := time.Now()
+	const recordsPerChunk = streamChunk / 1024 // values are 1KB
+	if n > past+8*recordsPerChunk {
+		t.Fatalf("merge stamped %d of %d records before releasing the source", n, len(second))
+	}
 	r.mu.Lock()
 	r.failAllRecords(errors.New("swept"))
 	r.mu.Unlock()
-	took := time.Since(start)
 	<-done
-	if took > 60*time.Millisecond {
-		t.Fatalf("sweep waited %v on a merge in progress", took)
-	}
 	if len(r.batches) != 0 {
 		t.Fatalf("%d batches survived the sweep", len(r.batches))
 	}
