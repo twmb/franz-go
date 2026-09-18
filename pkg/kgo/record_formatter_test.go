@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -494,6 +495,27 @@ func TestRecordReader(t *testing.T) {
 			in:     "",
 			exp:    []*Record{},
 		},
+		{
+			layout: `%v{re[a*]}`,
+			in:     "",
+			exp:    []*Record{},
+		},
+		{
+			layout: `%v{re[a+]}\n`,
+			in:     "aaa\naa\n",
+			exp: []*Record{
+				StringRecord("aaa"),
+				StringRecord("aa"),
+			},
+		},
+		{
+			layout: `%k{re[a*]}%v{re[b+]}`,
+			in:     "bbbaab",
+			exp: []*Record{
+				KeyStringRecord("", "bbb"),
+				KeyStringRecord("aa", "b"),
+			},
+		},
 
 		{
 			layout: `%K{3}%v{re[.*?\d]}%k`,
@@ -665,6 +687,49 @@ func TestRecordReader(t *testing.T) {
 				return
 			} else if !errors.Is(err, io.EOF) {
 				t.Errorf("got err %v != io.EOF after exhausting records", err)
+			}
+		})
+	}
+}
+
+func TestRecordReaderRegexpMismatch(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		layout string
+		in     string
+	}{
+		{"nonmatch", `%v{re[a+]}`, "bbb"},
+		{"nonmatch with delimiter", `%v{re[a+]}\n`, "bbb\n"},
+		{"nonmatch non-ASCII", `%v{re[a+]}`, "\u00e9\u00e9\u00e9"},
+		{"partial match", `%v{re[a{3}]}`, "aab"},
+		{"truncated match", `%v{re[a{3}]}`, "aa"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r, err := NewRecordReader(strings.NewReader(test.in), test.layout)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A failed match must not repeatedly return empty records
+			// with nil errors while leaving the input untouched.
+			for attempt := 0; attempt < 3; attempt++ {
+				if _, err := r.ReadRecord(); err == nil || !strings.Contains(err.Error(), "regexp text mismatch") {
+					t.Errorf("read %d: got %v, want regexp text mismatch", attempt, err)
+				}
+			}
+		})
+	}
+}
+
+func TestRecordReaderRegexpReadError(t *testing.T) {
+	errRead := errors.New("read failed")
+	for _, in := range []string{"", "aa"} {
+		t.Run(in, func(t *testing.T) {
+			r, err := NewRecordReader(io.MultiReader(strings.NewReader(in), iotest.ErrReader(errRead)), `%v{re[a{3}]}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.ReadRecord(); !errors.Is(err, errRead) {
+				t.Errorf("got %v, want %v", err, errRead)
 			}
 		})
 	}
