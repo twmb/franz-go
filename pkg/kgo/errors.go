@@ -455,7 +455,7 @@ func (e *ErrDecompressTooLarge) Error() string {
 		e.Topic, e.Partition, e.Offset, e.NextOffset)
 }
 
-func (*ErrDecompressTooLarge) Unwrap() error { return ErrMaxDecompressed }
+func (*ErrDecompressTooLarge) Unwrap() error { return ErrMaxDecompress }
 
 type errDecompress struct {
 	err error

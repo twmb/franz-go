@@ -19,12 +19,12 @@ import (
 
 var byteBuffers = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 8<<10)) }}
 
-// ErrMaxDecompressed is returned when a batch we consumed would decompress
+// ErrMaxDecompress is returned when a batch we consumed would decompress
 // larger than [MaxDecompressedBatchBytes]. The client treats this error as
 // fatal for the partition and it can only be recovered via SetOffsets or by
 // you restarting your client with a higher limit. A custom decompressor that
 // returns this error fatally stops the partition the same way.
-var ErrMaxDecompressed = errors.New("decompressed data would exceed MaxDecompressedBatchBytes")
+var ErrMaxDecompress = errors.New("decompressed data would exceed MaxDecompressedBatchBytes")
 
 // CompressionCodecType is a bitfield specifying a Kafka-defined compression
 // codec. Per spec, only four compression codecs are supported. However, if
@@ -595,7 +595,7 @@ func readBounded(out *bytes.Buffer, lim *io.LimitedReader, max int) error {
 	if n, err := out.ReadFrom(lim); err != nil {
 		return err
 	} else if n > int64(max) {
-		return ErrMaxDecompressed
+		return ErrMaxDecompress
 	}
 	return nil
 }
@@ -609,7 +609,7 @@ func decompressSnappy(dst, src []byte, max int) ([]byte, error) {
 	if l, err := s2.DecodedLen(src); err != nil {
 		return nil, err
 	} else if l > max {
-		return nil, ErrMaxDecompressed
+		return nil, ErrMaxDecompress
 	}
 	return s2.Decode(dst, src)
 }
@@ -623,7 +623,7 @@ func (d *decompressor) decompressZstd(dst, src []byte) ([]byte, error) {
 	defer d.unzstdPool.Put(unzstd)
 	out, err := unzstd.inner.DecodeAll(src, dst)
 	if errors.Is(err, zstd.ErrDecoderSizeExceeded) {
-		return nil, fmt.Errorf("%w: %w", ErrMaxDecompressed, err)
+		return nil, fmt.Errorf("%w: %w", ErrMaxDecompress, err)
 	}
 	return out, err
 }
@@ -705,7 +705,7 @@ func xerialDecode(dst, src []byte, max int) ([]byte, error) {
 		}
 		total += int64(l)
 		if total > int64(max-len(dst)) {
-			return nil, ErrMaxDecompressed
+			return nil, ErrMaxDecompress
 		}
 		rem = rem[size:]
 	}

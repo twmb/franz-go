@@ -216,8 +216,8 @@ func TestDecompressBombBounded(t *testing.T) {
 		if used != codec {
 			t.Fatalf("codec %d: compressed with %d", codec, used)
 		}
-		if _, err := bounded.Decompress(compressed, codec); !errors.Is(err, ErrMaxDecompressed) {
-			t.Errorf("codec %d: decompressing an 8MiB-decoded batch under a 1MiB bound: got err %v, want ErrMaxDecompressed", codec, err)
+		if _, err := bounded.Decompress(compressed, codec); !errors.Is(err, ErrMaxDecompress) {
+			t.Errorf("codec %d: decompressing an 8MiB-decoded batch under a 1MiB bound: got err %v, want ErrMaxDecompress", codec, err)
 		}
 	}
 
@@ -244,8 +244,8 @@ func TestDecompressBombBounded(t *testing.T) {
 		xer = binary.BigEndian.AppendUint32(xer, uint32(len(chunk)))
 		xer = append(xer, chunk...)
 	}
-	if _, err := bounded.Decompress(xer, CodecSnappy); !errors.Is(err, ErrMaxDecompressed) {
-		t.Errorf("xerial chunks summing past the bound: got err %v, want ErrMaxDecompressed", err)
+	if _, err := bounded.Decompress(xer, CodecSnappy); !errors.Is(err, ErrMaxDecompress) {
+		t.Errorf("xerial chunks summing past the bound: got err %v, want ErrMaxDecompress", err)
 	}
 }
 
@@ -362,8 +362,8 @@ func TestDecompressZstdHugeClaim(t *testing.T) {
 	frame = append(frame, 0xc0, 0x00)
 	frame = binary.LittleEndian.AppendUint64(frame, 8<<30)
 	_, err := DefaultDecompressor().Decompress(frame, CodecZstd)
-	if !errors.Is(err, ErrMaxDecompressed) {
-		t.Errorf("got err %v != exp ErrMaxDecompressed", err)
+	if !errors.Is(err, ErrMaxDecompress) {
+		t.Errorf("got err %v != exp ErrMaxDecompress", err)
 	}
 }
 

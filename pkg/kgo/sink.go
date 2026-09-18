@@ -2584,11 +2584,6 @@ func (s *sink) streamCodec() (*compressor, CompressionCodecType) {
 	return cc, codec
 }
 
-// mergeMaxUncompressed caps how many uncompressed bytes one merged batch
-// holds: the consumer decompresses a batch into one contiguous allocation.
-// MaxDecompressedBatchBytes lowers the cap.
-const mergeMaxUncompressed = 1 << 30
-
 // mergeBacklog merges this partition's unsent batches into one batch whose
 // compressed size stays under maxRecordBatchBytes: freeze them under mu so
 // nothing appends and createReq leaves them alone, stream their records
@@ -2701,9 +2696,11 @@ func (recBuf *recBuf) mergeSpan(span []*recBatch, total, size int, cc *compresso
 		swept        bool
 		err          error
 	)
-	maxUncompressed := min(mergeMaxUncompressed, recBuf.cl.cfg.maxDecompressedBatchBytes)
+	// A consumer decompresses a batch into one allocation, so the
+	// uncompressed size is bounded as well.
+	maxUncompressed := recBuf.cl.cfg.maxDecompressedBatchBytes
 	fits := func(n int) bool {
-		return uncompressed+n <= maxUncompressed && recordBatchOverhead+1+checkpoint+sc.worst(since+n) <= limit
+		return n <= maxUncompressed-uncompressed && recordBatchOverhead+1+checkpoint+sc.worst(since+n) <= limit
 	}
 	for _, src := range span {
 		done := func() bool {
