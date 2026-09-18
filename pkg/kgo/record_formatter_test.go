@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -636,6 +637,56 @@ func TestRecordReader(t *testing.T) {
 			},
 		},
 
+		// Regexps match runes, not bytes. Invalid UTF-8 decodes as U+FFFD
+		// with width one, the same as bufio.Reader.ReadRune.
+		{
+			layout: `%v{re[.]}\n`,
+			in:     "\u00e9\n",
+			exp:    []*Record{StringRecord("\u00e9")},
+		},
+		{
+			layout: "%v{re[\u00e9+]}\\n",
+			in:     "\u00e9\u00e9\n",
+			exp:    []*Record{StringRecord("\u00e9\u00e9")},
+		},
+		{
+			layout: `%v{re[\p{L}+]}\n`,
+			in:     "a\u00e9\u4e2d\n",
+			exp:    []*Record{StringRecord("a\u00e9\u4e2d")},
+		},
+		{
+			layout: `%k{re[.]}%v{re[.]}\n`,
+			in:     "\u00e9\u4e2d\n",
+			exp:    []*Record{KeyStringRecord("\u00e9", "\u4e2d")},
+		},
+		{
+			layout: `%v{re[.]}`,
+			in:     "a\u00e9\u4e2d\U0001f642",
+			exp: []*Record{
+				StringRecord("a"),
+				StringRecord("\u00e9"),
+				StringRecord("\u4e2d"),
+				StringRecord("\U0001f642"),
+			},
+		},
+		{
+			layout: `%v{re[\x{FFFD}+]}\n`,
+			in:     "\xff\x80\n",
+			exp:    []*Record{StringRecord("\xff\x80")},
+		},
+		{
+			layout: `%v{re[\x{FFFD}+]}`,
+			in:     "\xf0\x9f\x99",
+			exp:    []*Record{StringRecord("\xf0\x9f\x99")},
+		},
+		// The default bufio buffer is 4096 bytes: the emoji straddles its
+		// end, and the value field must still decode it whole.
+		{
+			layout: `%k{re[a+]}%v{re[.]}`,
+			in:     strings.Repeat("a", 4094) + "\U0001f642",
+			exp:    []*Record{KeyStringRecord(strings.Repeat("a", 4094), "\U0001f642")},
+		},
+
 		//
 	} {
 		t.Run(test.layout, func(t *testing.T) {
@@ -928,5 +979,44 @@ func TestRecordReaderTruncatedFixedSizeNoPanic(t *testing.T) {
 				t.Errorf("got err %v, want io.ErrUnexpectedEOF", err)
 			}
 		})
+	}
+}
+
+// reReader must decode runes the way strings.Reader does: whole UTF-8
+// sequences, and one U+FFFD per byte of anything invalid or truncated. It
+// must also leave the input in place for readRe to discard.
+func TestReReaderReadRune(t *testing.T) {
+	readErr := errors.New("read error")
+	for _, in := range []string{
+		"", "ascii", "a\u00e9\u4e2d\U0001f642\ufffdz",
+		"\xff\x80", "\xc0\xaf", "\xed\xa0\x80", "\xf4\x90\x80\x80",
+		"\xc3", "\xe4\xb8", "\xf0\x9f\x99", "\xe4a", "\u00e9\xf0\x9f\x99",
+	} {
+		for _, terminal := range []error{io.EOF, readErr} {
+			t.Run(strconv.Quote(in)+"/"+terminal.Error(), func(t *testing.T) {
+				r, err := NewRecordReader(io.MultiReader(strings.NewReader(in), iotest.ErrReader(terminal)), "%v")
+				if err != nil {
+					t.Fatal(err)
+				}
+				re := reReader{r: r}
+				want := strings.NewReader(in)
+				for {
+					expRune, expSize, expErr := want.ReadRune()
+					gotRune, gotSize, err := re.ReadRune()
+					if expErr != nil {
+						if err != terminal || gotSize != 0 {
+							t.Fatalf("after input: got (%U, %d, %v), want error %v", gotRune, gotSize, err, terminal)
+						}
+						break
+					}
+					if gotRune != expRune || gotSize != expSize || err != nil {
+						t.Fatalf("got (%U, %d, %v), want (%U, %d, nil)", gotRune, gotSize, err, expRune, expSize)
+					}
+				}
+				if peek, err := r.r.Peek(len(in)); err != nil || string(peek) != in {
+					t.Errorf("input consumed: got (%q, %v), want (%q, nil)", peek, err, in)
+				}
+			})
+		}
 	}
 }
