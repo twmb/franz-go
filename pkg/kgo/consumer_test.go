@@ -1291,8 +1291,8 @@ func TestConsumeMaxDecompressedBatchBytes(t *testing.T) {
 	if tooLarge.Topic != topic || tooLarge.Partition != 0 || tooLarge.Offset != 0 || tooLarge.NextOffset != 3 {
 		t.Fatalf("got %+v, want offset 0 through 3 on %s/0", tooLarge, topic)
 	}
-	if !errors.Is(fs.Err0(), ErrMaxDecompressed) {
-		t.Fatalf("err %v does not unwrap to ErrMaxDecompressed", fs.Err0())
+	if !errors.Is(fs.Err0(), ErrMaxDecompress) {
+		t.Fatalf("err %v does not unwrap to ErrMaxDecompress", fs.Err0())
 	}
 
 	// The partition is stopped: a following small record is not fetched.

@@ -1808,7 +1808,7 @@ func (o *ProcessFetchPartitionOpts) decompress(decompressor Decompressor, src []
 	if err == nil {
 		return out, nil
 	}
-	if errors.Is(err, ErrMaxDecompressed) {
+	if errors.Is(err, ErrMaxDecompress) {
 		err = &ErrDecompressTooLarge{
 			Topic:      o.Topic,
 			Partition:  o.Partition,

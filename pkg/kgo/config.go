@@ -666,7 +666,7 @@ func defaultCfg() cfg {
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 		maxBrokerReadBytes:  100 << 20,
 
-		maxDecompressedBatchBytes: math.MaxInt32,
+		maxDecompressedBatchBytes: 1 << 30,
 
 		metadataMaxAge:     5 * time.Minute,
 		metadataMinAge:     5 * time.Second,
@@ -990,8 +990,9 @@ func BrokerMaxReadBytes(v int32) Opt {
 }
 
 // MaxDecompressedBatchBytes sets the maximum size a fetched batch may
-// decompress to, overriding the default math.MaxInt32. This also caps the
-// uncompressed size of a batch that [StreamingCompression] merges.
+// decompress to, overriding the default of 1 GiB (1 << 30). This also
+// caps the uncompressed size of a batch that [StreamingCompression]
+// merges.
 //
 // If a batch would decompress past this bound, the client stops consuming
 // the partition, PollFetches returns [ErrDecompressTooLarge], and the
