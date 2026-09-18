@@ -270,3 +270,81 @@ func f44() *features {
 func ftip() *features {
 	return f44()
 }
+
+// featureLevelDescriptions is indexed by level. Level 34 is unstable at 4.4
+// and is not in any release's table.
+var featureLevelDescriptions = map[string][]string{
+	"metadata.version": {
+		1:  "3.0-IV1: ListOffsets v7 by max timestamp (KIP-734); message format 3.0 assumed (KIP-724)",
+		2:  "3.1-IV0: Fetch carries topic ids (KIP-516)",
+		3:  "3.2-IV0: leader recovery after unclean election (KIP-704)",
+		4:  "3.3-IV0: metadata.version is itself a feature; finalized ranges drop the min level (KIP-778)",
+		5:  "3.3-IV1: NoopRecord in the metadata log (KIP-835)",
+		6:  "3.3-IV2: BrokerRegistrationChangeRecord replaces the fence and unfence records (apache/kafka#12195)",
+		7:  "3.3-IV3: InControlledShutdown state in broker records (KIP-841); the minimum for 4.x",
+		8:  "3.4-IV0: ZooKeeper to KRaft migration records (KIP-866)",
+		9:  "3.5-IV0: tiered storage (KIP-405)",
+		10: "3.5-IV1: Fetch carries the replica epoch (KIP-903)",
+		11: "3.5-IV2: SCRAM credentials in KRaft (KAFKA-14881)",
+		12: "3.6-IV0: no leader epoch bump when the controller shrinks the ISR (KAFKA-15021)",
+		13: "3.6-IV1: metadata transactions (KAFKA-14538)",
+		14: "3.6-IV2: delegation tokens in KRaft (KAFKA-15219)",
+		15: "3.7-IV0: controller registration (KIP-919)",
+		16: "3.7-IV1: reserved",
+		17: "3.7-IV2: JBOD in KRaft (KAFKA-15922)",
+		18: "3.7-IV3: reserved; was ELR, moved to 4.0-IV1",
+		19: "3.7-IV4: replica fetcher sends the KIP-951 Fetch version (KIP-951)",
+		20: "3.8-IV0: release marker, gates nothing",
+		21: "3.9-IV0: ListOffsets v9 (KIP-1005)",
+		22: "4.0-IV0: bootstraps group.version 1 (KIP-848)",
+		23: "4.0-IV1: ELR records in the metadata log, preview (KIP-966)",
+		24: "4.0-IV2: bootstraps transaction.version 1 and 2 (KIP-890)",
+		25: "4.0-IV3: async remote ListOffsets (KIP-1075)",
+		26: "4.1-IV0: ELR on by default for new clusters (KIP-966)",
+		27: "4.1-IV1: replica fetcher sends Fetch v18 (KIP-1166)",
+		28: "4.2-IV0: share groups on by default for new clusters (KIP-932)",
+		29: "4.2-IV1: streams groups on by default for new clusters (KIP-1071)",
+		30: "4.3-IV0: cordoned log dirs in broker records (KAFKA-19774)",
+		31: "4.4-IV0: dead letter queue for share groups (KIP-1191)",
+		32: "4.4-IV1: CIDR host patterns in ACLs (KIP-1276)",
+		33: "4.4-IV2: controller unregistration (KIP-1312)",
+		34: "4.5-IV0: release marker, unstable",
+	},
+	"kraft.version": {
+		0: "the original KRaft quorum",
+		1: "dynamic quorum membership (KIP-853)",
+	},
+	"transaction.version": {
+		0: "the original transaction coordinator",
+		1: "flexible transaction state records (KIP-890)",
+		2: "epoch bump per transaction (KIP-890)",
+	},
+	"group.version": {
+		0: "the classic rebalance protocol only",
+		1: "the consumer rebalance protocol (KIP-848)",
+	},
+	"eligible.leader.replicas.version": {
+		0: "ELR off",
+		1: "ELR on; needs metadata.version 23 (KIP-966)",
+	},
+	"share.version": {
+		0: "share groups off",
+		1: "share groups (KIP-932)",
+		2: "dead letter queue for share groups (KIP-1191)",
+	},
+	"streams.version": {
+		0: "streams groups off",
+		1: "streams groups (KIP-1071)",
+	},
+}
+
+// FeatureLevelDescription describes one level of a feature in a sentence
+// with the KIP or issue to search for, or returns "" for a level kversion
+// does not know. The wording carries no stability guarantee.
+func FeatureLevelDescription(name string, level int16) string {
+	levels := featureLevelDescriptions[name]
+	if level < 0 || int(level) >= len(levels) {
+		return ""
+	}
+	return levels[level]
+}

@@ -141,3 +141,33 @@ func TestFeaturesFromApiVersionsResponse(t *testing.T) {
 		t.Errorf("zero response: got features %q", got)
 	}
 }
+
+func TestFeatureLevelDescription(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		level int16
+		exp   string
+	}{
+		{"metadata.version", 27, "4.1-IV1: replica fetcher sends Fetch v18 (KIP-1166)"},
+		{"metadata.version", 0, ""},
+		{"metadata.version", 35, ""},
+		{"metadata.version", -1, ""},
+		{"share.version", 2, "dead letter queue for share groups (KIP-1191)"},
+		{"share.version", 3, ""},
+		{"kraft.version", 0, "the original KRaft quorum"},
+		{"unknown.version", 1, ""},
+	} {
+		if got := FeatureLevelDescription(test.name, test.level); got != test.exp {
+			t.Errorf("%s %d: got %q != exp %q", test.name, test.level, got, test.exp)
+		}
+	}
+
+	// Every level a release's table reaches has a description.
+	V4_4_0().EachSupportedFeature(func(name string, min, max int16) {
+		for level := min; level <= max; level++ {
+			if FeatureLevelDescription(name, level) == "" {
+				t.Errorf("%s %d has no description", name, level)
+			}
+		}
+	})
+}
