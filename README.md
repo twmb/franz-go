@@ -22,7 +22,7 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - Full Exactly-Once-Semantics (EOS)
 - Idempotent & transactional producers
 - Simple (legacy) consumer
-- Group consumers with eager (roundrobin, range, sticky) and cooperative (cooperative-sticky) balancers, with optional rack-aware partition assignment (KIP-881)
+- Group consumers with eager (roundrobin, range, sticky) and cooperative (cooperative-sticky) balancers, with optional rack-aware partition assignment (KIP-881) or server-side balancing (KIP-848)
 - Share group (queue) consumers (KIP-932)
 - All compression types supported: gzip, snappy, lz4, zstd
 - SSL/TLS provided through custom dialer options
@@ -411,8 +411,8 @@ generation.
 | [KIP-700](https://cwiki.apache.org/confluence/display/KAFKA/KIP-700%3A+Add+Describe+Cluster+API) — DescribeCluster | 2.8 | Supported |
 | [KIP-704](https://cwiki.apache.org/confluence/display/KAFKA/KIP-704%3A+Send+a+hint+to+the+partition+leader+to+recover+the+partition) — AlterISR => AlterPartition | 3.2 | Supported |
 | [KIP-709](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=173084258) — Batch OffsetFetch | 3.0 | Supported |
-| [KIP-714](https://cwiki.apache.org/confluence/display/KAFKA/KIP-714%3A+Client+metrics+and+observability) - Client Metrics | 3.7 | Supported |
-| [KIP-730](https://cwiki.apache.org/confluence/display/KAFKA/KIP-730%3A+Producer+ID+generation+in+KRaft+mode) - AllocateProducerIDs | 3.0 | Supported |
+| [KIP-714](https://cwiki.apache.org/confluence/display/KAFKA/KIP-714%3A+Client+metrics+and+observability) — Client Metrics | 3.7 | Supported |
+| [KIP-730](https://cwiki.apache.org/confluence/display/KAFKA/KIP-730%3A+Producer+ID+generation+in+KRaft+mode) — AllocateProducerIDs | 3.0 | Supported |
 | [KIP-734](https://cwiki.apache.org/confluence/display/KAFKA/KIP-734:+Improve+AdminClient.listOffsets+to+return+timestamp+and+offset+for+the+record+with+the+largest+timestamp) — Support MaxTimestamp in ListOffsets | 3.0 | Supported (LookbackOffset) |
 | [KIP-735](https://cwiki.apache.org/confluence/display/KAFKA/KIP-735%3A+Increase+default+consumer+session+timeout) — Bump default session timeout | ? | Supported |
 | [KIP-768](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=186877575) — Extend SASL/OAUTHBEARER support for OIDC | 3.1 | Supported |
@@ -429,13 +429,13 @@ generation.
 | [KIP-851](https://cwiki.apache.org/confluence/display/KAFKA/KIP-851%3A+Add+requireStable+flag+into+ListConsumerGroupOffsetsOptions) — `RequireStable` on OffsetFetch | 3.3 | Supported (via `kadm.RequireStable`) |
 | [KIP-853](https://cwiki.apache.org/confluence/display/KAFKA/KIP-853%3A+KRaft+Controller+Membership+Changes) — Add replica directory ID for replica fetchers | 3.9 | Supported |
 | [KIP-858](https://cwiki.apache.org/confluence/display/KAFKA/KIP-858%3A+Handle+JBOD+broker+disk+failure+in+KRaft) — JBOD in KRaft (protocol) | 3.7 | Supported |
-| [KIP-860](https://cwiki.apache.org/confluence/display/KAFKA/KIP-860%3A+Add+client-provided+option+to+guard+against+replication+factor+change+during+partition+reassignments) - Client side AlterPartitionAssignments RF change guard | 4.1 | Supported (kadm v1.17+) |
+| [KIP-860](https://cwiki.apache.org/confluence/display/KAFKA/KIP-860%3A+Add+client-provided+option+to+guard+against+replication+factor+change+during+partition+reassignments) — Client side AlterPartitionAssignments RF change guard | 4.1 | Supported (kadm v1.17+) |
 | [KIP-866](https://cwiki.apache.org/confluence/display/KAFKA/KIP-866+ZooKeeper+to+KRaft+Migration) — ZK to Raft RPC changes | 3.4 | Supported |
 | [KIP-881](https://cwiki.apache.org/confluence/display/KAFKA/KIP-881%3A+Rack-aware+Partition+Assignment+for+Kafka+Consumers) — Rack-aware consumer partition assignment | 3.5 | Supported (range & sticky) |
 | [KIP-890](https://cwiki.apache.org/confluence/display/KAFKA/KIP-890%3A+Transactions+Server-Side+Defense) — Transactions server side defense | 3.8, 4.0 | Supported |
 | [KIP-893](https://cwiki.apache.org/confluence/display/KAFKA/KIP-893%3A+The+Kafka+protocol+should+support+nullable+structs) — Nullable structs in the protocol | 3.5 | Supported |
 | [KIP-899](https://cwiki.apache.org/confluence/display/KAFKA/KIP-899%3A+Allow+clients+to+rebootstrap) — Allow clients to rebootstrap | ? | Supported (`UpdateSeedBrokers`) |
-| [KIP-909](https://cwiki.apache.org/confluence/display/KAFKA/KIP-909%3A+DNS+Resolution+Failure+Should+Not+Fail+the+Clients) - DNS resolution failure does not fail the client | 4.4 | Supported (existing) |
+| [KIP-909](https://cwiki.apache.org/confluence/display/KAFKA/KIP-909%3A+DNS+Resolution+Failure+Should+Not+Fail+the+Clients) — DNS resolution failure does not fail the client | 4.4 | Supported (existing) |
 | [KIP-903](https://cwiki.apache.org/confluence/display/KAFKA/KIP-903%3A+Replicas+with+stale+broker+epoch+should+not+be+allowed+to+join+the+ISR) — Stale broker epoch fencing | 3.5 | Supported (proto) |
 | [KIP-919](https://cwiki.apache.org/confluence/display/KAFKA/KIP-919%3A+Allow+AdminClient+to+Talk+Directly+with+the+KRaft+Controller+Quorum+and+add+Controller+Registration) — Admin client to KRaft, Controller registration | 3.7 | Supported |
 | [KIP-932](https://cwiki.apache.org/confluence/display/KAFKA/KIP-932%3A+Queues+for+Kafka) — Share groups (queues) | 4.1 | Supported (via `ShareGroup`) |
@@ -444,7 +444,7 @@ generation.
 | [KIP-994](https://cwiki.apache.org/confluence/display/KAFKA/KIP-994%3A+Minor+Enhancements+to+ListTransactions+and+DescribeTransactions+APIs) — List/Describe transactions enhancements | 3.8 (partial) | Supported |
 | [KIP-1000](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1000%3A+List+Client+Metrics+Configuration+Resources) — ListClientMetricsResources | 3.7 | Supported |
 | [KIP-1005](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1005%3A+Expose+EarliestLocalOffset+and+TieredOffset) — ListOffsets w. Timestamp -5 | 3.9 | Supported |
-| [KIP-1022](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1022%3A+Formatting+and+Updating+Features) - Formatting changes for features | 4.0 | Supported |
+| [KIP-1022](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1022%3A+Formatting+and+Updating+Features) — Formatting changes for features | 4.0 | Supported |
 | [KIP-1023](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1023%3A+Follower+fetch+from+tiered+offset) — ListOffsets earliest pending upload offset | 4.2 | Supported (existing) |
 | [KIP-1025](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1025%3A+Optionally+URL-encode+clientID+and+clientSecret+in+authorization+header) — URL-encode clientID/secret in OAuth auth header | 3.9 | Supported (user callback) |
 | [KIP-1043](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1043%3A+Administration+of+groups) — Administration of groups | 4.0 | Supported |
@@ -456,23 +456,23 @@ generation.
 | [KIP-1082](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1082%3A+Require+Client-Generated+IDs+over+the+ConsumerGroupHeartbeat+RPC) — ClientID in the next-gen rebalancer | 4.0 | Supported |
 | [KIP-1102](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1102%3A+Enable+clients+to+rebootstrap+based+on+timeout+or+error+code) — RebootstrapRequired | 4.0 | Supported |
 | [KIP-1106](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1106%3A+Add+duration+based+offset+reset+option+for+consumer+clients) — Duration-based offset reset | 4.0 | Supported (LookbackOffset) |
-| [KIP-1123](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1123%3A+Rack-aware+partitioning+for+Kafka+Producer) - Rack-aware producer partitioning | 4.4 | Supported |
-| [KIP-1139](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1139%3A+Add+support+for+OAuth+jwt-bearer+grant+type) - Oauth JWT bearer grant| 4.0 | Supported |
-| [KIP-1142](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1142%3A+Allow+to+list+non-existent+group+which+has+dynamic+config) - ListConfigResources | 4.1 | Supported (kadm v1.17+) |
-| [KIP-1152](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1152%3A+Add+transactional+ID+pattern+filter+to+ListTransactions+API) - ListTransactions.TransactionalIDPattern | 4.1 | Supported (kadm v1.17+) |
+| [KIP-1123](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1123%3A+Rack-aware+partitioning+for+Kafka+Producer) — Rack-aware producer partitioning | 4.4 | Supported |
+| [KIP-1139](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1139%3A+Add+support+for+OAuth+jwt-bearer+grant+type) — Oauth JWT bearer grant| 4.0 | Supported |
+| [KIP-1142](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1142%3A+Allow+to+list+non-existent+group+which+has+dynamic+config) — ListConfigResources | 4.1 | Supported (kadm v1.17+) |
+| [KIP-1152](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1152%3A+Add+transactional+ID+pattern+filter+to+ListTransactions+API) — ListTransactions.TransactionalIDPattern | 4.1 | Supported (kadm v1.17+) |
 | [KIP-1160](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1160%3A+Enable+returning+supported+features+from+a+specific+broker) — Per-broker supported features in ApiVersions | 4.2 | Supported (proto) |
-| [KIP-1166](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1166%3A+Improve+high-watermark+replication) - Improve HWM replication (protocol) | 4.1 | Supported |
+| [KIP-1166](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1166%3A+Improve+high-watermark+replication) — Improve HWM replication (protocol) | 4.1 | Supported |
 | [KIP-1186](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1186%3A+Update+AddRaftVoterRequest+RPC+to+support+auto-join) — AddRaftVoter AckWhenCommitted | 4.2 | Supported (proto) |
 | [KIP-1206](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1206%3A+Strict+max+fetch+records+in+share+fetch) — ShareFetch strict record limit | 4.2 | Supported (via `ShareMaxRecordsStrict`) |
 | [KIP-1222](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1222%3A+Acquisition+lock+timeout+renewal+in+share+consumer+explicit+mode) — Share consumer renew acknowledgements | 4.2 | Supported (via `AckRenew`) |
 | [KIP-1226](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1226%3A+Introducing+Share+Partition+Lag+Persistence+and+Retrieval) — Share partition lag in DescribeShareGroupOffsets | 4.2 | Supported (kadm) |
 | [KIP-1227](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1227%3A+Expose+Rack+ID+in+MemberDescription+and+ShareMemberDescription) — Rack ID in (Share)MemberDescription | 4.2 | Supported (kadm) |
 | [KIP-1228](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1228%3A+Add+Transaction+Version+to+WriteTxnMarkersRequest) — WriteTxnMarkers TransactionVersion | 4.2 | Supported |
-| [KIP-1242](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1242%3A+Detection+and+handling+of+misrouted+connections) - Detection and handling of misrouted connections | 4.4 | Supported |
+| [KIP-1242](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1242%3A+Detection+and+handling+of+misrouted+connections) — Detection and handling of misrouted connections | 4.4 | Supported |
 | [KIP-1258](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1258%3A+Add+Support+for+OAuth+Client+Assertion+to+client_credentials+Grant+Type) — OAuth client assertion in client_credentials grant | 4.3 | Supported (user callback) |
 | [KIP-1319](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1319%3A+Align+TxnOffsetCommit+API+with+OffsetCommit+API) — TxnOffsetCommit by topic ID | 4.4 | Supported |
 | [KIP-1331](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1331%3A+Streams+Group+Topology+Description+Plugin) — Streams group topology descriptions | 4.4 | Supported (proto) |
-| [KIP-1357](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1357%3A+Add+broker+side+custom+assignors+for+%22streams%22+groups) - Broker side custom assignors for streams groups | 4.4 | Supported (proto) |
+| [KIP-1357](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1357%3A+Add+broker+side+custom+assignors+for+%22streams%22+groups) — Broker side custom assignors for streams groups | 4.4 | Supported (proto) |
 
 KIPs intentionally not implemented (with rationale):
 
