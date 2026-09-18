@@ -430,7 +430,7 @@ func (e *ErrGroupSession) Error() string {
 func (e *ErrGroupSession) Unwrap() error { return e.Err }
 
 // ErrDecompressTooLarge is returned from PollFetches when a batch would
-// decompress to more than [MaxDecompressedBatchBytes]. The client stops
+// decompress to more than [MaxDecompressBatchBytes]. The client stops
 // consuming the partition: it is not fetched again until you [SetOffsets]
 // it past the batch, to NextOffset. Alternatively, create a new client with
 // a larger bound.
@@ -450,7 +450,7 @@ type ErrDecompressTooLarge struct {
 }
 
 func (e *ErrDecompressTooLarge) Error() string {
-	return fmt.Sprintf("topic %s partition %d: the batch at offset %d decompresses to more than MaxDecompressedBatchBytes;"+
+	return fmt.Sprintf("topic %s partition %d: the batch at offset %d decompresses to more than MaxDecompressBatchBytes;"+
 		" consuming stopped, use SetOffsets to skip to offset %d",
 		e.Topic, e.Partition, e.Offset, e.NextOffset)
 }

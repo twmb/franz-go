@@ -145,13 +145,13 @@ func TestMergeBacklog(t *testing.T) {
 	}
 }
 
-// MaxDecompressedBatchBytes caps a merged batch's uncompressed bytes, so a
+// MaxDecompressBatchBytes caps a merged batch's uncompressed bytes, so a
 // consumer bounded the same way can decompress it.
 func TestMergeBacklogMaxDecompressed(t *testing.T) {
 	t.Parallel()
 	const n, limit, maxUncompressed = 500, 4096, 2048
 	s, r, want := mergeHarness(t, GzipCompression(), limit, n, false)
-	r.cl.cfg.maxDecompressedBatchBytes = maxUncompressed
+	r.cl.cfg.maxDecompressBatchBytes = maxUncompressed
 	var got []*Record
 	var merged int
 	for len(r.batches) > 0 {

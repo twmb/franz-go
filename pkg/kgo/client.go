@@ -182,14 +182,14 @@ func validateCfg(opts ...Opt) (cfg, []hostport, error) {
 			return cfg, nil, err
 		}
 	}
-	// Our own default is bounded at MaxDecompressedBatchBytes. A default
+	// Our own default is bounded at MaxDecompressBatchBytes. A default
 	// decompressor the user built is bounded at math.MaxInt32; rebuild it
 	// with our bound.
 	switch d := cfg.decompressor.(type) {
 	case nil:
-		cfg.decompressor = newDecompressor(cfg.maxDecompressedBatchBytes, cfg.pools...)
+		cfg.decompressor = newDecompressor(cfg.maxDecompressBatchBytes, cfg.pools...)
 	case *decompressor:
-		cfg.decompressor = newDecompressor(cfg.maxDecompressedBatchBytes, d.pools...)
+		cfg.decompressor = newDecompressor(cfg.maxDecompressBatchBytes, d.pools...)
 	}
 
 	return cfg, seeds, nil
@@ -313,8 +313,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.maxBrokerWriteBytes}
 	case namefn(BrokerMaxReadBytes):
 		return []any{cfg.maxBrokerReadBytes}
-	case namefn(MaxDecompressedBatchBytes):
-		return []any{cfg.maxDecompressedBatchBytes}
+	case namefn(MaxDecompressBatchBytes):
+		return []any{cfg.maxDecompressBatchBytes}
 	case namefn(MetadataMaxAge):
 		return []any{cfg.metadataMaxAge}
 	case namefn(MetadataMinAge):

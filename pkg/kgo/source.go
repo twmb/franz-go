@@ -170,7 +170,7 @@ type cursor struct {
 	useState atomic.Bool
 
 	// fatal is set when a batch decompresses past
-	// MaxDecompressedBatchBytes. The cursor stays unusable, no matter
+	// MaxDecompressBatchBytes. The cursor stays unusable, no matter
 	// what completes, until SetOffsets moves it past the batch or the
 	// partition is unassigned.
 	fatal atomic.Bool
@@ -1329,7 +1329,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// the fetch is drained.
 				if tooLarge, ok := errors.AsType[*ErrDecompressTooLarge](fp.Err); ok {
 					partOffset.from.fatal.Store(true)
-					s.cl.cfg.logger.Log(LogLevelError, "batch decompresses larger than MaxDecompressedBatchBytes, stopping consuming the partition; skip the batch with SetOffsets",
+					s.cl.cfg.logger.Log(LogLevelError, "batch decompresses larger than MaxDecompressBatchBytes, stopping consuming the partition; skip the batch with SetOffsets",
 						"broker", logID(s.nodeID),
 						"topic", topic,
 						"partition", partition,
