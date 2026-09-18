@@ -1845,7 +1845,9 @@ func (r *RecordReader) readRe(re *regexp.Regexp) error {
 	reader := reReader{r: r}
 	loc := re.FindReaderIndex(&reader)
 	if loc == nil {
-		if reader.err == io.EOF && len(reader.peek) > 0 {
+		// An anchored regexp can reject the input before the reader
+		// encounters an error, so a nil reader error is still a mismatch.
+		if reader.err == nil || reader.err == io.EOF && len(reader.peek) > 0 {
 			return fmt.Errorf("regexp text mismatch, saw %q", reader.peek)
 		}
 		return reader.err
