@@ -1830,15 +1830,22 @@ func (r *RecordReader) readCondition(fn func(byte) int8) error {
 type reReader struct {
 	r    *RecordReader
 	peek []byte
+	pos  int
 	err  error
 }
 
 func (re *reReader) ReadRune() (r rune, size int, err error) {
-	re.peek, re.err = re.r.r.Peek(len(re.peek) + 1)
-	if re.err != nil {
+	for re.err == nil && !utf8.FullRune(re.peek[re.pos:]) {
+		re.peek, re.err = re.r.r.Peek(len(re.peek) + 1)
+	}
+	if re.pos == len(re.peek) || re.err == bufio.ErrBufferFull {
 		return 0, 0, re.err
 	}
-	return rune(re.peek[len(re.peek)-1]), 1, nil
+	// Keep the byte position separate from the peek length: an incomplete
+	// rune at EOF can leave multiple bytes to decode as individual RuneErrors.
+	r, size = utf8.DecodeRune(re.peek[re.pos:])
+	re.pos += size
+	return r, size, nil
 }
 
 func (r *RecordReader) readRe(re *regexp.Regexp) error {
