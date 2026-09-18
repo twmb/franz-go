@@ -3,7 +3,7 @@ module github.com/twmb/franz-go/pkg/kadm
 go 1.26.0
 
 require (
-	github.com/twmb/franz-go v1.21.7
+	github.com/twmb/franz-go v1.22.0
 	github.com/twmb/franz-go/pkg/kmsg v1.14.0
 )
 
