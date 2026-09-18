@@ -429,6 +429,34 @@ func (e *ErrGroupSession) Error() string {
 
 func (e *ErrGroupSession) Unwrap() error { return e.Err }
 
+// ErrDecompressTooLarge is returned from PollFetches when a batch would
+// decompress to more than [MaxDecompressedBatchBytes]. The client stops
+// consuming the partition: it is not fetched again until you [SetOffsets]
+// it past the batch, to NextOffset. Alternatively, create a new client with
+// a larger bound.
+type ErrDecompressTooLarge struct {
+	// Topic is the topic the batch is in.
+	Topic string
+	// Partition is the partition the batch is in.
+	Partition int32
+	// Offset is the batch's first offset.
+	Offset int64
+	// Epoch is the leader epoch of the batch. Use SetOffsets with {Epoch,
+	// NextOffset} to skip this batch.
+	Epoch int32
+	// NextOffset is the offset after the batch's last record, i.e., where
+	// to SetOffsets to skip the batch.
+	NextOffset int64
+}
+
+func (e *ErrDecompressTooLarge) Error() string {
+	return fmt.Sprintf("topic %s partition %d: the batch at offset %d decompresses to more than MaxDecompressedBatchBytes;"+
+		" consuming stopped, use SetOffsets to skip to offset %d",
+		e.Topic, e.Partition, e.Offset, e.NextOffset)
+}
+
+func (*ErrDecompressTooLarge) Unwrap() error { return ErrMaxDecompressed }
+
 type errDecompress struct {
 	err error
 }

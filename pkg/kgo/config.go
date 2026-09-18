@@ -101,6 +101,8 @@ type cfg struct {
 	maxBrokerWriteBytes int32
 	maxBrokerReadBytes  int32
 
+	maxDecompressedBatchBytes int
+
 	metadataMaxAge time.Duration
 	metadataMinAge time.Duration
 
@@ -339,6 +341,9 @@ func (cfg *cfg) validate() error {
 		// fetch bytes limit, but hopefully we do not run into that.
 		{v: int64(cfg.maxBrokerWriteBytes), allowed: int64(cfg.maxRecordBatchBytes("")), badcmp: i64lt, fmt: "max broker write bytes %v is erroneously less than max record batch bytes %v"},
 		{v: int64(cfg.maxBrokerReadBytes), allowed: int64(cfg.maxBytes), badcmp: i64lt, fmt: "max broker read bytes %v is erroneously less than max fetch bytes %v"},
+
+		{name: "max decompressed batch bytes", v: int64(cfg.maxDecompressedBatchBytes), allowed: 1, badcmp: i64lt},
+		{name: "max decompressed batch bytes", v: int64(cfg.maxDecompressedBatchBytes), allowed: math.MaxInt32, badcmp: i64gt},
 
 		// -1 <= allowed concurrency (-1 is unbounded)
 		{name: "max concurrent fetches", v: int64(cfg.maxConcurrentFetches), allowed: -1, badcmp: i64lt},
@@ -661,6 +666,8 @@ func defaultCfg() cfg {
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 		maxBrokerReadBytes:  100 << 20,
 
+		maxDecompressedBatchBytes: math.MaxInt32,
+
 		metadataMaxAge:     5 * time.Minute,
 		metadataMinAge:     5 * time.Second,
 		missingTopicDelete: 15 * time.Second,
@@ -980,6 +987,19 @@ func BrokerMaxWriteBytes(v int32) Opt {
 // response should run the risk of hitting this limit.
 func BrokerMaxReadBytes(v int32) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.maxBrokerReadBytes = v }}
+}
+
+// MaxDecompressedBatchBytes sets the maximum size a fetched batch may
+// decompress to, overriding the default math.MaxInt32. This also caps the
+// uncompressed size of a batch that [StreamingCompression] merges.
+//
+// If a batch would decompress past this bound, the client stops consuming
+// the partition, PollFetches returns [ErrDecompressTooLarge], and the
+// partition is not fetched again until you [SetOffsets] past the batch.
+//
+// This option does not apply to custom decompressors, you must bound them.
+func MaxDecompressedBatchBytes(n int) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.maxDecompressedBatchBytes = n }}
 }
 
 // MetadataMaxAge sets the maximum age for the client's cached metadata,
@@ -1917,7 +1937,9 @@ func ConsumePreferringLagFn(fn PreferLagFn) ConsumerOpt {
 // WithDecompressor allows you to completely control how fetch batches are
 // decompressed, allowing you to use alternative libraries than what franz-go
 // supports, allowing you to have more control over memory & pooling, and other
-// benefits. The client default compressor is the [DefaultDecompressor].
+// benefits. The client default compressor is the [DefaultDecompressor]. A
+// [DefaultDecompressor] passed here is rebuilt internally with
+// [MaxDecompressedBatchBytes].
 func WithDecompressor(decompressor Decompressor) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.decompressor = decompressor }}
 }

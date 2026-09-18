@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"runtime"
@@ -18,23 +19,12 @@ import (
 
 var byteBuffers = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 8<<10)) }}
 
-// maxDecompressedSize caps how much one batch may decompress to. Fetch
-// limits bound only the compressed bytes on the wire; nothing in the
-// protocol bounds the decompressed size, and the whole batch is
-// materialized contiguously while decompressing. Without a cap, a few-KB
-// malicious or corrupt batch can demand tens of GiB: zstd frames declare a
-// content size that is honored up to the decoder's configured limit (the
-// library default is 64 GiB), gzip expands up to ~1032x, lz4 up to ~255x,
-// and snappy headers claim up to 4 GiB. No legitimate batch can exceed
-// math.MaxInt32 decompressed: every known producer serializes a batch's
-// records into an int32-indexed buffer before compressing (this client's
-// own appendTo, the Java client, librdkafka),
-// so a batch claiming more is corrupt or hostile and is rejected like any
-// other corrupt batch: a loud, repeated fetch error with no offset advance.
-// A var only so tests can shrink it.
-var maxDecompressedSize = int64(math.MaxInt32)
-
-var errDecompressedTooLarge = errors.New("decompressed data exceeds the maximum allowed decompressed batch size (corrupt or malicious batch)")
+// ErrMaxDecompressed is returned when a batch we consumed would decompress
+// larger than [MaxDecompressedBatchBytes]. The client treats this error as
+// fatal for the partition and it can only be recovered via SetOffsets or by
+// you restarting your client with a higher limit. A custom decompressor that
+// returns this error fatally stops the partition the same way.
+var ErrMaxDecompressed = errors.New("decompressed data would exceed MaxDecompressedBatchBytes")
 
 // CompressionCodecType is a bitfield specifying a Kafka-defined compression
 // codec. Per spec, only four compression codecs are supported. However, if
@@ -439,13 +429,22 @@ type decompressor struct {
 	unlz4Pool  sync.Pool
 	unzstdPool sync.Pool
 	pools      pools
+	max        int // how large a batch may decompress to
 }
 
 // DefaultDecompressor returns the default decompressor used by clients.
 // The first pool provided that implements PoolDecompressBytes will be
 // used where possible.
+//
+// The default decompressor bounds batches at math.MaxInt32; internally,
+// clients initialize decompressors with [MaxDecompressedBatchBytes].
 func DefaultDecompressor(pools ...Pool) Decompressor {
+	return newDecompressor(math.MaxInt32, pools...)
+}
+
+func newDecompressor(max int, pools ...Pool) *decompressor {
 	d := &decompressor{
+		max: max,
 		ungzPool: sync.Pool{
 			New: func() any {
 				r := new(gzipDecoder)
@@ -465,7 +464,7 @@ func DefaultDecompressor(pools ...Pool) Decompressor {
 				zstdDec, _ := zstd.NewReader(nil,
 					zstd.WithDecoderLowmem(true),
 					zstd.WithDecoderConcurrency(1),
-					zstd.WithDecoderMaxMemory(uint64(maxDecompressedSize)),
+					zstd.WithDecoderMaxMemory(uint64(max)),
 				)
 				r := &zstdDecoder{zstdDec}
 				runtime.SetFinalizer(r, func(r *zstdDecoder) {
@@ -499,6 +498,7 @@ type lz4Decoder struct {
 }
 
 func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) (_ []byte, err error) {
+	max := d.max
 	if codecType == CodecNone {
 		return src, nil
 	}
@@ -547,7 +547,7 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) (_
 	var lim *io.LimitedReader
 	switch codecType {
 	case CodecSnappy:
-		return decompressSnappy(dst, src)
+		return decompressSnappy(dst, src, max)
 	case CodecZstd:
 		return d.decompressZstd(dst, src)
 	case CodecGzip:
@@ -573,7 +573,7 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) (_
 	// before the deferred Put.
 	if userPooled {
 		out := bytes.NewBuffer(dst)
-		if err := readBounded(out, lim); err != nil {
+		if err := readBounded(out, lim, max); err != nil {
 			return nil, err
 		}
 		return out.Bytes(), nil
@@ -581,44 +581,51 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) (_
 	out := byteBuffers.Get().(*bytes.Buffer)
 	out.Reset()
 	defer byteBuffers.Put(out)
-	if err := readBounded(out, lim); err != nil {
+	if err := readBounded(out, lim, max); err != nil {
 		return nil, err
 	}
 	return slices.Clone(out.Bytes()), nil
 }
 
-// readBounded streams lim into out, rejecting more than
-// maxDecompressedSize. We call ReadFrom directly rather than io.Copy so
-// that a stack allocated out does not escape through the io.Writer
-// interface.
-func readBounded(out *bytes.Buffer, lim *io.LimitedReader) error {
-	lim.N = maxDecompressedSize + 1
+// readBounded streams lim into out, rejecting more than max bytes. We call
+// ReadFrom directly rather than io.Copy so that a stack allocated out does
+// not escape through the io.Writer interface.
+func readBounded(out *bytes.Buffer, lim *io.LimitedReader, max int) error {
+	lim.N = int64(max) + 1
 	if n, err := out.ReadFrom(lim); err != nil {
 		return err
-	} else if n > maxDecompressedSize {
-		return errDecompressedTooLarge
+	} else if n > int64(max) {
+		return ErrMaxDecompressed
 	}
 	return nil
 }
 
-func decompressSnappy(dst, src []byte) ([]byte, error) {
+func decompressSnappy(dst, src []byte, max int) ([]byte, error) {
 	if len(src) > 16 && bytes.HasPrefix(src, xerialPfx) {
-		return xerialDecode(dst, src)
+		return xerialDecode(dst, src, max)
 	}
 	// The decoded length is read from the header and allocated up
 	// front; check the claim before decoding.
 	if l, err := s2.DecodedLen(src); err != nil {
 		return nil, err
-	} else if int64(l) > maxDecompressedSize {
-		return nil, errDecompressedTooLarge
+	} else if l > max {
+		return nil, ErrMaxDecompressed
 	}
 	return s2.Decode(dst, src)
 }
 
+// decompressZstd relies on the decoder's WithDecoderMaxMemory bound: the
+// decoder rejects a frame declaring a content size over the bound before
+// allocating, errors when a frame outgrows its declared size or the bound
+// while decoding, and counts every frame of src against the bound.
 func (d *decompressor) decompressZstd(dst, src []byte) ([]byte, error) {
 	unzstd := d.unzstdPool.Get().(*zstdDecoder)
 	defer d.unzstdPool.Put(unzstd)
-	return unzstd.inner.DecodeAll(src, dst)
+	out, err := unzstd.inner.DecodeAll(src, dst)
+	if errors.Is(err, zstd.ErrDecoderSizeExceeded) {
+		return nil, fmt.Errorf("%w: %w", ErrMaxDecompressed, err)
+	}
+	return out, err
 }
 
 var xerialPfx = []byte{130, 83, 78, 65, 80, 80, 89, 0}
@@ -673,7 +680,7 @@ var errMalformedXerial = errors.New("malformed xerial framing")
 
 // xerialDecode appends the decoded chunks to dst (commonly a len-0 pooled
 // slice, or nil) and returns the result.
-func xerialDecode(dst, src []byte) ([]byte, error) {
+func xerialDecode(dst, src []byte, max int) ([]byte, error) {
 	// bytes 0-8: xerial header
 	// bytes 8-16: xerial version
 	// everything after: uint32 chunk size, snappy chunk
@@ -697,8 +704,8 @@ func xerialDecode(dst, src []byte) ([]byte, error) {
 			return nil, err
 		}
 		total += int64(l)
-		if total > maxDecompressedSize-int64(len(dst)) {
-			return nil, errDecompressedTooLarge
+		if total > int64(max-len(dst)) {
+			return nil, ErrMaxDecompressed
 		}
 		rem = rem[size:]
 	}

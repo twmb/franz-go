@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"reflect"
 	"slices"
@@ -201,10 +202,8 @@ func TestCompressDecompress(t *testing.T) {
 // succeeded, and in production zstd accepted up to the library-default
 // 64 GiB while gzip/lz4 had no bound at all.
 func TestDecompressBombBounded(t *testing.T) {
-	// Not parallel: overrides maxDecompressedSize.
-	old := maxDecompressedSize
-	defer func() { maxDecompressedSize = old }()
-	maxDecompressedSize = 1 << 20
+	t.Parallel()
+	bounded := newDecompressor(1 << 20)
 
 	huge := make([]byte, 8<<20) // zeros compress tightly under every codec
 	for _, codec := range []CompressionCodecType{CodecGzip, CodecSnappy, CodecLz4, CodecZstd} {
@@ -217,8 +216,8 @@ func TestDecompressBombBounded(t *testing.T) {
 		if used != codec {
 			t.Fatalf("codec %d: compressed with %d", codec, used)
 		}
-		if _, err := DefaultDecompressor().Decompress(compressed, codec); err == nil {
-			t.Errorf("codec %d: decompressing an 8MiB-decoded batch under a 1MiB bound unexpectedly succeeded", codec)
+		if _, err := bounded.Decompress(compressed, codec); !errors.Is(err, ErrMaxDecompressed) {
+			t.Errorf("codec %d: decompressing an 8MiB-decoded batch under a 1MiB bound: got err %v, want ErrMaxDecompressed", codec, err)
 		}
 	}
 
@@ -245,8 +244,8 @@ func TestDecompressBombBounded(t *testing.T) {
 		xer = binary.BigEndian.AppendUint32(xer, uint32(len(chunk)))
 		xer = append(xer, chunk...)
 	}
-	if _, err := DefaultDecompressor().Decompress(xer, CodecSnappy); err == nil {
-		t.Error("xerial chunks summing past the bound unexpectedly succeeded")
+	if _, err := bounded.Decompress(xer, CodecSnappy); !errors.Is(err, ErrMaxDecompressed) {
+		t.Errorf("xerial chunks summing past the bound: got err %v, want ErrMaxDecompressed", err)
 	}
 }
 
@@ -363,8 +362,8 @@ func TestDecompressZstdHugeClaim(t *testing.T) {
 	frame = append(frame, 0xc0, 0x00)
 	frame = binary.LittleEndian.AppendUint64(frame, 8<<30)
 	_, err := DefaultDecompressor().Decompress(frame, CodecZstd)
-	if !errors.Is(err, zstd.ErrDecoderSizeExceeded) {
-		t.Errorf("got err %v != exp zstd.ErrDecoderSizeExceeded", err)
+	if !errors.Is(err, ErrMaxDecompressed) {
+		t.Errorf("got err %v != exp ErrMaxDecompressed", err)
 	}
 }
 
@@ -516,7 +515,7 @@ func Test_xerialDecode(t *testing.T) {
 				t.Errorf("base64 decode error = %v", err)
 				return
 			}
-			got, err := xerialDecode(nil, data)
+			got, err := xerialDecode(nil, data, math.MaxInt32)
 			if (err != nil) != test.wantErr {
 				t.Errorf("xerialDecode() error = %v, wantErr %v", err, test.wantErr)
 				return

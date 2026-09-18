@@ -1244,3 +1244,76 @@ func TestLookbackMilli(t *testing.T) {
 		})
 	}
 }
+
+// A batch that decompresses past MaxDecompressedBatchBytes stops the
+// partition: PollFetches returns ErrDecompressTooLarge once and nothing
+// more until SetOffsets skips the batch.
+func TestConsumeMaxDecompressedBatchBytes(t *testing.T) {
+	t.Parallel()
+
+	topic, cleanup := tmpTopicPartitions(t, 1)
+	defer cleanup()
+
+	producer, _ := newTestClient(
+		DefaultProduceTopic(topic),
+		ProducerBatchMaxBytes(4<<20),
+		ProducerBatchCompression(GzipCompression()),
+		ProducerLinger(time.Second),
+	)
+	defer producer.Close()
+
+	// Three 1MiB records of zeros land in one batch that gzips to a few
+	// KB and decompresses to 3MiB.
+	big := make([]byte, 1<<20)
+	if err := producer.ProduceSync(context.Background(),
+		&Record{Value: big},
+		&Record{Value: big},
+		&Record{Value: big},
+	).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	cl, _ := newTestClient(
+		MaxDecompressedBatchBytes(1<<20),
+		ConsumePartitions(map[string]map[int32]Offset{
+			topic: {0: NewOffset().At(0)},
+		}),
+	)
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fs := cl.PollFetches(ctx)
+	tooLarge, ok := errors.AsType[*ErrDecompressTooLarge](fs.Err0())
+	if !ok {
+		t.Fatalf("got err %v, want ErrDecompressTooLarge", fs.Err0())
+	}
+	if tooLarge.Topic != topic || tooLarge.Partition != 0 || tooLarge.Offset != 0 || tooLarge.NextOffset != 3 {
+		t.Fatalf("got %+v, want offset 0 through 3 on %s/0", tooLarge, topic)
+	}
+	if !errors.Is(fs.Err0(), ErrMaxDecompressed) {
+		t.Fatalf("err %v does not unwrap to ErrMaxDecompressed", fs.Err0())
+	}
+
+	// The partition is stopped: a following small record is not fetched.
+	if err := producer.ProduceSync(context.Background(), &Record{Value: []byte("after")}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	quiet, cancelQuiet := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelQuiet()
+	if fs := cl.PollFetches(quiet); fs.Err0() != context.DeadlineExceeded {
+		t.Fatalf("stopped partition still polled: err %v, %d records", fs.Err0(), len(fs.Records()))
+	}
+
+	cl.SetOffsets(map[string]map[int32]EpochOffset{
+		topic: {0: {Epoch: tooLarge.Epoch, Offset: tooLarge.NextOffset}},
+	})
+	fs = cl.PollFetches(ctx)
+	if err := fs.Err0(); err != nil {
+		t.Fatalf("unexpected error after SetOffsets: %v", err)
+	}
+	recs := fs.Records()
+	if len(recs) != 1 || recs[0].Offset != 3 || string(recs[0].Value) != "after" {
+		t.Fatalf("after SetOffsets, got %d records (first offset/value %v), want offset 3 %q", len(recs), recs, "after")
+	}
+}
