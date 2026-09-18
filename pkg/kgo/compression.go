@@ -210,7 +210,6 @@ out:
 				zstd.WithWindowSize(64 << 10),
 				zstd.WithEncoderConcurrency(1),
 				zstd.WithZeroFrames(true),
-				zstd.WithEncoderCRC(false), // the record batch CRC already covers these bytes
 			}
 			fn := func() any {
 				zstdEnc, _ := zstd.NewWriter(nil, opts...)
