@@ -20,11 +20,11 @@ import (
 var byteBuffers = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 8<<10)) }}
 
 // ErrMaxDecompress is returned when a batch we consumed would decompress
-// larger than [MaxDecompressedBatchBytes]. The client treats this error as
+// larger than [MaxDecompressBatchBytes]. The client treats this error as
 // fatal for the partition and it can only be recovered via SetOffsets or by
 // you restarting your client with a higher limit. A custom decompressor that
 // returns this error fatally stops the partition the same way.
-var ErrMaxDecompress = errors.New("decompressed data would exceed MaxDecompressedBatchBytes")
+var ErrMaxDecompress = errors.New("decompressed data would exceed MaxDecompressBatchBytes")
 
 // CompressionCodecType is a bitfield specifying a Kafka-defined compression
 // codec. Per spec, only four compression codecs are supported. However, if
@@ -436,7 +436,7 @@ type decompressor struct {
 // used where possible.
 //
 // The default decompressor bounds batches at math.MaxInt32; internally,
-// clients initialize decompressors with [MaxDecompressedBatchBytes].
+// clients initialize decompressors with [MaxDecompressBatchBytes].
 func DefaultDecompressor(pools ...Pool) Decompressor {
 	return newDecompressor(math.MaxInt32, pools...)
 }

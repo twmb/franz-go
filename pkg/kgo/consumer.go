@@ -1232,7 +1232,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 							// cursor until the new session starts).
 							//
 							// A cursor stopped by a batch over
-							// MaxDecompressedBatchBytes is re-enabled
+							// MaxDecompressBatchBytes is re-enabled
 							// the same way: the set offset is how the
 							// user skips the batch.
 							if loadOffsets.removeLoad(usedCursor.topic, usedCursor.partition) || usedCursor.fatal.Swap(false) {

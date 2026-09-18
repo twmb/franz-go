@@ -1245,10 +1245,10 @@ func TestLookbackMilli(t *testing.T) {
 	}
 }
 
-// A batch that decompresses past MaxDecompressedBatchBytes stops the
+// A batch that decompresses past MaxDecompressBatchBytes stops the
 // partition: PollFetches returns ErrDecompressTooLarge once and nothing
 // more until SetOffsets skips the batch.
-func TestConsumeMaxDecompressedBatchBytes(t *testing.T) {
+func TestConsumeMaxDecompressBatchBytes(t *testing.T) {
 	t.Parallel()
 
 	topic, cleanup := tmpTopicPartitions(t, 1)
@@ -1274,7 +1274,7 @@ func TestConsumeMaxDecompressedBatchBytes(t *testing.T) {
 	}
 
 	cl, _ := newTestClient(
-		MaxDecompressedBatchBytes(1<<20),
+		MaxDecompressBatchBytes(1<<20),
 		ConsumePartitions(map[string]map[int32]Offset{
 			topic: {0: NewOffset().At(0)},
 		}),
