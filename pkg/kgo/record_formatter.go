@@ -989,12 +989,31 @@ func writeNumBool(b []byte, n int64) []byte {
 
 // RecordReader reads records from an io.Reader.
 type RecordReader struct {
-	r *bufio.Reader
+	r *countReader
 
 	buf []byte
 	fns []readParse
 
 	done bool
+}
+
+// countReader counts the bytes consumed from the reader, so that
+// ReadRecordInto can tell when a record consumed nothing.
+type countReader struct {
+	*bufio.Reader
+	n int64
+}
+
+func (c *countReader) Read(p []byte) (int, error) {
+	n, err := c.Reader.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func (c *countReader) Discard(n int) (int, error) {
+	n, err := c.Reader.Discard(n)
+	c.n += int64(n)
+	return n, err
 }
 
 // NewRecordReader returns a record reader for the given layout, or an error if
@@ -1091,7 +1110,7 @@ type RecordReader struct {
 //
 //	%k{re[\d*]}%v{re[\s+]}
 func NewRecordReader(reader io.Reader, layout string) (*RecordReader, error) {
-	r := &RecordReader{r: bufio.NewReader(reader)}
+	r := &RecordReader{r: &countReader{Reader: bufio.NewReader(reader)}}
 	if err := r.parseReadLayout(layout); err != nil {
 		return nil, err
 	}
@@ -1121,12 +1140,21 @@ func (r *RecordReader) ReadRecordInto(rec *Record) error {
 	if r.done {
 		return io.EOF
 	}
-	return r.next(rec)
+	n := r.r.n
+	if err := r.next(rec); err != nil {
+		return err
+	}
+	// A record that consumes no input, such as a regexp that matches the
+	// empty string on every field, would otherwise be returned forever.
+	if r.r.n == n {
+		return errors.New("layout consumed no input")
+	}
+	return nil
 }
 
 // SetReader replaces the underlying reader with the given reader.
 func (r *RecordReader) SetReader(reader io.Reader) {
-	r.r = bufio.NewReader(reader)
+	r.r = &countReader{Reader: bufio.NewReader(reader)}
 	r.done = false
 }
 
