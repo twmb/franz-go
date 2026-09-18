@@ -7,13 +7,15 @@ import (
 
 // UpdateFeatures: v0-2
 //
-// KIP-584: mutate finalized feature levels. kfake stores levels per
-// Cluster and ApiVersions reports them; changing a level does not
-// alter request behavior beyond what ApiVersions advertises.
+// KIP-584: mutate finalized feature levels. The features and their supported
+// ranges are the kversion table for the cluster's version; kfake stores the
+// levels set per Cluster and ApiVersions reports them over the table's
+// defaults. Changing a level does not alter request behavior beyond what
+// ApiVersions advertises.
 //
 // Behavior:
 // * Unknown features => FEATURE_UPDATE_FAILED (per feature)
-// * MaxVersionLevel above kfake's supported max => FEATURE_UPDATE_FAILED
+// * MaxVersionLevel outside the supported range => FEATURE_UPDATE_FAILED
 // * MaxVersionLevel < 1 deletes the feature (returns it to level 0)
 // * Downgrades require AllowDowngrade (v0) or UpgradeType != Upgrade (v1+)
 // * ValidateOnly (v1+) returns what would happen without mutating state
@@ -24,27 +26,6 @@ import (
 // * v2: Results removed (errors reported at top-level only)
 
 func init() { regKey(57, 0, 2) }
-
-type featureSpec struct {
-	minSupported int16
-	maxSupported int16
-}
-
-// kfakeFeatureSpecs is the set of features ApiVersions advertises plus
-// their supported ranges. Keys must match the names in 18_api_versions.go.
-var kfakeFeatureSpecs = map[string]featureSpec{
-	"transaction.version": {0, 2},
-	"group.version":       {0, 1},
-	"share.version":       {0, 1},
-}
-
-func defaultFinalizedFeatures() map[string]int16 {
-	m := make(map[string]int16, len(kfakeFeatureSpecs))
-	for name, spec := range kfakeFeatureSpecs {
-		m[name] = spec.maxSupported
-	}
-	return m
-}
 
 func (c *Cluster) handleUpdateFeatures(creq *clientReq) (kmsg.Response, error) {
 	req := creq.kreq.(*kmsg.UpdateFeaturesRequest)
@@ -60,6 +41,12 @@ func (c *Cluster) handleUpdateFeatures(creq *clientReq) (kmsg.Response, error) {
 			return resp, nil
 		}
 	}
+
+	vs := c.featureVersions()
+	supported := make(map[string][2]int16)
+	vs.EachSupportedFeature(func(name string, min, max int16) { supported[name] = [2]int16{min, max} })
+	finalized := make(map[string]int16)
+	vs.EachFinalizedFeature(func(name string, level int16) { finalized[name] = level })
 
 	// Build per-feature results, then collapse into the top-level error
 	// for v2 (which no longer carries per-feature Results).
@@ -106,22 +93,26 @@ func (c *Cluster) handleUpdateFeatures(creq *clientReq) (kmsg.Response, error) {
 		}
 		seen[fu.Feature] = true
 
-		spec, known := kfakeFeatureSpecs[fu.Feature]
+		r, known := supported[fu.Feature]
 		if !known {
 			fail(fu.Feature, kerr.FeatureUpdateFailed, "unknown feature")
 			continue
 		}
 
-		newLevel := fu.MaxVersionLevel
-		deletion := newLevel < 1
-		if deletion {
-			newLevel = 0
-		} else if newLevel > spec.maxSupported {
+		newLevel := max(fu.MaxVersionLevel, 0) // below 1 deletes
+		if newLevel > r[1] {
 			fail(fu.Feature, kerr.FeatureUpdateFailed, "level above supported max")
 			continue
 		}
+		if newLevel < r[0] {
+			fail(fu.Feature, kerr.FeatureUpdateFailed, "level below supported min")
+			continue
+		}
 
-		curLevel := c.features[fu.Feature]
+		curLevel := finalized[fu.Feature]
+		if set, ok := c.features[fu.Feature]; ok {
+			curLevel = set
+		}
 		downgrade := newLevel < curLevel
 
 		allowDowngrade := fu.AllowDowngrade

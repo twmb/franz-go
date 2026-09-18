@@ -59,7 +59,7 @@ type (
 		quotas             map[string]quotaEntry
 		telem              map[[16]byte]int32
 		telemNextID        int32
-		features           map[string]int16 // KIP-584 finalized feature levels, see 18_api_versions.go
+		features           map[string]int16 // finalized levels changed by UpdateFeatures; a feature not here is at the kversion table's default, see 18_api_versions.go
 		fetchSessions      fetchSessions
 		groupConfigs       map[string]map[string]*string // group -> config key -> config value
 		clientMetrics      map[string]map[string]*string // subscription -> config key -> config value, see data.go
@@ -180,7 +180,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		bcfgs:    make(map[string]*string, len(cfg.brokerConfigs)),
 		quotas:   make(map[string]quotaEntry),
 		telem:    make(map[[16]byte]int32),
-		features: defaultFinalizedFeatures(),
+		features: make(map[string]int16),
 
 		die: make(chan struct{}),
 	}

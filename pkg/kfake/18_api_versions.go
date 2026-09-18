@@ -8,13 +8,14 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 // ApiVersions: v0-5
 //
 // Behavior:
 // * Returns all registered API keys and their version ranges
-// * Advertises transaction.version feature for KIP-890 support
+// * Advertises the kversion feature table for the cluster's version (KIP-584)
 // * Auto-downgrades to v0 response on unknown version
 // * v5+: REBOOTSTRAP_REQUIRED if the client names a cluster or node that is
 //   not us (KIP-1242)
@@ -112,46 +113,32 @@ func (c *Cluster) handleApiVersions(creq *clientReq) (kmsg.Response, error) {
 		resp.ApiKeys = slices.Clone(apiVersionsSorted)
 	}
 
-	// Build SupportedFeatures (what we can support) and FinalizedFeatures
-	// (what is active), gated on whether the relevant API keys are available.
-	produceMax := apiVersionsKeys[0].MaxVersion
-	if c.cfg.maxVersions != nil {
-		if cfgMax, ok := c.cfg.maxVersions.LookupMaxKeyVersion(0); ok && cfgMax < produceMax {
-			produceMax = cfgMax
-		}
-	}
-	hasTxn := produceMax >= 12
-	_, hasGroup := apiVersionsKeys[68] // ConsumerGroupHeartbeat
-	if hasGroup && c.cfg.maxVersions != nil {
-		_, hasGroup = c.cfg.maxVersions.LookupMaxKeyVersion(68)
-	}
-	_, hasShare := apiVersionsKeys[76] // ShareGroupHeartbeat
-	if hasShare && c.cfg.maxVersions != nil {
-		_, hasShare = c.cfg.maxVersions.LookupMaxKeyVersion(76)
-	}
-	addFeature := func(name string) {
-		spec := kfakeFeatureSpecs[name]
+	// Features come from the kversion table for the cluster's version:
+	// what a broker of that release supports, and what a cluster it
+	// formats starts at, with any level UpdateFeatures set on top. A real
+	// broker lists a finalized feature only above level 0, with min and
+	// max both at the level.
+	vs := c.featureVersions()
+	vs.EachSupportedFeature(func(name string, min, max int16) {
 		sf := kmsg.NewApiVersionsResponseSupportedFeature()
 		sf.Name = name
-		sf.MinVersion = spec.minSupported
-		sf.MaxVersion = spec.maxSupported
+		sf.MinVersion = min
+		sf.MaxVersion = max
 		resp.SupportedFeatures = append(resp.SupportedFeatures, sf)
-
+	})
+	vs.EachFinalizedFeature(func(name string, level int16) {
+		if set, ok := c.features[name]; ok {
+			level = set
+		}
+		if level == 0 {
+			return
+		}
 		ff := kmsg.NewApiVersionsResponseFinalizedFeature()
 		ff.Name = name
-		ff.MinVersionLevel = 0
-		ff.MaxVersionLevel = c.features[name]
+		ff.MinVersionLevel = level
+		ff.MaxVersionLevel = level
 		resp.FinalizedFeatures = append(resp.FinalizedFeatures, ff)
-	}
-	if hasTxn {
-		addFeature("transaction.version")
-	}
-	if hasGroup {
-		addFeature("group.version")
-	}
-	if hasShare {
-		addFeature("share.version")
-	}
+	})
 	if len(resp.FinalizedFeatures) > 0 {
 		resp.FinalizedFeaturesEpoch = 1
 	}
@@ -184,6 +171,17 @@ func (c *Cluster) checkReqVersion(key, version int16) error {
 	}
 	return nil
 }
+
+// featureVersions is the version the cluster answers features from:
+// MaxVersions when configured, else Stable.
+func (c *Cluster) featureVersions() *kversion.Versions {
+	if c.cfg.maxVersions != nil {
+		return c.cfg.maxVersions
+	}
+	return stableVersions()
+}
+
+var stableVersions = sync.OnceValue(kversion.Stable)
 
 // maxVersion returns the max version we advertise for a request key, or -1 if
 // we do not advertise the key at all.

@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -3091,21 +3092,135 @@ func TestApiVersionsSupportedFeatures(t *testing.T) {
 		t.Fatal("expected group.version in FinalizedFeatures")
 	}
 
-	// With Produce capped below v12, transaction.version should be absent.
-	v := kversion.Stable()
-	v.SetMaxKeyVersion(0, 11) // Produce max v11
-	c2 := newCluster(t, NumBrokers(1), MaxVersions(v))
-	cl2 := newPlainClient(t, c2)
-	resp2, err := req.RequestWith(ctx, cl2)
-	if err != nil {
-		t.Fatal(err)
+	if resp.FinalizedFeaturesEpoch < 0 {
+		t.Fatalf("expected a finalized features epoch, got %d", resp.FinalizedFeaturesEpoch)
 	}
-	if findFeature(resp2.SupportedFeatures, "transaction.version") != nil {
-		t.Fatal("transaction.version should be absent when Produce < v12")
+}
+
+// featureString renders a response's features one per line, "name min-max
+// finalized", the same way the kversion table renders, so the two compare.
+func featureString(supported []kmsg.ApiVersionsResponseSupportedFeature, finalized []kmsg.ApiVersionsResponseFinalizedFeature, epoch int64) string {
+	fin := make(map[string]int16)
+	if epoch >= 0 {
+		for _, f := range finalized {
+			if f.MinVersionLevel != f.MaxVersionLevel {
+				return fmt.Sprintf("%s finalized min %d != max %d", f.Name, f.MinVersionLevel, f.MaxVersionLevel)
+			}
+			fin[f.Name] = f.MaxVersionLevel
+		}
 	}
-	// group.version should still be present.
-	if findFeature(resp2.SupportedFeatures, "group.version") == nil {
-		t.Fatal("group.version should still be present")
+	var sb strings.Builder
+	for _, f := range supported {
+		fmt.Fprintf(&sb, "%s %d-%d %d\n", f.Name, f.MinVersion, f.MaxVersion, fin[f.Name])
+	}
+	return sb.String()
+}
+
+func kversionFeatureString(vs *kversion.Versions) string {
+	fin := make(map[string]int16)
+	vs.EachFinalizedFeature(func(name string, level int16) { fin[name] = level })
+	var sb strings.Builder
+	vs.EachSupportedFeature(func(name string, min, max int16) {
+		fmt.Fprintf(&sb, "%s %d-%d %d\n", name, min, max, fin[name])
+	})
+	return sb.String()
+}
+
+// TestApiVersionsFeatureTable pins that a cluster capped at a version answers
+// that version's kversion feature table, that UpdateFeatures overrides show
+// through, and that a level 0 feature is not listed as finalized.
+func TestApiVersionsFeatureTable(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		version string
+		epoch   int64 // -1 when the version finalizes nothing
+	}{
+		{"4.4", 1},
+		{"4.1", 1},
+		{"3.9", 1},
+		{"3.2", -1},
+	} {
+		t.Run(test.version, func(t *testing.T) {
+			t.Parallel()
+			vs := kversion.FromString(test.version)
+			c := newCluster(t, NumBrokers(1), MaxVersions(vs))
+			cl := newPlainClient(t, c)
+			ctx := context.Background()
+
+			req := kmsg.NewPtrApiVersionsRequest()
+			resp, err := req.RequestWith(ctx, cl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.FinalizedFeaturesEpoch != test.epoch {
+				t.Errorf("epoch: got %d, exp %d", resp.FinalizedFeaturesEpoch, test.epoch)
+			}
+			got := featureString(resp.SupportedFeatures, resp.FinalizedFeatures, resp.FinalizedFeaturesEpoch)
+			if exp := kversionFeatureString(vs); got != exp {
+				t.Errorf("got:\n%sexp:\n%s", got, exp)
+			}
+			if test.epoch < 0 {
+				return
+			}
+
+			// updateFeature sends one update and returns its error
+			// code, from Results below v2 and the top level at v2.
+			updateFeature := func(name string, level int16) int16 {
+				ureq := kmsg.NewPtrUpdateFeaturesRequest()
+				fu := kmsg.NewUpdateFeaturesRequestFeatureUpdate()
+				fu.Feature = name
+				fu.MaxVersionLevel = level
+				fu.AllowDowngrade = true
+				fu.UpgradeType = 2 // safe downgrade
+				ureq.FeatureUpdates = append(ureq.FeatureUpdates, fu)
+				uresp, err := ureq.RequestWith(ctx, cl)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if uresp.Version >= 2 {
+					return uresp.ErrorCode
+				}
+				for _, r := range uresp.Results {
+					if r.Feature == name {
+						return r.ErrorCode
+					}
+				}
+				t.Fatalf("no result for %s", name)
+				return 0
+			}
+
+			// metadata.version below the supported min is refused.
+			if code := updateFeature("metadata.version", 0); code != kerr.FeatureUpdateFailed.Code {
+				t.Errorf("metadata.version 0: got error %d, exp FEATURE_UPDATE_FAILED", code)
+			}
+
+			// transaction.version downgraded to 0 drops out of the
+			// finalized list; a version without the feature refuses.
+			exp := kversionFeatureString(vs)
+			hasTxn := strings.Contains(exp, "transaction.version ")
+			code := updateFeature("transaction.version", 0)
+			if hasTxn && code != 0 {
+				t.Errorf("transaction.version 0: got error %d, exp none", code)
+			} else if !hasTxn && code != kerr.FeatureUpdateFailed.Code {
+				t.Errorf("transaction.version 0: got error %d, exp FEATURE_UPDATE_FAILED", code)
+			}
+
+			resp, err = req.RequestWith(ctx, cl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range resp.FinalizedFeatures {
+				if f.Name == "transaction.version" {
+					t.Errorf("transaction.version still finalized at %d after downgrade to 0", f.MaxVersionLevel)
+				}
+			}
+			got = featureString(resp.SupportedFeatures, resp.FinalizedFeatures, resp.FinalizedFeaturesEpoch)
+			exp = strings.Replace(exp, "transaction.version 0-2 2", "transaction.version 0-2 0", 1)
+			if got != exp {
+				t.Errorf("after downgrade got:\n%sexp:\n%s", got, exp)
+			}
+		})
 	}
 }
 
