@@ -559,6 +559,21 @@ func TestRecordReader(t *testing.T) {
 			},
 		},
 
+		// A regexp that matches the empty string consumes nothing from
+		// input it does not match. That is an error, not an empty record
+		// forever.
+		{
+			layout: `%v{re[a*]}`,
+			in:     "bbb",
+			expErr: true,
+		},
+		{
+			layout: `%k{re[a*]}%v{re[b*]}`,
+			in:     "abc",
+			exp:    []*Record{KeyStringRecord("a", "b")},
+			expErr: true,
+		},
+
 		{
 			layout: `%v{re#....#}`,
 			in:     "abc123",
@@ -729,10 +744,10 @@ func TestRecordReader(t *testing.T) {
 
 			_, err = r.ReadRecord()
 			// If we are expecting an error, we expect this final read to
-			// not be io.EOF.
+			// error with something other than io.EOF.
 			if test.expErr {
-				if errors.Is(err, io.EOF) {
-					t.Error("was expecting an error, got io.EOF")
+				if err == nil || errors.Is(err, io.EOF) {
+					t.Errorf("was expecting an error, got %v", err)
 				}
 				return
 			} else if !errors.Is(err, io.EOF) {
