@@ -584,7 +584,7 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 			handledBrace = isOpenBrace
 			if !handledBrace {
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record) []byte {
-					return writeR(b, r, func(b []byte, r *Record) []byte { return strconv.AppendInt(b, getTime(r).UnixNano()/1e6, 10) })
+					return writeR(b, r, func(b []byte, r *Record) []byte { return strconv.AppendInt(b, getTime(r).UnixMilli(), 10) })
 				})
 				continue
 			}
@@ -625,7 +625,7 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				layout = layout[n:]
 
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record) []byte {
-					return writeR(b, r, func(b []byte, r *Record) []byte { return numfn(b, getTime(r).UnixNano()/1e6) })
+					return writeR(b, r, func(b []byte, r *Record) []byte { return numfn(b, getTime(r).UnixMilli()) })
 				})
 			}
 		}
@@ -1329,7 +1329,7 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 					if err := numParse(b, nil); err != nil {
 						return err
 					}
-					rec.Timestamp = time.Unix(0, int64(*dst)*1e6)
+					rec.Timestamp = time.UnixMilli(int64(*dst))
 					return nil
 				}
 			case 'x':
