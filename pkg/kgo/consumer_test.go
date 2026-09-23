@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // Allow adding a topic to consume after the client is initialized with nothing
@@ -927,14 +926,10 @@ type testPooling struct {
 	t *testing.T
 
 	givenDecompress []byte
-	givenKRecs      []kmsg.Record
 	givenRecs       []Record
 
 	putDecompress bool
-	putKRecs      bool
 	putRecs       bool
-
-	keptKRecHeaders bool
 }
 
 func (p *testPooling) GetDecompressBytes([]byte, CompressionCodecType) []byte {
@@ -948,35 +943,6 @@ func (p *testPooling) PutDecompressBytes(put []byte) {
 		p.t.Error("PutDecompressByte != given!")
 	}
 	p.putDecompress = true
-}
-
-func (p *testPooling) GetKRecords(int) []kmsg.Record {
-	r := make([]kmsg.Record, 100) // same
-	p.givenKRecs = r
-	return r
-}
-
-func (p *testPooling) PutKRecords(put []kmsg.Record) {
-	if &put[0] != &p.givenKRecs[0] {
-		p.t.Error("PutKRecords != given!")
-	}
-	p.putKRecs = true
-
-	// A put record keeps its Headers slice so that the decoder refills
-	// that capacity on the next get rather than allocating; the elements
-	// are what must be cleared, since they point into the fetch buffer.
-	for i := range put {
-		hs := put[i].Headers
-		if len(hs) == 0 {
-			continue
-		}
-		p.keptKRecHeaders = true
-		for _, h := range hs {
-			if h.Key != "" || h.Value != nil {
-				p.t.Error("PutKRecords header not cleared!")
-			}
-		}
-	}
 }
 
 func (p *testPooling) GetRecords(int) []Record {
@@ -997,7 +963,6 @@ func TestPooling(t *testing.T) {
 
 	var _ interface {
 		PoolDecompressBytes
-		PoolKRecords
 		PoolRecords
 	} = new(testPooling)
 
@@ -1040,8 +1005,6 @@ func TestPooling(t *testing.T) {
 		fs := cl.PollFetches(context.Background())
 		consumed += fs.NumRecords()
 		fs.EachRecord(func(r *Record) {
-			// Each record's headers are a window into one per-batch
-			// slab; a short window must not see its neighbor's.
 			if len(r.Headers) != 2 || r.Headers[0].Key != "h1" || r.Headers[1].Key != "h2" {
 				t.Errorf("got headers %v != [h1 h2]", r.Headers)
 			}
@@ -1052,14 +1015,8 @@ func TestPooling(t *testing.T) {
 	if !pool.putDecompress {
 		t.Error("did not put decompress!")
 	}
-	if !pool.putKRecs {
-		t.Error("did not put krecs!")
-	}
 	if !pool.putRecs {
 		t.Error("did not put recs!")
-	}
-	if !pool.keptKRecHeaders {
-		t.Error("krecs were put back without their header slices!")
 	}
 }
 

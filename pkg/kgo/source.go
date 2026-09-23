@@ -1906,26 +1906,6 @@ func (a aborter) trackAbortedPID(producerID int64) {
 // processing records to fetch part //
 //////////////////////////////////////
 
-// readRawRecordsInto reads records from in and returns them and the total
-// number of headers they hold, returning early if there were partial records.
-func readRawRecordsInto(rs []kmsg.Record, in []byte) ([]kmsg.Record, int) {
-	var nheaders int
-	for i := range rs {
-		length, used := kbin.Varint(in)
-		total := used + int(length)
-		if used <= 0 || length < 0 || len(in) < total { // used < 0 is an overflowing varint
-			return rs[:i], nheaders
-		}
-		if err := (&rs[i]).ReadFrom(in[:total]); err != nil {
-			rs[i] = kmsg.Record{} // clear any invalid partial data
-			return rs[:i], nheaders
-		}
-		nheaders += len(rs[i].Headers)
-		in = in[total:]
-	}
-	return rs, nheaders
-}
-
 func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	fp *FetchPartition,
 	batch *kmsg.RecordBatch,
@@ -1983,7 +1963,7 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	// well-formed batch - every record needs at least one byte - so clamp
 	// the up-front allocation to the byte count to keep a bogus huge count
 	// from driving a massive allocation. The true decodable count is
-	// recomputed by readRawRecordsInto, and the truncation defer below
+	// recomputed by readRawRecordsDirect, and the truncation defer below
 	// leaves the offset unadvanced whenever it disagrees with numRecords.
 	if numRecords < 0 {
 		fp.Err = fmt.Errorf("invalid record batch: negative record count %d", numRecords)
@@ -2011,24 +1991,7 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 		fp.Records = make([]*Record, 0, numRecords)
 	}
 
-	var krecords []kmsg.Record
-	var krecordsPool PoolKRecords
-	pools(o.Pools).each(func(p Pool) bool {
-		if pkrecs, ok := p.(PoolKRecords); ok {
-			krecords = pkrecs.GetKRecords(numRecords)
-			krecordsPool = pkrecs
-			return true
-		}
-		return false
-	})
-	if krecordsPool != nil {
-		defer func() {
-			krecords = krecords[:cap(krecords)]
-			krecordsPool.PutKRecords(krecords)
-		}()
-	}
-	krecords = ensureLen(krecords, numRecords)
-	krecords, nheaders := readRawRecordsInto(krecords, rawRecords)
+	var ndecoded int // set once we decode, below
 
 	// KAFKA-5443: compacted topics preserve the last offset in a batch,
 	// even if the last record is removed, meaning that using offsets from
@@ -2042,7 +2005,7 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	// either advance offsets or will set to nextAskOffset.
 	nextAskOffset := lastOffset + 1
 	defer func() {
-		if numRecords == len(krecords) && o.Offset < nextAskOffset {
+		if numRecords == ndecoded && o.Offset < nextAskOffset {
 			o.Offset = nextAskOffset
 		}
 	}()
@@ -2058,8 +2021,6 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 		return false
 	})
 	rrecords = ensureLen(rrecords, numRecords)
-
-	hslab := make([]RecordHeader, nheaders) // headers are dropped together, same as records, with the same slab tradeoffs above
 
 	var p *recordPools
 	var poolsCtx context.Context
@@ -2079,6 +2040,8 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 			recordCtx = context.WithValue(parent, shareAckKey, slab)
 		}
 	}
+
+	ndecoded = readRawRecordsDirect(recordCtx, rrecords, rawRecords, o.Topic, fp.Partition, batch)
 	var nkept int
 	defer func() {
 		if p == nil {
@@ -2111,22 +2074,8 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	// (and Java inspects only a control batch's first record), so without this
 	// guard a second abort marker would pop an already-empty aborter slice.
 	abortMarkerHandled := false
-	for i := range krecords {
+	for i := range ndecoded {
 		record := &rrecords[i]
-		recordToRecord(
-			o.Topic,
-			fp.Partition,
-			batch,
-			&krecords[i],
-			record,
-			&hslab,
-		)
-		record.Context = recordCtx //nolint:fatcontext // not a nested context
-
-		// Prevent the kmsg.Record from hanging onto anything. The
-		// header slice is kept: the decoder reuses its capacity.
-		clear(krecords[i].Headers)
-		krecords[i] = kmsg.Record{Headers: krecords[i].Headers}
 
 		if kept := o.maybeKeepRecord(fp, record, abortBatch); kept {
 			nkept++
@@ -2143,7 +2092,64 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 		}
 	}
 
-	return len(krecords), uncompressedBytes
+	return ndecoded, uncompressedBytes
+}
+
+// readRawRecordsDirect decodes up to len(rs) raw v2 records from in into rs,
+// returning how many it decoded; it stops at the first record that is
+// truncated or does not decode.
+func readRawRecordsDirect(ctx context.Context, rs []Record, in []byte, topic string, partition int32, batch *kmsg.RecordBatch) int {
+	var (
+		attrs = RecordAttrs{uint8(batch.Attributes)}
+		n     int
+	)
+	for ; n < len(rs); n++ {
+		length, used := kbin.Varint(in)
+		total := used + int(length)
+		if used <= 0 || length < 0 || len(in) < total { // used < 0 is an overflowing varint
+			break
+		}
+		b := kbin.Reader{Src: in[used:total]}
+		b.Int8() // record attributes, unused
+		tsDelta := b.Varlong()
+		offsetDelta := b.Varint()
+		key := b.VarintBytes()
+		value := b.VarintBytes()
+		var headers []RecordHeader
+		if nh := int(b.VarintArrayLen()); nh > 0 {
+			headers = make([]RecordHeader, nh)
+			for i := range headers {
+				headers[i] = RecordHeader{Key: b.VarintString(), Value: b.VarintBytes()}
+			}
+		}
+		if !b.Ok() {
+			break
+		}
+
+		r := &rs[n]
+		r.Key = key
+		r.Value = value
+		r.Headers = headers
+		r.Topic = topic
+		r.Partition = partition
+		r.Attrs = attrs
+		r.ProducerID = batch.ProducerID
+		r.ProducerEpoch = batch.ProducerEpoch
+		r.LeaderEpoch = batch.PartitionLeaderEpoch
+		if batch.FirstOffset == -1 {
+			r.Offset = -1
+		} else {
+			r.Offset = batch.FirstOffset + int64(offsetDelta)
+		}
+		if attrs.TimestampType() == 0 {
+			r.Timestamp = timeFromMillis(batch.FirstTimestamp + tsDelta)
+		} else {
+			r.Timestamp = timeFromMillis(batch.MaxTimestamp)
+		}
+		r.Context = ctx //nolint:fatcontext // not a nested context
+		in = in[total:]
+	}
+	return n
 }
 
 // Processes an outer v1 message. There could be no inner message, which makes
@@ -2419,48 +2425,6 @@ func (o *ProcessFetchPartitionOpts) maybeKeepRecord(fp *FetchPartition, record *
 
 func timeFromMillis(millis int64) time.Time {
 	return time.Unix(0, millis*1e6)
-}
-
-// recordToRecord converts a kmsg.RecordBatch's Record to a kgo Record.
-func recordToRecord(
-	topic string,
-	partition int32,
-	batch *kmsg.RecordBatch,
-	krecord *kmsg.Record,
-	r *Record,
-	hslab *[]RecordHeader,
-) {
-	var h []RecordHeader
-	if n := len(krecord.Headers); n > 0 {
-		h, *hslab = (*hslab)[:n:n], (*hslab)[n:]
-		for i, kv := range krecord.Headers {
-			h[i] = RecordHeader{
-				Key:   kv.Key,
-				Value: kv.Value,
-			}
-		}
-	}
-	*r = Record{
-		Key:           krecord.Key,
-		Value:         krecord.Value,
-		Headers:       h,
-		Topic:         topic,
-		Partition:     partition,
-		Attrs:         RecordAttrs{uint8(batch.Attributes)},
-		ProducerID:    batch.ProducerID,
-		ProducerEpoch: batch.ProducerEpoch,
-		LeaderEpoch:   batch.PartitionLeaderEpoch,
-	}
-	if batch.FirstOffset == -1 {
-		r.Offset = -1
-	} else {
-		r.Offset = batch.FirstOffset + int64(krecord.OffsetDelta)
-	}
-	if r.Attrs.TimestampType() == 0 {
-		r.Timestamp = timeFromMillis(batch.FirstTimestamp + krecord.TimestampDelta64)
-	} else {
-		r.Timestamp = timeFromMillis(batch.MaxTimestamp)
-	}
 }
 
 func messageAttrsToRecordAttrs(attrs int8, v0 bool) RecordAttrs {

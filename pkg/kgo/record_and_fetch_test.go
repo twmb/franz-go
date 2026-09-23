@@ -1,6 +1,9 @@
 package kgo
 
 import (
+	"context"
+	"math/rand/v2"
+	"reflect"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -132,8 +135,143 @@ func TestNewRecordAttrs(t *testing.T) {
 // with a negative total.
 func TestReadRawRecordsOverflowingLength(t *testing.T) {
 	in := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0x02, 0x03}
-	rs, nheaders := readRawRecordsInto(make([]kmsg.Record, 2), in)
-	if len(rs) != 0 || nheaders != 0 {
-		t.Errorf("got %d records and %d headers, want none", len(rs), nheaders)
+	if n := readRawRecordsDirect(context.Background(), make([]Record, 2), in, "t", 0, new(kmsg.RecordBatch)); n != 0 {
+		t.Errorf("decoded %d records, want none", n)
 	}
+}
+
+// rawTestRecords encodes n random records with kmsg, mixing nil and empty
+// keys, values, and header fields and varying header counts, returning the
+// encoding and where each record ends in it.
+func rawTestRecords(rng *rand.Rand, n int) ([]kmsg.Record, []byte, []int) {
+	bytesOrNil := func() []byte {
+		switch rng.IntN(4) {
+		case 0:
+			return nil
+		case 1:
+			return []byte{}
+		default:
+			b := make([]byte, 1+rng.IntN(40))
+			for i := range b {
+				b[i] = byte(rng.Uint32())
+			}
+			return b
+		}
+	}
+	var (
+		krs  []kmsg.Record
+		raw  []byte
+		ends []int
+	)
+	for i := range n {
+		r := kmsg.Record{
+			TimestampDelta64: rng.Int64N(1<<40) - 1<<39,
+			OffsetDelta:      int32(i),
+			Key:              bytesOrNil(),
+			Value:            bytesOrNil(),
+		}
+		for range rng.IntN(4) {
+			r.Headers = append(r.Headers, kmsg.Header{Key: string(bytesOrNil()), Value: bytesOrNil()})
+		}
+		r.Length = int32(len(r.AppendTo(nil)) - 1)
+		raw = r.AppendTo(raw)
+		krs = append(krs, r)
+		ends = append(ends, len(raw))
+	}
+	return krs, raw, ends
+}
+
+func TestReadRawRecordsDirect(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rng := rand.New(rand.NewPCG(1, 2))
+	for range 500 {
+		n := rng.IntN(20)
+		krs, raw, ends := rawTestRecords(rng, n)
+		batch := &kmsg.RecordBatch{
+			FirstOffset:          rng.Int64N(1 << 40),
+			Attributes:           int16(rng.IntN(1 << 7)), // bits 0-6 are defined; kgo uses bit 7 internally for v0 messages
+			FirstTimestamp:       rng.Int64N(1 << 42),
+			MaxTimestamp:         rng.Int64N(1 << 42),
+			ProducerID:           rng.Int64N(1 << 20),
+			ProducerEpoch:        int16(rng.IntN(1 << 15)),
+			PartitionLeaderEpoch: rng.Int32N(1 << 20),
+		}
+		if rng.IntN(10) == 0 {
+			batch.FirstOffset = -1
+		}
+
+		// Every record decodes to what we encoded.
+		rs := make([]Record, n+rng.IntN(3))
+		if got := readRawRecordsDirect(ctx, rs, raw, "topic", 7, batch); got != n {
+			t.Fatalf("decoded %d records, want %d", got, n)
+		}
+		for i, kr := range krs {
+			r := &rs[i]
+			wantOffset := batch.FirstOffset + int64(kr.OffsetDelta)
+			if batch.FirstOffset == -1 {
+				wantOffset = -1
+			}
+			wantTs := batch.FirstTimestamp + kr.TimestampDelta64
+			if batch.Attributes&0b1000 != 0 { // log append time
+				wantTs = batch.MaxTimestamp
+			}
+			if !reflect.DeepEqual(r.Key, kr.Key) ||
+				!reflect.DeepEqual(r.Value, kr.Value) ||
+				r.Topic != "topic" ||
+				r.Partition != 7 ||
+				r.Attrs != (RecordAttrs{uint8(batch.Attributes)}) ||
+				r.ProducerID != batch.ProducerID ||
+				r.ProducerEpoch != batch.ProducerEpoch ||
+				r.LeaderEpoch != batch.PartitionLeaderEpoch ||
+				r.Offset != wantOffset ||
+				r.Timestamp.UnixMilli() != wantTs ||
+				r.Context != ctx {
+				t.Fatalf("record %d decoded to %+v from %+v in %+v", i, *r, kr, *batch)
+			}
+			if len(r.Headers) != len(kr.Headers) || (len(kr.Headers) == 0 && r.Headers != nil) {
+				t.Fatalf("record %d headers %v, want %v", i, r.Headers, kr.Headers)
+			}
+			for j, kh := range kr.Headers {
+				if h := r.Headers[j]; h.Key != kh.Key || !reflect.DeepEqual(h.Value, kh.Value) {
+					t.Fatalf("record %d header %d is %+v, want %+v", i, j, h, kh)
+				}
+			}
+		}
+
+		// Truncating anywhere decodes exactly the whole records before
+		// the cut, and fewer slots than records decodes that many.
+		if len(raw) > 0 {
+			cut := rng.IntN(len(raw))
+			want := 0
+			for want < n && ends[want] <= cut {
+				want++
+			}
+			if got := readRawRecordsDirect(ctx, make([]Record, n), raw[:cut], "topic", 7, batch); got != want {
+				t.Fatalf("decoded %d records cut at %d, want %d", got, cut, want)
+			}
+		}
+		if n > 0 {
+			slots := rng.IntN(n)
+			if got := readRawRecordsDirect(ctx, make([]Record, slots), raw, "topic", 7, batch); got != slots {
+				t.Fatalf("decoded %d records into %d slots", got, slots)
+			}
+		}
+	}
+}
+
+// Any input decodes without panicking, into at most as many records as we
+// have room for.
+func FuzzReadRawRecordsDirect(f *testing.F) {
+	rng := rand.New(rand.NewPCG(3, 4))
+	for range 20 {
+		_, raw, _ := rawTestRecords(rng, rng.IntN(10))
+		f.Add(raw, uint8(rng.IntN(12)))
+	}
+	f.Add([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0x01}, uint8(2))
+	f.Fuzz(func(t *testing.T, raw []byte, n uint8) {
+		if got := readRawRecordsDirect(context.Background(), make([]Record, n), raw, "t", 0, new(kmsg.RecordBatch)); got > int(n) {
+			t.Fatalf("decoded %d records into %d slots", got, n)
+		}
+	})
 }
