@@ -919,7 +919,6 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 	}
 
 	parts.partsMu.Lock()
-	defer parts.partsMu.Unlock()
 	if parts.partitioner == nil {
 		parts.partitioner = cl.cfg.partitioner.ForTopic(pr.Topic)
 	}
@@ -958,6 +957,7 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 		}
 	}
 	if len(mapping) == 0 {
+		parts.partsMu.Unlock()
 		cl.producer.promiseRecord(pr, errors.New("unable to partition record due to no usable partitions"))
 		return
 	}
@@ -974,15 +974,25 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 		pick = parts.partitioner.Partition(pr.Record, len(mapping))
 	}
 	if pick < 0 || pick >= len(mapping) {
+		parts.partsMu.Unlock()
 		cl.producer.promiseRecord(pr, fmt.Errorf("invalid record partitioning choice of %d from %d available", pick, len(mapping)))
 		return
 	}
 
 	partition := mapping[pick]
 
+	// partsMu guards the partitioner's state. Only a partitioner with
+	// OnNewBatch is called again after bufferRecord, so for any other
+	// partitioner we unlock before buffering: holding partsMu while
+	// buffering would serialize every goroutine producing to this topic.
 	onNewBatch, _ := parts.partitioner.(TopicPartitionerOnNewBatch)
-	abortOnNewBatch := onNewBatch != nil
-	processed := partition.records.bufferRecord(pr, abortOnNewBatch) // KIP-480
+	if onNewBatch == nil {
+		parts.partsMu.Unlock()
+		partition.records.bufferRecord(pr, false)
+		return
+	}
+	defer parts.partsMu.Unlock()
+	processed := partition.records.bufferRecord(pr, true) // KIP-480
 	if !processed {
 		onNewBatch.OnNewBatch()
 
