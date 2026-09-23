@@ -23,11 +23,10 @@ type sink struct {
 	cl     *Client // our owning client, for cfg, metadata triggering, context, etc.
 	nodeID int32   // the node ID of the broker this sink belongs to
 
-	// inflightSem controls the number of concurrent produce requests.  We
-	// start with a limit of 1, which covers Kafka v0.11.0. On the first
-	// response, we check what version was set in the request. If it is at
-	// least 4, which 1.0 introduced, we upgrade the sem size.
-	inflightSem    atomic.Value
+	// inflightSem controls the number of concurrent produce requests. When
+	// idempotent, we start with a limit of 1, which covers Kafka v0.11.0,
+	// and raise it to 5 in firstRespCheck if the broker supports it.
+	inflightSem    chan struct{}
 	produceVersion atomic.Int32 // negative is unset, positive is version
 
 	drainState workLoop
@@ -66,11 +65,15 @@ func (cl *Client) newSink(nodeID int32) *sink {
 		nodeID: nodeID,
 	}
 	s.produceVersion.Store(-1)
-	maxInflight := 1
 	if cl.cfg.disableIdempotency {
-		maxInflight = cl.cfg.maxProduceInflight
+		s.inflightSem = make(chan struct{}, cl.cfg.maxProduceInflight)
+	} else {
+		// We fill four of five slots now; firstRespCheck frees them.
+		s.inflightSem = make(chan struct{}, 5)
+		for range 4 {
+			s.inflightSem <- struct{}{}
+		}
 	}
-	s.inflightSem.Store(make(chan struct{}, maxInflight))
 	return s
 }
 
@@ -305,7 +308,7 @@ func (s *sink) drain() {
 		// good option needed.
 		s.mergeBacklogs()
 
-		sem := s.inflightSem.Load().(chan struct{})
+		sem := s.inflightSem
 		select {
 		case sem <- struct{}{}:
 		case <-s.cl.ctx.Done():
@@ -785,27 +788,29 @@ func (s *sink) issueTxnReq(
 }
 
 // firstRespCheck is effectively a sink.Once. On the first response, if the
-// used request version is at least 4, we upgrade our inflight sem.
+// used request version is at least 4, we raise our inflight limit.
 //
 // Starting on version 4, Kafka allowed five inflight requests while
-// maintaining idempotency. Before, only one was allowed.
+// maintaining idempotency: the broker remembers the last five batches per
+// producer and partition to deduplicate retries, and each request carries at
+// most one batch per partition. Before, only one was allowed.
 //
-// We go through an atomic because drain can be waiting on the sem (with
-// capacity one). We store four here, meaning new drain loops will load the
-// higher capacity sem without read/write pointer racing a current loop.
-//
-// This logic does mean that we will never use the full potential 5 in flight
-// outside of a small window during the store, but some pages in the Kafka
-// confluence basically show that more than two in flight has marginal benefit
-// anyway (although that may be due to their Java API).
+// Some pages in the Kafka confluence show that more than two in flight has
+// marginal benefit (although that may be due to their Java API):
 //
 //	https://cwiki.apache.org/confluence/display/KAFKA/An+analysis+of+the+impact+of+max.in.flight.requests.per.connection+and+acks+on+Producer+performance
 //	https://issues.apache.org/jira/browse/KAFKA-5494
+//
+// The sem has capacity five with four slots filled from the start; we free
+// them here. Only one request is in flight until we do, so this runs once,
+// and the sem can never admit more than five.
 func (s *sink) firstRespCheck(idempotent bool, version int16) {
 	if s.produceVersion.Load() < 0 {
 		s.produceVersion.Store(int32(version))
 		if idempotent && version >= 4 {
-			s.inflightSem.Store(make(chan struct{}, 4))
+			for range 4 {
+				<-s.inflightSem
+			}
 		}
 	}
 }
