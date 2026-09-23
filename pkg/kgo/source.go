@@ -1913,7 +1913,7 @@ func readRawRecordsInto(rs []kmsg.Record, in []byte) ([]kmsg.Record, int) {
 	for i := range rs {
 		length, used := kbin.Varint(in)
 		total := used + int(length)
-		if used == 0 || length < 0 || len(in) < total {
+		if used <= 0 || length < 0 || len(in) < total { // used < 0 is an overflowing varint
 			return rs[:i], nheaders
 		}
 		if err := (&rs[i]).ReadFrom(in[:total]); err != nil {

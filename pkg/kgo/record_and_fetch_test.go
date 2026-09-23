@@ -1,6 +1,10 @@
 package kgo
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/twmb/franz-go/pkg/kmsg"
+)
 
 // TestEachTopicPreservesTopicID verifies that Fetches.EachTopic carries
 // FetchTopic.TopicID through its grouping.
@@ -120,5 +124,16 @@ func TestNewRecordAttrs(t *testing.T) {
 				t.Errorf("IsControl: got %t, want %t", got, tc.opts.Control)
 			}
 		})
+	}
+}
+
+// A record length whose varint overflows makes kbin.Varint report a negative
+// number of bytes read; that must stop decoding rather than slice in[:total]
+// with a negative total.
+func TestReadRawRecordsOverflowingLength(t *testing.T) {
+	in := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0x02, 0x03}
+	rs, nheaders := readRawRecordsInto(make([]kmsg.Record, 2), in)
+	if len(rs) != 0 || nheaders != 0 {
+		t.Errorf("got %d records and %d headers, want none", len(rs), nheaders)
 	}
 }
