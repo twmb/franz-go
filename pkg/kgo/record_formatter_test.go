@@ -148,6 +148,10 @@ func TestRecordFormatter(t *testing.T) {
 		{layout: "%A", expR: "42000"},
 		{layout: "%A{strftime[%F]}", expR: "1970-01-01"},
 
+		{layout: "%i %i", expR: "1 1", expP: "2 2"},
+		{layout: "%h{%i}", expR: "11", expP: "22"},
+		{layout: "%h{{%k}}", expR: "{H1}{h2}"},
+
 		// Timestamps outside the UnixNano range.
 		{
 			layout: "%d %d{big64} %d{little64}",
@@ -187,6 +191,16 @@ func TestRecordFormatter(t *testing.T) {
 		}
 		if gotP != expP {
 			t.Errorf("P[%s]: got %s != exp %s", test.layout, gotP, expP)
+		}
+	}
+
+	f, _ := NewRecordFormatter("%h{%k}")
+	if got := string(f.AppendRecord(nil, nil)); got != "<nil>" {
+		t.Errorf("nil record: got %s != exp <nil>", got)
+	}
+	for _, layout := range []string{"%d{", "%v{", "%T{"} {
+		if _, err := NewRecordFormatter(layout); err == nil {
+			t.Errorf("%s: got nil error, want an error", layout)
 		}
 	}
 }
@@ -252,6 +266,12 @@ func TestRecordFormatterUnpack(t *testing.T) {
 			layout: "%v{unpack[x<xH.xx>Hxx.xxHxx.xx<xxHxx$]}",
 			in:     "\x00\x01 \x00\x01 \x00\x01 \x00\x01",
 			exp:    "256 1 1 256",
+		},
+
+		{
+			layout: "%v{unpack[bB]}",
+			in:     "\xff\xff",
+			exp:    "-1255",
 		},
 
 		//
@@ -486,6 +506,32 @@ func TestRecordReader(t *testing.T) {
 				ProducerID:    6,
 				ProducerEpoch: 10,
 			}},
+		},
+
+		{
+			layout: "%e %o %d %p",
+			in:     "-1 -2 -3 4",
+			exp:    []*Record{{LeaderEpoch: -1, Offset: -2, Timestamp: time.UnixMilli(-3), Partition: 4}},
+		},
+		{
+			layout: "%K %k",
+			in:     "-1 x",
+			expErr: true,
+		},
+		{
+			layout: "%K %k",
+			in:     "3 ",
+			expErr: true,
+		},
+		{
+			layout: "%K{3}%k\n",
+			in:     "abc",
+			expErr: true,
+		},
+		{
+			layout: "%H{big64}%h{%k{re[a*]}%v{re[b*]}}x",
+			in:     "\xff\xff\xff\xff\xff\xff\xff\xffx",
+			expErr: true,
 		},
 
 		// Timestamps outside the UnixNano range.
@@ -911,6 +957,9 @@ func TestRecordReaderJson(t *testing.T) {
 		`{"":[4.4e4]}`,
 		`{"":d}`,
 		`{"":{}d}`,
+		`{"a":true,"b":1e+5}`,
+		`[false,1e5]`,
+		`[null,2E-1]`,
 
 		// array
 		`[]`,
@@ -1030,6 +1079,7 @@ func TestNewRecordReaderRejectsBadLayouts(t *testing.T) {
 		"%p{3}",      // only a fixed-number verb: reads nothing, would loop forever
 		"%T{3}",      // only a fixed-size spec with no value verb: reads nothing
 		"%p{3}%o{4}", // all fixed-number verbs: reads nothing
+		"%v{",        // unclosed brace at end of layout
 	} {
 		t.Run(layout, func(t *testing.T) {
 			defer func() {
@@ -1041,6 +1091,30 @@ func TestNewRecordReaderRejectsBadLayouts(t *testing.T) {
 				t.Errorf("NewRecordReader(%q): got nil error, want an error", layout)
 			}
 		})
+	}
+}
+
+func TestRecordReaderReuse(t *testing.T) {
+	r, _ := NewRecordReader(strings.NewReader("1 a=b;\n1 c=d;\n"), "%H %h{%k=%v;}\n")
+	var rec Record
+	for range 2 {
+		if err := r.ReadRecordInto(&rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if exp := []RecordHeader{{"c", []byte("d")}}; !reflect.DeepEqual(rec.Headers, exp) {
+		t.Errorf("got headers %v != exp %v", rec.Headers, exp)
+	}
+
+	// A read that EOFs partway through a bool must not leave state for
+	// the next reader.
+	r, _ = NewRecordReader(strings.NewReader("tr"), "%p{bool}")
+	if _, err := r.ReadRecord(); err == nil {
+		t.Error("tr: got nil error, want an error")
+	}
+	r.SetReader(strings.NewReader("true"))
+	if rec, err := r.ReadRecord(); err != nil || rec.Partition != 1 {
+		t.Errorf("true: got partition %d, err %v, want 1, nil", rec.Partition, err)
 	}
 }
 
