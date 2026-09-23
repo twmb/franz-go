@@ -57,7 +57,6 @@ for improvements, please open an issue.
   decides where to resume. Before, a start offset of `AtEnd` was copied into
   the reset offset, so the consumer skipped to the end. Now, with the
   defaults, it resumes at the log start.
-  **`ConsumeResetOffset`'s new default is `RewindOffset(time.Minute)`**.
 
 * **Topic recreation is now a hard failure.** The client always
   produces to and consumes from the first instance of a topic. If you delete
@@ -147,7 +146,7 @@ proportion to partition leaders.
 broker's group coordinator assigns partitions rather than the client. This
 requires Kafka 4.0+ and either a range or sticky / cooperative-sticky
 balancer. This replaces the hidden `opt_in_kafka_next_gen_balancer_beta`
-context key from v1.19.0; the key still works in this release and is removed
+context key from v1.19.0; the key still works in this release but will be removed
 in the next. The default remains the classic protocol, matching the Java
 client. I still think the classic client side balancers are better (and this
 client's implementation is way faster than the Java client), but if you want
