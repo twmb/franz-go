@@ -725,6 +725,7 @@ doConnect:
 		conn:   conn,
 		deadCh: make(chan struct{}),
 	}
+	cxn.unwatchClientCtx = context.AfterFunc(b.cl.ctx, func() { conn.SetDeadline(time.Now()) })
 	if err = cxn.init(isProduceCxn, tries); err != nil {
 		// EventHubs does not handle v4 and resets the connection. We
 		// retry twice. On the first and second attempt, we try our max
@@ -870,6 +871,8 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 // brokerCxn manages an actual connection to a Kafka broker. This is separate
 // the broker struct to allow lazy connection (re)creation.
 type brokerCxn struct {
+	unwatchClientCtx func() bool // unhooks the client context (canceled on Close) from killing the conn
+
 	throttleUntil atomic.Int64 // atomic nanosec
 
 	conn net.Conn
@@ -1448,38 +1451,52 @@ func (cxn *brokerCxn) writeConn(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if cxn.cl.ctx.Err() != nil {
+		return 0, 0, 0, time.Time{}, ErrClientClosed
+	}
 	if timeout > 0 {
 		cxn.conn.SetWriteDeadline(time.Now().Add(timeout))
 	}
 	defer cxn.conn.SetWriteDeadline(time.Time{})
-	writeDone := make(chan struct{})
-	go func() {
-		defer close(writeDone)
-		writeStart := time.Now()
-		bytesWritten, writeErr = cxn.conn.Write(buf)
-		// As soon as we are done writing, we track that we have now
-		// enqueued this request for reading.
-		readEnqueue = time.Now()
-		writeWait = writeStart.Sub(enqueuedForWritingAt)
-		timeToWrite = readEnqueue.Sub(writeStart)
-	}()
-	select {
-	case <-writeDone:
-	case <-cxn.cl.ctx.Done():
-		cxn.conn.SetWriteDeadline(time.Now())
-		<-writeDone
-		if writeErr != nil {
+	stop := cxn.watchCtxCancel(ctx, cxn.conn.SetWriteDeadline)
+	writeStart := time.Now()
+	bytesWritten, writeErr = cxn.conn.Write(buf)
+	// As soon as we are done writing, we track that we have now
+	// enqueued this request for reading.
+	readEnqueue = time.Now()
+	writeWait = writeStart.Sub(enqueuedForWritingAt)
+	timeToWrite = readEnqueue.Sub(writeStart)
+	ctxInterrupted := stop()
+	if writeErr != nil {
+		if cxn.cl.ctx.Err() != nil {
 			writeErr = ErrClientClosed
-		}
-	case <-ctx.Done():
-		cxn.conn.SetWriteDeadline(time.Now())
-		<-writeDone
-		if writeErr != nil && ctx.Err() != nil {
+		} else if ctxInterrupted && ctx.Err() != nil {
 			writeErr = ctx.Err()
 			maybeUpdateCtxErr(cxn.cl.ctx, ctx, &writeErr)
 		}
 	}
 	return bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr
+}
+
+// watchCtxCancel watches ctx in a context.AfterFunc. If ctx is canceled,
+// deadlineFn is called. The returned func stops watching ctx and returns
+// whether deadlineFn was called.
+func (cxn *brokerCxn) watchCtxCancel(ctx context.Context, deadlineFn func(time.Time) error) func() bool {
+	if ctx.Done() == nil || ctx == cxn.cl.ctx {
+		return func() bool { return false }
+	}
+	fired := make(chan struct{})
+	stopFn := context.AfterFunc(ctx, func() {
+		deadlineFn(time.Now())
+		close(fired)
+	})
+	return func() bool {
+		if stopFn() {
+			return false
+		}
+		<-fired
+		return true
+	}
 }
 
 func (cxn *brokerCxn) readConn(
@@ -1496,51 +1513,42 @@ func (cxn *brokerCxn) readConn(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if cxn.cl.ctx.Err() != nil {
+		return 0, nil, 0, 0, ErrClientClosed
+	}
 	if timeout > 0 {
 		cxn.conn.SetReadDeadline(time.Now().Add(timeout))
 	}
 	defer cxn.conn.SetReadDeadline(time.Time{})
-	readDone := make(chan struct{})
-	go func() {
-		defer close(readDone)
-		readStart := time.Now()
-		defer func() {
-			timeToRead = time.Since(readStart)
-			readWait = readStart.Sub(enqueuedForReadingAt)
-		}()
-		if nread, err = io.ReadFull(cxn.conn, cxn.sizeBuf[:]); err != nil {
-			return
-		}
-		var size int32
-		if size, err = cxn.parseReadSize(cxn.sizeBuf[:]); err != nil {
-			return
-		}
-		buf = make([]byte, size)
-		var nread2 int
-		nread2, err = io.ReadFull(cxn.conn, buf)
-		nread += nread2
-		buf = buf[:nread2]
-		if err != nil {
-			return
-		}
-	}()
-	select {
-	case <-readDone:
-	case <-cxn.cl.ctx.Done():
-		cxn.conn.SetReadDeadline(time.Now())
-		<-readDone
-		if err != nil {
+	stop := cxn.watchCtxCancel(ctx, cxn.conn.SetReadDeadline)
+	readStart := time.Now()
+	nread, buf, err = cxn.readSizeAndBody()
+	timeToRead = time.Since(readStart)
+	readWait = readStart.Sub(enqueuedForReadingAt)
+	ctxInterrupted := stop()
+	if err != nil {
+		if cxn.cl.ctx.Err() != nil {
 			err = ErrClientClosed
-		}
-	case <-ctx.Done():
-		cxn.conn.SetReadDeadline(time.Now())
-		<-readDone
-		if err != nil && ctx.Err() != nil {
+		} else if ctxInterrupted && ctx.Err() != nil {
 			err = ctx.Err()
 			maybeUpdateCtxErr(cxn.cl.ctx, ctx, &err)
 		}
 	}
 	return nread, buf, readWait, timeToRead, err
+}
+
+func (cxn *brokerCxn) readSizeAndBody() (int, []byte, error) {
+	nread, err := io.ReadFull(cxn.conn, cxn.sizeBuf[:])
+	if err != nil {
+		return nread, nil, err
+	}
+	size, err := cxn.parseReadSize(cxn.sizeBuf[:])
+	if err != nil {
+		return nread, nil, err
+	}
+	buf := make([]byte, size)
+	nread2, err := io.ReadFull(cxn.conn, buf)
+	return nread + nread2, buf[:nread2], err
 }
 
 // Parses a length 4 slice and enforces the min / max read size based off the
@@ -1675,6 +1683,7 @@ func (cxn *brokerCxn) die() {
 			h.OnBrokerDisconnect(cxn.b.meta, cxn.conn)
 		}
 	})
+	cxn.unwatchClientCtx()
 	cxn.conn.Close()
 	close(cxn.deadCh)
 	cxn.resps.die()

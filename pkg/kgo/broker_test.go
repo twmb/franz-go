@@ -54,6 +54,8 @@ func TestRetiredBrokerConnectionClassifiedAsDead(t *testing.T) {
 		b:      b,
 		addr:   b.addr,
 		deadCh: make(chan struct{}),
+
+		unwatchClientCtx: func() bool { return true },
 	}
 	b.cxnFetch = cxn
 
@@ -101,6 +103,8 @@ func TestRetiredBrokerDoesNotMaskResponseError(t *testing.T) {
 		b:      b,
 		addr:   b.addr,
 		deadCh: make(chan struct{}),
+
+		unwatchClientCtx: func() bool { return true },
 	}
 	cl.cfg.hooks = hooks{brokerReadHook(cxn.die)}
 
@@ -162,6 +166,8 @@ func TestUnexpectedFirstReadStillWarns(t *testing.T) {
 		b:      b,
 		addr:   b.addr,
 		deadCh: make(chan struct{}),
+
+		unwatchClientCtx: func() bool { return true },
 	}
 
 	errCh := make(chan error, 1)
