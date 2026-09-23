@@ -606,6 +606,15 @@ func (cl *Client) produce(
 	if r.Topic == "" || cl.cfg.defaultProduceTopicAlways {
 		r.Topic = cl.cfg.defaultProduceTopic
 	}
+	// We stamp the record before taking any lock: reading the clock can
+	// be slow on machines without vDSO, and the partition lock
+	// serializes every goroutine producing to a topic. We truncate to
+	// milliseconds to avoid some accumulated rounding error problems
+	// (see IBM/sarama#1455).
+	if r.Timestamp.IsZero() {
+		r.Timestamp = time.Now()
+	}
+	r.Timestamp = r.Timestamp.Truncate(time.Millisecond)
 
 	p := &cl.producer
 	if p.hooks != nil && len(p.hooks.buffered) > 0 {

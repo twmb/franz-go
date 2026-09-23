@@ -1658,12 +1658,6 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
 
-	// We truncate to milliseconds to avoid some accumulated rounding error
-	// problems (see IBM/sarama#1455)
-	if pr.Timestamp.IsZero() {
-		pr.Timestamp = time.Now()
-	}
-	pr.Timestamp = pr.Timestamp.Truncate(time.Millisecond)
 	pr.Partition = recBuf.partition // set now, for the hook below
 
 	if recBuf.abandoned != nil {
