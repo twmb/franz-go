@@ -795,6 +795,7 @@ func (p *producer) promiseRecordBeforeBuf(pr promisedRec, err error) {
 }
 
 func (p *producer) finishPromises(b batchPromise) {
+	growStack()
 	cl := p.cl
 	var more bool
 	var broadcast bool

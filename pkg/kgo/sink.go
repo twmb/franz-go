@@ -289,6 +289,7 @@ func (s *sink) clearBackoff() {
 // This function is harmless if there are no records that need draining.
 // We rely on that to not worry about accidental triggers of this function.
 func (s *sink) drain() {
+	growStack()
 	again := true
 	for again {
 		// We merge before waiting on an inflight sem slot. When we
@@ -610,6 +611,7 @@ func (s *sink) doSequenced(
 
 // Ensures that all request responses are processed in order.
 func (s *sink) handleSeqResps(wait *seqResp) {
+	growStack()
 	var more bool
 start:
 	<-wait.done

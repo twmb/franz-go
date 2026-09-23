@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -329,7 +330,22 @@ func (b *broker) waitResp(ctx context.Context, req kmsg.Request) (kmsg.Response,
 	return resp, err
 }
 
+// growStack grows a goroutine's stack while it has one frame. Our request
+// and response workers exit when idle, so each new one starts with the
+// minimum stack and would otherwise grow it midway through serializing or
+// compressing, copying every frame above it. CockroachDB's growstack package
+// does the same.
+//
+//go:noinline
+func growStack() {
+	const size = 4 << 10
+	var b [size]byte
+	b[0] = 1
+	runtime.KeepAlive(&b)
+}
+
 func (b *broker) handleReqs(pr promisedReq) {
+	growStack()
 	var more, dead bool
 start:
 	if dead {
@@ -1840,6 +1856,7 @@ func (cxn *brokerCxn) discard() {
 
 // handleResps serially handles all broker responses for an single connection.
 func (cxn *brokerCxn) handleResps(pr promisedResp) {
+	growStack()
 	var more, dead bool
 start:
 	if dead {
