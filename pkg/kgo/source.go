@@ -634,6 +634,15 @@ func (s *source) discardBuffered() {
 	s.takeBufferedFn(false, usedOffsets.finishUsingAll)
 }
 
+// pollOne holds the first Fetch, FetchTopic, and FetchPartition that
+// PollRecords returns, so that in the likely common case of taking one or a
+// few records, the fetch costs only one alloc.
+type pollOne struct {
+	f [1]Fetch
+	t [1]FetchTopic
+	p [1]FetchPartition
+}
+
 // takeNBuffered takes a limited amount of records from a buffered fetch,
 // updating offsets in each partition per records taken.
 //
@@ -641,7 +650,7 @@ func (s *source) discardBuffered() {
 //
 // This returns the number of records taken and whether the source has been
 // completely drained.
-func (s *source) takeNBuffered(paused pausedTopics, n int) (Fetch, int, bool) {
+func (s *source) takeNBuffered(paused pausedTopics, n int, one *pollOne) (Fetch, int, bool) {
 	var (
 		r      Fetch
 		rstrip Fetch
@@ -669,6 +678,13 @@ func (s *source) takeNBuffered(paused pausedTopics, n int) (Fetch, int, bool) {
 		var rt *FetchTopic
 		ensureTopicAdded := func() {
 			if rt != nil {
+				return
+			}
+			if one != nil && len(r.Topics) == 0 {
+				one.t[0] = *t
+				r.Topics = one.t[:]
+				rt = &r.Topics[0]
+				rt.Partitions = one.p[:0]
 				return
 			}
 			r.Topics = append(r.Topics, *t)
