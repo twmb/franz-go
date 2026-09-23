@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
@@ -739,6 +740,7 @@ doConnect:
 
 		addr:   b.addr,
 		conn:   conn,
+		br:     bufio.NewReaderSize(conn, 4<<10),
 		deadCh: make(chan struct{}),
 	}
 	cxn.unwatchClientCtx = context.AfterFunc(b.cl.ctx, func() { conn.SetDeadline(time.Now()) })
@@ -887,6 +889,8 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 // brokerCxn manages an actual connection to a Kafka broker. This is separate
 // the broker struct to allow lazy connection (re)creation.
 type brokerCxn struct {
+	br *bufio.Reader // wraps conn for more efficient size + body reading; read br, not conn
+
 	unwatchClientCtx func() bool // unhooks the client context (canceled on Close) from killing the conn
 
 	throttleUntil atomic.Int64 // atomic nanosec
@@ -1554,7 +1558,7 @@ func (cxn *brokerCxn) readConn(
 }
 
 func (cxn *brokerCxn) readSizeAndBody() (int, []byte, error) {
-	nread, err := io.ReadFull(cxn.conn, cxn.sizeBuf[:])
+	nread, err := io.ReadFull(cxn.br, cxn.sizeBuf[:])
 	if err != nil {
 		return nread, nil, err
 	}
@@ -1563,7 +1567,10 @@ func (cxn *brokerCxn) readSizeAndBody() (int, []byte, error) {
 		return nread, nil, err
 	}
 	buf := make([]byte, size)
-	nread2, err := io.ReadFull(cxn.conn, buf)
+	// Past what br already holds, bufio reads a body larger than its 4KiB
+	// buffer straight into buf, so, on a large body, at most 4KiB is copied
+	// twice.
+	nread2, err := io.ReadFull(cxn.br, buf)
 	return nread + nread2, buf[:nread2], err
 }
 
@@ -1795,7 +1802,7 @@ func (cxn *brokerCxn) discard() {
 
 		go func() {
 			defer close(readDone)
-			if nread, err = io.ReadFull(cxn.conn, discardBuf[:4]); err != nil {
+			if nread, err = io.ReadFull(cxn.br, discardBuf[:4]); err != nil {
 				if i == 0 && errors.Is(err, os.ErrDeadlineExceeded) {
 					firstTimeout = true
 				}
@@ -1826,7 +1833,7 @@ func (cxn *brokerCxn) discard() {
 				if int(size) < len(discard) {
 					discard = discard[:size]
 				}
-				nread2, err = cxn.conn.Read(discard)
+				nread2, err = cxn.br.Read(discard)
 				nread += nread2
 				size -= int32(nread2) // nread2 max is len(discardBuf), 256
 			}

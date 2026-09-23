@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -57,6 +58,7 @@ func TestRetiredBrokerConnectionClassifiedAsDead(t *testing.T) {
 
 		unwatchClientCtx: func() bool { return true },
 	}
+	cxn.br = bufio.NewReader(cxn.conn)
 	b.cxnFetch = cxn
 
 	errCh := make(chan error, 1)
@@ -106,6 +108,7 @@ func TestRetiredBrokerDoesNotMaskResponseError(t *testing.T) {
 
 		unwatchClientCtx: func() bool { return true },
 	}
+	cxn.br = bufio.NewReader(cxn.conn)
 	cl.cfg.hooks = hooks{brokerReadHook(cxn.die)}
 
 	writeErrCh := make(chan error, 1)
@@ -169,6 +172,7 @@ func TestUnexpectedFirstReadStillWarns(t *testing.T) {
 
 		unwatchClientCtx: func() bool { return true },
 	}
+	cxn.br = bufio.NewReader(cxn.conn)
 
 	errCh := make(chan error, 1)
 	go cxn.handleResp(promisedResp{
