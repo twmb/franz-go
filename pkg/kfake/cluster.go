@@ -2,6 +2,7 @@
 package kfake
 
 import (
+	"bufio"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -428,6 +429,7 @@ func (b *broker) listen() {
 			c:      b.c,
 			b:      b,
 			conn:   conn,
+			br:     bufio.NewReaderSize(conn, 4<<10),
 			respCh: make(chan clientResp, 2),
 			done:   make(chan struct{}),
 			mute:   mute,
