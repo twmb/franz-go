@@ -50,6 +50,7 @@ func TestRecordFormatter(t *testing.T) {
 
 	for _, test := range []struct {
 		layout string
+		rec    *Record // defaults to r if nil
 		expR   string
 		expP   string // defaults to expR if empty
 	}{
@@ -147,6 +148,18 @@ func TestRecordFormatter(t *testing.T) {
 		{layout: "%A", expR: "42000"},
 		{layout: "%A{strftime[%F]}", expR: "1970-01-01"},
 
+		// Timestamps outside the UnixNano range.
+		{
+			layout: "%d %d{big64} %d{little64}",
+			rec:    &Record{Timestamp: time.Date(1600, 1, 1, 0, 0, 0, 0, time.UTC)},
+			expR:   "-11676096000000 \xff\xff\xf5arr\x10\x00 \x00\x10rra\xf5\xff\xff",
+		},
+		{
+			layout: "%d %d{big64} %d{little64}",
+			rec:    &Record{Timestamp: time.Date(2500, 1, 1, 0, 0, 0, 0, time.UTC)},
+			expR:   "16725225600000 \x00\x00\x0f6%!t\x00 \x00t!%6\x0f\x00\x00",
+		},
+
 		//
 	} {
 		f, err := NewRecordFormatter(test.layout)
@@ -155,8 +168,12 @@ func TestRecordFormatter(t *testing.T) {
 			continue
 		}
 
-		gotR := string(f.AppendRecord(nil, r))
-		gotP := string(f.AppendPartitionRecord(nil, p, r))
+		rec := r
+		if test.rec != nil {
+			rec = test.rec
+		}
+		gotR := string(f.AppendRecord(nil, rec))
+		gotP := string(f.AppendPartitionRecord(nil, p, rec))
 
 		if gotR != test.expR {
 			t.Errorf("R[%s]: got %s != exp %s", test.layout, gotR, test.expR)
@@ -469,6 +486,23 @@ func TestRecordReader(t *testing.T) {
 				ProducerID:    6,
 				ProducerEpoch: 10,
 			}},
+		},
+
+		// Timestamps outside the UnixNano range.
+		{
+			layout: "%d{big64}",
+			in:     "\xff\xff\xf5arr\x10\x00",
+			exp:    []*Record{{Timestamp: time.UnixMilli(-11676096000000)}},
+		},
+		{
+			layout: "%d",
+			in:     "16725225600000",
+			exp:    []*Record{{Timestamp: time.UnixMilli(16725225600000)}},
+		},
+		{
+			layout: "%d{little64}",
+			in:     "\x00t!%6\x0f\x00\x00",
+			exp:    []*Record{{Timestamp: time.UnixMilli(16725225600000)}},
 		},
 
 		{
