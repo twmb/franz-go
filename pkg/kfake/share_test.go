@@ -2486,3 +2486,43 @@ func TestShareGroupAlterOffsetsUninitialized(t *testing.T) {
 		t.Errorf("acquired %d records, want 0: the reset is latest", acquired)
 	}
 }
+
+// TestShareGroupLeaderMoveDropsAcquisitions verifies that a partition's new
+// leader does not know the old leader's acquisitions, as in Kafka: records
+// acquired before the move are available again at their prior delivery count.
+func TestShareGroupLeaderMoveDropsAcquisitions(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-move-drop"
+	const group = "share-move-drop-g"
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic))
+	produceShareN(t, c, topic, group, 2)
+
+	// A acquires both records. Strict mode fetches only while A polls, so
+	// A sends no fetch after its last poll that could re-acquire them on
+	// the new leader.
+	a := newShareConsumer(t, c, topic, group, kgo.ShareMaxRecords(10), kgo.ShareMaxRecordsStrict())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for n := 0; n < 2 && ctx.Err() == nil; {
+		n += len(a.PollFetches(ctx).Records())
+	}
+
+	if err := c.MoveTopicPartition(topic, 0, 1-c.LeaderFor(topic, 0)); err != nil {
+		t.Fatal(err)
+	}
+
+	b := newShareConsumer(t, c, topic, group)
+	var got int
+	for got < 2 && ctx.Err() == nil {
+		for _, r := range b.PollFetches(ctx).Records() {
+			got++
+			if dc := r.DeliveryCount(); dc != 1 {
+				t.Errorf("offset %d delivery count %d, want 1", r.Offset, dc)
+			}
+		}
+	}
+	if got != 2 {
+		t.Fatalf("B got %d records after the move, want 2", got)
+	}
+}

@@ -196,6 +196,30 @@ func (sp *sharePartition) releaseAcquiredBy(memberID string, maxDelivery int32) 
 	return released
 }
 
+// dropAcquired makes every acquired record available again, undoing the
+// delivery count its acquisition added: a new Kafka leader loads the state
+// last persisted by an ack or release and knows nothing of acquisitions.
+// Returns whether any record was acquired.
+func (sp *sharePartition) dropAcquired() bool {
+	var dropped bool
+	for offset, sr := range sp.records {
+		if sr.state != shareRecordAcquired {
+			continue
+		}
+		dropped = true
+		sr.state = shareRecordAvailable
+		sr.acquiredBy = ""
+		if sr.deliveryCount > 0 {
+			sr.deliveryCount--
+		}
+		sp.records[offset] = sr
+		if offset < sp.scanOffset {
+			sp.scanOffset = offset
+		}
+	}
+	return dropped
+}
+
 func (s *shareSession) bumpEpoch() {
 	s.epoch++
 	if s.epoch < 1 {
