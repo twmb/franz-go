@@ -2526,3 +2526,57 @@ func TestShareGroupLeaderMoveDropsAcquisitions(t *testing.T) {
 		t.Fatalf("B got %d records after the move, want 2", got)
 	}
 }
+
+// TestShareGroupLogStartRaisesStartOffset verifies that moving the log start
+// offset past released share records keeps them from being acquired again,
+// as Kafka does: records below the log start have no data.
+func TestShareGroupLogStartRaisesStartOffset(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-lso"
+	const group = "share-lso-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	produceShareN(t, c, topic, group, 3)
+
+	cl := newPlainClient(t, c)
+	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+	if _, n := rawShareFetch(t, cl, group, memberID, topicID, 0); n != 3 {
+		t.Fatalf("acquired %d, want 3", n)
+	}
+
+	// Release all three, then delete the first two.
+	ack := kmsg.NewPtrShareAcknowledgeRequest()
+	ack.GroupID = kmsg.StringPtr(group)
+	ack.MemberID = &memberID
+	ack.ShareSessionEpoch = 1
+	at := kmsg.NewShareAcknowledgeRequestTopic()
+	at.TopicID = topicID
+	ap := kmsg.NewShareAcknowledgeRequestTopicPartition()
+	ab := kmsg.NewShareAcknowledgeRequestTopicPartitionAcknowledgementBatch()
+	ab.FirstOffset, ab.LastOffset, ab.AcknowledgeTypes = 0, 2, []int8{int8(kgo.AckRelease)}
+	ap.AcknowledgementBatches = append(ap.AcknowledgementBatches, ab)
+	at.Partitions = append(at.Partitions, ap)
+	ack.Topics = append(ack.Topics, at)
+	if resp, err := ack.RequestWith(context.Background(), cl); err != nil || resp.ErrorCode != 0 || resp.Topics[0].Partitions[0].ErrorCode != 0 {
+		t.Fatalf("release: %v %+v", err, resp)
+	}
+	del := kmsg.NewPtrDeleteRecordsRequest()
+	dt := kmsg.NewDeleteRecordsRequestTopic()
+	dt.Topic = topic
+	dp := kmsg.NewDeleteRecordsRequestTopicPartition()
+	dp.Offset = 2
+	dt.Partitions = append(dt.Partitions, dp)
+	del.Topics = append(del.Topics, dt)
+	if resp, err := del.RequestWith(context.Background(), cl); err != nil || resp.Topics[0].Partitions[0].ErrorCode != 0 {
+		t.Fatalf("delete records: %v %+v", err, resp)
+	}
+
+	resp, _ := rawShareFetch(t, cl, group, memberID, topicID, 2)
+	var got [][2]int64
+	for _, ar := range resp.Topics[0].Partitions[0].AcquiredRecords {
+		got = append(got, [2]int64{ar.FirstOffset, ar.LastOffset})
+	}
+	if want := [][2]int64{{2, 2}}; !slices.Equal(got, want) {
+		t.Errorf("acquired %v, want %v", got, want)
+	}
+}

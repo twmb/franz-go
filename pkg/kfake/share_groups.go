@@ -1488,6 +1488,29 @@ func (sp *sharePartition) validateAndProcessAcks(memberID string, batches []ackB
 // records, cleaning up their state entries. Also skips compacted gaps:
 // if records[spso] is nil but we've already scanned past that offset
 // (spso < scanOffset), the nil means the offset was compacted away.
+// logStartMoved raises every share group's start offset for the partition to
+// its new log start offset, as Kafka's updateCacheAndOffsets does. Kafka
+// archives available records below it, archives an acquired one when it is
+// released or its lock expires, and skips acks below it; dropping them and
+// skipping acks below spso is the same to a client.
+func (sgs *shareGroups) logStartMoved(pd *partData) {
+	for _, g := range sgs.gs {
+		sp, ok := g.partitions.getp(pd.t, pd.p)
+		if !ok || pd.logStartOffset <= sp.spso {
+			continue
+		}
+		for o := range sp.records {
+			if o < pd.logStartOffset {
+				delete(sp.records, o)
+			}
+		}
+		sp.spso = pd.logStartOffset
+		sp.scanOffset = max(sp.scanOffset, sp.spso)
+		sp.acquireEnd = max(sp.acquireEnd, sp.spso)
+		sp.advanceSPSO()
+	}
+}
+
 func (sp *sharePartition) advanceSPSO() {
 	for {
 		sr, ok := sp.records[sp.spso]

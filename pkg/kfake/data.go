@@ -583,6 +583,7 @@ outer:
 	}
 	pd.rebuildMaxTimestampMeta()
 	pd.trimAbortedTxns()
+	c.shareGroups.logStartMoved(pd)
 }
 
 // legacyOffsetsBefore answers ListOffsets v0 the way a broker that still
