@@ -2367,3 +2367,80 @@ func TestShareGroupPerGroupConfig(t *testing.T) {
 		t.Errorf("AcquisitionLockTimeoutMillis = %d, want 12345", resp.AcquisitionLockTimeoutMillis)
 	}
 }
+
+// TestShareGroupBatchOptimizedAcquiresWholeBatch verifies that in
+// batch-optimized mode, acquisition reaching MaxRecords continues to the end
+// of the log batch, as Kafka does.
+func TestShareGroupBatchOptimizedAcquiresWholeBatch(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-batch-opt"
+	const group = "share-batch-opt-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	var rs []*kgo.Record
+	for i := range 10 {
+		rs = append(rs, kgo.StringRecord(strconv.Itoa(i)))
+	}
+	if err := producer.ProduceSync(ctx, rs...).FirstErr(); err != nil { // one produce, one batch
+		t.Fatal(err)
+	}
+
+	cl := newShareConsumer(t, c, topic, group, kgo.ShareMaxRecords(3))
+	var got []*kgo.Record
+	for len(got) == 0 && ctx.Err() == nil {
+		got = cl.PollFetches(ctx).Records()
+	}
+	if len(got) != 10 {
+		t.Errorf("first poll got %d records, want the whole 10-record batch", len(got))
+	}
+}
+
+// TestShareGroupBatchSizeSplitsOnBatchBoundaries verifies that BatchSize
+// splits acquired records only at log batch boundaries, as Kafka does.
+func TestShareGroupBatchSizeSplitsOnBatchBoundaries(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-batch-split"
+	const group = "share-batch-split-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
+
+	// Three log batches: 0-2, 3-5, 6-8.
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	for range 3 {
+		if err := cl.ProduceSync(context.Background(), kgo.StringRecord("a"), kgo.StringRecord("b"), kgo.StringRecord("c")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+	req := kmsg.NewPtrShareFetchRequest()
+	req.GroupID = kmsg.StringPtr(group)
+	req.MemberID = &memberID
+	req.MaxRecords = 9
+	req.BatchSize = 4
+	rt := kmsg.NewShareFetchRequestTopic()
+	rt.TopicID = topicID
+	rp := kmsg.NewShareFetchRequestTopicPartition()
+	rp.PartitionMaxBytes = 1 << 20
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+	resp, err := req.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The first split point at least 4 past 0 is the batch at 6.
+	var got [][2]int64
+	for _, ar := range resp.Topics[0].Partitions[0].AcquiredRecords {
+		got = append(got, [2]int64{ar.FirstOffset, ar.LastOffset})
+	}
+	if want := [][2]int64{{0, 5}, {6, 8}}; !slices.Equal(got, want) {
+		t.Errorf("acquired ranges %v, want %v", got, want)
+	}
+}

@@ -1165,6 +1165,10 @@ func (g *shareGroup) processShareAcks(
 //
 // When readCommitted is true, offsets belonging to aborted transactions are
 // archived immediately (matching Java's SharePartition.acquire filtering).
+//
+// When batchOptimized is true (ShareAcquireMode 0), acquisition that reaches
+// maxRecords continues to the end of that record's log batch, as Kafka's
+// acquireNewBatchRecords does; a client can get more than maxRecords.
 func (sp *sharePartition) acquireRecords(
 	pd *partData,
 	hwm int64,
@@ -1173,11 +1177,13 @@ func (sp *sharePartition) acquireRecords(
 	maxDeliveryCount int32,
 	maxRecordLocks int32,
 	readCommitted bool,
+	batchOptimized bool,
 ) []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord {
 	var (
-		now      = time.Now()
-		count    int32
-		acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord
+		now       = time.Now()
+		count     int32
+		acquired  []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord
+		extendEnd = int64(-1) // batch-optimized: acquire through this offset past maxRecords
 	)
 
 	if sp.scanOffset < sp.spso {
@@ -1216,7 +1222,7 @@ func (sp *sharePartition) acquireRecords(
 	lastScanned := sp.scanOffset
 
 	// Walk offsets from scanOffset to HWM looking for available records.
-	for offset := sp.scanOffset; offset < acquireLimit && count < maxRecords; offset++ {
+	for offset := sp.scanOffset; offset < acquireLimit && (count < maxRecords || offset <= extendEnd); offset++ {
 		// In-flight limit per iteration: stop if extending beyond acquireEnd
 		// while at capacity (records within the window are always ok).
 		// This check MUST come before advancing lastScanned, otherwise
@@ -1298,6 +1304,12 @@ func (sp *sharePartition) acquireRecords(
 		count++
 		if offset+1 > sp.acquireEnd {
 			sp.acquireEnd = offset + 1
+		}
+		if batchOptimized && count == maxRecords && hasBatch {
+			curBatch := &pd.segments[curSeg].index[curMeta]
+			if offset >= curBatch.firstOffset {
+				extendEnd = curBatch.firstOffset + int64(curBatch.lastOffsetDelta)
+			}
 		}
 
 		// Try to extend the last AcquiredRecord range.
