@@ -426,7 +426,8 @@ func TestShareGroupSessionEpoch(t *testing.T) {
 }
 
 // TestShareGroupSessionTimeout verifies that a member that stops heartbeating
-// is fenced and its acquired records are released.
+// is fenced. Like Kafka, fencing keeps the member's acquired records; they
+// are released when its connection drops.
 func TestShareGroupSessionTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -471,7 +472,8 @@ func TestShareGroupSessionTimeout(t *testing.T) {
 		t.Fatalf("expected UNKNOWN_MEMBER_ID after session timeout, got %v", kerr.ErrorForCode(hbResp2.ErrorCode))
 	}
 
-	// Consumer 2: should pick up released records (fencing releases them).
+	// Dropping the connection releases the records.
+	cl1.Close()
 	cl2 := newShareConsumer(t, c, "share-sessexp", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

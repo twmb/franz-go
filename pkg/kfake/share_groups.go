@@ -555,10 +555,10 @@ func (g *shareGroup) handleLeave(req *kmsg.ShareGroupHeartbeatRequest, resp *kms
 		g.recomputeAssignments()
 	}
 
-	// Release any records acquired by this member.
-	g.dropSessionsForMember(req.MemberID)
-	g.releaseRecordsForMember(req.MemberID)
-
+	// Like Kafka, leaving the group does not touch the member's share
+	// sessions or acquired records. Those are released when a session
+	// closes (epoch -1), when its connection drops, or when a lock
+	// expires.
 	g.maybeQuit()
 
 	resp.MemberID = &req.MemberID
@@ -894,8 +894,7 @@ func (g *shareGroup) fenceMember(memberID string) {
 	}
 	delete(g.members, memberID)
 
-	g.dropSessionsForMember(memberID)
-	g.releaseRecordsForMember(memberID)
+	// As in handleLeave, sessions and acquired records stay.
 	if len(g.members) > 0 {
 		g.groupEpoch++
 		g.recomputeAssignments()
@@ -924,38 +923,6 @@ func (g *shareGroup) kill() {
 	}
 	delete(sgs.gs, g.name)
 	sgs.refreshSweepTicker()
-}
-
-// dropSessionsForMember removes every share session the member holds, on
-// any broker. This must happen BEFORE the member's records are released:
-// a parked ShareFetch only re-checks that its session is still the one in
-// the map, not that the member is still in the group, so a session left
-// behind lets a departed member re-acquire the records we just released
-// and the surviving members see none of them until the lock expires.
-func (g *shareGroup) dropSessionsForMember(memberID string) {
-	sgs := &g.c.shareGroups
-	for key := range sgs.sessions {
-		if key.group == g.name && key.memberID == memberID {
-			delete(sgs.sessions, key)
-		}
-	}
-}
-
-// releaseRecordsForMember releases all records acquired by the given member
-// across all partitions. If a record has hit max delivery count, it is
-// archived instead. If any records were released to AVAILABLE, we fire share
-// watchers for waiting consumers.
-func (g *shareGroup) releaseRecordsForMember(memberID string) {
-	maxDelivery := g.c.shareMaxDeliveryAttempts()
-	released := false
-	g.partitions.each(func(_ string, _ int32, sp *sharePartition) {
-		if sp.releaseAcquiredBy(memberID, maxDelivery) {
-			released = true
-		}
-	})
-	if released {
-		g.fireAllShareWatchers()
-	}
 }
 
 // releaseRecordsForSession releases records acquired by memberID only for
