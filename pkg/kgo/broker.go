@@ -1608,7 +1608,7 @@ func (cxn *brokerCxn) parseReadSize(sizeBuf []byte) (int32, error) {
 			}
 			return 0, fmt.Errorf("invalid large response size %d > limit %d; the first three bytes received appear to be a tls alert record for %s; is this a plaintext connection speaking to a tls endpoint?", size, maxSize, versionGuess)
 		}
-		return 0, fmt.Errorf("invalid large response size %d > limit %d", size, maxSize)
+		return 0, fmt.Errorf("invalid large response size %d > limit %d: %w", size, maxSize, errResponseTooLarge)
 	}
 	return size, nil
 }

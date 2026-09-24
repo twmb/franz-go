@@ -1063,6 +1063,12 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 	// but that is fine; we may just re-request too early and fall into
 	// another backoff.
 	if err != nil {
+		// A response over BrokerMaxReadBytes will likely be too large
+		// again when we retry, so we surface the error rather than
+		// stall silently.
+		if errors.Is(err, errResponseTooLarge) {
+			s.cl.consumer.addFakeReadyForDraining("", -1, err, "fetch response is larger than BrokerMaxReadBytes")
+		}
 		backoff(err)
 		return fetched
 	}

@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"math"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // Allow adding a topic to consume after the client is initialized with nothing
@@ -956,6 +958,36 @@ func (p *testPooling) PutRecords(put []Record) {
 		p.t.Error("PutRecords != given!")
 	}
 	p.putRecs = true
+}
+
+func TestIssueFetchLargerThanBrokerMaxReadBytes(t *testing.T) {
+	t.Parallel()
+
+	maxMsg := "10485760"
+	topic, cleanup := tmpTopicPartitions(t, 1, kmsg.CreateTopicsRequestTopicConfig{Name: "max.message.bytes", Value: &maxMsg})
+	defer cleanup()
+
+	p, _ := newTestClient(DefaultProduceTopic(topic), ProducerBatchMaxBytes(8<<20))
+	defer p.Close()
+	v := make([]byte, 5<<20)
+	rand.Read(v) // incompressible, so the batch stays over the read limit
+	if err := p.ProduceSync(context.Background(), &Record{Value: v}).FirstErr(); err != nil {
+		t.Fatalf("unable to produce: %v", err)
+	}
+
+	// The broker returns the first batch even when it exceeds the fetch
+	// limits, and this one exceeds BrokerMaxReadBytes: we can never read
+	// it, and must say so rather than retry silently.
+	c, _ := newTestClient(ConsumeTopics(topic), FetchMaxBytes(1<<20), FetchMaxPartitionBytes(1<<20), BrokerMaxReadBytes(2<<20))
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, fe := range c.PollFetches(ctx).Errors() {
+		if errors.Is(fe.Err, errResponseTooLarge) {
+			return
+		}
+	}
+	t.Fatal("did not get an error for a fetch response larger than BrokerMaxReadBytes")
 }
 
 func TestPooling(t *testing.T) {
