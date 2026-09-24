@@ -2444,3 +2444,45 @@ func TestShareGroupBatchSizeSplitsOnBatchBoundaries(t *testing.T) {
 		t.Errorf("acquired ranges %v, want %v", got, want)
 	}
 }
+
+// TestShareGroupAlterOffsetsUninitialized verifies that altering a share
+// group's start offset to -1 leaves the partition uninitialized, so the next
+// fetch starts from share.auto.offset.reset (latest by default).
+func TestShareGroupAlterOffsetsUninitialized(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-alter-uninit"
+	const group = "share-alter-uninit-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	if err := producer.ProduceSync(ctx, kgo.StringRecord("old"), kgo.StringRecord("old")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
+	req.GroupID = group
+	rt := kmsg.NewAlterShareGroupOffsetsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewAlterShareGroupOffsetsRequestTopicPartition()
+	rp.StartOffset = -1
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+	resp, err := req.RequestWith(ctx, producer)
+	if err == nil {
+		err = kerr.ErrorForCode(resp.ErrorCode)
+	}
+	if err == nil {
+		err = kerr.ErrorForCode(resp.Topics[0].Partitions[0].ErrorCode)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cl := newPlainClient(t, c)
+	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+	if _, acquired := rawShareFetch(t, cl, group, memberID, topicID, 0); acquired != 0 {
+		t.Errorf("acquired %d records, want 0: the reset is latest", acquired)
+	}
+}
