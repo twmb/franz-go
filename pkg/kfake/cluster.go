@@ -319,6 +319,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		}
 	}
 
+	c.refreshCompactTicker() // before run, for seeded and loaded topics
 	go c.run()
 
 	return c, nil
@@ -1551,16 +1552,14 @@ func (c *Cluster) compactIntervalMs() int64 {
 }
 
 // refreshCompactTicker starts or stops the compaction ticker based on whether
-// any topic has cleanup.policy=compact or has retention configs explicitly set.
+// any topic has cleanup.policy=compact or a retention limit. Like Kafka, a
+// topic without its own retention config uses log.retention.ms, which
+// defaults to 7 days.
 // Must be called from Cluster.run().
 func (c *Cluster) refreshCompactTicker() {
 	needsTicker := false
 	for t := range c.data.tps {
-		if c.data.isCompactTopic(t) {
-			needsTicker = true
-			break
-		}
-		if c.data.hasRetentionConfig(t) {
+		if c.data.isCompactTopic(t) || c.data.retentionMs(t) >= 0 || c.data.retentionBytes(t) >= 0 {
 			needsTicker = true
 			break
 		}

@@ -1304,18 +1304,6 @@ func BatchRecords(b kmsg.RecordBatch) ([]kmsg.Record, error) {
 // COMPACTION  //
 /////////////////
 
-// hasRetentionConfig returns true if the topic has retention.ms or
-// retention.bytes explicitly set in its topic configs.
-func (d *data) hasRetentionConfig(t string) bool {
-	tcfg, ok := d.tcfgs[t]
-	if !ok {
-		return false
-	}
-	_, hasMs := tcfg["retention.ms"]
-	_, hasBytes := tcfg["retention.bytes"]
-	return hasMs || hasBytes
-}
-
 func (d *data) isCompactTopic(t string) bool {
 	if tcfg, ok := d.tcfgs[t]; ok {
 		if v, ok := tcfg["cleanup.policy"]; ok && v != nil {
