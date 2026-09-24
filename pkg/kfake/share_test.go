@@ -2580,3 +2580,44 @@ func TestShareGroupLogStartRaisesStartOffset(t *testing.T) {
 		t.Errorf("acquired %v, want %v", got, want)
 	}
 }
+
+// TestShareGroupConfigValidation verifies that IncrementalAlterConfigs
+// rejects group config values Kafka rejects.
+func TestShareGroupConfigValidation(t *testing.T) {
+	t.Parallel()
+
+	c := newCluster(t, NumBrokers(1))
+	cl := newPlainClient(t, c)
+	for _, tc := range []struct {
+		name, value string
+		ok          bool
+	}{
+		{"share.record.lock.duration.ms", "15000", true},
+		{"share.record.lock.duration.ms", "14999", false},
+		{"share.record.lock.duration.ms", "60001", false},
+		{"share.delivery.count.limit", "1", false},
+		{"share.delivery.count.limit", "x", false},
+		{"share.renew.acknowledge.enable", "FALSE", true},
+		{"share.renew.acknowledge.enable", "no", false},
+		{"share.isolation.level", "read_committed", true},
+		{"share.isolation.level", "READ_COMMITTED", false},
+		{"share.auto.offset.reset", "earliest", true},
+		{"share.auto.offset.reset", "none", false},
+	} {
+		req := kmsg.NewPtrIncrementalAlterConfigsRequest()
+		rr := kmsg.NewIncrementalAlterConfigsRequestResource()
+		rr.ResourceType = kmsg.ConfigResourceTypeGroupConfig
+		rr.ResourceName = "share-cfg-g"
+		rc := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+		rc.Name, rc.Value = tc.name, kmsg.StringPtr(tc.value)
+		rr.Configs = append(rr.Configs, rc)
+		req.Resources = append(req.Resources, rr)
+		resp, err := req.RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resp.Resources[0].ErrorCode == 0; got != tc.ok {
+			t.Errorf("%s=%s: accepted %v, want %v", tc.name, tc.value, got, tc.ok)
+		}
+	}
+}

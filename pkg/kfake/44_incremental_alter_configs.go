@@ -214,7 +214,8 @@ outer:
 			// Group configs are scalar (e.g. share.auto.offset.reset);
 			// the protocol's Append/Subtract ops are list-valued and
 			// not meaningful here. Reject the request if any config
-			// uses an unsupported op or an unknown config name.
+			// uses an unsupported op, an unknown config name, or a
+			// value Kafka rejects.
 			//
 			// Per-group config names are UNPREFIXED -- the "group."
 			// prefix is only for broker-level defaults. Real Kafka
@@ -227,6 +228,9 @@ outer:
 					invalid = true
 				}
 				if !validGroupConfigs[rr.Configs[i].Name] {
+					invalid = true
+				}
+				if rr.Configs[i].Op == kmsg.IncrementalAlterConfigOpSet && !c.validGroupConfigValue(rr.Configs[i].Name, rr.Configs[i].Value) {
 					invalid = true
 				}
 			}
