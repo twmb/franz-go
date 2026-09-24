@@ -583,6 +583,7 @@ outer:
 	}
 	pd.rebuildMaxTimestampMeta()
 	pd.trimAbortedTxns()
+	c.shareGroups.logStartMoved(pd)
 }
 
 // legacyOffsetsBefore answers ListOffsets v0 the way a broker that still
@@ -1187,7 +1188,43 @@ func (c *Cluster) shareMaxRecordLocks(group string) int32 {
 // shareRenewEnabled returns whether the group accepts renew acks
 // (share.renew.acknowledge.enable, default true).
 func (c *Cluster) shareRenewEnabled(group string) bool {
-	return c.groupConfig(group, "share.renew.acknowledge.enable") != "false"
+	return !strings.EqualFold(c.groupConfig(group, "share.renew.acknowledge.enable"), "false")
+}
+
+// groupConfigBounds are the integer group configs Kafka range checks
+// against the broker's min and max settings, with Kafka's defaults.
+var groupConfigBounds = map[string]struct {
+	min, max       string
+	defMin, defMax int
+}{
+	"consumer.session.timeout.ms":      {"group.consumer.min.session.timeout.ms", "group.consumer.max.session.timeout.ms", 45000, 60000},
+	"consumer.heartbeat.interval.ms":   {"group.consumer.min.heartbeat.interval.ms", "group.consumer.max.heartbeat.interval.ms", 5000, 15000},
+	"share.session.timeout.ms":         {"group.share.min.session.timeout.ms", "group.share.max.session.timeout.ms", 45000, 60000},
+	"share.heartbeat.interval.ms":      {"group.share.min.heartbeat.interval.ms", "group.share.max.heartbeat.interval.ms", 5000, 15000},
+	"share.record.lock.duration.ms":    {"group.share.min.record.lock.duration.ms", "group.share.max.record.lock.duration.ms", 15000, 60000},
+	"share.delivery.count.limit":       {"group.share.min.delivery.count.limit", "group.share.max.delivery.count.limit", 2, 10},
+	"share.partition.max.record.locks": {"group.share.min.partition.max.record.locks", "group.share.max.partition.max.record.locks", 100, 4000},
+}
+
+// validGroupConfigValue returns whether Kafka accepts v for the group
+// config name, one of validGroupConfigs.
+func (c *Cluster) validGroupConfigValue(name string, v *string) bool {
+	if v == nil {
+		return true
+	}
+	if b, ok := groupConfigBounds[name]; ok {
+		n, err := strconv.ParseInt(*v, 10, 32)
+		return err == nil && n >= int64(c.brokerConfigInt(b.min, b.defMin)) && n <= int64(c.brokerConfigInt(b.max, b.defMax))
+	}
+	switch name {
+	case "share.renew.acknowledge.enable":
+		return strings.EqualFold(*v, "true") || strings.EqualFold(*v, "false")
+	case "share.isolation.level":
+		return *v == "read_committed" || *v == "read_uncommitted"
+	case "share.auto.offset.reset":
+		return *v == "earliest" || *v == "latest" || strings.HasPrefix(*v, "by_duration:")
+	}
+	return true
 }
 
 func (c *Cluster) shareMaxSessions() int32 {
@@ -1303,6 +1340,17 @@ func BatchRecords(b kmsg.RecordBatch) ([]kmsg.Record, error) {
 /////////////////
 // COMPACTION  //
 /////////////////
+
+// isDeleteTopic returns whether retention applies to the topic: like Kafka,
+// only when cleanup.policy includes delete, the default.
+func (d *data) isDeleteTopic(t string) bool {
+	if tcfg, ok := d.tcfgs[t]; ok {
+		if v, ok := tcfg["cleanup.policy"]; ok && v != nil {
+			return strings.Contains(*v, "delete")
+		}
+	}
+	return true
+}
 
 func (d *data) isCompactTopic(t string) bool {
 	if tcfg, ok := d.tcfgs[t]; ok {
@@ -1515,7 +1563,7 @@ func (pd *partData) trimAbortedTxns() {
 // applyRetention advances logStartOffset past batches that are expired by
 // retention.ms or that exceed retention.bytes, then trims them.
 func (c *Cluster) applyRetention(pd *partData, topic string) {
-	if !pd.hasBatches() {
+	if !pd.hasBatches() || !c.data.isDeleteTopic(topic) {
 		return
 	}
 

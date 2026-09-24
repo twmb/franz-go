@@ -18,7 +18,6 @@ linters:
     - decorder
     - durationcheck
     - durationcheck
-    - exhaustive
     - exptostd
     - fatcontext
     - forbidigo
@@ -51,9 +50,6 @@ linters:
 
     errorlint:
       errorf: false
-
-    exhaustive:
-      default-signifies-exhaustive: true
 
     forbidigo:
       # In pkg/kgo non-test files we require xsync.Mutex / xsync.RWMutex.
