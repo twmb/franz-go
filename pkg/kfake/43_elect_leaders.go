@@ -63,8 +63,7 @@ func (c *Cluster) handleElectLeaders(creq *clientReq) (kmsg.Response, error) {
 
 	elect := func(t string, p int32, pd *partData) {
 		next := (pd.leader.bsIdx + 1) % len(c.bs)
-		pd.leader = c.bs[next]
-		pd.epoch++
+		c.setLeader(t, p, pd, c.bs[next])
 		donep(t, p, 0)
 	}
 

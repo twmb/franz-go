@@ -47,7 +47,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		memberID = *req.MemberID
 	}
 
-	resp.AcquisitionLockTimeoutMillis = c.shareRecordLockDurationMs()
+	resp.AcquisitionLockTimeoutMillis = c.shareRecordLockDurationMs(groupID)
 	fc := creq.faults
 
 	// ACL: require GROUP READ.
@@ -63,20 +63,11 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		return resp, nil
 	}
 
-	// KIP-1222: when isRenewAck is set, all fetch params must be zero
-	// and no fetch data (non-ack partition entries) may be present.
+	// KIP-1222: when isRenewAck is set, all fetch params must be zero.
 	if req.Version >= 2 && req.IsRenewAck {
 		if req.MaxBytes != 0 || req.MinBytes != 0 || req.MaxRecords != 0 || req.MaxWaitMillis != 0 {
 			resp.ErrorCode = kerr.InvalidRequest.Code
 			return resp, nil
-		}
-		for i := range req.Topics {
-			for j := range req.Topics[i].Partitions {
-				if len(req.Topics[i].Partitions[j].AcknowledgementBatches) == 0 {
-					resp.ErrorCode = kerr.InvalidRequest.Code
-					return resp, nil
-				}
-			}
 		}
 	}
 
@@ -93,7 +84,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 
 	sg := c.shareGroups.get(groupID)
 	id2t := c.data.id2t
-	maxDelivery := c.shareMaxDeliveryAttempts()
+	maxDelivery := c.shareMaxDeliveryAttempts(groupID)
 
 	maxAckType := shareAckReject
 	if req.Version >= 2 && req.IsRenewAck {
@@ -227,7 +218,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			ensureAckedParts(resp, ackTs, addTopic)
 		}
 		fireAll(toFire)
-		session.bumpEpoch()
 		return resp, nil
 	}
 
@@ -265,7 +255,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		acquiredParts  []acquiredPart
 		includeBrokers bool
 		toFire         []*partData
-		maxRecordLocks = c.shareMaxRecordLocks()
+		maxRecordLocks = c.shareMaxRecordLocks(groupID)
 	)
 
 	var ackTs []ackTopic
@@ -343,12 +333,13 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			maxDelivery,
 			maxRecordLocks,
 			readCommitted,
+			req.ShareAcquireMode == 0,
 		)
 		if len(acquiredRanges) == 0 {
 			continue
 		}
 		if batchSize > 0 {
-			acquiredRanges = splitAcquiredRanges(acquiredRanges, batchSize)
+			acquiredRanges = splitAcquiredRanges(tgt.pd, acquiredRanges, batchSize)
 		}
 		for _, ar := range acquiredRanges {
 			totalRecords += int32(ar.LastOffset - ar.FirstOffset + 1)
@@ -480,8 +471,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 	}
 
-	session.bumpEpoch()
-
 	return resp, nil
 }
 
@@ -509,37 +498,42 @@ func ensureAckedParts(resp *kmsg.ShareFetchResponse, ackTs []ackTopic, addTopic 
 	}
 }
 
-// splitAcquiredRanges splits acquired record ranges into sub-batches of at
-// most batchSize offsets for BATCH_OPTIMIZED mode (KIP-1206).
-func splitAcquiredRanges(ranges []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, batchSize int32) []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord {
-	// Fast path: if no range exceeds batchSize, return as-is.
-	needsSplit := false
-	for _, r := range ranges {
-		if r.LastOffset-r.FirstOffset+1 > int64(batchSize) {
-			needsSplit = true
-			break
-		}
+// splitAcquiredRanges splits each acquired range longer than batchSize for
+// BATCH_OPTIMIZED mode (KIP-1206), as Kafka's createBatches does: a split
+// happens only at a log batch base at least batchSize past the current
+// range's start, so a log batch is never split.
+func splitAcquiredRanges(pd *partData, ranges []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, batchSize int32) []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord {
+	var out []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord
+	add := func(first, last int64, dc int16) {
+		ar := kmsg.NewShareFetchResponseTopicPartitionAcquiredRecord()
+		ar.FirstOffset = first
+		ar.LastOffset = last
+		ar.DeliveryCount = dc
+		out = append(out, ar)
 	}
-	if !needsSplit {
-		return ranges
-	}
-
-	out := make([]kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, 0, len(ranges))
 	for _, r := range ranges {
-		count := int32(r.LastOffset - r.FirstOffset + 1)
-		if count <= batchSize {
+		if r.LastOffset-r.FirstOffset+1 <= int64(batchSize) {
 			out = append(out, r)
 			continue
 		}
-		for off := r.FirstOffset; off <= r.LastOffset; {
-			end := min(off+int64(batchSize)-1, r.LastOffset)
-			ar := kmsg.NewShareFetchResponseTopicPartitionAcquiredRecord()
-			ar.FirstOffset = off
-			ar.LastOffset = end
-			ar.DeliveryCount = r.DeliveryCount
-			out = append(out, ar)
-			off = end + 1
+		cur := r.FirstOffset
+		si, mi, ok, _ := pd.searchOffset(r.FirstOffset)
+		for ok {
+			base := pd.segments[si].index[mi].firstOffset
+			if base > r.LastOffset {
+				break
+			}
+			if base-cur >= int64(batchSize) {
+				add(cur, base-1, r.DeliveryCount)
+				cur = base
+			}
+			for mi++; ok && mi == len(pd.segments[si].index); {
+				mi = 0
+				si++
+				ok = si < len(pd.segments)
+			}
 		}
+		add(cur, r.LastOffset, r.DeliveryCount)
 	}
 	return out
 }

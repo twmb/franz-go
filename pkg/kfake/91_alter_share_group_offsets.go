@@ -51,6 +51,7 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 		resp.ErrorCode = kerr.NonEmptyGroup.Code
 		return resp, nil
 	}
+	sg.groupEpoch++ // Kafka bumps the epoch before writing the new offsets
 
 	for i := range req.Topics {
 		rt := &req.Topics[i]
@@ -88,6 +89,15 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 				if e == nil {
 					rsp.ErrorCode = kerr.UnknownTopicOrPartition.Code
 				}
+				rst.Partitions = append(rst.Partitions, rsp)
+				continue
+			}
+
+			// -1 marks the partition uninitialized, as in Kafka: drop
+			// its state so the next fetch starts from
+			// share.auto.offset.reset.
+			if rp.StartOffset == -1 {
+				sg.partitions.delp(rt.Topic, rp.Partition)
 				rst.Partitions = append(rst.Partitions, rsp)
 				continue
 			}

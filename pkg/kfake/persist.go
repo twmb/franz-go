@@ -2432,6 +2432,12 @@ func (c *Cluster) loadSessionState() error {
 	c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: classic=%d consumer=%d inProgressTxns=%d shutdownAt=%v elapsed=%v",
 		len(ss.ClassicGroups), len(ss.ConsumerGroups), len(ss.InProgressTxns), ss.ShutdownAt, time.Since(ss.ShutdownAt))
 
+	// Group configs first: the share restore below reads them.
+	if len(ss.GroupConfigs) > 0 {
+		c.groupConfigs = ss.GroupConfigs
+		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored %d group configs", len(ss.GroupConfigs))
+	}
+
 	for name, sg := range ss.ClassicGroups {
 		g, ok := c.groups.gs[name]
 		if !ok {
@@ -2471,9 +2477,8 @@ func (c *Cluster) loadSessionState() error {
 	// Acquisitions whose save-time is older than the configured record
 	// lock duration are released too, so fresh members can re-acquire
 	// records the prior owner never got to ack/release.
-	shareSessionTimeout := time.Duration(c.shareSessionTimeoutMs()) * time.Millisecond
-	shareLockDuration := time.Duration(c.shareRecordLockDurationMs()) * time.Millisecond
 	restoreMembers := func(sg *shareGroup, members []sessionShareMember) map[string]struct{} {
+		shareSessionTimeout := time.Duration(c.shareSessionTimeoutMs(sg.name)) * time.Millisecond
 		restored := make(map[string]struct{}, len(members))
 		now := time.Now()
 		for _, sm := range members {
@@ -2507,9 +2512,10 @@ func (c *Cluster) loadSessionState() error {
 		}
 		return restored
 	}
-	acquisitionStale := time.Since(ss.ShutdownAt) >= shareLockDuration
 	for name, ssg := range ss.ShareGroups {
 		sg := c.shareGroups.getOrCreate(name)
+		acquisitionStale := time.Since(ss.ShutdownAt) >= time.Duration(c.shareRecordLockDurationMs(name))*time.Millisecond
+		maxDelivery := c.shareMaxDeliveryAttempts(name)
 		sg.groupEpoch = ssg.GroupEpoch
 		restoredMembers := restoreMembers(sg, ssg.Members)
 		for topic, parts := range ssg.Partitions {
@@ -2532,7 +2538,7 @@ func (c *Cluster) loadSessionState() error {
 					// owner re-acquire on the next fetch.
 					_, memberSurvived := restoredMembers[acquiredBy]
 					if state == shareRecordAcquired && (!memberSurvived || acquisitionStale) {
-						if ssr.DeliveryCount >= c.shareMaxDeliveryAttempts() {
+						if ssr.DeliveryCount >= maxDelivery {
 							state = shareRecordArchived
 						} else {
 							state = shareRecordAvailable
@@ -2556,10 +2562,6 @@ func (c *Cluster) loadSessionState() error {
 			name, sg.groupEpoch, len(sg.members))
 	}
 
-	if len(ss.GroupConfigs) > 0 {
-		c.groupConfigs = ss.GroupConfigs
-		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored %d group configs", len(ss.GroupConfigs))
-	}
 	if len(ss.ClientMetrics) > 0 {
 		c.clientMetrics = ss.ClientMetrics
 	}

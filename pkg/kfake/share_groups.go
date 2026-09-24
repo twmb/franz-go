@@ -196,6 +196,30 @@ func (sp *sharePartition) releaseAcquiredBy(memberID string, maxDelivery int32) 
 	return released
 }
 
+// dropAcquired makes every acquired record available again, undoing the
+// delivery count its acquisition added: a new Kafka leader loads the state
+// last persisted by an ack or release and knows nothing of acquisitions.
+// Returns whether any record was acquired.
+func (sp *sharePartition) dropAcquired() bool {
+	var dropped bool
+	for offset, sr := range sp.records {
+		if sr.state != shareRecordAcquired {
+			continue
+		}
+		dropped = true
+		sr.state = shareRecordAvailable
+		sr.acquiredBy = ""
+		if sr.deliveryCount > 0 {
+			sr.deliveryCount--
+		}
+		sp.records[offset] = sr
+		if offset < sp.scanOffset {
+			sp.scanOffset = offset
+		}
+	}
+	return dropped
+}
+
 func (s *shareSession) bumpEpoch() {
 	s.epoch++
 	if s.epoch < 1 {
@@ -293,8 +317,10 @@ func (sgs *shareGroups) createSession(
 		return nil, nil, int16(133) // SHARE_SESSION_LIMIT_REACHED
 	}
 
+	// Like Kafka, the epoch moves when the request arrives, not when a
+	// parked fetch completes: the next request uses 1.
 	session := &shareSession{
-		epoch:      0,
+		epoch:      1,
 		partitions: make(map[uuid]map[int32]bool),
 		cc:         cc,
 	}
@@ -377,6 +403,7 @@ func (sgs *shareGroups) updateSession(
 			delete(session.partitions, ft.TopicID)
 		}
 	}
+	session.bumpEpoch()
 
 	return session, 0
 }
@@ -447,8 +474,8 @@ func (sgs *shareGroups) sweepAllExpiredAcquisitions() {
 // archived instead of released.
 func (g *shareGroup) sweepExpiredAcquisitions() {
 	now := time.Now()
-	lockDuration := time.Duration(g.c.shareRecordLockDurationMs()) * time.Millisecond
-	maxDelivery := g.c.shareMaxDeliveryAttempts()
+	lockDuration := time.Duration(g.c.shareRecordLockDurationMs(g.name)) * time.Millisecond
+	maxDelivery := g.c.shareMaxDeliveryAttempts(g.name)
 	released := false
 	g.partitions.each(func(_ string, _ int32, sp *sharePartition) {
 		for offset, sr := range sp.records {
@@ -475,7 +502,7 @@ func (g *shareGroup) sweepExpiredAcquisitions() {
 func (g *shareGroup) handleHeartbeat(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.ShareGroupHeartbeatRequest)
 	resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
-	resp.HeartbeatIntervalMillis = g.c.shareHeartbeatIntervalMs()
+	resp.HeartbeatIntervalMillis = g.c.shareHeartbeatIntervalMs(g.name)
 
 	switch req.MemberEpoch {
 	case 0:
@@ -555,10 +582,10 @@ func (g *shareGroup) handleLeave(req *kmsg.ShareGroupHeartbeatRequest, resp *kms
 		g.recomputeAssignments()
 	}
 
-	// Release any records acquired by this member.
-	g.dropSessionsForMember(req.MemberID)
-	g.releaseRecordsForMember(req.MemberID)
-
+	// Like Kafka, leaving the group does not touch the member's share
+	// sessions or acquired records. Those are released when a session
+	// closes (epoch -1), when its connection drops, or when a lock
+	// expires.
 	g.maybeQuit()
 
 	resp.MemberID = &req.MemberID
@@ -868,7 +895,7 @@ func (g *shareGroup) resetSessionTimeout(m *shareMember) {
 	if m.t != nil {
 		m.t.Stop()
 	}
-	timeout := time.Duration(g.c.shareSessionTimeoutMs()) * time.Millisecond
+	timeout := time.Duration(g.c.shareSessionTimeoutMs(g.name)) * time.Millisecond
 	m.last = time.Now()
 	m.t = g.c.afterFuncOnLoop(timeout, func() {
 		if g.c.shareGroups.gs[g.name] != g {
@@ -894,8 +921,7 @@ func (g *shareGroup) fenceMember(memberID string) {
 	}
 	delete(g.members, memberID)
 
-	g.dropSessionsForMember(memberID)
-	g.releaseRecordsForMember(memberID)
+	// As in handleLeave, sessions and acquired records stay.
 	if len(g.members) > 0 {
 		g.groupEpoch++
 		g.recomputeAssignments()
@@ -926,44 +952,12 @@ func (g *shareGroup) kill() {
 	sgs.refreshSweepTicker()
 }
 
-// dropSessionsForMember removes every share session the member holds, on
-// any broker. This must happen BEFORE the member's records are released:
-// a parked ShareFetch only re-checks that its session is still the one in
-// the map, not that the member is still in the group, so a session left
-// behind lets a departed member re-acquire the records we just released
-// and the surviving members see none of them until the lock expires.
-func (g *shareGroup) dropSessionsForMember(memberID string) {
-	sgs := &g.c.shareGroups
-	for key := range sgs.sessions {
-		if key.group == g.name && key.memberID == memberID {
-			delete(sgs.sessions, key)
-		}
-	}
-}
-
-// releaseRecordsForMember releases all records acquired by the given member
-// across all partitions. If a record has hit max delivery count, it is
-// archived instead. If any records were released to AVAILABLE, we fire share
-// watchers for waiting consumers.
-func (g *shareGroup) releaseRecordsForMember(memberID string) {
-	maxDelivery := g.c.shareMaxDeliveryAttempts()
-	released := false
-	g.partitions.each(func(_ string, _ int32, sp *sharePartition) {
-		if sp.releaseAcquiredBy(memberID, maxDelivery) {
-			released = true
-		}
-	})
-	if released {
-		g.fireAllShareWatchers()
-	}
-}
-
 // releaseRecordsForSession releases records acquired by memberID only for
 // partitions tracked by the given session. This is used during session
 // close (ShareAcknowledge/ShareFetch epoch=-1) to avoid releasing records
 // from other sessions on different brokers.
 func (g *shareGroup) releaseRecordsForSession(memberID string, session *shareSession) bool {
-	maxDelivery := g.c.shareMaxDeliveryAttempts()
+	maxDelivery := g.c.shareMaxDeliveryAttempts(g.name)
 	released := false
 	for topicID, parts := range session.partitions {
 		topicName := g.c.data.id2t[topicID]
@@ -1125,7 +1119,8 @@ func (g *shareGroup) processShareAcks(
 	onPartition func(tid uuid, p int32, ec int16),
 	onNotLeader func(tid uuid, p int32, pd *partData),
 ) (toFire []*partData) {
-	maxDelivery := g.c.shareMaxDeliveryAttempts()
+	maxDelivery := g.c.shareMaxDeliveryAttempts(g.name)
+	renewEnabled := g.c.shareRenewEnabled(g.name)
 	for _, at := range topics {
 		topicName := g.c.data.id2t[at.topicID]
 		if topicName == "" {
@@ -1171,6 +1166,10 @@ func (g *shareGroup) processShareAcks(
 				}
 				continue
 			}
+			if !renewEnabled && slices.ContainsFunc(ap.batches, func(b ackBatch) bool { return slices.Contains(b.ackTypes, shareAckRenew) }) {
+				onPartition(at.topicID, ap.partition, kerr.InvalidRecordState.Code)
+				continue
+			}
 			shp := g.getSharePartition(topicName, ap.partition, pd)
 			if ec := shp.validateAndProcessAcks(memberID, ap.batches, maxDelivery); ec != 0 {
 				onPartition(at.topicID, ap.partition, ec)
@@ -1193,6 +1192,10 @@ func (g *shareGroup) processShareAcks(
 //
 // When readCommitted is true, offsets belonging to aborted transactions are
 // archived immediately (matching Java's SharePartition.acquire filtering).
+//
+// When batchOptimized is true (ShareAcquireMode 0), acquisition that reaches
+// maxRecords continues to the end of that record's log batch, as Kafka's
+// acquireNewBatchRecords does; a client can get more than maxRecords.
 func (sp *sharePartition) acquireRecords(
 	pd *partData,
 	hwm int64,
@@ -1201,11 +1204,13 @@ func (sp *sharePartition) acquireRecords(
 	maxDeliveryCount int32,
 	maxRecordLocks int32,
 	readCommitted bool,
+	batchOptimized bool,
 ) []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord {
 	var (
-		now      = time.Now()
-		count    int32
-		acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord
+		now       = time.Now()
+		count     int32
+		acquired  []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord
+		extendEnd = int64(-1) // batch-optimized: acquire through this offset past maxRecords
 	)
 
 	if sp.scanOffset < sp.spso {
@@ -1244,7 +1249,7 @@ func (sp *sharePartition) acquireRecords(
 	lastScanned := sp.scanOffset
 
 	// Walk offsets from scanOffset to HWM looking for available records.
-	for offset := sp.scanOffset; offset < acquireLimit && count < maxRecords; offset++ {
+	for offset := sp.scanOffset; offset < acquireLimit && (count < maxRecords || offset <= extendEnd); offset++ {
 		// In-flight limit per iteration: stop if extending beyond acquireEnd
 		// while at capacity (records within the window are always ok).
 		// This check MUST come before advancing lastScanned, otherwise
@@ -1326,6 +1331,12 @@ func (sp *sharePartition) acquireRecords(
 		count++
 		if offset+1 > sp.acquireEnd {
 			sp.acquireEnd = offset + 1
+		}
+		if batchOptimized && count == maxRecords && hasBatch {
+			curBatch := &pd.segments[curSeg].index[curMeta]
+			if offset >= curBatch.firstOffset {
+				extendEnd = curBatch.firstOffset + int64(curBatch.lastOffsetDelta)
+			}
 		}
 
 		// Try to extend the last AcquiredRecord range.

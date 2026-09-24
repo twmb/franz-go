@@ -319,6 +319,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		}
 	}
 
+	c.refreshCompactTicker() // before run, for seeded and loaded topics
 	go c.run()
 
 	return c, nil
@@ -1325,10 +1326,26 @@ func (c *Cluster) MoveTopicPartition(topic string, partition, nodeID int32) erro
 			err = errors.New("topic/partition not found")
 			return
 		}
-		pd.leader = br
-		pd.epoch++
+		c.setLeader(topic, partition, pd, br)
 	})
 	return err
+}
+
+// setLeader moves a partition to leader and bumps its epoch. If the leader
+// changes, share groups drop their acquisitions on the partition, as a new
+// Kafka leader does: acquisitions are never persisted.
+func (c *Cluster) setLeader(t string, p int32, pd *partData, leader *broker) {
+	moved := pd.leader != leader
+	pd.leader = leader
+	pd.epoch++
+	if !moved {
+		return
+	}
+	for _, g := range c.shareGroups.gs {
+		if sp, ok := g.partitions.getp(t, p); ok && sp.dropAcquired() {
+			g.fireAllShareWatchers()
+		}
+	}
 }
 
 // CoordinatorFor returns the node ID of the group or transaction coordinator
@@ -1454,15 +1471,14 @@ func (c *Cluster) ShufflePartitionLeaders() {
 }
 
 func (c *Cluster) shufflePartitions() {
-	c.data.tps.each(func(_ string, _ int32, p *partData) {
+	c.data.tps.each(func(t string, p int32, pd *partData) {
 		var leader *broker
 		if len(c.bs) == 0 {
 			leader = c.noLeader()
 		} else {
 			leader = c.bs[rand.Intn(len(c.bs))]
 		}
-		p.leader = leader
-		p.epoch++
+		c.setLeader(t, p, pd, leader)
 	})
 }
 
@@ -1536,16 +1552,14 @@ func (c *Cluster) compactIntervalMs() int64 {
 }
 
 // refreshCompactTicker starts or stops the compaction ticker based on whether
-// any topic has cleanup.policy=compact or has retention configs explicitly set.
+// any topic has cleanup.policy=compact or a retention limit. Like Kafka, a
+// topic without its own retention config uses log.retention.ms, which
+// defaults to 7 days.
 // Must be called from Cluster.run().
 func (c *Cluster) refreshCompactTicker() {
 	needsTicker := false
 	for t := range c.data.tps {
-		if c.data.isCompactTopic(t) {
-			needsTicker = true
-			break
-		}
-		if c.data.hasRetentionConfig(t) {
+		if c.data.isCompactTopic(t) || c.data.retentionMs(t) >= 0 || c.data.retentionBytes(t) >= 0 {
 			needsTicker = true
 			break
 		}

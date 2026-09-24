@@ -426,7 +426,8 @@ func TestShareGroupSessionEpoch(t *testing.T) {
 }
 
 // TestShareGroupSessionTimeout verifies that a member that stops heartbeating
-// is fenced and its acquired records are released.
+// is fenced. Like Kafka, fencing keeps the member's acquired records; they
+// are released when its connection drops.
 func TestShareGroupSessionTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -471,7 +472,8 @@ func TestShareGroupSessionTimeout(t *testing.T) {
 		t.Fatalf("expected UNKNOWN_MEMBER_ID after session timeout, got %v", kerr.ErrorForCode(hbResp2.ErrorCode))
 	}
 
-	// Consumer 2: should pick up released records (fencing releases them).
+	// Dropping the connection releases the records.
+	cl1.Close()
 	cl2 := newShareConsumer(t, c, "share-sessexp", group)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -2344,5 +2346,183 @@ func TestShareGroupLeaderMoveInFlightAcks(t *testing.T) {
 	}
 	if p0 == 0 {
 		t.Errorf("callback never fired for partition 0 after in-flight ack+move; acks may have stranded on the migrated cursor. Results: %+v", cbResults)
+	}
+}
+
+// TestShareGroupPerGroupConfig verifies that a share config set on the group
+// overrides the broker's group.share.* default.
+func TestShareGroupPerGroupConfig(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-group-cfg"
+	const group = "share-group-cfg-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	produceShareN(t, c, topic, group, 1)
+	c.SetGroupConfigs(group, map[string]string{"share.record.lock.duration.ms": "12345"})
+
+	cl := newPlainClient(t, c)
+	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+	resp, _ := rawShareFetch(t, cl, group, memberID, topicID, 0)
+	if resp.AcquisitionLockTimeoutMillis != 12345 {
+		t.Errorf("AcquisitionLockTimeoutMillis = %d, want 12345", resp.AcquisitionLockTimeoutMillis)
+	}
+}
+
+// TestShareGroupBatchOptimizedAcquiresWholeBatch verifies that in
+// batch-optimized mode, acquisition reaching MaxRecords continues to the end
+// of the log batch, as Kafka does.
+func TestShareGroupBatchOptimizedAcquiresWholeBatch(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-batch-opt"
+	const group = "share-batch-opt-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	var rs []*kgo.Record
+	for i := range 10 {
+		rs = append(rs, kgo.StringRecord(strconv.Itoa(i)))
+	}
+	if err := producer.ProduceSync(ctx, rs...).FirstErr(); err != nil { // one produce, one batch
+		t.Fatal(err)
+	}
+
+	cl := newShareConsumer(t, c, topic, group, kgo.ShareMaxRecords(3))
+	var got []*kgo.Record
+	for len(got) == 0 && ctx.Err() == nil {
+		got = cl.PollFetches(ctx).Records()
+	}
+	if len(got) != 10 {
+		t.Errorf("first poll got %d records, want the whole 10-record batch", len(got))
+	}
+}
+
+// TestShareGroupBatchSizeSplitsOnBatchBoundaries verifies that BatchSize
+// splits acquired records only at log batch boundaries, as Kafka does.
+func TestShareGroupBatchSizeSplitsOnBatchBoundaries(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-batch-split"
+	const group = "share-batch-split-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
+
+	// Three log batches: 0-2, 3-5, 6-8.
+	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	for range 3 {
+		if err := cl.ProduceSync(context.Background(), kgo.StringRecord("a"), kgo.StringRecord("b"), kgo.StringRecord("c")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+	req := kmsg.NewPtrShareFetchRequest()
+	req.GroupID = kmsg.StringPtr(group)
+	req.MemberID = &memberID
+	req.MaxRecords = 9
+	req.BatchSize = 4
+	rt := kmsg.NewShareFetchRequestTopic()
+	rt.TopicID = topicID
+	rp := kmsg.NewShareFetchRequestTopicPartition()
+	rp.PartitionMaxBytes = 1 << 20
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+	resp, err := req.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The first split point at least 4 past 0 is the batch at 6.
+	var got [][2]int64
+	for _, ar := range resp.Topics[0].Partitions[0].AcquiredRecords {
+		got = append(got, [2]int64{ar.FirstOffset, ar.LastOffset})
+	}
+	if want := [][2]int64{{0, 5}, {6, 8}}; !slices.Equal(got, want) {
+		t.Errorf("acquired ranges %v, want %v", got, want)
+	}
+}
+
+// TestShareGroupAlterOffsetsUninitialized verifies that altering a share
+// group's start offset to -1 leaves the partition uninitialized, so the next
+// fetch starts from share.auto.offset.reset (latest by default).
+func TestShareGroupAlterOffsetsUninitialized(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-alter-uninit"
+	const group = "share-alter-uninit-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	if err := producer.ProduceSync(ctx, kgo.StringRecord("old"), kgo.StringRecord("old")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
+	req.GroupID = group
+	rt := kmsg.NewAlterShareGroupOffsetsRequestTopic()
+	rt.Topic = topic
+	rp := kmsg.NewAlterShareGroupOffsetsRequestTopicPartition()
+	rp.StartOffset = -1
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+	resp, err := req.RequestWith(ctx, producer)
+	if err == nil {
+		err = kerr.ErrorForCode(resp.ErrorCode)
+	}
+	if err == nil {
+		err = kerr.ErrorForCode(resp.Topics[0].Partitions[0].ErrorCode)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cl := newPlainClient(t, c)
+	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+	if _, acquired := rawShareFetch(t, cl, group, memberID, topicID, 0); acquired != 0 {
+		t.Errorf("acquired %d records, want 0: the reset is latest", acquired)
+	}
+}
+
+// TestShareGroupLeaderMoveDropsAcquisitions verifies that a partition's new
+// leader does not know the old leader's acquisitions, as in Kafka: records
+// acquired before the move are available again at their prior delivery count.
+func TestShareGroupLeaderMoveDropsAcquisitions(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-move-drop"
+	const group = "share-move-drop-g"
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic))
+	produceShareN(t, c, topic, group, 2)
+
+	// A acquires both records. Strict mode fetches only while A polls, so
+	// A sends no fetch after its last poll that could re-acquire them on
+	// the new leader.
+	a := newShareConsumer(t, c, topic, group, kgo.ShareMaxRecords(10), kgo.ShareMaxRecordsStrict())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for n := 0; n < 2 && ctx.Err() == nil; {
+		n += len(a.PollFetches(ctx).Records())
+	}
+
+	if err := c.MoveTopicPartition(topic, 0, 1-c.LeaderFor(topic, 0)); err != nil {
+		t.Fatal(err)
+	}
+
+	b := newShareConsumer(t, c, topic, group)
+	var got int
+	for got < 2 && ctx.Err() == nil {
+		for _, r := range b.PollFetches(ctx).Records() {
+			got++
+			if dc := r.DeliveryCount(); dc != 1 {
+				t.Errorf("offset %d delivery count %d, want 1", r.Offset, dc)
+			}
+		}
+	}
+	if got != 2 {
+		t.Fatalf("B got %d records after the move, want 2", got)
 	}
 }

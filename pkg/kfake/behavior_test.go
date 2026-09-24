@@ -4500,6 +4500,15 @@ func TestRetention(t *testing.T) {
 			sleep:     200 * time.Millisecond,
 			wantStart: 1,
 		},
+		{
+			// No topic config: the ticker still runs, for the broker's
+			// log.retention.ms, as Kafka's does for its 7 day default.
+			name:      "ticker-broker-default",
+			brokerCfg: map[string]string{"log.cleaner.backoff.ms": "50", "log.retention.ms": "1"},
+			first:     []string{"old", "keep"},
+			sleep:     200 * time.Millisecond,
+			wantStart: 1,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
