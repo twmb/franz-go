@@ -8,7 +8,67 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+// A fetch across many partitions returns batches only while the response has
+// room, beyond the first batch, as a broker does.
+func TestSyntheticFetchResponseBounded(t *testing.T) {
+	t.Parallel()
+
+	const nparts = 20
+	c, err := NewCluster(NumBrokers(1), SeedTopics(nparts, "t"), SyntheticFetch(SyntheticBatch{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx := context.Background()
+	meta, err := kmsg.NewPtrMetadataRequest().RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := kmsg.NewPtrFetchRequest()
+	req.MaxBytes = 3 << 20
+	rt := kmsg.NewFetchRequestTopic()
+	rt.Topic = "t"
+	rt.TopicID = meta.Topics[0].TopicID
+	for p := range int32(nparts) {
+		rp := kmsg.NewFetchRequestTopicPartition()
+		rp.Partition = p
+		rp.PartitionMaxBytes = 1 << 20
+		rt.Partitions = append(rt.Partitions, rp)
+	}
+	req.Topics = append(req.Topics, rt)
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var total, first, withData int
+	for _, rt := range resp.Topics {
+		for _, rp := range rt.Partitions {
+			if n := len(rp.RecordBatches); n > 0 {
+				if first == 0 {
+					first = n
+				}
+				total += n
+				withData++
+			}
+		}
+	}
+	if withData == 0 || withData == nparts {
+		t.Errorf("got data from %d of %d partitions, want some but not all", withData, nparts)
+	}
+	if total > max(int(req.MaxBytes), first) {
+		t.Errorf("got %d bytes of batches, over the %d max", total, req.MaxBytes)
+	}
+}
 
 func TestSyntheticFetch(t *testing.T) {
 	t.Parallel()
