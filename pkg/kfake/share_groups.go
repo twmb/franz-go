@@ -293,8 +293,10 @@ func (sgs *shareGroups) createSession(
 		return nil, nil, int16(133) // SHARE_SESSION_LIMIT_REACHED
 	}
 
+	// Like Kafka, the epoch moves when the request arrives, not when a
+	// parked fetch completes: the next request uses 1.
 	session := &shareSession{
-		epoch:      0,
+		epoch:      1,
 		partitions: make(map[uuid]map[int32]bool),
 		cc:         cc,
 	}
@@ -377,6 +379,7 @@ func (sgs *shareGroups) updateSession(
 			delete(session.partitions, ft.TopicID)
 		}
 	}
+	session.bumpEpoch()
 
 	return session, 0
 }

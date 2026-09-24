@@ -218,7 +218,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			ensureAckedParts(resp, ackTs, addTopic)
 		}
 		fireAll(toFire)
-		session.bumpEpoch()
 		return resp, nil
 	}
 
@@ -471,8 +470,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			resp.NodeEndpoints = append(resp.NodeEndpoints, ne)
 		}
 	}
-
-	session.bumpEpoch()
 
 	return resp, nil
 }
