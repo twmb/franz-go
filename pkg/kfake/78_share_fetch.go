@@ -63,20 +63,11 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		return resp, nil
 	}
 
-	// KIP-1222: when isRenewAck is set, all fetch params must be zero
-	// and no fetch data (non-ack partition entries) may be present.
+	// KIP-1222: when isRenewAck is set, all fetch params must be zero.
 	if req.Version >= 2 && req.IsRenewAck {
 		if req.MaxBytes != 0 || req.MinBytes != 0 || req.MaxRecords != 0 || req.MaxWaitMillis != 0 {
 			resp.ErrorCode = kerr.InvalidRequest.Code
 			return resp, nil
-		}
-		for i := range req.Topics {
-			for j := range req.Topics[i].Partitions {
-				if len(req.Topics[i].Partitions[j].AcknowledgementBatches) == 0 {
-					resp.ErrorCode = kerr.InvalidRequest.Code
-					return resp, nil
-				}
-			}
 		}
 	}
 
