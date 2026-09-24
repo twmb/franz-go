@@ -447,8 +447,8 @@ func (sgs *shareGroups) sweepAllExpiredAcquisitions() {
 // archived instead of released.
 func (g *shareGroup) sweepExpiredAcquisitions() {
 	now := time.Now()
-	lockDuration := time.Duration(g.c.shareRecordLockDurationMs()) * time.Millisecond
-	maxDelivery := g.c.shareMaxDeliveryAttempts()
+	lockDuration := time.Duration(g.c.shareRecordLockDurationMs(g.name)) * time.Millisecond
+	maxDelivery := g.c.shareMaxDeliveryAttempts(g.name)
 	released := false
 	g.partitions.each(func(_ string, _ int32, sp *sharePartition) {
 		for offset, sr := range sp.records {
@@ -475,7 +475,7 @@ func (g *shareGroup) sweepExpiredAcquisitions() {
 func (g *shareGroup) handleHeartbeat(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.ShareGroupHeartbeatRequest)
 	resp := req.ResponseKind().(*kmsg.ShareGroupHeartbeatResponse)
-	resp.HeartbeatIntervalMillis = g.c.shareHeartbeatIntervalMs()
+	resp.HeartbeatIntervalMillis = g.c.shareHeartbeatIntervalMs(g.name)
 
 	switch req.MemberEpoch {
 	case 0:
@@ -868,7 +868,7 @@ func (g *shareGroup) resetSessionTimeout(m *shareMember) {
 	if m.t != nil {
 		m.t.Stop()
 	}
-	timeout := time.Duration(g.c.shareSessionTimeoutMs()) * time.Millisecond
+	timeout := time.Duration(g.c.shareSessionTimeoutMs(g.name)) * time.Millisecond
 	m.last = time.Now()
 	m.t = g.c.afterFuncOnLoop(timeout, func() {
 		if g.c.shareGroups.gs[g.name] != g {
@@ -930,7 +930,7 @@ func (g *shareGroup) kill() {
 // close (ShareAcknowledge/ShareFetch epoch=-1) to avoid releasing records
 // from other sessions on different brokers.
 func (g *shareGroup) releaseRecordsForSession(memberID string, session *shareSession) bool {
-	maxDelivery := g.c.shareMaxDeliveryAttempts()
+	maxDelivery := g.c.shareMaxDeliveryAttempts(g.name)
 	released := false
 	for topicID, parts := range session.partitions {
 		topicName := g.c.data.id2t[topicID]
@@ -1092,7 +1092,8 @@ func (g *shareGroup) processShareAcks(
 	onPartition func(tid uuid, p int32, ec int16),
 	onNotLeader func(tid uuid, p int32, pd *partData),
 ) (toFire []*partData) {
-	maxDelivery := g.c.shareMaxDeliveryAttempts()
+	maxDelivery := g.c.shareMaxDeliveryAttempts(g.name)
+	renewEnabled := g.c.shareRenewEnabled(g.name)
 	for _, at := range topics {
 		topicName := g.c.data.id2t[at.topicID]
 		if topicName == "" {
@@ -1136,6 +1137,10 @@ func (g *shareGroup) processShareAcks(
 				} else {
 					onPartition(at.topicID, ap.partition, kerr.NotLeaderForPartition.Code)
 				}
+				continue
+			}
+			if !renewEnabled && slices.ContainsFunc(ap.batches, func(b ackBatch) bool { return slices.Contains(b.ackTypes, shareAckRenew) }) {
+				onPartition(at.topicID, ap.partition, kerr.InvalidRecordState.Code)
 				continue
 			}
 			shp := g.getSharePartition(topicName, ap.partition, pd)

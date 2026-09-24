@@ -866,8 +866,7 @@ var validGroupConfigs = map[string]bool{
 	"share.session.timeout.ms":         true,
 	"share.heartbeat.interval.ms":      true,
 	"share.partition.max.record.locks": true,
-	"share.max.share.sessions":         true,
-	"share.max.size":                   true,
+	"share.renew.acknowledge.enable":   true,
 }
 
 // validClientMetricsConfigs is the set of keys a KIP-714 client metrics
@@ -1150,28 +1149,45 @@ func (c *Cluster) offsetsRetentionCheckIntervalMs() int64 {
 	return int64(c.brokerConfigInt("offsets.retention.check.interval.ms", 600000))
 }
 
-func (c *Cluster) shareHeartbeatIntervalMs() int32 {
-	return c.brokerConfigInt("group.share.heartbeat.interval.ms", defHeartbeatInterval)
+// shareGroupConfigInt returns the group's config key, falling back to the
+// broker's "group."+key and then def, as Kafka does for share groups.
+func (c *Cluster) shareGroupConfigInt(group, key string, def int) int32 {
+	if v := c.groupConfig(group, key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return int32(n)
+		}
+	}
+	return c.brokerConfigInt("group."+key, def)
 }
 
-func (c *Cluster) shareSessionTimeoutMs() int32 {
-	return c.brokerConfigInt("group.share.session.timeout.ms", 45000)
+func (c *Cluster) shareHeartbeatIntervalMs(group string) int32 {
+	return c.shareGroupConfigInt(group, "share.heartbeat.interval.ms", defHeartbeatInterval)
+}
+
+func (c *Cluster) shareSessionTimeoutMs(group string) int32 {
+	return c.shareGroupConfigInt(group, "share.session.timeout.ms", 45000)
 }
 
 func (c *Cluster) shareLockSweepIntervalMs() int32 {
 	return c.brokerConfigInt("share.record.lock.sweep.interval.ms", 5000)
 }
 
-func (c *Cluster) shareRecordLockDurationMs() int32 {
-	return c.brokerConfigInt("group.share.record.lock.duration.ms", 30000)
+func (c *Cluster) shareRecordLockDurationMs(group string) int32 {
+	return c.shareGroupConfigInt(group, "share.record.lock.duration.ms", 30000)
 }
 
-func (c *Cluster) shareMaxDeliveryAttempts() int32 {
-	return c.brokerConfigInt("group.share.delivery.count.limit", 5)
+func (c *Cluster) shareMaxDeliveryAttempts(group string) int32 {
+	return c.shareGroupConfigInt(group, "share.delivery.count.limit", 5)
 }
 
-func (c *Cluster) shareMaxRecordLocks() int32 {
-	return c.brokerConfigInt("group.share.partition.max.record.locks", 2000)
+func (c *Cluster) shareMaxRecordLocks(group string) int32 {
+	return c.shareGroupConfigInt(group, "share.partition.max.record.locks", 2000)
+}
+
+// shareRenewEnabled returns whether the group accepts renew acks
+// (share.renew.acknowledge.enable, default true).
+func (c *Cluster) shareRenewEnabled(group string) bool {
+	return c.groupConfig(group, "share.renew.acknowledge.enable") != "false"
 }
 
 func (c *Cluster) shareMaxSessions() int32 {

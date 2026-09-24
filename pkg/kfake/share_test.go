@@ -2348,3 +2348,22 @@ func TestShareGroupLeaderMoveInFlightAcks(t *testing.T) {
 		t.Errorf("callback never fired for partition 0 after in-flight ack+move; acks may have stranded on the migrated cursor. Results: %+v", cbResults)
 	}
 }
+
+// TestShareGroupPerGroupConfig verifies that a share config set on the group
+// overrides the broker's group.share.* default.
+func TestShareGroupPerGroupConfig(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-group-cfg"
+	const group = "share-group-cfg-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	produceShareN(t, c, topic, group, 1)
+	c.SetGroupConfigs(group, map[string]string{"share.record.lock.duration.ms": "12345"})
+
+	cl := newPlainClient(t, c)
+	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+	resp, _ := rawShareFetch(t, cl, group, memberID, topicID, 0)
+	if resp.AcquisitionLockTimeoutMillis != 12345 {
+		t.Errorf("AcquisitionLockTimeoutMillis = %d, want 12345", resp.AcquisitionLockTimeoutMillis)
+	}
+}

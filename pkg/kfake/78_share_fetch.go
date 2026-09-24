@@ -47,7 +47,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		memberID = *req.MemberID
 	}
 
-	resp.AcquisitionLockTimeoutMillis = c.shareRecordLockDurationMs()
+	resp.AcquisitionLockTimeoutMillis = c.shareRecordLockDurationMs(groupID)
 	fc := creq.faults
 
 	// ACL: require GROUP READ.
@@ -93,7 +93,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 
 	sg := c.shareGroups.get(groupID)
 	id2t := c.data.id2t
-	maxDelivery := c.shareMaxDeliveryAttempts()
+	maxDelivery := c.shareMaxDeliveryAttempts(groupID)
 
 	maxAckType := shareAckReject
 	if req.Version >= 2 && req.IsRenewAck {
@@ -265,7 +265,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		acquiredParts  []acquiredPart
 		includeBrokers bool
 		toFire         []*partData
-		maxRecordLocks = c.shareMaxRecordLocks()
+		maxRecordLocks = c.shareMaxRecordLocks(groupID)
 	)
 
 	var ackTs []ackTopic

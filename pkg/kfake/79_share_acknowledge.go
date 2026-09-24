@@ -29,8 +29,6 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		return nil, err
 	}
 
-	resp.AcquisitionLockTimeoutMillis = c.shareRecordLockDurationMs()
-
 	var groupID, memberID string
 	if req.GroupID != nil {
 		groupID = *req.GroupID
@@ -38,6 +36,7 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 	if req.MemberID != nil {
 		memberID = *req.MemberID
 	}
+	resp.AcquisitionLockTimeoutMillis = c.shareRecordLockDurationMs(groupID)
 
 	// ACL: require GROUP READ.
 	if e := c.deny(creq, groupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: groupID}); e != nil {
