@@ -836,6 +836,24 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 
 	case errors.Is(err, ErrClientClosed):
 		s.cl.failBufferedRecords(ErrClientClosed)
+
+	case errors.Is(err, errBrokerTooOld), errors.Is(err, errUnknownRequestKey):
+		// The broker cannot take any produce request we can build
+		// (e.g., we are pinned below Kafka 4.0's minimum produce
+		// version), and retrying cannot change that. We never wrote
+		// the request, so we fail what we can fail safely; anything
+		// that may have been produced by an earlier attempt goes
+		// through the normal retry path.
+		s.cl.cfg.logger.Log(LogLevelError, "broker cannot handle any produce request we can issue, failing records", "broker", logID(s.nodeID), "err", err)
+		req.batches.eachOwnerLocked(func(batch seqRecBatch) {
+			if !batch.isOwnersFirstBatch() || batch.owner.sink != s {
+				return
+			}
+			if !batch.unsureIfProduced || s.cl.cfg.disableIdempotency || s.cl.cfg.allowIdempotentProduceCancellation {
+				batch.owner.failAllRecords(err)
+			}
+		})
+		s.handleRetryBatches(req.batches, nil, req.backoffSeq, true, false, "produce request failed with a version error")
 	}
 }
 

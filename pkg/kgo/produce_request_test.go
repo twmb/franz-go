@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 func TestClient_Produce(t *testing.T) {
@@ -194,6 +195,41 @@ func TestIssue769(t *testing.T) {
 		if !errors.Is(rerr, context.Canceled) {
 			t.Errorf("got %v != context.Canceled", rerr)
 		}
+	}
+}
+
+func TestIssueProduceBrokerTooOldFailsRecords(t *testing.T) {
+	t.Parallel()
+
+	topic, cleanup := tmpTopicPartitions(t, 1)
+	defer cleanup()
+
+	// A client pinned to 0.10 issues at most produce v2. Kafka 4.0 (and
+	// kfake) no longer take v2; against a broker that still does, there is
+	// nothing to test.
+	vcl, _ := newTestClient()
+	defer vcl.Close()
+	versions, err := kmsg.NewPtrApiVersionsRequest().RequestWith(context.Background(), vcl)
+	if err != nil {
+		t.Fatalf("unable to request api versions: %v", err)
+	}
+	for _, k := range versions.ApiKeys {
+		if k.ApiKey == 0 && k.MinVersion <= 2 {
+			t.Skip("broker still takes produce v2")
+		}
+	}
+
+	cl, _ := newTestClient(
+		DefaultProduceTopic(topic),
+		MaxVersions(kversion.V0_10_2()),
+	)
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = cl.ProduceSync(ctx, StringRecord("v")).FirstErr()
+	if !errors.Is(err, errBrokerTooOld) {
+		t.Fatalf("got %v, want errBrokerTooOld", err)
 	}
 }
 
