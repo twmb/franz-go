@@ -1305,6 +1305,17 @@ func BatchRecords(b kmsg.RecordBatch) ([]kmsg.Record, error) {
 // COMPACTION  //
 /////////////////
 
+// isDeleteTopic returns whether retention applies to the topic: like Kafka,
+// only when cleanup.policy includes delete, the default.
+func (d *data) isDeleteTopic(t string) bool {
+	if tcfg, ok := d.tcfgs[t]; ok {
+		if v, ok := tcfg["cleanup.policy"]; ok && v != nil {
+			return strings.Contains(*v, "delete")
+		}
+	}
+	return true
+}
+
 func (d *data) isCompactTopic(t string) bool {
 	if tcfg, ok := d.tcfgs[t]; ok {
 		if v, ok := tcfg["cleanup.policy"]; ok && v != nil {
@@ -1516,7 +1527,7 @@ func (pd *partData) trimAbortedTxns() {
 // applyRetention advances logStartOffset past batches that are expired by
 // retention.ms or that exceed retention.bytes, then trims them.
 func (c *Cluster) applyRetention(pd *partData, topic string) {
-	if !pd.hasBatches() {
+	if !pd.hasBatches() || !c.data.isDeleteTopic(topic) {
 		return
 	}
 

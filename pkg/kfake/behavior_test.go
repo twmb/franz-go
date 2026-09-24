@@ -4471,6 +4471,7 @@ func TestRetention(t *testing.T) {
 		rest         []string // produced after the sleep, so retention leaves them
 		apply        bool     // false leaves the pass to the cleaner ticker
 		wantStart    int64    // minimum logStartOffset
+		keepAll      bool     // retention must leave logStartOffset at 0
 		wantSurvivor string   // "" skips the read back
 	}{
 		{
@@ -4499,6 +4500,16 @@ func TestRetention(t *testing.T) {
 			first:     []string{"old", "keep"},
 			sleep:     200 * time.Millisecond,
 			wantStart: 1,
+		},
+		{
+			// Like Kafka, retention deletes only when cleanup.policy
+			// includes delete.
+			name:     "compact-only",
+			topicCfg: map[string]string{"cleanup.policy": "compact", "retention.ms": "1"},
+			first:    []string{"a", "b"},
+			sleep:    50 * time.Millisecond,
+			apply:    true,
+			keepAll:  true,
 		},
 		{
 			// No topic config: the ticker still runs, for the broker's
@@ -4534,8 +4545,12 @@ func TestRetention(t *testing.T) {
 				c.ApplyRetention()
 			}
 
-			if pi := c.PartitionInfo(topic, 0); pi.LogStartOffset < tc.wantStart {
+			pi := c.PartitionInfo(topic, 0)
+			if pi.LogStartOffset < tc.wantStart {
 				t.Fatalf("expected logStartOffset >= %d after retention, got %d", tc.wantStart, pi.LogStartOffset)
+			}
+			if tc.keepAll && pi.LogStartOffset != 0 {
+				t.Fatalf("expected retention to keep everything, logStartOffset is %d", pi.LogStartOffset)
 			}
 			if tc.wantSurvivor == "" {
 				return
