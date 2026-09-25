@@ -755,8 +755,12 @@ func (s *source) closeShareSession(ctx context.Context) {
 	// response handler doesn't flag partitions we never sent (e.g.
 	// a drain whose entries all have status=0 produces an empty
 	// range list from buildAckRanges and is skipped below).
+	// Gaps can survive the stale filter with no live user ack; send
+	// them too, else closing the session releases those offsets
+	// rather than archiving them (see shareAck).
+	liveGaps := slices.ContainsFunc(drains, func(d cursorAckDrain) bool { return len(d.gaps) > 0 })
 	var drainIdx map[tidp]int
-	if nLive > 0 {
+	if nLive > 0 || liveGaps {
 		drainIdx = make(map[tidp]int, len(drains))
 		topicIdx := make(map[[16]byte]int)
 		for i, d := range drains {
@@ -1553,7 +1557,12 @@ func (s *source) loopShareFetch() {
 		ackTimer  *time.Timer
 		ackTimerC <-chan time.Time // nil until acks are pending
 
-		resetAckTimer = func() {
+		// The timer bounds how long an ack waits, so a running timer is
+		// not pushed back by later acks.
+		startAckTimer = func() {
+			if ackTimerC != nil {
+				return
+			}
 			if ackTimer == nil {
 				ackTimer = time.NewTimer(time.Second)
 			} else {
@@ -1588,23 +1597,15 @@ func (s *source) loopShareFetch() {
 			case <-sc.fm.ctx.Done():
 				return
 			case <-s.share.ackCh:
-				resetAckTimer()
+				startAckTimer()
 			case <-s.share.ackFlushCh:
 				flushAcks()
 			case <-ackTimerC:
+				// Like the classic loop, we only exit through
+				// the request path below: exiting here could
+				// leave a fetch buffered with no loop to fetch
+				// after it is taken.
 				flushAcks()
-				// No more acks: We try finishing by doing a
-				// quick check of cursors, the check that is
-				// done when actually building a ShareFetch.
-				//
-				// If we DO loop back to the start (maybe two
-				// acks bumped workState to continueWorking),
-				// we will go through the full request flow and
-				// exit after creating an empty request, same
-				// as the normal consumer.
-				if again := s.fetchState.maybeFinish(false); !again {
-					return
-				}
 			case <-s.sem:
 				break unbuffered
 			}
@@ -1616,7 +1617,7 @@ func (s *source) loopShareFetch() {
 			case <-sc.fm.ctx.Done():
 				return
 			case <-s.share.ackCh:
-				resetAckTimer()
+				startAckTimer()
 			case <-s.share.ackFlushCh:
 				flushAcks()
 			case <-ackTimerC:
@@ -1633,7 +1634,7 @@ func (s *source) loopShareFetch() {
 				sc.fm.cancelFetchCh <- canFetch
 				return
 			case <-s.share.ackCh:
-				resetAckTimer()
+				startAckTimer()
 			case <-s.share.ackFlushCh:
 				flushAcks()
 			case <-ackTimerC:
@@ -1643,13 +1644,15 @@ func (s *source) loopShareFetch() {
 					doneFetch <- false
 					return
 				}
-				fetched := s.shareFetch(doneFetch)
+				fetched, acked := s.shareFetch(doneFetch)
 				// If we fetched, any pending acks from this source's
-				// cursors were piggybacked on the request. Stop the
-				// ack timer; if more acks arrive between here and
-				// the next loop iteration, a signal is waiting in
-				// share.ackCh that will restart the timer.
-				if fetched {
+				// cursors were piggybacked on the request; with nothing
+				// to fetch, they were sent on their own. Stop the ack
+				// timer, else with nothing to fetch we loop until it
+				// fires; if more acks arrive between here and the next
+				// loop iteration, a signal is waiting in share.ackCh
+				// that will restart the timer.
+				if fetched || acked {
 					stopAckTimer()
 				}
 				if !s.fetchState.maybeFinish(fetched || ackTimerC != nil) {
@@ -2455,11 +2458,23 @@ func coalesceAppendRange(out []shareAckRange, r shareAckRange) []shareAckRange {
 // FETCH // -- methods on source rather than shareSource b/c most need source fields
 ///////////
 
+// shareFetchAbandoned handles a ShareFetch given up on at its deadline and
+// returns whether the loop should keep going. With the client alive, the
+// fetch's connection was closed, which ended our broker session; nothing
+// else restarts the loop, so we reset and keep going.
+func (s *source) shareFetchAbandoned() bool {
+	if s.cl.ctx.Err() != nil {
+		return false
+	}
+	s.resetShareSession()
+	return true
+}
+
 // shareFetch orchestrates a share fetch: send the request, handle
 // errors and backoff, apply leader moves, dispatch ack callbacks,
 // and buffer the result. Per-partition handling lives in
 // handleShareReqResp.
-func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
+func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 	sc := s.share.sc
 	req, usable, piggybackAcks, sentPiggyback, nAcks, staleResults, nStaleAcks, hasRenew := s.createShareReq(false)
 
@@ -2501,7 +2516,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 
 	if req == nil { // nothing to fetch or forget; fallback to a shareAck
 		s.shareAck(nil)
-		return false
+		return false, true
 	}
 
 	sc.cfg.logger.Log(LogLevelDebug, "sending share fetch",
@@ -2560,7 +2575,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 			for _, pa := range piggybackAcks {
 				pa.requeue(sc)
 			}
-			return false
+			return s.shareFetchAbandoned(), false
 		}
 		fetched = true
 	case <-ctx.Done():
@@ -2568,7 +2583,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 		for _, pa := range piggybackAcks {
 			pa.requeue(sc)
 		}
-		return false
+		return s.shareFetchAbandoned(), false
 	}
 
 	var didBackoff bool
@@ -2602,7 +2617,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 		s.resetShareSession()
 		backoff(err)
 		sc.enqueueAckErrors(piggybackAcks, err, nAcks)
-		return fetched
+		return fetched, false
 	}
 
 	resp := kresp.(*kmsg.ShareFetchResponse)
@@ -2617,7 +2632,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 		// responses already back off; treat top-level errors the same.
 		sc.enqueueAckErrors(piggybackAcks, res.discardErr, nAcks)
 		backoff(res.discardErr)
-		return fetched
+		return fetched, false
 	}
 
 	if len(res.moves) > 0 {
@@ -2638,7 +2653,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched bool) {
 	} else if res.allErrsStripped {
 		backoff("empty share fetch response due to all partitions having retryable errors")
 	}
-	return fetched
+	return fetched, false
 }
 
 // handleShareReqResp decodes partitions, bumps the session epoch,
@@ -3248,6 +3263,17 @@ func (s *source) createShareReq(skipAckDrain bool) (
 			tid := d.cursor.topicID
 			partition := d.cursor.partition
 			sentPiggyback[tidp{tid, partition}] = i
+			// The broker adds every partition in Topics to the
+			// session before removing the forgotten ones. A
+			// partition here only for its acks is forgotten in
+			// the same request, else the broker acquires records
+			// for it that we discard. One already in the session
+			// is in toForget from above.
+			if _, want := wantSet[tidp{tid, partition}]; !want {
+				if _, inSession := s.share.sessionParts[tidp{tid, partition}]; !inSession {
+					toForget = append(toForget, tidp{tid, partition})
+				}
+			}
 			tidx, ok := topicIdx[tid]
 			if !ok {
 				tidx = len(req.Topics)

@@ -440,15 +440,18 @@ func TestShareFetchPiggybackAckForgetNoLeak(t *testing.T) {
 
 	// Observe the client's ShareFetch requests (pass-through, never
 	// answering). p0ForgetCount counts ForgottenTopicsData entries for
-	// partition 0; sawPiggybackAfterAck records the piggyback-only re-add.
+	// partition 0; sawPiggybackAfterAck records the piggyback-only re-add,
+	// and forgotWithAck records that the same request forgot partition 0.
 	var (
 		acked                atomic.Bool
 		p0ForgetCount        atomic.Int32
 		sawPiggybackAfterAck atomic.Bool
+		forgotWithAck        atomic.Bool
 	)
 	c.ControlKey(int16(kmsg.ShareFetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
 		req := kreq.(*kmsg.ShareFetchRequest)
+		var piggyback, forgot bool
 		for i := range req.Topics {
 			rt := &req.Topics[i]
 			if rt.TopicID != ti.TopicID {
@@ -458,6 +461,7 @@ func TestShareFetchPiggybackAckForgetNoLeak(t *testing.T) {
 				rp := &rt.Partitions[j]
 				if rp.Partition == 0 && len(rp.AcknowledgementBatches) > 0 && acked.Load() {
 					sawPiggybackAfterAck.Store(true)
+					piggyback = true
 				}
 			}
 		}
@@ -469,8 +473,12 @@ func TestShareFetchPiggybackAckForgetNoLeak(t *testing.T) {
 			for _, p := range ft.Partitions {
 				if p == 0 {
 					p0ForgetCount.Add(1)
+					forgot = true
 				}
 			}
+		}
+		if piggyback && forgot {
+			forgotWithAck.Store(true)
 		}
 		return nil, nil, false
 	})
@@ -518,6 +526,12 @@ func TestShareFetchPiggybackAckForgetNoLeak(t *testing.T) {
 	waitFor(t, 5*time.Second,
 		"BUG REPRODUCED: a piggyback-only ack re-added partition 0 to the broker share session and the client never forgot it (sessionParts omitted piggyback-only partitions); the broker would redeliver its records forever",
 		func() bool { return p0ForgetCount.Load() > forgetsBeforeAck })
+
+	// The forget must ride the same request as the ack, like Java, or the
+	// broker acquires records for partition 0 that we discard.
+	if !forgotWithAck.Load() {
+		t.Error("the piggyback-only ack for partition 0 did not forget partition 0 in the same request")
+	}
 }
 
 // waitFor polls cond until it returns true or the timeout elapses, failing

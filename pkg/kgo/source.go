@@ -856,6 +856,10 @@ func (s *source) createReq() *fetchRequest {
 }
 
 func (s *source) maybeConsume() {
+	if s.share.sc != nil {
+		s.maybeShareConsume()
+		return
+	}
 	if s.fetchState.maybeBegin() {
 		go s.loopFetch()
 	}
