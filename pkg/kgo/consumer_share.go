@@ -2320,10 +2320,10 @@ func ackTypes(t int8) []int8 {
 // pointer; entries with status 0 (reset or unhandled) are skipped.
 // hasRenew is true if any entry has AckRenew status.
 //
-// Entries and gaps are sorted by offset before coalescing so that
-// contiguous same-type ranges merge regardless of insertion order.
-// The two are built separately (gaps are acked immediately so they
-// rarely coalesce with user entries).
+// Entries and gaps are sorted and merged by offset before coalescing.
+// The broker requires a partition's batches in ascending offset order
+// and rejects the partition with INVALID_REQUEST otherwise; a gap for a
+// transaction marker can sit between two user acks.
 func buildAckRanges(entries []*shareAckState, gaps []shareAckRange) (ranges []shareAckRange, hasRenew bool) {
 	slices.SortFunc(entries, func(a, b *shareAckState) int {
 		return cmp.Compare(a.offset, b.offset)
@@ -2331,26 +2331,38 @@ func buildAckRanges(entries []*shareAckState, gaps []shareAckRange) (ranges []sh
 	slices.SortFunc(gaps, func(a, b shareAckRange) int {
 		return cmp.Compare(a.firstOffset, b.firstOffset)
 	})
-	// Dedupe: a single record can have multiple entries for the same offset
-	// (e.g. Ack(AckRenew) then Ack(AckAccept) both append; the terminal
-	// CAS overwrites the renew but the renew entry remains in the slice).
-	// Both entries read the same final status, so emit only one. Without
-	// this, the request carries two adjacent [X,X,T] batches and the
-	// broker rejects with INVALID_RECORD_STATE.
-	var lastOffset int64 = -1
+	// Each offset goes out once: the broker rejects the whole partition
+	// if a batch starts before the previous one ends. A record can have
+	// several entries (Ack(AckRenew) then Ack(AckAccept) append twice
+	// and both read the final status), and a gap can cover an offset we
+	// also hold an entry or another gap for (the offset was redelivered,
+	// or a requeued gap was acquired again). The first to reach an offset
+	// wins.
+	end := int64(-1)
+	emit := func(r shareAckRange) {
+		if r.lastOffset <= end {
+			return
+		}
+		r.firstOffset = max(r.firstOffset, end+1)
+		ranges = coalesceAppendRange(ranges, r)
+		end = r.lastOffset
+	}
 	for _, e := range entries {
 		t := int8(e.status.Load())
 		if t == 0 {
 			continue // status was reset or not yet decided
 		}
-		if e.offset == lastOffset {
-			continue // duplicate from a renew-then-terminal sequence
+		for len(gaps) > 0 && gaps[0].firstOffset < e.offset {
+			emit(gaps[0])
+			gaps = gaps[1:]
 		}
-		lastOffset = e.offset
+		if e.offset <= end {
+			continue
+		}
 		if t == int8(AckRenew) {
 			hasRenew = true
 		}
-		ranges = coalesceAppendRange(ranges, shareAckRange{
+		emit(shareAckRange{
 			firstOffset: e.offset,
 			lastOffset:  e.offset,
 			source:      e.slab.ackSource,
@@ -2359,7 +2371,7 @@ func buildAckRanges(entries []*shareAckState, gaps []shareAckRange) (ranges []sh
 		})
 	}
 	for _, g := range gaps {
-		ranges = coalesceAppendRange(ranges, g)
+		emit(g)
 	}
 	return
 }

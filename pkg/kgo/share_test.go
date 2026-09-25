@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -1067,4 +1068,47 @@ func setShareGroupConfigs(t *testing.T, cl *Client, group string, kvs ...string)
 func setShareAutoOffsetReset(t *testing.T, cl *Client, group string) {
 	t.Helper()
 	setShareGroupConfigs(t, cl, group, "share.auto.offset.reset", "earliest")
+}
+
+// TestBuildAckRanges verifies that a partition's ack batches are in offset
+// order with each offset once, which the broker requires.
+func TestBuildAckRanges(t *testing.T) {
+	const accept = int8(AckAccept)
+	slab := new(shareAckSlab)
+	entry := func(o int64) *shareAckState {
+		e := &shareAckState{offset: o, slab: slab}
+		e.status.Store(int32(AckAccept))
+		return e
+	}
+	gap := func(first, last int64) shareAckRange {
+		return shareAckRange{firstOffset: first, lastOffset: last}
+	}
+	type r struct {
+		first, last int64
+		typ         int8
+	}
+	for _, tc := range []struct {
+		name    string
+		entries []*shareAckState
+		gaps    []shareAckRange
+		want    []r
+	}{
+		{"markers between records", []*shareAckState{entry(0), entry(1), entry(3)}, []shareAckRange{gap(2, 2), gap(4, 4)},
+			[]r{{0, 1, accept}, {2, 2, 0}, {3, 3, accept}, {4, 4, 0}}},
+		{"gap over an entry", []*shareAckState{entry(5), entry(9)}, []shareAckRange{gap(4, 7)},
+			[]r{{4, 7, 0}, {9, 9, accept}}},
+		{"duplicate gaps", nil, []shareAckRange{gap(4, 7), gap(4, 7)},
+			[]r{{4, 7, 0}}},
+		{"overlapping gaps", []*shareAckState{entry(3)}, []shareAckRange{gap(6, 9), gap(4, 7)},
+			[]r{{3, 3, accept}, {4, 9, 0}}},
+	} {
+		ranges, _ := buildAckRanges(tc.entries, tc.gaps)
+		var got []r
+		for _, rg := range ranges {
+			got = append(got, r{rg.firstOffset, rg.lastOffset, rg.ackType})
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
 }
