@@ -868,6 +868,8 @@ func (c *connTimeouter) timeouts(req kmsg.Request) (r, w time.Duration) {
 		return def + millis(t.maxWait), def
 	case *kmsg.FetchRequest:
 		return def + millis(t.MaxWaitMillis), def
+	case *kmsg.ShareFetchRequest:
+		return def + millis(t.MaxWaitMillis), def
 
 	// Join and sync can take a long time. Sync has no notion of
 	// timeouts, but since the flow of requests should be first

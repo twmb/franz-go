@@ -2621,3 +2621,88 @@ func TestShareGroupConfigValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestShareGroupRenewKeepsSessionConn verifies that renewing held records
+// keeps the connection that holds the share session active: the broker
+// releases a member's records when that connection closes.
+func TestShareGroupRenewKeepsSessionConn(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-renew-conn"
+	const group = "share-renew-conn-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	produceShareN(t, c, topic, group, 2)
+
+	var acks shareAckCollector
+	cl := newShareConsumer(t, c, topic, group,
+		kgo.ConnIdleTimeout(time.Second),
+		kgo.ShareMaxRecords(1),
+		kgo.ShareMaxRecordsStrict(), // strict mode fetches only while polling, so no ShareFetch runs
+		acks.opt(),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var rs []*kgo.Record
+	for len(rs) == 0 && ctx.Err() == nil {
+		rs = cl.PollFetches(ctx).Records()
+	}
+
+	// Renew within ConnIdleTimeout for longer than it, then accept on
+	// the next poll's ShareFetch.
+	for range 6 {
+		time.Sleep(500 * time.Millisecond)
+		rs[0].Ack(kgo.AckRenew)
+		if err := cl.FlushAcks(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rs[0].Ack(kgo.AckAccept)
+	for n := 0; n == 0 && ctx.Err() == nil; {
+		n = len(cl.PollFetches(ctx).Records())
+	}
+	if err := cl.FlushAcks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range acks.snapshot() {
+		if r.Err != nil {
+			t.Errorf("ack %s/%d: %v", r.Topic, r.Partition, r.Err)
+		}
+	}
+}
+
+// TestShareGroupFetchMaxWaitBeyondOverhead verifies that a ShareFetch parked
+// for longer than RequestTimeoutOverhead does not time out its connection,
+// which would end the share session and release the records we hold.
+func TestShareGroupFetchMaxWaitBeyondOverhead(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-maxwait"
+	const group = "share-maxwait-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	produceShareN(t, c, topic, group, 1)
+
+	var acks shareAckCollector
+	cl := newShareConsumer(t, c, topic, group,
+		kgo.FetchMaxWait(3*time.Second),
+		kgo.RequestTimeoutOverhead(time.Second),
+		acks.opt(),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var rs []*kgo.Record
+	for len(rs) == 0 && ctx.Err() == nil {
+		rs = cl.PollFetches(ctx).Records()
+	}
+
+	// The next ShareFetch parks for 3s with nothing to fetch.
+	time.Sleep(2500 * time.Millisecond)
+	rs[0].Ack(kgo.AckAccept)
+	if err := cl.FlushAcks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range acks.snapshot() {
+		if r.Err != nil {
+			t.Errorf("ack %s/%d: %v", r.Topic, r.Partition, r.Err)
+		}
+	}
+}
