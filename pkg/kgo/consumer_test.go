@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"math"
@@ -927,14 +928,10 @@ type testPooling struct {
 	t *testing.T
 
 	givenDecompress []byte
-	givenKRecs      []kmsg.Record
 	givenRecs       []Record
 
 	putDecompress bool
-	putKRecs      bool
 	putRecs       bool
-
-	keptKRecHeaders bool
 }
 
 func (p *testPooling) GetDecompressBytes([]byte, CompressionCodecType) []byte {
@@ -950,35 +947,6 @@ func (p *testPooling) PutDecompressBytes(put []byte) {
 	p.putDecompress = true
 }
 
-func (p *testPooling) GetKRecords(int) []kmsg.Record {
-	r := make([]kmsg.Record, 100) // same
-	p.givenKRecs = r
-	return r
-}
-
-func (p *testPooling) PutKRecords(put []kmsg.Record) {
-	if &put[0] != &p.givenKRecs[0] {
-		p.t.Error("PutKRecords != given!")
-	}
-	p.putKRecs = true
-
-	// A put record keeps its Headers slice so that the decoder refills
-	// that capacity on the next get rather than allocating; the elements
-	// are what must be cleared, since they point into the fetch buffer.
-	for i := range put {
-		hs := put[i].Headers
-		if len(hs) == 0 {
-			continue
-		}
-		p.keptKRecHeaders = true
-		for _, h := range hs {
-			if h.Key != "" || h.Value != nil {
-				p.t.Error("PutKRecords header not cleared!")
-			}
-		}
-	}
-}
-
 func (p *testPooling) GetRecords(int) []Record {
 	r := make([]Record, 100) // same
 	p.givenRecs = r
@@ -992,12 +960,41 @@ func (p *testPooling) PutRecords(put []Record) {
 	p.putRecs = true
 }
 
+func TestIssueFetchLargerThanBrokerMaxReadBytes(t *testing.T) {
+	t.Parallel()
+
+	maxMsg := "10485760"
+	topic, cleanup := tmpTopicPartitions(t, 1, kmsg.CreateTopicsRequestTopicConfig{Name: "max.message.bytes", Value: &maxMsg})
+	defer cleanup()
+
+	p, _ := newTestClient(DefaultProduceTopic(topic), ProducerBatchMaxBytes(8<<20))
+	defer p.Close()
+	v := make([]byte, 5<<20)
+	rand.Read(v) // incompressible, so the batch stays over the read limit
+	if err := p.ProduceSync(context.Background(), &Record{Value: v}).FirstErr(); err != nil {
+		t.Fatalf("unable to produce: %v", err)
+	}
+
+	// The broker returns the first batch even when it exceeds the fetch
+	// limits, and this one exceeds BrokerMaxReadBytes: we can never read
+	// it, and must say so rather than retry silently.
+	c, _ := newTestClient(ConsumeTopics(topic), FetchMaxBytes(1<<20), FetchMaxPartitionBytes(1<<20), BrokerMaxReadBytes(2<<20))
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, fe := range c.PollFetches(ctx).Errors() {
+		if errors.Is(fe.Err, errResponseTooLarge) {
+			return
+		}
+	}
+	t.Fatal("did not get an error for a fetch response larger than BrokerMaxReadBytes")
+}
+
 func TestPooling(t *testing.T) {
 	t.Parallel()
 
 	var _ interface {
 		PoolDecompressBytes
-		PoolKRecords
 		PoolRecords
 	} = new(testPooling)
 
@@ -1040,8 +1037,6 @@ func TestPooling(t *testing.T) {
 		fs := cl.PollFetches(context.Background())
 		consumed += fs.NumRecords()
 		fs.EachRecord(func(r *Record) {
-			// Each record's headers are a window into one per-batch
-			// slab; a short window must not see its neighbor's.
 			if len(r.Headers) != 2 || r.Headers[0].Key != "h1" || r.Headers[1].Key != "h2" {
 				t.Errorf("got headers %v != [h1 h2]", r.Headers)
 			}
@@ -1052,14 +1047,8 @@ func TestPooling(t *testing.T) {
 	if !pool.putDecompress {
 		t.Error("did not put decompress!")
 	}
-	if !pool.putKRecs {
-		t.Error("did not put krecs!")
-	}
 	if !pool.putRecs {
 		t.Error("did not put recs!")
-	}
-	if !pool.keptKRecHeaders {
-		t.Error("krecs were put back without their header slices!")
 	}
 }
 

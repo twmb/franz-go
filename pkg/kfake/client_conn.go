@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"bufio"
 	"encoding/binary"
 	"io"
 	"net"
@@ -15,6 +16,7 @@ type (
 		c      *Cluster
 		b      *broker
 		conn   net.Conn
+		br     *bufio.Reader // buffers reads so a small request's size and body usually arrive in one read
 		respCh chan clientResp
 		done   chan struct{} // closed when read() returns
 		mute   chan bool     // capacity 1: serializes request processing per connection; false = stop reading
@@ -85,39 +87,30 @@ func (cc *clientConn) read() {
 	defer close(cc.done)
 	defer cc.conn.Close()
 
-	type read struct {
-		body []byte
-		err  error
-	}
-	var (
-		who    = cc.conn.RemoteAddr()
-		size   = make([]byte, 4)
-		readCh = make(chan read, 1)
-	)
-	for {
-		go func() {
-			if _, err := io.ReadFull(cc.conn, size); err != nil {
-				readCh <- read{err: err}
-				return
-			}
-			body := make([]byte, binary.BigEndian.Uint32(size))
-			_, err := io.ReadFull(cc.conn, body)
-			readCh <- read{body: body, err: err}
-		}()
-
-		var read read
+	// The cluster dying closes the connection, which is what returns us
+	// from a blocked read (and write from a blocked write).
+	go func() {
 		select {
 		case <-cc.c.die:
-			return
-		case read = <-readCh:
+			cc.conn.Close()
+		case <-cc.done:
 		}
+	}()
 
-		if err := read.err; err != nil {
+	var (
+		who  = cc.conn.RemoteAddr()
+		size = make([]byte, 4)
+	)
+	for {
+		if _, err := io.ReadFull(cc.br, size); err != nil {
+			return
+		}
+		body := make([]byte, binary.BigEndian.Uint32(size))
+		if _, err := io.ReadFull(cc.br, body); err != nil {
 			return
 		}
 
 		var (
-			body     = read.body
 			reader   = kbin.Reader{Src: body}
 			key      = reader.Int16()
 			version  = reader.Int16()
@@ -166,9 +159,8 @@ func (cc *clientConn) write() {
 	defer cc.conn.Close()
 
 	var (
-		who     = cc.conn.RemoteAddr()
-		writeCh = make(chan error, 1)
-		buf     []byte
+		who = cc.conn.RemoteAddr()
+		buf []byte
 	)
 	for {
 		var resp clientResp
@@ -200,17 +192,7 @@ func (cc *clientConn) write() {
 		binary.BigEndian.PutUint32(buf[:4], uint32(len(buf)-4))
 		binary.BigEndian.PutUint32(buf[4:8], uint32(resp.corr))
 
-		go func() {
-			_, err := cc.conn.Write(buf)
-			writeCh <- err
-		}()
-
-		var err error
-		select {
-		case <-cc.c.die:
-			return
-		case err = <-writeCh:
-		}
+		_, err := cc.conn.Write(buf)
 		cc.unmute(err == nil)
 		if err != nil {
 			return

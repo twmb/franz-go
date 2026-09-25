@@ -413,6 +413,9 @@ full:
 			sp.LastStableOffset = syntheticEnd
 			sp.LogStartOffset = 0
 			room := min(int(fp.maxBytes), int(req.MaxBytes)-nbytes)
+			if nbytes > 0 && room < len(syn.batch) {
+				continue // full: only the first batch we return may exceed the limits
+			}
 			sp.RecordBatches = syn.appendBatches(sp.RecordBatches, fp.fetchOffset, pd.epoch, room)
 			nbytes += len(sp.RecordBatches)
 			continue
