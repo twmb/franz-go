@@ -455,8 +455,9 @@ func (g *groupConsumer) leave848(ctx context.Context) {
 	// succeeded but its response was lost (the connection died), the
 	// retry finds the member already gone. Same if the session expired
 	// before we could leave. Either way the member is out of the group,
-	// which is the goal state of leaving, not an error.
-	if errors.Is(err, kerr.UnknownMemberID) {
+	// which is the goal state of leaving, not an error. The same holds
+	// if the group itself is gone.
+	if errors.Is(err, kerr.UnknownMemberID) || errors.Is(err, kerr.GroupIDNotFound) {
 		err = nil
 	}
 	g.leaveErr = err

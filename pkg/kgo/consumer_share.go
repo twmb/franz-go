@@ -676,8 +676,9 @@ func (sc *shareConsumer) leave(ctx context.Context) {
 	// As with the 848 leave: the leave is retried, so a retry can find
 	// the member already gone (prior attempt's response lost, or the
 	// session expired first). The member being out of the group is the
-	// goal state of leaving, not an error.
-	if errors.Is(err, kerr.UnknownMemberID) {
+	// goal state of leaving, not an error. The same holds if the group
+	// itself is gone.
+	if errors.Is(err, kerr.UnknownMemberID) || errors.Is(err, kerr.GroupIDNotFound) {
 		err = nil
 	}
 	sc.leaveErr = err
