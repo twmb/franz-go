@@ -58,10 +58,12 @@ type sourceShare struct {
 	cursors      []*shareCursor
 	cursorsStart int
 	sessionEpoch int32              // 0=new, incremented on success, -1=close
+	sessionGen   uint32             // incremented on every session reset; stamps acks so we drop those from an earlier session
 	sessionParts map[tidp]struct{}  // broker-confirmed session partitions; createShareFetchReq diffs WANT against this to compute add/forget
 	ackCh        chan struct{}      // acks pending, batch on timer
 	ackFlushCh   chan struct{}      // flush acks immediately
 	buffered     shareBufferedFetch // decoded share fetch waiting for poll
+	purgedAcks   []cursorAckDrain   // acks drained from purged cursors, sent with the next request
 }
 
 func (cl *Client) newSource(nodeID int32) *source {
@@ -854,6 +856,10 @@ func (s *source) createReq() *fetchRequest {
 }
 
 func (s *source) maybeConsume() {
+	if s.share.sc != nil {
+		s.maybeShareConsume()
+		return
+	}
 	if s.fetchState.maybeBegin() {
 		go s.loopFetch()
 	}
@@ -3066,6 +3072,7 @@ func (s *source) resetShareSession() {
 	s.share.mu.Lock()
 	prev := s.share.sessionEpoch
 	s.share.sessionEpoch = 0
+	s.share.sessionGen++
 	clear(s.share.sessionParts) // must also be cleared, else we'll have a corrupted session
 	s.share.mu.Unlock()
 	s.cl.cfg.logger.Log(LogLevelDebug, "resetting share session",
@@ -3083,7 +3090,7 @@ func (s *source) resetShareSession() {
 func (s *source) bumpShareSessionEpochIfCurrent(epoch int32) {
 	s.share.mu.Lock()
 	if s.share.sessionEpoch == epoch {
-		s.share.sessionEpoch++
+		s.share.sessionEpoch = max(1, epoch+1) // MaxInt32 wraps to 1, as in Kafka
 	}
 	s.share.mu.Unlock()
 }

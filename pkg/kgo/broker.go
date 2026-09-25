@@ -678,7 +678,12 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 	case reqKey == 0:
 		pcxn = &b.cxnProduce
 		isProduceCxn = true
-	case reqKey == 1 || reqKey == 78: // Fetch or ShareFetch (both long-poll)
+	case reqKey == 1 || reqKey == 78 || reqKey == 79:
+		// Fetch and ShareFetch long-poll. ShareAcknowledge shares the
+		// ShareFetch connection: the broker ties a share session to it
+		// and releases the member's records when it closes, so acks
+		// and renews keep it from going idle. The share source sends
+		// one of the two at a time.
 		pcxn = &b.cxnFetch
 		isFetchCxn = true
 	case reqKey == 11 || reqKey == 14: // join || sync

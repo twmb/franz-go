@@ -2009,6 +2009,12 @@ func ConsumerGroup(group string) GroupOpt {
 // IncrementalAlterConfigs with resource type GROUP. Without this, share
 // groups default to "latest" and only records produced after the group
 // begins consuming are delivered.
+//
+// The broker ties a share session to one connection and releases every
+// record you hold when that connection closes. If you hold records without
+// polling, ack or renew (AckRenew) them within ConnIdleTimeout, otherwise
+// the idle connection can be closed and the records delivered to another
+// member.
 func ShareGroup(group string) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.shareGroup = group }}
 }

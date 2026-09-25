@@ -4807,3 +4807,73 @@ func TestOffsetCommitV10PinAfterPreCommitFn(t *testing.T) {
 		t.Errorf("committed offset for %s: got %+v (ok=%v), want offset 7", extra, o, ok)
 	}
 }
+
+// Transaction markers are acquired but never returned, so the client acks
+// them as gaps. Gaps and user acks for one partition must go out in offset
+// order or the broker rejects the partition with INVALID_REQUEST.
+func TestIssue1474(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		isolation string
+		want      int
+	}{
+		{"read_uncommitted", 4},
+		{"read_committed", 3}, // the aborted record is archived
+	} {
+		t.Run(tc.isolation, func(t *testing.T) {
+			t.Parallel()
+			const topic = "issue-1474"
+			const group = "issue-1474-group"
+
+			c := newCluster(t, SeedTopics(1, topic))
+			c.SetGroupConfigs(group, map[string]string{
+				"share.auto.offset.reset": "earliest",
+				"share.isolation.level":   tc.isolation,
+			})
+
+			// 0 plain, 1 committed, 2 COMMIT marker, 3 aborted, 4 ABORT marker, 5 plain.
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+			produce := func(cl *kgo.Client) {
+				if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			produce(producer)
+			for _, commit := range []bool{true, false} {
+				txn := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.TransactionalID(strconv.FormatBool(commit)))
+				if err := txn.BeginTransaction(); err != nil {
+					t.Fatal(err)
+				}
+				produce(txn)
+				if err := txn.EndTransaction(ctx, kgo.TransactionEndTry(commit)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			produce(producer)
+
+			var acks shareAckCollector
+			cl := newShareConsumer(t, c, topic, group, acks.opt())
+			var n int
+			for n < tc.want && ctx.Err() == nil {
+				fetches := cl.PollFetches(ctx)
+				for _, r := range fetches.Records() {
+					r.Ack(kgo.AckAccept)
+					n++
+				}
+			}
+			if n != tc.want {
+				t.Fatalf("got %d records, want %d", n, tc.want)
+			}
+			if err := cl.FlushAcks(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range acks.snapshot() {
+				if r.Err != nil {
+					t.Errorf("ack %s/%d: %v", r.Topic, r.Partition, r.Err)
+				}
+			}
+		})
+	}
+}
