@@ -191,15 +191,15 @@ type (
 	//     pendingGaps queue); these have no status pointer because
 	//     the user never saw the records
 	//
-	// source and sessionEpoch are used by the staleness filter to
+	// source and sessionGen are used by the staleness filter to
 	// drop acks the broker would reject (session reset or cursor
 	// migration).
 	shareAckRange struct {
-		firstOffset  int64
-		lastOffset   int64
-		source       *source
-		sessionEpoch int32
-		ackType      int8 // uniform type for the entire range
+		firstOffset int64
+		lastOffset  int64
+		source      *source
+		sessionGen  uint32
+		ackType     int8 // uniform type for the entire range
 	}
 
 	// shareAckState is per-record ack state (24 bytes), used as
@@ -234,7 +234,7 @@ type (
 		status        atomic.Int32  // CAS target for ack transitions
 		deliveryCount int32         // broker's delivery count for this record (>= 1)
 		offset        int64         // record's Kafka offset
-		slab          *shareAckSlab // back-ref: gives ackSource, sessionEpoch, cursor
+		slab          *shareAckSlab // back-ref: gives ackSource, sessionGen, cursor
 	}
 
 	// shareAckSlab holds the per-record shareAckState array for one
@@ -244,8 +244,8 @@ type (
 	// pointer arithmetic from records0 gives the slab index for
 	// any *Record in the batch (see shareAckFromCtx).
 	//
-	// ackSource, sessionEpoch are the source identity and session
-	// epoch at decode time; the staleness filter compares these
+	// ackSource, sessionGen are the source identity and session
+	// generation at decode time; the staleness filter compares these
 	// against the source actually sending the ack, dropping acks
 	// the broker would reject on cursor migration or session reset.
 	// cursor routes acks to the right partition. acqLockDeadlineNanos
@@ -257,7 +257,7 @@ type (
 		ackSource            *source
 		cursor               *shareCursor
 		acqLockDeadlineNanos int64
-		sessionEpoch         int32
+		sessionGen           uint32
 	}
 
 	// shareCallbackEntry is pushed onto the callbackRing. The drainer
@@ -714,6 +714,7 @@ func (s *source) closeShareSession(ctx context.Context) {
 	// waiting for the acquisition lock to expire.
 	s.share.mu.Lock()
 	epoch := s.share.sessionEpoch
+	gen := s.share.sessionGen
 	drains := s.drainAllShareAcks(true)
 	s.share.mu.Unlock()
 	var nAcks int64
@@ -728,7 +729,7 @@ func (s *source) closeShareSession(ctx context.Context) {
 	// The broker would reject them per-partition
 	// anyway (their original session is gone), and we notify the
 	// user via the shareAckCallback for consistency.
-	nLive, nStaleAcks, staleResults := filterStaleEntries(s, epoch, drains)
+	nLive, nStaleAcks, staleResults := filterStaleEntries(s, gen, drains)
 	sc.enqueueCallback(staleResults, nStaleAcks)
 	if nStaleAcks > 0 {
 		sc.cfg.logger.Log(LogLevelInfo, "share session close: dropped stale-epoch acks",
@@ -1758,6 +1759,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 	var drains []cursorAckDrain
 	s.share.mu.Lock() // guard concurrent cursor movement
 	epoch := s.share.sessionEpoch
+	gen := s.share.sessionGen
 	if predrained != nil {
 		drains = predrained
 	} else {
@@ -1769,7 +1771,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 		return
 	}
 
-	nAcks, nStaleAcks, staleResults := filterStaleEntries(s, epoch, drains)
+	nAcks, nStaleAcks, staleResults := filterStaleEntries(s, gen, drains)
 
 	sc.enqueueCallback(staleResults, nStaleAcks)
 	// nAcks counts only user ack entries; gap/release ranges are filtered
@@ -1970,7 +1972,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 
 // releaseUndeliverable releases records that were "acquired" but for which the
 // broker gave us no record data (i.e. protocol violation).
-func (s *source) releaseUndeliverable(cursor *shareCursor, acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, epoch int32) {
+func (s *source) releaseUndeliverable(cursor *shareCursor, acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, gen uint32) {
 	if len(acquired) == 0 {
 		return
 	}
@@ -1980,11 +1982,11 @@ func (s *source) releaseUndeliverable(cursor *shareCursor, acquired []kmsg.Share
 			continue // inverted range, skip
 		}
 		releases = append(releases, shareAckRange{
-			firstOffset:  ar.FirstOffset,
-			lastOffset:   ar.LastOffset,
-			source:       s,
-			sessionEpoch: epoch,
-			ackType:      int8(AckRelease),
+			firstOffset: ar.FirstOffset,
+			lastOffset:  ar.LastOffset,
+			source:      s,
+			sessionGen:  gen,
+			ackType:     int8(AckRelease),
 		})
 	}
 	cursor.enqueueGaps(releases)
@@ -2234,25 +2236,24 @@ func (st *shareAckState) tryAck(status AckStatus, strictZero bool) bool {
 // filterStaleEntries mutates drains in-place to drop ack entries
 // (and gap ranges) that the broker cannot honor, reporting them via
 // the user callback as pre-filtered drops. Two categories, both
-// derived from the per-entry slab's ackSource and sessionEpoch:
+// derived from the per-entry slab's ackSource and sessionGen:
 //
-//  1. slab.ackSource == s && slab.sessionEpoch > epoch: same source,
-//     entry stamped with an epoch higher than the current session
-//     epoch: a session reset happened and the broker lost record state.
+//  1. slab.ackSource == s && slab.sessionGen != gen: same source,
+//     entry stamped in an earlier session: a session reset happened
+//     and the broker lost record state.
 //
 //  2. slab.ackSource != s: the cursor migrated from the original
 //     source to s after the acks were queued. Acquisition state is
 //     not transferred to the new broker.
 //
-// Edge cases: enough epoch bumps happen, or the leader transfer from
-// A to B then back; it's fine, we'll just have a wasted round trip
-// and the broker rejects the acks.
+// Edge case: the leader moves from A to B and back to A; it's fine,
+// we'll just have a wasted round trip and the broker rejects the acks.
 //
 // Returns:
 //   - nAcks: count of deliverable (non-stale, non-migrated) records
 //   - nStaleAcks: count of pre-filtered records (stale + migrated)
 //   - staleResults: per-cursor pre-filter results for the user callback
-func filterStaleEntries(s *source, epoch int32, drains []cursorAckDrain) (nUserAcks, nStaleUserAcks int64, staleResults ShareAckResults) {
+func filterStaleEntries(s *source, gen uint32, drains []cursorAckDrain) (nUserAcks, nStaleUserAcks int64, staleResults ShareAckResults) {
 	for i := range drains {
 		d := &drains[i]
 
@@ -2261,7 +2262,7 @@ func filterStaleEntries(s *source, epoch int32, drains []cursorAckDrain) (nUserA
 		var dropErr error
 		for _, e := range d.entries {
 			switch {
-			case e.slab.ackSource == s && e.slab.sessionEpoch > epoch:
+			case e.slab.ackSource == s && e.slab.sessionGen != gen:
 				nStaleUserAcks++
 				if dropErr == nil {
 					dropErr = kerr.InvalidShareSessionEpoch
@@ -2282,7 +2283,7 @@ func filterStaleEntries(s *source, epoch int32, drains []cursorAckDrain) (nUserA
 		filteredGaps := d.gaps[:0]
 		for _, g := range d.gaps {
 			switch {
-			case g.source == s && g.sessionEpoch > epoch:
+			case g.source == s && g.sessionGen != gen:
 				// stale gap; drop silently (not counted in pendingAcks)
 			case g.source != s:
 				// migrated gap; drop silently
@@ -2350,11 +2351,11 @@ func buildAckRanges(entries []*shareAckState, gaps []shareAckRange) (ranges []sh
 			hasRenew = true
 		}
 		ranges = coalesceAppendRange(ranges, shareAckRange{
-			firstOffset:  e.offset,
-			lastOffset:   e.offset,
-			source:       e.slab.ackSource,
-			sessionEpoch: e.slab.sessionEpoch,
-			ackType:      t,
+			firstOffset: e.offset,
+			lastOffset:  e.offset,
+			source:      e.slab.ackSource,
+			sessionGen:  e.slab.sessionGen,
+			ackType:     t,
 		})
 	}
 	for _, g := range gaps {
@@ -2369,7 +2370,7 @@ func coalesceAppendRange(out []shareAckRange, r shareAckRange) []shareAckRange {
 	if n := len(out); n > 0 {
 		last := &out[n-1]
 		if last.ackType == r.ackType && last.source == r.source &&
-			last.sessionEpoch == r.sessionEpoch && last.lastOffset+1 == r.firstOffset {
+			last.sessionGen == r.sessionGen && last.lastOffset+1 == r.firstOffset {
 			last.lastOffset = r.lastOffset
 			return out
 		}
@@ -2591,7 +2592,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 	s.share.mu.Lock()
 	sessionStale := s.share.sessionEpoch != epoch
 	if !sessionStale {
-		s.share.sessionEpoch++
+		s.share.sessionEpoch = max(1, s.share.sessionEpoch+1) // MaxInt32 wraps to 1, as in Kafka
 		// Mirror the broker's session bookkeeping exactly: the broker
 		// adds every partition we list in the request topics to its
 		// share session, whether the partition carries a fetch or only
@@ -2611,6 +2612,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 		}
 	}
 	newEpoch := s.share.sessionEpoch
+	gen := s.share.sessionGen
 	s.share.mu.Unlock()
 	if sessionStale {
 		sc.cfg.logger.Log(LogLevelInfo, "share fetch session was reset mid-flight, extracting ack results only",
@@ -2769,7 +2771,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 					"partition", rp.Partition,
 					"acquired_ranges", len(rp.AcquiredRecords),
 				)
-				s.releaseUndeliverable(cursor, rp.AcquiredRecords, newEpoch)
+				s.releaseUndeliverable(cursor, rp.AcquiredRecords, gen)
 				continue
 			}
 
@@ -2779,7 +2781,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 			// The records are acquired for us on the broker,
 			// not auto-released.
 
-			fp, gapAcks := s.processSharePartition(topicName, cursor, newEpoch, rp, acqLockDeadlineNanos)
+			fp, gapAcks := s.processSharePartition(topicName, cursor, gen, rp, acqLockDeadlineNanos)
 			if len(gapAcks) > 0 {
 				cursor.enqueueGaps(gapAcks)
 			}
@@ -2856,7 +2858,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 // The broker tracks acks in blocks - regardless of whether there are
 // actually underlying records. We ack the gaps immediately to free
 // up the acquired count on the broker.
-func (s *source) processSharePartition(topicName string, cursor *shareCursor, sessionEpoch int32, rp *kmsg.ShareFetchResponseTopicPartition, acqLockDeadlineNanos int64) (FetchPartition, []shareAckRange) {
+func (s *source) processSharePartition(topicName string, cursor *shareCursor, sessionGen uint32, rp *kmsg.ShareFetchResponseTopicPartition, acqLockDeadlineNanos int64) (FetchPartition, []shareAckRange) {
 	sc := s.share.sc
 	// Build a synthetic FetchResponseTopicPartition because ShareFetch
 	// uses the same wire format for records.
@@ -2880,7 +2882,7 @@ func (s *source) processSharePartition(topicName string, cursor *shareCursor, se
 				ackSource:            s,
 				cursor:               cursor,
 				acqLockDeadlineNanos: acqLockDeadlineNanos,
-				sessionEpoch:         sessionEpoch,
+				sessionGen:           sessionGen,
 			}
 		},
 	}, &fakePart, sc.cfg.decompressor, nil)
@@ -2986,11 +2988,11 @@ func (s *source) processSharePartition(topicName string, cursor *shareCursor, se
 			r := fp.Records[ri]
 			if r.Offset > nextExpected {
 				gapAcks = append(gapAcks, shareAckRange{
-					firstOffset:  nextExpected,
-					lastOffset:   r.Offset - 1,
-					source:       s,
-					sessionEpoch: sessionEpoch,
-					ackType:      gapType,
+					firstOffset: nextExpected,
+					lastOffset:  r.Offset - 1,
+					source:      s,
+					sessionGen:  sessionGen,
+					ackType:     gapType,
 				})
 			}
 			slab := r.Context.Value(shareAckKey).(*shareAckSlab)
@@ -3011,11 +3013,11 @@ func (s *source) processSharePartition(topicName string, cursor *shareCursor, se
 		}
 		if nextExpected <= ar.LastOffset {
 			gapAcks = append(gapAcks, shareAckRange{
-				firstOffset:  nextExpected,
-				lastOffset:   ar.LastOffset,
-				source:       s,
-				sessionEpoch: sessionEpoch,
-				ackType:      gapType,
+				firstOffset: nextExpected,
+				lastOffset:  ar.LastOffset,
+				source:      s,
+				sessionGen:  sessionGen,
+				ackType:     gapType,
 			})
 		}
 	}
@@ -3079,6 +3081,7 @@ func (s *source) createShareReq(skipAckDrain bool) (
 	// (sessionParts is empty at epoch 0).
 	var toForget []tidp
 	epoch := s.share.sessionEpoch
+	gen := s.share.sessionGen
 	if epoch > 0 {
 		for sp := range s.share.sessionParts {
 			if _, want := wantSet[sp]; !want {
@@ -3096,7 +3099,7 @@ func (s *source) createShareReq(skipAckDrain bool) (
 	// ones) to piggyback on the ShareFetch request.
 	if !skipAckDrain {
 		piggybackAcks = s.drainAllShareAcks(false)
-		nAcks, nStaleAcks, staleResults = filterStaleEntries(s, epoch, piggybackAcks)
+		nAcks, nStaleAcks, staleResults = filterStaleEntries(s, gen, piggybackAcks)
 		// Compute hasRenew once here so callers don't have to re-walk
 		// every entry's status atomic in a separate hasRenewAck pass.
 	scanRenew:
