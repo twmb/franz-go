@@ -1112,3 +1112,18 @@ func TestBuildAckRanges(t *testing.T) {
 		}
 	}
 }
+
+// TestDrainPurgedAcksLiveCursor verifies that acks parked by a purge go out
+// under the live cursor when the partition is consumed again, so the
+// response's records are not given to the closed cursor.
+func TestDrainPurgedAcksLiveCursor(t *testing.T) {
+	old := &shareCursor{topicID: [16]byte{1}}
+	live := &shareCursor{topicID: [16]byte{1}}
+	var s source
+	s.share.cursors = []*shareCursor{live}
+	s.share.purgedAcks = []cursorAckDrain{{cursor: old, entries: []*shareAckState{{offset: 1}}}}
+	drains := s.drainAllShareAcks(false)
+	if len(drains) != 1 || drains[0].cursor != live {
+		t.Fatalf("got %d drains, want 1 under the live cursor", len(drains))
+	}
+}

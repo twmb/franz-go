@@ -63,6 +63,7 @@ type sourceShare struct {
 	ackCh        chan struct{}      // acks pending, batch on timer
 	ackFlushCh   chan struct{}      // flush acks immediately
 	buffered     shareBufferedFetch // decoded share fetch waiting for poll
+	purgedAcks   []cursorAckDrain   // acks drained from purged cursors, sent with the next request
 }
 
 func (cl *Client) newSource(nodeID int32) *source {

@@ -931,6 +931,7 @@ func (sc *shareConsumer) purgeTopics(topics []string) {
 		"topics", topics,
 	)
 	tps := sc.tps.load()
+	var toSend map[*source][]cursorAckDrain
 	for _, topic := range topics {
 		tp, ok := tps[topic]
 		if !ok {
@@ -940,12 +941,43 @@ func (sc *shareConsumer) purgeTopics(topics []string) {
 		for i := range td.partitions {
 			cursor := td.partitions[i].shareCursor
 			cursor.assigned.Store(false)
-			cursor.source.Load().removeShareCursor(cursor)
-			entries, _ := cursor.drainAcks(true)
-			if n := int64(len(entries)); n > 0 {
-				sc.enqueueCallback(ShareAckResults{{cursor.topic, cursor.partition, errShareConsumerLeft}}, n)
+			src := cursor.source.Load()
+			src.removeShareCursor(cursor)
+			entries, gaps := cursor.drainAcks(true)
+			if len(entries) > 0 || len(gaps) > 0 {
+				if toSend == nil {
+					toSend = make(map[*source][]cursorAckDrain)
+				}
+				toSend[src] = append(toSend[src], cursorAckDrain{cursor: cursor, entries: entries, gaps: gaps})
 			}
 		}
+	}
+	// Acks made before the purge are still sent, as Java does: failing
+	// them would redeliver records the user already processed. The
+	// source loop sends them with its next request. Leaving sets dying
+	// under sc.mu before closing any session, so checking it under sc.mu
+	// means either the close drains these or we fail them here.
+	var left ShareAckResults
+	var nLeft int64
+	sc.mu.Lock()
+	for src, drains := range toSend {
+		if sc.dying {
+			for _, d := range drains {
+				if n := int64(len(d.entries)); n > 0 {
+					left = append(left, ShareAckResult{d.cursor.topic, d.cursor.partition, errShareConsumerLeft})
+					nLeft += n
+				}
+			}
+			continue
+		}
+		src.share.mu.Lock()
+		src.share.purgedAcks = append(src.share.purgedAcks, drains...)
+		src.share.mu.Unlock()
+		src.signalShareAcks()
+	}
+	sc.mu.Unlock()
+	if nLeft > 0 {
+		sc.enqueueCallback(left, nLeft)
 	}
 	for _, topic := range topics {
 		delete(sc.reSeen, topic)
@@ -1109,6 +1141,16 @@ func (sc *shareConsumer) heartbeat() (time.Duration, error) {
 	}
 	tps := sc.tps.load()
 	subscribedTopics := slices.Sorted(maps.Keys(tps))
+	if len(subscribedTopics) == 0 {
+		// Every topic was purged. The broker reads a null list as
+		// unchanged and rejects an empty list when joining, so we
+		// send an empty list to drop our subscription, or wait to
+		// join until topics are added back.
+		if req.MemberEpoch == 0 {
+			return sc.cfg.heartbeatInterval, nil
+		}
+		subscribedTopics = []string{}
+	}
 	if sc.lastSentSubscribedTopics == nil || !slices.Equal(subscribedTopics, sc.lastSentSubscribedTopics) {
 		req.SubscribedTopicNames = subscribedTopics
 	}
@@ -2131,6 +2173,25 @@ func (s *source) drainAllShareAcks(close bool) []cursorAckDrain {
 			drains = append(drains, cursorAckDrain{cursor: c, entries: entries, gaps: gaps})
 		}
 	}
+	// A purged partition can be consumed again before its acks are
+	// sent. Its acks then join the new cursor's drain, or go out under
+	// the new cursor, so the partition is listed once in the request and
+	// the response's records go to the live cursor, not the closed one.
+	for _, p := range s.share.purgedAcks {
+		same := func(c *shareCursor) bool {
+			return c.topicID == p.cursor.topicID && c.partition == p.cursor.partition
+		}
+		if i := slices.IndexFunc(drains, func(d cursorAckDrain) bool { return same(d.cursor) }); i >= 0 {
+			drains[i].entries = append(drains[i].entries, p.entries...)
+			drains[i].gaps = append(drains[i].gaps, p.gaps...)
+			continue
+		}
+		if i := slices.IndexFunc(s.share.cursors, same); i >= 0 {
+			p.cursor = s.share.cursors[i]
+		}
+		drains = append(drains, p)
+	}
+	s.share.purgedAcks = nil
 	return drains
 }
 

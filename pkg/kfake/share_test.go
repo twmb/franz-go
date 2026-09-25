@@ -2706,3 +2706,78 @@ func TestShareGroupFetchMaxWaitBeyondOverhead(t *testing.T) {
 		}
 	}
 }
+
+// TestShareGroupPurgeAllTopicsUnsubscribes verifies that purging every
+// consumed topic sends an empty subscription. A null list means unchanged
+// to the broker, which would keep the member assigned.
+func TestShareGroupPurgeAllTopicsUnsubscribes(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-purge-all"
+	const group = "share-purge-all-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), BrokerConfigs(map[string]string{
+		"group.share.heartbeat.interval.ms": "1000", // the subscription change goes out on the next heartbeat
+	}))
+	produceShareN(t, c, topic, group, 1)
+
+	var purged, unsubscribed atomic.Bool
+	c.ControlKey(int16(kmsg.ShareGroupHeartbeat), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.ShareGroupHeartbeatRequest)
+		if purged.Load() && req.SubscribedTopicNames != nil && len(req.SubscribedTopicNames) == 0 {
+			unsubscribed.Store(true)
+		}
+		return nil, nil, false
+	})
+
+	cl := newShareConsumer(t, c, topic, group)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for n := 0; n < 1 && ctx.Err() == nil; {
+		n += len(cl.PollFetches(ctx).Records())
+	}
+
+	purged.Store(true)
+	cl.PurgeTopicsFromConsuming(topic)
+	waitFor(t, 10*time.Second, "no heartbeat with an empty subscription after purging every topic", unsubscribed.Load)
+}
+
+// TestShareGroupPurgeSendsPendingAcks verifies that acks made before a topic
+// is purged are still sent rather than failed.
+func TestShareGroupPurgeSendsPendingAcks(t *testing.T) {
+	t.Parallel()
+
+	const topic = "share-purge-acks"
+	const group = "share-purge-acks-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	produceShareN(t, c, topic, group, 2)
+
+	var acks shareAckCollector
+	cl := newShareConsumer(t, c, topic, group,
+		kgo.ShareMaxRecords(1),
+		kgo.ShareMaxRecordsStrict(), // strict mode fetches only while polling, so no ShareFetch carries the ack
+		acks.opt(),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var rs []*kgo.Record
+	for len(rs) == 0 && ctx.Err() == nil {
+		rs = cl.PollFetches(ctx).Records()
+	}
+
+	rs[0].Ack(kgo.AckAccept)
+	cl.PurgeTopicsFromConsuming(topic)
+	if err := cl.FlushAcks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var sawAck bool
+	for _, r := range acks.snapshot() {
+		sawAck = true
+		if r.Err != nil {
+			t.Errorf("ack %s/%d: %v", r.Topic, r.Partition, r.Err)
+		}
+	}
+	if !sawAck {
+		t.Error("no ack result")
+	}
+}
