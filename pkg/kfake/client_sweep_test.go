@@ -163,11 +163,7 @@ func TestAuditCloseSendsTerminatingTelemetryPush(t *testing.T) {
 
 	cl.Close()
 
-	termCtx, termCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer termCancel()
-	if err := termPushes.Wait(termCtx, 1); err != nil {
-		t.Fatal("no terminating telemetry push was delivered during Close")
-	}
+	waitHits(t, termPushes, 1, "no terminating telemetry push was delivered during Close")
 	if n := termPushes.Hits(); n != 1 {
 		t.Errorf("got %d terminating pushes, want exactly 1", n)
 	}

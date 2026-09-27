@@ -153,11 +153,7 @@ func TestAudit848StaleUnresolvedJoin(t *testing.T) {
 			return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch > 0
 		},
 	})
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer waitCancel()
-	if err := joinAttempts.Wait(waitCtx, 1); err != nil {
-		t.Fatal("member was never fenced into rejoining")
-	}
+	waitHits(t, joinAttempts, 1, "member was never fenced into rejoining")
 
 	// The rejoin must succeed and t1 must keep consuming. Pre-fix,
 	// consumeN fatals on the injected ErrGroupSession(INVALID_REQUEST).
@@ -180,11 +176,7 @@ func TestAudit848StaleUnresolvedJoin(t *testing.T) {
 		},
 	})
 	cl.PurgeTopicsFromConsuming(t1)
-	releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer releaseCancel()
-	if err := released.Wait(releaseCtx, 1); err != nil {
-		t.Fatal("member never released t1 while the rest of its assignment was unresolved")
-	}
+	waitHits(t, released, 1, "member never released t1 while the rest of its assignment was unresolved")
 }
 
 // B2: with the coordinator answering every heartbeat NOT_COORDINATOR, the

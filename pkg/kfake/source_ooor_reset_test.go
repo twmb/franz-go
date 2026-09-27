@@ -243,11 +243,7 @@ func TestOutOfRangeNothingConsumed(t *testing.T) {
 			// The reset lists the log before it resumes. Producing
 			// after that list lands past the end it saw, so the at
 			// end row has a record to read.
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			defer cancel()
-			if err := listed.Wait(ctx, 1); err != nil {
-				t.Fatal("the reset never listed offsets")
-			}
+			waitHits(t, listed, 1, "the reset never listed offsets")
 			produceN(t, c, topic, 1)
 			if got := consumeN(t, cl, 1, 8*time.Second); got[0].Offset != test.want {
 				t.Fatalf("resumed at offset %d, want %d", got[0].Offset, test.want)

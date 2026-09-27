@@ -1,7 +1,6 @@
 package kfake
 
 import (
-	"context"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -87,11 +86,7 @@ func TestAudit848PurgeReconcilesViaHeartbeat(t *testing.T) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := release.Wait(ctx, 1); err != nil {
-		t.Fatal("purged topic never released")
-	}
+	waitHits(t, release, 1, "purged topic never released")
 	if !commitFirst.Load() {
 		t.Fatal("purged topic released before its offsets were committed")
 	}
