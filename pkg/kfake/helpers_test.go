@@ -354,6 +354,17 @@ func waitCh[T any](t *testing.T, ch <-chan T, why string) {
 	}
 }
 
+// waitHits waits until h has answered n requests, fataling with why if that
+// takes too long.
+func waitHits(t *testing.T, h *FaultHandle, n int, why string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := h.Wait(ctx, n); err != nil {
+		t.Fatal(why)
+	}
+}
+
 // drainCh discards everything buffered in ch.
 func drainCh[T any](ch <-chan T) {
 	for {

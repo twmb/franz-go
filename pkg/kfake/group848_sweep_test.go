@@ -153,16 +153,30 @@ func TestAudit848StaleUnresolvedJoin(t *testing.T) {
 			return kreq.(*kmsg.ConsumerGroupHeartbeatRequest).MemberEpoch > 0
 		},
 	})
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer waitCancel()
-	if err := joinAttempts.Wait(waitCtx, 1); err != nil {
-		t.Fatal("member was never fenced into rejoining")
-	}
+	waitHits(t, joinAttempts, 1, "member was never fenced into rejoining")
 
 	// The rejoin must succeed and t1 must keep consuming. Pre-fix,
 	// consumeN fatals on the injected ErrGroupSession(INVALID_REQUEST).
 	produceNStrings(t, producer, t1, 3)
 	consumeN(t, cl, 3, 10*time.Second)
+
+	// Purging t1 leaves an assignment of only the unresolved t2. The
+	// member must still revoke t1 and stop reporting it as owned, rather
+	// than hold it until t2 resolves, which here is never.
+	t1ID := c.TopicInfo(t1).TopicID
+	released := c.Fault(Fault{
+		Keys:    []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
+		Observe: true,
+		Count:   -1,
+		When: func(kreq kmsg.Request) bool {
+			req := kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
+			return req.MemberEpoch > 0 && req.Topics != nil && !slices.ContainsFunc(req.Topics, func(t kmsg.ConsumerGroupHeartbeatRequestTopic) bool {
+				return t.TopicID == t1ID
+			})
+		},
+	})
+	cl.PurgeTopicsFromConsuming(t1)
+	waitHits(t, released, 1, "member never released t1 while the rest of its assignment was unresolved")
 }
 
 // B2: with the coordinator answering every heartbeat NOT_COORDINATOR, the

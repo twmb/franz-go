@@ -74,11 +74,7 @@ func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 	ofle := failNextOFLE(c)
 	fenceNextFetch(c, topic)
 
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer waitCancel()
-	if err := ofle.Wait(waitCtx, 1); err != nil {
-		t.Fatalf("waiting for the epoch validation load to be issued: %v", err)
-	}
+	waitHits(t, ofle, 1, "the epoch validation load was never issued")
 
 	// The validation load for offset 10 is now pending (its retriable
 	// failure scheduled a reload). Seek to offset 1: the seek must win.
@@ -122,11 +118,7 @@ func TestAuditStopSessionPromptWhilePendingReload(t *testing.T) {
 
 	ofle := failNextOFLE(c)
 	fenceNextFetch(c, topic)
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer waitCancel()
-	if err := ofle.Wait(waitCtx, 1); err != nil {
-		t.Fatalf("waiting for the epoch validation load to be issued: %v", err)
-	}
+	waitHits(t, ofle, 1, "the epoch validation load was never issued")
 
 	// The epoch validation is now reload-looping. Stopping the session
 	// must park the pending load, not spin until MetadataMinAge.
@@ -201,11 +193,7 @@ func TestAuditPendingReloadSurvivesPartitionRevoke(t *testing.T) {
 
 	// Wait for the kept partition to enter its retryable reload loop. Firing
 	// the revoke now lands while the reload is in flight or in its backoff.
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer waitCancel()
-	if err := failKept.Wait(waitCtx, 1); err != nil {
-		t.Fatalf("kept partition never entered the offset reload loop: %v", err)
-	}
+	waitHits(t, failKept, 1, "kept partition never entered the offset reload loop")
 
 	// Stop the session by revoking the OTHER partition. kept is retained, so
 	// its in-flight reload must be carried into the new session.
@@ -300,11 +288,7 @@ func TestAuditTxnAbortRewindNotClobberedByPendingLoad(t *testing.T) {
 
 	ofle := failNextOFLE(c)
 	fenceNextFetch(c, topic)
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer waitCancel()
-	if err := ofle.Wait(waitCtx, 1); err != nil {
-		t.Fatalf("waiting for the epoch validation load to be issued: %v", err)
-	}
+	waitHits(t, ofle, 1, "the epoch validation load was never issued")
 
 	if _, err := s.End(ctx, kgo.TryAbort); err != nil {
 		t.Fatalf("abort failed: %v", err)
