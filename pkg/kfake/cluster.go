@@ -51,6 +51,12 @@ type (
 		faults    []*fault
 		faultCond *sync.Cond // broadcast on every fault hit, see FaultHandle.Wait
 
+		// inWhen is true while the run loop is inside a Fault.When. The
+		// loop is paused there, so admin runs its function inline under
+		// whenMu rather than waiting on a loop that cannot serve it.
+		whenMu sync.Mutex
+		inWhen bool
+
 		data               data
 		pids               pids
 		groups             groups
@@ -1300,6 +1306,14 @@ func (bs *bsleep) waitQueue() {
 // that handles client requests.
 
 func (c *Cluster) admin(fn func()) {
+	c.whenMu.Lock()
+	if c.inWhen {
+		defer c.whenMu.Unlock()
+		fn()
+		return
+	}
+	c.whenMu.Unlock()
+
 	ofn := fn
 	wait := make(chan struct{})
 	fn = func() { ofn(); close(wait) }

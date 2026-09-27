@@ -30,7 +30,7 @@ func (c *Cluster) handleAlterClientQuotas(creq *clientReq) (kmsg.Response, error
 		return nil, err
 	}
 
-	clusterErr := c.denyCluster(creq, kmsg.ACLOperationAlterConfigs)
+	clusterErr := c.denyCluster(creq, kmsg.ACLOperationAlterConfigs, faultKey{})
 	if clusterErr != nil && creq.skipsWork(clusterErr) { // a timed-out alter still applies
 		for _, entry := range req.Entries {
 			re := kmsg.NewAlterClientQuotasResponseEntry()

@@ -233,6 +233,13 @@ func (c *Cluster) notifyTopicChange() {
 	}
 }
 
+// isCoordinator reports whether this request reached key's coordinator.
+// Faults on a coordinator request fire only there; any other broker answers
+// NOT_COORDINATOR.
+func (c *Cluster) isCoordinator(creq *clientReq, key string) bool {
+	return c.coordinator(key) == creq.cc.b
+}
+
 func (c *Cluster) validateGroup(creq *clientReq, group string) *kerr.Error {
 	switch key := kmsg.Key(creq.kreq.Key()); key {
 	case kmsg.OffsetCommit, kmsg.OffsetFetch, kmsg.DescribeGroups, kmsg.DeleteGroups, kmsg.ConsumerGroupDescribe:
@@ -402,7 +409,7 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 	for _, rg := range req.Groups {
 		sg := doneg(rg)
 		// ACL check: DESCRIBE on Group
-		if e := gs.c.deny(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg}); e != nil {
+		if e := gs.c.deny(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg, misrouted: !gs.c.isCoordinator(creq, rg)}); e != nil {
 			sg.ErrorCode = e.Code
 			continue
 		}
@@ -470,7 +477,7 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 			}
 		}
 		// ACL check: DELETE on Group
-		if e := gs.c.deny(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: rg}); e != nil {
+		if e := gs.c.deny(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: rg, misrouted: !gs.c.isCoordinator(creq, rg)}); e != nil {
 			sg.ErrorCode = e.Code
 			if creq.skipsWork(e) { // a timed-out delete still deletes
 				continue
@@ -536,6 +543,23 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 		defer func() {
 			g0 := resp.Groups[0]
 			resp.ErrorCode = g0.ErrorCode
+			// v0-1 has no top-level ErrorCode on the wire, so a
+			// group error goes on every requested partition.
+			if req.Version <= 1 && g0.ErrorCode != 0 && len(g0.Topics) == 0 {
+				for _, t := range req.Topics {
+					st := kmsg.NewOffsetFetchResponseTopic()
+					st.Topic = t.Topic
+					for _, p := range t.Partitions {
+						sp := kmsg.NewOffsetFetchResponseTopicPartition()
+						sp.Partition = p
+						sp.Offset = -1
+						sp.ErrorCode = g0.ErrorCode
+						st.Partitions = append(st.Partitions, sp)
+					}
+					resp.Topics = append(resp.Topics, st)
+				}
+				return
+			}
 			for _, t := range g0.Topics {
 				st := kmsg.NewOffsetFetchResponseTopic()
 				st.Topic = t.Topic
@@ -563,7 +587,7 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 	for _, rg := range req.Groups {
 		sg := doneg(rg.Group)
 		// ACL check: DESCRIBE on Group
-		if e := gs.c.deny(creq, rg.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg.Group}); e != nil {
+		if e := gs.c.deny(creq, rg.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg.Group, misrouted: !gs.c.isCoordinator(creq, rg.Group)}); e != nil {
 			sg.ErrorCode = e.Code
 			continue
 		}
@@ -682,7 +706,7 @@ func (g *group) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 	resp := req.ResponseKind().(*kmsg.OffsetDeleteResponse)
 
 	// ACL check: DELETE on Group
-	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: req.Group}); e != nil {
+	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: req.Group, misrouted: !g.c.isCoordinator(creq, req.Group)}); e != nil {
 		resp.ErrorCode = e.Code
 		return resp
 	}
@@ -1729,6 +1753,21 @@ func (gs *groups) handleConsumerGroupHeartbeat(creq *clientReq) kmsg.Response {
 		return resp
 	}
 
+	// We validate before creating the group, so a heartbeat we reject
+	// does not leave an empty group behind.
+	if kerr := gs.c.validateGroup(creq, req.Group); kerr != nil {
+		resp := req.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
+		resp.HeartbeatIntervalMillis = gs.c.consumerHeartbeatIntervalMs()
+		resp.ErrorCode = kerr.Code
+		return resp
+	}
+	if e := gs.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
+		resp := req.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
+		resp.HeartbeatIntervalMillis = gs.c.consumerHeartbeatIntervalMs()
+		resp.ErrorCode = e.Code
+		return resp
+	}
+
 	g, _ := gs.newOrExisting(req.Group)
 	return g.handleConsumerHeartbeat(creq)
 }
@@ -1747,7 +1786,7 @@ func (gs *groups) handleConsumerGroupDescribe(creq *clientReq) *kmsg.ConsumerGro
 
 	for _, rg := range req.Groups {
 		sg := doneg(rg)
-		if e := gs.c.deny(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg}); e != nil {
+		if e := gs.c.deny(creq, rg, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg, misrouted: !gs.c.isCoordinator(creq, rg)}); e != nil {
 			sg.ErrorCode = e.Code
 			continue
 		}
@@ -1824,15 +1863,6 @@ func (g *group) handleConsumerHeartbeat(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
 	resp := req.ResponseKind().(*kmsg.ConsumerGroupHeartbeatResponse)
 	resp.HeartbeatIntervalMillis = g.c.consumerHeartbeatIntervalMs()
-
-	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
-		resp.ErrorCode = kerr.Code
-		return resp
-	}
-	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
-		resp.ErrorCode = e.Code
-		return resp
-	}
 
 	// Groups start as "classic" (the default in newGroup). The first
 	// ConsumerGroupHeartbeat upgrades the group to "consumer",

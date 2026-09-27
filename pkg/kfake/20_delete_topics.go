@@ -105,9 +105,9 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 			id = rt.TopicID
 		}
 		// ACL check: DESCRIBE first (to identify topic), then DELETE
-		e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic})
+		e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic, topicID: id})
 		if e == nil {
-			e = c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDelete, faultKey{topic: topic})
+			e = c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDelete, faultKey{topic: topic, topicID: id})
 		}
 		if e != nil {
 			donet(&topic, id, e.Code)

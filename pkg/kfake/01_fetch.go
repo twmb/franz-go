@@ -208,7 +208,6 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		nbytes        int
 		returnEarly   bool
 		needp         tps[int]
-		fc            = creq.faults
 		syn           = c.cfg.synthetic
 	)
 	if syn != nil {
@@ -221,8 +220,8 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		// on data hold the request for MaxWait.
 	out:
 		for _, fp := range toFetch {
-			if e := fc.check(faultKey{topic: fp.topic, topicID: fp.topicID}.part(fp.partition)); e != nil {
-				returnEarly = true // the fault's error
+			if e := c.deny(creq, fp.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, c.fetchFaultKey(creq, fp.topic, fp.topicID, fp.partition)); e != nil {
+				returnEarly = true // TopicAuthorizationFailed or the fault's error
 				break out
 			}
 			if fp.staleID {
@@ -362,7 +361,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	nbytes = 0
 full:
 	for _, fp := range toFetch {
-		if e := c.deny(creq, fp.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{topic: fp.topic, topicID: fp.topicID}.part(fp.partition)); e != nil {
+		if e := c.deny(creq, fp.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, c.fetchFaultKey(creq, fp.topic, fp.topicID, fp.partition)); e != nil {
 			donep(fp.topic, fp.topicID, fp.partition, e.Code)
 			continue
 		}
@@ -798,4 +797,13 @@ func (s *fetchSession) updateAndFilterResponse(resp *kmsg.FetchResponse, filter 
 		}
 	}
 	resp.Topics = resp.Topics[:n]
+}
+
+// fetchFaultKey is the fault key for a fetched partition. A fetch is served
+// by the leader or a follower; anywhere else we answer NOT_LEADER, so the
+// partition is misrouted.
+func (c *Cluster) fetchFaultKey(creq *clientReq, topic string, topicID uuid, partition int32) faultKey {
+	pd, ok := c.data.tps.getp(topic, partition)
+	misrouted := ok && pd.leader != creq.cc.b && !slices.Contains(pd.followers, creq.cc.b.node)
+	return faultKey{topic: topic, topicID: topicID, misrouted: misrouted}.part(partition)
 }

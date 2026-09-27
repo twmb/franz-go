@@ -60,7 +60,7 @@ outer:
 		rr := &req.Resources[i]
 		switch rr.ResourceType {
 		case kmsg.ConfigResourceTypeBroker:
-			if e := c.denyCluster(creq, kmsg.ACLOperationAlterConfigs); e != nil {
+			if e := c.denyCluster(creq, kmsg.ACLOperationAlterConfigs, brokerConfigFaultKey(b, rr.ResourceName)); e != nil {
 				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				answered[resource{rr.ResourceName, rr.ResourceType}] = true
 				if creq.skipsWork(e) { // a timed-out alter still applies
@@ -95,7 +95,7 @@ outer:
 			c.persistBrokerConfigsState()
 
 		case kmsg.ConfigResourceTypeTopic:
-			if e := c.deny(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationAlterConfigs, faultKey{resource: rr.ResourceName}); e != nil {
+			if e := c.deny(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationAlterConfigs, faultKey{topic: rr.ResourceName, resource: rr.ResourceName}); e != nil {
 				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				answered[resource{rr.ResourceName, rr.ResourceType}] = true
 				if creq.skipsWork(e) { // a timed-out alter still applies

@@ -28,7 +28,11 @@ func (c *Cluster) handleAlterUserSCRAMCredentials(creq *clientReq) (kmsg.Respons
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationAlter); e != nil && creq.skipsWork(e) { // a timed-out change still changes the credentials
+	// Faults fire only on the controller; elsewhere we answer
+	// NOT_CONTROLLER below. A timed-out change still changes the
+	// credentials, and every user is answered with the fault.
+	clusterFault := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{misrouted: b != c.controller})
+	if e := clusterFault; e != nil && creq.skipsWork(e) {
 		for _, d := range req.Deletions {
 			sr := kmsg.NewAlterUserSCRAMCredentialsResponseResult()
 			sr.User = d.Name
@@ -62,26 +66,10 @@ func (c *Cluster) handleAlterUserSCRAMCredentials(creq *clientReq) (kmsg.Respons
 	}
 
 	users := make(map[string]int16)
-	faulted := func(u string) bool {
-		e := creq.faults.check(faultKey{resource: u})
-		if e == nil {
-			return false
-		}
-		doneu(u, e.Code)
-		answered[u] = true
-		if creq.skipsWork(e) { // a timed-out change still changes the credential
-			users[u] = e.Code
-			return true
-		}
-		return false
-	}
 
 	// Validate everything up front, keeping track of all (and duplicate)
 	// users. If we are not controller, we fail with our users map.
 	for _, d := range req.Deletions {
-		if faulted(d.Name) {
-			continue
-		}
 		if d.Name == "" {
 			users[d.Name] = kerr.UnacceptableCredential.Code
 			continue
@@ -93,9 +81,6 @@ func (c *Cluster) handleAlterUserSCRAMCredentials(creq *clientReq) (kmsg.Respons
 		users[d.Name] = 0
 	}
 	for _, u := range req.Upsertions {
-		if faulted(u.Name) {
-			continue
-		}
 		if u.Name == "" || u.Iterations < 4096 || u.Iterations > 16384 { // Kafka min/max
 			users[u.Name] = kerr.UnacceptableCredential.Code
 			continue
@@ -116,6 +101,23 @@ func (c *Cluster) handleAlterUserSCRAMCredentials(creq *clientReq) (kmsg.Respons
 			doneu(u, kerr.NotController.Code)
 		}
 		return resp, nil
+	}
+
+	// A timed-out change still changes the credential, and its user is
+	// answered with the fault.
+	fault := func(u string, e *kerr.Error) {
+		doneu(u, e.Code)
+		answered[u] = true
+		if creq.skipsWork(e) {
+			users[u] = e.Code
+		}
+	}
+	for u := range users {
+		if clusterFault != nil {
+			fault(u, clusterFault)
+		} else if e := creq.faults.check(faultKey{resource: u}); e != nil {
+			fault(u, e)
+		}
 	}
 
 	// Add anything that failed validation.

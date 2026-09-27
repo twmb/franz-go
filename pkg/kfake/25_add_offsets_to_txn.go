@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -24,18 +25,21 @@ func (c *Cluster) handleAddOffsetsToTxn(creq *clientReq) (kmsg.Response, error) 
 		return nil, err
 	}
 
-	// ACL check: WRITE on TxnID
-	if e := c.deny(creq, req.TransactionalID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite, faultKey{txnID: req.TransactionalID}); e != nil {
+	errResp := func(e *kerr.Error) kmsg.Response {
 		resp := req.ResponseKind().(*kmsg.AddOffsetsToTxnResponse)
 		resp.ErrorCode = e.Code
-		return resp, nil
+		return resp
 	}
 
-	// ACL check: READ on Group
-	if e := c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
-		resp := req.ResponseKind().(*kmsg.AddOffsetsToTxnResponse)
-		resp.ErrorCode = e.Code
-		return resp, nil
+	// ACL checks: WRITE on TxnID, READ on Group. Faults fire only on the
+	// transaction coordinator; elsewhere doAddOffsets answers
+	// NOT_COORDINATOR.
+	misrouted := !c.isCoordinator(creq, req.TransactionalID)
+	if e := c.deny(creq, req.TransactionalID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite, faultKey{txnID: req.TransactionalID, misrouted: misrouted}); e != nil {
+		return errResp(e), nil
+	}
+	if e := c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{txnID: req.TransactionalID, group: req.Group, misrouted: misrouted}); e != nil {
+		return errResp(e), nil
 	}
 
 	return c.pids.doAddOffsets(creq), nil

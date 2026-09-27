@@ -25,14 +25,9 @@ func (c *Cluster) handleCreateACLs(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	clusterAllowed := c.allowedClusterACL(creq, kmsg.ACLOperationAlter)
-
 	for _, cr := range req.Creations {
 		result := kmsg.CreateACLsResponseResult{}
-		fe := creq.faults.check(faultKey{resource: cr.ResourceName})
-		if !clusterAllowed {
-			fe = kerr.ClusterAuthorizationFailed
-		}
+		fe := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{resource: cr.ResourceName})
 		if fe != nil {
 			result.ErrorCode = fe.Code
 			result.ErrorMessage = kmsg.StringPtr(fe.Message)

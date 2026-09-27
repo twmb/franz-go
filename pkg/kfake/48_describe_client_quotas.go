@@ -27,7 +27,7 @@ func (c *Cluster) handleDescribeClientQuotas(creq *clientReq) (kmsg.Response, er
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationDescribeConfigs); e != nil {
+	if e := c.denyCluster(creq, kmsg.ACLOperationDescribeConfigs, faultKey{}); e != nil {
 		resp.ErrorCode = e.Code
 		return resp, nil
 	}

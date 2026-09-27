@@ -97,7 +97,7 @@ outer:
 		rr := &req.Resources[i]
 		switch rr.ResourceType {
 		case kmsg.ConfigResourceTypeBroker:
-			if e := c.denyCluster(creq, kmsg.ACLOperationDescribeConfigs); e != nil {
+			if e := c.denyCluster(creq, kmsg.ACLOperationDescribeConfigs, brokerConfigFaultKey(b, rr.ResourceName)); e != nil {
 				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				continue outer
 			}
@@ -110,16 +110,12 @@ outer:
 					continue outer
 				}
 			}
-			if e := creq.faults.check(faultKey{resource: rr.ResourceName}); e != nil {
-				doner(rr.ResourceName, rr.ResourceType, e.Code)
-				continue
-			}
 			r := doner(rr.ResourceName, rr.ResourceType, 0)
 			c.brokerConfigs(id, rfn(r))
 			filter(rr, r)
 
 		case kmsg.ConfigResourceTypeTopic:
-			if e := c.deny(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribeConfigs, faultKey{resource: rr.ResourceName}); e != nil {
+			if e := c.deny(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribeConfigs, faultKey{topic: rr.ResourceName, resource: rr.ResourceName}); e != nil {
 				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				continue
 			}
@@ -136,16 +132,12 @@ outer:
 			// DescribeConfigs on CLUSTER. A name with no
 			// subscription answers every key at its default, as
 			// Kafka does; only an empty name is an error.
-			if e := c.denyCluster(creq, kmsg.ACLOperationDescribeConfigs); e != nil {
+			if e := c.denyCluster(creq, kmsg.ACLOperationDescribeConfigs, faultKey{resource: rr.ResourceName}); e != nil {
 				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				continue
 			}
 			if rr.ResourceName == "" {
 				doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
-				continue
-			}
-			if e := creq.faults.check(faultKey{resource: rr.ResourceName}); e != nil {
-				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				continue
 			}
 			sub := c.clientMetrics[rr.ResourceName]
@@ -162,6 +154,10 @@ outer:
 			filter(rr, r)
 
 		case kmsg.ConfigResourceTypeGroupConfig:
+			if e := c.deny(creq, rr.ResourceName, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribeConfigs, faultKey{group: rr.ResourceName, resource: rr.ResourceName}); e != nil {
+				doner(rr.ResourceName, rr.ResourceType, e.Code)
+				continue
+			}
 			r := doner(rr.ResourceName, rr.ResourceType, 0)
 			emit := rfn(r)
 			for k := range validGroupConfigs {
@@ -180,4 +176,12 @@ outer:
 	}
 
 	return resp, nil
+}
+
+// brokerConfigFaultKey is the fault key for a BROKER config resource. A name
+// that is another node's ID is answered INVALID_REQUEST here, so the resource
+// is misrouted.
+func brokerConfigFaultKey(b *broker, name string) faultKey {
+	id, err := strconv.Atoi(name)
+	return faultKey{resource: name, misrouted: name != "" && err == nil && int32(id) != b.node}
 }

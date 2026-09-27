@@ -93,16 +93,11 @@ func (c *Cluster) handleListOffsets(creq *clientReq) (kmsg.Response, error) {
 	readCommitted := req.ReplicaID == -1 && req.IsolationLevel == 1
 
 	for _, rt := range req.Topics {
-		tk := faultKey{topic: rt.Topic}
-		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, tk); e != nil {
-			for _, rp := range rt.Partitions {
-				donep(rt.Topic, rp.Partition, e.Code)
-			}
-			continue
-		}
 		ps, ok := c.data.tps.gett(rt.Topic)
 		for _, rp := range rt.Partitions {
-			if e := creq.faults.check(tk.part(rp.Partition)); e != nil {
+			pd, exists := ps[rp.Partition]
+			k := faultKey{topic: rt.Topic, misrouted: exists && pd.leader != b && req.ReplicaID != -2}
+			if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, k.part(rp.Partition)); e != nil {
 				donep(rt.Topic, rp.Partition, e.Code)
 				continue
 			}

@@ -31,9 +31,11 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 	}
 
 	// ACL: require GROUP READ (Kafka uses READ, not ALTER).
-	if e := c.deny(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.GroupID}); e != nil && creq.skipsWork(e) { // a timed-out reset falls through to the per-partition checks
+	if e := c.deny(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.GroupID}); e != nil {
 		resp.ErrorCode = e.Code
-		return resp, nil
+		if creq.skipsWork(e) { // a timed-out reset still resets
+			return resp, nil
+		}
 	}
 
 	// Group type exclusivity: a consumer group under this id means
@@ -61,7 +63,7 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 		rst.TopicID = id
 
 		// ACL: per-topic READ check.
-		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{topic: rt.Topic, topicID: id}); e != nil && creq.skipsWork(e) { // a timed-out reset falls through to the per-partition check
+		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{group: req.GroupID, topic: rt.Topic, topicID: id}); e != nil && creq.skipsWork(e) { // a timed-out reset falls through to the per-partition check
 			for j := range rt.Partitions {
 				rsp := kmsg.NewAlterShareGroupOffsetsResponseTopicPartition()
 				rsp.Partition = rt.Partitions[j].Partition

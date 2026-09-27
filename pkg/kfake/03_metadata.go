@@ -110,7 +110,11 @@ func (c *Cluster) handleMetadata(creq *clientReq) (kmsg.Response, error) {
 		// Topics with no topic and no ID are ignored.
 		if rt.TopicID != noID {
 			if topic, ok = c.data.id2t[rt.TopicID]; !ok {
-				donet("", rt.TopicID, kerr.UnknownTopicID.Code)
+				code := kerr.UnknownTopicID.Code
+				if e := creq.faults.check(faultKey{topicID: rt.TopicID}); e != nil {
+					code = e.Code
+				}
+				donet("", rt.TopicID, code)
 				continue
 			}
 		} else if rt.Topic == nil {

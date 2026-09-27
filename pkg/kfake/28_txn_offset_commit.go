@@ -53,11 +53,6 @@ func (c *Cluster) handleTxnOffsetCommit(creq *clientReq) (kmsg.Response, error) 
 			valid = append(valid, *t)
 		}
 		req.Topics = valid
-		if len(req.Topics) == 0 && len(errTopics) > 0 {
-			resp := req.ResponseKind().(*kmsg.TxnOffsetCommitResponse)
-			resp.Topics = errTopics
-			return resp, nil
-		}
 	}
 
 	errResp := func(errCode int16) kmsg.Response {
@@ -74,24 +69,44 @@ func (c *Cluster) handleTxnOffsetCommit(creq *clientReq) (kmsg.Response, error) 
 			}
 			resp.Topics = append(resp.Topics, st)
 		}
+		resp.Topics = append(resp.Topics, errTopics...)
 		return resp
 	}
 
+	// Faults fire only on the group's coordinator; elsewhere
+	// doTxnOffsetCommit answers NOT_COORDINATOR. A timed-out commit falls
+	// through to the per-partition checks.
+	misrouted := !c.isCoordinator(creq, req.Group)
+
 	// ACL check: WRITE on TxnID
-	if e := c.deny(creq, req.TransactionalID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite, faultKey{txnID: req.TransactionalID}); e != nil && creq.skipsWork(e) { // a timed-out commit falls through to the per-partition checks
+	if e := c.deny(creq, req.TransactionalID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite, faultKey{txnID: req.TransactionalID, misrouted: misrouted}); e != nil && creq.skipsWork(e) {
 		return errResp(e.Code), nil
 	}
 
 	// ACL check: READ on Group
-	if e := c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{txnID: req.TransactionalID, group: req.Group}); e != nil && creq.skipsWork(e) {
+	if e := c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{txnID: req.TransactionalID, group: req.Group, misrouted: misrouted}); e != nil && creq.skipsWork(e) {
 		return errResp(e.Code), nil
 	}
 
 	// ACL check: READ on each Topic
 	for _, rt := range req.Topics {
-		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{txnID: req.TransactionalID, group: req.Group, topic: rt.Topic}); e != nil && creq.skipsWork(e) {
+		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{txnID: req.TransactionalID, group: req.Group, topic: rt.Topic, misrouted: misrouted}); e != nil && creq.skipsWork(e) {
 			return errResp(e.Code), nil
 		}
+	}
+
+	// A topic ID we do not know has no name to authorize, but a fault can
+	// still fail it.
+	for i := range errTopics {
+		st := &errTopics[i]
+		for j := range st.Partitions {
+			if e := creq.faults.check(faultKey{txnID: req.TransactionalID, group: req.Group, topicID: st.TopicID, misrouted: misrouted}.part(st.Partitions[j].Partition)); e != nil {
+				st.Partitions[j].ErrorCode = e.Code
+			}
+		}
+	}
+	if len(req.Topics) == 0 && len(errTopics) > 0 {
+		return errResp(0), nil
 	}
 
 	resp := c.pids.doTxnOffsetCommit(creq).(*kmsg.TxnOffsetCommitResponse)

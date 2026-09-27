@@ -32,7 +32,7 @@ func (c *Cluster) handleListConfigResources(creq *clientReq) (kmsg.Response, err
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationDescribeConfigs); e != nil {
+	if e := c.denyCluster(creq, kmsg.ACLOperationDescribeConfigs, faultKey{}); e != nil {
 		resp.ErrorCode = e.Code
 		return resp, nil
 	}

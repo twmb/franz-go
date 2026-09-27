@@ -274,11 +274,15 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		topicName := id2t[topicID]
 		if topicName == "" {
 			for p := range parts {
-				donep(topicID, p, kerr.UnknownTopicID.Code)
+				code := kerr.UnknownTopicID.Code
+				if e := fc.check(faultKey{group: groupID, topicID: topicID}.part(p)); e != nil {
+					code = e.Code
+				}
+				donep(topicID, p, code)
 			}
 			continue
 		}
-		tk := faultKey{topic: topicName, topicID: topicID}
+		tk := faultKey{group: groupID, topic: topicName, topicID: topicID}
 		if e := c.deny(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, tk); e != nil {
 			for p := range parts {
 				donep(topicID, p, e.Code)
