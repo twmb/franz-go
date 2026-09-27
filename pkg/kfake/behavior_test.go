@@ -1281,6 +1281,27 @@ func TestTxnDescribeTransactions(t *testing.T) {
 		t.Fatalf("add partitions: %v", err)
 	}
 
+	// A broker's batched VerifyOnly check (v4+) sees the partition in the
+	// transaction.
+	verify := kmsg.NewPtrAddPartitionsToTxnRequest()
+	vt := kmsg.NewAddPartitionsToTxnRequestTransaction()
+	vt.TransactionalID, vt.ProducerID, vt.ProducerEpoch, vt.VerifyOnly = txnID, pid, epoch, true
+	vtt := kmsg.NewAddPartitionsToTxnRequestTransactionTopic()
+	vtt.Topic = topic
+	vtt.Partitions = []int32{0}
+	vt.Topics = append(vt.Topics, vtt)
+	verify.Transactions = append(verify.Transactions, vt)
+	vresp, err := verify.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if len(vresp.Transactions) != 1 || len(vresp.Transactions[0].Topics) != 1 || len(vresp.Transactions[0].Topics[0].Partitions) != 1 {
+		t.Fatalf("verify: unexpected response shape %+v", vresp)
+	}
+	if code := vresp.Transactions[0].Topics[0].Partitions[0].ErrorCode; code != 0 {
+		t.Fatalf("verify: %v, want the partition in the transaction", kerr.ErrorForCode(code))
+	}
+
 	// During transaction: state should be Ongoing with the partition.
 	descResp, err = descReq.RequestWith(ctx, cl)
 	if err != nil {

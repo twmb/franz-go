@@ -24,7 +24,10 @@ func TestFaultObserveAndWhen(t *testing.T) {
 		Keys:  []kmsg.Key{kmsg.Produce},
 		Err:   kerr.PolicyViolation,
 		Count: -1,
-		When:  func(kreq kmsg.Request) bool { return kreq.(*kmsg.ProduceRequest).Acks == 1 },
+		// When can call back into the cluster.
+		When: func(kreq kmsg.Request) bool {
+			return kreq.(*kmsg.ProduceRequest).Acks == 1 && c.TopicInfo(topic) != nil
+		},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

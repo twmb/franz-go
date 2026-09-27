@@ -26,18 +26,13 @@ func (c *Cluster) handleDeleteACLs(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	clusterAllowed := c.allowedClusterACL(creq, kmsg.ACLOperationAlter)
-
 	for _, rf := range req.Filters {
 		result := kmsg.DeleteACLsResponseResult{}
 		var name string
 		if rf.ResourceName != nil {
 			name = *rf.ResourceName
 		}
-		fe := creq.faults.check(faultKey{resource: name})
-		if !clusterAllowed {
-			fe = kerr.ClusterAuthorizationFailed
-		}
+		fe := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{resource: name})
 		if fe != nil {
 			result.ErrorCode = fe.Code
 			result.ErrorMessage = kmsg.StringPtr(fe.Message)

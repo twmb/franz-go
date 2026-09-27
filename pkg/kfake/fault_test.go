@@ -11,6 +11,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 // hasErrorCode reports whether any error code anywhere in resp is code.
@@ -192,14 +193,22 @@ func coverageReq(key int16, topic string, id [16]byte, group, txnID string) kmsg
 		req.Topics = append(req.Topics, rt)
 		return req
 	case kmsg.AddPartitionsToTxn:
+		// We fill both shapes: v0-3 and the v4+ batch.
 		req := kmsg.NewPtrAddPartitionsToTxnRequest()
-		req.Version = 3 // v4+ is the broker to broker batched shape
 		req.TransactionalID = txnID
 		req.ProducerEpoch = -1
 		rt := kmsg.NewAddPartitionsToTxnRequestTopic()
 		rt.Topic = topic
 		rt.Partitions = []int32{0}
 		req.Topics = append(req.Topics, rt)
+		txn := kmsg.NewAddPartitionsToTxnRequestTransaction()
+		txn.TransactionalID = txnID
+		txn.ProducerEpoch = -1
+		tt := kmsg.NewAddPartitionsToTxnRequestTransactionTopic()
+		tt.Topic = topic
+		tt.Partitions = []int32{0}
+		txn.Topics = append(txn.Topics, tt)
+		req.Transactions = append(req.Transactions, txn)
 		return req
 	case kmsg.AddOffsetsToTxn:
 		req := kmsg.NewPtrAddOffsetsToTxnRequest()
@@ -505,12 +514,6 @@ func TestFaultCoverage(t *testing.T) {
 			if n := h.Hits(); n == 0 {
 				t.Errorf("fault never fired")
 			}
-			// We answer AddPartitionsToTxn in its v3 shape while
-			// advertising v5, so a raw request negotiated at v5
-			// carries no partitions for us to answer.
-			if kmsg.Key(key) == kmsg.AddPartitionsToTxn {
-				return
-			}
 			if !hasErrorCode(resp, kerr.UnknownServerError.Code) {
 				t.Errorf("response carries no injected error code")
 			}
@@ -743,6 +746,22 @@ func TestFaultTopLevel(t *testing.T) {
 	if n := h.Hits(); n != 1 {
 		t.Errorf("fault fired %d times != 1", n)
 	}
+
+	// Fetch v6 has no top-level ErrorCode on the wire, so the fault does
+	// not fire and the fetch is answered normally.
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(int16(kmsg.Fetch), 6)
+	old := newPlainClient(t, c, kgo.MaxVersions(v))
+	req.Version = 6
+	req.MaxWaitMillis = 1
+	req.Topics[0].TopicID = [16]byte{}
+	oldResp := faultReq(t, old, 0, req).(*kmsg.FetchResponse)
+	if n := h.Hits(); n != 1 {
+		t.Errorf("fault fired on v6 without a top-level ErrorCode")
+	}
+	if len(oldResp.Topics) != 1 {
+		t.Errorf("v6 fetch answered %d topics, want 1", len(oldResp.Topics))
+	}
 }
 
 // A transaction selector reaches every request that names the transaction.
@@ -808,6 +827,20 @@ func TestFaultNode(t *testing.T) {
 	}
 	if n := h.Hits(); n != 1 {
 		t.Errorf("fault fired %d times != 1", n)
+	}
+	h.Remove()
+
+	// Node 0 is no longer the leader. A fault without Nodes leaves it to
+	// answer NOT_LEADER, while one naming node 0 fires there, as at a
+	// leader that has not learned it was replaced.
+	h = c.Fault(Fault{Keys: []kmsg.Key{kmsg.ListOffsets}, Topic: topic, Err: kerr.PolicyViolation, Count: -1})
+	if code := listOffsetsCode(t, cl, 0, topic, 0); code != kerr.NotLeaderForPartition.Code {
+		t.Errorf("non-leader answered %d, want NOT_LEADER", code)
+	}
+	h.Remove()
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.ListOffsets}, Nodes: []int32{0}, Topic: topic, Err: kerr.PolicyViolation, Count: -1})
+	if code := listOffsetsCode(t, cl, 0, topic, 0); code != kerr.PolicyViolation.Code {
+		t.Errorf("a fault naming the old leader answered %d there", code)
 	}
 }
 

@@ -265,116 +265,141 @@ func (pidinf *pidinfo) maybeStart() {
 	pidinf.pids.txs[pidinf] = struct{}{}
 }
 
-func (pids *pids) doAddPartitions(creq *clientReq) kmsg.Response {
-	req := creq.kreq.(*kmsg.AddPartitionsToTxnRequest)
-	resp := req.ResponseKind().(*kmsg.AddPartitionsToTxnResponse)
+// doAddPartitions adds, or with VerifyOnly checks, one transaction's
+// partitions. fromClient is true for v0-3, which need WRITE on the
+// transactional ID and each topic.
+func (pids *pids) doAddPartitions(creq *clientReq, t *kmsg.AddPartitionsToTxnRequestTransaction, fromClient bool) kmsg.AddPartitionsToTxnResponseTransaction {
+	c := pids.c
+	txnID := t.TransactionalID
+	st := kmsg.NewAddPartitionsToTxnResponseTransaction()
+	st.TransactionalID = txnID
 
 	tidx := make(map[string]int)
-	donep := func(t string, p int32, errCode int16) {
-		var st *kmsg.AddPartitionsToTxnResponseTopic
-		if i, ok := tidx[t]; ok {
-			st = &resp.Topics[i]
-		} else {
-			tidx[t] = len(resp.Topics)
-			resp.Topics = append(resp.Topics, kmsg.NewAddPartitionsToTxnResponseTopic())
-			st = &resp.Topics[len(resp.Topics)-1]
-			st.Topic = t
+	donep := func(topic string, p int32, errCode int16) {
+		i, ok := tidx[topic]
+		if !ok {
+			i = len(st.Topics)
+			tidx[topic] = i
+			rt := kmsg.NewAddPartitionsToTxnResponseTransactionTopic()
+			rt.Topic = topic
+			st.Topics = append(st.Topics, rt)
 		}
-		sp := kmsg.NewAddPartitionsToTxnResponseTopicPartition()
+		sp := kmsg.NewAddPartitionsToTxnResponseTransactionTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
-		st.Partitions = append(st.Partitions, sp)
+		st.Topics[i].Partitions = append(st.Topics[i].Partitions, sp)
 	}
 	doneall := func(errCode int16) {
-		for _, rt := range req.Topics {
-			for _, rp := range rt.Partitions {
-				donep(rt.Topic, rp, errCode)
+		for _, rt := range t.Topics {
+			for _, p := range rt.Partitions {
+				donep(rt.Topic, p, errCode)
 			}
 		}
 	}
 
+	// Clients (v0-3) need WRITE on the transactional ID and each topic;
+	// brokers (v4+) passed the cluster check. Faults fire only on the
+	// transaction coordinator; elsewhere we answer NOT_COORDINATOR below.
+	isCoordinator := c.isCoordinator(creq, txnID)
+	deny := func(resource string, rt kmsg.ACLResourceType, k faultKey) *kerr.Error {
+		k.misrouted = !isCoordinator
+		if fromClient {
+			return c.deny(creq, resource, rt, kmsg.ACLOperationWrite, k)
+		}
+		return creq.faults.check(k)
+	}
+	if e := deny(txnID, kmsg.ACLResourceTypeTransactionalId, faultKey{txnID: txnID}); e != nil {
+		doneall(e.Code)
+		return st
+	}
+
+	// An unauthorized, unknown, or faulted partition fails the whole
+	// transaction: those partitions get their error and the rest are
+	// not attempted.
 	type tpKey struct {
 		t string
 		p int32
 	}
 	pdMap := make(map[tpKey]*partData)
-	for _, rt := range req.Topics {
-		ps, ok := pids.c.data.tps.gett(rt.Topic)
-		if !ok {
-			continue
+	failed := make(map[tpKey]int16)
+	for _, rt := range t.Topics {
+		ps, _ := c.data.tps.gett(rt.Topic)
+		for _, p := range rt.Partitions {
+			k := tpKey{rt.Topic, p}
+			pd := ps[p]
+			if e := deny(rt.Topic, kmsg.ACLResourceTypeTopic, faultKey{txnID: txnID, topic: rt.Topic}.part(p)); e != nil {
+				failed[k] = e.Code
+				continue
+			}
+			if pd == nil {
+				failed[k] = kerr.UnknownTopicOrPartition.Code
+				continue
+			}
+			pdMap[k] = pd
 		}
-		for _, rp := range rt.Partitions {
-			if pd := ps[rp]; pd != nil {
-				pdMap[tpKey{rt.Topic, rp}] = pd
+	}
+	if len(failed) > 0 {
+		for _, rt := range t.Topics {
+			for _, p := range rt.Partitions {
+				code, ok := failed[tpKey{rt.Topic, p}]
+				if !ok {
+					code = kerr.OperationNotAttempted.Code
+				}
+				donep(rt.Topic, p, code)
 			}
 		}
+		return st
 	}
 
-	// A faulted partition is not added, and the rest of the transaction
-	// is not attempted, as with a partition that does not exist.
-	faulted := make(map[tpKey]*kerr.Error)
-	var noAttempt bool
-	for _, rt := range req.Topics {
-		for _, rp := range rt.Partitions {
-			if e := creq.faults.check(faultKey{txnID: req.TransactionalID, topic: rt.Topic}.part(rp)); e != nil {
-				faulted[tpKey{rt.Topic, rp}] = e
-				noAttempt = true
-			}
-		}
+	if !isCoordinator {
+		doneall(kerr.NotCoordinator.Code)
+		return st
 	}
-	for _, rt := range req.Topics {
-		for _, rp := range rt.Partitions {
-			if pdMap[tpKey{rt.Topic, rp}] == nil {
-				noAttempt = true
-				break
-			}
-		}
-		if noAttempt {
-			break
-		}
-	}
-	if noAttempt {
-		for _, rt := range req.Topics {
-			for _, rp := range rt.Partitions {
-				switch e := faulted[tpKey{rt.Topic, rp}]; {
-				case e != nil:
-					donep(rt.Topic, rp, e.Code)
-				case pdMap[tpKey{rt.Topic, rp}] == nil:
-					donep(rt.Topic, rp, kerr.UnknownTopicOrPartition.Code)
-				default:
-					donep(rt.Topic, rp, kerr.OperationNotAttempted.Code)
+
+	if t.VerifyOnly {
+		// We commit and abort synchronously, so a transaction is never
+		// mid-prepare and we never answer CONCURRENT_TRANSACTIONS.
+		pidinf := pids.getpid(t.ProducerID)
+		switch {
+		case txnID == "":
+			doneall(kerr.InvalidRequest.Code)
+		case pidinf == nil || pidinf.txid != txnID:
+			doneall(kerr.InvalidProducerIDMapping.Code)
+		case pidinf.epoch != t.ProducerEpoch:
+			doneall(kerr.ProducerFenced.Code)
+		default:
+			for _, rt := range t.Topics {
+				for _, p := range rt.Partitions {
+					code := kerr.TransactionAbortable.Code
+					if _, ok := pidinf.txParts.getp(rt.Topic, p); ok && pidinf.inTx {
+						code = 0
+					}
+					donep(rt.Topic, p, code)
 				}
 			}
 		}
-		return resp
+		return st
 	}
 
-	coordinator := pids.c.coordinator(req.TransactionalID)
-	if creq.cc.b != coordinator {
-		doneall(kerr.NotCoordinator.Code)
-		return resp
-	}
-
-	pidinf := pids.getpid(req.ProducerID)
+	pidinf := pids.getpid(t.ProducerID)
 	if pidinf == nil {
 		doneall(kerr.InvalidProducerIDMapping.Code)
-		return resp
+		return st
 	}
-	if pidinf.epoch != req.ProducerEpoch {
+	if pidinf.epoch != t.ProducerEpoch {
 		doneall(kerr.ProducerFenced.Code)
-		return resp
+		return st
 	}
 
-	for _, rt := range req.Topics {
-		for _, partition := range rt.Partitions {
-			pd := pdMap[tpKey{rt.Topic, partition}]
+	for _, rt := range t.Topics {
+		for _, p := range rt.Partitions {
 			ps := pidinf.txParts.mkt(rt.Topic)
-			ps[partition] = pd
-			donep(rt.Topic, partition, 0)
+			ps[p] = pdMap[tpKey{rt.Topic, p}]
+			donep(rt.Topic, p, 0)
 		}
 	}
 	pidinf.maybeStart()
-	return resp
+	return st
 }
 
 func (pids *pids) doAddOffsets(creq *clientReq) kmsg.Response {
@@ -934,14 +959,13 @@ func (pids *pids) doDescribeTransactions(creq *clientReq) kmsg.Response {
 		st := kmsg.NewDescribeTransactionsResponseTransactionState()
 		st.TransactionalID = txnID
 
-		if e := pids.c.deny(creq, txnID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationDescribe, faultKey{txnID: txnID}); e != nil {
+		isCoordinator := pids.c.isCoordinator(creq, txnID)
+		if e := pids.c.deny(creq, txnID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationDescribe, faultKey{txnID: txnID, misrouted: !isCoordinator}); e != nil {
 			st.ErrorCode = e.Code
 			resp.TransactionStates = append(resp.TransactionStates, st)
 			continue
 		}
-
-		coordinator := pids.c.coordinator(txnID)
-		if coordinator != creq.cc.b {
+		if !isCoordinator {
 			st.ErrorCode = kerr.NotCoordinator.Code
 			resp.TransactionStates = append(resp.TransactionStates, st)
 			continue
@@ -962,7 +986,7 @@ func (pids *pids) doDescribeTransactions(creq *clientReq) kmsg.Response {
 			st.State = "Ongoing"
 			st.StartTimestamp = pidinf.txStart.UnixMilli()
 			pidinf.txParts.each(func(topic string, partition int32, _ *partData) {
-				if e := pids.c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic}.part(partition)); e != nil {
+				if e := pids.c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{txnID: txnID, topic: topic}.part(partition)); e != nil {
 					return
 				}
 				var topicEntry *kmsg.DescribeTransactionsResponseTransactionStateTopic
@@ -1063,15 +1087,12 @@ func (pids *pids) doDescribeProducers(creq *clientReq) kmsg.Response {
 	}
 	var checks []partState
 	for _, rt := range req.Topics {
-		if e := pids.c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{topic: rt.Topic}); e != nil {
-			for _, p := range rt.Partitions {
-				checks = append(checks, partState{rt.Topic, p, e.Code})
-			}
-			continue
-		}
+		ps, _ := pids.c.data.tps.gett(rt.Topic)
 		for _, p := range rt.Partitions {
 			var code int16
-			if e := creq.faults.check(faultKey{topic: rt.Topic}.part(p)); e != nil {
+			pd, exists := ps[p]
+			k := faultKey{topic: rt.Topic, misrouted: exists && pd.leader != creq.cc.b}
+			if e := pids.c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, k.part(p)); e != nil {
 				code = e.Code
 			}
 			checks = append(checks, partState{rt.Topic, p, code})

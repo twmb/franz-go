@@ -25,7 +25,11 @@ func (c *Cluster) handleDescribeACLs(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationDescribe); e != nil {
+	var k faultKey
+	if req.ResourceName != nil {
+		k.resource = *req.ResourceName
+	}
+	if e := c.denyCluster(creq, kmsg.ACLOperationDescribe, k); e != nil {
 		resp.ErrorCode = e.Code
 		return resp, nil
 	}

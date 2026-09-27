@@ -44,7 +44,7 @@ Assignors: uniform (default, maps to kgo sticky balancer) and range.
 - InitProducerID accepts epoch <= server epoch, so a stale epoch from a timeout bump recovers instead of retrying forever. Idempotent (nil txid) always gets a fresh PID.
 - KIP-447: OffsetFetch with `RequireStable=true` returns `UNSTABLE_OFFSET_COMMIT` when `pids.hasUnstableOffsets(group)`.
 
-**Concurrency**: everything runs on `Cluster.run()`, nothing has a goroutine of its own, and timers hand their work back through the loop.
+**Concurrency**: everything runs on `Cluster.run()`, nothing has a goroutine of its own, and timers hand their work back through the loop. The one exception: while the loop is paused inside a `Fault.When`, `admin` runs its function inline under `whenMu`, for the `When` and for any other caller.
 
 ## ACLs
 
@@ -95,12 +95,14 @@ Adding a request:
 
 Authorization and faults:
 - Check every resource the request touches through `c.deny` (topic, group, transactional ID: pass the resource type and operation) or `c.denyCluster`.
-- Check beside the point the handler emits that entity's error, before any side effect.
+- Order: ACL, then routing (NOT_COORDINATOR, NOT_CONTROLLER, NOT_LEADER_OR_FOLLOWER for a partition that exists), then the fault, then existence and everything else. A fault fires only on the broker that would handle the request, and can fail an entity that does not exist.
+- Keep the ACL and the fault in one `deny`/`denyCluster` call. When this broker is the wrong one for the entity, set `misrouted` in the key: the fault is skipped and the handler's routing answer follows. `c.isCoordinator` and `c.fetchFaultKey` help.
+- Check before any side effect.
 - A request that carries partitions also calls `creq.faults.check` inside the partition loop, with the partition in the key.
 - A request with nothing to authorize goes in the `entityless` set in `faults.go`.
 
 The fault key:
-- Name every identifier the request carries that is known at that site: topic, topicID, partition, group, txnID, resource.
+- Name every identifier known at that site, including parents: a partition in a group's commit carries the group, one in a transaction carries the txnID. `check` fills in whichever of topic name and ID the key lacks.
 - A selector the key does not name never matches, so a missing field silently drops faults.
 
 Emission:

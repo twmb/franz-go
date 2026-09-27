@@ -32,11 +32,13 @@ func (c *Cluster) handleWriteTxnMarkers(creq *clientReq) (kmsg.Response, error) 
 		return nil, err
 	}
 
-	clusterAuthorized := c.allowedClusterACL(creq, kmsg.ACLOperationClusterAction)
-
 	for _, m := range req.Markers {
 		respMarker := kmsg.NewWriteTxnMarkersResponseMarker()
 		respMarker.ProducerID = m.ProducerID
+		var txnID string
+		if pidinf := c.pids.ids[m.ProducerID]; pidinf != nil {
+			txnID = pidinf.txid
+		}
 
 		for _, mt := range m.Topics {
 			respTopic := kmsg.NewWriteTxnMarkersResponseMarkerTopic()
@@ -53,19 +55,15 @@ func (c *Cluster) handleWriteTxnMarkers(creq *clientReq) (kmsg.Response, error) 
 						respPart.ErrorCode = code
 					}
 				}
-				if !clusterAuthorized {
-					respPart.ErrorCode = kerr.ClusterAuthorizationFailed.Code
-					respTopic.Partitions = append(respTopic.Partitions, respPart)
-					continue
-				}
-				if fe := creq.faults.check(faultKey{topic: mt.Topic}.part(p)); fe != nil {
-					respPart.ErrorCode = fe.Code
-					if creq.skipsWork(fe) { // a timed-out marker is still written
+				pd, ok := ps[p]
+				k := faultKey{txnID: txnID, topic: mt.Topic, misrouted: ok && pd.leader != creq.cc.b}
+				if e := c.denyCluster(creq, kmsg.ACLOperationClusterAction, k.part(p)); e != nil {
+					respPart.ErrorCode = e.Code
+					if creq.skipsWork(e) { // a timed-out marker is still written
 						respTopic.Partitions = append(respTopic.Partitions, respPart)
 						continue
 					}
 				}
-				pd, ok := ps[p]
 				switch {
 				case !topicExists, !ok:
 					setErr(kerr.UnknownTopicOrPartition.Code)

@@ -28,7 +28,7 @@ func (c *Cluster) handleAlterPartitionAssignments(creq *clientReq) (kmsg.Respons
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationAlter); e != nil {
+	if e := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{}); e != nil {
 		resp.ErrorCode = e.Code
 		if creq.skipsWork(e) {
 			return resp, nil

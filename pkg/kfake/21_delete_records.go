@@ -56,15 +56,11 @@ func (c *Cluster) handleDeleteRecords(creq *clientReq) (kmsg.Response, error) {
 	}
 
 	for _, rt := range req.Topics {
-		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDelete, faultKey{topic: rt.Topic}); e != nil && creq.skipsWork(e) { // a timed-out delete falls through to the per-partition checks
-			for _, rp := range rt.Partitions {
-				donep(rt.Topic, rp.Partition, e.Code)
-			}
-			continue
-		}
 		ps, ok := c.data.tps.gett(rt.Topic)
 		for _, rp := range rt.Partitions {
-			if e := creq.faults.check(faultKey{topic: rt.Topic}.part(rp.Partition)); e != nil {
+			pd, exists := ps[rp.Partition]
+			k := faultKey{topic: rt.Topic, misrouted: exists && pd.leader != b}
+			if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDelete, k.part(rp.Partition)); e != nil {
 				donep(rt.Topic, rp.Partition, e.Code)
 				if creq.skipsWork(e) { // a timed-out delete still deletes
 					continue

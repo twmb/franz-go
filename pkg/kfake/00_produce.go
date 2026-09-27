@@ -107,26 +107,27 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 		if req.Version >= 13 {
 			topic, ok := c.data.id2t[rt.TopicID]
 			if !ok {
-				donet(rt, kerr.UnknownTopicID.Code, "Unknown topic ID.")
+				for _, rp := range rt.Partitions {
+					if e := creq.faults.check(faultKey{topicID: rt.TopicID}.part(rp.Partition)); e != nil {
+						donep(rt, rp, e.Code, e.Message)
+						continue
+					}
+					donep(rt, rp, kerr.UnknownTopicID.Code, "Unknown topic ID.")
+				}
 				continue
 			}
 			rt.Topic = topic
 		}
-		tk := faultKey{topic: rt.Topic, topicID: rt.TopicID}
-		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationWrite, tk); e != nil && creq.skipsWork(e) { // a timed-out append falls through to the per-partition checks
-			donet(rt, e.Code, e.Message)
-			continue
-		}
 		maxMessageBytes := c.data.maxMessageBytes(rt.Topic)
 		for _, rp := range rt.Partitions {
-			e := creq.faults.check(tk.part(rp.Partition))
-			if e != nil {
+			pd, ok := c.data.tps.getp(rt.Topic, rp.Partition)
+			k := faultKey{topic: rt.Topic, topicID: rt.TopicID, misrouted: ok && pd.leader != b}
+			if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationWrite, k.part(rp.Partition)); e != nil {
 				donep(rt, rp, e.Code, e.Message)
 				if creq.skipsWork(e) { // a timed-out append still appends
 					continue
 				}
 			}
-			pd, ok := c.data.tps.getp(rt.Topic, rp.Partition)
 			if !ok {
 				donep(rt, rp, kerr.UnknownTopicOrPartition.Code, "Unknown topic or partition.")
 				continue

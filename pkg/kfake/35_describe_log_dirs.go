@@ -1,10 +1,11 @@
 package kfake
 
 import (
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// DescribeLogDirs: v0-4
+// DescribeLogDirs: v0-5
 //
 // Behavior:
 // * Returns log directory info for requested partitions
@@ -14,8 +15,9 @@ import (
 // Version notes:
 // * v1: ThrottleMillis
 // * v2: Flexible versions
-// * v3: TotalBytes, UsableBytes
-// * v4: No changes
+// * v3: Top-level ErrorCode
+// * v4: TotalBytes, UsableBytes
+// * v5: IsCordoned (we never cordon a dir)
 
 func init() { regKey(35, 0, 5) }
 
@@ -29,8 +31,17 @@ func (c *Cluster) handleDescribeLogDirs(creq *clientReq) (kmsg.Response, error) 
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationDescribe); e != nil {
-		resp.ErrorCode = e.Code
+	if !c.allowedClusterACL(creq, kmsg.ACLOperationDescribe) {
+		resp.ErrorCode = kerr.ClusterAuthorizationFailed.Code
+		return resp, nil
+	}
+	// v0-2 has no top-level ErrorCode on the wire, so a request-level
+	// fault goes on every dir instead. An ACL denial there answers no
+	// dirs, as in Kafka, which is why we check the ACL apart from the
+	// fault.
+	allDirs := creq.faults.check(faultKey{})
+	if allDirs != nil && req.Version >= 3 {
+		resp.ErrorCode = allDirs.Code
 		return resp, nil
 	}
 
@@ -70,7 +81,11 @@ func (c *Cluster) handleDescribeLogDirs(creq *clientReq) (kmsg.Response, error) 
 	for dir, ts := range individual {
 		rd := kmsg.NewDescribeLogDirsResponseDir()
 		rd.Dir = dir
-		if e := creq.faults.check(faultKey{resource: dir}); e != nil {
+		e := allDirs
+		if e == nil {
+			e = creq.faults.check(faultKey{resource: dir})
+		}
+		if e != nil {
 			rd.ErrorCode = e.Code
 			resp.Dirs = append(resp.Dirs, rd)
 			continue

@@ -27,7 +27,7 @@ func (c *Cluster) handleAlterReplicaLogDirs(creq *clientReq) (kmsg.Response, err
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationAlter); e != nil {
+	if e := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{}); e != nil {
 		// Return cluster authorization failed for all partitions
 		for _, rd := range req.Dirs {
 			for _, t := range rd.Topics {

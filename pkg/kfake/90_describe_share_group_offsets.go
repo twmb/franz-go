@@ -83,7 +83,7 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 			rst.TopicID = c.data.t2id[tr.topic]
 
 			// ACL: per-topic DESCRIBE check.
-			if e := c.deny(creq, tr.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: tr.topic}); e != nil {
+			if e := c.deny(creq, tr.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{group: rg.GroupID, topic: tr.topic}); e != nil {
 				if isDescribeAll {
 					// Describe-all: silently filter unauthorized topics.
 					continue

@@ -18,10 +18,28 @@ import (
 // every field being an AND filter of what the fault should apply to. Faults
 // are an easier way to inject targeted failures than Control.
 //
+// Selectors choose what a fault applies to. kfake checks faults while
+// handling a request, once for each thing the request names.
+//
+//   - Topic and TopicID both work whether a request carries topic names
+//     or topic IDs.
+//   - A fault fires only on the broker that would handle the request:
+//     the coordinator, the controller, or the partition leader (unless
+//     you set Nodes, then it always fires on those specific brokers).
+//   - A fault fires only after the request passes ACL checks. It can
+//     fail a topic or group that does not exist.
+//   - Requests that list everything, like Metadata for all topics or
+//     ListGroups, leave a faulted entry out of the response, the same way
+//     they leave out entries you are not authorized to see.
+//   - Fetch and ShareFetch also check the partitions in the fetch session
+//     that the request does not name.
+//
 // A selector that a request does not carry never matches: a fault with a
-// Topic does not fail a heartbeat. Requests with a top-level ErrorCode can
-// have that error code set by setting TopLevel to true (some requests set
-// either a top-level code OR a per-resource code).
+// Topic does not fail a heartbeat.
+//
+// TopLevel sets the request's top-level ErrorCode instead, before the
+// request is handled. It never fires on a request version whose response
+// has no top-level ErrorCode.
 //
 // A faulted entity is rejected before the broker acts on it, except with
 // REQUEST_TIMED_OUT, on the requests a real broker can answer that way after
@@ -31,14 +49,14 @@ import (
 // bypasses them.
 type Fault struct {
 	Keys  []kmsg.Key // which requests this should apply to; nil means all
-	Nodes []int32    // which nodes this should apply to; nil means all
+	Nodes []int32    // which nodes this should apply to; nil means all; see above
 
 	Topic      string   // "" means all
 	TopicID    [16]byte // zero means all
 	Partitions []int32  // which partitions this should apply to; nil means all
 	Group      string   // "" means all; a FindCoordinator group key matches this
 	TxnID      string   // "" means all; a FindCoordinator transaction key matches this
-	TopLevel   bool     // fail the request's top-level ErrorCode rather than its entities, ignored for requests without one
+	TopLevel   bool     // fail the request's top-level ErrorCode rather than its entities; see above
 
 	// Resource names an entity no selector above reaches: a config
 	// resource, a client quota entity, a SCRAM user, a log dir, a feature,
@@ -52,11 +70,12 @@ type Fault struct {
 	// When further filters by the request itself, for what the selectors
 	// cannot reach: a field inside the request body, such as the member
 	// epoch on a heartbeat or the topics a heartbeat subscribes to. nil
-	// means every request the selectors match.
+	// means every request the selectors match. Returning false means the
+	// request is not faulted.
 	//
-	// When runs on the cluster goroutine. It must not block and must not
-	// call back into the cluster. Returning false means the request is not
-	// faulted; you can use this for observing.
+	// When can be called several times for one request, once per entity
+	// checked. You can call Cluster methods inside When, minus Wait
+	// methods that wait for the cluster itself to do things.
 	When func(kmsg.Request) bool
 
 	// Observe counts matching requests rather than faulting them: the
@@ -65,7 +84,9 @@ type Fault struct {
 	//
 	// Note that a control that answers a request bypasses faults, so an
 	// observing fault does not see it, nor does an observing fault
-	// without TopLevel see a request a TopLevel fault answers.
+	// without TopLevel see a request a TopLevel fault answers. An
+	// observing fault also counts a request that reached the wrong
+	// broker.
 	Observe bool
 }
 
@@ -106,6 +127,9 @@ func (c *Cluster) Fault(faults ...Fault) *FaultHandle {
 		c.faultCond = sync.NewCond(&c.faultsMu)
 	}
 	for _, in := range faults {
+		if in.TopLevel && (in.Topic != "" || in.TopicID != noID || in.Partitions != nil || in.Resource != "") {
+			panic("kfake: a TopLevel fault can select only on Group and TxnID")
+		}
 		f := &fault{
 			keys:       slices.Clone(in.Keys),
 			nodes:      slices.Clone(in.Nodes),
@@ -199,6 +223,13 @@ type faultKey struct {
 	group     string
 	txnID     string
 	resource  string
+
+	// misrouted is set when this broker would not handle the entity:
+	// it is not the coordinator, controller, or partition leader. We
+	// answer that ourselves (NOT_COORDINATOR, ...), so faults that
+	// answer skip it unless they name this node; observing faults
+	// still count it.
+	misrouted bool
 }
 
 // part returns k naming a partition.
@@ -270,9 +301,12 @@ func (fc *faultCheck) check(k faultKey) *kerr.Error {
 	if fc == nil {
 		return nil
 	}
+	fc.c.resolveTopic(&k)
 	for _, f := range fc.fs {
-		// A TopLevel fault answers only in topLevel.
-		if f.topLevel || !f.matches(k) || !fc.when(f) {
+		// A TopLevel fault answers only in topLevel. A misrouted
+		// entity is seen only by an observing fault or one that names
+		// this node.
+		if f.topLevel || k.misrouted && !f.observe && len(f.nodes) == 0 || !f.matches(k) || !fc.when(f) {
 			continue
 		}
 		if !fc.hit(f) {
@@ -286,10 +320,34 @@ func (fc *faultCheck) check(k faultKey) *kerr.Error {
 	return nil
 }
 
+// resolveTopic fills in whichever of the topic name and ID the site did not
+// know, so Topic and TopicID both match whatever the request carries.
+func (c *Cluster) resolveTopic(k *faultKey) {
+	switch {
+	case k.topic != "" && k.topicID == noID:
+		k.topicID = c.data.t2id[k.topic]
+	case k.topic == "" && k.topicID != noID:
+		k.topic = c.data.id2t[k.topicID]
+	}
+}
+
 // when reports whether f's When accepts this request. A fault with no When
-// accepts every request its selectors matched.
+// accepts every request its selectors matched. While When runs, admin
+// serves Cluster methods inline; see inWhen.
 func (fc *faultCheck) when(f *fault) bool {
-	return f.when == nil || f.when(fc.kreq)
+	if f.when == nil {
+		return true
+	}
+	c := fc.c
+	c.whenMu.Lock()
+	c.inWhen = true
+	c.whenMu.Unlock()
+	defer func() {
+		c.whenMu.Lock()
+		c.inWhen = false
+		c.whenMu.Unlock()
+	}()
+	return f.when(fc.kreq)
 }
 
 // afterApply is the requests a broker can answer REQUEST_TIMED_OUT after
@@ -344,14 +402,13 @@ func (fc *faultCheck) topLevel(kreq kmsg.Request) kmsg.Response {
 		return nil
 	}
 	for _, f := range fc.fs {
-		answers := f.topLevel || entityless[fc.key] && f.matches(faultKey{})
+		answers := f.topLevel && f.matches(requestKey(kreq)) || entityless[fc.key] && f.matches(faultKey{})
 		if !answers || !fc.when(f) {
 			continue
 		}
-		resp := kreq.ResponseKind()
-		code, ok := topLevelCode(resp)
+		resp, code, ok := topLevelCode(kreq)
 		if !ok {
-			continue // this request has no top-level code
+			continue // this request version has no top-level code
 		}
 		if !fc.hit(f) {
 			continue
@@ -365,9 +422,29 @@ func (fc *faultCheck) topLevel(kreq kmsg.Request) kmsg.Response {
 	return nil
 }
 
-// topLevelCode returns the response's top-level ErrorCode field, if it has
-// one.
-func topLevelCode(kresp kmsg.Response) (reflect.Value, bool) {
+// topLevelCode returns a response for kreq and its top-level ErrorCode field,
+// if the response has one at kreq's version. Many responses gained their
+// ErrorCode in a later version; we tell by encoding a code and decoding it
+// back, since a code the version does not serialize never reaches the client.
+func topLevelCode(kreq kmsg.Request) (kmsg.Response, reflect.Value, bool) {
+	resp := kreq.ResponseKind()
+	code, ok := errorCodeField(resp)
+	if !ok {
+		return nil, reflect.Value{}, false
+	}
+	code.SetInt(-1)
+	back := kreq.ResponseKind()
+	if err := back.ReadFrom(resp.AppendTo(nil)); err != nil {
+		return nil, reflect.Value{}, false
+	}
+	code.SetInt(0)
+	if backCode, _ := errorCodeField(back); backCode.Int() != -1 {
+		return nil, reflect.Value{}, false
+	}
+	return resp, code, true
+}
+
+func errorCodeField(kresp kmsg.Response) (reflect.Value, bool) {
 	v := reflect.ValueOf(kresp)
 	if v.Kind() != reflect.Pointer || v.IsNil() {
 		return reflect.Value{}, false
@@ -377,6 +454,30 @@ func topLevelCode(kresp kmsg.Response) (reflect.Value, bool) {
 		return reflect.Value{}, false
 	}
 	return code, true
+}
+
+// requestKey names the group and transactional ID a request carries at its
+// top level, for TopLevel faults.
+func requestKey(kreq kmsg.Request) faultKey {
+	var k faultKey
+	v := reflect.ValueOf(kreq)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		return k
+	}
+	str := func(name string) string {
+		f := v.Elem().FieldByName(name)
+		switch {
+		case !f.IsValid():
+		case f.Kind() == reflect.String:
+			return f.String()
+		case f.Kind() == reflect.Pointer && !f.IsNil() && f.Elem().Kind() == reflect.String:
+			return f.Elem().String()
+		}
+		return ""
+	}
+	k.group = str("Group")
+	k.txnID = str("TransactionalID")
+	return k
 }
 
 // hit takes a unit of f's budget for this request. A request with several
@@ -420,11 +521,11 @@ func (c *Cluster) deny(creq *clientReq, resource string, rt kmsg.ACLResourceType
 }
 
 // denyCluster is deny for an operation on the cluster itself.
-func (c *Cluster) denyCluster(creq *clientReq, op kmsg.ACLOperation) *kerr.Error {
+func (c *Cluster) denyCluster(creq *clientReq, op kmsg.ACLOperation, k faultKey) *kerr.Error {
 	if !c.allowedClusterACL(creq, op) {
 		return kerr.ClusterAuthorizationFailed
 	}
-	return creq.faults.check(faultKey{})
+	return creq.faults.check(k)
 }
 
 func aclDenied(rt kmsg.ACLResourceType) *kerr.Error {

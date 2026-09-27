@@ -28,10 +28,16 @@ func (c *Cluster) handleElectLeaders(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationAlter); e != nil {
+	// v0 has no top-level ErrorCode on the wire, so there we answer the
+	// error on every partition instead, as Kafka does.
+	var v0Err *kerr.Error
+	if e := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{}); e != nil {
 		resp.ErrorCode = e.Code
 		if creq.skipsWork(e) { // a timed-out election still elects
-			return resp, nil
+			if req.Version >= 1 {
+				return resp, nil
+			}
+			v0Err = e
 		}
 	}
 
@@ -59,6 +65,18 @@ func (c *Cluster) handleElectLeaders(creq *clientReq) (kmsg.Response, error) {
 		sp.ErrorCode = errCode
 		st.Partitions = append(st.Partitions, sp)
 		resp.Topics = append(resp.Topics, st)
+	}
+
+	if v0Err != nil {
+		if req.Topics == nil {
+			c.data.tps.each(func(t string, p int32, _ *partData) { donep(t, p, v0Err.Code) })
+		}
+		for _, rt := range req.Topics {
+			for _, p := range rt.Partitions {
+				donep(rt.Topic, p, v0Err.Code)
+			}
+		}
+		return resp, nil
 	}
 
 	elect := func(t string, p int32, pd *partData) {

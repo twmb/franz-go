@@ -35,7 +35,7 @@ func (c *Cluster) handleUpdateFeatures(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationAlter); e != nil {
+	if e := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{}); e != nil {
 		resp.ErrorCode = e.Code
 		if creq.skipsWork(e) { // a timed-out update still updates
 			return resp, nil

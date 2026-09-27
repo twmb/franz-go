@@ -80,8 +80,10 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 	for _, rt := range req.Topics {
 		// ACL check: cluster CREATE or topic CREATE
 		tk := faultKey{topic: rt.Topic}
-		e := creq.faults.check(tk)
-		if !clusterCreate {
+		var e *kerr.Error
+		if clusterCreate {
+			e = creq.faults.check(tk)
+		} else {
 			e = c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationCreate, tk)
 		}
 		if e != nil {

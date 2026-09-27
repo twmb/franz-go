@@ -63,7 +63,7 @@ outer:
 		rr := &req.Resources[i]
 		switch rr.ResourceType {
 		case kmsg.ConfigResourceTypeBroker:
-			if e := c.denyCluster(creq, kmsg.ACLOperationAlterConfigs); e != nil {
+			if e := c.denyCluster(creq, kmsg.ACLOperationAlterConfigs, brokerConfigFaultKey(b, rr.ResourceName)); e != nil {
 				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				answered[resource{rr.ResourceName, rr.ResourceType}] = true
 				if creq.skipsWork(e) { // a timed-out alter still applies
@@ -119,7 +119,7 @@ outer:
 			c.persistBrokerConfigsState()
 
 		case kmsg.ConfigResourceTypeTopic:
-			if e := c.deny(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationAlterConfigs, faultKey{resource: rr.ResourceName}); e != nil {
+			if e := c.deny(creq, rr.ResourceName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationAlterConfigs, faultKey{topic: rr.ResourceName, resource: rr.ResourceName}); e != nil {
 				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				answered[resource{rr.ResourceName, rr.ResourceType}] = true
 				if creq.skipsWork(e) { // a timed-out alter still applies
@@ -175,7 +175,7 @@ outer:
 			// AlterConfigs on CLUSTER. A SET on a new name creates
 			// the subscription, and deleting its every key removes
 			// it, which is how kafka-client-metrics.sh --delete works.
-			if e := c.denyCluster(creq, kmsg.ACLOperationAlterConfigs); e != nil {
+			if e := c.denyCluster(creq, kmsg.ACLOperationAlterConfigs, faultKey{resource: rr.ResourceName}); e != nil {
 				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				answered[resource{rr.ResourceName, rr.ResourceType}] = true
 				if creq.skipsWork(e) { // a timed-out alter still applies
@@ -211,6 +211,13 @@ outer:
 			c.clientMetrics[rr.ResourceName] = dup
 
 		case kmsg.ConfigResourceTypeGroupConfig:
+			if e := c.deny(creq, rr.ResourceName, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationAlterConfigs, faultKey{group: rr.ResourceName, resource: rr.ResourceName}); e != nil {
+				doner(rr.ResourceName, rr.ResourceType, e.Code)
+				answered[resource{rr.ResourceName, rr.ResourceType}] = true
+				if creq.skipsWork(e) { // a timed-out alter still applies
+					continue
+				}
+			}
 			// Group configs are scalar (e.g. share.auto.offset.reset);
 			// the protocol's Append/Subtract ops are list-valued and
 			// not meaningful here. Reject the request if any config

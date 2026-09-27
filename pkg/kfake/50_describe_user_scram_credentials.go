@@ -24,7 +24,7 @@ func (c *Cluster) handleDescribeUserSCRAMCredentials(creq *clientReq) (kmsg.Resp
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationDescribe); e != nil {
+	if e := c.denyCluster(creq, kmsg.ACLOperationDescribe, faultKey{}); e != nil {
 		resp.ErrorCode = e.Code
 		return resp, nil
 	}

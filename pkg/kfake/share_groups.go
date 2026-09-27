@@ -1125,11 +1125,15 @@ func (g *shareGroup) processShareAcks(
 		topicName := g.c.data.id2t[at.topicID]
 		if topicName == "" {
 			for _, ap := range at.partitions {
-				onPartition(at.topicID, ap.partition, kerr.UnknownTopicID.Code)
+				code := kerr.UnknownTopicID.Code
+				if e := creq.faults.check(faultKey{group: g.name, topicID: at.topicID}.part(ap.partition)); e != nil {
+					code = e.Code
+				}
+				onPartition(at.topicID, ap.partition, code)
 			}
 			continue
 		}
-		tk := faultKey{topic: topicName, topicID: at.topicID}
+		tk := faultKey{group: g.name, topic: topicName, topicID: at.topicID}
 		if e := g.c.deny(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, tk); e != nil {
 			for _, ap := range at.partitions {
 				onPartition(at.topicID, ap.partition, e.Code)

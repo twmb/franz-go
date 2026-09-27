@@ -31,9 +31,11 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 	}
 
 	// ACL: require GROUP DELETE.
-	if e := c.deny(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: req.GroupID}); e != nil && creq.skipsWork(e) { // a timed-out delete falls through to the per-topic checks
+	if e := c.deny(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: req.GroupID}); e != nil {
 		resp.ErrorCode = e.Code
-		return resp, nil
+		if creq.skipsWork(e) { // a timed-out delete still deletes
+			return resp, nil
+		}
 	}
 
 	sg := c.shareGroups.get(req.GroupID)
@@ -54,7 +56,7 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 		id := c.data.t2id[rt.Topic]
 		rst.TopicID = id
 
-		e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{topic: rt.Topic, topicID: id})
+		e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{group: req.GroupID, topic: rt.Topic, topicID: id})
 		if e != nil {
 			rst.ErrorCode = e.Code
 			if creq.skipsWork(e) { // a timed-out delete still deletes
