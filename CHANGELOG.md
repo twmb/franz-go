@@ -1,3 +1,26 @@
+v1.22.1
+===
+
+This patch has a few bug fixes in the share consumer (one via bug report,
+the others via a corresponding targeted audit), the 848 consumer (these found
+only via an audit), and some fixes in the `RecordFormatter` and `RecordReader`.
+
+This patch also has produce and consume performance improvements that come
+with two minor behavior changes:
+
+* `MaxBufferedRecords` now has a default of 50K, up from 10K: 10K was chosen when
+  I initially wrote this library and is a very low default limit for average sized
+  records. The librdkafka default is 100K; 50K increases producer throughput while
+  still keeping producer memory low.
+
+* `PoolKRecords` is deprecated and unused. The client now decodes fetched
+  records straight into `Record`s, so there is no need for pooling `kmsg.Record`s.
+
+Thanks to [@kmrgirish](https://github.com/kmrgirish) for the share consumer
+bug report ([#1474](https://github.com/twmb/franz-go/issues/1474)), and to
+[@ajavanma](https://github.com/ajavanma) and [@jakezwang](https://github.com/jakezwang)
+for `RecordReader` and `RecordFormatter` fixes.
+
 v1.22.0
 ===
 
