@@ -1,9 +1,11 @@
 package kgo
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"slices"
 	"testing"
 	"time"
 
@@ -138,6 +140,106 @@ func mkreq(topics ...string) *kmsg.MetadataRequest {
 		req.Topics = append(req.Topics, rt)
 	}
 	return req
+}
+
+// A brokers-only metadata response replaces cl.brokers and leaves the topic
+// cache alone. RequestCachedMetadata must not pair those newer brokers with
+// the cached leaders: that response never existed, and the leader is missing
+// from Brokers.
+func TestRequestCachedMetadataBrokersFromSameResponse(t *testing.T) {
+	t.Parallel()
+	cl := &Client{cfg: defaultCfg()}
+
+	rack := "r"
+	meta := kmsg.NewPtrMetadataResponse()
+	for _, id := range []int32{1, 2, 3} {
+		b := kmsg.NewMetadataResponseBroker()
+		b.NodeID = id
+		b.Rack = &rack
+		meta.Brokers = append(meta.Brokers, b)
+	}
+	meta.ControllerID = 3
+	meta.ClusterID = kmsg.StringPtr("c")
+	rt := kmsg.NewMetadataResponseTopic()
+	rt.Topic = kmsg.StringPtr("foo")
+	rp := kmsg.NewMetadataResponseTopicPartition()
+	rp.Leader = 3
+	rt.Partitions = append(rt.Partitions, rp)
+	meta.Topics = append(meta.Topics, rt)
+
+	all := kmsg.NewPtrMetadataRequest() // nil Topics: all topics
+	cl.storeCachedMeta(all, meta, true, nil)
+
+	// Broker 3 has since left. The connection table, the controller the
+	// client dials, and the cluster id it holds are all from a later
+	// response. The topic cache still says 3 leads foo.
+	cl.brokers = []*broker{
+		{meta: BrokerMetadata{NodeID: 1}},
+		{meta: BrokerMetadata{NodeID: 2}},
+	}
+	cl.controllerID = 1
+	live := "live"
+	cl.clusterID.Store(&live)
+
+	ctx := context.Background()
+	resp, err := cl.RequestCachedMetadata(ctx, all, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int32
+	for _, b := range resp.Brokers {
+		ids = append(ids, b.NodeID)
+	}
+	if !slices.Equal(ids, []int32{1, 2, 3}) {
+		t.Errorf("cached brokers = %v, want [1 2 3]", ids)
+	}
+	if resp.ControllerID != 3 {
+		t.Errorf("cached controller = %d, want 3", resp.ControllerID)
+	}
+	if resp.ClusterID == nil || *resp.ClusterID != "c" {
+		t.Errorf("cached cluster id = %v, want %q", resp.ClusterID, "c")
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 || resp.Topics[0].Partitions[0].Leader != 3 {
+		t.Fatalf("cached topics = %+v, want foo led by 3", resp.Topics)
+	}
+	// dups must not hand back the snapshot's Rack, nor the one on the
+	// response the snapshot was built from. A caller writing through it
+	// would change the cache.
+	if resp.Brokers[0].Rack == &rack || resp.Brokers[0].Rack == meta.Brokers[0].Rack {
+		t.Error("returned Rack aliases internal state")
+	}
+
+	// A topic-bearing response that reports no controller returns -1,
+	// not the id the client still dials. A request with no topics keeps
+	// that dial id, since it has no snapshot to take one from.
+	unknown := kmsg.NewPtrMetadataResponse()
+	unknown.ControllerID = -1
+	ub := kmsg.NewMetadataResponseBroker()
+	ub.NodeID = 1
+	unknown.Brokers = append(unknown.Brokers, ub)
+	ut := kmsg.NewMetadataResponseTopic()
+	ut.Topic = kmsg.StringPtr("foo")
+	up := kmsg.NewMetadataResponseTopicPartition()
+	up.Leader = 1
+	ut.Partitions = append(ut.Partitions, up)
+	unknown.Topics = append(unknown.Topics, ut)
+	cl.controllerID = 5
+	cl.storeCachedMeta(all, unknown, true, nil)
+
+	resp, err = cl.RequestCachedMetadata(ctx, all, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ControllerID != -1 {
+		t.Errorf("cached controller = %d, want -1 from the response", resp.ControllerID)
+	}
+	resp, err = cl.RequestCachedMetadata(ctx, mkreq(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ControllerID != 5 {
+		t.Errorf("no-topics controller = %d, want the live 5", resp.ControllerID)
+	}
 }
 
 // We evict cached topics only from a request that says something about what
