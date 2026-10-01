@@ -1644,9 +1644,34 @@ func (cl *Client) RequestCachedMetadata(ctx context.Context, req *kmsg.MetadataR
 	}
 
 	// Phase 3: fetch all resolved topic names, using the cache.
+	// resolveTopicMeta reuses this slice for the names it still has to
+	// fetch, so keep the caller's set aside for the refetch below.
+	var refetch []string
+	if len(topics) > 0 {
+		refetch = slices.Clone(topics)
+	}
 	cached, err := cl.resolveTopicMeta(ctx, topics, true, limit)
 	if err != nil {
 		return nil, err
+	}
+
+	// A cache hit can join topics from two responses: a partial hit
+	// refetched only the missing names, or a targeted fetch (the metadata
+	// loop asking for the topics it tracks) overwrote some entries of a
+	// still fresh all-topics fetch. Neither response's broker list is
+	// right for the other half, so fetch the caller's set once more. That
+	// fetch's results are written by one storeCachedMeta call and cannot
+	// mix again.
+	if cachedMetaMixed(cached) {
+		cached, err = cl.resolveTopicMeta(ctx, refetch, false, limit)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var brokers *cachedMetaBrokers
+	for _, t := range cached {
+		brokers = t.brokers
+		break
 	}
 
 	// Phase 4: build the response. We deeply clone all cached data so
@@ -1685,21 +1710,39 @@ func (cl *Client) RequestCachedMetadata(ctx context.Context, req *kmsg.MetadataR
 
 	resp := kmsg.NewPtrMetadataResponse()
 
-	cl.brokersMu.RLock()
-	for _, b := range cl.brokers {
-		resp.Brokers = append(resp.Brokers, kmsg.MetadataResponseBroker{
-			NodeID: b.meta.NodeID,
-			Host:   b.meta.Host,
-			Port:   b.meta.Port,
-			Rack:   dups(b.meta.Rack),
-		})
-	}
-	cl.brokersMu.RUnlock()
+	if brokers != nil {
+		// The topics came from a metadata response, so the brokers,
+		// controller, and cluster ID must come from that same response.
+		// On a cache hit they are as old as the topics, which is the age
+		// the caller already accepted via limit.
+		resp.Brokers = make([]kmsg.MetadataResponseBroker, 0, len(brokers.brokers))
+		for _, b := range brokers.brokers {
+			b.Rack = dups(b.Rack)
+			resp.Brokers = append(resp.Brokers, b)
+		}
+		resp.ClusterID = dups(brokers.clusterID)
+		resp.ControllerID = brokers.controllerID
+	} else {
+		// No topics: a brokers-only request, or nothing cached. There is
+		// no topic half to agree with, so the live connection table is
+		// the answer. This is what kadm.BrokerMetadata relies on, and it
+		// does not fetch when we already know a broker.
+		cl.brokersMu.RLock()
+		for _, b := range cl.brokers {
+			resp.Brokers = append(resp.Brokers, kmsg.MetadataResponseBroker{
+				NodeID: b.meta.NodeID,
+				Host:   b.meta.Host,
+				Port:   b.meta.Port,
+				Rack:   dups(b.meta.Rack),
+			})
+		}
+		cl.brokersMu.RUnlock()
 
-	resp.ClusterID = dups(cl.clusterID.Load())
-	cl.controllerIDMu.Lock()
-	resp.ControllerID = cl.controllerID
-	cl.controllerIDMu.Unlock()
+		resp.ClusterID = dups(cl.clusterID.Load())
+		cl.controllerIDMu.Lock()
+		resp.ControllerID = cl.controllerID
+		cl.controllerIDMu.Unlock()
+	}
 
 	for _, t := range cached {
 		resp.Topics = append(resp.Topics, dupt(t.t))
@@ -3119,11 +3162,49 @@ func firstErrMerger(sresps []ResponseShard, merge func(kresp kmsg.Response)) err
 	return firstErr
 }
 
+// cachedMetaBrokers is the broker half of one metadata response, saved with
+// every topic that response contained. RequestCachedMetadata returns those
+// topics with this list, not with cl.brokers. cl.brokers is the connection
+// table, and every metadata response rewrites it: the metadata loop, Ping,
+// and fetchBrokerMetadata included. Topics stored by one storeCachedMeta
+// call share one pointer, and that pointer is the generation.
+//
+// A caller can otherwise observe a pair no broker sent. RequestCachedMetadata
+// fetches a response listing brokers {1, 2, 3} and a partition led by 3, and
+// storeCachedMeta caches the topic. Broker 3 then leaves. Ping gets {1, 2}
+// back and updateBrokers replaces cl.brokers. A brokers-only response does
+// not touch the topic cache, so the topic still says leader 3. The next
+// RequestCachedMetadata within limit copies cl.brokers and the cached topic,
+// and the caller reads that struct as one response.
+type cachedMetaBrokers struct {
+	brokers      []kmsg.MetadataResponseBroker
+	controllerID int32
+	clusterID    *string
+}
+
 type cachedMetaTopic struct {
-	id   [16]byte
-	t    kmsg.MetadataResponseTopic
-	ps   map[int32]kmsg.MetadataResponseTopicPartition
-	when time.Time
+	id      [16]byte
+	t       kmsg.MetadataResponseTopic
+	ps      map[int32]kmsg.MetadataResponseTopicPartition
+	when    time.Time
+	brokers *cachedMetaBrokers // nil when a test fills the entry without storeCachedMeta
+}
+
+// cachedMetaMixed reports whether these topics were stored from more than
+// one metadata response. Pointer identity is the generation.
+func cachedMetaMixed(topics map[string]cachedMetaTopic) bool {
+	var first *cachedMetaBrokers
+	var seen bool
+	for _, t := range topics {
+		if !seen {
+			first, seen = t.brokers, true
+			continue
+		}
+		if t.brokers != first {
+			return true
+		}
+	}
+	return false
 }
 
 // For NOT_LEADER_FOR_PARTITION:
@@ -3272,6 +3353,34 @@ func (cl *Client) storeCachedMeta(req *kmsg.MetadataRequest, meta *kmsg.Metadata
 		cl.metaCache.byID = make(map[[16]byte]string)
 	}
 	when := time.Now()
+
+	// One broker snapshot for every topic in this response. Rack and
+	// ClusterID are cloned for the same reason the topics below are:
+	// cl.Request hands this response back to the user, who may write
+	// through those pointers. ControllerID is stored as the response
+	// sent it, including -1. updateMetadataBrokers ignores -1 so the
+	// client can still dial the last controller it knew, but that id
+	// may not be in this response's broker list.
+	var brokers *cachedMetaBrokers
+	if len(meta.Topics) > 0 {
+		brokers = &cachedMetaBrokers{
+			brokers:      slices.Clone(meta.Brokers),
+			controllerID: meta.ControllerID,
+		}
+		for i := range brokers.brokers {
+			b := &brokers.brokers[i]
+			if b.Rack != nil {
+				rack := *b.Rack
+				b.Rack = &rack
+			}
+			b.UnknownTags = kmsg.Tags{}
+		}
+		if meta.ClusterID != nil {
+			clusterID := *meta.ClusterID
+			brokers.clusterID = &clusterID
+		}
+	}
+
 	var stored int
 	for _, topic := range meta.Topics {
 		if topic.Topic == nil {
@@ -3302,10 +3411,11 @@ func (cl *Client) storeCachedMeta(req *kmsg.MetadataRequest, meta *kmsg.Metadata
 			p.OfflineReplicas = slices.Clone(p.OfflineReplicas)
 		}
 		t := cachedMetaTopic{
-			id:   topic.TopicID,
-			t:    topic,
-			ps:   make(map[int32]kmsg.MetadataResponseTopicPartition),
-			when: when,
+			id:      topic.TopicID,
+			t:       topic,
+			ps:      make(map[int32]kmsg.MetadataResponseTopicPartition),
+			when:    when,
+			brokers: brokers,
 		}
 		// A recreated topic comes back under a new ID. Delete the old
 		// ID's mapping when overwriting the entry, else byID accumulates

@@ -1888,6 +1888,178 @@ func TestRequestCachedMetadata(t *testing.T) {
 	})
 }
 
+// TestRequestCachedMetadataBrokersMatchTopics reproduces a
+// MetadataResponse whose Brokers and Topics come from different
+// responses.
+//
+// The cluster answers brokers {0, 1, 2} with every partition led by 2,
+// then {0, 1} led by 0. Ping applies the second answer as brokers only,
+// so the topic cache still says leader 2. A cache hit must not return
+// that leader next to the new broker list. A later request that spans a
+// topic from each answer must not either.
+func TestRequestCachedMetadataBrokersMatchTopics(t *testing.T) {
+	t.Parallel()
+	const topic1, topic2 = "topic1", "topic2"
+	c := newCluster(t, NumBrokers(3))
+
+	// kfake node i listens on ListenAddrs()[i]. The crafted brokers have
+	// to keep that mapping, or KIP-1242 rejects the connection.
+	addrs := c.ListenAddrs()
+
+	// gone: broker 2 has left and partitions moved to 0.
+	var gone atomic.Bool
+	var topicRequests atomic.Int32
+	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.MetadataRequest)
+		resp := req.ResponseKind().(*kmsg.MetadataResponse)
+
+		nodes := []int32{0, 1, 2}
+		leader := int32(2)
+		if gone.Load() {
+			nodes = []int32{0, 1}
+			leader = 0
+		}
+		for _, n := range nodes {
+			host, portStr, _ := net.SplitHostPort(addrs[n])
+			port, _ := strconv.Atoi(portStr)
+			b := kmsg.NewMetadataResponseBroker()
+			b.NodeID = n
+			b.Host = host
+			b.Port = int32(port)
+			resp.Brokers = append(resp.Brokers, b)
+		}
+		resp.ControllerID = 0
+		resp.ClusterID = kmsg.StringPtr("kfake")
+
+		brokersOnly := req.Topics != nil && len(req.Topics) == 0
+		if brokersOnly {
+			return resp, nil, true
+		}
+		topicRequests.Add(1)
+
+		var names []string
+		if req.Topics == nil {
+			names = []string{topic1, topic2}
+		}
+		for _, rt := range req.Topics {
+			if rt.Topic != nil {
+				names = append(names, *rt.Topic)
+			}
+		}
+		for _, name := range names {
+			st := kmsg.NewMetadataResponseTopic()
+			st.Topic = kmsg.StringPtr(name)
+			st.TopicID = [16]byte{name[0]}
+			sp := kmsg.NewMetadataResponseTopicPartition()
+			sp.Partition = 0
+			sp.Leader = leader
+			sp.Replicas = []int32{leader}
+			sp.ISR = []int32{leader}
+			st.Partitions = append(st.Partitions, sp)
+			resp.Topics = append(resp.Topics, st)
+		}
+		return resp, nil, true
+	})
+
+	cl := newPlainClient(t, c)
+	ctx := context.Background()
+
+	nodeIDs := func(resp *kmsg.MetadataResponse) []int32 {
+		ids := make([]int32, 0, len(resp.Brokers))
+		for _, b := range resp.Brokers {
+			ids = append(ids, b.NodeID)
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	leadersInBrokers := func(t *testing.T, resp *kmsg.MetadataResponse) {
+		t.Helper()
+		ids := nodeIDs(resp)
+		for _, rt := range resp.Topics {
+			for _, p := range rt.Partitions {
+				if !slices.Contains(ids, p.Leader) {
+					t.Errorf("topic %s partition %d: leader %d not in brokers %v", *rt.Topic, p.Partition, p.Leader, ids)
+				}
+			}
+		}
+	}
+	metaReq := func(topics ...string) *kmsg.MetadataRequest {
+		req := kmsg.NewPtrMetadataRequest()
+		req.Topics = []kmsg.MetadataRequestTopic{}
+		for _, topic := range topics {
+			rt := kmsg.NewMetadataRequestTopic()
+			rt.Topic = kmsg.StringPtr(topic)
+			req.Topics = append(req.Topics, rt)
+		}
+		return req
+	}
+	all := kmsg.NewPtrMetadataRequest()
+
+	// Fill the cache from the {0,1,2} view.
+	resp, err := cl.RequestCachedMetadata(ctx, all, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nodeIDs(resp); !slices.Equal(got, []int32{0, 1, 2}) {
+		t.Fatalf("initial brokers: got %v, expected [0 1 2]", got)
+	}
+	leadersInBrokers(t, resp)
+
+	// Broker 2 leaves. Ping is a brokers-only Metadata: it rewrites the
+	// connection table to {0,1} and leaves the topic cache alone.
+	gone.Store(true)
+	if err := cl.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(cl.DiscoveredBrokers()); got != 2 {
+		t.Fatalf("discovered brokers after ping: got %d, expected 2", got)
+	}
+
+	// A cache hit must return the broker list the cached leaders came
+	// with, not the connection table.
+	before := topicRequests.Load()
+	resp, err = cl.RequestCachedMetadata(ctx, all, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if topicRequests.Load() != before {
+		t.Fatal("expected a cache hit")
+	}
+	if got := nodeIDs(resp); !slices.Equal(got, []int32{0, 1, 2}) {
+		t.Errorf("cache hit brokers: got %v, expected [0 1 2]", got)
+	}
+	leadersInBrokers(t, resp)
+
+	// topic1 is still from {0, 1, 2}; refresh only topic2, which is now
+	// led by 0. One request for both must not keep leader 2 beside the
+	// broker list that no longer has 2, and it must take one fetch to
+	// get there. The request after that shares one response, so it hits.
+	if _, err := cl.RequestCachedMetadata(ctx, metaReq(topic2), time.Nanosecond); err != nil {
+		t.Fatal(err)
+	}
+	before = topicRequests.Load()
+	resp, err = cl.RequestCachedMetadata(ctx, metaReq(topic1, topic2), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := topicRequests.Load() - before; got != 1 {
+		t.Errorf("mixed cache hit issued %d topic metadata requests, expected 1", got)
+	}
+	if len(resp.Topics) != 2 {
+		t.Fatalf("got %d topics, expected 2", len(resp.Topics))
+	}
+	leadersInBrokers(t, resp)
+
+	before = topicRequests.Load()
+	if _, err := cl.RequestCachedMetadata(ctx, metaReq(topic1, topic2), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if topicRequests.Load() != before {
+		t.Error("expected a cache hit once both topics share one response")
+	}
+}
+
 func TestKadmCachedMetadata(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t,
