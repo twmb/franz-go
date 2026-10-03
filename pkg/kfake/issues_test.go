@@ -1888,6 +1888,106 @@ func TestRequestCachedMetadata(t *testing.T) {
 	})
 }
 
+// Ensure every leader RequestCachedMetadata returns is in its Brokers, and
+// that cached topics are returned without a fetch even when different
+// metadata responses cached them.
+func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(3))
+	addrs := c.ListenAddrs()
+
+	// Brokers 0, 1, and 2 with every partition led by 2 until gone is set,
+	// then brokers 0 and 1 with every partition led by 0.
+	var gone atomic.Bool
+	var topicRequests atomic.Int32
+	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.MetadataRequest)
+		resp := req.ResponseKind().(*kmsg.MetadataResponse)
+		nodes, leader := []int32{0, 1, 2}, int32(2)
+		if gone.Load() {
+			nodes, leader = []int32{0, 1}, 0
+		}
+		for _, n := range nodes {
+			host, port, _ := net.SplitHostPort(addrs[n])
+			p, _ := strconv.Atoi(port)
+			b := kmsg.NewMetadataResponseBroker()
+			b.NodeID, b.Host, b.Port = n, host, int32(p)
+			resp.Brokers = append(resp.Brokers, b)
+		}
+		if req.Topics != nil && len(req.Topics) == 0 {
+			return resp, nil, true
+		}
+		topicRequests.Add(1)
+		names := []string{"t1", "t2"}
+		if req.Topics != nil {
+			names = names[:0]
+			for _, rt := range req.Topics {
+				names = append(names, *rt.Topic)
+			}
+		}
+		for _, name := range names {
+			st := kmsg.NewMetadataResponseTopic()
+			st.Topic = kmsg.StringPtr(name)
+			sp := kmsg.NewMetadataResponseTopicPartition()
+			sp.Leader = leader
+			st.Partitions = append(st.Partitions, sp)
+			resp.Topics = append(resp.Topics, st)
+		}
+		return resp, nil, true
+	})
+
+	cl := newPlainClient(t, c, kgo.MetadataMinAge(time.Minute))
+	ctx := context.Background()
+
+	check := func(limit time.Duration, fetches int32, topics ...string) {
+		t.Helper()
+		req := kmsg.NewPtrMetadataRequest() // no topics: all topics
+		for _, topic := range topics {
+			rt := kmsg.NewMetadataRequestTopic()
+			rt.Topic = kmsg.StringPtr(topic)
+			req.Topics = append(req.Topics, rt)
+		}
+		before := topicRequests.Load()
+		resp, err := cl.RequestCachedMetadata(ctx, req, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := topicRequests.Load() - before; got != fetches {
+			t.Errorf("topics %v: got %d metadata requests, expected %d", topics, got, fetches)
+		}
+		brokers := make(map[int32]bool)
+		for _, b := range resp.Brokers {
+			brokers[b.NodeID] = true
+		}
+		for _, rt := range resp.Topics {
+			for _, p := range rt.Partitions {
+				if !brokers[p.Leader] {
+					t.Errorf("topics %v: %s leader %d is not in the returned brokers", topics, *rt.Topic, p.Leader)
+				}
+			}
+		}
+	}
+
+	check(time.Hour, 1) // caches t1 and t2, led by 2
+
+	// Ping is a brokers only request: broker 2 leaves cl.brokers, and the
+	// cache still says 2 leads t1 and t2.
+	gone.Store(true)
+	if err := cl.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check(time.Hour, 0, "t1")
+	check(time.Nanosecond, 1, "t2") // recaches t2, led by 0
+
+	// Each cached topic keeps its leader's broker, so topics cached by
+	// different responses need no fetch, and a partial hit fetches only
+	// the missing topic.
+	check(time.Hour, 0, "t1", "t2")
+	check(time.Hour, 1, "t1", "t3")
+	check(time.Hour, 0)
+}
+
 func TestKadmCachedMetadata(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t,

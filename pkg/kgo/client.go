@@ -1701,7 +1701,25 @@ func (cl *Client) RequestCachedMetadata(ctx context.Context, req *kmsg.MetadataR
 	resp.ControllerID = cl.controllerID
 	cl.controllerIDMu.Unlock()
 
-	for _, t := range cached {
+	// A metadata response after a topic was cached can drop the topic's
+	// leader from cl.brokers. Every leader we return must be in Brokers,
+	// so we add a missing leader as the topic's own response listed it,
+	// checking the newest topics first.
+	known := make(map[int32]bool, len(resp.Brokers))
+	for _, b := range resp.Brokers {
+		known[b.NodeID] = true
+	}
+	newestFirst := slices.SortedFunc(maps.Values(cached), func(l, r cachedMetaTopic) int {
+		return r.when.Compare(l.when)
+	})
+	for _, t := range newestFirst {
+		for _, p := range t.t.Partitions {
+			if b, ok := t.brokers[p.Leader]; ok && !known[p.Leader] {
+				b.Rack = dups(b.Rack)
+				resp.Brokers = append(resp.Brokers, b)
+				known[p.Leader] = true
+			}
+		}
 		resp.Topics = append(resp.Topics, dupt(t.t))
 	}
 	for _, t := range idErrTopics {
@@ -3120,10 +3138,11 @@ func firstErrMerger(sresps []ResponseShard, merge func(kresp kmsg.Response)) err
 }
 
 type cachedMetaTopic struct {
-	id   [16]byte
-	t    kmsg.MetadataResponseTopic
-	ps   map[int32]kmsg.MetadataResponseTopicPartition
-	when time.Time
+	id      [16]byte
+	t       kmsg.MetadataResponseTopic
+	ps      map[int32]kmsg.MetadataResponseTopicPartition
+	when    time.Time
+	brokers map[int32]kmsg.MetadataResponseBroker // shared by all topics from one response
 }
 
 // For NOT_LEADER_FOR_PARTITION:
@@ -3272,6 +3291,20 @@ func (cl *Client) storeCachedMeta(req *kmsg.MetadataRequest, meta *kmsg.Metadata
 		cl.metaCache.byID = make(map[[16]byte]string)
 	}
 	when := time.Now()
+
+	// RequestCachedMetadata may need a leader that is no longer in
+	// cl.brokers, so we keep the brokers each response listed. We clone
+	// Rack for the same reason we clone topics below.
+	brokers := make(map[int32]kmsg.MetadataResponseBroker, len(meta.Brokers))
+	for _, b := range meta.Brokers {
+		if b.Rack != nil {
+			rack := *b.Rack
+			b.Rack = &rack
+		}
+		b.UnknownTags = kmsg.Tags{}
+		brokers[b.NodeID] = b
+	}
+
 	var stored int
 	for _, topic := range meta.Topics {
 		if topic.Topic == nil {
@@ -3302,10 +3335,11 @@ func (cl *Client) storeCachedMeta(req *kmsg.MetadataRequest, meta *kmsg.Metadata
 			p.OfflineReplicas = slices.Clone(p.OfflineReplicas)
 		}
 		t := cachedMetaTopic{
-			id:   topic.TopicID,
-			t:    topic,
-			ps:   make(map[int32]kmsg.MetadataResponseTopicPartition),
-			when: when,
+			id:      topic.TopicID,
+			t:       topic,
+			ps:      make(map[int32]kmsg.MetadataResponseTopicPartition),
+			when:    when,
+			brokers: brokers,
 		}
 		// A recreated topic comes back under a new ID. Delete the old
 		// ID's mapping when overwriting the entry, else byID accumulates
