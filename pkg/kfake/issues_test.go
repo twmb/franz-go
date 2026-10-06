@@ -4877,3 +4877,182 @@ func TestIssue1474(t *testing.T) {
 		})
 	}
 }
+
+// Regression for #1485: an eager member revoked while fetchOffsets is waiting
+// on its OffsetFetch, or is inside adjustOffsetsBeforeAssign, must not keep
+// fetching the partitions it was revoked from.
+//
+// Member A joins alone and owns every partition, and the broker holds A's
+// OffsetFetch. B joins, and once the broker shows the group preparing to
+// rebalance, A is forced to rejoin, which revokes without waiting on a
+// heartbeat (A's heartbeat interval is long so no heartbeat queues behind the
+// held request). A's OnPartitionsRevoked releases the OffsetFetch and waits
+// until fetchOffsets has the response, so fetchOffsets is assigning while
+// the revoke is running. Pre-fix, the revoke invalidated every cursor first
+// and fetchOffsets then re-armed them for the whole old assignment: those
+// cursors lived into the next session and polls on A returned B's records.
+//
+// A tracks its assignment through the OnPartitions callbacks, which run under
+// the BlockRebalanceOnPoll gate, so between a poll returning and
+// AllowRebalance every record must be for a partition A currently owns.
+func TestIssue1485(t *testing.T) {
+	for _, adjust := range []bool{false, true} {
+		name := "no_adjust_fn"
+		if adjust {
+			name = "adjust_fn"
+		}
+		t.Run(name, func(t *testing.T) { testIssue1485(t, adjust) })
+	}
+}
+
+// fetchReturnedLogger closes returned the first time kgo logs that an
+// OffsetFetch response arrived, which is when fetchOffsets holds the response
+// and is about to run its callbacks and assign.
+type fetchReturnedLogger struct {
+	returned chan struct{}
+	once     sync.Once
+}
+
+func (*fetchReturnedLogger) Level() kgo.LogLevel { return kgo.LogLevelDebug }
+
+func (l *fetchReturnedLogger) Log(_ kgo.LogLevel, msg string, _ ...any) {
+	if msg == "fetch offsets returned" {
+		l.once.Do(func() { close(l.returned) })
+	}
+}
+
+func testIssue1485(t *testing.T, withAdjustFn bool) {
+	t.Parallel()
+	const (
+		topic        = "issue-1485"
+		group        = "issue-1485-g"
+		partitions   = 4
+		perPartition = 100
+	)
+	c := newCluster(t, SeedTopics(partitions, topic))
+
+	producer := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	var records []*kgo.Record
+	for i := range partitions * perPartition {
+		records = append(records, &kgo.Record{Topic: topic, Partition: int32(i % partitions), Value: []byte("v" + strconv.Itoa(i))})
+	}
+	produceSync(t, producer, records...)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	held, release := hold(c, kmsg.OffsetFetch, 0)
+	logger := &fetchReturnedLogger{returned: make(chan struct{})}
+
+	var (
+		mu    sync.Mutex
+		owned = make(map[int32]bool)
+		first sync.Once
+	)
+	aOpts := []kgo.Opt{
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.Balancers(kgo.RoundRobinBalancer()),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.DisableAutoCommit(),
+		kgo.FetchMaxWait(50 * time.Millisecond),
+		kgo.HeartbeatInterval(30 * time.Second),
+		kgo.WithLogger(logger),
+		kgo.BlockRebalanceOnPoll(),
+		kgo.OnPartitionsAssigned(func(_ context.Context, _ *kgo.Client, m map[string][]int32) {
+			mu.Lock()
+			defer mu.Unlock()
+			for _, p := range m[topic] {
+				owned[p] = true
+			}
+		}),
+		kgo.OnPartitionsRevoked(func(_ context.Context, _ *kgo.Client, m map[string][]int32) {
+			mu.Lock()
+			for _, p := range m[topic] {
+				delete(owned, p)
+			}
+			mu.Unlock()
+			// Let the held OffsetFetch through and wait until fetchOffsets
+			// has the response, so it assigns while this revoke runs.
+			first.Do(func() {
+				release()
+				select {
+				case <-logger.returned:
+				case <-time.After(10 * time.Second):
+					t.Error("fetchOffsets never got the released OffsetFetch")
+				}
+			})
+		}),
+	}
+	if withAdjustFn {
+		aOpts = append(aOpts, kgo.AdjustFetchOffsetsFn(func(_ context.Context, offsets map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error) {
+			return offsets, nil
+		}))
+	}
+	a := newPlainClient(t, c, aOpts...)
+
+	// A joins alone, owns everything, and its OffsetFetch is now held.
+	select {
+	case <-held:
+	case <-ctx.Done():
+		t.Fatal("A never issued its OffsetFetch")
+	}
+
+	// B's join puts the group into PreparingRebalance; A then rejoins on
+	// demand rather than on a heartbeat error.
+	newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.Balancers(kgo.RoundRobinBalancer()),
+	)
+	if _, err := c.WaitGroupInfo(ctx, group, func(g *GroupInfo) bool {
+		return g != nil && g.State == "PreparingRebalance" && len(g.Members) == 2
+	}); err != nil {
+		t.Fatalf("group never prepared to rebalance with B joined: %v", err)
+	}
+	a.ForceRebalance()
+
+	// Consume until A has every record of every partition it owns in the
+	// new session. Any record outside the current assignment is a cursor
+	// that survived the revoke.
+	seen := make(map[int32]int)
+	for {
+		pollCtx, pollCancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		fs := a.PollFetches(pollCtx)
+		pollCancel()
+		mu.Lock()
+		var stale []string
+		fs.EachRecord(func(r *kgo.Record) {
+			if !owned[r.Partition] {
+				stale = append(stale, "p"+strconv.Itoa(int(r.Partition))+"@"+strconv.FormatInt(r.Offset, 10))
+			}
+			seen[r.Partition]++
+		})
+		done := len(owned) > 0 && len(owned) < partitions
+		for p := range owned {
+			if seen[p] < perPartition {
+				done = false
+			}
+		}
+		mu.Unlock()
+		a.AllowRebalance()
+		if len(stale) > 0 {
+			t.Fatalf("A polled %d records for partitions it does not own, e.g. %v", len(stale), stale[:min(10, len(stale))])
+		}
+		if done {
+			return
+		}
+		if ctx.Err() != nil {
+			mu.Lock()
+			ownedNow, seenNow := make(map[int32]bool, len(owned)), make(map[int32]int, len(seen))
+			for p := range owned {
+				ownedNow[p] = true
+			}
+			for p, n := range seen {
+				seenNow[p] = n
+			}
+			mu.Unlock()
+			t.Fatalf("A owns %v but consumed %v", ownedNow, seenNow)
+		}
+	}
+}

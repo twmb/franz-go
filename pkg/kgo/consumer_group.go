@@ -86,7 +86,8 @@ type groupConsumer struct {
 	fetching map[string]map[int32]struct{}
 
 	// onFetchedMu ensures we do not call onFetched nor adjustOffsets
-	// concurrent with onRevoked.
+	// concurrent with onRevoked, and that an eager revoke cannot
+	// interleave with fetchOffsets assigning partitions.
 	//
 	// The group session itself ensures that OnPartitions functions are
 	// serial, but offset fetching is concurrent with heartbeating and can
@@ -97,7 +98,21 @@ type groupConsumer struct {
 	// locations fetch callbacks are called. We only have to worry about
 	// onRevoked because fetching offsets occurs after onAssigned, and
 	// onLost happens after fetching offsets is done.
+	//
+	// fetchOffsets also holds this mu through its assignPartitions, and
+	// the eager end-of-session revoke holds it from invalidating cursors
+	// through onRevoked. This orders the two: either the fetch assigns
+	// and the revoke then invalidates everything, or the revoke runs
+	// first and the fetch sees the session is gone and assigns nothing.
+	// Without this, a revoke detected while the fetch was in a user
+	// callback invalidated first, the fetch then re-armed cursors for the
+	// revoked partitions, and polls returned records for partitions this
+	// member no longer owned.
 	onFetchedMu xsync.Mutex
+
+	// onRevokedNoLock is onRevoked without the onFetchedMu wrapper, for
+	// the eager revoke that holds the mutex itself. See revoke.
+	onRevokedNoLock func(context.Context, *Client, map[string][]int32)
 
 	// leader is whether we are the leader right now. This is set to false
 	//
@@ -424,6 +439,7 @@ func (c *consumer) initGroup() {
 		}
 	}
 
+	g.onRevokedNoLock = g.cfg.onRevoked
 	if g.cfg.onFetched != nil || g.cfg.adjustOffsetsBeforeAssign != nil {
 		revoked := g.cfg.onRevoked
 		g.cfg.onRevoked = func(ctx context.Context, cl *Client, m map[string][]int32) {
@@ -772,6 +788,17 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 	defer g.c.unaddRebalance()
 
 	if !g.cooperative.Load() || leaving { // stage == revokeThisSession if not cooperative
+		// Hold onFetchedMu across invalidating and the user callback.
+		// fetchOffsets holds the same mu from its user callbacks through
+		// its assignPartitions, so a fetch that was in a callback when
+		// the heartbeat errored finishes assigning before we invalidate.
+		// Invalidating first let that fetch re-arm cursors for the
+		// partitions we had just revoked: they kept fetching into the
+		// next session, and polls returned records for partitions this
+		// member no longer owned. See the comment on onFetchedMu.
+		g.onFetchedMu.Lock()
+		defer g.onFetchedMu.Unlock()
+
 		// If we are an eager consumer, we stop fetching all of our
 		// current partitions as we will be revoking them.
 		g.c.mu.Lock()
@@ -787,7 +814,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		} else {
 			g.cfg.logger.Log(LogLevelInfo, "cooperative consumer revoking prior assigned partitions because leaving group", "group", g.cfg.group, "revoking", mtps(g.nowAssigned.read()))
 		}
-		g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned.read())
+		g.onRevokedNoLock(g.cl.ctx, g.cl, g.nowAssigned.read())
 		g.nowAssigned.store(nil)
 		g.lastAssigned = nil
 
@@ -2308,18 +2335,26 @@ start:
 		}
 	}
 
+	// Hold onFetchedMu from the user callbacks through assigning. The
+	// eager revoke takes the same mu before it invalidates cursors, so
+	// if it ran first, the session is gone and we must not assign
+	// anything: assigning would re-arm cursors for revoked partitions.
+	// See the comment on onFetchedMu.
+	g.onFetchedMu.Lock()
+	defer g.onFetchedMu.Unlock()
+	if len(g.nowAssigned.read()) == 0 {
+		g.cfg.logger.Log(LogLevelInfo, "session revoked while fetching offsets; not assigning", "group", g.cfg.group)
+		return nil
+	}
+
 	if g.cfg.onFetched != nil {
-		g.onFetchedMu.Lock()
 		err = g.cfg.onFetched(ctx, g.cl, resp)
-		g.onFetchedMu.Unlock()
 		if err != nil {
 			return err
 		}
 	}
 	if g.cfg.adjustOffsetsBeforeAssign != nil {
-		g.onFetchedMu.Lock()
 		offsets, err = g.cfg.adjustOffsetsBeforeAssign(ctx, offsets)
-		g.onFetchedMu.Unlock()
 		if err != nil {
 			return err
 		}
