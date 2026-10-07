@@ -2068,7 +2068,8 @@ func TestClassicProtocolVoting(t *testing.T) {
 	// Both members support "range" and "sticky", but in different preference order.
 	// A prefers sticky, B prefers range. Both support both.
 	// Result should be: sticky gets 1 vote (A), range gets 1 vote (B).
-	// Map iteration is non-deterministic for ties, but at least both are candidates.
+	// Kafka breaks the tie by its Java HashMap order of the votes, in
+	// which sticky comes before range.
 	clA := newPlainClient(t, c)
 	clB := newPlainClient(t, c)
 
@@ -2126,13 +2127,37 @@ func TestClassicProtocolVoting(t *testing.T) {
 		t.Fatalf("B rejoin error: %v", kerr.ErrorForCode(rB.resp.ErrorCode))
 	}
 
-	// The selected protocol should be one of the candidates.
 	proto := ""
 	if rA.resp.Protocol != nil {
 		proto = *rA.resp.Protocol
 	}
-	if proto != "range" && proto != "sticky" {
-		t.Fatalf("expected protocol 'range' or 'sticky', got %q", proto)
+	if proto != "sticky" {
+		t.Fatalf("expected protocol 'sticky', got %q", proto)
+	}
+}
+
+// TestClassicProtocolVoteTie verifies that a tied vote goes where Kafka's
+// does: to the first tied protocol in the Java HashMap order of the votes,
+// which is sticky, range, roundrobin, then cooperative-sticky.
+func TestClassicProtocolVoteTie(t *testing.T) {
+	t.Parallel()
+	names := []string{"cooperative-sticky", "roundrobin", "range", "sticky"}
+	g := &group{members: make(map[string]*groupMember), protocols: make(map[string]int)}
+	for i := range names {
+		// Each member supports every protocol and prefers a different one.
+		m := &groupMember{memberID: strconv.Itoa(i), join: new(kmsg.JoinGroupRequest)}
+		for j := range names {
+			name := names[(i+j)%len(names)]
+			m.join.Protocols = append(m.join.Protocols, kmsg.JoinGroupRequestProtocol{Name: name})
+			g.protocols[name]++
+		}
+		g.members[m.memberID] = m
+	}
+	// One vote could land on sticky by chance; twenty in a row do not.
+	for range 20 {
+		if got := g.selectProtocol(); got != "sticky" {
+			t.Fatalf("tied vote went to %q, want sticky", got)
+		}
 	}
 }
 
@@ -2714,6 +2739,166 @@ func TestStaticMemberClassicLeaveByInstance(t *testing.T) {
 			t.Fatalf("leave member error: %v", kerr.ErrorForCode(m.ErrorCode))
 		}
 	}
+}
+
+// TestClassicStaticRejoinStable verifies a restarted static member's join into
+// a Stable group, as in Kafka: changed metadata under the same protocol does
+// not rebalance, and before v9 the replaced leader is not named leader.
+func TestClassicStaticRejoinStable(t *testing.T) {
+	t.Parallel()
+	const groupID = "g-static-rejoin-stable"
+	c, cl, ctx := newGuardCluster(t)
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(int16(kmsg.JoinGroup), 8)
+	cl8 := newPlainClient(t, c, kgo.MaxVersions(v))
+
+	join := classicJoinReq(groupID, "")
+	join.InstanceID = kmsg.StringPtr("s")
+	first, err := join.RequestWith(ctx, cl)
+	if err != nil || first.ErrorCode != 0 {
+		t.Fatalf("join: %v %v", err, first)
+	}
+	sync := kmsg.NewPtrSyncGroupRequest()
+	sync.Group, sync.MemberID, sync.InstanceID, sync.Generation = groupID, first.MemberID, join.InstanceID, first.Generation
+	if _, err := sync.RequestWith(ctx, cl); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	join.Protocols[0].Metadata = []byte{0, 0, 0, 0, 0, 0, 0, 1}
+	resp, err := join.RequestWith(ctx, cl8)
+	if err != nil || resp.ErrorCode != 0 {
+		t.Fatalf("rejoin: %v %v", err, resp)
+	}
+	if resp.Generation != first.Generation {
+		t.Fatalf("the rejoin rebalanced: generation %d, want %d", resp.Generation, first.Generation)
+	}
+	if resp.LeaderID != first.MemberID || len(resp.Members) != 0 {
+		t.Fatalf("v8 rejoin named leader %s with %d members, want the old leader %s and none", resp.LeaderID, len(resp.Members), first.MemberID)
+	}
+}
+
+// TestClassicStaticMissedRejoin verifies that a static member that does not
+// rejoin stays in the group, as in Kafka: the new leader gets its metadata.
+func TestClassicStaticMissedRejoin(t *testing.T) {
+	t.Parallel()
+	const groupID = "g-static-missed-rejoin"
+	_, cl, ctx := newGuardCluster(t)
+
+	join := func(instance string) *kmsg.JoinGroupResponse {
+		req := classicJoinReq(groupID, "")
+		req.InstanceID = kmsg.StringPtr(instance)
+		req.RebalanceTimeoutMillis = 100
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil || resp.ErrorCode != 0 {
+			t.Fatalf("join %s: %v %v", instance, err, resp)
+		}
+		return resp
+	}
+	join("a")
+	// b's join starts a rebalance that a does not rejoin.
+	if resp := join("b"); len(resp.Members) != 2 {
+		t.Fatalf("the leader got %d members, want 2", len(resp.Members))
+	}
+}
+
+// TestClassicStaticJoinLostMember verifies that a static join whose instance
+// ID maps to no live member, as after a restart that lost the member, joins at
+// once as in Kafka, with no MEMBER_ID_REQUIRED.
+func TestClassicStaticJoinLostMember(t *testing.T) {
+	t.Parallel()
+	const groupID = "g-static-join-lost-member"
+	c, cl, ctx := newGuardCluster(t)
+
+	if _, err := classicJoinReq(groupID, "").RequestWith(ctx, cl); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	onGroup(t, c, groupID, func(g *group) { g.staticMembers["s"] = "s-lost" })
+	join := classicJoinReq(groupID, "")
+	join.InstanceID = kmsg.StringPtr("s")
+	if resp, err := join.RequestWith(ctx, cl); err != nil || resp.ErrorCode != 0 {
+		t.Fatalf("static join: %v %v", err, resp)
+	}
+}
+
+// TestClassicRebalanceDeadlineKept verifies that a rebalance keeps the
+// deadline set when it began, as in Kafka: a join or leave during it calls
+// rebalance() again, which must not restart the timer.
+func TestClassicRebalanceDeadlineKept(t *testing.T) {
+	t.Parallel()
+	const groupID = "g-rebalance-deadline-kept"
+	c, cl, ctx := newGuardCluster(t)
+
+	classicJoin(ctx, t, cl, "join", groupID, "")
+	var first, second *time.Timer
+	onGroup(t, c, groupID, func(g *group) {
+		g.rebalance()
+		first = g.tRebalance
+		g.rebalance()
+		second = g.tRebalance
+	})
+	if first == nil || second != first {
+		t.Fatal("a second rebalance() while preparing restarted the deadline")
+	}
+}
+
+// TestClassicStaticReplaceParkedSync verifies that a static member whose
+// SyncGroup is parked outlives its session timer, as in Kafka, and that
+// replacing it keeps the count of members waiting in join right: the
+// rebalance the replacement starts completes as soon as the other member
+// rejoins, not at the rebalance timeout.
+func TestClassicStaticReplaceParkedSync(t *testing.T) {
+	t.Parallel()
+	const groupID = "g-static-replace-parked-sync"
+	c, cl, ctx := newGuardCluster(t)
+
+	// Each parked request needs its own client: we answer one request at
+	// a time per connection. A failed request sends nil.
+	async := func(req kmsg.Request) <-chan kmsg.Response {
+		ch := make(chan kmsg.Response, 1)
+		cl := newPlainClient(t, c)
+		go func() {
+			resp, _ := cl.Request(ctx, req)
+			ch <- resp
+		}()
+		return ch
+	}
+	waitGroup := func(cond func(g *group) bool) {
+		for done := false; !done; {
+			onGroup(t, c, groupID, func(g *group) { done = cond(g) })
+		}
+	}
+	static := classicJoinReq(groupID, "")
+	static.InstanceID = kmsg.StringPtr("s")
+
+	leader := classicJoin(ctx, t, cl, "leader join", groupID, "").MemberID
+	joined := async(static)
+	waitGroup(func(g *group) bool { return len(g.members) == 2 })
+	classicJoin(ctx, t, cl, "leader rejoin", groupID, leader)
+	s, ok := (<-joined).(*kmsg.JoinGroupResponse)
+	if !ok {
+		t.Fatal("static join failed")
+	}
+
+	sync := kmsg.NewPtrSyncGroupRequest()
+	sync.Group, sync.MemberID, sync.InstanceID, sync.Generation = groupID, s.MemberID, static.InstanceID, s.Generation
+	synced := async(sync)
+	waitGroup(func(g *group) bool { return !g.members[s.MemberID].waitingReply.empty() })
+	var expired bool
+	onGroup(t, c, groupID, func(g *group) {
+		g.expireSession(g.members[s.MemberID])
+		expired = g.members[s.MemberID] == nil
+	})
+	if expired {
+		t.Fatal("the session timer removed a member waiting in SyncGroup")
+	}
+	async(static)
+	if r, _ := (<-synced).(*kmsg.SyncGroupResponse); r == nil || r.ErrorCode != kerr.FencedInstanceID.Code {
+		t.Fatalf("parked sync got %v, want FENCED_INSTANCE_ID", r)
+	}
+
+	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	classicJoin(rctx, t, cl, "leader rejoin after the replacement", groupID, leader)
 }
 
 // Test848FetchOffsetsStaleEpochRetry verifies that the kgo client retries

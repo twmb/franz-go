@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"time"
+	"unicode/utf16"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -861,9 +862,12 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 	// we immediately enter rebalance. Static members (instanceID set)
 	// may rejoin with an empty memberID - check the static mapping.
 	if req.MemberID == "" {
+		// Kafka maps an instance ID only to a live member. We can keep a
+		// mapping whose member did not survive a restart, and a join for
+		// it is a new member's.
 		if req.InstanceID != nil {
-			if oldMemberID, ok := g.staticMembers[*req.InstanceID]; ok {
-				return g.replaceStaticMember(oldMemberID, creq, req, resp)
+			if old := g.members[g.staticMembers[*req.InstanceID]]; old != nil {
+				return g.replaceStaticMember(old, creq, req, resp)
 			}
 		}
 		if int32(len(g.members)+len(g.pending)) >= g.c.groupMaxSize() {
@@ -940,36 +944,9 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 }
 
 // replaceStaticMember handles a static member rejoining with the same
-// instanceID. If the protocol is unchanged, the member is not the leader,
-// and the group is stable, we skip the rebalance (KIP-345).
-func (g *group) replaceStaticMember(oldMemberID string, creq *clientReq, req *kmsg.JoinGroupRequest, resp *kmsg.JoinGroupResponse) (kmsg.Response, bool) {
-	old, ok := g.members[oldMemberID]
-	if !ok {
-		// Old member was pending or already removed - treat as new join.
-		delete(g.staticMembers, *req.InstanceID)
-		memberID := generateMemberID(creq.cid, req.InstanceID)
-		resp.MemberID = memberID
-		m := &groupMember{
-			memberID:   memberID,
-			instanceID: req.InstanceID,
-			clientID:   creq.cid,
-			clientHost: creq.cc.conn.RemoteAddr().String(),
-			join:       req,
-		}
-		g.staticMembers[*req.InstanceID] = memberID
-		g.persistStaticMember(*req.InstanceID, memberID)
-		if p, ok := g.pending[oldMemberID]; ok {
-			g.stopPending(p)
-		}
-		if req.Version >= 4 {
-			g.addPendingRebalance(m)
-			resp.ErrorCode = kerr.MemberIDRequired.Code
-			return resp, true
-		}
-		g.addMemberAndRebalance(m, creq, req)
-		return nil, true
-	}
-
+// instanceID. If the group is stable and the selected protocol would not
+// change, we skip the rebalance (KIP-345).
+func (g *group) replaceStaticMember(old *groupMember, creq *clientReq, req *kmsg.JoinGroupRequest, resp *kmsg.JoinGroupResponse) (kmsg.Response, bool) {
 	// Generate a new memberID for the replacement.
 	memberID := generateMemberID(creq.cid, req.InstanceID)
 
@@ -1006,22 +983,32 @@ func (g *group) replaceStaticMember(oldMemberID string, creq *clientReq, req *km
 		g.protocols[p.Name]++
 	}
 
-	// If protocol unchanged and group is stable: skip rebalance (KIP-345).
-	// For the leader, set SkipAssignment so it knows to re-send the
-	// existing assignment without running the balancer (KIP-814).
-	if g.state == groupStable && old.sameJoin(req) {
-		if g.leader == oldMemberID {
+	// If the group is stable and the protocol we would select is
+	// unchanged, skip the rebalance and keep the old assignment, whatever
+	// the new metadata says (KIP-345). For the leader, set SkipAssignment
+	// so it knows to re-send the existing assignment without running the
+	// balancer (KIP-814).
+	if g.state == groupStable && g.selectProtocol() == g.protocol {
+		oldLeader := g.leader
+		if g.leader == old.memberID {
 			g.leader = memberID
 		}
 		g.updateHeartbeat(m)
 		g.fillJoinResp(memberID, resp)
-		if resp.LeaderID == memberID {
+		switch {
+		case req.Version < 9:
+			// Without SkipAssignment, Kafka names the leader from
+			// before the replacement and sends no members, so a
+			// replaced leader does not run the balancer.
+			resp.LeaderID = oldLeader
+			resp.Members = nil
+		case resp.LeaderID == memberID:
 			resp.SkipAssignment = true
 		}
 		return resp, true
 	}
 
-	// Otherwise trigger a rebalance.
+	// Otherwise trigger a rebalance, or join the one in progress.
 	g.nJoining++
 	m.waitingReply = creq
 	g.rebalance()
@@ -1328,7 +1315,7 @@ func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse,
 // Transitions the group to the preparing rebalance state. We first need to
 // clear any member that is currently sitting in sync. If enough members have
 // entered join, we immediately proceed to completeRebalance, otherwise we
-// begin a wait timer.
+// wait, starting the deadline if the rebalance just began.
 func (g *group) rebalance() {
 	if g.state == groupCompletingRebalance {
 		for _, m := range g.members {
@@ -1354,10 +1341,12 @@ func (g *group) rebalance() {
 		return
 	}
 
-	// Always reset the timer with the current max rebalance timeout.
-	// A subsequent rebalance() call may have a different timeout.
+	// Kafka sets the deadline when the rebalance begins, from the largest
+	// rebalance timeout at that moment. A join or leave during the
+	// rebalance does not extend it. The timer is nil outside of
+	// PreparingRebalance.
 	if g.tRebalance != nil {
-		g.tRebalance.Stop()
+		return
 	}
 	// The deadline belongs to this generation. completeRebalance's state
 	// check alone misses preparing to completing and back to preparing: a
@@ -1374,8 +1363,10 @@ func (g *group) rebalance() {
 	})
 }
 
-// Transitions the group to either dead or stable, depending on if any members
-// remain by the time we clear those that are not waiting in join.
+// Ends the join phase: the group moves to CompletingRebalance, or to Empty if
+// no member remains. Dynamic members that did not rejoin are removed. Static
+// members that did not rejoin stay with their stored metadata, as in Kafka,
+// until their session times out, they leave, or they are replaced.
 func (g *group) completeRebalance() {
 	// A timer that already fired cannot be retracted. If the rebalance
 	// completed inline since, every member is waiting in sync with an
@@ -1389,15 +1380,28 @@ func (g *group) completeRebalance() {
 	}
 	g.nJoining = 0
 
-	var foundLeader bool
+	var (
+		leaderJoined bool
+		joined       string
+	)
 	for _, m := range g.members {
 		if m.waitingReply.empty() {
-			g.removeMember(m)
+			if m.instanceID == nil {
+				g.removeMember(m)
+			}
 			continue
 		}
+		joined = m.memberID
 		if m.memberID == g.leader {
-			foundLeader = true
+			leaderJoined = true
 		}
+	}
+	// Only static members that did not rejoin remain. Kafka has no
+	// leader to give the next generation to, so it waits another
+	// rebalance timeout.
+	if joined == "" && len(g.members) > 0 {
+		g.rebalance()
+		return
 	}
 
 	g.generation++
@@ -1410,47 +1414,23 @@ func (g *group) completeRebalance() {
 		g.persistClassicMeta()
 		return
 	}
+	if !leaderJoined {
+		g.leader = joined
+	}
 	g.state = groupCompletingRebalance
-
-	// Kafka-style protocol voting: find candidate protocols
-	// (supported by all members), then each member votes for
-	// their most-preferred candidate. The protocol with the
-	// most votes wins.
-	candidates := make(map[string]struct{})
-	for proto, nsupport := range g.protocols {
-		if nsupport == len(g.members) {
-			candidates[proto] = struct{}{}
-		}
-	}
-	if len(candidates) == 0 {
-		panic(fmt.Sprint("unable to find commonly supported protocol!", g.protocols, len(g.members)))
-	}
-	votes := make(map[string]int, len(candidates))
-	for _, m := range g.members {
-		for _, p := range m.join.Protocols {
-			if _, ok := candidates[p.Name]; ok {
-				votes[p.Name]++
-				break
-			}
-		}
-	}
-	bestProto, bestVotes := "", 0
-	for proto, v := range votes {
-		if v > bestVotes {
-			bestProto = proto
-			bestVotes = v
-		}
-	}
-	g.protocol = bestProto
+	g.protocol = g.selectProtocol()
 	g.persistClassicMeta()
 
-	// Track which members need to send SyncGroup.
+	// Track which members need to send SyncGroup. Kafka restarts every
+	// member's session timer here, including a static member that did
+	// not rejoin.
 	g.pendingSyncIDs = make(map[string]struct{}, len(g.members))
 	for _, m := range g.members {
-		if !foundLeader {
-			g.leader = m.memberID
-		}
 		g.pendingSyncIDs[m.memberID] = struct{}{}
+		if m.waitingReply.empty() {
+			g.updateHeartbeat(m)
+			continue
+		}
 		req := m.join
 		resp := req.ResponseKind().(*kmsg.JoinGroupResponse)
 		g.fillJoinResp(m.memberID, resp)
@@ -1479,6 +1459,80 @@ func (g *group) completeRebalance() {
 		g.pendingSyncIDs = nil
 		g.rebalance()
 	})
+}
+
+// Kafka-style protocol voting: find candidate protocols (supported by all
+// members), then each member votes for their most-preferred candidate. The
+// protocol with the most votes wins.
+//
+// On a tie Kafka keeps the first protocol in the iteration order of the Java
+// HashMap holding the votes: by bucket, then by the order of each protocol's
+// first vote, which follows the iteration order of its member map. We order
+// both maps the same way, except that within a member bucket we go by member
+// ID where Kafka goes by join order, and we size the member table for the
+// current members where Kafka's keeps the size it once grew to.
+func (g *group) selectProtocol() string {
+	candidates := make(map[string]struct{})
+	for proto, nsupport := range g.protocols {
+		if nsupport == len(g.members) {
+			candidates[proto] = struct{}{}
+		}
+	}
+	if len(candidates) == 0 {
+		panic(fmt.Sprint("unable to find commonly supported protocol!", g.protocols, len(g.members)))
+	}
+
+	type bucketed struct {
+		m      *groupMember
+		bucket uint32
+	}
+	members := make([]bucketed, 0, len(g.members))
+	for _, m := range g.members {
+		members = append(members, bucketed{m, javaHashBucket(m.memberID, len(g.members))})
+	}
+	slices.SortFunc(members, func(a, b bucketed) int {
+		return cmp.Or(cmp.Compare(a.bucket, b.bucket), cmp.Compare(a.m.memberID, b.m.memberID))
+	})
+
+	votes := make(map[string]int, len(candidates))
+	var voted []string // in first-vote order
+	for _, b := range members {
+		for _, p := range b.m.join.Protocols {
+			if _, ok := candidates[p.Name]; ok {
+				if votes[p.Name] == 0 {
+					voted = append(voted, p.Name)
+				}
+				votes[p.Name]++
+				break
+			}
+		}
+	}
+	slices.SortStableFunc(voted, func(a, b string) int {
+		return cmp.Compare(javaHashBucket(a, len(voted)), javaHashBucket(b, len(voted)))
+	})
+	var best string
+	for i, p := range voted {
+		if i == 0 || votes[p] > votes[best] {
+			best = p
+		}
+	}
+	return best
+}
+
+// javaHashBucket returns the bucket of key in a Java HashMap holding size
+// string keys. The table starts at 16 buckets and doubles once it is more
+// than 3/4 full. The bucket is String.hashCode, which hashes UTF-16 code
+// units, with its high 16 bits folded into the low 16.
+func javaHashBucket(key string, size int) uint32 {
+	n := 16
+	for size > n/4*3 {
+		n *= 2
+	}
+	var h uint32
+	for _, c := range utf16.Encode([]rune(key)) {
+		h = 31*h + uint32(c)
+	}
+	return (h ^ h>>16) & uint32(n-1)
 }
 
 // Transitions the group to stable, the final step of a rebalance.
@@ -1526,17 +1580,28 @@ func (g *group) assignmentOrEmpty(assignment []byte) []byte {
 }
 
 func (g *group) updateHeartbeat(m *groupMember) {
-	g.atSessionTimeout(m, func() {
-		// A timer that already fired cannot be retracted: the member
-		// may have left and been removed since. removeMember is NOT
-		// idempotent, it decrements g.protocols and g.nJoining and
-		// drops the static mapping, so a second run skews counters
-		// that are never rebuilt.
-		if g.members[m.memberID] != m {
-			return
-		}
-		g.updateMemberAndRebalance(m, nil, nil)
-	})
+	g.atSessionTimeout(m, func() { g.expireSession(m) })
+}
+
+// expireSession removes m when its session timer fires.
+func (g *group) expireSession(m *groupMember) {
+	// A timer that already fired cannot be retracted: the member
+	// may have left and been removed since. removeMember is NOT
+	// idempotent, it decrements g.protocols and g.nJoining and
+	// drops the static mapping, so a second run skews counters
+	// that are never rebuilt.
+	if g.members[m.memberID] != m {
+		return
+	}
+	// Kafka counts a member waiting in JoinGroup or SyncGroup as
+	// heartbeating, and restarts its session when it answers. We
+	// restart the timer now instead, so that the member still expires
+	// if that answer cannot be sent.
+	if !m.waitingReply.empty() {
+		g.updateHeartbeat(m)
+		return
+	}
+	g.updateMemberAndRebalance(m, nil, nil)
 }
 
 func (g *group) addPendingRebalance(m *groupMember) {
@@ -1595,7 +1660,11 @@ func (g *group) removeMember(m *groupMember) {
 		m.t.Stop()
 	}
 	if !m.waitingReply.empty() {
-		g.nJoining--
+		// nJoining counts parked joins only, not a sync parked in
+		// CompletingRebalance.
+		if _, ok := m.waitingReply.kreq.(*kmsg.JoinGroupRequest); ok {
+			g.nJoining--
+		}
 	}
 }
 
@@ -1627,11 +1696,30 @@ func (g *group) updateMemberAndRebalance(m *groupMember, waitingReply *clientReq
 		for _, p := range m.join.Protocols {
 			g.protocols[p.Name]++
 		}
+		// Leaving CompletingRebalance answers every parked sync with
+		// REBALANCE_IN_PROGRESS, as Kafka does, but this member's is
+		// about to be replaced by its join.
+		if !m.waitingReply.empty() {
+			if sync, ok := m.waitingReply.kreq.(*kmsg.SyncGroupRequest); ok {
+				resp := sync.ResponseKind().(*kmsg.SyncGroupResponse)
+				resp.ErrorCode = kerr.RebalanceInProgress.Code
+				g.reply(m.waitingReply, resp, m)
+			}
+		}
 		if m.waitingReply.empty() && !waitingReply.empty() {
 			g.nJoining++
 		}
 		m.waitingReply = waitingReply
 	} else {
+		// Kafka answers a removed member's parked JoinGroup with
+		// UNKNOWN_MEMBER_ID. It never answers a parked SyncGroup.
+		if !m.waitingReply.empty() {
+			if join, ok := m.waitingReply.kreq.(*kmsg.JoinGroupRequest); ok {
+				resp := join.ResponseKind().(*kmsg.JoinGroupResponse)
+				resp.ErrorCode = kerr.UnknownMemberID.Code
+				g.reply(m.waitingReply, resp, nil)
+			}
+		}
 		g.removeMember(m)
 	}
 	g.rebalance()
@@ -3482,18 +3570,15 @@ func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGro
 				RebalanceTimeoutMillis: sm.RebalanceTimeoutMs,
 			},
 		}
-		for _, name := range sm.Protocols {
-			m.join.Protocols = append(m.join.Protocols, kmsg.JoinGroupRequestProtocol{Name: name})
-			g.protocols[name]++
+		for _, p := range sm.Protocols {
+			m.join.Protocols = append(m.join.Protocols, kmsg.JoinGroupRequestProtocol{Name: p.Name, Metadata: p.Metadata})
+			g.protocols[p.Name]++
 		}
 		g.members[m.memberID] = m
 		if m.instanceID != nil {
 			g.staticMembers[*m.instanceID] = m.memberID
 		}
-		g.atSessionTimeoutIn(m, remaining, func() {
-			g.removeMember(m)
-			g.rebalance()
-		})
+		g.atSessionTimeoutIn(m, remaining, func() { g.expireSession(m) })
 		// Preserve the real last heartbeat time so that across
 		// repeated restarts, dead members accumulate elapsed time.
 		m.last = lastHB

@@ -60,11 +60,8 @@ func newGuardCluster(t *testing.T, opts ...Opt) (*Cluster, *kgo.Client, context.
 	return c, newPlainClient(t, c), ctx
 }
 
-// classicJoin sends a JoinGroup for one "range" protocol, retrying with the
-// member ID we hand back on MEMBER_ID_REQUIRED. Pass an empty member ID for a
-// new member. what names the step in any failure.
-func classicJoin(ctx context.Context, t *testing.T, cl *kgo.Client, what, groupID, memberID string) *kmsg.JoinGroupResponse {
-	t.Helper()
+// classicJoinReq returns a JoinGroup for one "range" protocol.
+func classicJoinReq(groupID, memberID string) *kmsg.JoinGroupRequest {
 	join := kmsg.NewPtrJoinGroupRequest()
 	join.Group = groupID
 	join.MemberID = memberID
@@ -75,6 +72,15 @@ func classicJoin(ctx context.Context, t *testing.T, cl *kgo.Client, what, groupI
 	proto.Name = "range"
 	proto.Metadata = []byte{0, 0, 0, 0, 0, 0, 0, 0}
 	join.Protocols = append(join.Protocols, proto)
+	return join
+}
+
+// classicJoin sends classicJoinReq, retrying with the member ID we hand back
+// on MEMBER_ID_REQUIRED. Pass an empty member ID for a new member. what names
+// the step in any failure.
+func classicJoin(ctx context.Context, t *testing.T, cl *kgo.Client, what, groupID, memberID string) *kmsg.JoinGroupResponse {
+	t.Helper()
+	join := classicJoinReq(groupID, memberID)
 	resp, err := join.RequestWith(ctx, cl)
 	if err == nil && resp.ErrorCode == kerr.MemberIDRequired.Code {
 		join.MemberID = resp.MemberID
