@@ -1458,13 +1458,15 @@ func TestProduceControlBatchRejected(t *testing.T) {
 }
 
 // TestTxnNonTransactionalProduceDuringTx verifies that a
-// non-transactional produce during an active transaction returns
-// INVALID_TXN_STATE.
+// non-transactional produce to a partition holding records of the
+// producer's open transaction returns INVALID_TXN_STATE, and that one to a
+// partition only added to the transaction succeeds, as Kafka checks per
+// partition.
 func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	t.Parallel()
-	topic := "t-non-txn-during-tx"
+	topic, added := "t-non-txn-during-tx", "t-non-txn-during-tx-added"
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic, added))
 	v := kversion.Stable()
 	v.SetMaxKeyVersion(0, 11)
 	cl := newPlainClient(t, c, kgo.MaxVersions(v))
@@ -1487,15 +1489,59 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	addT.Topic = topic
 	addT.Partitions = []int32{0}
 	addReq.Topics = append(addReq.Topics, addT)
+	addT.Topic = added
+	addReq.Topics = append(addReq.Topics, addT)
 	if _, err := addReq.RequestWith(ctx, cl); err != nil {
 		t.Fatalf("add partitions: %v", err)
 	}
 
+	if errCode := produceRawV11(t, cl, added, rawBatch(0, pid, epoch, 0, kvRecord())).ErrorCode; errCode != 0 {
+		t.Fatalf("non-txn produce to a partition with no txn records: %v", kerr.ErrorForCode(errCode))
+	}
+	if errCode := produceRawV11(t, cl, topic, rawBatch(0x0010, pid, epoch, 0, kvRecord())).ErrorCode; errCode != 0 {
+		t.Fatalf("transactional produce: %v", kerr.ErrorForCode(errCode))
+	}
+
 	// Produce a NON-transactional batch (attributes 0) using the same
 	// producer ID.
-	errCode := produceRawV11(t, cl, topic, rawBatch(0, pid, epoch, 0, kvRecord())).ErrorCode
+	errCode := produceRawV11(t, cl, topic, rawBatch(0, pid, epoch, 1, kvRecord())).ErrorCode
 	if errCode != kerr.InvalidTxnState.Code {
 		t.Fatalf("expected INVALID_TXN_STATE for non-txn produce during tx, got: %v", kerr.ErrorForCode(errCode))
+	}
+}
+
+// TestTxnFencedEpochProduce verifies that a transactional batch from a fenced
+// epoch is rejected before its partition is added, so it does not open a
+// transaction for the producer that fenced it.
+func TestTxnFencedEpochProduce(t *testing.T) {
+	t.Parallel()
+	const topic, txid = "t-txn-fenced-epoch", "txid-fenced-epoch"
+
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	cl := newPlainClient(t, c)
+	old := initProducerID(t, cl, txid, -1, -1, 60000)
+	initProducerID(t, cl, txid, -1, -1, 60000)
+
+	req := kmsg.NewPtrProduceRequest()
+	req.Acks = -1
+	req.TimeoutMillis = 5000
+	rt := kmsg.NewProduceRequestTopic()
+	rt.TopicID = c.TopicInfo(topic).TopicID
+	rp := kmsg.NewProduceRequestTopicPartition()
+	rp.Records = rawBatch(0x0010, old.ProducerID, old.ProducerEpoch, 0, kvRecord())
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+	resp, err := req.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("produce: %v", err)
+	}
+	if code := resp.Topics[0].Partitions[0].ErrorCode; code != kerr.InvalidProducerEpoch.Code {
+		t.Fatalf("got %v, want INVALID_PRODUCER_EPOCH", kerr.ErrorForCode(code))
+	}
+	var open bool
+	c.admin(func() { open = c.pids.byTxid[txid].inTx })
+	if open {
+		t.Fatal("the fenced batch opened a transaction")
 	}
 }
 
@@ -1668,6 +1714,35 @@ func TestProduceNeverWrittenPartitionFirstSeq(t *testing.T) {
 				t.Fatalf("got %v, want %v", kerr.ErrorForCode(got), kerr.ErrorForCode(test.want))
 			}
 		})
+	}
+}
+
+// TestProduceEpochPerPartition verifies that producer epochs are checked per
+// partition, as Kafka keeps producer state per partition: after an idempotent
+// producer bumps its epoch on one partition, another accepts the old epoch
+// until it sees the new one.
+func TestProduceEpochPerPartition(t *testing.T) {
+	t.Parallel()
+	const a, b = "t-epoch-per-partition-a", "t-epoch-per-partition-b"
+
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, a, b))
+	cl := newPlainClient(t, c)
+	pid, epoch := initIdempotentPID(t, cl)
+	for i, s := range []struct {
+		topic string
+		epoch int16
+		seq   int32
+		want  int16
+	}{
+		{a, epoch, 0, 0},
+		{b, epoch, 0, 0},
+		{a, epoch + 1, 0, 0},
+		{b, epoch, 1, 0},
+		{a, epoch, 1, kerr.InvalidProducerEpoch.Code},
+	} {
+		if got := idempotentProduceRaw(t, c, cl, s.topic, pid, s.epoch, s.seq); got != s.want {
+			t.Fatalf("step %d: got %v, want %v", i, kerr.ErrorForCode(got), kerr.ErrorForCode(s.want))
+		}
 	}
 }
 

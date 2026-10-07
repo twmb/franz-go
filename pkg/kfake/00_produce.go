@@ -204,6 +204,15 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 			var baseOffset, lso int64
 
 			if b.ProducerID >= 0 {
+				// Kafka has the coordinator check a transactional
+				// batch's epoch before it adds or verifies the
+				// partition, and answers a mismatch either way with
+				// INVALID_PRODUCER_EPOCH.
+				if p := c.pids.getpid(b.ProducerID); txnal && p != nil && p.epoch != b.ProducerEpoch {
+					donep(rt, rp, kerr.InvalidProducerEpoch.Code, "")
+					continue
+				}
+
 				// For KIP-890 (v12+), pass pd to implicitly add
 				// the partition to the transaction if not yet added.
 				var implicit *partData
@@ -222,9 +231,10 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					pidinf, window = c.pids.getOrCreateNonTx(b.ProducerID, b.ProducerEpoch, rt.Topic, rp.Partition)
 				}
 
-				// Reject non-transactional produce during an
-				// active transaction.
-				if pidinf != nil && pidinf.inTx && !txnal {
+				// Kafka rejects a non-transactional batch only on a
+				// partition holding the producer's records of a
+				// transaction that is not yet committed or aborted.
+				if _, open := pd.uncommittedPIDs[b.ProducerID]; open && !txnal {
 					errCode = kerr.InvalidTxnState.Code
 				}
 
@@ -256,17 +266,15 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					switch {
 					case window == nil && b.ProducerEpoch != -1:
 						errCode = kerr.InvalidTxnState.Code
-					case window != nil && b.ProducerEpoch < pidinf.epoch:
+					case window != nil && !txnal && window.seen && b.ProducerEpoch < window.epoch:
+						// Kafka keeps producer state per partition and
+						// rejects only an epoch below the one stored
+						// there. An idempotent producer bumps its epoch
+						// itself (KIP-360), so a partition that has not
+						// yet seen the bump accepts the old epoch. A
+						// higher epoch must restart at sequence 0, see
+						// pushAndValidate.
 						errCode = kerr.InvalidProducerEpoch.Code
-					case window != nil && b.ProducerEpoch > pidinf.epoch:
-						// KIP-360: the real broker accepts any batchEpoch >= storedEpoch
-						// for data batches (ProducerAppendInfo.java:119 -- only rejects
-						// batchEpoch < storedEpoch). Non-txn idempotent producers bump
-						// locally on produce errors; firstSeq==0 is enforced downstream
-						// in pushAndValidate, which returns OOOSN (not InvalidProducerEpoch)
-						// on violation -- matching the broker's error-code semantics.
-						pidinf.epoch = b.ProducerEpoch
-						fallthrough
 					default:
 						var seqOk bool
 						seqOk, dup, baseOffset = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords, pd.highWatermark)
