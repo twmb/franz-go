@@ -4877,3 +4877,100 @@ func TestIssue1474(t *testing.T) {
 		})
 	}
 }
+
+// Ensure a static member that closes after revoking a partition in a
+// cooperative rebalance, but before the rejoin that lets the group assign
+// it, leaves the group. Otherwise its restart takes back its old assignment
+// with no rebalance, and nothing assigns the partition.
+func TestIssue1483(t *testing.T) {
+	t.Parallel()
+	const (
+		moving = "issue-1483-moving"
+		other  = "issue-1483-other"
+		group  = "issue-1483-group"
+	)
+	c := newCluster(t, SeedTopics(2, moving), SeedTopics(1, other))
+	member := func(topic, instance string, opts ...kgo.Opt) *kgo.Client {
+		return newPlainClient(t, c, append([]kgo.Opt{
+			kgo.ConsumeTopics(topic),
+			kgo.ConsumerGroup(group),
+			kgo.InstanceID(instance),
+			kgo.HeartbeatInterval(100 * time.Millisecond),
+		}, opts...)...)
+	}
+
+	// The leader consumes another topic, so the partition that moves is
+	// A's.
+	member(other, "leader")
+	waitStable(t, c, group, 1)
+
+	// After A revokes the partition, its queued rejoin ends the session.
+	// A blocks in that session-end revoke, so Close cancels the group
+	// before A rejoins.
+	var revoked atomic.Bool
+	blocked := make(chan struct{}, 1)
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	canceled := &canceledLogWatch{msg: "heartbeat errored again while waiting for user revoke to finish", seen: make(chan struct{}, 1)}
+	a := member(moving, "a",
+		kgo.WithLogger(canceled),
+		kgo.OnPartitionsRevoked(func(_ context.Context, _ *kgo.Client, lost map[string][]int32) {
+			if len(lost) > 0 {
+				revoked.Store(true)
+				return
+			}
+			if revoked.Load() {
+				select {
+				case blocked <- struct{}{}:
+				default:
+				}
+				<-release
+			}
+		}),
+	)
+	t.Cleanup(unblock) // runs before A's Close
+	waitStable(t, c, group, 2)
+
+	member(moving, "c") // takes one of A's partitions
+	waitCh(t, blocked, "A never blocked revoking")
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		a.Close()
+	}()
+	waitCh(t, canceled.seen, "A's session never saw the close")
+	unblock()
+	waitCh(t, closed, "A's Close never returned")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := c.WaitGroupInfo(ctx, group, func(g *GroupInfo) bool {
+		return g != nil && g.State == "Stable" && g.NumAssigned() == 3
+	}); err != nil {
+		t.Fatalf("moved partition still unassigned: %+v", c.GroupInfo(group).Members)
+	}
+}
+
+// canceledLogWatch signals seen when a client logs msg with a canceled
+// context error.
+type canceledLogWatch struct {
+	msg  string
+	seen chan struct{}
+}
+
+func (*canceledLogWatch) Level() kgo.LogLevel { return kgo.LogLevelInfo }
+
+func (l *canceledLogWatch) Log(_ kgo.LogLevel, msg string, keyvals ...any) {
+	if msg != l.msg {
+		return
+	}
+	for i := 0; i+1 < len(keyvals); i += 2 {
+		if err, ok := keyvals[i+1].(error); ok && errors.Is(err, context.Canceled) {
+			select {
+			case l.seen <- struct{}{}:
+			default:
+			}
+		}
+	}
+}

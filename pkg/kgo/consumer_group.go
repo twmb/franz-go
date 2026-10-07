@@ -76,6 +76,11 @@ type groupConsumer struct {
 	// the next session revokes everything before consuming.
 	protocolDowngraded bool
 
+	// Set when a classic session revokes what it lost and queues the
+	// rejoin that lets the group assign it, and cleared once we join
+	// again. leave reads it only after manage returns.
+	rejoinOwed bool
+
 	// Fetching ensures we continue fetching offsets across cooperative
 	// rebalance if an offset fetch returns early due to an immediate
 	// rebalance. See the large comment on adjustCooperativeFetchOffsets
@@ -581,6 +586,7 @@ func (g *groupConsumer) manage() {
 		}
 		err := g.joinAndSync(joinWhy)
 		if err == nil {
+			g.rejoinOwed = false
 			if joinWhy, err = g.setupAssignedAndHeartbeat(g.cfg.heartbeatInterval, g.heartbeatFn()); err != nil {
 				if errors.Is(err, kerr.RebalanceInProgress) {
 					err = nil
@@ -641,7 +647,18 @@ func (g *groupConsumer) leave(ctx context.Context) {
 		}
 
 		if g.cfg.instanceID != nil {
-			return
+			if !g.rejoinOwed {
+				return
+			}
+			// The group assigns what we revoked only once we
+			// rejoin. A static member that closes first and
+			// restarts gets its old assignment back with no
+			// rebalance, so we leave to let the group assign it.
+			g.cfg.logger.Log(LogLevelWarn, "leaving group as a static member: we revoked partitions in a cooperative rebalance and are closing before the rejoin that lets the group assign them; our restart joins as a new member",
+				"group", g.cfg.group,
+				"member_id", memberID,
+				"instance_id", *g.cfg.instanceID,
+			)
 		}
 
 		g.cfg.logger.Log(LogLevelInfo, "leaving group",
@@ -655,6 +672,7 @@ func (g *groupConsumer) leave(ctx context.Context) {
 		req.MemberID = memberID
 		member := kmsg.NewLeaveGroupRequestMember()
 		member.MemberID = memberID
+		member.InstanceID = g.cfg.instanceID
 		member.Reason = kmsg.StringPtr("client leaving group per normal operation")
 		req.Members = append(req.Members, member)
 
@@ -915,6 +933,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		is848 := g.is848
 		g.mu.Unlock()
 		if !is848 {
+			g.rejoinOwed = true
 			defer g.rejoin("after revoking what we lost from a rebalance")
 		}
 	}
