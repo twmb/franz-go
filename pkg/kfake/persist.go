@@ -2125,15 +2125,22 @@ type (
 	}
 
 	sessionClassicMember struct {
-		ID                 string    `json:"id"`
-		InstanceID         *string   `json:"instance,omitempty"`
-		ClientID           string    `json:"clientID"`
-		ClientHost         string    `json:"clientHost"`
-		Protocols          []string  `json:"protocols"`
-		Assignment         []byte    `json:"assignment,omitempty"`
-		SessionTimeoutMs   int32     `json:"sessionTimeoutMs"`
-		RebalanceTimeoutMs int32     `json:"rebalanceTimeoutMs"`
-		LastHeartbeat      time.Time `json:"lastHeartbeat,omitzero"`
+		ID                 string                   `json:"id"`
+		InstanceID         *string                  `json:"instance,omitempty"`
+		ClientID           string                   `json:"clientID"`
+		ClientHost         string                   `json:"clientHost"`
+		Protocols          []sessionClassicProtocol `json:"protocols"`
+		Assignment         []byte                   `json:"assignment,omitempty"`
+		SessionTimeoutMs   int32                    `json:"sessionTimeoutMs"`
+		RebalanceTimeoutMs int32                    `json:"rebalanceTimeoutMs"`
+		LastHeartbeat      time.Time                `json:"lastHeartbeat,omitzero"`
+	}
+
+	// The metadata is kept because a static member that misses a rejoin
+	// stays in the group, and the leader is given its stored metadata.
+	sessionClassicProtocol struct {
+		Name     string `json:"name"`
+		Metadata []byte `json:"metadata,omitempty"`
 	}
 
 	sessionConsumerGroup struct {
@@ -2216,7 +2223,7 @@ func (c *Cluster) saveSessionState() error {
 					LastHeartbeat:      m.last,
 				}
 				for _, p := range m.join.Protocols {
-					sm.Protocols = append(sm.Protocols, p.Name)
+					sm.Protocols = append(sm.Protocols, sessionClassicProtocol{p.Name, p.Metadata})
 				}
 				sg.Members = append(sg.Members, sm)
 			}
