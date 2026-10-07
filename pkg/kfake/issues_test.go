@@ -4877,3 +4877,99 @@ func TestIssue1474(t *testing.T) {
 		})
 	}
 }
+
+// Ensure an idempotent batch that fails after the broker appended it does not
+// make the broker ack our next batch as its duplicate. A real broker can
+// answer NOT_LEADER_OR_FOLLOWER after appending; the control appends A by
+// resending A's request from another client, then fails A.
+func TestIssue1484(t *testing.T) {
+	t.Parallel()
+	const topic = "foo"
+
+	for _, tc := range []struct {
+		name   string
+		cancel bool  // cancel A's context; otherwise RecordRetries(0)
+		allow  bool  // AllowIdempotentProduceCancellation
+		err    error // A's error; nil means the retry dedupes to offset 1
+	}{
+		{"record_retries", false, false, nil},
+		{"record_context", true, false, nil},
+		{"allow_cancel", true, true, context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			opts := []kgo.Opt{
+				kgo.DefaultProduceTopic(topic),
+				kgo.ProducerLinger(0),
+				kgo.RetryBackoffFn(func(int) time.Duration { return 10 * time.Millisecond }),
+				kgo.MetadataMinAge(10 * time.Millisecond), // A's retry waits on a metadata update
+			}
+			if !tc.cancel {
+				opts = append(opts, kgo.RecordRetries(0))
+			}
+			if tc.allow {
+				opts = append(opts, kgo.AllowIdempotentProduceCancellation())
+			}
+			cl := newPlainClient(t, c, opts...)
+			raw := newPlainClient(t, c)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			actx, acancel := context.WithCancel(ctx)
+			defer acancel()
+
+			produceSync(t, cl, kgo.StringRecord("W"))
+
+			var calls atomic.Int32
+			c.ControlKey(int16(kmsg.Produce), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+				if calls.Add(1) > 1 {
+					return nil, nil, false // our resend of A
+				}
+				req := kreq.(*kmsg.ProduceRequest)
+				resend := *req
+				c.SleepControl(func() {
+					if _, err := raw.Request(ctx, &resend); err != nil {
+						t.Errorf("resending A: %v", err)
+					}
+				})
+				if tc.cancel {
+					acancel()
+				}
+				resp := req.ResponseKind().(*kmsg.ProduceResponse)
+				st := kmsg.NewProduceResponseTopic()
+				st.Topic = req.Topics[0].Topic
+				st.TopicID = req.Topics[0].TopicID
+				sp := kmsg.NewProduceResponseTopicPartition()
+				sp.ErrorCode = kerr.NotLeaderForPartition.Code
+				st.Partitions = append(st.Partitions, sp)
+				resp.Topics = append(resp.Topics, st)
+				return resp, nil, true
+			})
+
+			a, err := cl.ProduceSync(actx, kgo.StringRecord("A")).First()
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("A: got %v, want %v", err, tc.err)
+			}
+			if err == nil && a.Offset != 1 {
+				t.Fatalf("A acked at offset %d, want 1", a.Offset)
+			}
+			b, err := cl.ProduceSync(ctx, kgo.StringRecord("B")).First()
+			if err != nil {
+				t.Fatalf("B: %v", err)
+			}
+			if b.Offset != 2 {
+				t.Fatalf("B acked at offset %d, want 2", b.Offset)
+			}
+
+			consumer := newPlainClient(t, c, kgo.ConsumeTopics(topic), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+			var got []string
+			for _, r := range consumeN(t, consumer, 3, 5*time.Second) {
+				got = append(got, string(r.Value))
+			}
+			if want := []string{"W", "A", "B"}; !slices.Equal(got, want) {
+				t.Fatalf("got %v, want %v", got, want)
+			}
+		})
+	}
+}

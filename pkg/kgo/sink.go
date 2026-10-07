@@ -1074,12 +1074,14 @@ func (s *sink) handleReqRespBatch(
 	// different sink).
 	batch.canFailFromLoadErrs = true
 
-	// If the response was from a timeout, or the record was written but
-	// not to enough replicas, we actually do not know whether the record
-	// was persisted or not. We need to poison this batch: if we encounter
-	// a retryable error the NEXT time we produce, we still are unsure of
-	// the final state, and we need to block canceling producing.
-	if rp.ErrorCode == kerr.RequestTimedOut.Code || rp.ErrorCode == kerr.NotEnoughReplicasAfterAppend.Code {
+	// Kafka can answer these errors after it appended the batch.
+	switch rp.ErrorCode {
+	case kerr.RequestTimedOut.Code,
+		kerr.NotEnoughReplicasAfterAppend.Code,
+		kerr.NotLeaderForPartition.Code,
+		kerr.UnknownTopicOrPartition.Code,
+		kerr.KafkaStorageError.Code,
+		kerr.UnknownServerError.Code:
 		batch.unsureIfProduced = true
 	}
 
@@ -1109,7 +1111,8 @@ func (s *sink) handleReqRespBatch(
 	case kerr.IsRetriable(err) &&
 		!failUnknown &&
 		err != kerr.CorruptMessage &&
-		(batch.tries.Load() <= s.cl.cfg.recordRetries || batch.unsureIfProduced): // we need to bypass the retry limit if we are not sure of the state
+		(batch.tries.Load() <= s.cl.cfg.recordRetries ||
+			batch.unsureIfProduced && s.cl.idempotent() && !s.cl.cfg.allowIdempotentProduceCancellation): // we need to bypass the retry limit if we are not sure of the state
 		if debug {
 			fmt.Fprintf(b, "retrying@%d,%d(%s)}, ", rp.BaseOffset, nrec, err)
 		}
@@ -1367,6 +1370,10 @@ func (s *sink) handleRetryBatches(
 	var numRetryBatches, numMoveBatches int
 	retry.eachOwnerLocked(func(batch seqRecBatch) {
 		numRetryBatches++
+		// We wrote this batch and have no answer for it.
+		if !batch.canFailFromLoadErrs {
+			batch.unsureIfProduced = true
+		}
 		if !batch.isOwnersFirstBatch() {
 			if debug {
 				logger.Log(LogLevelDebug, "retry batch is not the first batch in the owner, skipping result",
@@ -1874,6 +1881,7 @@ func (recBuf *recBuf) checkUnknownFailLimit(err error) bool {
 //   - if batch fails fatally when producing
 func (recBuf *recBuf) failAllRecords(err error) {
 	recBuf.lockedStopLinger()
+	var maybeProduced bool
 	for _, batch := range recBuf.batches {
 		// We need to guard our clearing of records against a
 		// concurrent produceRequest's write, which can have this batch
@@ -1886,6 +1894,7 @@ func (recBuf *recBuf) failAllRecords(err error) {
 		records := batch.records
 		batch.records = nil
 		batch.releaseStream()
+		maybeProduced = maybeProduced || batch.unsureIfProduced || !batch.canFailFromLoadErrs
 		batch.mu.Unlock()
 
 		recBuf.cl.producer.promiseBatch(batchPromise{
@@ -1896,6 +1905,14 @@ func (recBuf *recBuf) failAllRecords(err error) {
 	recBuf.resetBatchDrainIdx()
 	recBuf.buffered.Store(0)
 	recBuf.batches = nil
+
+	// The broker may have a batch we just failed, and our next batch
+	// reuses its sequence numbers. A new epoch starts them over.
+	if maybeProduced && recBuf.cl.idempotent() && recBuf.cl.cfg.txnID == nil {
+		if id := recBuf.cl.producer.id.Load().(*producerID); id.err == nil && id.id >= 0 {
+			recBuf.cl.failProducerID(id.id, id.epoch, errReloadProducerID)
+		}
+	}
 }
 
 // clearFailing clears a buffer's failing state if it is failing.
@@ -1957,13 +1974,14 @@ type recBatch struct {
 	// request with this batch, and then reset it to true whenever we
 	// process a response.
 	canFailFromLoadErrs bool
-	// If we receive a response, but the error code is REQUEST_TIMED_OUT or
-	// NOT_ENOUGH_REPLICAS_AFTER_APPEND, we actually do not know the state
-	// of producing this on the broker. Further, we need to persist this
-	// state: if we produce a second time and receive a different retryable
-	// error, we need to ensure we do not allow the record to be canceled
-	// *then*. Once we do not know the state, we need to block cancelation
-	// until we definitively produce or definitively fail.
+	// Whether some send of this batch may have been appended: we wrote it
+	// and have no answer, or the answer was an error Kafka can return
+	// after appending (see handleReqRespBatch). If we fail a batch the
+	// broker has, our next batch reuses its sequence numbers, and if it
+	// has as many records, the broker acks it as a duplicate without
+	// writing it. A later answer cannot prove an earlier send was not
+	// appended, so we never clear this, and contexts, RecordRetries, and
+	// RecordDeliveryTimeout do not fail an unsure batch.
 	unsureIfProduced bool
 	// If we are going to fail the batch in bumpRepeatedLoadErr, we need to
 	// set this bool to true. There could be a concurrent request about to

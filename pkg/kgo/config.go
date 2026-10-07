@@ -1235,14 +1235,12 @@ func DisableIdempotentWrite() ProducerOpt {
 // received it" from "the broker wrote it but the reply was lost".
 // Cancelling at this point leaves the client's idempotent sequence
 // window inconsistent with the broker: once cancelled records are
-// failed to the user, the next produce either silently gap-accepts (if
-// the broker wrote them) or hits OUT_OF_ORDER_SEQUENCE and forces the
-// client to reload its producer ID (new epoch, reset sequence). A
-// subsequent application-level retry of the cancelled record races
-// against what the broker may already have stored - the broker cannot
-// dedupe it, and you can get duplicates. By default, the client refuses
-// to cancel in this state and instead waits for the record's outcome
-// so idempotency holds.
+// failed to the user, the client bumps its producer epoch before
+// producing again. A subsequent application-level retry of the
+// cancelled record races against what the broker may already have
+// stored - the broker cannot dedupe it, and you can get duplicates. By
+// default, the client refuses to cancel in this state and instead waits
+// for the record's outcome so idempotency holds.
 //
 // With this option, context cancellation, RecordDeliveryTimeout, and
 // RecordRetries exhaustion are allowed to fail in-flight records.
@@ -1402,7 +1400,8 @@ func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 // If idempotency is enabled (as it is by default), this option is only
 // enforced if it is safe to do so without creating invalid sequence numbers.
 // It is safe to enforce if a record was never issued in a request to Kafka, or
-// if it was requested and received a response.
+// if every request so far received a response proving Kafka did not write it.
+// Otherwise, the client waits for the outcome.
 //
 // If a record fails due to retries, all records buffered in the same partition
 // are failed as well. This ensures gapless ordering: the client will not fail
@@ -1510,7 +1509,8 @@ func StreamingCompression() ProducerOpt {
 // If idempotency is enabled (as it is by default), this option is only
 // enforced if it is safe to do so without creating invalid sequence numbers.
 // It is safe to enforce if a record was never issued in a request to Kafka, or
-// if it was requested and received a response.
+// if every request so far received a response proving Kafka did not write it.
+// Otherwise, the client waits for the outcome.
 //
 // The timeout for all records in a batch inherit the timeout of the first
 // record in that batch. That is, once the first record's timeout expires, all
