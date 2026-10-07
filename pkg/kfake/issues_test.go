@@ -4877,3 +4877,142 @@ func TestIssue1474(t *testing.T) {
 		})
 	}
 }
+
+// Ensure an idempotent batch that fails after the broker appended it does not
+// make the broker ack our next batch as its duplicate. A real broker can
+// answer NOT_LEADER_OR_FOLLOWER after appending; the control appends A by
+// resending A's request from another client, then fails A.
+func TestIssue1484(t *testing.T) {
+	t.Parallel()
+	const topic = "foo"
+
+	for _, tc := range []struct {
+		name string
+		err  error // what fails A: RecordRetries(0), or A's canceled context
+	}{
+		{"record_retries", kerr.NotLeaderForPartition},
+		{"record_context", context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			opts := []kgo.Opt{
+				kgo.DefaultProduceTopic(topic),
+				kgo.ProducerLinger(0),
+				kgo.RetryBackoffFn(func(int) time.Duration { return 10 * time.Millisecond }),
+			}
+			if tc.err != context.Canceled {
+				opts = append(opts, kgo.RecordRetries(0))
+			}
+			cl := newPlainClient(t, c, opts...)
+			raw := newPlainClient(t, c)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			actx, acancel := context.WithCancel(ctx)
+			defer acancel()
+
+			produceSync(t, cl, kgo.StringRecord("W"))
+
+			var calls atomic.Int32
+			c.ControlKey(int16(kmsg.Produce), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+				if calls.Add(1) > 1 {
+					return nil, nil, false // our resend of A
+				}
+				req := kreq.(*kmsg.ProduceRequest)
+				resend := *req
+				c.SleepControl(func() {
+					if _, err := raw.Request(ctx, &resend); err != nil {
+						t.Errorf("resending A: %v", err)
+					}
+				})
+				if tc.err == context.Canceled {
+					acancel()
+				}
+				resp := req.ResponseKind().(*kmsg.ProduceResponse)
+				st := kmsg.NewProduceResponseTopic()
+				st.Topic = req.Topics[0].Topic
+				st.TopicID = req.Topics[0].TopicID
+				sp := kmsg.NewProduceResponseTopicPartition()
+				sp.ErrorCode = kerr.NotLeaderForPartition.Code
+				st.Partitions = append(st.Partitions, sp)
+				resp.Topics = append(resp.Topics, st)
+				return resp, nil, true
+			})
+
+			if err := cl.ProduceSync(actx, kgo.StringRecord("A")).FirstErr(); !errors.Is(err, tc.err) {
+				t.Fatalf("A: got %v, want %v", err, tc.err)
+			}
+			b, err := cl.ProduceSync(ctx, kgo.StringRecord("B")).First()
+			if err != nil {
+				t.Fatalf("B: %v", err)
+			}
+			if b.Offset != 2 {
+				t.Fatalf("B acked at offset %d, want 2", b.Offset)
+			}
+
+			consumer := newPlainClient(t, c, kgo.ConsumeTopics(topic), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+			var got []string
+			for _, r := range consumeN(t, consumer, 3, 5*time.Second) {
+				got = append(got, string(r.Value))
+			}
+			if want := []string{"W", "A", "B"}; !slices.Equal(got, want) {
+				t.Fatalf("got %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// Ensure failing a written batch on one partition does not duplicate a batch
+// another partition has in flight. The epoch bump must not move X to the new
+// epoch at sequence 0: the broker cannot dedupe that against X's append under
+// the old epoch.
+func TestIssue1484OtherPartition(t *testing.T) {
+	t.Parallel()
+	const fail, keep = "fail", "keep"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, fail, keep))
+	cl := newPlainClient(t, c,
+		kgo.ManualFlushing(), // A and X go in one request
+		kgo.RecordRetries(0),
+		kgo.RetryBackoffFn(func(int) time.Duration { return 10 * time.Millisecond }),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	flush := func(chs ...<-chan error) []error {
+		if err := cl.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		var errs []error
+		for _, ch := range chs {
+			errs = append(errs, <-ch)
+		}
+		return errs
+	}
+	if err := errors.Join(flush(produceCh(ctx, cl, fail, "W"), produceCh(ctx, cl, keep, "W"))...); err != nil {
+		t.Fatal(err)
+	}
+
+	// A is rejected and fails, which bumps the epoch. X is appended but
+	// answered REQUEST_TIMED_OUT, so we resend it after the bump.
+	c.Fault(
+		Fault{Keys: []kmsg.Key{kmsg.Produce}, Topic: fail, Err: kerr.NotLeaderForPartition},
+		Fault{Keys: []kmsg.Key{kmsg.Produce}, Topic: keep, Err: kerr.RequestTimedOut},
+	)
+	errs := flush(produceCh(ctx, cl, fail, "A"), produceCh(ctx, cl, keep, "X"))
+	if !errors.Is(errs[0], kerr.NotLeaderForPartition) || errs[1] != nil {
+		t.Fatalf("A, X: got %v, want %v, nil", errs, kerr.NotLeaderForPartition)
+	}
+	if err := flush(produceCh(ctx, cl, keep, "Y"))[0]; err != nil {
+		t.Fatalf("Y: %v", err)
+	}
+
+	consumer := newPlainClient(t, c, kgo.ConsumeTopics(keep), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+	var got []string
+	for _, r := range consumeN(t, consumer, 3, 5*time.Second) {
+		got = append(got, string(r.Value))
+	}
+	if want := []string{"W", "X", "Y"}; !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
