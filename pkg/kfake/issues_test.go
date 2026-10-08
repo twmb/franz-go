@@ -1888,9 +1888,10 @@ func TestRequestCachedMetadata(t *testing.T) {
 	})
 }
 
-// Ensure every leader RequestCachedMetadata returns is in its Brokers, and
-// that cached topics are returned without a fetch even when different
-// metadata responses cached them.
+// Ensure every leader RequestCachedMetadata returns is in its Brokers, that
+// a cached topic whose leader's broker left is fetched again, and that cached
+// topics are returned without a fetch even when different metadata responses
+// cached them.
 func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(3))
@@ -1977,12 +1978,12 @@ func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
 	if err := cl.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
-	check(time.Hour, 0, "t1")
-	check(time.Nanosecond, 1, "t2") // recaches t2, led by 0
+	check(time.Hour, 1, "t1")       // recaches t1, led by 0
+	check(time.Hour, 1)             // t2 is still led by 2: recaches all topics
+	check(time.Nanosecond, 1, "t2") // recaches t2 by itself
 
-	// Each cached topic keeps its leader's broker, so topics cached by
-	// different responses need no fetch, and a partial hit fetches only
-	// the missing topic.
+	// Topics cached by different responses need no fetch, and a partial
+	// hit fetches only the missing topic.
 	check(time.Hour, 0, "t1", "t2")
 	check(time.Hour, 1, "t1", "t3")
 	check(time.Hour, 0)
