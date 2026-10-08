@@ -1573,9 +1573,9 @@ func (cl *Client) Request(ctx context.Context, req kmsg.Request) (kmsg.Response,
 }
 
 // RequestCachedMetadata returns a metadata response, using any cached topic
-// data possible. Any topic with data cached longer than 'limit' has its
-// metadata updated before being returned. If limit is zero or less,
-// MetadataMinAge is used (default 5s).
+// data possible. Any topic with data cached longer than 'limit', or whose
+// cached leader no longer exists, triggers a cache update. If limit is zero
+// or less, MetadataMinAge is used (default 5s).
 //
 // This function is useful if you run a lot of functions that internally
 // fetch metadata to execute. As an example, many functions in the kadm
@@ -1701,20 +1701,18 @@ func (cl *Client) RequestCachedMetadata(ctx context.Context, req *kmsg.MetadataR
 	resp.ControllerID = cl.controllerID
 	cl.controllerIDMu.Unlock()
 
-	// A metadata response after a topic was cached can drop the topic's
-	// leader from cl.brokers. Every leader we return must be in Brokers,
-	// so we add a missing leader as the topic's own response listed it,
-	// checking the newest topics first.
+	// A metadata update after resolveTopicMeta can remove a leader from
+	// cl.brokers. We add any such leader from its topic's cached brokers.
 	known := make(map[int32]bool, len(resp.Brokers))
 	for _, b := range resp.Brokers {
 		known[b.NodeID] = true
 	}
-	newestFirst := slices.SortedFunc(maps.Values(cached), func(l, r cachedMetaTopic) int {
-		return r.when.Compare(l.when)
-	})
-	for _, t := range newestFirst {
+	for _, t := range cached {
 		for _, p := range t.t.Partitions {
-			if b, ok := t.brokers[p.Leader]; ok && !known[p.Leader] {
+			if known[p.Leader] {
+				continue
+			}
+			if b, ok := t.brokers[p.Leader]; ok {
 				b.Rack = dups(b.Rack)
 				resp.Brokers = append(resp.Brokers, b)
 				known[p.Leader] = true
@@ -3203,20 +3201,6 @@ func (cl *Client) resolveTopicMeta(ctx context.Context, topics []string, useCach
 
 	all := topics == nil
 
-	// All-topics: return a copy of the cache if fresh.
-	if all && useCache {
-		cl.metaCache.mu.Lock()
-		if cl.metaCache.topics != nil && time.Since(cl.metaCache.allAt) < limit {
-			cached := make(map[string]cachedMetaTopic, len(cl.metaCache.topics))
-			for k, v := range cl.metaCache.topics {
-				cached[k] = v
-			}
-			cl.metaCache.mu.Unlock()
-			return cached, nil
-		}
-		cl.metaCache.mu.Unlock()
-	}
-
 	// No-topics: just need brokers/controller. The main metadata loop
 	// maintains both; we only fetch if we have no broker info yet.
 	if !all && len(topics) == 0 {
@@ -3228,6 +3212,32 @@ func (cl *Client) resolveTopicMeta(ctx context.Context, topics []string, useCach
 		}
 	}
 
+	var brokers map[int32]bool
+	if useCache {
+		cl.brokersMu.RLock()
+		brokers = make(map[int32]bool, len(cl.brokers))
+		for _, b := range cl.brokers {
+			brokers[b.meta.NodeID] = true
+		}
+		cl.brokersMu.RUnlock()
+	}
+
+	// All-topics: return a copy of the cache if fresh.
+	if all && useCache {
+		var cached map[string]cachedMetaTopic
+		cl.metaCache.mu.Lock()
+		if cl.metaCache.topics != nil && time.Since(cl.metaCache.allAt) < limit {
+			cached = make(map[string]cachedMetaTopic, len(cl.metaCache.topics))
+			for k, v := range cl.metaCache.topics {
+				cached[k] = v
+			}
+		}
+		cl.metaCache.mu.Unlock()
+		if cached != nil && !leaderGone(cached, brokers) {
+			return cached, nil
+		}
+	}
+
 	// Specific topics: check cache for individual topics.
 	var results map[string]cachedMetaTopic
 	needed := topics
@@ -3235,7 +3245,7 @@ func (cl *Client) resolveTopicMeta(ctx context.Context, topics []string, useCach
 		cl.metaCache.mu.Lock()
 		if len(cl.metaCache.topics) > 0 {
 			results = make(map[string]cachedMetaTopic)
-			needed = topics[:0]
+			needed = nil // not topics[:0]: a gone leader fetches all of topics
 			for _, t := range topics {
 				tcached, exists := cl.metaCache.topics[t]
 				if exists && time.Since(tcached.when) < limit {
@@ -3246,6 +3256,9 @@ func (cl *Client) resolveTopicMeta(ctx context.Context, topics []string, useCach
 			}
 		}
 		cl.metaCache.mu.Unlock()
+		if leaderGone(results, brokers) {
+			results, needed = nil, topics
+		}
 		if results != nil && len(needed) == 0 {
 			return results, nil
 		}
@@ -3255,6 +3268,21 @@ func (cl *Client) resolveTopicMeta(ctx context.Context, topics []string, useCach
 	}
 	_, _, err := cl.fetchMetadataByName(ctx, all, needed, true, results) // prune: yes; our caller wants only these cached
 	return results, err
+}
+
+// Returns if any cached partition's leader no longer exists in the client.
+func leaderGone(cached map[string]cachedMetaTopic, brokers map[int32]bool) bool {
+	for _, ct := range cached {
+		for _, p := range ct.t.Partitions {
+			if brokers[p.Leader] {
+				continue
+			}
+			if _, listed := ct.brokers[p.Leader]; listed {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // storeCachedMeta caches the fetched metadata in the Client, and

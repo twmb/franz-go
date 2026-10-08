@@ -1888,16 +1888,18 @@ func TestRequestCachedMetadata(t *testing.T) {
 	})
 }
 
-// Ensure every leader RequestCachedMetadata returns is in its Brokers, and
-// that cached topics are returned without a fetch even when different
-// metadata responses cached them.
+// Ensure every leader RequestCachedMetadata returns is in its Brokers, that
+// a cached topic whose leader's broker left is fetched again, and that cached
+// topics are returned without a fetch even when different metadata responses
+// cached them.
 func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(3))
 	addrs := c.ListenAddrs()
 
-	// Brokers 0, 1, and 2 with every partition led by 2 until gone is set,
-	// then brokers 0 and 1 with every partition led by 0.
+	// Brokers 0, 1, and 2 with partition 0 led by 2 until gone is set, then
+	// brokers 0 and 1 with partition 0 led by 0. Partition 1 has no leader,
+	// which is not a leader that left: the cache hits below must not fetch.
 	var gone atomic.Bool
 	var topicRequests atomic.Int32
 	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
@@ -1931,7 +1933,9 @@ func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
 			st.Topic = kmsg.StringPtr(name)
 			sp := kmsg.NewMetadataResponseTopicPartition()
 			sp.Leader = leader
-			st.Partitions = append(st.Partitions, sp)
+			none := kmsg.NewMetadataResponseTopicPartition()
+			none.Partition, none.Leader, none.ErrorCode = 1, -1, kerr.LeaderNotAvailable.Code
+			st.Partitions = append(st.Partitions, sp, none)
 			resp.Topics = append(resp.Topics, st)
 		}
 		return resp, nil, true
@@ -1962,7 +1966,7 @@ func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
 		}
 		for _, rt := range resp.Topics {
 			for _, p := range rt.Partitions {
-				if !brokers[p.Leader] {
+				if p.Leader >= 0 && !brokers[p.Leader] {
 					t.Errorf("topics %v: %s leader %d is not in the returned brokers", topics, *rt.Topic, p.Leader)
 				}
 			}
@@ -1977,12 +1981,12 @@ func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
 	if err := cl.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
-	check(time.Hour, 0, "t1")
-	check(time.Nanosecond, 1, "t2") // recaches t2, led by 0
+	check(time.Hour, 1, "t1")       // recaches t1, led by 0
+	check(time.Hour, 1)             // t2 is still led by 2: recaches all topics
+	check(time.Nanosecond, 1, "t2") // recaches t2 by itself
 
-	// Each cached topic keeps its leader's broker, so topics cached by
-	// different responses need no fetch, and a partial hit fetches only
-	// the missing topic.
+	// Topics cached by different responses need no fetch, and a partial
+	// hit fetches only the missing topic.
 	check(time.Hour, 0, "t1", "t2")
 	check(time.Hour, 1, "t1", "t3")
 	check(time.Hour, 0)
