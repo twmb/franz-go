@@ -1897,8 +1897,9 @@ func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
 	c := newCluster(t, NumBrokers(3))
 	addrs := c.ListenAddrs()
 
-	// Brokers 0, 1, and 2 with every partition led by 2 until gone is set,
-	// then brokers 0 and 1 with every partition led by 0.
+	// Brokers 0, 1, and 2 with partition 0 led by 2 until gone is set, then
+	// brokers 0 and 1 with partition 0 led by 0. Partition 1 has no leader,
+	// which is not a leader that left: the cache hits below must not fetch.
 	var gone atomic.Bool
 	var topicRequests atomic.Int32
 	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
@@ -1932,7 +1933,9 @@ func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
 			st.Topic = kmsg.StringPtr(name)
 			sp := kmsg.NewMetadataResponseTopicPartition()
 			sp.Leader = leader
-			st.Partitions = append(st.Partitions, sp)
+			none := kmsg.NewMetadataResponseTopicPartition()
+			none.Partition, none.Leader, none.ErrorCode = 1, -1, kerr.LeaderNotAvailable.Code
+			st.Partitions = append(st.Partitions, sp, none)
 			resp.Topics = append(resp.Topics, st)
 		}
 		return resp, nil, true
@@ -1963,7 +1966,7 @@ func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
 		}
 		for _, rt := range resp.Topics {
 			for _, p := range rt.Partitions {
-				if !brokers[p.Leader] {
+				if p.Leader >= 0 && !brokers[p.Leader] {
 					t.Errorf("topics %v: %s leader %d is not in the returned brokers", topics, *rt.Topic, p.Leader)
 				}
 			}
