@@ -1704,17 +1704,17 @@ func (cl *Client) RequestCachedMetadata(ctx context.Context, req *kmsg.MetadataR
 	// resolveTopicMeta refetches a topic whose leader left cl.brokers, but
 	// a metadata response after its check can drop the leader again. Every
 	// leader we return must be in Brokers, so we add a missing leader as
-	// the topic's own response listed it, checking the newest topics first.
+	// the topic's own response listed it.
 	known := make(map[int32]bool, len(resp.Brokers))
 	for _, b := range resp.Brokers {
 		known[b.NodeID] = true
 	}
-	newestFirst := slices.SortedFunc(maps.Values(cached), func(l, r cachedMetaTopic) int {
-		return r.when.Compare(l.when)
-	})
-	for _, t := range newestFirst {
+	for _, t := range cached {
 		for _, p := range t.t.Partitions {
-			if b, ok := t.brokers[p.Leader]; ok && !known[p.Leader] {
+			if known[p.Leader] {
+				continue
+			}
+			if b, ok := t.brokers[p.Leader]; ok {
 				b.Rack = dups(b.Rack)
 				resp.Brokers = append(resp.Brokers, b)
 				known[p.Leader] = true
@@ -3280,7 +3280,10 @@ func (cl *Client) resolveTopicMeta(ctx context.Context, topics []string, useCach
 func leaderGone(cached map[string]cachedMetaTopic, brokers map[int32]bool) bool {
 	for _, ct := range cached {
 		for _, p := range ct.t.Partitions {
-			if _, listed := ct.brokers[p.Leader]; listed && !brokers[p.Leader] {
+			if brokers[p.Leader] {
+				continue
+			}
+			if _, listed := ct.brokers[p.Leader]; listed {
 				return true
 			}
 		}
