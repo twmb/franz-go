@@ -866,6 +866,8 @@ func (c *connTimeouter) timeouts(req kmsg.Request) (r, w time.Duration) {
 		return def + millis(t.timeout), def
 	case *fetchRequest:
 		return def + millis(t.maxWait), def
+	case *kmsg.ListOffsetsRequest:
+		return def + millis(t.TimeoutMillis), def
 	case *kmsg.FetchRequest:
 		return def + millis(t.MaxWaitMillis), def
 	case *kmsg.ShareFetchRequest:
@@ -3549,6 +3551,7 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request, _ er
 		r := kmsg.NewPtrListOffsetsRequest()
 		r.ReplicaID = req.ReplicaID
 		r.IsolationLevel = req.IsolationLevel
+		r.TimeoutMillis = req.TimeoutMillis
 		return r
 	}
 

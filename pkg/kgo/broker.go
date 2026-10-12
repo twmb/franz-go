@@ -166,7 +166,9 @@ type broker struct {
 	//
 	// Produce requests go to cxnProduce, fetch to cxnFetch, join/sync go
 	// to cxnGroup, anything with TimeoutMillis goes to cxnSlow, and
-	// everything else goes to cxnNormal.
+	// everything else goes to cxnNormal. ListOffsets v10+ has
+	// TimeoutMillis, but Kafka answers it late only when it reads tiered
+	// storage, so ListOffsets stays on cxnNormal.
 	cxnNormal  *brokerCxn
 	cxnProduce *brokerCxn
 	cxnFetch   *brokerCxn
@@ -692,6 +694,7 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 		isFetchCxn = true
 	case reqKey == 11 || reqKey == 14: // join || sync
 		pcxn = &b.cxnGroup
+	case reqKey == 2: // list offsets stays on cxnNormal
 	case isTimeout:
 		pcxn = &b.cxnSlow
 	}
