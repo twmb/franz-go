@@ -624,12 +624,16 @@ start:
 
 	rt, _ := cxn.cl.connTimeouter.timeouts(req)
 
+	ctx, promise := pr.ctx, pr.promise
+	if cxn.isNormalCxn {
+		ctx, promise = cxn.abandonOnCancel(ctx, promise)
+	}
 	cxn.waitResp(promisedResp{
-		pr.ctx,
+		ctx,
 		corrID,
 		req.IsFlexible() && req.Key() != 18, // response header not flexible if ApiVersions; see promisedResp doc
 		req.ResponseKind(),
-		pr.promise,
+		promise,
 		rt,
 		bytesWritten,
 		writeWait,
@@ -747,6 +751,8 @@ doConnect:
 		conn:   conn,
 		br:     bufio.NewReaderSize(conn, 4<<10),
 		deadCh: make(chan struct{}),
+
+		isNormalCxn: pcxn == &b.cxnNormal,
 	}
 	cxn.unwatchClientCtx = context.AfterFunc(b.cl.ctx, func() { conn.SetDeadline(time.Now()) })
 	if err = cxn.init(isProduceCxn, tries); err != nil {
@@ -936,6 +942,8 @@ type brokerCxn struct {
 	// reauthentication can never happen in place; see handleReq and
 	// loadConnection.
 	hasDiscard bool
+
+	isNormalCxn bool // see abandonOnCancel
 
 	// reauthPending is set by the broker worker when the sasl expiry has
 	// passed but responses are still in flight (handleResps owns reads,
@@ -1716,6 +1724,30 @@ func (cxn *brokerCxn) die() {
 	close(cxn.deadCh)
 	cxn.resps.die()
 	cxn.failParked()
+}
+
+// On cxnNormal, a request canceled after it is written fails immediately and
+// its response is dropped when it arrives, rather than killing the
+// connection: Kafka handles the request regardless, and killing the
+// connection fails every request in flight on it. Other connections still
+// die on cancel: Kafka can hold their requests for a long time and handles
+// one request per connection at a time.
+func (cxn *brokerCxn) abandonOnCancel(ctx context.Context, promise func(kmsg.Response, error)) (context.Context, func(kmsg.Response, error)) {
+	if ctx.Done() == nil || ctx == cxn.cl.ctx {
+		return ctx, promise
+	}
+	stop := context.AfterFunc(ctx, func() {
+		err := ctx.Err()
+		if cxn.cl.ctx.Err() != nil {
+			err = ErrClientClosed
+		}
+		promise(nil, err)
+	})
+	return context.WithoutCancel(ctx), func(resp kmsg.Response, err error) {
+		if stop() { // false: the cancel already failed the promise
+			promise(resp, err)
+		}
+	}
 }
 
 // waitResp, called serially by a broker's handleReqs, manages handling a

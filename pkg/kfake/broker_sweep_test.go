@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -677,5 +678,67 @@ func TestApiVersionsLiteralRequest(t *testing.T) {
 	}
 	if resp.ErrorCode != 0 || len(resp.ApiKeys) == 0 {
 		t.Fatalf("got error code %d with %d keys, want no error and the key table", resp.ErrorCode, len(resp.ApiKeys))
+	}
+}
+
+// brokerConnects counts successful connections to discovered brokers.
+type brokerConnects struct{ n atomic.Int32 }
+
+func (h *brokerConnects) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
+	if err == nil && meta.NodeID >= 0 {
+		h.n.Add(1)
+	}
+}
+
+// Canceling a request on the normal connection while its response is
+// outstanding fails the request right away and keeps the connection: the
+// broker handles the request either way. Before, the cancel killed the
+// connection, failing anything else in flight on it, and the next request
+// dialed a new one.
+func TestCanceledRequestKeepsNormalConnection(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1))
+	connects := new(brokerConnects)
+	cl := newPlainClient(t, c, kgo.WithHooks(connects))
+	br := discoverBroker(t, cl)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// ListGroups goes on the normal connection, and kgo never issues it
+	// itself.
+	if _, err := br.Request(ctx, kmsg.NewPtrListGroupsRequest()); err != nil {
+		t.Fatalf("first request failed: %v", err)
+	}
+	before := connects.n.Load()
+
+	held, release := hold(c, kmsg.ListGroups, 0)
+	reqCtx, reqCancel := context.WithCancel(ctx)
+	errc := make(chan error, 1)
+	go func() {
+		_, err := br.Request(reqCtx, kmsg.NewPtrListGroupsRequest())
+		errc <- err
+	}()
+	select {
+	case <-held:
+	case <-ctx.Done():
+		t.Fatal("ListGroups never reached the broker")
+	}
+	reqCancel()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled request: got %v, want context.Canceled", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("canceled request did not return")
+	}
+	release()
+
+	if _, err := br.Request(ctx, kmsg.NewPtrListGroupsRequest()); err != nil {
+		t.Fatalf("request after the canceled one failed: %v", err)
+	}
+	if after := connects.n.Load(); after != before {
+		t.Fatalf("canceling a request reconnected: %d connections before, %d after", before, after)
 	}
 }
