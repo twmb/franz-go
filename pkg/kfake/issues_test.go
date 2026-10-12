@@ -5129,3 +5129,155 @@ func TestIssue1484OtherPartition(t *testing.T) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
+
+// TestIssue1485 verifies that an eager member does not keep consuming
+// partitions that were revoked while fetchOffsets waited on its OffsetFetch,
+// with and without an AdjustFetchOffsetsFn (#1485 used one). The broker holds
+// member A's OffsetFetch until A's OnPartitionsRevoked releases it, and the
+// callback returns only once fetchOffsets has the response or was canceled.
+func TestIssue1485(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		opts []kgo.Opt
+	}{
+		{"no_adjust_fn", nil},
+		{"adjust_fn", []kgo.Opt{kgo.AdjustFetchOffsetsFn(func(_ context.Context, offsets map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error) {
+			return offsets, nil
+		})}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const (
+				topic        = "issue-1485"
+				group        = "issue-1485-g"
+				partitions   = 4
+				perPartition = 100
+			)
+			c := newCluster(t, SeedTopics(partitions, topic))
+
+			producer := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+			var records []*kgo.Record
+			for i := range partitions * perPartition {
+				records = append(records, &kgo.Record{Topic: topic, Partition: int32(i % partitions), Value: []byte("v" + strconv.Itoa(i))})
+			}
+			produceSync(t, producer, records...)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			held, release := hold(c, kmsg.OffsetFetch, 0)
+			logger := &fetchReturnedLogger{returned: make(chan struct{})}
+
+			var (
+				mu    sync.Mutex
+				owned = make(map[int32]bool)
+				first sync.Once
+			)
+			a := newPlainClient(t, c, append([]kgo.Opt{
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.Balancers(kgo.RoundRobinBalancer()),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.DisableAutoCommit(),
+				kgo.FetchMaxWait(50 * time.Millisecond),
+				kgo.HeartbeatInterval(30 * time.Second), // a heartbeat would wait behind the held OffsetFetch
+				kgo.WithLogger(logger),
+				kgo.OnPartitionsAssigned(func(_ context.Context, _ *kgo.Client, m map[string][]int32) {
+					mu.Lock()
+					defer mu.Unlock()
+					for _, p := range m[topic] {
+						owned[p] = true
+					}
+				}),
+				kgo.OnPartitionsRevoked(func(_ context.Context, _ *kgo.Client, m map[string][]int32) {
+					mu.Lock()
+					for _, p := range m[topic] {
+						delete(owned, p)
+					}
+					mu.Unlock()
+					first.Do(func() {
+						release()
+						select {
+						case <-logger.returned:
+						case <-time.After(10 * time.Second):
+							t.Error("fetchOffsets never got the released OffsetFetch")
+						}
+					})
+				}),
+			}, tc.opts...)...)
+
+			// A joins alone, owns everything, and its OffsetFetch is now held.
+			select {
+			case <-held:
+			case <-ctx.Done():
+				t.Fatal("A never issued its OffsetFetch")
+			}
+
+			// B's join puts the group into PreparingRebalance; A then rejoins on
+			// demand rather than on a heartbeat error.
+			newPlainClient(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.Balancers(kgo.RoundRobinBalancer()),
+			)
+			if _, err := c.WaitGroupInfo(ctx, group, func(g *GroupInfo) bool {
+				return g != nil && g.State == "PreparingRebalance" && len(g.Members) == 2
+			}); err != nil {
+				t.Fatalf("group never prepared to rebalance with B joined: %v", err)
+			}
+			a.ForceRebalance()
+
+			// Consume until A has every record of every partition it owns in the
+			// new session. Any record outside the current assignment is a cursor
+			// that survived the revoke.
+			seen := make(map[int32]int)
+			for {
+				fs := a.PollFetches(ctx)
+				mu.Lock()
+				var stale []string
+				fs.EachRecord(func(r *kgo.Record) {
+					if !owned[r.Partition] {
+						stale = append(stale, "p"+strconv.Itoa(int(r.Partition))+"@"+strconv.FormatInt(r.Offset, 10))
+					}
+					seen[r.Partition]++
+				})
+				done := len(owned) > 0 && len(owned) < partitions
+				for p := range owned {
+					if seen[p] < perPartition {
+						done = false
+					}
+				}
+				mu.Unlock()
+				if len(stale) > 0 {
+					t.Fatalf("A polled %d records for partitions it does not own, e.g. %v", len(stale), stale[:min(10, len(stale))])
+				}
+				if done {
+					return
+				}
+				if ctx.Err() != nil {
+					mu.Lock()
+					t.Errorf("A owns %v but consumed %v", owned, seen)
+					mu.Unlock()
+					t.FailNow()
+				}
+			}
+		})
+	}
+}
+
+// fetchReturnedLogger closes returned the first time kgo logs that
+// fetchOffsets has its OffsetFetch response, or that it was canceled while
+// waiting for it.
+type fetchReturnedLogger struct {
+	returned chan struct{}
+	once     sync.Once
+}
+
+func (*fetchReturnedLogger) Level() kgo.LogLevel { return kgo.LogLevelDebug }
+
+func (l *fetchReturnedLogger) Log(_ kgo.LogLevel, msg string, _ ...any) {
+	if msg == "fetch offsets returned" || msg == "fetch offsets failed due to context cancelation" {
+		l.once.Do(func() { close(l.returned) })
+	}
+}

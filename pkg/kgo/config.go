@@ -2198,15 +2198,15 @@ func BlockRebalanceOnPoll() GroupOpt {
 //
 // This function should not exceed the rebalance interval. It is possible
 // for the group, immediately after finishing a balance, to re-enter a new balancing
-// session. This function is passed a context that is canceled if the current group
-// session finishes (i.e., after revoking).
+// session. This function is passed a context that is canceled when the current
+// group session begins revoking.
 //
 // If you are resetting the position of the offset, you may want to clear any existing
 // "epoch" with WithEpoch(-1). If the epoch is non-negative, the client performs
 // data loss detection, which may result in errors and unexpected behavior.
 //
-// This function is called after OnPartitionsAssigned and may be called before
-// or after OnPartitionsRevoked.
+// This function is called after OnPartitionsAssigned and before
+// OnPartitionsRevoked.
 func AdjustFetchOffsetsFn(adjustOffsetsBeforeAssign func(context.Context, map[string]map[int32]Offset) (map[string]map[int32]Offset, error)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.adjustOffsetsBeforeAssign = adjustOffsetsBeforeAssign }}
 }
@@ -2314,11 +2314,11 @@ func OnPartitionsCallbackBlocked(fn func(context.Context, *Client)) GroupOpt {
 //
 // This function should not exceed the rebalance interval. It is possible for
 // the group, immediately after finishing a balance, to re-enter a new
-// balancing session. This function is passed a context that is canceled if the
-// current group session finishes (i.e., after revoking).
+// balancing session. This function is passed a context that is canceled when the
+// current group session begins revoking.
 //
-// This function is called after OnPartitionsAssigned and may be called before
-// or after OnPartitionsRevoked.
+// This function is called after OnPartitionsAssigned and before
+// OnPartitionsRevoked.
 func OnOffsetsFetched(onFetched func(context.Context, *Client, *kmsg.OffsetFetchResponse) error) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onFetched = onFetched }}
 }
