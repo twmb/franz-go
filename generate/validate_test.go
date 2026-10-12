@@ -476,6 +476,27 @@ func validateMessage(t *testing.T, msg kafkaMessage, dsl *Struct) {
 	for v := validVR.min; v <= maxV; v++ {
 		compareFieldsAtVersion(t, msg.Name, v, dsl.FlexibleAt, msg.Fields, dsl.Fields, commons)
 	}
+
+	// A request's top-level TimeoutMs is how long Kafka can hold the
+	// request before answering. It must use the special TimeoutMillis
+	// field so that the request implements kmsg.TimeoutRequest: kgo sends
+	// those on their own connection and waits longer for their responses.
+	if msg.Type == "request" {
+		for _, jf := range msg.Fields {
+			if !strings.EqualFold(jf.Name, "TimeoutMs") {
+				continue
+			}
+			var special bool
+			for _, df := range dsl.Fields {
+				if _, ok := df.Type.(Timeout); ok {
+					special = true
+				}
+			}
+			if !special {
+				t.Errorf("JSON has TimeoutMs (versions %s), but the DSL does not use the special TimeoutMillis field", jf.Versions)
+			}
+		}
+	}
 }
 
 func compareFieldsAtVersion(t *testing.T, msgName string, version, flexibleAt int, jsonFields []kafkaField, dslFields []StructField, commons map[string]kafkaStruct) {
