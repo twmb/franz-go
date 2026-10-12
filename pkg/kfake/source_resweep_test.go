@@ -204,6 +204,56 @@ func TestUndefinedEpochStays(t *testing.T) {
 	}
 }
 
+// TestEpochBumpKeepsCursor requires the cursor to stay where it was when the
+// leader epoch is bumped with nothing written since. The epoch we consumed at
+// ends at the log end, so the validation finds no loss, and the AtEnd reset
+// does not skip the records past the cursor.
+func TestEpochBumpKeepsCursor(t *testing.T) {
+	t.Parallel()
+
+	const (
+		topic = "epoch-bump"
+		nrecs = 8
+		at    = 5
+	)
+
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	produceN(t, c, topic, nrecs)
+
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeStartOffset(kgo.NewOffset().AtStart()),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
+		kgo.DisableFetchSessions(),
+		kgo.FetchMaxWait(100*time.Millisecond),
+	)
+	consumeThenPause(t, cl, topic, at)
+
+	validations := c.Fault(Fault{Keys: []kmsg.Key{kmsg.OffsetForLeaderEpoch}, Observe: true, Count: -1})
+	if err := c.MoveTopicPartition(topic, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	cl.ResumeFetchTopics(topic)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	if err := validations.Wait(ctx, 1); err != nil {
+		t.Fatal("the epoch validation was never issued")
+	}
+
+	dl, got := pollDataLoss(cl, 4*time.Second)
+	if dl != nil {
+		t.Errorf("reported data loss: %v", dl)
+	}
+	if len(got) != nrecs-at {
+		t.Fatalf("consumed %d records after the validation, want %d", len(got), nrecs-at)
+	}
+	for i, r := range got {
+		if want := int64(at + i); r.Offset != want {
+			t.Errorf("record %d is offset %d, want %d", i, r.Offset, want)
+		}
+	}
+}
+
 // TestAuditFetchTopLevelErrorBackoff returns an unexpected top-level error from
 // every classic Fetch (the persistent shape: a non-conformant or future broker
 // answering a code kgo's fetch-session arms do not recognize) and asserts the

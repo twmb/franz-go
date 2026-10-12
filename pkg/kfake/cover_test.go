@@ -1503,41 +1503,66 @@ func TestCoordinatorAPIs(t *testing.T) {
 	}
 }
 
-// TestOffsetForLeaderEpochCurrentEpoch verifies that querying the current
-// epoch returns the high watermark as the end offset.
-func TestOffsetForLeaderEpochCurrentEpoch(t *testing.T) {
+// TestOffsetForLeaderEpochLogEnd verifies that an epoch with no later batch
+// ends at the high watermark, with the last batch's epoch, or the requested
+// epoch if the log is empty.
+func TestOffsetForLeaderEpochLogEnd(t *testing.T) {
 	t.Parallel()
-	topic := "ofle-current"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	const topic = "ofle-log-end"
+	for _, test := range []struct {
+		name      string
+		produce   int
+		trim      bool // delete every record before bumping
+		bumps     int
+		epoch     int32
+		wantEpoch int32
+		wantEnd   int64
+	}{
+		{name: "current epoch", produce: 5, wantEnd: 5},
+		{name: "newest logged epoch", produce: 5, bumps: 1, wantEnd: 5},
+		{name: "epoch with no batches", produce: 5, bumps: 2, epoch: 1, wantEnd: 5},
+		{name: "empty", bumps: 1},
+		{name: "trimmed", produce: 5, trim: true, bumps: 1, wantEnd: 5},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
-	for range 5 {
-		if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
-			t.Fatal(err)
-		}
-	}
+			produceN(t, c, topic, test.produce)
+			adm := kadm.NewClient(newPlainClient(t, c))
+			if test.trim {
+				offsets := kadm.Offsets{}
+				offsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: int64(test.produce)})
+				dresp, err := adm.DeleteRecords(ctx, offsets)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := dresp.Error(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range test.bumps {
+				if err := c.MoveTopicPartition(topic, 0, 0); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	adm := kadm.NewClient(cl)
-	var req kadm.OffsetForLeaderEpochRequest
-	req.Add(topic, 0, 0) // partition 0, epoch 0
-	resp, err := adm.OffsetForLeaderEpoch(ctx, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, ok := resp[topic][0]
-	if !ok {
-		t.Fatal("no response for partition 0")
-	}
-	if r.Err != nil {
-		t.Fatal(r.Err)
-	}
-	if r.EndOffset != 5 {
-		t.Errorf("expected EndOffset=5 (HWM), got %d", r.EndOffset)
-	}
-	if r.LeaderEpoch != 0 {
-		t.Errorf("expected LeaderEpoch=0, got %d", r.LeaderEpoch)
+			var req kadm.OffsetForLeaderEpochRequest
+			req.Add(topic, 0, test.epoch)
+			resp, err := adm.OffsetForLeaderEpoch(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := resp[topic][0]
+			if r.Err != nil {
+				t.Fatal(r.Err)
+			}
+			if r.LeaderEpoch != test.wantEpoch || r.EndOffset != test.wantEnd {
+				t.Errorf("got epoch %d end offset %d, want %d %d", r.LeaderEpoch, r.EndOffset, test.wantEpoch, test.wantEnd)
+			}
+		})
 	}
 }
 
@@ -1602,35 +1627,6 @@ func TestOffsetForLeaderEpochAfterLeaderChange(t *testing.T) {
 	}
 	if sp.LeaderEpoch != 0 {
 		t.Errorf("expected LeaderEpoch=0, got %d", sp.LeaderEpoch)
-	}
-}
-
-// TestOffsetForLeaderEpochEmptyPartition verifies that querying the epoch
-// of a partition with no batches returns offset 0.
-func TestOffsetForLeaderEpochEmptyPartition(t *testing.T) {
-	t.Parallel()
-	topic := "ofle-empty"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Move partition to bump epoch, but don't produce. This tests the
-	// "no batches" path (lines 97-105 in the handler).
-	c.MoveTopicPartition(topic, 0, 0) // epoch 0 -> 1
-	adm := kadm.NewClient(newPlainClient(t, c))
-	var req kadm.OffsetForLeaderEpochRequest
-	req.Add(topic, 0, 0) // query for old epoch 0
-	resp, err := adm.OffsetForLeaderEpoch(ctx, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := resp[topic][0]
-	if r.Err != nil {
-		t.Fatal(r.Err)
-	}
-	// No batches at any epoch, so the handler returns epoch=current, offset=0.
-	if r.EndOffset != 0 {
-		t.Errorf("expected EndOffset=0 for empty partition, got %d", r.EndOffset)
 	}
 }
 
