@@ -85,20 +85,6 @@ type groupConsumer struct {
 	// hard error once the heartbeat/fetch has returned.
 	fetching map[string]map[int32]struct{}
 
-	// onFetchedMu ensures we do not call onFetched nor adjustOffsets
-	// concurrent with onRevoked.
-	//
-	// The group session itself ensures that OnPartitions functions are
-	// serial, but offset fetching is concurrent with heartbeating and can
-	// finish before or after heartbeating has already detected a revoke.
-	// To make user lives easier, we guarantee that offset fetch callbacks
-	// cannot be concurrent with onRevoked with this mu. If fetch callbacks
-	// are present, we hook this mu into onRevoked, and we grab it in the
-	// locations fetch callbacks are called. We only have to worry about
-	// onRevoked because fetching offsets occurs after onAssigned, and
-	// onLost happens after fetching offsets is done.
-	onFetchedMu xsync.Mutex
-
 	// leader is whether we are the leader right now. This is set to false
 	//
 	//  - set to false at the beginning of a join group session
@@ -418,15 +404,6 @@ func (c *consumer) initGroup() {
 				}
 				user(ctx, cl, dup)
 			}
-		}
-	}
-
-	if g.cfg.onFetched != nil || g.cfg.adjustOffsetsBeforeAssign != nil {
-		revoked := g.cfg.onRevoked
-		g.cfg.onRevoked = func(ctx context.Context, cl *Client, m map[string][]int32) {
-			g.onFetchedMu.Lock()
-			defer g.onFetchedMu.Unlock()
-			revoked(ctx, cl, m)
 		}
 	}
 
@@ -765,9 +742,6 @@ const (
 // Lastly, for cooperative consumers, this must selectively delete what was
 // lost from the uncommitted map.
 func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leaving bool) {
-	g.c.waitAndAddRebalance()
-	defer g.c.unaddRebalance()
-
 	if !g.cooperative.Load() || leaving { // stage == revokeThisSession if not cooperative
 		// If we are an eager consumer, we stop fetching all of our
 		// current partitions as we will be revoking them.
@@ -947,6 +921,9 @@ type assignRevokeSession struct {
 	prerevokeDone chan struct{}
 	assignDone    chan struct{}
 	revokeDone    chan struct{}
+
+	cancelFetch context.CancelFunc
+	fetchDone   chan struct{}
 }
 
 func newAssignRevokeSession() *assignRevokeSession {
@@ -954,6 +931,7 @@ func newAssignRevokeSession() *assignRevokeSession {
 		prerevokeDone: make(chan struct{}),
 		assignDone:    make(chan struct{}),
 		revokeDone:    make(chan struct{}),
+		fetchDone:     make(chan struct{}),
 	}
 }
 
@@ -972,7 +950,9 @@ func (s *assignRevokeSession) prerevoke(g *groupConsumer, lost map[string][]int3
 	go func() {
 		defer close(s.prerevokeDone)
 		if g.cooperative.Load() && len(lost) > 0 {
+			g.c.waitAndAddRebalance()
 			g.revoke(revokeLastSession, lost, false)
+			g.c.unaddRebalance()
 		}
 		// Now that prerevoke is complete, clear prerevoking so
 		// subsequent heartbeats resume sending full requests. For 848,
@@ -1021,10 +1001,19 @@ func (s *assignRevokeSession) assign(g *groupConsumer, newAssigned map[string][]
 // This may not run before returning from the heartbeat loop: if we encounter a
 // fatal error, we return before revoking so that we can instead call onLost in
 // the manage loop.
+//
+// Before revoking, this waits for AllowRebalance (BlockRebalanceOnPoll) so
+// onRevoked does not run while polled records are processed, then cancels
+// fetchOffsets and waits for it to return so it cannot assign partitions this
+// revoke takes away.
 func (s *assignRevokeSession) revoke(g *groupConsumer, leaving bool) <-chan struct{} {
 	go func() {
 		defer close(s.revokeDone)
 		<-s.assignDone
+		g.c.waitAndAddRebalance()
+		defer g.c.unaddRebalance()
+		s.cancelFetch()
+		<-s.fetchDone
 		g.revoke(revokeThisSession, nil, leaving)
 	}()
 	return s.revokeDone
@@ -1085,6 +1074,7 @@ func (g *groupConsumer) setupAssignedAndHeartbeat(initialHb time.Duration, hbfn 
 	// This will continue until the heartbeat errors, the group is killed,
 	// or the fetch offsets below errors.
 	ctx, cancel := context.WithCancel(g.ctx)
+	s.cancelFetch = cancel
 	go func() {
 		defer cancel() // potentially kill offset fetching
 		g.cfg.logger.Log(LogLevelInfo, "beginning heartbeat loop", "group", g.cfg.group)
@@ -1100,8 +1090,7 @@ func (g *groupConsumer) setupAssignedAndHeartbeat(initialHb time.Duration, hbfn 
 	// The difference between fetchDone and fetchErrCh is that fetchErrCh
 	// can kill heartbeating, or signal it to continue, while fetchDone
 	// is specifically used for this function's return.
-	fetchDone := make(chan struct{})
-	defer func() { <-fetchDone }()
+	defer func() { <-s.fetchDone }()
 
 	// Before we fetch offsets, we wait for the user's onAssign callback to
 	// be done. This ensures a few things:
@@ -1135,12 +1124,12 @@ func (g *groupConsumer) setupAssignedAndHeartbeat(initialHb time.Duration, hbfn 
 
 	if len(added) > 0 {
 		go func() {
-			defer close(fetchDone)
+			defer close(s.fetchDone)
 			defer close(fetchErrCh)
 			fetchErrCh <- g.fetchOffsets(ctx, added)
 		}()
 	} else {
-		close(fetchDone)
+		close(s.fetchDone)
 		close(fetchErrCh)
 	}
 
@@ -1366,6 +1355,10 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 			// If the err is context.Canceled, the group is being
 			// left and we revoke everything.
 			revoked = s.revoke(g, errors.Is(err, context.Canceled))
+			// The revoke cancels fetchOffsets; ignore the resulting
+			// context.Canceled, which manage would treat as leaving
+			// the group.
+			fetchErrCh = nil
 		}
 
 		// We always save the latest error; generally this should be
@@ -2306,17 +2299,13 @@ start:
 	}
 
 	if g.cfg.onFetched != nil {
-		g.onFetchedMu.Lock()
 		err = g.cfg.onFetched(ctx, g.cl, resp)
-		g.onFetchedMu.Unlock()
 		if err != nil {
 			return err
 		}
 	}
 	if g.cfg.adjustOffsetsBeforeAssign != nil {
-		g.onFetchedMu.Lock()
 		offsets, err = g.cfg.adjustOffsetsBeforeAssign(ctx, offsets)
-		g.onFetchedMu.Unlock()
 		if err != nil {
 			return err
 		}
