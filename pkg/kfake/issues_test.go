@@ -1969,6 +1969,9 @@ func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
 				if p.Leader >= 0 && !brokers[p.Leader] {
 					t.Errorf("topics %v: %s leader %d is not in the returned brokers", topics, *rt.Topic, p.Leader)
 				}
+				if gone.Load() && p.Leader == 2 {
+					t.Errorf("topics %v: %s leader 2 is gone", topics, *rt.Topic)
+				}
 			}
 		}
 	}
@@ -1986,10 +1989,16 @@ func TestRequestCachedMetadataLeaderInBrokers(t *testing.T) {
 	check(time.Nanosecond, 1, "t2") // recaches t2 by itself
 
 	// Topics cached by different responses need no fetch, and a partial
-	// hit fetches only the missing topic.
+	// hit fetches every topic asked for.
 	check(time.Hour, 0, "t1", "t2")
 	check(time.Hour, 1, "t1", "t3")
 	check(time.Hour, 0)
+
+	// Broker 2 leads again, then the fetch for a miss drops it.
+	gone.Store(false)
+	check(time.Nanosecond, 1) // recaches all topics, led by 2
+	gone.Store(true)
+	check(time.Hour, 1, "t1", "t4") // t4 is a miss: fetches t1 with it, led by 0
 }
 
 func TestKadmCachedMetadata(t *testing.T) {

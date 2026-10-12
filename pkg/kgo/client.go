@@ -1701,8 +1701,9 @@ func (cl *Client) RequestCachedMetadata(ctx context.Context, req *kmsg.MetadataR
 	resp.ControllerID = cl.controllerID
 	cl.controllerIDMu.Unlock()
 
-	// A metadata update after resolveTopicMeta can remove a leader from
-	// cl.brokers. We add any such leader from its topic's cached brokers.
+	// While we run, another metadata update (the metadata loop, a Ping) can
+	// remove a topic's leader from cl.brokers before the copy above. We add
+	// that leader from the brokers the topic was cached with.
 	known := make(map[int32]bool, len(resp.Brokers))
 	for _, b := range resp.Brokers {
 		known[b.NodeID] = true
@@ -3238,35 +3239,26 @@ func (cl *Client) resolveTopicMeta(ctx context.Context, topics []string, useCach
 		}
 	}
 
-	// Specific topics: check cache for individual topics.
-	var results map[string]cachedMetaTopic
-	needed := topics
+	// Specific topics: return the cache if every topic is fresh. Otherwise,
+	// we fetch every topic asked for, so all come from one response.
 	if len(topics) > 0 && useCache {
+		results := make(map[string]cachedMetaTopic, len(topics))
 		cl.metaCache.mu.Lock()
-		if len(cl.metaCache.topics) > 0 {
-			results = make(map[string]cachedMetaTopic)
-			needed = nil // not topics[:0]: a gone leader fetches all of topics
-			for _, t := range topics {
-				tcached, exists := cl.metaCache.topics[t]
-				if exists && time.Since(tcached.when) < limit {
-					results[t] = tcached
-				} else {
-					needed = append(needed, t)
-				}
+		for _, t := range topics {
+			tcached, exists := cl.metaCache.topics[t]
+			if !exists || time.Since(tcached.when) >= limit {
+				results = nil
+				break
 			}
+			results[t] = tcached
 		}
 		cl.metaCache.mu.Unlock()
-		if leaderGone(results, brokers) {
-			results, needed = nil, topics
-		}
-		if results != nil && len(needed) == 0 {
+		if results != nil && !leaderGone(results, brokers) {
 			return results, nil
 		}
 	}
-	if results == nil {
-		results = make(map[string]cachedMetaTopic)
-	}
-	_, _, err := cl.fetchMetadataByName(ctx, all, needed, true, results) // prune: yes; our caller wants only these cached
+	results := make(map[string]cachedMetaTopic)
+	_, _, err := cl.fetchMetadataByName(ctx, all, topics, true, results) // prune: yes; our caller wants only these cached
 	return results, err
 }
 
