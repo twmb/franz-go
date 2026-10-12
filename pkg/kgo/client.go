@@ -3499,6 +3499,7 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request, _ er
 		r := kmsg.NewPtrListOffsetsRequest()
 		r.ReplicaID = req.ReplicaID
 		r.IsolationLevel = req.IsolationLevel
+		r.TimeoutMillis = req.TimeoutMillis
 		return r
 	}
 
