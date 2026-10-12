@@ -94,15 +94,10 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 				continue
 			}
 
-			// If our epoch was bumped before anything was
-			// produced, return the epoch and a start offset of 0.
-			if !pd.hasBatches() {
-				sp.LeaderEpoch = pd.epoch
-				sp.EndOffset = 0
-				if rp.LeaderEpoch > pd.epoch {
-					sp.LeaderEpoch = -1
-					sp.EndOffset = -1
-				}
+			// Requested epoch is not yet known: keep -1 returns.
+			if rp.LeaderEpoch > pd.epoch {
+				sp.LeaderEpoch = -1
+				sp.EndOffset = -1
 				continue
 			}
 
@@ -110,37 +105,18 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 			nextEpoch := rp.LeaderEpoch + 1
 			si, mi, cur := pd.findBatchMeta(int64(nextEpoch), func(m *batchMeta) int64 { return int64(m.epoch) })
 
+			// No batch is after the requested epoch, so it ends at
+			// the log end. As in Kafka, we return the last batch's
+			// epoch, or the requested epoch if the log is empty.
 			if cur == nil {
-				// No batch carries a later epoch. That is two
-				// different situations and they need different
-				// answers.
-				//
-				// If the requested epoch is past ours, we have
-				// never heard of it: -1 is UNDEFINED_EPOCH_OFFSET
-				// and is right.
-				if rp.LeaderEpoch > pd.epoch {
-					sp.LeaderEpoch = -1
-					sp.EndOffset = -1
-					continue
-				}
-				// Otherwise the requested epoch is the newest one
-				// the log holds, and it has not ended: nothing has
-				// been written after it. Its end offset is the high
-				// watermark, which is the same answer the
-				// current-epoch branch above gives -- the only
-				// difference here is that the leader epoch has since
-				// been bumped with nothing produced under it, which
-				// is what a client sees after an election.
-				//
-				// Answering -1 says the opposite: a broker with no
-				// record of an epoch its log is full of. A client is
-				// entitled to act on that, and kgo does -- it cannot
-				// locate where the log diverged, so it resets the
-				// partition through ConsumeResetOffset, which for the
-				// common AtEnd reset skips every record between the
-				// cursor and the log end.
 				sp.LeaderEpoch = rp.LeaderEpoch
 				sp.EndOffset = pd.highWatermark
+				for i := len(pd.segments) - 1; i >= 0; i-- {
+					if idx := pd.segments[i].index; len(idx) > 0 {
+						sp.LeaderEpoch = idx[len(idx)-1].epoch
+						break
+					}
+				}
 				continue
 			}
 
