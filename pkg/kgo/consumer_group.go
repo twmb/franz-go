@@ -291,21 +291,18 @@ func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 	if c.g == nil && c.s == nil {
 		return nil
 	}
-	var immediate bool
-	if ctx == nil {
-		var cancel func()
-		ctx, cancel = context.WithCancel(context.Background())
-		cancel()
-		immediate = true
+	immediate := ctx == nil
+	if immediate {
+		ctx = cl.ctx
 	}
 
 	if c.s != nil {
 		go c.s.leave(ctx)
+		if immediate {
+			return nil
+		}
 		select {
 		case <-ctx.Done():
-			if immediate {
-				return nil
-			}
 			return ctx.Err()
 		case <-c.s.left:
 			return c.s.leaveErr
@@ -321,11 +318,11 @@ func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 		c.unaddRebalance()
 	}()
 
+	if immediate {
+		return nil
+	}
 	select {
 	case <-ctx.Done():
-		if immediate {
-			return nil
-		}
 		return ctx.Err()
 	case <-c.g.left:
 		return c.g.leaveErr

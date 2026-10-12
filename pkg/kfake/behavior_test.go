@@ -527,6 +527,30 @@ func TestOffsetCommitAfterLeaveClassic(t *testing.T) {
 	}
 }
 
+// TestLeaveGroupNilContext verifies that LeaveGroupContext(nil), which
+// returns without waiting, still sends the LeaveGroup: the member must be
+// gone once Close returns, not linger until its session times out.
+func TestLeaveGroupNilContext(t *testing.T) {
+	t.Parallel()
+	const topic, group = "leave-nil", "leave-nil-group"
+
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	cl := newPlainClient(t, c,
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topic),
+	)
+	waitStable(t, c, group, 1)
+
+	if err := cl.LeaveGroupContext(nil); err != nil {
+		t.Fatalf("leave failed: %v", err)
+	}
+	cl.Close() // waits for the leave to finish
+
+	if g := c.GroupInfo(group); g != nil && len(g.Members) > 0 {
+		t.Fatalf("member still in the group after leaving: %+v", g.Members)
+	}
+}
+
 // TestOffsetCommitAfterLeave848 verifies that an admin-style OffsetCommit
 // (empty memberID, negative epoch) is accepted on an empty KIP-848 consumer
 // group after the member has left.
