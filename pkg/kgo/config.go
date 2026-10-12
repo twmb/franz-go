@@ -1235,9 +1235,8 @@ func DisableIdempotentWrite() ProducerOpt {
 // received it" from "the broker wrote it but the reply was lost".
 // Cancelling at this point leaves the client's idempotent sequence
 // window inconsistent with the broker: once cancelled records are
-// failed to the user, the next produce either silently gap-accepts (if
-// the broker wrote them) or hits OUT_OF_ORDER_SEQUENCE and forces the
-// client to reload its producer ID (new epoch, reset sequence). A
+// failed to the user, the client bumps its producer epoch before
+// producing again. A
 // subsequent application-level retry of the cancelled record races
 // against what the broker may already have stored - the broker cannot
 // dedupe it, and you can get duplicates. By default, the client refuses
