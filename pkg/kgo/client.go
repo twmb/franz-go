@@ -1367,8 +1367,8 @@ func (cl *Client) CloseAllowingRebalance() {
 
 // Close leaves any group and closes all connections and goroutines. This
 // function waits for the group to be left. If you want to force leave a group
-// immediately and ensure a speedy shutdown you can use LeaveGroupContext first
-// (and then Close will be immediate).
+// immediately and ensure a speedy shutdown you can use LeaveGroupContext with a
+// canceled context first (and then Close will be immediate).
 //
 // If you are group consuming and have overridden the default
 // OnPartitionsRevoked, you must manually commit offsets before closing the
