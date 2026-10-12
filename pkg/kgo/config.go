@@ -2394,6 +2394,13 @@ func AutoCommitMarks() GroupOpt {
 // increase the session timeout enough to allow time for the restart (remember
 // that the default session timeout is 45s).
 //
+// In a classic group with a cooperative balancer, if the client revoked
+// partitions in a rebalance and closes before rejoining, the client sends a
+// leave group request and logs a warning. The leave makes the group rebalance
+// and assign the revoked partitions. If the client did not leave, a restart
+// with the same instance ID would get its old assignment back, not rebalance,
+// and the revoked partitions would stay unassigned until the next rebalance.
+//
 // To actually leave the group, you must use an external admin command that
 // issues a leave group request on behalf of this instance ID (see kcl), or you
 // can manually use the kmsg package with a proper LeaveGroupRequest.

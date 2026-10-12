@@ -1360,8 +1360,9 @@ func (cl *Client) brokerRacks() map[int32]string {
 // safe. The CloseAllowingRebalance function exists a shortcut to opt into
 // allowing rebalance while closing.
 //
-// If you are using static membership, CloseAllowingRebalance will NOT send a
-// leave group request. See InstanceID for more details.
+// If you are using static membership, CloseAllowingRebalance does not send a
+// leave group request, except for one specific case noted in the [InstanceID]
+// docs.
 func (cl *Client) CloseAllowingRebalance() {
 	cl.AllowRebalance()
 	cl.Close()
@@ -1383,8 +1384,8 @@ func (cl *Client) CloseAllowingRebalance() {
 // notification of revoked partitions. If you want to automatically allow
 // rebalancing, use CloseAllowingRebalance.
 //
-// If you are using static membership, Close will NOT send a leave group
-// request. See InstanceID for more details.
+// If you are using static membership, Close does not send a leave group
+// request, except for one specific case noted in the [InstanceID] docs.
 func (cl *Client) Close() {
 	cl.close(cl.ctx)
 }
