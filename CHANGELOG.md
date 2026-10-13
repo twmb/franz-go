@@ -1,3 +1,54 @@
+v1.22.2
+===
+
+This patch fixes a few rare bugs and has a few small improvements. kfake also
+now matches Kafka more closely for static group membership, producer epochs,
+and OffsetForLeaderEpoch after a leader change (thanks
+[@qoke](https://github.com/qoke)).
+
+* In a rare case, an idempotent producer could ack a record without writing
+  it, if a context, `RecordDeliveryTimeout`, or `RecordRetries` failed a batch
+  the broker had already appended and the next batch had the same number of
+  records. Failing a sent batch now bumps the producer epoch, as the Java
+  client does. Thanks [@sklyar](https://github.com/sklyar) for the report,
+  see [#1484](https://github.com/twmb/franz-go/issues/1484).
+
+* An eager group consumer that began rebalancing while fetching offsets could
+  keep consuming partitions it revoked. `OnOffsetsFetched` and
+  `AdjustFetchOffsetsFn` are now always called before `OnPartitionsRevoked`,
+  and their context is canceled when revoking begins. Thanks
+  [@michaelwilner](https://github.com/michaelwilner) for the report and initial
+  fix, see [#1485](https://github.com/twmb/franz-go/issues/1485).
+
+* `LeaveGroupContext(nil)` now sends the leave request. Before, the member
+  stayed in the group until its session timed out. A later `Close` now waits
+  for that leave; for an immediate `Close` that skips the leave, pass a
+  canceled context instead.
+
+* A static cooperative member that closes between revoking partitions and the
+  rejoin that lets the group assign them now leaves the group with a warning.
+  Before, those partitions stayed unassigned until group membership changed.
+  Thanks [@genzgd](https://github.com/genzgd) for the report, see
+  [#1483](https://github.com/twmb/franz-go/issues/1483).
+
+* `RequestCachedMetadata` now includes every returned topic's leader in
+  `Brokers`, and refetches cached topics whose leader is no longer a known
+  broker. Thanks [@koloss2001](https://github.com/koloss2001), see
+  [#1481](https://github.com/twmb/franz-go/pull/1481).
+
+* Canceling a metadata, heartbeat, commit, or offset request no longer closes
+  its broker connection. Before, the close failed every other request in
+  flight on that connection.
+
+* ListOffsets now waits up to its `TimeoutMillis` for a response rather than
+  10s, since Kafka can hold a ListOffsets request while it reads tiered
+  storage. A `ListOffsetsRequest` you issue through the client now keeps its
+  `TimeoutMillis` rather than being reset to 30s. kmsg's `ListOffsetsRequest`
+  now implements `TimeoutRequest`.
+
+* Deps are bumped: klauspost/compress v1.20.3, pierrec/lz4 v4.1.33, and kmsg
+  v1.15.0.
+
 v1.22.1
 ===
 
