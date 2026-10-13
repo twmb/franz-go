@@ -254,6 +254,24 @@ type HookProduceBatchWritten interface {
 	OnProduceBatchWritten(meta BrokerMetadata, topic string, partition int32, metrics ProduceBatchMetrics)
 }
 
+// HookProduceRequestStart is called when the client issues a produce request
+// to a broker.
+type HookProduceRequestStart interface {
+	// OnProduceRequestStart is called before each produce request.
+	OnProduceRequestStart(meta BrokerMetadata, metrics ProduceRequestStartMetrics)
+}
+
+// ProduceRequestStartMetrics tracks information about a produce request.
+type ProduceRequestStartMetrics struct {
+	// Inflight is the number of produce requests in-flight to
+	// this broker, including this request.
+	Inflight int
+
+	// InflightWait is how long the client waited for there to be fewer than
+	// MaxProduceRequestsInflightPerBroker produce requests in-flight to this broker.
+	InflightWait time.Duration
+}
+
 // FetchBatchMetrics tracks information about fetches of batches.
 type FetchBatchMetrics struct {
 	// NumRecords is the number of records that were fetched in this batch.
@@ -434,6 +452,7 @@ func implementsAnyHook(h Hook) bool {
 		HookBrokerThrottle,
 		HookGroupManageError,
 		HookProduceBatchWritten,
+		HookProduceRequestStart,
 		HookFetchBatchRead,
 		HookProduceRecordBuffered,
 		HookProduceRecordPartitioned,
