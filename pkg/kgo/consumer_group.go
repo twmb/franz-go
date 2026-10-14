@@ -239,9 +239,9 @@ func (cl *Client) LeaveGroup() {
 // background to keep client state consistent.
 //
 // For classic consumer groups: if a rebalance is in progress, this
-// function waits for the rebalance to complete before the group can
-// be left. This is necessary to allow you to safely issue one final
-// offset commit in OnPartitionsRevoked. If you have overridden the
+// function waits for the in-flight join and sync to finish before the
+// group can be left. This is necessary to allow you to safely issue one
+// final offset commit in OnPartitionsRevoked. If you have overridden the
 // default revoke, you must manually commit offsets before leaving the
 // group. If you have configured the group with an InstanceID, this does
 // not leave the group, except for one specific case noted in the
@@ -1567,6 +1567,26 @@ start:
 
 	if err = g.handleSyncResp(protocol, syncResp); err != nil {
 		if errors.Is(err, kerr.RebalanceInProgress) {
+			// Leaving does not interrupt join and sync (see the
+			// NOTE above), so leave waits for us to return. If the
+			// group keeps going back to preparing a rebalance
+			// before our sync completes, rejoining here would hang
+			// Close for as long as that lasts.
+			//
+			// Normally the group is now preparing a rebalance on
+			// the generation we joined with, and Kafka accepts
+			// commits on that generation until the next join
+			// completes, so the final commit in OnPartitionsRevoked
+			// can still succeed. The one exception: Kafka's old
+			// group coordinator (the default before 4.0) answers
+			// this way while it is still loading the group, and the
+			// loaded group may be on an older generation. The final
+			// commit then fails, and the next owner re-reads what we
+			// consumed since our last commit.
+			if g.ctx.Err() != nil {
+				g.cfg.logger.Log(LogLevelInfo, "sync failed with RebalanceInProgress while leaving the group, not rejoining", "group", g.cfg.group)
+				return g.ctx.Err()
+			}
 			g.cfg.logger.Log(LogLevelInfo, "sync failed with RebalanceInProgress, rejoining", "group", g.cfg.group)
 			goto start
 		}
