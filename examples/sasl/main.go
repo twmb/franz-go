@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go-v2/config"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/aws"
@@ -86,12 +86,12 @@ func main() {
 		}.AsSha512Mechanism()))
 
 	case "aws-msk-iam":
-		sess, err := session.NewSession()
+		cfg, err := config.LoadDefaultConfig(context.Background())
 		if err != nil {
-			die("unable to initialize aws session: %v\n", err)
+			die("unable to load aws config: %v\n", err)
 		}
 		opts = append(opts, kgo.SASL(aws.ManagedStreamingIAM(func(ctx context.Context) (aws.Auth, error) {
-			val, err := sess.Config.Credentials.GetWithContext(ctx)
+			val, err := cfg.Credentials.Retrieve(ctx)
 			if err != nil {
 				return aws.Auth{}, err
 			}
