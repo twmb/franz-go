@@ -5,6 +5,8 @@
 //   - scram-sha-256: SCRAM-SHA-256 (requires -user and -pass)
 //   - scram-sha-512: SCRAM-SHA-512 (requires -user and -pass)
 //   - aws-msk-iam: AWS MSK IAM (uses AWS SDK default credential chain)
+//   - oauth: OAUTHBEARER with a client credentials token (requires -user,
+//     -pass, and -token-url)
 //
 // All methods use TLS by default. For plain/scram, the client uses the system
 // certificate pool. For AWS MSK IAM, credentials come from the AWS SDK.
@@ -24,15 +26,19 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/aws"
+	"github.com/twmb/franz-go/pkg/sasl/oauth"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
 var (
 	seedBrokers = flag.String("brokers", "localhost:9092", "comma delimited list of seed brokers")
-	method      = flag.String("method", "plain", "SASL method: plain, scram-sha-256, scram-sha-512, aws-msk-iam")
-	user        = flag.String("user", "", "username for PLAIN or SCRAM")
-	pass        = flag.String("pass", "", "password for PLAIN or SCRAM")
+	method      = flag.String("method", "plain", "SASL method: plain, scram-sha-256, scram-sha-512, aws-msk-iam, oauth")
+	user        = flag.String("user", "", "username for PLAIN or SCRAM, client ID for oauth")
+	pass        = flag.String("pass", "", "password for PLAIN or SCRAM, client secret for oauth")
+	tokenURL    = flag.String("token-url", "", "token endpoint for oauth")
+	scopes      = flag.String("scopes", "", "optional comma delimited scopes for oauth")
 )
 
 func die(msg string, args ...any) {
@@ -93,6 +99,28 @@ func main() {
 				SessionToken: val.SessionToken,
 				UserAgent:    "franz-go/example/v1.0.0",
 			}, nil
+		})))
+
+	case "oauth":
+		if *user == "" || *pass == "" || *tokenURL == "" {
+			die("-user, -pass, and -token-url are required for oauth\n")
+		}
+		cfg := clientcredentials.Config{
+			ClientID:     *user,
+			ClientSecret: *pass,
+			TokenURL:     *tokenURL,
+		}
+		if *scopes != "" {
+			cfg.Scopes = strings.Split(*scopes, ",")
+		}
+		// The token source caches the token until shortly before it expires.
+		ts := cfg.TokenSource(context.Background())
+		opts = append(opts, kgo.SASL(oauth.Oauth(func(context.Context) (oauth.Auth, error) {
+			tok, err := ts.Token()
+			if err != nil {
+				return oauth.Auth{}, err
+			}
+			return oauth.Auth{Token: tok.AccessToken}, nil
 		})))
 
 	default:
