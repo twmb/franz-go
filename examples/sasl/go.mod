@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/aws/aws-sdk-go v1.55.8
 	github.com/twmb/franz-go v1.22.1
+	golang.org/x/oauth2 v0.37.0
 )
 
 require (
