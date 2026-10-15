@@ -124,6 +124,7 @@ type scramClient0 struct {
 	user  string
 	bare  []byte // client-first-message-bare
 	nonce []byte // nonce in client0
+	cbind string // base64 gs2-header, the c= we expect in client-final
 }
 
 var scramUnescaper = strings.NewReplacer("=3D", "=", "=2C", ",")
@@ -146,10 +147,15 @@ func scramParseClient0(client0 []byte) (scramClient0, error) {
 	if zid != "" && zid != user {
 		return scramClient0{}, errors.New("authzid is not equal to username") // Kafka & Redpanda enforce that a present zid == username
 	}
+	gs2 := "n,,"
+	if zid != "" {
+		gs2 = "n,a=" + zid + ","
+	}
 	return scramClient0{
 		user:  scramUnescaper.Replace(user),
 		bare:  bare,
 		nonce: nonce,
+		cbind: base64.StdEncoding.EncodeToString([]byte(gs2)),
 	}, nil
 }
 
@@ -163,6 +169,7 @@ func scramServerFirst(client0 scramClient0, auth scramAuth) (scramServer0, []byt
 	return scramServer0{
 		a:      auth,
 		c0bare: client0.bare,
+		cbind:  client0.cbind,
 		s0:     serverFirst,
 	}, serverFirst
 }
@@ -171,6 +178,7 @@ func scramServerFirst(client0 scramClient0, auth scramAuth) (scramServer0, []byt
 type scramServer0 struct {
 	a      scramAuth
 	c0bare []byte
+	cbind  string
 	s0     []byte
 }
 
@@ -189,7 +197,7 @@ func (s *scramServer0) serverFinal(clientFinal []byte) ([]byte, error) {
 	if s.a.mechanism == saslScram512 {
 		h = sha512.New
 	}
-	if !bytes.Equal(channel, []byte("biws")) { // "biws" == base64("n,,")
+	if string(channel) != s.cbind { // "biws" == base64("n,,") without a zid
 		return nil, errors.New("invalid channel binding")
 	}
 	clientProof, err := base64.StdEncoding.DecodeString(string(clientProof64))
