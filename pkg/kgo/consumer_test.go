@@ -533,6 +533,182 @@ func closed(ch <-chan struct{}) bool {
 	}
 }
 
+type resumeFetchWriteHook chan time.Time
+
+func (h resumeFetchWriteHook) OnBrokerWrite(_ BrokerMetadata, key int16, _ int, _, _ time.Duration, err error) {
+	if key == 1 && err == nil {
+		select {
+		case h <- time.Now():
+		default:
+		}
+	}
+}
+
+func TestResumeFetchInterruptsIdleSibling(t *testing.T) {
+	t.Parallel()
+	for _, topics := range []bool{false, true} {
+		for _, sessions := range []bool{false, true} {
+			t.Run(fmt.Sprintf("topics=%v/sessions=%v", topics, sessions), func(t *testing.T) {
+				t.Parallel()
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+
+				metadata := kmsg.NewPtrMetadataRequest()
+				metadata.Topics = []kmsg.MetadataRequestTopic{}
+				brokers, err := metadata.RequestWith(ctx, adm())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(brokers.Brokers) == 0 {
+					t.Fatal("no brokers available")
+				}
+				hot, cold := randsha(), randsha()
+				create := kmsg.NewPtrCreateTopicsRequest()
+				for _, topic := range []string{hot, cold} {
+					ct := kmsg.NewCreateTopicsRequestTopic()
+					ct.Topic = topic
+					ct.NumPartitions = -1
+					ct.ReplicationFactor = -1
+					// Both topics must share a fetch request, even with multiple brokers.
+					ct.ReplicaAssignment = []kmsg.CreateTopicsRequestTopicReplicaAssignment{{
+						Partition: 0, Replicas: []int32{brokers.Brokers[0].NodeID},
+					}}
+					create.Topics = append(create.Topics, ct)
+				}
+				created, err := create.RequestWith(ctx, adm())
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, topic := range created.Topics {
+					if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
+						t.Fatal(err)
+					}
+					waitForTopic(t, topic.Topic, 1)
+				}
+				t.Cleanup(func() {
+					drop := kmsg.NewPtrDeleteTopicsRequest()
+					drop.TopicNames = []string{hot, cold}
+					for _, topic := range drop.TopicNames {
+						dt := kmsg.NewDeleteTopicsRequestTopic()
+						dt.Topic = kmsg.StringPtr(topic)
+						drop.Topics = append(drop.Topics, dt)
+					}
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cleanupCancel()
+					deleted, err := drop.RequestWith(cleanupCtx, adm())
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					for _, topic := range deleted.Topics {
+						if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
+							t.Error(err)
+						}
+					}
+				})
+
+				writes := make(resumeFetchWriteHook, 16)
+				opts := []Opt{FetchMaxWait(2 * time.Second), MaxConcurrentFetches(1), WithHooks(writes)}
+				if !sessions {
+					opts = append(opts, DisableFetchSessions())
+				}
+				cl, err := newTestClient(opts...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer cl.Close()
+				const hotRecords = 8
+				records := []*Record{{Topic: cold, Value: []byte("warmup")}}
+				for range hotRecords {
+					records = append(records, &Record{Topic: hot, Value: []byte("hot")})
+				}
+				if err := cl.ProduceSync(ctx, records...).FirstErr(); err != nil {
+					t.Fatal(err)
+				}
+				cl.PauseFetchTopics(hot)
+				cl.PauseFetchPartitions(map[string][]int32{hot: {0}})
+				cl.AddConsumePartitions(map[string]map[int32]Offset{
+					hot: {0: NewOffset().At(0)}, cold: {0: NewOffset().At(0)},
+				})
+				fs := cl.PollRecords(ctx, 1)
+				if err := fs.Err(); err != nil {
+					t.Fatal(err)
+				}
+				if got := fs.Records(); len(got) != 1 || got[0].Topic != cold || got[0].Offset != 0 {
+					t.Fatalf("unexpected warmup records: %v", got)
+				}
+				// The warmup establishes the fetch session when enabled. The
+				// second request has only the now-empty sibling and cannot see
+				// the hot records.
+				for range 2 {
+					select {
+					case <-writes:
+					case <-ctx.Done():
+						t.Fatal("timed out waiting for the idle fetch")
+					}
+				}
+				// Resuming unpaused partitions, or only clearing one of the
+				// independent pause scopes, must not interrupt the request.
+				cl.ResumeFetchTopics(cold)
+				cl.ResumeFetchPartitions(map[string][]int32{cold: {0}})
+				if topics {
+					cl.ResumeFetchPartitions(map[string][]int32{hot: {0}})
+				} else {
+					cl.ResumeFetchTopics(hot)
+				}
+				select {
+				case <-writes:
+					t.Fatal("a no-op resume restarted the idle fetch")
+				case <-time.After(50 * time.Millisecond):
+				}
+
+				start := time.Now()
+				if topics {
+					cl.ResumeFetchTopics(hot)
+				} else {
+					cl.ResumeFetchPartitions(map[string][]int32{hot: {0}})
+				}
+				resumed, stopResumed := context.WithTimeout(ctx, 750*time.Millisecond)
+				defer stopResumed()
+				for next := int64(0); next < hotRecords; {
+					fs := cl.PollFetches(resumed)
+					if err := fs.Err(); err != nil {
+						t.Fatalf("resumed partition is still waiting for the idle fetch: %v", err)
+					}
+					for _, r := range fs.Records() {
+						if r.Topic != hot || r.Offset != next {
+							t.Fatalf("expected topic %s offset %d, got topic %s offset %d", hot, next, r.Topic, r.Offset)
+						}
+						next++
+					}
+				}
+				t.Logf("resumed records arrived after %v", time.Since(start))
+
+				// Both partitions must continue at their next offsets after reconnecting.
+				if err := cl.ProduceSync(ctx,
+					&Record{Topic: hot, Value: []byte("next hot")},
+					&Record{Topic: cold, Value: []byte("next cold")},
+				).FirstErr(); err != nil {
+					t.Fatal(err)
+				}
+				want := map[string]int64{hot: hotRecords, cold: 1}
+				for len(want) > 0 {
+					fs := cl.PollFetches(ctx)
+					if err := fs.Err(); err != nil {
+						t.Fatal(err)
+					}
+					for _, r := range fs.Records() {
+						if offset, ok := want[r.Topic]; !ok || r.Offset != offset {
+							t.Fatalf("unexpected record after resume: topic %s offset %d", r.Topic, r.Offset)
+						}
+						delete(want, r.Topic)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestPauseIssue489(t *testing.T) {
 	t.Parallel()
 
