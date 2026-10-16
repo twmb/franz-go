@@ -791,7 +791,7 @@ func (cl *Client) PauseFetchPartitions(topicPartitions map[string][]int32) map[s
 // See the documentation on PauseFetchTopics for more details.
 func (cl *Client) ResumeFetchTopics(topics ...string) {
 	defer cl.allSources(func(s *source) {
-		s.maybeConsume()
+		s.resumeFetch()
 	})
 
 	c := &cl.consumer
@@ -809,7 +809,7 @@ func (cl *Client) ResumeFetchTopics(topics ...string) {
 // details.
 func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
 	defer cl.allSources(func(s *source) {
-		s.maybeConsume()
+		s.resumeFetch()
 	})
 
 	c := &cl.consumer

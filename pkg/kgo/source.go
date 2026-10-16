@@ -40,6 +40,7 @@ type source struct {
 	fetchState workLoop
 	sem        chan struct{} // closed when fetchable, recreated when a buffered fetch exists
 	buffered   bufferedFetch // contains a fetch the source has buffered for polling
+	resumeCh   chan struct{}
 
 	session fetchSession // supports fetch sessions as per KIP-227
 
@@ -68,9 +69,10 @@ type sourceShare struct {
 
 func (cl *Client) newSource(nodeID int32) *source {
 	s := &source{
-		cl:     cl,
-		nodeID: nodeID,
-		sem:    make(chan struct{}),
+		cl:       cl,
+		nodeID:   nodeID,
+		sem:      make(chan struct{}),
+		resumeCh: make(chan struct{}, 1),
 	}
 	if cl.cfg.disableFetchSessions {
 		s.session.kill()
@@ -784,7 +786,7 @@ func (s *source) takeBufferedFn(polled bool, offsetFn func(usedOffsets)) Fetch {
 }
 
 // createReq actually creates a fetch request.
-func (s *source) createReq() *fetchRequest {
+func (s *source) createReq(paused pausedTopics) *fetchRequest {
 	req := &fetchRequest{
 		maxWait:        s.cl.cfg.maxWait,
 		minBytes:       s.cl.cfg.minBytes,
@@ -798,8 +800,6 @@ func (s *source) createReq() *fetchRequest {
 		// modify source while the request may be reading its copy.
 		session: s.session,
 	}
-
-	paused := s.cl.consumer.loadPaused()
 
 	// While building this request, if any cursor is follow fetching and it
 	// has been more than the recheck-if-we-should-still-follow interval,
@@ -863,6 +863,32 @@ func (s *source) maybeConsume() {
 	if s.fetchState.maybeBegin() {
 		go s.loopFetch()
 	}
+}
+
+func (s *source) resumeFetch() {
+	// A fetch can contain only idle siblings while a paused partition is
+	// resumed. Buffer the notification so even a request still being built
+	// can stop waiting and include that partition in a new fetch.
+	select {
+	case s.resumeCh <- struct{}{}:
+	default:
+	}
+	s.maybeConsume()
+}
+
+func (s *source) hasResumed(paused pausedTopics) bool {
+	if len(paused) == 0 {
+		return false
+	}
+	now := s.cl.consumer.loadPaused()
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
+	for _, c := range s.cursors {
+		if paused.has(c.topic, c.partition) && !now.has(c.topic, c.partition) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *source) loopFetch() {
@@ -982,7 +1008,8 @@ func (s *source) killSessionOnClose(ctx context.Context) {
 // replica to use would not be out of date even if the consumer session is
 // changing.
 func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) (fetched bool) {
-	req := s.createReq()
+	paused := s.cl.consumer.loadPaused()
+	req := s.createReq(paused)
 
 	// For all returns, if we do not buffer our fetch, then we want to
 	// ensure our used offsets are usable again.
@@ -1028,16 +1055,28 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		})
 	}
 
-	select {
-	case <-requested:
-		// As `select` is pseudo-random when both cases are ready,
-		// check for context error in this branch to avoid retrying immediately with a failed context.
-		if isContextErr(err) && ctx.Err() != nil {
+	for {
+		select {
+		case <-requested:
+			// As `select` is pseudo-random when both cases are ready,
+			// check for context error in this branch to avoid retrying immediately with a failed context.
+			if isContextErr(err) && ctx.Err() != nil {
+				return fetched
+			}
+			fetched = true
+		case <-ctx.Done():
 			return fetched
+		case <-s.resumeCh:
+			if s.hasResumed(paused) {
+				// The broker may have advanced the session for the
+				// abandoned request. Reestablish it without advancing
+				// offsets for records we have not returned to the caller.
+				s.session.reset()
+				return true
+			}
+			continue
 		}
-		fetched = true
-	case <-ctx.Done():
-		return fetched
+		break
 	}
 
 	var didBackoff bool
