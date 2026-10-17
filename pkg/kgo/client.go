@@ -1422,24 +1422,23 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 	// assignPartitions above is synchronous.
 
 	sessCloseCtx, sessCloseCancel := context.WithTimeout(ctx, time.Second)
-	var wg sync.WaitGroup
-	cl.allSinksAndSources(func(sns sinkAndSource) {
-		if sns.source.session.id != 0 {
-			sns := sns
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				sns.source.killSessionOnClose(sessCloseCtx)
-			}()
+	var kills []*respWaiter
+	cl.allSources(func(s *source) {
+		if s.session.id != 0 {
+			if w := s.killSessionOnClose(sessCloseCtx); w != nil {
+				kills = append(kills, w)
+			}
 		}
 	})
-	wg.Wait()
+	for _, w := range kills {
+		w.wait()
+	}
 	sessCloseCancel()
 
 	// Tell the metrics loop to send its final Terminating=true push and
 	// give it 1s to do so. This must happen BEFORE we cancel the client
-	// context: the entire request path (shardedRequest's cancel watchdog,
-	// Broker.request's select, and the broker connection write/read
+	// context: the entire request path (shardedRequest's and
+	// Broker.request's AfterFunc, and the broker connection write/read
 	// loops) aborts requests once cl.ctx is dead, so a terminating push
 	// started after cancelation could never be delivered. The metrics
 	// loop cancels metrics.ctx when it exits; clients with metrics
@@ -1927,16 +1926,8 @@ type shardMerge func([]ResponseShard) (kmsg.Response, error)
 
 func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]ResponseShard, shardMerge) {
 	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		defer cancel()
-		select {
-		case <-done:
-		case <-ctx.Done():
-		case <-cl.ctx.Done():
-		}
-	}()
+	defer cancel()
+	defer context.AfterFunc(cl.ctx, cancel)()
 
 	// First, handle any sharded request. This comes before the conditional
 	// below because this handles two group requests, which we do not want
@@ -2750,49 +2741,33 @@ func (b *Broker) RetriableRequest(ctx context.Context, req kmsg.Request) (kmsg.R
 func (b *Broker) request(ctx context.Context, retry bool, req kmsg.Request) (kmsg.Response, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var resp kmsg.Response
-	var err error
-	done := make(chan struct{})
+	defer context.AfterFunc(b.cl.ctx, cancel)()
 
-	go func() {
-		defer close(done)
-
-		if !retry {
-			var br *broker
-			br, err = b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
-			if err == nil {
-				resp, err = br.waitResp(ctx, req)
-			}
-		} else {
-			r := b.cl.retryableBrokerFn(func() (*broker, error) {
-				return b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
-			})
-			// Pinned by ID: on dial failure, retry with backoff to give
-			// the broker time to come back (e.g. rolling restart).
-			// Also clear cached controller/coordinator entries pointing
-			// at this broker so other code paths re-resolve.
-			d := failDial{clearFn: func() {
-				b.cl.forgetControllerID(b.id)
-				b.cl.deleteStaleCoordinatorsByNode(b.id)
-			}}
-			r.parseRetryErr = func(_ kmsg.Response, err error) error {
-				if err != nil {
-					return d.handleDialErr(err)
-				}
-				return nil
-			}
-			resp, err = r.Request(ctx, req)
+	if !retry {
+		br, err := b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
+		if err != nil {
+			return nil, err
 		}
-	}()
-
-	select {
-	case <-done:
-		return resp, err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-b.cl.ctx.Done():
-		return nil, b.cl.ctx.Err()
+		return br.waitResp(ctx, req)
 	}
+	r := b.cl.retryableBrokerFn(func() (*broker, error) {
+		return b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
+	})
+	// Pinned by ID: on dial failure, retry with backoff to give
+	// the broker time to come back (e.g. rolling restart).
+	// Also clear cached controller/coordinator entries pointing
+	// at this broker so other code paths re-resolve.
+	d := failDial{clearFn: func() {
+		b.cl.forgetControllerID(b.id)
+		b.cl.deleteStaleCoordinatorsByNode(b.id)
+	}}
+	r.parseRetryErr = func(_ kmsg.Response, err error) error {
+		if err != nil {
+			return d.handleDialErr(err)
+		}
+		return nil
+	}
+	return r.Request(ctx, req)
 }
 
 //////////////////////

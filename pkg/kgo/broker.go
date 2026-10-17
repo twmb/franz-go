@@ -325,23 +325,24 @@ func (b *broker) push(pr promisedReq) {
 }
 
 // waitResp runs a req, waits for the resp and returns the resp and err.
-//
-// handleReqs runs at the same time. Before handleReq claims our request, just
-// before it first changes req, handleReqs can spend a long time on the
-// requests ahead of ours, on our connection's dial, ApiVersions, and SASL, and
-// on reauthenticating our connection. If ctx ends before handleReq claims the
-// request, we claim it and return: handleReq then skips it, and a connection
-// that was already dialed still finishes ApiVersions and SASL and is kept.
-// Once handleReq claims the request, it may set the version on req or write
-// it, and the caller may reuse req once we return, so we wait for the promise.
 func (b *broker) waitResp(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
-	type waiter struct {
-		claimed atomic.Bool
-		done    chan struct{}
-		resp    kmsg.Response
-		err     error
-	}
-	w := &waiter{done: make(chan struct{})}
+	return b.issue(ctx, req).wait()
+}
+
+// respWaiter waits for the response to a request from issue.
+type respWaiter struct {
+	ctx     context.Context
+	cl      *Client
+	claimed atomic.Bool
+	done    chan struct{}
+	resp    kmsg.Response
+	err     error
+}
+
+// issue issues req and returns without waiting for its response, so that a
+// caller can issue requests to many brokers before waiting on any.
+func (b *broker) issue(ctx context.Context, req kmsg.Request) *respWaiter {
+	w := &respWaiter{ctx: ctx, cl: b.cl, done: make(chan struct{})}
 	b.push(promisedReq{
 		ctx: ctx,
 		req: req,
@@ -353,17 +354,35 @@ func (b *broker) waitResp(ctx context.Context, req kmsg.Request) (kmsg.Response,
 		claimed: &w.claimed,
 		key:     req.Key(),
 	})
+	return w
+}
 
+// wait returns the request's resp and err, or the ctx error if the request's
+// ctx ends first. If the client has closed, a failed request returns
+// ErrClientClosed: the close is what failed it.
+//
+// handleReqs runs at the same time. Before handleReq claims our request, just
+// before it first changes req, handleReqs can spend a long time on the
+// requests ahead of ours, on our connection's dial, ApiVersions, and SASL, and
+// on reauthenticating our connection. If ctx ends before handleReq claims the
+// request, we claim it and return: handleReq then skips it, and a connection
+// that was already dialed still finishes ApiVersions and SASL and is kept.
+// Once handleReq claims the request, it may set the version on req or write
+// it, and the caller may reuse req once we return, so we wait for the promise.
+func (w *respWaiter) wait() (kmsg.Response, error) {
 	select {
 	case <-w.done:
-	case <-ctx.Done():
+	case <-w.ctx.Done():
 		if w.claimed.CompareAndSwap(false, true) {
-			if b.cl.ctx.Err() != nil {
+			if w.cl.ctx.Err() != nil {
 				return nil, ErrClientClosed
 			}
-			return nil, ctx.Err()
+			return nil, w.ctx.Err()
 		}
 		<-w.done
+	}
+	if w.err != nil && w.cl.ctx.Err() != nil {
+		return nil, ErrClientClosed
 	}
 	return w.resp, w.err
 }
