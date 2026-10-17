@@ -1601,12 +1601,14 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 	for _, g := range groups {
 		set[g] = struct{}{}
 	}
+	// Build into a fresh slice: groups is the caller's variadic slice and
+	// reusing it would rewrite the caller's backing array.
 	rem := func() []string {
-		groups = groups[:0]
+		out := make([]string, 0, len(set))
 		for g := range set {
-			groups = append(groups, g)
+			out = append(out, g)
 		}
-		return groups
+		return out
 	}
 	lags := make(DescribedGroupLags)
 
