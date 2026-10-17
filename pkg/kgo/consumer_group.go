@@ -1497,12 +1497,6 @@ start:
 	if joinWhy != "" {
 		joinReq.Reason = kmsg.StringPtr(joinWhy)
 	}
-	var (
-		joinResp *kmsg.JoinGroupResponse
-		err      error
-		joined   = make(chan struct{})
-	)
-
 	// NOTE: For this function, we have to use the client context, not the
 	// group context. We want to allow people to issue one final commit in
 	// OnPartitionsRevoked before leaving a group, so we need to block
@@ -1510,16 +1504,13 @@ start:
 	// cancled immediately when leaving while a join or sync is inflight,
 	// and then our final commit will receive either REBALANCE_IN_PROGRESS
 	// or ILLEGAL_GENERATION.
-
-	go func() {
-		defer close(joined)
-		joinResp, err = joinReq.RequestWith(g.cl.ctx, g.cl)
-	}()
-
-	select {
-	case <-joined:
-	case <-g.cl.ctx.Done():
-		return g.cl.ctx.Err() // client closed
+	//
+	// If the client closes, we return its context error rather than the
+	// request's ErrClientClosed: manageFailWait revokes, rather than
+	// loses, on context.Canceled.
+	joinResp, err := joinReq.RequestWith(g.cl.ctx, g.cl)
+	if g.cl.ctx.Err() != nil {
+		return g.cl.ctx.Err()
 	}
 	if err != nil {
 		return err
@@ -1545,20 +1536,9 @@ start:
 	if !joinResp.SkipAssignment {
 		syncReq.GroupAssignment = plan // nil unless we are the leader
 	}
-	var (
-		syncResp *kmsg.SyncGroupResponse
-		synced   = make(chan struct{})
-	)
-
 	g.cfg.logger.Log(LogLevelInfo, "syncing", "group", g.cfg.group, "protocol_type", g.cfg.protocol, "protocol", protocol)
-	go func() {
-		defer close(synced)
-		syncResp, err = syncReq.RequestWith(g.cl.ctx, g.cl)
-	}()
-
-	select {
-	case <-synced:
-	case <-g.cl.ctx.Done():
+	syncResp, err := syncReq.RequestWith(g.cl.ctx, g.cl)
+	if g.cl.ctx.Err() != nil {
 		return g.cl.ctx.Err()
 	}
 	if err != nil {
@@ -2038,18 +2018,12 @@ start:
 		"require_stable", req.RequireStable,
 		"num_topics", len(reqg.Topics),
 	)
-	fetchDone := make(chan struct{})
-	go func() {
-		defer close(fetchDone)
-		resp, err = req.RequestWith(reqCtx, g.cl)
-	}()
-	select {
-	case <-fetchDone:
-		g.cfg.logger.Log(LogLevelDebug, "fetch offsets returned", "group", g.cfg.group, "err", err)
-	case <-ctx.Done():
+	resp, err = req.RequestWith(reqCtx, g.cl)
+	if ctx.Err() != nil {
 		g.cfg.logger.Log(LogLevelInfo, "fetch offsets failed due to context cancelation", "group", g.cfg.group)
 		return ctx.Err()
 	}
+	g.cfg.logger.Log(LogLevelDebug, "fetch offsets returned", "group", g.cfg.group, "err", err)
 	if err != nil {
 		g.cfg.logger.Log(LogLevelError, "fetch offsets failed with non-retryable error", "group", g.cfg.group, "err", err)
 		return err
@@ -3621,20 +3595,12 @@ func (g *groupConsumer) commit(
 		defer close(commitDone) // allow future commits to continue when we are done
 		defer commitCancel()
 		if priorDone != nil { // wait for any prior request to finish
-			// We must NOT cancel the prior commit. Canceling an
-			// in-flight request kills the TCP connection. Our
-			// subsequent request would then use a new connection,
-			// and the broker can process the two requests out of
-			// order (different connections have no ordering
-			// guarantee). If the prior commit had a lower offset
-			// (e.g. autocommit HEAD vs. sync commit DIRTY), the
-			// broker could process it AFTER ours and overwrite
-			// our higher offset, causing duplicate consumption.
-			//
-			// By waiting for the prior commit to complete
-			// naturally, we keep the connection alive and
-			// guarantee our request is queued behind the prior on
-			// the same connection, preserving ordering.
+			// We wait for the prior commit rather than cancel it,
+			// so that its callback gets its real result. Canceling
+			// would not reorder the two: commits use the normal
+			// connection, where a canceled request is abandoned
+			// and the connection stays, so ours would still follow
+			// it on the same connection.
 			select {
 			case <-priorDone:
 			default:

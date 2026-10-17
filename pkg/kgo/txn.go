@@ -1350,10 +1350,9 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 	go func() {
 		defer close(commitDone) // allow future commits to continue when we are done
 		if priorDone != nil {   // wait for any prior request to finish
-			// Same as commit(): we must NOT cancel the prior commit
-			// because canceling kills the TCP connection, and our
-			// subsequent request on a new connection can be processed
-			// out of order at the broker, rewinding committed offsets.
+			// Same as commit(): we wait for the prior commit rather
+			// than cancel it, so that its callback gets its real
+			// result.
 			select {
 			case <-priorDone:
 			default:

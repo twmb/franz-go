@@ -43,7 +43,8 @@ type forceOpenReq struct{ kmsg.Request }
 // reauthentication pending. It runs handleReauthDrain on the broker worker
 // goroutine: reauthenticate now that no reads are in flight, then replay the
 // requests that parked while the pipeline drained. The embedded kmsg.Request
-// is nil and never used; handleReq dispatches on the type before touching it.
+// is nil and never used; handleReq dispatches on the type before touching it,
+// and the sentinel is pushed directly because do calls Key.
 type reauthDrainReq struct {
 	kmsg.Request
 	cxn *brokerCxn
@@ -53,7 +54,9 @@ type promisedReq struct {
 	ctx     context.Context
 	req     kmsg.Request
 	promise func(kmsg.Response, error)
-	enqueue time.Time // used to calculate writeWait
+	enqueue time.Time    // used to calculate writeWait
+	claimed *atomic.Bool // set by handleReq or waitResp, whichever is first; nil from do
+	key     int16        // req.Key(), read before waitResp's caller can reuse req
 }
 
 type promisedResp struct {
@@ -308,12 +311,14 @@ func (b *broker) do(
 	req kmsg.Request,
 	promise func(kmsg.Response, error),
 ) {
-	pr := promisedReq{ctx, req, promise, time.Now()}
+	b.push(promisedReq{ctx: ctx, req: req, promise: promise, enqueue: time.Now(), key: req.Key()})
+}
 
+func (b *broker) push(pr promisedReq) {
 	first, dead := b.reqs.push(pr)
 
 	if dead {
-		promise(nil, errChosenBrokerDead)
+		pr.promise(nil, errChosenBrokerDead)
 	} else if first {
 		go b.handleReqs(pr)
 	}
@@ -321,16 +326,65 @@ func (b *broker) do(
 
 // waitResp runs a req, waits for the resp and returns the resp and err.
 func (b *broker) waitResp(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
-	var resp kmsg.Response
-	var err error
-	done := make(chan struct{})
-	wait := func(kresp kmsg.Response, kerr error) {
-		resp, err = kresp, kerr
-		close(done)
+	return b.issue(ctx, req).wait()
+}
+
+// respWaiter waits for the response to a request from issue.
+type respWaiter struct {
+	ctx     context.Context
+	cl      *Client
+	claimed atomic.Bool
+	done    chan struct{}
+	resp    kmsg.Response
+	err     error
+}
+
+// issue issues req and returns without waiting for its response, so that a
+// caller can issue requests to many brokers before waiting on any.
+func (b *broker) issue(ctx context.Context, req kmsg.Request) *respWaiter {
+	w := &respWaiter{ctx: ctx, cl: b.cl, done: make(chan struct{})}
+	b.push(promisedReq{
+		ctx: ctx,
+		req: req,
+		promise: func(resp kmsg.Response, err error) {
+			w.resp, w.err = resp, err
+			close(w.done)
+		},
+		enqueue: time.Now(),
+		claimed: &w.claimed,
+		key:     req.Key(),
+	})
+	return w
+}
+
+// wait returns the request's resp and err, or the ctx error if the request's
+// ctx ends first. If the client has closed, a failed request returns
+// ErrClientClosed: the close is what failed it.
+//
+// handleReqs runs at the same time. Before handleReq claims our request, just
+// before it first changes req, handleReqs can spend a long time on the
+// requests ahead of ours, on our connection's dial, ApiVersions, and SASL, and
+// on reauthenticating our connection. If ctx ends before handleReq claims the
+// request, we claim it and return: handleReq then skips it, and a connection
+// that was already dialed still finishes ApiVersions and SASL and is kept.
+// Once handleReq claims the request, it may set the version on req or write
+// it, and the caller may reuse req once we return, so we wait for the promise.
+func (w *respWaiter) wait() (kmsg.Response, error) {
+	select {
+	case <-w.done:
+	case <-w.ctx.Done():
+		if w.claimed.CompareAndSwap(false, true) {
+			if w.cl.ctx.Err() != nil {
+				return nil, ErrClientClosed
+			}
+			return nil, w.ctx.Err()
+		}
+		<-w.done
 	}
-	b.do(ctx, req, wait)
-	<-done
-	return resp, err
+	if w.err != nil && w.cl.ctx.Err() != nil {
+		return nil, ErrClientClosed
+	}
+	return w.resp, w.err
 }
 
 // growStack grows a goroutine's stack while it has one frame. Our request
@@ -375,7 +429,7 @@ func (b *broker) handleReq(pr promisedReq) {
 start:
 	{
 		var err error
-		if cxn, err = b.loadConnection(pr.ctx, req); err != nil {
+		if cxn, err = b.loadConnection(pr); err != nil {
 			// It is rare, but it is possible that the broker has
 			// an immediate issue on a new connection. We retry
 			// once.
@@ -386,6 +440,81 @@ start:
 			pr.promise(nil, err)
 			return
 		}
+	}
+
+	if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) && !cxn.hasDiscard {
+		// If we are after the reauth time, reauthenticate, for KIP-368.
+		// We can only have an expiry if we went the authenticate flow,
+		// so we know we are authenticating again.
+		//
+		// Reauthenticating reads the handshake and authenticate
+		// responses on this goroutine, so it requires that nothing
+		// else can be reading the connection:
+		//
+		//   * If any response is in flight (resps is non-empty -- an
+		//     element stays in the ring while handleResps processes
+		//     it), handleResps is reading this connection and our read
+		//     would race it byte-by-byte, interleaving the two
+		//     responses' bytes between the two readers. We park this
+		//     request (and every following request for this connection)
+		//     so the pipeline drains -- under sustained pipelining the
+		//     pipeline never goes empty on its own, so we must stop
+		//     feeding it. Our expiry is deliberately pessimistic (2-5%
+		//     early, 1s floor; see doSasl), so the in-flight responses
+		//     are on a still-valid session and the drain (bounded by
+		//     their read timeouts) fits the margin. handleResps pushes
+		//     a reauthDrainReq as it exits; handleReauthDrain then
+		//     reauthenticates and replays the parked requests in
+		//     order. Only this connection parks: the broker worker
+		//     keeps serving its other connections. The Java client
+		//     similarly holds the channel's queued send while
+		//     reauthenticating, and it too only begins with no write
+		//     in progress.
+		//
+		//     Ordering of the pending store vs the empty check below
+		//     matters: we store before checking, and handleResps reads
+		//     the flag after its final dropPeek. empty() and dropPeek
+		//     both take the ring mutex, so if we observe a non-empty
+		//     ring, our store happens-before the drain's flag read and
+		//     a parked request can never miss its drain signal.
+		//
+		//   * acks=0 produce connections run a discard goroutine that
+		//     owns all reads forever (hasDiscard, checked above), so
+		//     in-place reauth is never possible: loadConnection
+		//     recreates expired discard connections instead, and a
+		//     fresh connection authenticates in init. We can still get
+		//     here if the connection's lifetime is shorter than our
+		//     pessimism (the fresh connection is already "expired");
+		//     issuing the request on the just-authenticated connection
+		//     is correct, and the next request picks up a new one.
+		cxn.reauthPending.Store(true)
+		if cxn.anyParked() || !cxn.resps.empty() {
+			cxn.park(pr)
+			return
+		}
+		cxn.reauthPending.Store(false)
+		// Some implementations (AWS) occasionally fail for
+		// unclear reasons (principals change, somehow). If
+		// we receive SASL_AUTHENTICATION_FAILED, we retry
+		// once on a new connection. See #249.
+		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
+		if err := cxn.sasl(); err != nil {
+			cxn.die()
+			if errors.Is(err, kerr.SaslAuthenticationFailed) && !retriedOnNewConnection {
+				cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
+				retriedOnNewConnection = true
+				goto start
+			}
+			pr.promise(nil, err)
+			return
+		}
+	}
+
+	if pr.claimed != nil {
+		if !pr.claimed.CompareAndSwap(false, true) {
+			return // waitResp returned on its ctx
+		}
+		pr.claimed = nil // a goto start retry must not claim again
 	}
 
 	v := b.loadVersions()
@@ -466,66 +595,25 @@ start:
 	}
 	req.SetVersion(ourMax)
 
-	if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) && !cxn.hasDiscard {
-		// If we are after the reauth time, reauthenticate, for KIP-368.
-		// We can only have an expiry if we went the authenticate flow,
-		// so we know we are authenticating again.
-		//
-		// Reauthenticating reads the handshake and authenticate
-		// responses on this goroutine, so it requires that nothing
-		// else can be reading the connection:
-		//
-		//   * If any response is in flight (resps is non-empty -- an
-		//     element stays in the ring while handleResps processes
-		//     it), handleResps is reading this connection and our read
-		//     would race it byte-by-byte, interleaving the two
-		//     responses' bytes between the two readers. We park this
-		//     request (and every following request for this connection)
-		//     so the pipeline drains -- under sustained pipelining the
-		//     pipeline never goes empty on its own, so we must stop
-		//     feeding it. Our expiry is deliberately pessimistic (2-5%
-		//     early, 1s floor; see doSasl), so the in-flight responses
-		//     are on a still-valid session and the drain (bounded by
-		//     their read timeouts) fits the margin. handleResps pushes
-		//     a reauthDrainReq as it exits; handleReauthDrain then
-		//     reauthenticates and replays the parked requests in
-		//     order. Only this connection parks: the broker worker
-		//     keeps serving its other connections. The Java client
-		//     similarly holds the channel's queued send while
-		//     reauthenticating, and it too only begins with no write
-		//     in progress.
-		//
-		//     Ordering of the pending store vs the empty check below
-		//     matters: we store before checking, and handleResps reads
-		//     the flag after its final dropPeek. empty() and dropPeek
-		//     both take the ring mutex, so if we observe a non-empty
-		//     ring, our store happens-before the drain's flag read and
-		//     a parked request can never miss its drain signal.
-		//
-		//   * acks=0 produce connections run a discard goroutine that
-		//     owns all reads forever (hasDiscard, checked above), so
-		//     in-place reauth is never possible: loadConnection
-		//     recreates expired discard connections instead, and a
-		//     fresh connection authenticates in init. We can still get
-		//     here if the connection's lifetime is shorter than our
-		//     pessimism (the fresh connection is already "expired");
-		//     issuing the request on the just-authenticated connection
-		//     is correct, and the next request picks up a new one.
-		cxn.reauthPending.Store(true)
-		if cxn.anyParked() || !cxn.resps.empty() {
-			cxn.park(pr)
-			return
+	// Wait out a throttle (KIP-219) before writing. Nothing is written if
+	// ctx ends or the client closes while we wait, so we fail only this
+	// request and keep the connection.
+	if sleep := time.Until(time.Unix(0, cxn.throttleUntil.Load())); sleep > 0 {
+		after := time.NewTimer(sleep)
+		var err error
+		select {
+		case <-after.C:
+		case <-pr.ctx.Done():
+			err = pr.ctx.Err()
+			maybeUpdateCtxErr(cxn.cl.ctx, pr.ctx, &err)
+		case <-cxn.cl.ctx.Done():
+			err = ErrClientClosed
+		case <-cxn.deadCh:
+			err = errChosenBrokerDead
 		}
-		cxn.reauthPending.Store(false)
-		// Some implementations (AWS) occasionally fail for
-		// unclear reasons (principals change, somehow). If
-		// we receive SASL_AUTHENTICATION_FAILED, we retry
-		// once on a new connection. See #249.
-		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
-		if err := cxn.sasl(); err != nil {
-			cxn.die()
-			if errors.Is(err, kerr.SaslAuthenticationFailed) && !retriedOnNewConnection {
-				cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
+		after.Stop()
+		if err != nil {
+			if err == errChosenBrokerDead && !retriedOnNewConnection {
 				retriedOnNewConnection = true
 				goto start
 			}
@@ -671,13 +759,13 @@ func (p bufPool) put(b []byte) { p.p.Put(&b) }
 
 // loadConnection returns the broker's connection, creating it if necessary
 // and returning an error of if that fails.
-func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerCxn, error) {
+func (b *broker) loadConnection(pr promisedReq) (*brokerCxn, error) {
 	var (
 		pcxn         = &b.cxnNormal
 		isProduceCxn bool
 		isFetchCxn   bool
-		reqKey       = req.Key()
-		_, isTimeout = req.(kmsg.TimeoutRequest)
+		reqKey       = pr.key
+		_, isTimeout = pr.req.(kmsg.TimeoutRequest)
 		reuse        = true
 	)
 	switch {
@@ -725,6 +813,13 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 		return nil, errChosenBrokerDead
 	}
 
+	// Do not dial for a request whose ctx ended; waitResp may have
+	// returned already.
+	if err := pr.ctx.Err(); err != nil {
+		maybeUpdateCtxErr(b.cl.ctx, pr.ctx, &err)
+		return nil, err
+	}
+
 	var tries int
 doConnect:
 	tries++
@@ -733,7 +828,7 @@ doConnect:
 	// error, and duration (a backward goto over := re-executes the
 	// declaration; prior attempts' defers keep their own variables).
 	start := time.Now()
-	conn, err := b.connect(ctx)
+	conn, err := b.connect(pr.ctx)
 	defer func() {
 		since := time.Since(start)
 		b.cl.cfg.hooks.each(func(h Hook) {
@@ -1418,29 +1513,6 @@ func maybeUpdateCtxErr(clientCtx, reqCtx context.Context, err *error) {
 // writeRequest writes a message request to the broker connection, bumping the
 // connection's correlation ID as appropriate for the next write.
 func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt time.Time, req kmsg.Request) (corrID int32, bytesWritten int, writeWait, timeToWrite time.Duration, readEnqueue time.Time, writeErr error) {
-	// A nil ctx means we cannot be throttled.
-	if ctx != nil {
-		throttleUntil := time.Unix(0, cxn.throttleUntil.Load())
-		if sleep := time.Until(throttleUntil); sleep > 0 {
-			after := time.NewTimer(sleep)
-			select {
-			case <-after.C:
-			case <-ctx.Done():
-				writeErr = ctx.Err()
-				maybeUpdateCtxErr(cxn.cl.ctx, ctx, &writeErr)
-			case <-cxn.cl.ctx.Done():
-				writeErr = ErrClientClosed
-			case <-cxn.deadCh:
-				writeErr = errChosenBrokerDead
-			}
-			if writeErr != nil {
-				after.Stop()
-				writeWait = time.Since(enqueuedForWritingAt)
-				return corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr
-			}
-		}
-	}
-
 	buf := cxn.cl.reqFormatter.AppendRequest(
 		cxn.cl.bufPool.get()[:0],
 		req,
@@ -1926,7 +1998,7 @@ start:
 	// push is fine: stopForever dies every connection, and die fails
 	// everything parked.
 	if cxn.reauthPending.Load() {
-		cxn.b.do(cxn.cl.ctx, &reauthDrainReq{cxn: cxn}, func(kmsg.Response, error) {})
+		cxn.b.push(promisedReq{ctx: cxn.cl.ctx, req: &reauthDrainReq{cxn: cxn}, promise: func(kmsg.Response, error) {}})
 	}
 }
 
@@ -2029,7 +2101,7 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 			// A throttle is honored in full with NO upper cap (KIP-219),
 			// matching Java's NetworkClient. millis <= 0 is ignored; a
 			// positive value - even a hostile near-MaxInt32 (~24.8 days) -
-			// delays the next write on this connection (writeRequest), which
+			// delays the next write on this connection (handleReq), which
 			// selects on the request ctx and client Close, so the wait is
 			// always interruptible and holds no lock. Capping it would break
 			// the quota mechanism; an absurd throttle is equivalent to a slow
