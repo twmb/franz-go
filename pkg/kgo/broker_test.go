@@ -499,3 +499,116 @@ func TestIssue1377(t *testing.T) {
 		t.Errorf("got %d connects and %d disconnects, want %d of each (one per connection)", c, d, want)
 	}
 }
+
+// brokerConnectHook sends each initialized connection's error. The send never
+// blocks: a hook must not stall a client goroutine.
+type brokerConnectHook chan error
+
+func (h brokerConnectHook) OnBrokerConnect(_ BrokerMetadata, _ time.Duration, conn net.Conn, err error) {
+	if conn != nil {
+		select {
+		case h <- err:
+		default:
+		}
+	}
+}
+
+// Ensure a request returns at its deadline while it waits behind a request
+// whose new connection is stuck in ApiVersions; that the request owning the
+// connection returns once canceled while the connection still finishes and
+// is kept; and that a request canceled while waiting out a throttle keeps the
+// connection too.
+func TestIssue1505(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var once sync.Once
+	stalled, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serveApiVersions(conn, func() {
+				once.Do(func() { close(stalled) })
+				<-release
+			})
+		}
+	}()
+
+	connected := make(brokerConnectHook, 1)
+	cl, err := NewClient(
+		SeedBrokers(ln.Addr().String()),
+		DisableClientMetrics(),
+		WithHooks(connected),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	b := cl.loadSeeds()[0]
+
+	wait := func(ctx context.Context, req kmsg.Request) error {
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := b.waitResp(ctx, req)
+			errCh <- err
+		}()
+		select {
+		case err := <-errCh:
+			return err
+		case <-time.After(5 * time.Second):
+			return errors.New("request did not return")
+		}
+	}
+	short := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		return wait(ctx, kmsg.NewPtrApiVersionsRequest())
+	}
+
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	defer firstCancel()
+	first := kmsg.NewPtrApiVersionsRequest()
+	firstErr := make(chan error, 1)
+	go func() { firstErr <- wait(firstCtx, first) }()
+	<-stalled
+
+	if err := short(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queued request error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	firstCancel()
+	if err := <-firstErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("connecting request error = %v, want %v", err, context.Canceled)
+	}
+
+	close(release)
+	first.SetVersion(0) // the caller may reuse req once waitResp returns
+	select {
+	case err := <-connected:
+		if err != nil {
+			t.Fatalf("connection initialization error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("connection did not finish initializing")
+	}
+	b.reapMu.Lock()
+	cxn := b.cxnNormal
+	b.reapMu.Unlock()
+	if cxn == nil || cxn.dead.Load() {
+		t.Fatal("the connection was not kept")
+	}
+
+	cxn.throttleUntil.Store(time.Now().Add(time.Hour).UnixNano())
+	if err := short(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("throttled request error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	if cxn.dead.Load() {
+		t.Error("a request canceled while waiting out a throttle killed the connection")
+	}
+}
