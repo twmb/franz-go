@@ -2124,6 +2124,22 @@ type coordinatorLoad struct {
 }
 
 func (cl *Client) loadCoordinator(ctx context.Context, typ int8, key string) (*broker, error) {
+	// Most requests find their coordinator loaded and its broker known,
+	// and skip loadCoordinators' goroutine and maps.
+	cl.coordinatorsMu.Lock()
+	c := cl.coordinators[coordinatorKey{key, typ}]
+	cl.coordinatorsMu.Unlock()
+	if c != nil {
+		select {
+		case <-c.loadWait: // publishes c.err and c.node
+			if c.err == nil {
+				if b, err := cl.brokerOrErr(nil, c.node, errUnknownBroker); err == nil {
+					return b, nil
+				}
+			}
+		default:
+		}
+	}
 	berr := cl.loadCoordinators(ctx, typ, key)[key]
 	return berr.b, berr.err
 }
