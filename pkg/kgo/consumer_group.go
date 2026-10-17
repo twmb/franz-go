@@ -3392,9 +3392,8 @@ func (g *groupConsumer) commitOffsetsSync(
 //
 // Note that this function ensures absolute ordering of commit requests by
 // waiting for any prior in-flight commit to complete before issuing a new
-// one. Prior commits are never canceled: canceling kills the connection,
-// and the broker could then process a replacement commit issued on a new
-// connection before the original. This means, for absolute control, you can
+// one. Prior commits are never canceled, so each onDone receives its
+// commit's real result. This means, for absolute control, you can
 // use this function to periodically commit async and then issue a final sync
 // commit before quitting (this is the behavior of autocommiting and using
 // the default revoke). This differs from the Java async commit, which does
@@ -3584,20 +3583,15 @@ func (g *groupConsumer) commit(
 		defer close(commitDone) // allow future commits to continue when we are done
 		defer commitCancel()
 		if priorDone != nil { // wait for any prior request to finish
-			// We must NOT cancel the prior commit. Canceling an
-			// in-flight request kills the TCP connection. Our
-			// subsequent request would then use a new connection,
-			// and the broker can process the two requests out of
-			// order (different connections have no ordering
-			// guarantee). If the prior commit had a lower offset
-			// (e.g. autocommit HEAD vs. sync commit DIRTY), the
-			// broker could process it AFTER ours and overwrite
-			// our higher offset, causing duplicate consumption.
-			//
-			// By waiting for the prior commit to complete
-			// naturally, we keep the connection alive and
-			// guarantee our request is queued behind the prior on
-			// the same connection, preserving ordering.
+			// We must NOT cancel the prior commit. Waiting gives
+			// its callback its real result, and keeps the two
+			// commits in order if a cancel ever kills the
+			// connection again: our commit would then use a new
+			// connection, and the broker could process the prior
+			// commit after ours. If the prior commit had a lower
+			// offset (e.g. autocommit HEAD vs. sync commit DIRTY),
+			// the prior commit would overwrite our higher offset,
+			// causing duplicate consumption.
 			select {
 			case <-priorDone:
 			default:
