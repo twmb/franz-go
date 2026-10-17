@@ -2123,12 +2123,51 @@ type coordinatorLoad struct {
 	err      error
 }
 
+// Returns the coordinator's broker if the coordinator is loaded and its broker
+// is known, or nil. Most requests find every coordinator they need this way,
+// and skip the goroutine in loadCoordinators and the maps in
+// doLoadCoordinators.
+func (cl *Client) loadedCoordinator(typ int8, key string) *broker {
+	cl.coordinatorsMu.Lock()
+	c := cl.coordinators[coordinatorKey{key, typ}]
+	cl.coordinatorsMu.Unlock()
+	if c == nil {
+		return nil
+	}
+	select {
+	case <-c.loadWait: // publishes c.err and c.node
+		if c.err == nil {
+			if b, err := cl.brokerOrErr(nil, c.node, errUnknownBroker); err == nil {
+				return b
+			}
+		}
+	default:
+	}
+	return nil
+}
+
 func (cl *Client) loadCoordinator(ctx context.Context, typ int8, key string) (*broker, error) {
+	if b := cl.loadedCoordinator(typ, key); b != nil {
+		return b, nil
+	}
 	berr := cl.loadCoordinators(ctx, typ, key)[key]
 	return berr.b, berr.err
 }
 
 func (cl *Client) loadCoordinators(ctx context.Context, typ int8, keys ...string) map[string]brokerOrErr {
+	m := make(map[string]brokerOrErr, len(keys))
+	for _, key := range keys {
+		b := cl.loadedCoordinator(typ, key)
+		if b == nil {
+			m = nil
+			break
+		}
+		m[key] = brokerOrErr{b, nil}
+	}
+	if m != nil {
+		return m
+	}
+
 	mch := make(chan map[string]brokerOrErr, 1)
 	go func() { mch <- cl.doLoadCoordinators(ctx, typ, keys...) }()
 	select {
