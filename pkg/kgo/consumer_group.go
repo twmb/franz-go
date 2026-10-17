@@ -3595,20 +3595,12 @@ func (g *groupConsumer) commit(
 		defer close(commitDone) // allow future commits to continue when we are done
 		defer commitCancel()
 		if priorDone != nil { // wait for any prior request to finish
-			// We must NOT cancel the prior commit. Canceling an
-			// in-flight request kills the TCP connection. Our
-			// subsequent request would then use a new connection,
-			// and the broker can process the two requests out of
-			// order (different connections have no ordering
-			// guarantee). If the prior commit had a lower offset
-			// (e.g. autocommit HEAD vs. sync commit DIRTY), the
-			// broker could process it AFTER ours and overwrite
-			// our higher offset, causing duplicate consumption.
-			//
-			// By waiting for the prior commit to complete
-			// naturally, we keep the connection alive and
-			// guarantee our request is queued behind the prior on
-			// the same connection, preserving ordering.
+			// We wait for the prior commit rather than cancel it,
+			// so that its callback gets its real result. Canceling
+			// would not reorder the two: commits use the normal
+			// connection, where a canceled request is abandoned
+			// and the connection stays, so ours would still follow
+			// it on the same connection.
 			select {
 			case <-priorDone:
 			default:
