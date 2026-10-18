@@ -558,6 +558,11 @@ outer:
 				select {
 				case admin := <-c.adminCh:
 					admin()
+					select {
+					case <-c.die: // see the die check after tryControl
+						return
+					default:
+					}
 					continue inner
 				case fn := <-c.groupWorkCh:
 					fn()
@@ -601,6 +606,16 @@ outer:
 		}
 
 		kresp, err, handled = c.tryControl(creq)
+
+		// While a control function runs, tryControlKey and the wakeCh
+		// case receive on adminCh, where Close can run its persist
+		// shutdown. Both stop once it has run: anything we do after
+		// it changes state that saveToDisk did not capture.
+		select {
+		case <-c.die:
+			return
+		default:
+		}
 		if handled {
 			goto afterControl
 		}
@@ -916,7 +931,11 @@ func (c *Cluster) SleepControl(wakeup func()) {
 		sleepChs.clientWait <- struct{}{}
 	}()
 
-	c.controlSleep <- sleepChs
+	select {
+	case c.controlSleep <- sleepChs:
+	case <-c.die:
+		return
+	}
 	select {
 	case <-sleepChs.clientCont:
 	case <-c.die:
@@ -960,6 +979,12 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 			select {
 			case admin := <-c.adminCh:
 				admin()
+				select {
+				case <-c.die: // see the die check after tryControl in run
+					c.controlMu.Lock() // tryControl unlocks
+					return nil, nil, true
+				default:
+				}
 				continue
 			case fn := <-c.groupWorkCh:
 				fn()
