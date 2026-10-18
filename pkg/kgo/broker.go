@@ -1604,7 +1604,7 @@ func (cxn *brokerCxn) writeConn(
 		cxn.conn.SetWriteDeadline(time.Now().Add(timeout))
 	}
 	defer cxn.conn.SetWriteDeadline(time.Time{})
-	stop := cxn.watchCtxCancel(ctx, cxn.conn.SetWriteDeadline)
+	stop := cxn.watchCtxCancel(ctx, net.Conn.SetWriteDeadline)
 	writeStart := time.Now()
 	bytesWritten, writeErr = cxn.conn.Write(buf)
 	// As soon as we are done writing, we track that we have now
@@ -1625,15 +1625,18 @@ func (cxn *brokerCxn) writeConn(
 }
 
 // watchCtxCancel watches ctx in a context.AfterFunc. If ctx is canceled,
-// deadlineFn is called. The returned func stops watching ctx and returns
-// whether deadlineFn was called.
-func (cxn *brokerCxn) watchCtxCancel(ctx context.Context, deadlineFn func(time.Time) error) func() bool {
+// deadlineFn is called on the connection. The returned func stops watching
+// ctx and returns whether deadlineFn was called.
+//
+// deadlineFn is a method expression (net.Conn.SetReadDeadline): a method
+// value (cxn.conn.SetReadDeadline) allocates on every call.
+func (cxn *brokerCxn) watchCtxCancel(ctx context.Context, deadlineFn func(net.Conn, time.Time) error) func() bool {
 	if ctx.Done() == nil || ctx == cxn.cl.ctx {
 		return func() bool { return false }
 	}
 	fired := make(chan struct{})
 	stopFn := context.AfterFunc(ctx, func() {
-		deadlineFn(time.Now())
+		deadlineFn(cxn.conn, time.Now())
 		close(fired)
 	})
 	return func() bool {
@@ -1666,7 +1669,7 @@ func (cxn *brokerCxn) readConn(
 		cxn.conn.SetReadDeadline(time.Now().Add(timeout))
 	}
 	defer cxn.conn.SetReadDeadline(time.Time{})
-	stop := cxn.watchCtxCancel(ctx, cxn.conn.SetReadDeadline)
+	stop := cxn.watchCtxCancel(ctx, net.Conn.SetReadDeadline)
 	readStart := time.Now()
 	nread, buf, err = cxn.readSizeAndBody()
 	timeToRead = time.Since(readStart)
