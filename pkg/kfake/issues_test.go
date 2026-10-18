@@ -60,7 +60,7 @@ func TestIssue1508(t *testing.T) {
 			}
 			c.controlMu.Unlock()
 			c.continueSleptControl(s)
-			c.finishSleptControl(s)
+			c.finishSleptControl(s, false)
 		})
 	}
 }
