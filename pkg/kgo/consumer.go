@@ -789,6 +789,12 @@ func (cl *Client) PauseFetchPartitions(topicPartitions map[string][]int32) map[s
 // ResumeFetchTopics resumes fetching the input topics if they were previously
 // paused. Resuming topics that are not currently paused is a per-topic no-op.
 // See the documentation on PauseFetchTopics for more details.
+//
+// Note that resuming does not interrupt a fetch already in flight: resumed
+// topics are included in the next fetch to each broker, after that broker's
+// in-flight fetch completes. A fetch with no new data waits up to
+// FetchMaxWait (default 5s). If you pause and resume often, consider
+// lowering FetchMaxWait.
 func (cl *Client) ResumeFetchTopics(topics ...string) {
 	defer cl.allSources(func(s *source) {
 		s.maybeConsume()
@@ -806,7 +812,8 @@ func (cl *Client) ResumeFetchTopics(topics ...string) {
 // ResumeFetchPartitions resumes fetching the input partitions if they were
 // previously paused. Resuming partitions that are not currently paused is a
 // per-topic no-op. See the documentation on PauseFetchPartitions for more
-// details.
+// details, and ResumeFetchTopics for how resuming interacts with an in-flight
+// fetch.
 func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
 	defer cl.allSources(func(s *source) {
 		s.maybeConsume()
