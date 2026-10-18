@@ -479,6 +479,7 @@ outer:
 			kresp   kmsg.Response
 			err     error
 			handled bool
+			asleep  bool
 		)
 
 		select {
@@ -605,7 +606,7 @@ outer:
 			creq = wsf.creq
 		}
 
-		kresp, err, handled = c.tryControl(creq)
+		kresp, err, handled, asleep = c.tryControl(creq)
 
 		// While a control function runs, tryControlKey and the wakeCh
 		// case receive on adminCh, where Close can run its persist
@@ -780,6 +781,10 @@ outer:
 			s.continueDequeue <- struct{}{}
 		}
 		if kresp == nil && err == nil {
+			// A slept request is answered once its control finishes.
+			if asleep {
+				continue
+			}
 			// A group request (JoinGroup, SyncGroup) can park in
 			// the group as a member's waitingReply; a later state
 			// transition on this loop replies to it. The mute stays
@@ -789,7 +794,7 @@ outer:
 			// the mute is held until write() runs. Send a skip
 			// sentinel: write() unmutes without writing anything so
 			// that read() can submit the next request.
-			if req, ok := kreq.(*kmsg.ProduceRequest); ok && req.Acks == 0 {
+			if req, ok := creq.kreq.(*kmsg.ProduceRequest); ok && req.Acks == 0 {
 				select {
 				case creq.cc.respCh <- clientResp{corr: creq.corr, skip: true}:
 				case <-creq.cc.done:
@@ -835,9 +840,10 @@ func (c *Cluster) Control(fn func(kmsg.Request) (kmsg.Response, error, bool)) {
 //
 // If the control function returns true (handled), then either the response is
 // written back to the client or, if the control function returns an error, the
-// client connection is closed. If both returns are nil, then the cluster will
-// loop continuing to read from the client and the client will likely have a
-// read timeout at some point.
+// client connection is closed. If both returns are nil, then the cluster does
+// not reply to this request or any later request on that connection; the
+// client will likely have a read timeout at some point. An acks=0 produce has
+// no reply, so returning nil for one only drops it.
 //
 // If the control function returns false (not handled), the next control
 // function for this key runs. If no control function handles the request,
@@ -954,20 +960,22 @@ func (c *Cluster) CurrentNode() int32 {
 	return -1
 }
 
-func (c *Cluster) tryControl(creq *clientReq) (kresp kmsg.Response, err error, handled bool) { //nolint:revive // control handler signature
+// tryControl returns asleep=true, with handled=true, if a control function
+// slept the request rather than returning.
+func (c *Cluster) tryControl(creq *clientReq) (kresp kmsg.Response, err error, handled, asleep bool) { //nolint:revive,staticcheck // control handler signature
 	c.controlMu.Lock()
 	defer c.controlMu.Unlock()
 	if len(c.control) == 0 {
-		return nil, nil, false
+		return nil, nil, false, false
 	}
-	kresp, err, handled = c.tryControlKey(creq.kreq.Key(), creq)
+	kresp, err, handled, asleep = c.tryControlKey(creq.kreq.Key(), creq)
 	if !handled {
-		kresp, err, handled = c.tryControlKey(-1, creq)
+		kresp, err, handled, asleep = c.tryControlKey(-1, creq)
 	}
-	return kresp, err, handled
+	return kresp, err, handled, asleep
 }
 
-func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, error, bool) { //nolint:revive // control handler signature
+func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, error, bool, bool) { //nolint:revive,staticcheck // control handler signature
 	for _, cctx := range c.control[key] {
 		if cctx.lastReq[creq.cc] == creq {
 			continue
@@ -982,7 +990,7 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 				select {
 				case <-c.die: // see the die check after tryControl in run
 					c.controlMu.Lock() // tryControl unlocks
-					return nil, nil, true
+					return nil, nil, true, false
 				default:
 				}
 				continue
@@ -1002,7 +1010,7 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 				c.controlMu.Lock()
 				c.maybePopControl(res.handled, cctx)
 				if res.handled {
-					return res.kresp, res.err, true
+					return res.kresp, res.err, true, false
 				}
 				break inner
 			case sleepChs := <-c.controlSleep:
@@ -1012,11 +1020,11 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 					res:      res,
 					creq:     creq,
 				})
-				return nil, nil, true
+				return nil, nil, true, true
 			}
 		}
 	}
-	return nil, nil, false
+	return nil, nil, false, false
 }
 
 func (c *Cluster) runControl(cctx *controlCtx, creq *clientReq) chan controlResp {
