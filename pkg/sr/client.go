@@ -4,7 +4,8 @@
 // As mentioned on the Serde type, this package does not provide schema
 // auto-discovery and type auto-decoding. To aid in strong typing and validated
 // encoding/decoding, you must register IDs and values to how to encode or
-// decode them.
+// decode them. For schema-registry-aware protobuf encoding with automatic
+// registration, see github.com/twmb/franz-go/pkg/sr/serde/protobuf.
 //
 // The client does not automatically cache schemas, instead, the Serde type is
 // used for the actual caching of IDs to how to encode/decode the IDs. The

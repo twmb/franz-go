@@ -110,6 +110,9 @@ type tserde struct {
 // auto-decoding. To aid in strong typing and validated encoding/decoding, you
 // must register IDs and values to how to encode or decode them.
 //
+// For schema-registry-aware protobuf encoding with automatic registration, see
+// github.com/twmb/franz-go/pkg/sr/serde/protobuf.
+//
 // To use a Serde for encoding, you must pre-register schema ids and values you
 // will encode, and then you can use the encode functions.
 //

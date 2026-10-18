@@ -34,10 +34,11 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - Written in pure Go (no wrapper lib for a C library or other bindings)
 - Ability to add detailed log messages or metrics using hooks
 - Plug-in metrics support for prometheus, zap, etc.
-- A [schema registry client][SRC] and convenience Serde type for encoding and decoding
+- A [schema registry client][SRC] and convenience Serde type for encoding and decoding, plus a [protobuf serde][PB] for automatic schema registration and Confluent wire-format encoding
 
 [KADMC]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kadm
 [SRC]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/sr
+[PB]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/sr/serde/protobuf
 
 ## Works with any Kafka compatible brokers:
 
