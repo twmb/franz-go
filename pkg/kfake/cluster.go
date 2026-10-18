@@ -976,6 +976,7 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 				c.shareGroups.sweepAllExpiredAcquisitions()
 				continue
 			case res := <-res:
+				c.controlMu.Lock()
 				c.maybePopControl(res.handled, cctx)
 				if res.handled {
 					return res.kresp, res.err, true
@@ -999,18 +1000,16 @@ func (c *Cluster) runControl(cctx *controlCtx, creq *clientReq) chan controlResp
 	res := make(chan controlResp, 1)
 	c.currentBroker = creq.cc.b
 	c.currentControl = cctx
-	// We unlock before entering a control function so that the control
-	// function can modify / add more control. We re-lock when exiting the
-	// control function. This does pose some weird control flow issues
-	// w.r.t. sleeping requests. Here, we have to re-lock before sending
-	// down res, otherwise we risk unlocking an unlocked mu in
-	// finishSleepControl.
+	// Unlock so the control function can modify / add more control.
+	// Each goroutine releases its own lock: shutdown can return a sleeping
+	// control before continueSleptControl locks to resume it.
 	c.controlMu.Unlock()
 	go func() {
 		kresp, err, handled := cctx.fn(creq.kreq)
 		c.controlMu.Lock()
 		c.currentControl = nil
 		c.currentBroker = nil
+		c.controlMu.Unlock()
 		res <- controlResp{kresp, err, handled}
 	}()
 	return res
@@ -1047,9 +1046,8 @@ func (c *Cluster) continueSleptControl(s *slept) {
 }
 
 func (c *Cluster) finishSleptControl(s *slept) {
-	// When finishing a slept control, the control function exited and
-	// grabbed the control mu. We clear the control, unlock, and allow the
-	// slept control to be dequeued.
+	// Clear the control and allow the slept control to be dequeued.
+	c.controlMu.Lock()
 	c.currentControl = nil
 	c.currentBroker = nil
 	c.controlMu.Unlock()

@@ -23,6 +23,48 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 )
 
+func TestIssue1508(t *testing.T) {
+	t.Parallel()
+	for _, outOfOrder := range []bool{false, true} {
+		t.Run(strconv.FormatBool(outOfOrder), func(t *testing.T) {
+			// Drive the sleep lifecycle directly so shutdown always wins
+			// before the run loop resumes the woken control function.
+			c := &Cluster{
+				cfg:          cfg{sleepOutOfOrder: outOfOrder},
+				die:          make(chan struct{}),
+				controlSleep: make(chan sleepChs, 1),
+				wakeCh:       make(chan *slept, 1),
+				sleeping:     make(map[*clientConn]*bsleep),
+			}
+			release := make(chan struct{})
+			cctx := &controlCtx{fn: func(kmsg.Request) (kmsg.Response, error, bool) {
+				c.SleepControl(func() { <-release })
+				return nil, nil, false
+			}}
+			creq := &clientReq{cc: &clientConn{b: &broker{}}, kreq: kmsg.NewPtrProduceRequest()}
+			c.controlMu.Lock()
+			res := c.runControl(cctx, creq)
+			s := &slept{cctx: cctx, creq: creq, res: res, sleepChs: <-c.controlSleep}
+			c.beginSleptControl(s)
+			c.controlMu.Unlock()
+
+			close(release)
+			<-c.wakeCh
+			close(c.die)
+			<-res // The callback has returned before continueSleptControl.
+
+			// A completed callback must not strand the run loop on the
+			// mutex before it can read the buffered response.
+			if !c.controlMu.TryLock() {
+				t.Fatal("control callback exited holding controlMu")
+			}
+			c.controlMu.Unlock()
+			c.continueSleptControl(s)
+			c.finishSleptControl(s)
+		})
+	}
+}
+
 func TestIssue885(t *testing.T) {
 	t.Parallel()
 	const (
