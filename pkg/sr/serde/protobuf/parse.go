@@ -37,7 +37,8 @@ func resolveReferences(schema sr.Schema, fetch func(subject string, version int)
 			stack[key] = struct{}{}
 			next, err := fetch(ref.Subject, ref.Version)
 			if err != nil {
-				return err
+				return fmt.Errorf("unable to fetch referenced schema %q (subject %q version %d): %w",
+					ref.Name, ref.Subject, ref.Version, err)
 			}
 			deps[ref.Name] = next.Schema
 			if err := walk(next); err != nil {
@@ -110,20 +111,13 @@ func messageDescriptorAt(fd *desc.FileDescriptor, indexes []int) (*desc.MessageD
 		return nil, errors.New("empty message indexes")
 	}
 	var cur *desc.MessageDescriptor
-	for i, idx := range indexes {
-		if i == 0 {
-			msgs := fd.GetMessageTypes()
-			if idx < 0 || idx >= len(msgs) {
-				return nil, fmt.Errorf("message index %d out of range", idx)
-			}
-			cur = msgs[idx]
-			continue
+	msgs := fd.GetMessageTypes()
+	for _, idx := range indexes {
+		if idx < 0 || idx >= len(msgs) {
+			return nil, fmt.Errorf("message index %v is out of range for the schema", indexes)
 		}
-		nested := cur.GetNestedMessageTypes()
-		if idx < 0 || idx >= len(nested) {
-			return nil, fmt.Errorf("nested message index %d out of range", idx)
-		}
-		cur = nested[idx]
+		cur = msgs[idx]
+		msgs = cur.GetNestedMessageTypes()
 	}
 	return cur, nil
 }

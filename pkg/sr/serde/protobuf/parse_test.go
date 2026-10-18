@@ -1,6 +1,7 @@
 package protobuf
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -137,6 +138,67 @@ func TestResolveReferencesDetectsCycles(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "circular schema reference") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// A fetch that fails deep in the reference graph must say which reference
+// could not be loaded; the bare registry error does not identify it.
+func TestResolveReferencesNamesTheFailedReference(t *testing.T) {
+	root := sr.Schema{
+		Schema:     `syntax = "proto3"; message Root {}`,
+		Type:       sr.TypeProtobuf,
+		References: []sr.SchemaReference{{Name: "mid.proto", Subject: "mid", Version: 2}},
+	}
+	mid := sr.Schema{
+		Schema:     `syntax = "proto3"; message Mid {}`,
+		Type:       sr.TypeProtobuf,
+		References: []sr.SchemaReference{{Name: "leaf.proto", Subject: "leaf", Version: 7}},
+	}
+
+	sentinel := errors.New("registry is down")
+	err := resolveReferences(root, func(subject string, _ int) (sr.Schema, error) {
+		if subject == "mid" {
+			return mid, nil
+		}
+		return sr.Schema{}, sentinel
+	}, make(map[string]string))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("error does not wrap the fetch error: %v", err)
+	}
+	for _, want := range []string{"leaf.proto", `"leaf"`, "7"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %s", err, want)
+		}
+	}
+}
+
+// The error for a bad index reports the whole path, not just the element that
+// was out of range, which is what makes a nested miss debuggable.
+func TestMessageDescriptorAtReportsTheIndexPath(t *testing.T) {
+	fd, err := parseSchema(sr.Schema{
+		Schema: `syntax = "proto3";
+message Outer {
+  message Inner {}
+}`,
+		Type: sr.TypeProtobuf,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := messageDescriptorAt(fd, []int{0, 0}); err != nil {
+		t.Fatalf("Outer.Inner should resolve: %v", err)
+	}
+
+	_, err = messageDescriptorAt(fd, []int{0, 3})
+	if err == nil {
+		t.Fatal("expected an out of range error")
+	}
+	if !strings.Contains(err.Error(), "[0 3]") {
+		t.Errorf("error %q does not report the full index path", err)
 	}
 }
 
