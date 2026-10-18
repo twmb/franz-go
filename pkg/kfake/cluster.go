@@ -1126,6 +1126,7 @@ type bsleep struct {
 	queue   []*slept
 	set     map[*slept]struct{}
 	setWake chan *slept
+	running bool // a wait goroutine is running; it clears this when it sees nothing left
 }
 
 type slept struct {
@@ -1152,7 +1153,8 @@ type sleepChs struct {
 //
 // (2) If s is not waiting, this is a sleeping request. If the queue is empty,
 // this is the first sleeping request on a node. We enqueue and start our wait
-// goroutine. Easy.
+// goroutine, unless the previous one has not yet seen the queue empty: it
+// then handles s.
 //
 // (3) If s is not waiting, but our queue is non-empty, this must be from a
 // convoluted scenario:
@@ -1181,7 +1183,10 @@ func (bs *bsleep) enqueue(s *slept) bool {
 	}
 	if bs.empty() {
 		bs.keep(s)
-		go bs.wait() // Case (2)
+		if !bs.running { // Case (2)
+			bs.running = true
+			go bs.wait()
+		}
 		return true
 	}
 	if bs.c.cfg.sleepOutOfOrder {
@@ -1253,6 +1258,7 @@ func (bs *bsleep) waitSet() {
 	for {
 		bs.mu.Lock()
 		if len(bs.set) == 0 {
+			bs.running = false
 			bs.mu.Unlock()
 			return
 		}
@@ -1300,6 +1306,7 @@ func (bs *bsleep) waitQueue() {
 	for {
 		bs.mu.Lock()
 		if len(bs.queue) == 0 {
+			bs.running = false
 			bs.mu.Unlock()
 			return
 		}
