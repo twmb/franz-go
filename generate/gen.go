@@ -438,6 +438,7 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("if !b.Ok() {")
 	l.Write("return b.Complete()")
 	l.Write("}")
+	writeArrayBound(a, l)
 
 	l.Write("a = a[:0]")
 

@@ -134,3 +134,28 @@ func TestReaderTagCount(t *testing.T) {
 		})
 	}
 }
+
+// TestReaderFitsArray pins that an array length its remaining bytes cannot
+// hold at the elements' minimum encoded size invalidates the reader.
+func TestReaderFitsArray(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		l    int32
+		min  int
+		left int
+		ok   bool
+	}{
+		{"one element per byte, 18 bytes each", 1000, 18, 1000, false},
+		{"exactly the bytes", 55, 18, 990, true},
+		{"one past the bytes", 56, 18, 1007, false},
+		{"none", 0, 18, 0, true},
+		{"null", -1, 18, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Reader{Src: make([]byte, tc.left)}
+			if got := b.FitsArray(tc.l, tc.min); got != tc.ok || b.Ok() != tc.ok {
+				t.Errorf("FitsArray = %v, ok %v; want %v", got, b.Ok(), tc.ok)
+			}
+		})
+	}
+}

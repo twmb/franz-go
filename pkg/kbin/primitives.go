@@ -828,6 +828,30 @@ func (b *Reader) TagCount() uint32 {
 	return r
 }
 
+// FitsArray returns whether l array elements, each encoding in at least min
+// bytes, fit in the bytes left; if not, the reader is bad. ArrayLen bounds a
+// length by a byte an element, but decoding allocates every element up
+// front, each many times its encoded size: a 16 MiB Metadata v12 request of
+// empty topic entries allocated 512 MiB. A generated decoder checks the
+// length against its elements' minimum size before it allocates them.
+func (b *Reader) FitsArray(l int32, min int) bool {
+	if l <= 0 || int64(l)*int64(min) <= int64(len(b.Src)) {
+		return true
+	}
+	b.bad = true
+	b.Src = nil
+	return false
+}
+
+// Pick returns a if cond, else b: a generated minimum size, compact in the
+// flexible versions.
+func Pick(cond bool, a, b int) int {
+	if cond {
+		return a
+	}
+	return b
+}
+
 // VarintBytes returns a Kafka encoded varint array from the reader, returning
 // nil as appropriate.
 func (b *Reader) VarintBytes() []byte {

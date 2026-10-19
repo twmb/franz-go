@@ -1304,6 +1304,9 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeGroupMetadataValueMember(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]GroupMetadataValueMember, l)...)
@@ -1757,6 +1760,9 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeTxnMetadataValueTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TxnMetadataValueTopic, l)...)
@@ -1792,6 +1798,9 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -2048,6 +2057,9 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, 2) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]string, l)...)
@@ -2076,6 +2088,9 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeConsumerMemberMetadataOwnedPartition(version, false)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ConsumerMemberMetadataOwnedPartition, l)...)
@@ -2099,6 +2114,9 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 				var l int32
 				l = b.ArrayLen()
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -2234,6 +2252,9 @@ func (v *ConsumerMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeConsumerMemberAssignmentTopic(version, false)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ConsumerMemberAssignmentTopic, l)...)
@@ -2257,6 +2278,9 @@ func (v *ConsumerMemberAssignment) readFrom(src []byte, unsafe bool) error {
 				var l int32
 				l = b.ArrayLen()
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -2550,6 +2574,9 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeConnectMemberAssignmentAssignment(version, false)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ConnectMemberAssignmentAssignment, l)...)
@@ -2575,6 +2602,9 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, 2) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int16, l)...)
@@ -2596,6 +2626,9 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		var l int32
 		l = b.ArrayLen()
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeConnectMemberAssignmentRevoked(version, false)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -2621,6 +2654,9 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 				var l int32
 				l = b.ArrayLen()
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 2) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -3035,6 +3071,9 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeLeaderChangeMessageVoter(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]LeaderChangeMessageVoter, l)...)
@@ -3068,6 +3107,9 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeLeaderChangeMessageVoter(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -3365,6 +3407,9 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeProduceRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ProduceRequestTopic, l)...)
@@ -3404,6 +3449,9 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeProduceRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -3991,6 +4039,9 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeProduceResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ProduceResponseTopic, l)...)
@@ -4032,6 +4083,9 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeProduceResponseTopicPartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ProduceResponseTopicPartition, l)...)
@@ -4070,6 +4124,9 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeProduceResponseTopicPartitionErrorRecord(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -4183,6 +4240,9 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeProduceResponseBroker(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -4825,6 +4885,9 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeFetchRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]FetchRequestTopic, l)...)
@@ -4864,6 +4927,9 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeFetchRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -4943,6 +5009,9 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeFetchRequestForgottenTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]FetchRequestForgottenTopic, l)...)
@@ -4982,6 +5051,9 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -5782,6 +5854,9 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeFetchResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]FetchResponseTopic, l)...)
@@ -5821,6 +5896,9 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeFetchResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -5864,6 +5942,9 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 							a = []FetchResponseTopicPartitionAbortedTransaction{}
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeFetchResponseTopicPartitionAbortedTransaction(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -5994,6 +6075,9 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeFetchResponseBroker(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -6366,6 +6450,9 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeListOffsetsRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ListOffsetsRequestTopic, l)...)
@@ -6401,6 +6488,9 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeListOffsetsRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -6733,6 +6823,9 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeListOffsetsResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ListOffsetsResponseTopic, l)...)
@@ -6770,6 +6863,9 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeListOffsetsResponseTopicPartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ListOffsetsResponseTopicPartition, l)...)
@@ -6796,6 +6892,9 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 8) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -7041,6 +7140,9 @@ func (v *MetadataRequest) readFrom(src []byte, unsafe bool) error {
 			a = []MetadataRequestTopic{}
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeMetadataRequestTopic(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -7559,6 +7661,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeMetadataResponseBroker(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]MetadataResponseBroker, l)...)
@@ -7649,6 +7754,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeMetadataResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]MetadataResponseTopic, l)...)
@@ -7716,6 +7824,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeMetadataResponseTopicPartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]MetadataResponseTopicPartition, l)...)
@@ -7752,6 +7863,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -7775,6 +7889,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -7796,6 +7913,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -8377,6 +8497,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeLeaderAndISRRequestTopicPartition(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]LeaderAndISRRequestTopicPartition, l)...)
@@ -8430,6 +8553,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, 4) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -8457,6 +8583,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, 4) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -8480,6 +8609,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, 4) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -8501,6 +8633,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -8539,6 +8674,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeLeaderAndISRRequestTopicState(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -8580,6 +8718,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeLeaderAndISRRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -8635,6 +8776,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -8662,6 +8806,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -8685,6 +8832,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -8706,6 +8856,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -8751,6 +8904,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeLeaderAndISRRequestLiveLeader(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -8993,6 +9149,9 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeLeaderAndISRResponseTopicPartition(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]LeaderAndISRResponseTopicPartition, l)...)
@@ -9045,6 +9204,9 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeLeaderAndISRResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]LeaderAndISRResponseTopic, l)...)
@@ -9067,6 +9229,9 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeLeaderAndISRResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -9394,6 +9559,9 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeStopReplicaRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]StopReplicaRequestTopic, l)...)
@@ -9435,6 +9603,9 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, 4) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -9456,6 +9627,9 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeStopReplicaRequestTopicPartitionState(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -9641,6 +9815,9 @@ func (v *StopReplicaResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeStopReplicaResponsePartition(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -10216,6 +10393,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeUpdateMetadataRequestTopicPartition(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]UpdateMetadataRequestTopicPartition, l)...)
@@ -10269,6 +10449,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, 4) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -10296,6 +10479,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, 4) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -10317,6 +10503,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -10347,6 +10536,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeUpdateMetadataRequestTopicState(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -10388,6 +10580,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeUpdateMetadataRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -10443,6 +10638,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -10470,6 +10668,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -10491,6 +10692,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -10528,6 +10732,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeUpdateMetadataRequestLiveBroker(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -10573,6 +10780,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeUpdateMetadataRequestLiveBrokerEndpoint(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -10997,6 +11207,9 @@ func (v *ControlledShutdownResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeControlledShutdownResponsePartitionsRemaining(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ControlledShutdownResponsePartitionsRemaining, l)...)
@@ -11399,6 +11612,9 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeOffsetCommitRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetCommitRequestTopic, l)...)
@@ -11438,6 +11654,9 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeOffsetCommitRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -11735,6 +11954,9 @@ func (v *OffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeOffsetCommitResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetCommitResponseTopic, l)...)
@@ -11774,6 +11996,9 @@ func (v *OffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeOffsetCommitResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -12156,6 +12381,9 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeOffsetFetchRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetFetchRequestTopic, l)...)
@@ -12193,6 +12421,9 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, 4) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -12221,6 +12452,9 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeOffsetFetchRequestGroup(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -12284,6 +12518,9 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeOffsetFetchRequestGroupTopic(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]OffsetFetchRequestGroupTopic, l)...)
@@ -12323,6 +12560,9 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -12793,6 +13033,9 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeOffsetFetchResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetFetchResponseTopic, l)...)
@@ -12828,6 +13071,9 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeOffsetFetchResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -12901,6 +13147,9 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeOffsetFetchResponseGroup(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetFetchResponseGroup, l)...)
@@ -12936,6 +13185,9 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeOffsetFetchResponseGroupTopic(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -12977,6 +13229,9 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeOffsetFetchResponseGroupTopicPartition(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -13205,6 +13460,9 @@ func (v *FindCoordinatorRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -13521,6 +13779,9 @@ func (v *FindCoordinatorResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeFindCoordinatorResponseCoordinator(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -13948,6 +14209,9 @@ func (v *JoinGroupRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeJoinGroupRequestProtocol(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -14399,6 +14663,9 @@ func (v *JoinGroupResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeJoinGroupResponseMember(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -14979,6 +15246,9 @@ func (v *LeaveGroupRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeLeaveGroupRequestMember(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]LeaveGroupRequestMember, l)...)
@@ -15233,6 +15503,9 @@ func (v *LeaveGroupResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeLeaveGroupResponseMember(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -15599,6 +15872,9 @@ func (v *SyncGroupRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeSyncGroupRequestGroupAssignment(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]SyncGroupRequestGroupAssignment, l)...)
@@ -15956,6 +16232,9 @@ func (v *DescribeGroupsRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -16320,6 +16599,9 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeGroupsResponseGroup(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeGroupsResponseGroup, l)...)
@@ -16427,6 +16709,9 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeGroupsResponseGroupMember(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -16680,6 +16965,9 @@ func (v *ListGroupsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]string, l)...)
@@ -16714,6 +17002,9 @@ func (v *ListGroupsRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -16933,6 +17224,9 @@ func (v *ListGroupsResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeListGroupsResponseGroup(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -17199,6 +17493,9 @@ func (v *SASLHandshakeResponse) readFrom(src []byte, unsafe bool) error {
 		var l int32
 		l = b.ArrayLen()
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, 2) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -17778,6 +18075,9 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeApiVersionsResponseApiKey(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ApiVersionsResponseApiKey, l)...)
@@ -17825,6 +18125,9 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeApiVersionsResponseSupportedFeature(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -17887,6 +18190,9 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeApiVersionsResponseFinalizedFeature(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -18248,6 +18554,9 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeCreateTopicsRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]CreateTopicsRequestTopic, l)...)
@@ -18293,6 +18602,9 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeCreateTopicsRequestTopicReplicaAssignment(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]CreateTopicsRequestTopicReplicaAssignment, l)...)
@@ -18315,6 +18627,9 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -18345,6 +18660,9 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeCreateTopicsRequestTopicConfig(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -18741,6 +19059,9 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeCreateTopicsResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]CreateTopicsResponseTopic, l)...)
@@ -18812,6 +19133,9 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 					a = []CreateTopicsResponseTopicConfig{}
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeCreateTopicsResponseTopicConfig(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -19075,6 +19399,9 @@ func (v *DeleteTopicsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]string, l)...)
@@ -19109,6 +19436,9 @@ func (v *DeleteTopicsRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeDeleteTopicsRequestTopic(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -19360,6 +19690,9 @@ func (v *DeleteTopicsResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeDeleteTopicsResponseTopic(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -19658,6 +19991,9 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDeleteRecordsRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DeleteRecordsRequestTopic, l)...)
@@ -19693,6 +20029,9 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDeleteRecordsRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -19957,6 +20296,9 @@ func (v *DeleteRecordsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDeleteRecordsResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DeleteRecordsResponseTopic, l)...)
@@ -19992,6 +20334,9 @@ func (v *DeleteRecordsResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDeleteRecordsResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -20561,6 +20906,9 @@ func (v *OffsetForLeaderEpochRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeOffsetForLeaderEpochRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetForLeaderEpochRequestTopic, l)...)
@@ -20596,6 +20944,9 @@ func (v *OffsetForLeaderEpochRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeOffsetForLeaderEpochRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -20889,6 +21240,9 @@ func (v *OffsetForLeaderEpochResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeOffsetForLeaderEpochResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetForLeaderEpochResponseTopic, l)...)
@@ -20924,6 +21278,9 @@ func (v *OffsetForLeaderEpochResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeOffsetForLeaderEpochResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -21313,6 +21670,9 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAddPartitionsToTxnRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AddPartitionsToTxnRequestTopic, l)...)
@@ -21350,6 +21710,9 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, 4) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -21378,6 +21741,9 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeAddPartitionsToTxnRequestTransaction(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -21429,6 +21795,9 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeAddPartitionsToTxnRequestTransactionTopic(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AddPartitionsToTxnRequestTransactionTopic, l)...)
@@ -21464,6 +21833,9 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -21881,6 +22253,9 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAddPartitionsToTxnResponseTransaction(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AddPartitionsToTxnResponseTransaction, l)...)
@@ -21918,6 +22293,9 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeAddPartitionsToTxnResponseTransactionTopic(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AddPartitionsToTxnResponseTransactionTopic, l)...)
@@ -21953,6 +22331,9 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeAddPartitionsToTxnResponseTransactionTopicPartition(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -22004,6 +22385,9 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAddPartitionsToTxnResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AddPartitionsToTxnResponseTopic, l)...)
@@ -22039,6 +22423,9 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeAddPartitionsToTxnResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -22882,6 +23269,9 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeWriteTxnMarkersRequestMarker(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]WriteTxnMarkersRequestMarker, l)...)
@@ -22912,6 +23302,9 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeWriteTxnMarkersRequestMarkerTopic(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -22949,6 +23342,9 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -23225,6 +23621,9 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeWriteTxnMarkersResponseMarker(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]WriteTxnMarkersResponseMarker, l)...)
@@ -23247,6 +23646,9 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeWriteTxnMarkersResponseMarkerTopic(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -23284,6 +23686,9 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeWriteTxnMarkersResponseMarkerTopicPartition(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -23704,6 +24109,9 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeTxnOffsetCommitRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TxnOffsetCommitRequestTopic, l)...)
@@ -23743,6 +24151,9 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeTxnOffsetCommitRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -24044,6 +24455,9 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeTxnOffsetCommitResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TxnOffsetCommitResponseTopic, l)...)
@@ -24083,6 +24497,9 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeTxnOffsetCommitResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -24664,6 +25081,9 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeACLsResponseResource(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeACLsResponseResource, l)...)
@@ -24717,6 +25137,9 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeACLsResponseResourceACL(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -25012,6 +25435,9 @@ func (v *CreateACLsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeCreateACLsRequestCreation(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]CreateACLsRequestCreation, l)...)
@@ -25268,6 +25694,9 @@ func (v *CreateACLsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeCreateACLsResponseResult(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]CreateACLsResponseResult, l)...)
@@ -25503,6 +25932,9 @@ func (v *DeleteACLsRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeDeleteACLsRequestFilter(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -25884,6 +26316,9 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDeleteACLsResponseResult(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DeleteACLsResponseResult, l)...)
@@ -25923,6 +26358,9 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDeleteACLsResponseResultMatchingACL(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -26251,6 +26689,9 @@ func (v *DescribeConfigsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeConfigsRequestResource(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeConfigsRequestResource, l)...)
@@ -26298,6 +26739,9 @@ func (v *DescribeConfigsRequest) readFrom(src []byte, unsafe bool) error {
 					a = []string{}
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -26722,6 +27166,9 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeConfigsResponseResource(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeConfigsResponseResource, l)...)
@@ -26787,6 +27234,9 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeConfigsResponseResourceConfig(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -26862,6 +27312,9 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeDescribeConfigsResponseResourceConfigConfigSynonym(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -27204,6 +27657,9 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterConfigsRequestResource(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterConfigsRequestResource, l)...)
@@ -27248,6 +27704,9 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeAlterConfigsRequestResourceConfig(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -27497,6 +27956,9 @@ func (v *AlterConfigsResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeAlterConfigsResponseResource(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -27770,6 +28232,9 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterReplicaLogDirsRequestDir(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterReplicaLogDirsRequestDir, l)...)
@@ -27807,6 +28272,9 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeAlterReplicaLogDirsRequestDirTopic(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AlterReplicaLogDirsRequestDirTopic, l)...)
@@ -27842,6 +28310,9 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -28085,6 +28556,9 @@ func (v *AlterReplicaLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterReplicaLogDirsResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterReplicaLogDirsResponseTopic, l)...)
@@ -28120,6 +28594,9 @@ func (v *AlterReplicaLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeAlterReplicaLogDirsResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -28314,6 +28791,9 @@ func (v *DescribeLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeLogDirsRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeLogDirsRequestTopic, l)...)
@@ -28349,6 +28829,9 @@ func (v *DescribeLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -28695,6 +29178,9 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeLogDirsResponseDir(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeLogDirsResponseDir, l)...)
@@ -28736,6 +29222,9 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeDescribeLogDirsResponseDirTopic(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]DescribeLogDirsResponseDirTopic, l)...)
@@ -28771,6 +29260,9 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeDescribeLogDirsResponseDirTopicPartition(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -29316,6 +29808,9 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeCreatePartitionsRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]CreatePartitionsRequestTopic, l)...)
@@ -29360,6 +29855,9 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeCreatePartitionsRequestTopicAssignment(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]CreatePartitionsRequestTopicAssignment, l)...)
@@ -29378,6 +29876,9 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -29603,6 +30104,9 @@ func (v *CreatePartitionsResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeCreatePartitionsResponseTopic(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -29888,6 +30392,9 @@ func (v *CreateDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeCreateDelegationTokenRequestRenewer(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -30875,6 +31382,9 @@ func (v *DescribeDelegationTokenRequest) readFrom(src []byte, unsafe bool) error
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeDelegationTokenRequestOwner(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeDelegationTokenRequestOwner, l)...)
@@ -31219,6 +31729,9 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeDelegationTokenResponseTokenDetail(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeDelegationTokenResponseTokenDetail, l)...)
@@ -31343,6 +31856,9 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeDelegationTokenResponseTokenDetailRenewer(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -31519,6 +32035,9 @@ func (v *DeleteGroupsRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -31721,6 +32240,9 @@ func (v *DeleteGroupsResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeDeleteGroupsResponseGroup(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -31970,6 +32492,9 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeElectLeadersRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ElectLeadersRequestTopic, l)...)
@@ -32005,6 +32530,9 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -32265,6 +32793,9 @@ func (v *ElectLeadersResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeElectLeadersResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ElectLeadersResponseTopic, l)...)
@@ -32300,6 +32831,9 @@ func (v *ElectLeadersResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeElectLeadersResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -32606,6 +33140,9 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeIncrementalAlterConfigsRequestResource(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]IncrementalAlterConfigsRequestResource, l)...)
@@ -32650,6 +33187,9 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeIncrementalAlterConfigsRequestResourceConfig(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -32911,6 +33451,9 @@ func (v *IncrementalAlterConfigsResponse) readFrom(src []byte, unsafe bool) erro
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeIncrementalAlterConfigsResponseResource(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -33212,6 +33755,9 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterPartitionAssignmentsRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterPartitionAssignmentsRequestTopic, l)...)
@@ -33249,6 +33795,9 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeAlterPartitionAssignmentsRequestTopicPartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AlterPartitionAssignmentsRequestTopicPartition, l)...)
@@ -33274,6 +33823,9 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 							a = []int32{}
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -33578,6 +34130,9 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterPartitionAssignmentsResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterPartitionAssignmentsResponseTopic, l)...)
@@ -33613,6 +34168,9 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeAlterPartitionAssignmentsResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -33846,6 +34404,9 @@ func (v *ListPartitionReassignmentsRequest) readFrom(src []byte, unsafe bool) er
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeListPartitionReassignmentsRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ListPartitionReassignmentsRequestTopic, l)...)
@@ -33881,6 +34442,9 @@ func (v *ListPartitionReassignmentsRequest) readFrom(src []byte, unsafe bool) er
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -34184,6 +34748,9 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeListPartitionReassignmentsResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ListPartitionReassignmentsResponseTopic, l)...)
@@ -34221,6 +34788,9 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeListPartitionReassignmentsResponseTopicPartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ListPartitionReassignmentsResponseTopicPartition, l)...)
@@ -34243,6 +34813,9 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -34268,6 +34841,9 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -34289,6 +34865,9 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -34479,6 +35058,9 @@ func (v *OffsetDeleteRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeOffsetDeleteRequestTopic(version, false)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetDeleteRequestTopic, l)...)
@@ -34502,6 +35084,9 @@ func (v *OffsetDeleteRequest) readFrom(src []byte, unsafe bool) error {
 				var l int32
 				l = b.ArrayLen()
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeOffsetDeleteRequestTopicPartition(version, false)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -34704,6 +35289,9 @@ func (v *OffsetDeleteResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeOffsetDeleteResponseTopic(version, false)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetDeleteResponseTopic, l)...)
@@ -34727,6 +35315,9 @@ func (v *OffsetDeleteResponse) readFrom(src []byte, unsafe bool) error {
 				var l int32
 				l = b.ArrayLen()
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeOffsetDeleteResponseTopicPartition(version, false)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -34925,6 +35516,9 @@ func (v *DescribeClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeDescribeClientQuotasRequestComponent(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -35283,6 +35877,9 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeClientQuotasResponseEntry(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeClientQuotasResponseEntry, l)...)
@@ -35301,6 +35898,9 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeClientQuotasResponseEntryEntity(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -35362,6 +35962,9 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeClientQuotasResponseEntryValue(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -35668,6 +36271,9 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterClientQuotasRequestEntry(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterClientQuotasRequestEntry, l)...)
@@ -35686,6 +36292,9 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeAlterClientQuotasRequestEntryEntity(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -35747,6 +36356,9 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeAlterClientQuotasRequestEntryOp(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -36013,6 +36625,9 @@ func (v *AlterClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterClientQuotasResponseEntry(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterClientQuotasResponseEntry, l)...)
@@ -36052,6 +36667,9 @@ func (v *AlterClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeAlterClientQuotasResponseEntryEntity(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -36257,6 +36875,9 @@ func (v *DescribeUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) 
 			a = []DescribeUserSCRAMCredentialsRequestUser{}
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeDescribeUserSCRAMCredentialsRequestUser(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -36553,6 +37174,9 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeUserSCRAMCredentialsResponseResult(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeUserSCRAMCredentialsResponseResult, l)...)
@@ -36609,6 +37233,9 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeUserSCRAMCredentialsResponseResultCredentialInfo(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -36880,6 +37507,9 @@ func (v *AlterUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) err
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterUserSCRAMCredentialsRequestDeletion(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterUserSCRAMCredentialsRequestDeletion, l)...)
@@ -36926,6 +37556,9 @@ func (v *AlterUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) err
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeAlterUserSCRAMCredentialsRequestUpsertion(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -37150,6 +37783,9 @@ func (v *AlterUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool) er
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeAlterUserSCRAMCredentialsResponseResult(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -37476,6 +38112,9 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeVoteRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]VoteRequestTopic, l)...)
@@ -37511,6 +38150,9 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeVoteRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -37846,6 +38488,9 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeVoteResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]VoteResponseTopic, l)...)
@@ -37881,6 +38526,9 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeVoteResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -37941,6 +38589,9 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeVoteResponseNodeEndpoint(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -38297,6 +38948,9 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeBeginQuorumEpochRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]BeginQuorumEpochRequestTopic, l)...)
@@ -38332,6 +38986,9 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeBeginQuorumEpochRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -38382,6 +39039,9 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeBeginQuorumEpochRequestLeaderEndpoint(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -38715,6 +39375,9 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeBeginQuorumEpochResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]BeginQuorumEpochResponseTopic, l)...)
@@ -38750,6 +39413,9 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeBeginQuorumEpochResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -38806,6 +39472,9 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeBeginQuorumEpochResponseNodeEndpoint(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -39206,6 +39875,9 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeEndQuorumEpochRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]EndQuorumEpochRequestTopic, l)...)
@@ -39243,6 +39915,9 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeEndQuorumEpochRequestTopicPartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]EndQuorumEpochRequestTopicPartition, l)...)
@@ -39275,6 +39950,9 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -39296,6 +39974,9 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeEndQuorumEpochRequestTopicPartitionPreferredCandidate(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -39345,6 +40026,9 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeEndQuorumEpochRequestLeaderEndpoint(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -39677,6 +40361,9 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeEndQuorumEpochResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]EndQuorumEpochResponseTopic, l)...)
@@ -39712,6 +40399,9 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeEndQuorumEpochResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -39768,6 +40458,9 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeEndQuorumEpochResponseNodeEndpoint(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -40035,6 +40728,9 @@ func (v *DescribeQuorumRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeQuorumRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeQuorumRequestTopic, l)...)
@@ -40070,6 +40766,9 @@ func (v *DescribeQuorumRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeQuorumRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -40514,6 +41213,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeQuorumResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeQuorumResponseTopic, l)...)
@@ -40549,6 +41251,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeQuorumResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -40608,6 +41313,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, minSizeDescribeQuorumResponseTopicPartitionReplicaState(version, isFlexible)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]DescribeQuorumResponseTopicPartitionReplicaState, l)...)
@@ -40653,6 +41361,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeDescribeQuorumResponseTopicPartitionReplicaState(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -40716,6 +41427,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeQuorumResponseNode(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeQuorumResponseNode, l)...)
@@ -40738,6 +41452,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeQuorumResponseNodeListener(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -41102,6 +41819,9 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterPartitionRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterPartitionRequestTopic, l)...)
@@ -41143,6 +41863,9 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeAlterPartitionRequestTopicPartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AlterPartitionRequestTopicPartition, l)...)
@@ -41171,6 +41894,9 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -41192,6 +41918,9 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeAlterPartitionRequestTopicPartitionNewEpochISR(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -41487,6 +42216,9 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterPartitionResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterPartitionResponseTopic, l)...)
@@ -41528,6 +42260,9 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeAlterPartitionResponseTopicPartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AlterPartitionResponseTopicPartition, l)...)
@@ -41562,6 +42297,9 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -41792,6 +42530,9 @@ func (v *UpdateFeaturesRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeUpdateFeaturesRequestFeatureUpdate(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -42040,6 +42781,9 @@ func (v *UpdateFeaturesResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeUpdateFeaturesResponseResult(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -42656,6 +43400,9 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeFetchSnapshotRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]FetchSnapshotRequestTopic, l)...)
@@ -42691,6 +43438,9 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeFetchSnapshotRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -43199,6 +43949,9 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeFetchSnapshotResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]FetchSnapshotResponseTopic, l)...)
@@ -43234,6 +43987,9 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeFetchSnapshotResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -43339,6 +44095,9 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeFetchSnapshotResponseNodeEndpoint(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -43782,6 +44541,9 @@ func (v *DescribeClusterResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeClusterResponseBroker(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeClusterResponseBroker, l)...)
@@ -44009,6 +44771,9 @@ func (v *DescribeProducersRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeProducersRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeProducersRequestTopic, l)...)
@@ -44044,6 +44809,9 @@ func (v *DescribeProducersRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -44362,6 +45130,9 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeProducersResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeProducersResponseTopic, l)...)
@@ -44397,6 +45168,9 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeProducersResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -44442,6 +45216,9 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeDescribeProducersResponseTopicPartitionActiveProducer(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -44817,6 +45594,9 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeBrokerRegistrationRequestListener(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]BrokerRegistrationRequestListener, l)...)
@@ -44884,6 +45664,9 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeBrokerRegistrationRequestFeature(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -44957,6 +45740,9 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, 16) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -45307,6 +46093,9 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, 16) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([][16]byte, l)...)
@@ -45334,6 +46123,9 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 					a = [][16]byte{}
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 16) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -45814,6 +46606,9 @@ func (v *DescribeTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]string, l)...)
@@ -46106,6 +46901,9 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeTransactionsResponseTransactionState(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeTransactionsResponseTransactionState, l)...)
@@ -46180,6 +46978,9 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeDescribeTransactionsResponseTransactionStateTopic(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]DescribeTransactionsResponseTransactionStateTopic, l)...)
@@ -46215,6 +47016,9 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -46400,6 +47204,9 @@ func (v *ListTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]string, l)...)
@@ -46434,6 +47241,9 @@ func (v *ListTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, 8) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -46673,6 +47483,9 @@ func (v *ListTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]string, l)...)
@@ -46707,6 +47520,9 @@ func (v *ListTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeListTransactionsResponseTransactionState(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -47328,6 +48144,9 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]string, l)...)
@@ -47401,6 +48220,9 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeConsumerGroupHeartbeatRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ConsumerGroupHeartbeatRequestTopic, l)...)
@@ -47423,6 +48245,9 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -47742,6 +48567,9 @@ func (v *ConsumerGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeConsumerGroupHeartbeatResponseAssignmentTopic(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ConsumerGroupHeartbeatResponseAssignmentTopic, l)...)
@@ -47764,6 +48592,9 @@ func (v *ConsumerGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -47933,6 +48764,9 @@ func (v *ConsumerGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -48426,6 +49260,9 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeConsumerGroupDescribeResponseGroup(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ConsumerGroupDescribeResponseGroup, l)...)
@@ -48524,6 +49361,9 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeConsumerGroupDescribeResponseGroupMember(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -48635,6 +49475,9 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]string, l)...)
@@ -48692,83 +49535,7 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 							if !b.Ok() {
 								return b.Complete()
 							}
-							a = a[:0]
-							if l > 0 {
-								a = append(a, make([]AssignmentTopicPartition, l)...)
-							}
-							for i := int32(0); i < l; i++ {
-								v := &a[i]
-								v.Default()
-								s := v
-								{
-									v := b.Uuid()
-									s.TopicID = v
-								}
-								{
-									var v string
-									if unsafe {
-										if isFlexible {
-											v = b.UnsafeCompactString()
-										} else {
-											v = b.UnsafeString()
-										}
-									} else {
-										if isFlexible {
-											v = b.CompactString()
-										} else {
-											v = b.String()
-										}
-									}
-									s.Topic = v
-								}
-								{
-									v := s.Partitions
-									a := v
-									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									a = a[:0]
-									if l > 0 {
-										a = append(a, make([]int32, l)...)
-									}
-									for i := int32(0); i < l; i++ {
-										v := b.Int32()
-										a[i] = v
-									}
-									v = a
-									s.Partitions = v
-								}
-								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
-								}
-							}
-							v = a
-							s.TopicPartitions = v
-						}
-						if isFlexible {
-							s.UnknownTags = internalReadTags(&b)
-						}
-					}
-					{
-						v := &s.TargetAssignment
-						v.Default()
-						s := v
-						{
-							v := s.TopicPartitions
-							a := v
-							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
+							if !b.FitsArray(l, minSizeAssignmentTopicPartition(version, isFlexible)) {
 								return b.Complete()
 							}
 							a = a[:0]
@@ -48810,6 +49577,94 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 										l = b.ArrayLen()
 									}
 									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, 4) {
+										return b.Complete()
+									}
+									a = a[:0]
+									if l > 0 {
+										a = append(a, make([]int32, l)...)
+									}
+									for i := int32(0); i < l; i++ {
+										v := b.Int32()
+										a[i] = v
+									}
+									v = a
+									s.Partitions = v
+								}
+								if isFlexible {
+									s.UnknownTags = internalReadTags(&b)
+								}
+							}
+							v = a
+							s.TopicPartitions = v
+						}
+						if isFlexible {
+							s.UnknownTags = internalReadTags(&b)
+						}
+					}
+					{
+						v := &s.TargetAssignment
+						v.Default()
+						s := v
+						{
+							v := s.TopicPartitions
+							a := v
+							var l int32
+							if isFlexible {
+								l = b.CompactArrayLen()
+							} else {
+								l = b.ArrayLen()
+							}
+							if !b.Ok() {
+								return b.Complete()
+							}
+							if !b.FitsArray(l, minSizeAssignmentTopicPartition(version, isFlexible)) {
+								return b.Complete()
+							}
+							a = a[:0]
+							if l > 0 {
+								a = append(a, make([]AssignmentTopicPartition, l)...)
+							}
+							for i := int32(0); i < l; i++ {
+								v := &a[i]
+								v.Default()
+								s := v
+								{
+									v := b.Uuid()
+									s.TopicID = v
+								}
+								{
+									var v string
+									if unsafe {
+										if isFlexible {
+											v = b.UnsafeCompactString()
+										} else {
+											v = b.UnsafeString()
+										}
+									} else {
+										if isFlexible {
+											v = b.CompactString()
+										} else {
+											v = b.String()
+										}
+									}
+									s.Topic = v
+								}
+								{
+									v := s.Partitions
+									a := v
+									var l int32
+									if isFlexible {
+										l = b.CompactArrayLen()
+									} else {
+										l = b.ArrayLen()
+									}
+									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, 4) {
 										return b.Complete()
 									}
 									a = a[:0]
@@ -49111,6 +49966,9 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeControllerRegistrationRequestListener(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ControllerRegistrationRequestListener, l)...)
@@ -49178,6 +50036,9 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeControllerRegistrationRequestFeature(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -49659,6 +50520,9 @@ func (v *GetTelemetrySubscriptionsResponse) readFrom(src []byte, unsafe bool) er
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -50171,6 +51035,9 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAssignReplicasToDirsRequestDirectory(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AssignReplicasToDirsRequestDirectory, l)...)
@@ -50195,6 +51062,9 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeAssignReplicasToDirsRequestDirectoryTopic(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AssignReplicasToDirsRequestDirectoryTopic, l)...)
@@ -50217,6 +51087,9 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeAssignReplicasToDirsRequestDirectoryTopicPartition(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -50493,6 +51366,9 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAssignReplicasToDirsResponseDirectory(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AssignReplicasToDirsResponseDirectory, l)...)
@@ -50517,6 +51393,9 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeAssignReplicasToDirsResponseDirectoryTopic(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AssignReplicasToDirsResponseDirectoryTopic, l)...)
@@ -50539,6 +51418,9 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeAssignReplicasToDirsResponseDirectoryTopicPartition(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -50867,6 +51749,9 @@ func (v *ListConfigResourcesResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeListConfigResourcesResponseConfigResource(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ListConfigResourcesResponseConfigResource, l)...)
@@ -51105,6 +51990,9 @@ func (v *DescribeTopicPartitionsRequest) readFrom(src []byte, unsafe bool) error
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeDescribeTopicPartitionsRequestTopic(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -51549,6 +52437,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeTopicPartitionsResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeTopicPartitionsResponseTopic, l)...)
@@ -51598,6 +52489,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeDescribeTopicPartitionsResponseTopicPartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]DescribeTopicPartitionsResponseTopicPartition, l)...)
@@ -51634,6 +52528,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -51655,6 +52552,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -51683,6 +52583,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -51709,6 +52612,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -51730,6 +52636,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -52010,6 +52919,9 @@ func (v *ShareGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			a = []string{}
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -52336,6 +53248,9 @@ func (v *ShareGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeShareGroupHeartbeatResponseAssignmentTopicPartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ShareGroupHeartbeatResponseAssignmentTopicPartition, l)...)
@@ -52358,6 +53273,9 @@ func (v *ShareGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -52510,6 +53428,9 @@ func (v *ShareGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -52969,6 +53890,9 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeShareGroupDescribeResponseGroup(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareGroupDescribeResponseGroup, l)...)
@@ -53069,6 +53993,9 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeShareGroupDescribeResponseGroupMember(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ShareGroupDescribeResponseGroupMember, l)...)
@@ -53161,6 +54088,9 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]string, l)...)
@@ -53199,6 +54129,9 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								l = b.ArrayLen()
 							}
 							if !b.Ok() {
+								return b.Complete()
+							}
+							if !b.FitsArray(l, minSizeShareGroupDescribeResponseGroupMemberAssignmentTopicPartition(version, isFlexible)) {
 								return b.Complete()
 							}
 							a = a[:0]
@@ -53240,6 +54173,9 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										l = b.ArrayLen()
 									}
 									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, 4) {
 										return b.Complete()
 									}
 									a = a[:0]
@@ -53756,6 +54692,9 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeShareFetchRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareFetchRequestTopic, l)...)
@@ -53778,6 +54717,9 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeShareFetchRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -53806,6 +54748,9 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeShareFetchRequestTopicPartitionAcknowledgementBatch(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -53880,6 +54825,9 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeShareFetchRequestForgottenTopicsData(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareFetchRequestForgottenTopicsData, l)...)
@@ -53902,6 +54850,9 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -54399,6 +55350,9 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeShareFetchResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareFetchResponseTopic, l)...)
@@ -54421,6 +55375,9 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeShareFetchResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -54514,6 +55471,9 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, minSizeShareFetchResponseTopicPartitionAcquiredRecord(version, isFlexible)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]ShareFetchResponseTopicPartitionAcquiredRecord, l)...)
@@ -54565,6 +55525,9 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeShareFetchResponseNodeEndpoint(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -54958,6 +55921,9 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeShareAcknowledgeRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareAcknowledgeRequestTopic, l)...)
@@ -54982,6 +55948,9 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeShareAcknowledgeRequestTopicPartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ShareAcknowledgeRequestTopicPartition, l)...)
@@ -55004,6 +55973,9 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeShareAcknowledgeRequestTopicPartitionAcknowledgementBatch(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -55454,6 +56426,9 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeShareAcknowledgeResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareAcknowledgeResponseTopic, l)...)
@@ -55476,6 +56451,9 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeShareAcknowledgeResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -55551,6 +56529,9 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeShareAcknowledgeResponseNodeEndpoint(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -55846,6 +56827,9 @@ func (v *AddRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeAddRaftVoterRequestListener(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -56541,6 +57525,9 @@ func (v *UpdateRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeUpdateRaftVoterRequestListener(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]UpdateRaftVoterRequestListener, l)...)
@@ -57071,6 +58058,9 @@ func (v *InitializeShareGroupStateRequest) readFrom(src []byte, unsafe bool) err
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeInitializeShareGroupStateRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]InitializeShareGroupStateRequestTopic, l)...)
@@ -57093,6 +58083,9 @@ func (v *InitializeShareGroupStateRequest) readFrom(src []byte, unsafe bool) err
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeInitializeShareGroupStateRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -57322,6 +58315,9 @@ func (v *InitializeShareGroupStateResponse) readFrom(src []byte, unsafe bool) er
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeInitializeShareGroupStateResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]InitializeShareGroupStateResponseTopic, l)...)
@@ -57344,6 +58340,9 @@ func (v *InitializeShareGroupStateResponse) readFrom(src []byte, unsafe bool) er
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeInitializeShareGroupStateResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -57608,6 +58607,9 @@ func (v *ReadShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeReadShareGroupStateRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ReadShareGroupStateRequestTopic, l)...)
@@ -57630,6 +58632,9 @@ func (v *ReadShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeReadShareGroupStateRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -57937,6 +58942,9 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeReadShareGroupStateResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ReadShareGroupStateResponseTopic, l)...)
@@ -57959,6 +58967,9 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeReadShareGroupStateResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -58012,6 +59023,9 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeReadShareGroupStateResponseTopicPartitionStateBatch(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -58366,6 +59380,9 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeWriteShareGroupStateRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]WriteShareGroupStateRequestTopic, l)...)
@@ -58388,6 +59405,9 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeWriteShareGroupStateRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -58428,6 +59448,9 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeWriteShareGroupStateRequestTopicPartitionStateBatch(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -58671,6 +59694,9 @@ func (v *WriteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeWriteShareGroupStateResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]WriteShareGroupStateResponseTopic, l)...)
@@ -58693,6 +59719,9 @@ func (v *WriteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeWriteShareGroupStateResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -58950,6 +59979,9 @@ func (v *DeleteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDeleteShareGroupStateRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DeleteShareGroupStateRequestTopic, l)...)
@@ -58972,6 +60004,9 @@ func (v *DeleteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDeleteShareGroupStateRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -59195,6 +60230,9 @@ func (v *DeleteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDeleteShareGroupStateResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DeleteShareGroupStateResponseTopic, l)...)
@@ -59217,6 +60255,9 @@ func (v *DeleteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error 
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDeleteShareGroupStateResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -59483,6 +60524,9 @@ func (v *ReadShareGroupStateSummaryRequest) readFrom(src []byte, unsafe bool) er
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeReadShareGroupStateSummaryRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ReadShareGroupStateSummaryRequestTopic, l)...)
@@ -59505,6 +60549,9 @@ func (v *ReadShareGroupStateSummaryRequest) readFrom(src []byte, unsafe bool) er
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeReadShareGroupStateSummaryRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -59764,6 +60811,9 @@ func (v *ReadShareGroupStateSummaryResponse) readFrom(src []byte, unsafe bool) e
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeReadShareGroupStateSummaryResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ReadShareGroupStateSummaryResponseTopic, l)...)
@@ -59786,6 +60836,9 @@ func (v *ReadShareGroupStateSummaryResponse) readFrom(src []byte, unsafe bool) e
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeReadShareGroupStateSummaryResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -60903,6 +61956,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeStreamsGroupHeartbeatRequestTopologySubtopology(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]StreamsGroupHeartbeatRequestTopologySubtopology, l)...)
@@ -60938,6 +61994,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -60976,6 +62035,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]string, l)...)
@@ -61010,6 +62072,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeTopicInfo(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -61055,6 +62120,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 									l = b.ArrayLen()
 								}
 								if !b.Ok() {
+									return b.Complete()
+								}
+								if !b.FitsArray(l, minSizeTopicInfoConfig(version, isFlexible)) {
 									return b.Complete()
 								}
 								a = a[:0]
@@ -61125,6 +62193,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]string, l)...)
@@ -61159,6 +62230,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeTopicInfo(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -61204,6 +62278,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 									l = b.ArrayLen()
 								}
 								if !b.Ok() {
+									return b.Complete()
+								}
+								if !b.FitsArray(l, minSizeTopicInfoConfig(version, isFlexible)) {
 									return b.Complete()
 								}
 								a = a[:0]
@@ -61274,6 +62351,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, minSizeStreamsGroupHeartbeatRequestTopologySubtopologyCopartitionGroup(version, isFlexible)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]StreamsGroupHeartbeatRequestTopologySubtopologyCopartitionGroup, l)...)
@@ -61292,6 +62372,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 									l = b.ArrayLen()
 								}
 								if !b.Ok() {
+									return b.Complete()
+								}
+								if !b.FitsArray(l, 2) {
 									return b.Complete()
 								}
 								a = a[:0]
@@ -61317,6 +62400,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								if !b.Ok() {
 									return b.Complete()
 								}
+								if !b.FitsArray(l, 2) {
+									return b.Complete()
+								}
 								a = a[:0]
 								if l > 0 {
 									a = append(a, make([]int16, l)...)
@@ -61338,6 +62424,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 									l = b.ArrayLen()
 								}
 								if !b.Ok() {
+									return b.Complete()
+								}
+								if !b.FitsArray(l, 2) {
 									return b.Complete()
 								}
 								a = a[:0]
@@ -61385,6 +62474,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TaskIDs, l)...)
@@ -61420,6 +62512,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -61455,74 +62550,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
-		a = a[:0]
-		if l > 0 {
-			a = append(a, make([]TaskIDs, l)...)
-		}
-		for i := int32(0); i < l; i++ {
-			v := &a[i]
-			v.Default()
-			s := v
-			{
-				var v string
-				if unsafe {
-					if isFlexible {
-						v = b.UnsafeCompactString()
-					} else {
-						v = b.UnsafeString()
-					}
-				} else {
-					if isFlexible {
-						v = b.CompactString()
-					} else {
-						v = b.String()
-					}
-				}
-				s.SubtopologyID = v
-			}
-			{
-				v := s.Partitions
-				a := v
-				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				a = a[:0]
-				if l > 0 {
-					a = append(a, make([]int32, l)...)
-				}
-				for i := int32(0); i < l; i++ {
-					v := b.Int32()
-					a[i] = v
-				}
-				v = a
-				s.Partitions = v
-			}
-			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
-			}
-		}
-		v = a
-		s.StandbyTasks = v
-	}
-	{
-		v := s.WarmupTasks
-		a := v
-		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if version < 0 || l == 0 {
-			a = []TaskIDs{}
-		}
-		if !b.Ok() {
+		if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -61560,6 +62588,85 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
+					return b.Complete()
+				}
+				a = a[:0]
+				if l > 0 {
+					a = append(a, make([]int32, l)...)
+				}
+				for i := int32(0); i < l; i++ {
+					v := b.Int32()
+					a[i] = v
+				}
+				v = a
+				s.Partitions = v
+			}
+			if isFlexible {
+				s.UnknownTags = internalReadTags(&b)
+			}
+		}
+		v = a
+		s.StandbyTasks = v
+	}
+	{
+		v := s.WarmupTasks
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if version < 0 || l == 0 {
+			a = []TaskIDs{}
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
+			return b.Complete()
+		}
+		a = a[:0]
+		if l > 0 {
+			a = append(a, make([]TaskIDs, l)...)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				var v string
+				if unsafe {
+					if isFlexible {
+						v = b.UnsafeCompactString()
+					} else {
+						v = b.UnsafeString()
+					}
+				} else {
+					if isFlexible {
+						v = b.CompactString()
+					} else {
+						v = b.String()
+					}
+				}
+				s.SubtopologyID = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -61644,6 +62751,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeStreamsGroupHeartbeatRequestClientTag(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]StreamsGroupHeartbeatRequestClientTag, l)...)
@@ -61708,6 +62818,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeTaskOffset(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TaskOffset, l)...)
@@ -61761,6 +62874,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			a = []TaskOffset{}
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeTaskOffset(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -62428,6 +63544,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeStreamsGroupHeartbeatResponseStatus(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]StreamsGroupHeartbeatResponseStatus, l)...)
@@ -62479,6 +63598,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TaskIDs, l)...)
@@ -62514,6 +63636,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -62549,74 +63674,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
-		a = a[:0]
-		if l > 0 {
-			a = append(a, make([]TaskIDs, l)...)
-		}
-		for i := int32(0); i < l; i++ {
-			v := &a[i]
-			v.Default()
-			s := v
-			{
-				var v string
-				if unsafe {
-					if isFlexible {
-						v = b.UnsafeCompactString()
-					} else {
-						v = b.UnsafeString()
-					}
-				} else {
-					if isFlexible {
-						v = b.CompactString()
-					} else {
-						v = b.String()
-					}
-				}
-				s.SubtopologyID = v
-			}
-			{
-				v := s.Partitions
-				a := v
-				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				a = a[:0]
-				if l > 0 {
-					a = append(a, make([]int32, l)...)
-				}
-				for i := int32(0); i < l; i++ {
-					v := b.Int32()
-					a[i] = v
-				}
-				v = a
-				s.Partitions = v
-			}
-			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
-			}
-		}
-		v = a
-		s.StandbyTasks = v
-	}
-	{
-		v := s.WarmupTasks
-		a := v
-		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if version < 0 || l == 0 {
-			a = []TaskIDs{}
-		}
-		if !b.Ok() {
+		if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -62654,6 +63712,85 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
+					return b.Complete()
+				}
+				a = a[:0]
+				if l > 0 {
+					a = append(a, make([]int32, l)...)
+				}
+				for i := int32(0); i < l; i++ {
+					v := b.Int32()
+					a[i] = v
+				}
+				v = a
+				s.Partitions = v
+			}
+			if isFlexible {
+				s.UnknownTags = internalReadTags(&b)
+			}
+		}
+		v = a
+		s.StandbyTasks = v
+	}
+	{
+		v := s.WarmupTasks
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if version < 0 || l == 0 {
+			a = []TaskIDs{}
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
+			return b.Complete()
+		}
+		a = a[:0]
+		if l > 0 {
+			a = append(a, make([]TaskIDs, l)...)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				var v string
+				if unsafe {
+					if isFlexible {
+						v = b.UnsafeCompactString()
+					} else {
+						v = b.UnsafeString()
+					}
+				} else {
+					if isFlexible {
+						v = b.CompactString()
+					} else {
+						v = b.String()
+					}
+				}
+				s.SubtopologyID = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, 4) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -62695,6 +63832,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 			a = []StreamsGroupHeartbeatResponsePartitionsByUserEndpoint{}
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeStreamsGroupHeartbeatResponsePartitionsByUserEndpoint(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -62746,6 +63886,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeStreamsGroupHeartbeatResponsePartitionsByUserEndpointActivePartition(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]StreamsGroupHeartbeatResponsePartitionsByUserEndpointActivePartition, l)...)
@@ -62783,6 +63926,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, 4) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -62811,6 +63957,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeStreamsGroupHeartbeatResponsePartitionsByUserEndpointStandbyPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -62848,6 +63997,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -63091,6 +64243,9 @@ func (v *StreamsGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -64474,6 +65629,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeStreamsGroupDescribeResponseGroup(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]StreamsGroupDescribeResponseGroup, l)...)
@@ -64570,6 +65728,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, minSizeStreamsGroupDescribeResponseGroupTopologySubtopology(version, isFlexible)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]StreamsGroupDescribeResponseGroupTopologySubtopology, l)...)
@@ -64605,6 +65766,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									l = b.ArrayLen()
 								}
 								if !b.Ok() {
+									return b.Complete()
+								}
+								if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 									return b.Complete()
 								}
 								a = a[:0]
@@ -64643,6 +65807,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								if !b.Ok() {
 									return b.Complete()
 								}
+								if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+									return b.Complete()
+								}
 								a = a[:0]
 								if l > 0 {
 									a = append(a, make([]string, l)...)
@@ -64677,6 +65844,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									l = b.ArrayLen()
 								}
 								if !b.Ok() {
+									return b.Complete()
+								}
+								if !b.FitsArray(l, minSizeTopicInfo(version, isFlexible)) {
 									return b.Complete()
 								}
 								a = a[:0]
@@ -64722,6 +65892,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											l = b.ArrayLen()
 										}
 										if !b.Ok() {
+											return b.Complete()
+										}
+										if !b.FitsArray(l, minSizeTopicInfoConfig(version, isFlexible)) {
 											return b.Complete()
 										}
 										a = a[:0]
@@ -64792,6 +65965,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								if !b.Ok() {
 									return b.Complete()
 								}
+								if !b.FitsArray(l, minSizeTopicInfo(version, isFlexible)) {
+									return b.Complete()
+								}
 								a = a[:0]
 								if l > 0 {
 									a = append(a, make([]TopicInfo, l)...)
@@ -64835,6 +66011,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											l = b.ArrayLen()
 										}
 										if !b.Ok() {
+											return b.Complete()
+										}
+										if !b.FitsArray(l, minSizeTopicInfoConfig(version, isFlexible)) {
 											return b.Complete()
 										}
 										a = a[:0]
@@ -64915,6 +66094,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeStreamsGroupDescribeResponseGroupMember(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -65079,6 +66261,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, minSizeStreamsGroupDescribeResponseGroupMemberClientTag(version, isFlexible)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]StreamsGroupDescribeResponseGroupMemberClientTag, l)...)
@@ -65140,6 +66325,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, minSizeTaskOffset(version, isFlexible)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]TaskOffset, l)...)
@@ -65190,6 +66378,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeTaskOffset(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -65248,6 +66439,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
+								return b.Complete()
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]TaskIDs, l)...)
@@ -65283,6 +66477,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										l = b.ArrayLen()
 									}
 									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, 4) {
 										return b.Complete()
 									}
 									a = a[:0]
@@ -65315,71 +66512,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							if !b.Ok() {
 								return b.Complete()
 							}
-							a = a[:0]
-							if l > 0 {
-								a = append(a, make([]TaskIDs, l)...)
-							}
-							for i := int32(0); i < l; i++ {
-								v := &a[i]
-								v.Default()
-								s := v
-								{
-									var v string
-									if unsafe {
-										if isFlexible {
-											v = b.UnsafeCompactString()
-										} else {
-											v = b.UnsafeString()
-										}
-									} else {
-										if isFlexible {
-											v = b.CompactString()
-										} else {
-											v = b.String()
-										}
-									}
-									s.SubtopologyID = v
-								}
-								{
-									v := s.Partitions
-									a := v
-									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									a = a[:0]
-									if l > 0 {
-										a = append(a, make([]int32, l)...)
-									}
-									for i := int32(0); i < l; i++ {
-										v := b.Int32()
-										a[i] = v
-									}
-									v = a
-									s.Partitions = v
-								}
-								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
-								}
-							}
-							v = a
-							s.StandbyTasks = v
-						}
-						{
-							v := s.WarmupTasks
-							a := v
-							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
+							if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
 								return b.Complete()
 							}
 							a = a[:0]
@@ -65417,6 +66550,82 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										l = b.ArrayLen()
 									}
 									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, 4) {
+										return b.Complete()
+									}
+									a = a[:0]
+									if l > 0 {
+										a = append(a, make([]int32, l)...)
+									}
+									for i := int32(0); i < l; i++ {
+										v := b.Int32()
+										a[i] = v
+									}
+									v = a
+									s.Partitions = v
+								}
+								if isFlexible {
+									s.UnknownTags = internalReadTags(&b)
+								}
+							}
+							v = a
+							s.StandbyTasks = v
+						}
+						{
+							v := s.WarmupTasks
+							a := v
+							var l int32
+							if isFlexible {
+								l = b.CompactArrayLen()
+							} else {
+								l = b.ArrayLen()
+							}
+							if !b.Ok() {
+								return b.Complete()
+							}
+							if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
+								return b.Complete()
+							}
+							a = a[:0]
+							if l > 0 {
+								a = append(a, make([]TaskIDs, l)...)
+							}
+							for i := int32(0); i < l; i++ {
+								v := &a[i]
+								v.Default()
+								s := v
+								{
+									var v string
+									if unsafe {
+										if isFlexible {
+											v = b.UnsafeCompactString()
+										} else {
+											v = b.UnsafeString()
+										}
+									} else {
+										if isFlexible {
+											v = b.CompactString()
+										} else {
+											v = b.String()
+										}
+									}
+									s.SubtopologyID = v
+								}
+								{
+									v := s.Partitions
+									a := v
+									var l int32
+									if isFlexible {
+										l = b.CompactArrayLen()
+									} else {
+										l = b.ArrayLen()
+									}
+									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, 4) {
 										return b.Complete()
 									}
 									a = a[:0]
@@ -65457,6 +66666,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
+								return b.Complete()
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]TaskIDs, l)...)
@@ -65492,6 +66704,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										l = b.ArrayLen()
 									}
 									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, 4) {
 										return b.Complete()
 									}
 									a = a[:0]
@@ -65524,71 +66739,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							if !b.Ok() {
 								return b.Complete()
 							}
-							a = a[:0]
-							if l > 0 {
-								a = append(a, make([]TaskIDs, l)...)
-							}
-							for i := int32(0); i < l; i++ {
-								v := &a[i]
-								v.Default()
-								s := v
-								{
-									var v string
-									if unsafe {
-										if isFlexible {
-											v = b.UnsafeCompactString()
-										} else {
-											v = b.UnsafeString()
-										}
-									} else {
-										if isFlexible {
-											v = b.CompactString()
-										} else {
-											v = b.String()
-										}
-									}
-									s.SubtopologyID = v
-								}
-								{
-									v := s.Partitions
-									a := v
-									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									a = a[:0]
-									if l > 0 {
-										a = append(a, make([]int32, l)...)
-									}
-									for i := int32(0); i < l; i++ {
-										v := b.Int32()
-										a[i] = v
-									}
-									v = a
-									s.Partitions = v
-								}
-								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
-								}
-							}
-							v = a
-							s.StandbyTasks = v
-						}
-						{
-							v := s.WarmupTasks
-							a := v
-							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
+							if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
 								return b.Complete()
 							}
 							a = a[:0]
@@ -65626,6 +66777,82 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										l = b.ArrayLen()
 									}
 									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, 4) {
+										return b.Complete()
+									}
+									a = a[:0]
+									if l > 0 {
+										a = append(a, make([]int32, l)...)
+									}
+									for i := int32(0); i < l; i++ {
+										v := b.Int32()
+										a[i] = v
+									}
+									v = a
+									s.Partitions = v
+								}
+								if isFlexible {
+									s.UnknownTags = internalReadTags(&b)
+								}
+							}
+							v = a
+							s.StandbyTasks = v
+						}
+						{
+							v := s.WarmupTasks
+							a := v
+							var l int32
+							if isFlexible {
+								l = b.CompactArrayLen()
+							} else {
+								l = b.ArrayLen()
+							}
+							if !b.Ok() {
+								return b.Complete()
+							}
+							if !b.FitsArray(l, minSizeTaskIDs(version, isFlexible)) {
+								return b.Complete()
+							}
+							a = a[:0]
+							if l > 0 {
+								a = append(a, make([]TaskIDs, l)...)
+							}
+							for i := int32(0); i < l; i++ {
+								v := &a[i]
+								v.Default()
+								s := v
+								{
+									var v string
+									if unsafe {
+										if isFlexible {
+											v = b.UnsafeCompactString()
+										} else {
+											v = b.UnsafeString()
+										}
+									} else {
+										if isFlexible {
+											v = b.CompactString()
+										} else {
+											v = b.String()
+										}
+									}
+									s.SubtopologyID = v
+								}
+								{
+									v := s.Partitions
+									a := v
+									var l int32
+									if isFlexible {
+										l = b.CompactArrayLen()
+									} else {
+										l = b.ArrayLen()
+									}
+									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, 4) {
 										return b.Complete()
 									}
 									a = a[:0]
@@ -65683,6 +66910,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, minSizeTopologyDescriptionSubtopology(version, isFlexible)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]TopologyDescriptionSubtopology, l)...)
@@ -65718,6 +66948,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									l = b.ArrayLen()
 								}
 								if !b.Ok() {
+									return b.Complete()
+								}
+								if !b.FitsArray(l, minSizeTopologyDescriptionNode(version, isFlexible)) {
 									return b.Complete()
 								}
 								a = a[:0]
@@ -65759,6 +66992,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											l = b.ArrayLen()
 										}
 										if !b.Ok() {
+											return b.Complete()
+										}
+										if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 											return b.Complete()
 										}
 										a = a[:0]
@@ -65814,6 +67050,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										if !b.Ok() {
 											return b.Complete()
 										}
+										if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+											return b.Complete()
+										}
 										a = a[:0]
 										if l > 0 {
 											a = append(a, make([]string, l)...)
@@ -65848,6 +67087,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											l = b.ArrayLen()
 										}
 										if !b.Ok() {
+											return b.Complete()
+										}
+										if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 											return b.Complete()
 										}
 										a = a[:0]
@@ -65900,6 +67142,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, minSizeTopologyDescriptionGlobalStore(version, isFlexible)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]TopologyDescriptionGlobalStore, l)...)
@@ -65943,6 +67188,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										l = b.ArrayLen()
 									}
 									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 										return b.Complete()
 									}
 									a = a[:0]
@@ -65998,6 +67246,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									if !b.Ok() {
 										return b.Complete()
 									}
+									if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+										return b.Complete()
+									}
 									a = a[:0]
 									if l > 0 {
 										a = append(a, make([]string, l)...)
@@ -66032,6 +67283,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										l = b.ArrayLen()
 									}
 									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 										return b.Complete()
 									}
 									a = a[:0]
@@ -66099,6 +67353,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									if !b.Ok() {
 										return b.Complete()
 									}
+									if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+										return b.Complete()
+									}
 									a = a[:0]
 									if l > 0 {
 										a = append(a, make([]string, l)...)
@@ -66152,6 +67409,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									if !b.Ok() {
 										return b.Complete()
 									}
+									if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+										return b.Complete()
+									}
 									a = a[:0]
 									if l > 0 {
 										a = append(a, make([]string, l)...)
@@ -66186,6 +67446,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										l = b.ArrayLen()
 									}
 									if !b.Ok() {
+										return b.Complete()
+									}
+									if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 										return b.Complete()
 									}
 									a = a[:0]
@@ -66461,6 +67724,9 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeShareGroupOffsetsRequestGroup(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeShareGroupOffsetsRequestGroup, l)...)
@@ -66501,6 +67767,9 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if !b.FitsArray(l, minSizeDescribeShareGroupOffsetsRequestGroupTopic(version, isFlexible)) {
+					return b.Complete()
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]DescribeShareGroupOffsetsRequestGroupTopic, l)...)
@@ -66536,6 +67805,9 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, 4) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -66880,6 +68152,9 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeDescribeShareGroupOffsetsResponseGroup(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeShareGroupOffsetsResponseGroup, l)...)
@@ -66915,6 +68190,9 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeDescribeShareGroupOffsetsResponseGroupTopic(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -66956,6 +68234,9 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, minSizeDescribeShareGroupOffsetsResponseGroupTopicPartition(version, isFlexible)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -67264,6 +68545,9 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterShareGroupOffsetsRequestTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterShareGroupOffsetsRequestTopic, l)...)
@@ -67299,6 +68583,9 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeAlterShareGroupOffsetsRequestTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -67598,6 +68885,9 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if !b.FitsArray(l, minSizeAlterShareGroupOffsetsResponseTopic(version, isFlexible)) {
+			return b.Complete()
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterShareGroupOffsetsResponseTopic, l)...)
@@ -67637,6 +68927,9 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 					l = b.ArrayLen()
 				}
 				if !b.Ok() {
+					return b.Complete()
+				}
+				if !b.FitsArray(l, minSizeAlterShareGroupOffsetsResponseTopicPartition(version, isFlexible)) {
 					return b.Complete()
 				}
 				a = a[:0]
@@ -67853,6 +69146,9 @@ func (v *DeleteShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeDeleteShareGroupOffsetsRequestTopic(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -68111,6 +69407,9 @@ func (v *DeleteShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) erro
 			l = b.ArrayLen()
 		}
 		if !b.Ok() {
+			return b.Complete()
+		}
+		if !b.FitsArray(l, minSizeDeleteShareGroupOffsetsResponseTopic(version, isFlexible)) {
 			return b.Complete()
 		}
 		a = a[:0]
@@ -68644,6 +69943,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 			if !b.Ok() {
 				return b.Complete()
 			}
+			if !b.FitsArray(l, minSizeTopologyDescriptionSubtopology(version, isFlexible)) {
+				return b.Complete()
+			}
 			a = a[:0]
 			if l > 0 {
 				a = append(a, make([]TopologyDescriptionSubtopology, l)...)
@@ -68679,6 +69981,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						l = b.ArrayLen()
 					}
 					if !b.Ok() {
+						return b.Complete()
+					}
+					if !b.FitsArray(l, minSizeTopologyDescriptionNode(version, isFlexible)) {
 						return b.Complete()
 					}
 					a = a[:0]
@@ -68720,6 +70025,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 								l = b.ArrayLen()
 							}
 							if !b.Ok() {
+								return b.Complete()
+							}
+							if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 								return b.Complete()
 							}
 							a = a[:0]
@@ -68775,6 +70083,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+								return b.Complete()
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]string, l)...)
@@ -68809,6 +70120,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 								l = b.ArrayLen()
 							}
 							if !b.Ok() {
+								return b.Complete()
+							}
+							if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 								return b.Complete()
 							}
 							a = a[:0]
@@ -68861,6 +70175,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 			if !b.Ok() {
 				return b.Complete()
 			}
+			if !b.FitsArray(l, minSizeTopologyDescriptionGlobalStore(version, isFlexible)) {
+				return b.Complete()
+			}
 			a = a[:0]
 			if l > 0 {
 				a = append(a, make([]TopologyDescriptionGlobalStore, l)...)
@@ -68904,6 +70221,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -68959,6 +70279,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]string, l)...)
@@ -68993,6 +70316,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -69060,6 +70386,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]string, l)...)
@@ -69113,6 +70442,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
+							return b.Complete()
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]string, l)...)
@@ -69147,6 +70479,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							l = b.ArrayLen()
 						}
 						if !b.Ok() {
+							return b.Complete()
+						}
+						if !b.FitsArray(l, kbin.Pick(isFlexible, 1, 2)) {
 							return b.Complete()
 						}
 						a = a[:0]
@@ -71365,4 +72700,4310 @@ func strnorm(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.ToLower(s)
 	return s
+}
+
+// minSizeAddPartitionsToTxnRequestTopic is the fewest bytes a AddPartitionsToTxnRequestTopic encodes in at version.
+func minSizeAddPartitionsToTxnRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAddPartitionsToTxnRequestTransaction is the fewest bytes a AddPartitionsToTxnRequestTransaction encodes in at version.
+func minSizeAddPartitionsToTxnRequestTransaction(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 8
+	n += 2
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAddPartitionsToTxnRequestTransactionTopic is the fewest bytes a AddPartitionsToTxnRequestTransactionTopic encodes in at version.
+func minSizeAddPartitionsToTxnRequestTransactionTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAddPartitionsToTxnResponseTopic is the fewest bytes a AddPartitionsToTxnResponseTopic encodes in at version.
+func minSizeAddPartitionsToTxnResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAddPartitionsToTxnResponseTopicPartition is the fewest bytes a AddPartitionsToTxnResponseTopicPartition encodes in at version.
+func minSizeAddPartitionsToTxnResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAddPartitionsToTxnResponseTransaction is the fewest bytes a AddPartitionsToTxnResponseTransaction encodes in at version.
+func minSizeAddPartitionsToTxnResponseTransaction(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAddPartitionsToTxnResponseTransactionTopic is the fewest bytes a AddPartitionsToTxnResponseTransactionTopic encodes in at version.
+func minSizeAddPartitionsToTxnResponseTransactionTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAddPartitionsToTxnResponseTransactionTopicPartition is the fewest bytes a AddPartitionsToTxnResponseTransactionTopicPartition encodes in at version.
+func minSizeAddPartitionsToTxnResponseTransactionTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAddRaftVoterRequestListener is the fewest bytes a AddRaftVoterRequestListener encodes in at version.
+func minSizeAddRaftVoterRequestListener(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterClientQuotasRequestEntry is the fewest bytes a AlterClientQuotasRequestEntry encodes in at version.
+func minSizeAlterClientQuotasRequestEntry(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterClientQuotasRequestEntryEntity is the fewest bytes a AlterClientQuotasRequestEntryEntity encodes in at version.
+func minSizeAlterClientQuotasRequestEntryEntity(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterClientQuotasRequestEntryOp is the fewest bytes a AlterClientQuotasRequestEntryOp encodes in at version.
+func minSizeAlterClientQuotasRequestEntryOp(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 8
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterClientQuotasResponseEntry is the fewest bytes a AlterClientQuotasResponseEntry encodes in at version.
+func minSizeAlterClientQuotasResponseEntry(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterClientQuotasResponseEntryEntity is the fewest bytes a AlterClientQuotasResponseEntryEntity encodes in at version.
+func minSizeAlterClientQuotasResponseEntryEntity(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterConfigsRequestResource is the fewest bytes a AlterConfigsRequestResource encodes in at version.
+func minSizeAlterConfigsRequestResource(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterConfigsRequestResourceConfig is the fewest bytes a AlterConfigsRequestResourceConfig encodes in at version.
+func minSizeAlterConfigsRequestResourceConfig(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterConfigsResponseResource is the fewest bytes a AlterConfigsResponseResource encodes in at version.
+func minSizeAlterConfigsResponseResource(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterPartitionAssignmentsRequestTopic is the fewest bytes a AlterPartitionAssignmentsRequestTopic encodes in at version.
+func minSizeAlterPartitionAssignmentsRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterPartitionAssignmentsRequestTopicPartition is the fewest bytes a AlterPartitionAssignmentsRequestTopicPartition encodes in at version.
+func minSizeAlterPartitionAssignmentsRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterPartitionAssignmentsResponseTopic is the fewest bytes a AlterPartitionAssignmentsResponseTopic encodes in at version.
+func minSizeAlterPartitionAssignmentsResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterPartitionAssignmentsResponseTopicPartition is the fewest bytes a AlterPartitionAssignmentsResponseTopicPartition encodes in at version.
+func minSizeAlterPartitionAssignmentsResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterPartitionRequestTopic is the fewest bytes a AlterPartitionRequestTopic encodes in at version.
+func minSizeAlterPartitionRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 1 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 2 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterPartitionRequestTopicPartition is the fewest bytes a AlterPartitionRequestTopicPartition encodes in at version.
+func minSizeAlterPartitionRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 4
+	if version >= 0 && version <= 2 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if version >= 3 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if version >= 1 {
+		n += 1
+	}
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterPartitionRequestTopicPartitionNewEpochISR is the fewest bytes a AlterPartitionRequestTopicPartitionNewEpochISR encodes in at version.
+func minSizeAlterPartitionRequestTopicPartitionNewEpochISR(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 8
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterPartitionResponseTopic is the fewest bytes a AlterPartitionResponseTopic encodes in at version.
+func minSizeAlterPartitionResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 1 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 2 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterPartitionResponseTopicPartition is the fewest bytes a AlterPartitionResponseTopicPartition encodes in at version.
+func minSizeAlterPartitionResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += 4
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	if version >= 1 {
+		n += 1
+	}
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterReplicaLogDirsRequestDir is the fewest bytes a AlterReplicaLogDirsRequestDir encodes in at version.
+func minSizeAlterReplicaLogDirsRequestDir(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterReplicaLogDirsRequestDirTopic is the fewest bytes a AlterReplicaLogDirsRequestDirTopic encodes in at version.
+func minSizeAlterReplicaLogDirsRequestDirTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterReplicaLogDirsResponseTopic is the fewest bytes a AlterReplicaLogDirsResponseTopic encodes in at version.
+func minSizeAlterReplicaLogDirsResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterReplicaLogDirsResponseTopicPartition is the fewest bytes a AlterReplicaLogDirsResponseTopicPartition encodes in at version.
+func minSizeAlterReplicaLogDirsResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterShareGroupOffsetsRequestTopic is the fewest bytes a AlterShareGroupOffsetsRequestTopic encodes in at version.
+func minSizeAlterShareGroupOffsetsRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterShareGroupOffsetsRequestTopicPartition is the fewest bytes a AlterShareGroupOffsetsRequestTopicPartition encodes in at version.
+func minSizeAlterShareGroupOffsetsRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 8
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterShareGroupOffsetsResponseTopic is the fewest bytes a AlterShareGroupOffsetsResponseTopic encodes in at version.
+func minSizeAlterShareGroupOffsetsResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterShareGroupOffsetsResponseTopicPartition is the fewest bytes a AlterShareGroupOffsetsResponseTopicPartition encodes in at version.
+func minSizeAlterShareGroupOffsetsResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterUserSCRAMCredentialsRequestDeletion is the fewest bytes a AlterUserSCRAMCredentialsRequestDeletion encodes in at version.
+func minSizeAlterUserSCRAMCredentialsRequestDeletion(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterUserSCRAMCredentialsRequestUpsertion is the fewest bytes a AlterUserSCRAMCredentialsRequestUpsertion encodes in at version.
+func minSizeAlterUserSCRAMCredentialsRequestUpsertion(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAlterUserSCRAMCredentialsResponseResult is the fewest bytes a AlterUserSCRAMCredentialsResponseResult encodes in at version.
+func minSizeAlterUserSCRAMCredentialsResponseResult(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeApiVersionsResponseApiKey is the fewest bytes a ApiVersionsResponseApiKey encodes in at version.
+func minSizeApiVersionsResponseApiKey(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += 2
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeApiVersionsResponseFinalizedFeature is the fewest bytes a ApiVersionsResponseFinalizedFeature encodes in at version.
+func minSizeApiVersionsResponseFinalizedFeature(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeApiVersionsResponseSupportedFeature is the fewest bytes a ApiVersionsResponseSupportedFeature encodes in at version.
+func minSizeApiVersionsResponseSupportedFeature(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAssignReplicasToDirsRequestDirectory is the fewest bytes a AssignReplicasToDirsRequestDirectory encodes in at version.
+func minSizeAssignReplicasToDirsRequestDirectory(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAssignReplicasToDirsRequestDirectoryTopic is the fewest bytes a AssignReplicasToDirsRequestDirectoryTopic encodes in at version.
+func minSizeAssignReplicasToDirsRequestDirectoryTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAssignReplicasToDirsRequestDirectoryTopicPartition is the fewest bytes a AssignReplicasToDirsRequestDirectoryTopicPartition encodes in at version.
+func minSizeAssignReplicasToDirsRequestDirectoryTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAssignReplicasToDirsResponseDirectory is the fewest bytes a AssignReplicasToDirsResponseDirectory encodes in at version.
+func minSizeAssignReplicasToDirsResponseDirectory(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAssignReplicasToDirsResponseDirectoryTopic is the fewest bytes a AssignReplicasToDirsResponseDirectoryTopic encodes in at version.
+func minSizeAssignReplicasToDirsResponseDirectoryTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAssignReplicasToDirsResponseDirectoryTopicPartition is the fewest bytes a AssignReplicasToDirsResponseDirectoryTopicPartition encodes in at version.
+func minSizeAssignReplicasToDirsResponseDirectoryTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAssignmentTopicPartition is the fewest bytes a AssignmentTopicPartition encodes in at version.
+func minSizeAssignmentTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeBeginQuorumEpochRequestLeaderEndpoint is the fewest bytes a BeginQuorumEpochRequestLeaderEndpoint encodes in at version.
+func minSizeBeginQuorumEpochRequestLeaderEndpoint(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeBeginQuorumEpochRequestTopic is the fewest bytes a BeginQuorumEpochRequestTopic encodes in at version.
+func minSizeBeginQuorumEpochRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeBeginQuorumEpochRequestTopicPartition is the fewest bytes a BeginQuorumEpochRequestTopicPartition encodes in at version.
+func minSizeBeginQuorumEpochRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	if version >= 1 {
+		n += 16
+	}
+	n += 4
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeBeginQuorumEpochResponseNodeEndpoint is the fewest bytes a BeginQuorumEpochResponseNodeEndpoint encodes in at version.
+func minSizeBeginQuorumEpochResponseNodeEndpoint(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 1 {
+		n += 4
+	}
+	if version >= 1 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 1 {
+		n += 2
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeBeginQuorumEpochResponseTopic is the fewest bytes a BeginQuorumEpochResponseTopic encodes in at version.
+func minSizeBeginQuorumEpochResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeBeginQuorumEpochResponseTopicPartition is the fewest bytes a BeginQuorumEpochResponseTopicPartition encodes in at version.
+func minSizeBeginQuorumEpochResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += 4
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeBrokerRegistrationRequestFeature is the fewest bytes a BrokerRegistrationRequestFeature encodes in at version.
+func minSizeBrokerRegistrationRequestFeature(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeBrokerRegistrationRequestListener is the fewest bytes a BrokerRegistrationRequestListener encodes in at version.
+func minSizeBrokerRegistrationRequestListener(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeConnectMemberAssignmentAssignment is the fewest bytes a ConnectMemberAssignmentAssignment encodes in at version.
+func minSizeConnectMemberAssignmentAssignment(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += 4
+	return n
+}
+
+// minSizeConnectMemberAssignmentRevoked is the fewest bytes a ConnectMemberAssignmentRevoked encodes in at version.
+func minSizeConnectMemberAssignmentRevoked(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += 4
+	return n
+}
+
+// minSizeConsumerGroupDescribeResponseGroup is the fewest bytes a ConsumerGroupDescribeResponseGroup encodes in at version.
+func minSizeConsumerGroupDescribeResponseGroup(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeConsumerGroupDescribeResponseGroupMember is the fewest bytes a ConsumerGroupDescribeResponseGroupMember encodes in at version.
+func minSizeConsumerGroupDescribeResponseGroupMember(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += minSizeAssignment(version, isFlexible)
+	n += minSizeAssignment(version, isFlexible)
+	if version >= 1 {
+		n += 1
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeConsumerGroupHeartbeatRequestTopic is the fewest bytes a ConsumerGroupHeartbeatRequestTopic encodes in at version.
+func minSizeConsumerGroupHeartbeatRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeConsumerGroupHeartbeatResponseAssignmentTopic is the fewest bytes a ConsumerGroupHeartbeatResponseAssignmentTopic encodes in at version.
+func minSizeConsumerGroupHeartbeatResponseAssignmentTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeConsumerMemberAssignmentTopic is the fewest bytes a ConsumerMemberAssignmentTopic encodes in at version.
+func minSizeConsumerMemberAssignmentTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += 4
+	return n
+}
+
+// minSizeConsumerMemberMetadataOwnedPartition is the fewest bytes a ConsumerMemberMetadataOwnedPartition encodes in at version.
+func minSizeConsumerMemberMetadataOwnedPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += 4
+	return n
+}
+
+// minSizeControlledShutdownResponsePartitionsRemaining is the fewest bytes a ControlledShutdownResponsePartitionsRemaining encodes in at version.
+func minSizeControlledShutdownResponsePartitionsRemaining(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeControllerRegistrationRequestFeature is the fewest bytes a ControllerRegistrationRequestFeature encodes in at version.
+func minSizeControllerRegistrationRequestFeature(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeControllerRegistrationRequestListener is the fewest bytes a ControllerRegistrationRequestListener encodes in at version.
+func minSizeControllerRegistrationRequestListener(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeCreateACLsRequestCreation is the fewest bytes a CreateACLsRequestCreation encodes in at version.
+func minSizeCreateACLsRequestCreation(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 1 {
+		n += 1
+	}
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeCreateACLsResponseResult is the fewest bytes a CreateACLsResponseResult encodes in at version.
+func minSizeCreateACLsResponseResult(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeCreateDelegationTokenRequestRenewer is the fewest bytes a CreateDelegationTokenRequestRenewer encodes in at version.
+func minSizeCreateDelegationTokenRequestRenewer(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeCreatePartitionsRequestTopic is the fewest bytes a CreatePartitionsRequestTopic encodes in at version.
+func minSizeCreatePartitionsRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeCreatePartitionsRequestTopicAssignment is the fewest bytes a CreatePartitionsRequestTopicAssignment encodes in at version.
+func minSizeCreatePartitionsRequestTopicAssignment(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeCreatePartitionsResponseTopic is the fewest bytes a CreatePartitionsResponseTopic encodes in at version.
+func minSizeCreatePartitionsResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeCreateTopicsRequestTopic is the fewest bytes a CreateTopicsRequestTopic encodes in at version.
+func minSizeCreateTopicsRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeCreateTopicsRequestTopicConfig is the fewest bytes a CreateTopicsRequestTopicConfig encodes in at version.
+func minSizeCreateTopicsRequestTopicConfig(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeCreateTopicsRequestTopicReplicaAssignment is the fewest bytes a CreateTopicsRequestTopicReplicaAssignment encodes in at version.
+func minSizeCreateTopicsRequestTopicReplicaAssignment(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeCreateTopicsResponseTopic is the fewest bytes a CreateTopicsResponseTopic encodes in at version.
+func minSizeCreateTopicsResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 7 {
+		n += 16
+	}
+	n += 2
+	if version >= 1 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 5 {
+		n += 4
+	}
+	if version >= 5 {
+		n += 2
+	}
+	if version >= 5 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeCreateTopicsResponseTopicConfig is the fewest bytes a CreateTopicsResponseTopicConfig encodes in at version.
+func minSizeCreateTopicsResponseTopicConfig(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += 1
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteACLsRequestFilter is the fewest bytes a DeleteACLsRequestFilter encodes in at version.
+func minSizeDeleteACLsRequestFilter(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 1 {
+		n += 1
+	}
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteACLsResponseResult is the fewest bytes a DeleteACLsResponseResult encodes in at version.
+func minSizeDeleteACLsResponseResult(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteACLsResponseResultMatchingACL is the fewest bytes a DeleteACLsResponseResultMatchingACL encodes in at version.
+func minSizeDeleteACLsResponseResultMatchingACL(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 1 {
+		n += 1
+	}
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteGroupsResponseGroup is the fewest bytes a DeleteGroupsResponseGroup encodes in at version.
+func minSizeDeleteGroupsResponseGroup(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	if version >= 3 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteRecordsRequestTopic is the fewest bytes a DeleteRecordsRequestTopic encodes in at version.
+func minSizeDeleteRecordsRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteRecordsRequestTopicPartition is the fewest bytes a DeleteRecordsRequestTopicPartition encodes in at version.
+func minSizeDeleteRecordsRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 8
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteRecordsResponseTopic is the fewest bytes a DeleteRecordsResponseTopic encodes in at version.
+func minSizeDeleteRecordsResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteRecordsResponseTopicPartition is the fewest bytes a DeleteRecordsResponseTopicPartition encodes in at version.
+func minSizeDeleteRecordsResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 8
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteShareGroupOffsetsRequestTopic is the fewest bytes a DeleteShareGroupOffsetsRequestTopic encodes in at version.
+func minSizeDeleteShareGroupOffsetsRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteShareGroupOffsetsResponseTopic is the fewest bytes a DeleteShareGroupOffsetsResponseTopic encodes in at version.
+func minSizeDeleteShareGroupOffsetsResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 16
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteShareGroupStateRequestTopic is the fewest bytes a DeleteShareGroupStateRequestTopic encodes in at version.
+func minSizeDeleteShareGroupStateRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteShareGroupStateRequestTopicPartition is the fewest bytes a DeleteShareGroupStateRequestTopicPartition encodes in at version.
+func minSizeDeleteShareGroupStateRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteShareGroupStateResponseTopic is the fewest bytes a DeleteShareGroupStateResponseTopic encodes in at version.
+func minSizeDeleteShareGroupStateResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteShareGroupStateResponseTopicPartition is the fewest bytes a DeleteShareGroupStateResponseTopicPartition encodes in at version.
+func minSizeDeleteShareGroupStateResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteTopicsRequestTopic is the fewest bytes a DeleteTopicsRequestTopic encodes in at version.
+func minSizeDeleteTopicsRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 16
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDeleteTopicsResponseTopic is the fewest bytes a DeleteTopicsResponseTopic encodes in at version.
+func minSizeDeleteTopicsResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 6 {
+		n += 16
+	}
+	n += 2
+	if version >= 5 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeACLsResponseResource is the fewest bytes a DescribeACLsResponseResource encodes in at version.
+func minSizeDescribeACLsResponseResource(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 1 {
+		n += 1
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeACLsResponseResourceACL is the fewest bytes a DescribeACLsResponseResourceACL encodes in at version.
+func minSizeDescribeACLsResponseResourceACL(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeClientQuotasRequestComponent is the fewest bytes a DescribeClientQuotasRequestComponent encodes in at version.
+func minSizeDescribeClientQuotasRequestComponent(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeClientQuotasResponseEntry is the fewest bytes a DescribeClientQuotasResponseEntry encodes in at version.
+func minSizeDescribeClientQuotasResponseEntry(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeClientQuotasResponseEntryEntity is the fewest bytes a DescribeClientQuotasResponseEntryEntity encodes in at version.
+func minSizeDescribeClientQuotasResponseEntryEntity(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeClientQuotasResponseEntryValue is the fewest bytes a DescribeClientQuotasResponseEntryValue encodes in at version.
+func minSizeDescribeClientQuotasResponseEntryValue(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 8
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeClusterResponseBroker is the fewest bytes a DescribeClusterResponseBroker encodes in at version.
+func minSizeDescribeClusterResponseBroker(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 2 {
+		n += 1
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeConfigsRequestResource is the fewest bytes a DescribeConfigsRequestResource encodes in at version.
+func minSizeDescribeConfigsRequestResource(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeConfigsResponseResource is the fewest bytes a DescribeConfigsResponseResource encodes in at version.
+func minSizeDescribeConfigsResponseResource(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeConfigsResponseResourceConfig is the fewest bytes a DescribeConfigsResponseResourceConfig encodes in at version.
+func minSizeDescribeConfigsResponseResourceConfig(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	if version >= 0 && version <= 0 {
+		n += 1
+	}
+	if version >= 1 {
+		n += 1
+	}
+	n += 1
+	if version >= 1 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if version >= 3 {
+		n += 1
+	}
+	if version >= 3 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeConfigsResponseResourceConfigConfigSynonym is the fewest bytes a DescribeConfigsResponseResourceConfigConfigSynonym encodes in at version.
+func minSizeDescribeConfigsResponseResourceConfigConfigSynonym(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeDelegationTokenRequestOwner is the fewest bytes a DescribeDelegationTokenRequestOwner encodes in at version.
+func minSizeDescribeDelegationTokenRequestOwner(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeDelegationTokenResponseTokenDetail is the fewest bytes a DescribeDelegationTokenResponseTokenDetail encodes in at version.
+func minSizeDescribeDelegationTokenResponseTokenDetail(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 3 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 3 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	n += 8
+	n += 8
+	n += 8
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeDelegationTokenResponseTokenDetailRenewer is the fewest bytes a DescribeDelegationTokenResponseTokenDetailRenewer encodes in at version.
+func minSizeDescribeDelegationTokenResponseTokenDetailRenewer(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeGroupsResponseGroup is the fewest bytes a DescribeGroupsResponseGroup encodes in at version.
+func minSizeDescribeGroupsResponseGroup(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	if version >= 6 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if version >= 3 {
+		n += 4
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeGroupsResponseGroupMember is the fewest bytes a DescribeGroupsResponseGroupMember encodes in at version.
+func minSizeDescribeGroupsResponseGroupMember(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 4 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeLogDirsRequestTopic is the fewest bytes a DescribeLogDirsRequestTopic encodes in at version.
+func minSizeDescribeLogDirsRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeLogDirsResponseDir is the fewest bytes a DescribeLogDirsResponseDir encodes in at version.
+func minSizeDescribeLogDirsResponseDir(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if version >= 4 {
+		n += 8
+	}
+	if version >= 4 {
+		n += 8
+	}
+	if version >= 5 {
+		n += 1
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeLogDirsResponseDirTopic is the fewest bytes a DescribeLogDirsResponseDirTopic encodes in at version.
+func minSizeDescribeLogDirsResponseDirTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeLogDirsResponseDirTopicPartition is the fewest bytes a DescribeLogDirsResponseDirTopicPartition encodes in at version.
+func minSizeDescribeLogDirsResponseDirTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 8
+	n += 8
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeProducersRequestTopic is the fewest bytes a DescribeProducersRequestTopic encodes in at version.
+func minSizeDescribeProducersRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeProducersResponseTopic is the fewest bytes a DescribeProducersResponseTopic encodes in at version.
+func minSizeDescribeProducersResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeProducersResponseTopicPartition is the fewest bytes a DescribeProducersResponseTopicPartition encodes in at version.
+func minSizeDescribeProducersResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeProducersResponseTopicPartitionActiveProducer is the fewest bytes a DescribeProducersResponseTopicPartitionActiveProducer encodes in at version.
+func minSizeDescribeProducersResponseTopicPartitionActiveProducer(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 8
+	n += 4
+	n += 4
+	n += 8
+	n += 4
+	n += 8
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeQuorumRequestTopic is the fewest bytes a DescribeQuorumRequestTopic encodes in at version.
+func minSizeDescribeQuorumRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeQuorumRequestTopicPartition is the fewest bytes a DescribeQuorumRequestTopicPartition encodes in at version.
+func minSizeDescribeQuorumRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeQuorumResponseNode is the fewest bytes a DescribeQuorumResponseNode encodes in at version.
+func minSizeDescribeQuorumResponseNode(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeQuorumResponseNodeListener is the fewest bytes a DescribeQuorumResponseNodeListener encodes in at version.
+func minSizeDescribeQuorumResponseNodeListener(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeQuorumResponseTopic is the fewest bytes a DescribeQuorumResponseTopic encodes in at version.
+func minSizeDescribeQuorumResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeQuorumResponseTopicPartition is the fewest bytes a DescribeQuorumResponseTopicPartition encodes in at version.
+func minSizeDescribeQuorumResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	if version >= 2 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	n += 4
+	n += 4
+	n += 8
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeQuorumResponseTopicPartitionReplicaState is the fewest bytes a DescribeQuorumResponseTopicPartitionReplicaState encodes in at version.
+func minSizeDescribeQuorumResponseTopicPartitionReplicaState(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	if version >= 2 {
+		n += 16
+	}
+	n += 8
+	if version >= 1 {
+		n += 8
+	}
+	if version >= 1 {
+		n += 8
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeShareGroupOffsetsRequestGroup is the fewest bytes a DescribeShareGroupOffsetsRequestGroup encodes in at version.
+func minSizeDescribeShareGroupOffsetsRequestGroup(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeShareGroupOffsetsRequestGroupTopic is the fewest bytes a DescribeShareGroupOffsetsRequestGroupTopic encodes in at version.
+func minSizeDescribeShareGroupOffsetsRequestGroupTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeShareGroupOffsetsResponseGroup is the fewest bytes a DescribeShareGroupOffsetsResponseGroup encodes in at version.
+func minSizeDescribeShareGroupOffsetsResponseGroup(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeShareGroupOffsetsResponseGroupTopic is the fewest bytes a DescribeShareGroupOffsetsResponseGroupTopic encodes in at version.
+func minSizeDescribeShareGroupOffsetsResponseGroupTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeShareGroupOffsetsResponseGroupTopicPartition is the fewest bytes a DescribeShareGroupOffsetsResponseGroupTopicPartition encodes in at version.
+func minSizeDescribeShareGroupOffsetsResponseGroupTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 8
+	n += 4
+	if version >= 1 {
+		n += 8
+	}
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeTopicPartitionsRequestTopic is the fewest bytes a DescribeTopicPartitionsRequestTopic encodes in at version.
+func minSizeDescribeTopicPartitionsRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeTopicPartitionsResponseTopic is the fewest bytes a DescribeTopicPartitionsResponseTopic encodes in at version.
+func minSizeDescribeTopicPartitionsResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 16
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeTopicPartitionsResponseTopicPartition is the fewest bytes a DescribeTopicPartitionsResponseTopicPartition encodes in at version.
+func minSizeDescribeTopicPartitionsResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += 4
+	n += 4
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeTransactionsResponseTransactionState is the fewest bytes a DescribeTransactionsResponseTransactionState encodes in at version.
+func minSizeDescribeTransactionsResponseTransactionState(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += 8
+	n += 8
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeTransactionsResponseTransactionStateTopic is the fewest bytes a DescribeTransactionsResponseTransactionStateTopic encodes in at version.
+func minSizeDescribeTransactionsResponseTransactionStateTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeUserSCRAMCredentialsRequestUser is the fewest bytes a DescribeUserSCRAMCredentialsRequestUser encodes in at version.
+func minSizeDescribeUserSCRAMCredentialsRequestUser(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeUserSCRAMCredentialsResponseResult is the fewest bytes a DescribeUserSCRAMCredentialsResponseResult encodes in at version.
+func minSizeDescribeUserSCRAMCredentialsResponseResult(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeDescribeUserSCRAMCredentialsResponseResultCredentialInfo is the fewest bytes a DescribeUserSCRAMCredentialsResponseResultCredentialInfo encodes in at version.
+func minSizeDescribeUserSCRAMCredentialsResponseResultCredentialInfo(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 1
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeElectLeadersRequestTopic is the fewest bytes a ElectLeadersRequestTopic encodes in at version.
+func minSizeElectLeadersRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeElectLeadersResponseTopic is the fewest bytes a ElectLeadersResponseTopic encodes in at version.
+func minSizeElectLeadersResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeElectLeadersResponseTopicPartition is the fewest bytes a ElectLeadersResponseTopicPartition encodes in at version.
+func minSizeElectLeadersResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeEndQuorumEpochRequestLeaderEndpoint is the fewest bytes a EndQuorumEpochRequestLeaderEndpoint encodes in at version.
+func minSizeEndQuorumEpochRequestLeaderEndpoint(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeEndQuorumEpochRequestTopic is the fewest bytes a EndQuorumEpochRequestTopic encodes in at version.
+func minSizeEndQuorumEpochRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeEndQuorumEpochRequestTopicPartition is the fewest bytes a EndQuorumEpochRequestTopicPartition encodes in at version.
+func minSizeEndQuorumEpochRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 4
+	n += 4
+	if version >= 0 && version <= 0 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if version >= 1 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeEndQuorumEpochRequestTopicPartitionPreferredCandidate is the fewest bytes a EndQuorumEpochRequestTopicPartitionPreferredCandidate encodes in at version.
+func minSizeEndQuorumEpochRequestTopicPartitionPreferredCandidate(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 16
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeEndQuorumEpochResponseNodeEndpoint is the fewest bytes a EndQuorumEpochResponseNodeEndpoint encodes in at version.
+func minSizeEndQuorumEpochResponseNodeEndpoint(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 1 {
+		n += 4
+	}
+	if version >= 1 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 1 {
+		n += 2
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeEndQuorumEpochResponseTopic is the fewest bytes a EndQuorumEpochResponseTopic encodes in at version.
+func minSizeEndQuorumEpochResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeEndQuorumEpochResponseTopicPartition is the fewest bytes a EndQuorumEpochResponseTopicPartition encodes in at version.
+func minSizeEndQuorumEpochResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += 4
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchRequestForgottenTopic is the fewest bytes a FetchRequestForgottenTopic encodes in at version.
+func minSizeFetchRequestForgottenTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 7 && version <= 12 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 13 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchRequestTopic is the fewest bytes a FetchRequestTopic encodes in at version.
+func minSizeFetchRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 12 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 13 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchRequestTopicPartition is the fewest bytes a FetchRequestTopicPartition encodes in at version.
+func minSizeFetchRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	if version >= 9 {
+		n += 4
+	}
+	n += 8
+	if version >= 12 {
+		n += 4
+	}
+	if version >= 5 {
+		n += 8
+	}
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchResponseBroker is the fewest bytes a FetchResponseBroker encodes in at version.
+func minSizeFetchResponseBroker(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchResponseTopic is the fewest bytes a FetchResponseTopic encodes in at version.
+func minSizeFetchResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 12 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 13 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchResponseTopicPartition is the fewest bytes a FetchResponseTopicPartition encodes in at version.
+func minSizeFetchResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += 8
+	if version >= 4 {
+		n += 8
+	}
+	if version >= 5 {
+		n += 8
+	}
+	if version >= 4 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if version >= 11 {
+		n += 4
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchResponseTopicPartitionAbortedTransaction is the fewest bytes a FetchResponseTopicPartitionAbortedTransaction encodes in at version.
+func minSizeFetchResponseTopicPartitionAbortedTransaction(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 8
+	n += 8
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchSnapshotRequestTopic is the fewest bytes a FetchSnapshotRequestTopic encodes in at version.
+func minSizeFetchSnapshotRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchSnapshotRequestTopicPartition is the fewest bytes a FetchSnapshotRequestTopicPartition encodes in at version.
+func minSizeFetchSnapshotRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 4
+	n += minSizeFetchSnapshotRequestTopicPartitionSnapshotID(version, isFlexible)
+	n += 8
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchSnapshotResponseNodeEndpoint is the fewest bytes a FetchSnapshotResponseNodeEndpoint encodes in at version.
+func minSizeFetchSnapshotResponseNodeEndpoint(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 1 {
+		n += 4
+	}
+	if version >= 1 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 1 {
+		n += 2
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchSnapshotResponseTopic is the fewest bytes a FetchSnapshotResponseTopic encodes in at version.
+func minSizeFetchSnapshotResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchSnapshotResponseTopicPartition is the fewest bytes a FetchSnapshotResponseTopicPartition encodes in at version.
+func minSizeFetchSnapshotResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += minSizeFetchSnapshotResponseTopicPartitionSnapshotID(version, isFlexible)
+	n += 8
+	n += 8
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFindCoordinatorResponseCoordinator is the fewest bytes a FindCoordinatorResponseCoordinator encodes in at version.
+func minSizeFindCoordinatorResponseCoordinator(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeGroupMetadataValueMember is the fewest bytes a GroupMetadataValueMember encodes in at version.
+func minSizeGroupMetadataValueMember(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 3 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 1 {
+		n += 4
+	}
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeIncrementalAlterConfigsRequestResource is the fewest bytes a IncrementalAlterConfigsRequestResource encodes in at version.
+func minSizeIncrementalAlterConfigsRequestResource(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeIncrementalAlterConfigsRequestResourceConfig is the fewest bytes a IncrementalAlterConfigsRequestResourceConfig encodes in at version.
+func minSizeIncrementalAlterConfigsRequestResourceConfig(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeIncrementalAlterConfigsResponseResource is the fewest bytes a IncrementalAlterConfigsResponseResource encodes in at version.
+func minSizeIncrementalAlterConfigsResponseResource(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeInitializeShareGroupStateRequestTopic is the fewest bytes a InitializeShareGroupStateRequestTopic encodes in at version.
+func minSizeInitializeShareGroupStateRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeInitializeShareGroupStateRequestTopicPartition is the fewest bytes a InitializeShareGroupStateRequestTopicPartition encodes in at version.
+func minSizeInitializeShareGroupStateRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 4
+	n += 8
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeInitializeShareGroupStateResponseTopic is the fewest bytes a InitializeShareGroupStateResponseTopic encodes in at version.
+func minSizeInitializeShareGroupStateResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeInitializeShareGroupStateResponseTopicPartition is the fewest bytes a InitializeShareGroupStateResponseTopicPartition encodes in at version.
+func minSizeInitializeShareGroupStateResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeJoinGroupRequestProtocol is the fewest bytes a JoinGroupRequestProtocol encodes in at version.
+func minSizeJoinGroupRequestProtocol(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeJoinGroupResponseMember is the fewest bytes a JoinGroupResponseMember encodes in at version.
+func minSizeJoinGroupResponseMember(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 5 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeLeaderAndISRRequestLiveLeader is the fewest bytes a LeaderAndISRRequestLiveLeader encodes in at version.
+func minSizeLeaderAndISRRequestLiveLeader(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeLeaderAndISRRequestTopicPartition is the fewest bytes a LeaderAndISRRequestTopicPartition encodes in at version.
+func minSizeLeaderAndISRRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 1 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	n += 4
+	n += 4
+	n += 4
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	if version >= 3 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if version >= 3 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if version >= 1 {
+		n += 1
+	}
+	if version >= 6 {
+		n += 1
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeLeaderAndISRRequestTopicState is the fewest bytes a LeaderAndISRRequestTopicState encodes in at version.
+func minSizeLeaderAndISRRequestTopicState(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 5 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeLeaderAndISRResponseTopic is the fewest bytes a LeaderAndISRResponseTopic encodes in at version.
+func minSizeLeaderAndISRResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeLeaderAndISRResponseTopicPartition is the fewest bytes a LeaderAndISRResponseTopicPartition encodes in at version.
+func minSizeLeaderAndISRResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 4 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	n += 4
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeLeaderChangeMessageVoter is the fewest bytes a LeaderChangeMessageVoter encodes in at version.
+func minSizeLeaderChangeMessageVoter(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	if version >= 1 {
+		n += 16
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeLeaveGroupRequestMember is the fewest bytes a LeaveGroupRequestMember encodes in at version.
+func minSizeLeaveGroupRequestMember(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 5 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeLeaveGroupResponseMember is the fewest bytes a LeaveGroupResponseMember encodes in at version.
+func minSizeLeaveGroupResponseMember(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeListConfigResourcesResponseConfigResource is the fewest bytes a ListConfigResourcesResponseConfigResource encodes in at version.
+func minSizeListConfigResourcesResponseConfigResource(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 1 {
+		n += 1
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeListGroupsResponseGroup is the fewest bytes a ListGroupsResponseGroup encodes in at version.
+func minSizeListGroupsResponseGroup(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 4 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 5 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeListOffsetsRequestTopic is the fewest bytes a ListOffsetsRequestTopic encodes in at version.
+func minSizeListOffsetsRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeListOffsetsRequestTopicPartition is the fewest bytes a ListOffsetsRequestTopicPartition encodes in at version.
+func minSizeListOffsetsRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	if version >= 4 {
+		n += 4
+	}
+	n += 8
+	if version >= 0 && version <= 0 {
+		n += 4
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeListOffsetsResponseTopic is the fewest bytes a ListOffsetsResponseTopic encodes in at version.
+func minSizeListOffsetsResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeListOffsetsResponseTopicPartition is the fewest bytes a ListOffsetsResponseTopicPartition encodes in at version.
+func minSizeListOffsetsResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	if version >= 0 && version <= 0 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if version >= 1 {
+		n += 8
+	}
+	if version >= 1 {
+		n += 8
+	}
+	if version >= 4 {
+		n += 4
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeListPartitionReassignmentsRequestTopic is the fewest bytes a ListPartitionReassignmentsRequestTopic encodes in at version.
+func minSizeListPartitionReassignmentsRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeListPartitionReassignmentsResponseTopic is the fewest bytes a ListPartitionReassignmentsResponseTopic encodes in at version.
+func minSizeListPartitionReassignmentsResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeListPartitionReassignmentsResponseTopicPartition is the fewest bytes a ListPartitionReassignmentsResponseTopicPartition encodes in at version.
+func minSizeListPartitionReassignmentsResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeListTransactionsResponseTransactionState is the fewest bytes a ListTransactionsResponseTransactionState encodes in at version.
+func minSizeListTransactionsResponseTransactionState(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 8
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeMetadataRequestTopic is the fewest bytes a MetadataRequestTopic encodes in at version.
+func minSizeMetadataRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 10 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeMetadataResponseBroker is the fewest bytes a MetadataResponseBroker encodes in at version.
+func minSizeMetadataResponseBroker(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	if version >= 1 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeMetadataResponseTopic is the fewest bytes a MetadataResponseTopic encodes in at version.
+func minSizeMetadataResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 10 {
+		n += 16
+	}
+	if version >= 1 {
+		n += 1
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if version >= 8 {
+		n += 4
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeMetadataResponseTopicPartition is the fewest bytes a MetadataResponseTopicPartition encodes in at version.
+func minSizeMetadataResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += 4
+	n += 4
+	if version >= 7 {
+		n += 4
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if version >= 5 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetCommitRequestTopic is the fewest bytes a OffsetCommitRequestTopic encodes in at version.
+func minSizeOffsetCommitRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 9 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 10 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetCommitRequestTopicPartition is the fewest bytes a OffsetCommitRequestTopicPartition encodes in at version.
+func minSizeOffsetCommitRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 8
+	if version >= 1 && version <= 1 {
+		n += 8
+	}
+	if version >= 6 {
+		n += 4
+	}
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetCommitResponseTopic is the fewest bytes a OffsetCommitResponseTopic encodes in at version.
+func minSizeOffsetCommitResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 9 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 10 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetCommitResponseTopicPartition is the fewest bytes a OffsetCommitResponseTopicPartition encodes in at version.
+func minSizeOffsetCommitResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetDeleteRequestTopic is the fewest bytes a OffsetDeleteRequestTopic encodes in at version.
+func minSizeOffsetDeleteRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += 4
+	return n
+}
+
+// minSizeOffsetDeleteRequestTopicPartition is the fewest bytes a OffsetDeleteRequestTopicPartition encodes in at version.
+func minSizeOffsetDeleteRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	return n
+}
+
+// minSizeOffsetDeleteResponseTopic is the fewest bytes a OffsetDeleteResponseTopic encodes in at version.
+func minSizeOffsetDeleteResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += 4
+	return n
+}
+
+// minSizeOffsetDeleteResponseTopicPartition is the fewest bytes a OffsetDeleteResponseTopicPartition encodes in at version.
+func minSizeOffsetDeleteResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	return n
+}
+
+// minSizeOffsetFetchRequestGroup is the fewest bytes a OffsetFetchRequestGroup encodes in at version.
+func minSizeOffsetFetchRequestGroup(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 9 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 9 {
+		n += 4
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetFetchRequestGroupTopic is the fewest bytes a OffsetFetchRequestGroupTopic encodes in at version.
+func minSizeOffsetFetchRequestGroupTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 8 && version <= 9 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 10 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetFetchRequestTopic is the fewest bytes a OffsetFetchRequestTopic encodes in at version.
+func minSizeOffsetFetchRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetFetchResponseGroup is the fewest bytes a OffsetFetchResponseGroup encodes in at version.
+func minSizeOffsetFetchResponseGroup(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetFetchResponseGroupTopic is the fewest bytes a OffsetFetchResponseGroupTopic encodes in at version.
+func minSizeOffsetFetchResponseGroupTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 8 && version <= 9 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 10 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetFetchResponseGroupTopicPartition is the fewest bytes a OffsetFetchResponseGroupTopicPartition encodes in at version.
+func minSizeOffsetFetchResponseGroupTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 8
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetFetchResponseTopic is the fewest bytes a OffsetFetchResponseTopic encodes in at version.
+func minSizeOffsetFetchResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetFetchResponseTopicPartition is the fewest bytes a OffsetFetchResponseTopicPartition encodes in at version.
+func minSizeOffsetFetchResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 8
+	if version >= 5 {
+		n += 4
+	}
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetForLeaderEpochRequestTopic is the fewest bytes a OffsetForLeaderEpochRequestTopic encodes in at version.
+func minSizeOffsetForLeaderEpochRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetForLeaderEpochRequestTopicPartition is the fewest bytes a OffsetForLeaderEpochRequestTopicPartition encodes in at version.
+func minSizeOffsetForLeaderEpochRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	if version >= 2 {
+		n += 4
+	}
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetForLeaderEpochResponseTopic is the fewest bytes a OffsetForLeaderEpochResponseTopic encodes in at version.
+func minSizeOffsetForLeaderEpochResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeOffsetForLeaderEpochResponseTopicPartition is the fewest bytes a OffsetForLeaderEpochResponseTopicPartition encodes in at version.
+func minSizeOffsetForLeaderEpochResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += 4
+	if version >= 1 {
+		n += 4
+	}
+	n += 8
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeProduceRequestTopic is the fewest bytes a ProduceRequestTopic encodes in at version.
+func minSizeProduceRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 12 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 13 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeProduceRequestTopicPartition is the fewest bytes a ProduceRequestTopicPartition encodes in at version.
+func minSizeProduceRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeProduceResponseBroker is the fewest bytes a ProduceResponseBroker encodes in at version.
+func minSizeProduceResponseBroker(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeProduceResponseTopic is the fewest bytes a ProduceResponseTopic encodes in at version.
+func minSizeProduceResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 12 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 13 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeProduceResponseTopicPartition is the fewest bytes a ProduceResponseTopicPartition encodes in at version.
+func minSizeProduceResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += 8
+	if version >= 2 {
+		n += 8
+	}
+	if version >= 5 {
+		n += 8
+	}
+	if version >= 8 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if version >= 8 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeProduceResponseTopicPartitionErrorRecord is the fewest bytes a ProduceResponseTopicPartitionErrorRecord encodes in at version.
+func minSizeProduceResponseTopicPartitionErrorRecord(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeReadShareGroupStateRequestTopic is the fewest bytes a ReadShareGroupStateRequestTopic encodes in at version.
+func minSizeReadShareGroupStateRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeReadShareGroupStateRequestTopicPartition is the fewest bytes a ReadShareGroupStateRequestTopicPartition encodes in at version.
+func minSizeReadShareGroupStateRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeReadShareGroupStateResponseTopic is the fewest bytes a ReadShareGroupStateResponseTopic encodes in at version.
+func minSizeReadShareGroupStateResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeReadShareGroupStateResponseTopicPartition is the fewest bytes a ReadShareGroupStateResponseTopicPartition encodes in at version.
+func minSizeReadShareGroupStateResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += 8
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeReadShareGroupStateResponseTopicPartitionStateBatch is the fewest bytes a ReadShareGroupStateResponseTopicPartitionStateBatch encodes in at version.
+func minSizeReadShareGroupStateResponseTopicPartitionStateBatch(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 8
+	n += 8
+	n += 1
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeReadShareGroupStateSummaryRequestTopic is the fewest bytes a ReadShareGroupStateSummaryRequestTopic encodes in at version.
+func minSizeReadShareGroupStateSummaryRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeReadShareGroupStateSummaryRequestTopicPartition is the fewest bytes a ReadShareGroupStateSummaryRequestTopicPartition encodes in at version.
+func minSizeReadShareGroupStateSummaryRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeReadShareGroupStateSummaryResponseTopic is the fewest bytes a ReadShareGroupStateSummaryResponseTopic encodes in at version.
+func minSizeReadShareGroupStateSummaryResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeReadShareGroupStateSummaryResponseTopicPartition is the fewest bytes a ReadShareGroupStateSummaryResponseTopicPartition encodes in at version.
+func minSizeReadShareGroupStateSummaryResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += 4
+	n += 8
+	if version >= 1 {
+		n += 4
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareAcknowledgeRequestTopic is the fewest bytes a ShareAcknowledgeRequestTopic encodes in at version.
+func minSizeShareAcknowledgeRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareAcknowledgeRequestTopicPartition is the fewest bytes a ShareAcknowledgeRequestTopicPartition encodes in at version.
+func minSizeShareAcknowledgeRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareAcknowledgeRequestTopicPartitionAcknowledgementBatch is the fewest bytes a ShareAcknowledgeRequestTopicPartitionAcknowledgementBatch encodes in at version.
+func minSizeShareAcknowledgeRequestTopicPartitionAcknowledgementBatch(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 8
+	n += 8
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareAcknowledgeResponseNodeEndpoint is the fewest bytes a ShareAcknowledgeResponseNodeEndpoint encodes in at version.
+func minSizeShareAcknowledgeResponseNodeEndpoint(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareAcknowledgeResponseTopic is the fewest bytes a ShareAcknowledgeResponseTopic encodes in at version.
+func minSizeShareAcknowledgeResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareAcknowledgeResponseTopicPartition is the fewest bytes a ShareAcknowledgeResponseTopicPartition encodes in at version.
+func minSizeShareAcknowledgeResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += minSizeShareAcknowledgeResponseTopicPartitionCurrentLeader(version, isFlexible)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareFetchRequestForgottenTopicsData is the fewest bytes a ShareFetchRequestForgottenTopicsData encodes in at version.
+func minSizeShareFetchRequestForgottenTopicsData(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareFetchRequestTopic is the fewest bytes a ShareFetchRequestTopic encodes in at version.
+func minSizeShareFetchRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareFetchRequestTopicPartition is the fewest bytes a ShareFetchRequestTopicPartition encodes in at version.
+func minSizeShareFetchRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	if version >= 0 && version <= 0 {
+		n += 4
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareFetchRequestTopicPartitionAcknowledgementBatch is the fewest bytes a ShareFetchRequestTopicPartitionAcknowledgementBatch encodes in at version.
+func minSizeShareFetchRequestTopicPartitionAcknowledgementBatch(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 8
+	n += 8
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareFetchResponseNodeEndpoint is the fewest bytes a ShareFetchResponseNodeEndpoint encodes in at version.
+func minSizeShareFetchResponseNodeEndpoint(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareFetchResponseTopic is the fewest bytes a ShareFetchResponseTopic encodes in at version.
+func minSizeShareFetchResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareFetchResponseTopicPartition is the fewest bytes a ShareFetchResponseTopicPartition encodes in at version.
+func minSizeShareFetchResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += minSizeShareFetchResponseTopicPartitionCurrentLeader(version, isFlexible)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareFetchResponseTopicPartitionAcquiredRecord is the fewest bytes a ShareFetchResponseTopicPartitionAcquiredRecord encodes in at version.
+func minSizeShareFetchResponseTopicPartitionAcquiredRecord(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 8
+	n += 8
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareGroupDescribeResponseGroup is the fewest bytes a ShareGroupDescribeResponseGroup encodes in at version.
+func minSizeShareGroupDescribeResponseGroup(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareGroupDescribeResponseGroupMember is the fewest bytes a ShareGroupDescribeResponseGroupMember encodes in at version.
+func minSizeShareGroupDescribeResponseGroupMember(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += minSizeShareGroupDescribeResponseGroupMemberAssignment(version, isFlexible)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareGroupDescribeResponseGroupMemberAssignmentTopicPartition is the fewest bytes a ShareGroupDescribeResponseGroupMemberAssignmentTopicPartition encodes in at version.
+func minSizeShareGroupDescribeResponseGroupMemberAssignmentTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareGroupHeartbeatResponseAssignmentTopicPartition is the fewest bytes a ShareGroupHeartbeatResponseAssignmentTopicPartition encodes in at version.
+func minSizeShareGroupHeartbeatResponseAssignmentTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStopReplicaRequestTopic is the fewest bytes a StopReplicaRequestTopic encodes in at version.
+func minSizeStopReplicaRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 0 && version <= 0 {
+		n += 4
+	}
+	if version >= 1 && version <= 2 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if version >= 3 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStopReplicaRequestTopicPartitionState is the fewest bytes a StopReplicaRequestTopicPartitionState encodes in at version.
+func minSizeStopReplicaRequestTopicPartitionState(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 4
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStopReplicaResponsePartition is the fewest bytes a StopReplicaResponsePartition encodes in at version.
+func minSizeStopReplicaResponsePartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsGroupDescribeResponseGroup is the fewest bytes a StreamsGroupDescribeResponseGroup encodes in at version.
+func minSizeStreamsGroupDescribeResponseGroup(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += 4
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += 4
+	if version >= 1 {
+		n += 1
+	}
+	if version >= 1 {
+		n += 1
+	}
+	if version >= 1 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsGroupDescribeResponseGroupMember is the fewest bytes a StreamsGroupDescribeResponseGroupMember encodes in at version.
+func minSizeStreamsGroupDescribeResponseGroupMember(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += minSizeStreamsAssignment(version, isFlexible)
+	n += minSizeStreamsAssignment(version, isFlexible)
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsGroupDescribeResponseGroupMemberClientTag is the fewest bytes a StreamsGroupDescribeResponseGroupMemberClientTag encodes in at version.
+func minSizeStreamsGroupDescribeResponseGroupMemberClientTag(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsGroupDescribeResponseGroupTopologySubtopology is the fewest bytes a StreamsGroupDescribeResponseGroupTopologySubtopology encodes in at version.
+func minSizeStreamsGroupDescribeResponseGroupTopologySubtopology(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsGroupHeartbeatRequestClientTag is the fewest bytes a StreamsGroupHeartbeatRequestClientTag encodes in at version.
+func minSizeStreamsGroupHeartbeatRequestClientTag(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsGroupHeartbeatRequestTopologySubtopology is the fewest bytes a StreamsGroupHeartbeatRequestTopologySubtopology encodes in at version.
+func minSizeStreamsGroupHeartbeatRequestTopologySubtopology(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsGroupHeartbeatRequestTopologySubtopologyCopartitionGroup is the fewest bytes a StreamsGroupHeartbeatRequestTopologySubtopologyCopartitionGroup encodes in at version.
+func minSizeStreamsGroupHeartbeatRequestTopologySubtopologyCopartitionGroup(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsGroupHeartbeatResponsePartitionsByUserEndpoint is the fewest bytes a StreamsGroupHeartbeatResponsePartitionsByUserEndpoint encodes in at version.
+func minSizeStreamsGroupHeartbeatResponsePartitionsByUserEndpoint(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += minSizeEndpoint(version, isFlexible)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsGroupHeartbeatResponsePartitionsByUserEndpointActivePartition is the fewest bytes a StreamsGroupHeartbeatResponsePartitionsByUserEndpointActivePartition encodes in at version.
+func minSizeStreamsGroupHeartbeatResponsePartitionsByUserEndpointActivePartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsGroupHeartbeatResponsePartitionsByUserEndpointStandbyPartition is the fewest bytes a StreamsGroupHeartbeatResponsePartitionsByUserEndpointStandbyPartition encodes in at version.
+func minSizeStreamsGroupHeartbeatResponsePartitionsByUserEndpointStandbyPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsGroupHeartbeatResponseStatus is the fewest bytes a StreamsGroupHeartbeatResponseStatus encodes in at version.
+func minSizeStreamsGroupHeartbeatResponseStatus(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeSyncGroupRequestGroupAssignment is the fewest bytes a SyncGroupRequestGroupAssignment encodes in at version.
+func minSizeSyncGroupRequestGroupAssignment(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTaskIDs is the fewest bytes a TaskIDs encodes in at version.
+func minSizeTaskIDs(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTaskOffset is the fewest bytes a TaskOffset encodes in at version.
+func minSizeTaskOffset(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += 8
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTopicInfo is the fewest bytes a TopicInfo encodes in at version.
+func minSizeTopicInfo(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTopicInfoConfig is the fewest bytes a TopicInfoConfig encodes in at version.
+func minSizeTopicInfoConfig(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTopologyDescriptionGlobalStore is the fewest bytes a TopologyDescriptionGlobalStore encodes in at version.
+func minSizeTopologyDescriptionGlobalStore(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += minSizeTopologyDescriptionNode(version, isFlexible)
+	n += minSizeTopologyDescriptionNode(version, isFlexible)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTopologyDescriptionNode is the fewest bytes a TopologyDescriptionNode encodes in at version.
+func minSizeTopologyDescriptionNode(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTopologyDescriptionSubtopology is the fewest bytes a TopologyDescriptionSubtopology encodes in at version.
+func minSizeTopologyDescriptionSubtopology(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTxnMetadataValueTopic is the fewest bytes a TxnMetadataValueTopic encodes in at version.
+func minSizeTxnMetadataValueTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTxnOffsetCommitRequestTopic is the fewest bytes a TxnOffsetCommitRequestTopic encodes in at version.
+func minSizeTxnOffsetCommitRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 5 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 6 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTxnOffsetCommitRequestTopicPartition is the fewest bytes a TxnOffsetCommitRequestTopicPartition encodes in at version.
+func minSizeTxnOffsetCommitRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 8
+	if version >= 2 {
+		n += 4
+	}
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTxnOffsetCommitResponseTopic is the fewest bytes a TxnOffsetCommitResponseTopic encodes in at version.
+func minSizeTxnOffsetCommitResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 5 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 6 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeTxnOffsetCommitResponseTopicPartition is the fewest bytes a TxnOffsetCommitResponseTopicPartition encodes in at version.
+func minSizeTxnOffsetCommitResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeUpdateFeaturesRequestFeatureUpdate is the fewest bytes a UpdateFeaturesRequestFeatureUpdate encodes in at version.
+func minSizeUpdateFeaturesRequestFeatureUpdate(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	if version >= 0 && version <= 0 {
+		n += 1
+	}
+	if version >= 1 {
+		n += 1
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeUpdateFeaturesResponseResult is the fewest bytes a UpdateFeaturesResponseResult encodes in at version.
+func minSizeUpdateFeaturesResponseResult(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeUpdateMetadataRequestLiveBroker is the fewest bytes a UpdateMetadataRequestLiveBroker encodes in at version.
+func minSizeUpdateMetadataRequestLiveBroker(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	if version >= 0 && version <= 0 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 0 && version <= 0 {
+		n += 4
+	}
+	if version >= 1 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if version >= 2 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeUpdateMetadataRequestLiveBrokerEndpoint is the fewest bytes a UpdateMetadataRequestLiveBrokerEndpoint encodes in at version.
+func minSizeUpdateMetadataRequestLiveBrokerEndpoint(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 3 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeUpdateMetadataRequestTopicPartition is the fewest bytes a UpdateMetadataRequestTopicPartition encodes in at version.
+func minSizeUpdateMetadataRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 0 && version <= 4 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	n += 4
+	n += 4
+	n += 4
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += 4
+	n += kbin.Pick(isFlexible, 1, 4)
+	if version >= 4 {
+		n += kbin.Pick(isFlexible, 1, 4)
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeUpdateMetadataRequestTopicState is the fewest bytes a UpdateMetadataRequestTopicState encodes in at version.
+func minSizeUpdateMetadataRequestTopicState(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	if version >= 7 {
+		n += 16
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeUpdateRaftVoterRequestListener is the fewest bytes a UpdateRaftVoterRequestListener encodes in at version.
+func minSizeUpdateRaftVoterRequestListener(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeVoteRequestTopic is the fewest bytes a VoteRequestTopic encodes in at version.
+func minSizeVoteRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeVoteRequestTopicPartition is the fewest bytes a VoteRequestTopicPartition encodes in at version.
+func minSizeVoteRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 4
+	n += 4
+	if version >= 1 {
+		n += 16
+	}
+	if version >= 1 {
+		n += 16
+	}
+	n += 4
+	n += 8
+	if version >= 2 {
+		n += 1
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeVoteResponseNodeEndpoint is the fewest bytes a VoteResponseNodeEndpoint encodes in at version.
+func minSizeVoteResponseNodeEndpoint(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	if version >= 1 {
+		n += 4
+	}
+	if version >= 1 {
+		n += kbin.Pick(isFlexible, 1, 2)
+	}
+	if version >= 1 {
+		n += 2
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeVoteResponseTopic is the fewest bytes a VoteResponseTopic encodes in at version.
+func minSizeVoteResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeVoteResponseTopicPartition is the fewest bytes a VoteResponseTopicPartition encodes in at version.
+func minSizeVoteResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += 4
+	n += 4
+	n += 1
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeWriteShareGroupStateRequestTopic is the fewest bytes a WriteShareGroupStateRequestTopic encodes in at version.
+func minSizeWriteShareGroupStateRequestTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeWriteShareGroupStateRequestTopicPartition is the fewest bytes a WriteShareGroupStateRequestTopicPartition encodes in at version.
+func minSizeWriteShareGroupStateRequestTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 4
+	n += 4
+	n += 8
+	if version >= 1 {
+		n += 4
+	}
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeWriteShareGroupStateRequestTopicPartitionStateBatch is the fewest bytes a WriteShareGroupStateRequestTopicPartitionStateBatch encodes in at version.
+func minSizeWriteShareGroupStateRequestTopicPartitionStateBatch(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 8
+	n += 8
+	n += 1
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeWriteShareGroupStateResponseTopic is the fewest bytes a WriteShareGroupStateResponseTopic encodes in at version.
+func minSizeWriteShareGroupStateResponseTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 16
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeWriteShareGroupStateResponseTopicPartition is the fewest bytes a WriteShareGroupStateResponseTopicPartition encodes in at version.
+func minSizeWriteShareGroupStateResponseTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	n += kbin.Pick(isFlexible, 1, 2)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeWriteTxnMarkersRequestMarker is the fewest bytes a WriteTxnMarkersRequestMarker encodes in at version.
+func minSizeWriteTxnMarkersRequestMarker(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 8
+	n += 2
+	n += 1
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += 4
+	if version >= 2 {
+		n += 1
+	}
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeWriteTxnMarkersRequestMarkerTopic is the fewest bytes a WriteTxnMarkersRequestMarkerTopic encodes in at version.
+func minSizeWriteTxnMarkersRequestMarkerTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeWriteTxnMarkersResponseMarker is the fewest bytes a WriteTxnMarkersResponseMarker encodes in at version.
+func minSizeWriteTxnMarkersResponseMarker(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 8
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeWriteTxnMarkersResponseMarkerTopic is the fewest bytes a WriteTxnMarkersResponseMarkerTopic encodes in at version.
+func minSizeWriteTxnMarkersResponseMarkerTopic(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeWriteTxnMarkersResponseMarkerTopicPartition is the fewest bytes a WriteTxnMarkersResponseMarkerTopicPartition encodes in at version.
+func minSizeWriteTxnMarkersResponseMarkerTopicPartition(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeAssignment is the fewest bytes a Assignment encodes in at version.
+func minSizeAssignment(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeEndpoint is the fewest bytes a Endpoint encodes in at version.
+func minSizeEndpoint(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 2)
+	n += 2
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchSnapshotRequestTopicPartitionSnapshotID is the fewest bytes a FetchSnapshotRequestTopicPartitionSnapshotID encodes in at version.
+func minSizeFetchSnapshotRequestTopicPartitionSnapshotID(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 8
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeFetchSnapshotResponseTopicPartitionSnapshotID is the fewest bytes a FetchSnapshotResponseTopicPartitionSnapshotID encodes in at version.
+func minSizeFetchSnapshotResponseTopicPartitionSnapshotID(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 8
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareAcknowledgeResponseTopicPartitionCurrentLeader is the fewest bytes a ShareAcknowledgeResponseTopicPartitionCurrentLeader encodes in at version.
+func minSizeShareAcknowledgeResponseTopicPartitionCurrentLeader(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareFetchResponseTopicPartitionCurrentLeader is the fewest bytes a ShareFetchResponseTopicPartitionCurrentLeader encodes in at version.
+func minSizeShareFetchResponseTopicPartitionCurrentLeader(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += 4
+	n += 4
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeShareGroupDescribeResponseGroupMemberAssignment is the fewest bytes a ShareGroupDescribeResponseGroupMemberAssignment encodes in at version.
+func minSizeShareGroupDescribeResponseGroupMemberAssignment(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
+}
+
+// minSizeStreamsAssignment is the fewest bytes a StreamsAssignment encodes in at version.
+func minSizeStreamsAssignment(version int16, isFlexible bool) int {
+	_, _ = version, isFlexible
+	n := 0
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	n += kbin.Pick(isFlexible, 1, 4)
+	if isFlexible {
+		n++ // its tagged fields' count
+	}
+	return n
 }

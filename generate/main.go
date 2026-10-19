@@ -578,6 +578,7 @@ func main() {
 	}
 
 	writeStrnorm(l)
+	writeMinSizeFuncs(l)
 
 	fmt.Println(l.buf.String())
 }

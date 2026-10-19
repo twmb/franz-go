@@ -1,6 +1,10 @@
 package kmsg
 
-import "testing"
+import (
+	"encoding/binary"
+	"runtime"
+	"testing"
+)
 
 // TestReadFromBoundsTagCount pins that a flexible message whose tagged-field
 // count its remaining bytes cannot hold fails to read instead of looping the
@@ -30,5 +34,40 @@ func TestReadFromBoundsTagCount(t *testing.T) {
 	}
 	if string(got.AppendTo(nil)) != string(b) {
 		t.Fatal("a message with tagged fields does not round trip")
+	}
+}
+
+// TestReadFromBoundsArrayAllocation pins that an array length the remaining
+// bytes cannot hold at the elements' minimum encoded size fails to read
+// before the elements are allocated: here a 16 MiB Metadata v12 request
+// whose topics array claims an entry per byte, each entry at least 18 bytes
+// (a topic ID, a null name and a tag count), which used to allocate 512 MiB.
+func TestReadFromBoundsArrayAllocation(t *testing.T) {
+	const size = 16 << 20
+	b := binary.AppendUvarint(nil, uint64(size-4)+1)
+	b = append(b, make([]byte, size-len(b))...)
+
+	r := NewPtrMetadataRequest()
+	r.SetVersion(12)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	err := r.ReadFrom(b)
+	runtime.ReadMemStats(&after)
+	if err == nil {
+		t.Fatal("ReadFrom of an array length past the bytes left succeeded")
+	}
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 1<<20 {
+		t.Fatalf("ReadFrom allocated %d bytes refusing the array; want under 1 MiB", alloc)
+	}
+
+	// The most entries the bytes hold read.
+	n := (size - 4 - 3) / 18
+	b = binary.AppendUvarint(b[:0], uint64(n)+1)
+	b = append(b, make([]byte, size-len(b))...)
+	r = NewPtrMetadataRequest()
+	r.SetVersion(12)
+	if err := r.ReadFrom(b); err != nil || len(r.Topics) != n {
+		t.Fatalf("ReadFrom of %d entries the bytes hold: %d read, %v", n, len(r.Topics), err)
 	}
 }
