@@ -2749,51 +2749,31 @@ func (b *Broker) RetriableRequest(ctx context.Context, req kmsg.Request) (kmsg.R
 }
 
 func (b *Broker) request(ctx context.Context, retry bool, req kmsg.Request) (kmsg.Response, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var resp kmsg.Response
-	var err error
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-
-		if !retry {
-			var br *broker
-			br, err = b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
-			if err == nil {
-				resp, err = br.waitResp(ctx, req)
-			}
-		} else {
-			r := b.cl.retryableBrokerFn(func() (*broker, error) {
-				return b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
-			})
-			// Pinned by ID: on dial failure, retry with backoff to give
-			// the broker time to come back (e.g. rolling restart).
-			// Also clear cached controller/coordinator entries pointing
-			// at this broker so other code paths re-resolve.
-			d := failDial{clearFn: func() {
-				b.cl.forgetControllerID(b.id)
-				b.cl.deleteStaleCoordinatorsByNode(b.id)
-			}}
-			r.parseRetryErr = func(_ kmsg.Response, err error) error {
-				if err != nil {
-					return d.handleDialErr(err)
-				}
-				return nil
-			}
-			resp, err = r.Request(ctx, req)
+	if !retry {
+		br, err := b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
+		if err != nil {
+			return nil, err
 		}
-	}()
-
-	select {
-	case <-done:
-		return resp, err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-b.cl.ctx.Done():
-		return nil, b.cl.ctx.Err()
+		return br.waitResp(ctx, req)
 	}
+	r := b.cl.retryableBrokerFn(func() (*broker, error) {
+		return b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
+	})
+	// Pinned by ID: on dial failure, retry with backoff to give
+	// the broker time to come back (e.g. rolling restart).
+	// Also clear cached controller/coordinator entries pointing
+	// at this broker so other code paths re-resolve.
+	d := failDial{clearFn: func() {
+		b.cl.forgetControllerID(b.id)
+		b.cl.deleteStaleCoordinatorsByNode(b.id)
+	}}
+	r.parseRetryErr = func(_ kmsg.Response, err error) error {
+		if err != nil {
+			return d.handleDialErr(err)
+		}
+		return nil
+	}
+	return r.Request(ctx, req)
 }
 
 //////////////////////

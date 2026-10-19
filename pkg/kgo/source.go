@@ -1010,35 +1010,17 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		return fetched
 	}
 
-	// If our fetch is killed, we want to cancel waiting for the response.
-	var (
-		kresp       kmsg.Response
-		requested   = make(chan struct{})
-		ctx, cancel = context.WithCancel(consumerSession.ctx)
-	)
-	defer cancel()
-
+	// The request returns early if our session stops.
+	ctx := consumerSession.ctx
+	var kresp kmsg.Response
 	br, err := s.cl.brokerOrErr(ctx, s.nodeID, errUnknownBroker)
-	if err != nil {
-		close(requested)
-	} else {
-		br.do(ctx, req, func(k kmsg.Response, e error) {
-			kresp, err = k, e
-			close(requested)
-		})
+	if err == nil {
+		kresp, err = br.waitResp(ctx, req)
 	}
-
-	select {
-	case <-requested:
-		// As `select` is pseudo-random when both cases are ready,
-		// check for context error in this branch to avoid retrying immediately with a failed context.
-		if isContextErr(err) && ctx.Err() != nil {
-			return fetched
-		}
-		fetched = true
-	case <-ctx.Done():
+	if err != nil && ctx.Err() != nil {
 		return fetched
 	}
+	fetched = true
 
 	var didBackoff bool
 	backoff := func(why any) {
