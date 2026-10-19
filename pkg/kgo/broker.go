@@ -703,35 +703,34 @@ start:
 		resp = req.ResponseKind()
 	}
 
-	corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr := cxn.writeRequest(pr.ctx, pr.enqueue, a)
+	// From here on, a cancel fails the request; see abandonOnCancel.
+	ioCtx, promise, stop := cxn.abandonOnCancel(pr)
+	corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr := cxn.writeRequest(ioCtx, pr.enqueue, a)
 
 	if writeErr != nil {
 		cxn.die()
 		cxn.hookWriteE2E(a.key, bytesWritten, writeWait, timeToWrite, writeErr)
 		// If we wrote 0 bytes, the broker never saw the request.
 		// Safe to retry once on a new connection, same as the
-		// loadConnection retry above. Does not count against the
-		// client's retry budget.
-		if bytesWritten == 0 && !retriedOnNewConnection {
+		// loadConnection retry above, unless a cancel already failed
+		// the request: the caller may be reusing req. Does not count
+		// against the client's retry budget.
+		if bytesWritten == 0 && !retriedOnNewConnection && stop() {
 			retriedOnNewConnection = true
 			goto start
 		}
-		pr.promise(nil, writeErr)
+		promise(nil, writeErr)
 		return
 	}
 
 	if isNoResp {
-		pr.promise(noResp, nil)
+		promise(noResp, nil)
 		cxn.hookWriteE2E(a.key, bytesWritten, writeWait, timeToWrite, writeErr)
 		return
 	}
 
-	ctx, promise := pr.ctx, pr.promise
-	if cxn.isNormalCxn {
-		ctx, promise = cxn.abandonOnCancel(ctx, promise)
-	}
 	cxn.waitResp(promisedResp{
-		ctx,
+		ioCtx,
 		corrID,
 		a.flexibleHeader,
 		resp,
@@ -1830,15 +1829,36 @@ func (cxn *brokerCxn) die() {
 	cxn.failParked()
 }
 
-// On cxnNormal, a request canceled after it is written fails immediately and
-// its response is dropped when it arrives, rather than killing the
-// connection: Kafka handles the request regardless, and killing the
-// connection fails every request in flight on it. Other connections still
-// die on cancel: Kafka can hold their requests for a long time and handles
-// one request per connection at a time.
-func (cxn *brokerCxn) abandonOnCancel(ctx context.Context, promise func(kmsg.Response, error)) (context.Context, func(kmsg.Response, error)) {
+// abandonOnCancel fails the request as soon as ctx ends, rather than when the
+// request's response is read.
+//
+// On cxnNormal, the write and the read do not watch ctx: a canceled request is
+// still written in full, and its response is dropped when it arrives. Kafka
+// handles the request regardless, and killing the connection would fail every
+// request in flight on it. On the other connections, Kafka can hold a request
+// for a long time, so the write and the read watch ctx and kill the connection
+// on cancel.
+//
+// This returns the ctx for the write and the read to watch (nil on
+// cxnNormal), the promise to call, and stop, which ends the watch and returns
+// false if the cancel already failed the request.
+func (cxn *brokerCxn) abandonOnCancel(pr promisedReq) (context.Context, func(kmsg.Response, error), func() bool) {
+	ctx, promise := pr.ctx, pr.promise
+	ioCtx := ctx
+	if cxn.isNormalCxn {
+		ioCtx = nil
+	}
 	if ctx.Done() == nil || ctx == cxn.cl.ctx {
-		return ctx, promise
+		return ioCtx, promise, func() bool { return true }
+	}
+	// Only we push to resps, so if resps is empty, our response is next,
+	// and the read of our response watches ctx. A request from `do` (the
+	// sink's produce) fails only when the write or the read kills the
+	// connection: once a produce fails, the sink frees the produce's
+	// in-flight slot and retries the produce's batches, so the produce
+	// must be off the connection first.
+	if !cxn.isNormalCxn && (cxn.resps.empty() || pr.claimed == nil) {
+		return ioCtx, promise, func() bool { return true }
 	}
 	stop := context.AfterFunc(ctx, func() {
 		err := ctx.Err()
@@ -1847,11 +1867,11 @@ func (cxn *brokerCxn) abandonOnCancel(ctx context.Context, promise func(kmsg.Res
 		}
 		promise(nil, err)
 	})
-	return context.WithoutCancel(ctx), func(resp kmsg.Response, err error) {
+	return ioCtx, func(resp kmsg.Response, err error) {
 		if stop() { // false: the cancel already failed the promise
 			promise(resp, err)
 		}
-	}
+	}, stop
 }
 
 // waitResp, called serially by a broker's handleReqs, manages handling a

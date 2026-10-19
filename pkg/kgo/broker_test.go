@@ -513,11 +513,26 @@ func (h brokerConnectHook) OnBrokerConnect(_ BrokerMetadata, _ time.Duration, co
 	}
 }
 
+// produceWriteHook signals each produce request written. The send never
+// blocks: a hook must not stall a client goroutine.
+type produceWriteHook chan struct{}
+
+func (h produceWriteHook) OnBrokerWrite(_ BrokerMetadata, key int16, _ int, _, _ time.Duration, err error) {
+	if key == 0 && err == nil {
+		select {
+		case h <- struct{}{}:
+		default:
+		}
+	}
+}
+
 // Ensure a request returns at its deadline while it waits behind a request
 // whose new connection is stuck in ApiVersions; that the request owning the
 // connection returns once canceled while the connection still finishes and
-// is kept; and that a request canceled while waiting out a throttle keeps the
-// connection too.
+// is kept; that a request canceled while waiting out a throttle keeps the
+// connection too; and that behind an unanswered produce, a queued request
+// returns at its deadline while a produce from do fails only once the
+// connection dies.
 func TestIssue1505(t *testing.T) {
 	t.Parallel()
 
@@ -542,10 +557,11 @@ func TestIssue1505(t *testing.T) {
 	}()
 
 	connected := make(brokerConnectHook, 1)
+	produced := make(produceWriteHook, 4)
 	cl, err := NewClient(
 		SeedBrokers(ln.Addr().String()),
 		DisableClientMetrics(),
-		WithHooks(connected),
+		WithHooks(connected, produced),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -616,5 +632,59 @@ func TestIssue1505(t *testing.T) {
 	}
 	if cxn.dead.Load() {
 		t.Error("a request canceled while waiting out a throttle killed the connection")
+	}
+
+	// On a connection whose reads watch only the response at the head of
+	// the ring (produce here), a request queued behind another returns at
+	// its deadline too, rather than when the earlier read ends. The first
+	// produce opens the connection and is never answered; handleReqs
+	// handles the second only after writing the first.
+	inflightCtx, inflightCancel := context.WithCancel(context.Background())
+	defer inflightCancel()
+	b.issue(inflightCtx, kmsg.NewPtrProduceRequest())
+	select {
+	case err := <-connected:
+		if err != nil {
+			t.Fatalf("produce connection initialization error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("produce connection did not finish initializing")
+	}
+	// handleReqs has moved on to the produce, so it is done with first.
+	// The wait for first returned before handleReq claimed first, so
+	// handleReq must leave first unchanged.
+	if v := first.GetVersion(); v != 0 {
+		t.Fatalf("handleReq set the version of a request after its wait returned: v%d", v)
+	}
+
+	// The sink retries a failed produce, so a produce from do must not
+	// fail while the produce is still on the connection.
+	doCtx, doCancel := context.WithCancel(context.Background())
+	defer doCancel()
+	doErr := make(chan error, 1)
+	b.do(doCtx, kmsg.NewPtrProduceRequest(), func(_ kmsg.Response, err error) { doErr <- err })
+	for range 2 { // the unanswered produce, then ours
+		select {
+		case <-produced:
+		case <-time.After(5 * time.Second):
+			t.Fatal("produce was not written")
+		}
+	}
+	doCancel()
+	select {
+	case err := <-doErr:
+		t.Fatalf("produce from do failed at its cancel: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := short(kmsg.NewPtrProduceRequest()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queued produce request error = %v, want %v", err, context.DeadlineExceeded)
+	}
+
+	inflightCancel() // kills the connection
+	select {
+	case <-doErr:
+	case <-time.After(5 * time.Second):
+		t.Fatal("produce from do did not fail once its connection died")
 	}
 }
