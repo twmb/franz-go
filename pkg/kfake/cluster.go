@@ -983,7 +983,10 @@ func (c *Cluster) tryControl(creq *clientReq) (kresp kmsg.Response, err error, h
 }
 
 func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, error, bool, bool) { //nolint:revive,staticcheck // control handler signature
-	for _, cctx := range c.control[key] {
+	// maybePopControl removes a control by shifting c.control[key] in
+	// place, which would skip the control after it, so we range over a
+	// copy.
+	for _, cctx := range slices.Clone(c.control[key]) {
 		if slices.Contains(creq.controls, cctx) {
 			continue
 		}
