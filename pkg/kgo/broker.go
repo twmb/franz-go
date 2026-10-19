@@ -388,6 +388,74 @@ start:
 		}
 	}
 
+	if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) && !cxn.hasDiscard {
+		// If we are after the reauth time, reauthenticate, for KIP-368.
+		// We can only have an expiry if we went the authenticate flow,
+		// so we know we are authenticating again.
+		//
+		// Reauthenticating reads the handshake and authenticate
+		// responses on this goroutine, so it requires that nothing
+		// else can be reading the connection:
+		//
+		//   * If any response is in flight (resps is non-empty -- an
+		//     element stays in the ring while handleResps processes
+		//     it), handleResps is reading this connection and our read
+		//     would race it byte-by-byte, interleaving the two
+		//     responses' bytes between the two readers. We park this
+		//     request (and every following request for this connection)
+		//     so the pipeline drains -- under sustained pipelining the
+		//     pipeline never goes empty on its own, so we must stop
+		//     feeding it. Our expiry is deliberately pessimistic (2-5%
+		//     early, 1s floor; see doSasl), so the in-flight responses
+		//     are on a still-valid session and the drain (bounded by
+		//     their read timeouts) fits the margin. handleResps pushes
+		//     a reauthDrainReq as it exits; handleReauthDrain then
+		//     reauthenticates and replays the parked requests in
+		//     order. Only this connection parks: the broker worker
+		//     keeps serving its other connections. The Java client
+		//     similarly holds the channel's queued send while
+		//     reauthenticating, and it too only begins with no write
+		//     in progress.
+		//
+		//     Ordering of the pending store vs the empty check below
+		//     matters: we store before checking, and handleResps reads
+		//     the flag after its final dropPeek. empty() and dropPeek
+		//     both take the ring mutex, so if we observe a non-empty
+		//     ring, our store happens-before the drain's flag read and
+		//     a parked request can never miss its drain signal.
+		//
+		//   * acks=0 produce connections run a discard goroutine that
+		//     owns all reads forever (hasDiscard, checked above), so
+		//     in-place reauth is never possible: loadConnection
+		//     recreates expired discard connections instead, and a
+		//     fresh connection authenticates in init. We can still get
+		//     here if the connection's lifetime is shorter than our
+		//     pessimism (the fresh connection is already "expired");
+		//     issuing the request on the just-authenticated connection
+		//     is correct, and the next request picks up a new one.
+		cxn.reauthPending.Store(true)
+		if cxn.anyParked() || !cxn.resps.empty() {
+			cxn.park(pr)
+			return
+		}
+		cxn.reauthPending.Store(false)
+		// Some implementations (AWS) occasionally fail for
+		// unclear reasons (principals change, somehow). If
+		// we receive SASL_AUTHENTICATION_FAILED, we retry
+		// once on a new connection. See #249.
+		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
+		if err := cxn.sasl(); err != nil {
+			cxn.die()
+			if errors.Is(err, kerr.SaslAuthenticationFailed) && !retriedOnNewConnection {
+				cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
+				retriedOnNewConnection = true
+				goto start
+			}
+			pr.promise(nil, err)
+			return
+		}
+	}
+
 	v := b.loadVersions()
 
 	if b.cl.cfg.maxVersions != nil && !b.cl.cfg.maxVersions.HasKey(req.Key()) {
@@ -465,74 +533,6 @@ start:
 		return
 	}
 	req.SetVersion(ourMax)
-
-	if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) && !cxn.hasDiscard {
-		// If we are after the reauth time, reauthenticate, for KIP-368.
-		// We can only have an expiry if we went the authenticate flow,
-		// so we know we are authenticating again.
-		//
-		// Reauthenticating reads the handshake and authenticate
-		// responses on this goroutine, so it requires that nothing
-		// else can be reading the connection:
-		//
-		//   * If any response is in flight (resps is non-empty -- an
-		//     element stays in the ring while handleResps processes
-		//     it), handleResps is reading this connection and our read
-		//     would race it byte-by-byte, interleaving the two
-		//     responses' bytes between the two readers. We park this
-		//     request (and every following request for this connection)
-		//     so the pipeline drains -- under sustained pipelining the
-		//     pipeline never goes empty on its own, so we must stop
-		//     feeding it. Our expiry is deliberately pessimistic (2-5%
-		//     early, 1s floor; see doSasl), so the in-flight responses
-		//     are on a still-valid session and the drain (bounded by
-		//     their read timeouts) fits the margin. handleResps pushes
-		//     a reauthDrainReq as it exits; handleReauthDrain then
-		//     reauthenticates and replays the parked requests in
-		//     order. Only this connection parks: the broker worker
-		//     keeps serving its other connections. The Java client
-		//     similarly holds the channel's queued send while
-		//     reauthenticating, and it too only begins with no write
-		//     in progress.
-		//
-		//     Ordering of the pending store vs the empty check below
-		//     matters: we store before checking, and handleResps reads
-		//     the flag after its final dropPeek. empty() and dropPeek
-		//     both take the ring mutex, so if we observe a non-empty
-		//     ring, our store happens-before the drain's flag read and
-		//     a parked request can never miss its drain signal.
-		//
-		//   * acks=0 produce connections run a discard goroutine that
-		//     owns all reads forever (hasDiscard, checked above), so
-		//     in-place reauth is never possible: loadConnection
-		//     recreates expired discard connections instead, and a
-		//     fresh connection authenticates in init. We can still get
-		//     here if the connection's lifetime is shorter than our
-		//     pessimism (the fresh connection is already "expired");
-		//     issuing the request on the just-authenticated connection
-		//     is correct, and the next request picks up a new one.
-		cxn.reauthPending.Store(true)
-		if cxn.anyParked() || !cxn.resps.empty() {
-			cxn.park(pr)
-			return
-		}
-		cxn.reauthPending.Store(false)
-		// Some implementations (AWS) occasionally fail for
-		// unclear reasons (principals change, somehow). If
-		// we receive SASL_AUTHENTICATION_FAILED, we retry
-		// once on a new connection. See #249.
-		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
-		if err := cxn.sasl(); err != nil {
-			cxn.die()
-			if errors.Is(err, kerr.SaslAuthenticationFailed) && !retriedOnNewConnection {
-				cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
-				retriedOnNewConnection = true
-				goto start
-			}
-			pr.promise(nil, err)
-			return
-		}
-	}
 
 	// Juuuust before we issue the request, we check if it was
 	// canceled. We could have previously tried this request, which
