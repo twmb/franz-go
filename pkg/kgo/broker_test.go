@@ -530,9 +530,10 @@ func (h produceWriteHook) OnBrokerWrite(_ BrokerMetadata, key int16, _ int, _, _
 // whose new connection is stuck in ApiVersions; that the request owning the
 // connection returns once canceled while the connection still finishes and
 // is kept; that a request canceled while waiting out a throttle keeps the
-// connection too; and that behind an unanswered produce, a queued request
+// connection too; that behind an unanswered produce, a queued request
 // returns at its deadline while a produce from do fails only once the
-// connection dies.
+// connection dies; and that a request whose deadline passes during a retry
+// backoff returns the deadline's error.
 func TestIssue1505(t *testing.T) {
 	t.Parallel()
 
@@ -686,5 +687,18 @@ func TestIssue1505(t *testing.T) {
 	case <-doErr:
 	case <-time.After(5 * time.Second):
 		t.Fatal("produce from do did not fail once its connection died")
+	}
+
+	// A retired broker fails a request with errChosenBrokerDead at once,
+	// and the first retry backoff is at least 200ms. ApiVersions retries
+	// in retryable.Request, and FindCoordinator in handleShardedReq.
+	b.stopForever()
+	for _, req := range []kmsg.Request{kmsg.NewPtrApiVersionsRequest(), kmsg.NewPtrFindCoordinatorRequest()} {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		_, err := cl.Request(ctx, req)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s retrying on a retired broker: error = %v, want %v", kmsg.NameForKey(req.Key()), err, context.DeadlineExceeded)
+		}
 	}
 }

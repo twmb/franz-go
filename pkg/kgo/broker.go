@@ -360,7 +360,8 @@ func (b *broker) issue(ctx context.Context, req kmsg.Request) *respWaiter {
 }
 
 // wait returns the request's resp and err, or the ctx error if ctx ends
-// before handleReq claims the request.
+// before handleReq claims the request. If the client has closed, a failed
+// request returns ErrClientClosed.
 //
 // handleReq claims the request just before first touching req. Before the
 // claim, handleReqs may spend a long time on earlier requests or on opening or
@@ -374,6 +375,9 @@ func (w *respWaiter) wait() (kmsg.Response, error) {
 			return nil, w.cl.ctxErr(w.ctx)
 		}
 		<-w.done
+	}
+	if w.err != nil && w.cl.ctx.Err() != nil {
+		return nil, ErrClientClosed
 	}
 	return w.resp, w.err
 }
@@ -990,6 +994,12 @@ func (b *broker) reapConnections(idleTimeout time.Duration) (total int) {
 
 // connect connects to the broker's addr, returning the new connection.
 func (b *broker) connect(ctx context.Context) (net.Conn, error) {
+	// Close ends the dial.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(b.cl.ctx, cancel)
+	defer stop()
+
 	b.cl.cfg.logger.Log(LogLevelDebug, "opening connection to broker", "addr", b.addr, "broker", logID(b.meta.NodeID))
 	conn, err := b.cl.cfg.dialFn(ctx, "tcp", b.addr)
 	if err != nil {

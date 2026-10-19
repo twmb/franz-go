@@ -1445,10 +1445,9 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 
 	// Tell the metrics loop to send its final Terminating=true push and
 	// give it 1s to do so. This must happen BEFORE we cancel the client
-	// context: the entire request path (shardedRequest's cancel watchdog,
-	// Broker.request's select, and the broker connection write/read
-	// loops) aborts requests once cl.ctx is dead, so a terminating push
-	// started after cancelation could never be delivered. The metrics
+	// context: the entire request path (the dial and the broker connection
+	// write/read loops) aborts requests once cl.ctx is dead, so a terminating
+	// push started after cancelation could never be delivered. The metrics
 	// loop cancels metrics.ctx when it exits; clients with metrics
 	// disabled, unsupported, or never observed pass through instantly.
 	cl.metrics.quit()
@@ -1854,6 +1853,13 @@ start:
 			}
 		}
 	}
+	if err != nil {
+		// If ctx ends or the client closes during a retry backoff, err
+		// is the last request's error.
+		if ctxErr := r.cl.ctxErr(ctx); ctxErr != nil {
+			return nil, ctxErr
+		}
+	}
 	return resp, err
 }
 
@@ -1933,18 +1939,6 @@ func (cl *Client) RequestSharded(ctx context.Context, req kmsg.Request) []Respon
 type shardMerge func([]ResponseShard) (kmsg.Response, error)
 
 func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]ResponseShard, shardMerge) {
-	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		defer cancel()
-		select {
-		case <-done:
-		case <-ctx.Done():
-		case <-cl.ctx.Done():
-		}
-	}()
-
 	// First, handle any sharded request. This comes before the conditional
 	// below because this handles two group requests, which we do not want
 	// to fall into the handleCoordinatorReq logic.
@@ -3079,6 +3073,12 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 				// The end user can parse the response ErrorCode.
 				if errIsFromResp {
 					err = nil
+				} else if err != nil {
+					// waitTries above can end the retries early; see
+					// retryable.Request.
+					if ctxErr := cl.ctxErr(ctx); ctxErr != nil {
+						err = ctxErr
+					}
 				}
 				addShard(shard(br, myIssue.req, resp, err)) // the error was not retryable
 			}()
