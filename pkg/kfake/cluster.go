@@ -1340,11 +1340,14 @@ func (bs *bsleep) waitQueue() {
 			return
 		case <-q0.continueDequeue:
 		}
+		// If a later control sleeps this request, enqueue updates q0's
+		// sleepChs under bs.mu after continueDequeue is sent, so we
+		// check and pop under the same lock.
+		bs.mu.Lock()
 		if q0.sleepChs.clientWait == nil {
-			bs.mu.Lock()
 			bs.queue = bs.queue[1:]
-			bs.mu.Unlock()
 		}
+		bs.mu.Unlock()
 	}
 }
 
