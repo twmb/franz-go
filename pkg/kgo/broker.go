@@ -600,6 +600,34 @@ start:
 	}
 	req.SetVersion(ourMax)
 
+	// Wait out a throttle (KIP-219) before writing. Nothing is written if
+	// ctx ends or the client closes while we wait, so we fail only this
+	// request and keep the connection.
+	if sleep := time.Until(time.Unix(0, cxn.throttleUntil.Load())); sleep > 0 {
+		after := time.NewTimer(sleep)
+		var err error
+		select {
+		case <-after.C:
+		case <-pr.ctx.Done():
+			err = pr.ctx.Err()
+			maybeUpdateCtxErr(cxn.cl.ctx, pr.ctx, &err)
+		case <-cxn.cl.ctx.Done():
+			err = ErrClientClosed
+		case <-cxn.deadCh:
+			err = errChosenBrokerDead
+		}
+		after.Stop()
+		if err != nil {
+			cxn.hookWriteE2E(req.Key(), 0, time.Since(pr.enqueue), 0, err)
+			if err == errChosenBrokerDead && !retriedOnNewConnection {
+				retriedOnNewConnection = true
+				goto start
+			}
+			pr.promise(nil, err)
+			return
+		}
+	}
+
 	// Juuuust before we issue the request, we check if it was
 	// canceled. We could have previously tried this request, which
 	// then failed and retried.
@@ -1491,29 +1519,6 @@ func maybeUpdateCtxErr(clientCtx, reqCtx context.Context, err *error) {
 // writeRequest writes a message request to the broker connection, bumping the
 // connection's correlation ID as appropriate for the next write.
 func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt time.Time, req kmsg.Request) (corrID int32, bytesWritten int, writeWait, timeToWrite time.Duration, readEnqueue time.Time, writeErr error) {
-	// A nil ctx means we cannot be throttled.
-	if ctx != nil {
-		throttleUntil := time.Unix(0, cxn.throttleUntil.Load())
-		if sleep := time.Until(throttleUntil); sleep > 0 {
-			after := time.NewTimer(sleep)
-			select {
-			case <-after.C:
-			case <-ctx.Done():
-				writeErr = ctx.Err()
-				maybeUpdateCtxErr(cxn.cl.ctx, ctx, &writeErr)
-			case <-cxn.cl.ctx.Done():
-				writeErr = ErrClientClosed
-			case <-cxn.deadCh:
-				writeErr = errChosenBrokerDead
-			}
-			if writeErr != nil {
-				after.Stop()
-				writeWait = time.Since(enqueuedForWritingAt)
-				return corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr
-			}
-		}
-	}
-
 	buf := cxn.cl.reqFormatter.AppendRequest(
 		cxn.cl.bufPool.get()[:0],
 		req,
@@ -2102,7 +2107,7 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 			// A throttle is honored in full with NO upper cap (KIP-219),
 			// matching Java's NetworkClient. millis <= 0 is ignored; a
 			// positive value - even a hostile near-MaxInt32 (~24.8 days) -
-			// delays the next write on this connection (writeRequest), which
+			// delays the next write on this connection (handleReq), which
 			// selects on the request ctx and client Close, so the wait is
 			// always interruptible and holds no lock. Capping it would break
 			// the quota mechanism; an absurd throttle is equivalent to a slow

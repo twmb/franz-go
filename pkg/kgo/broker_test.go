@@ -514,9 +514,10 @@ func (h brokerConnectHook) OnBrokerConnect(_ BrokerMetadata, _ time.Duration, co
 }
 
 // Ensure a request returns at its deadline while it waits behind a request
-// whose new connection is stuck in ApiVersions, and that the request owning
-// the connection returns once canceled while the connection still finishes
-// and is kept.
+// whose new connection is stuck in ApiVersions; that the request owning the
+// connection returns once canceled while the connection still finishes and
+// is kept; and that a request canceled while waiting out a throttle keeps the
+// connection too.
 func TestIssue1505(t *testing.T) {
 	t.Parallel()
 
@@ -607,5 +608,13 @@ func TestIssue1505(t *testing.T) {
 	b.reapMu.Unlock()
 	if cxn == nil || cxn.dead.Load() {
 		t.Fatal("the connection was not kept")
+	}
+
+	cxn.throttleUntil.Store(time.Now().Add(time.Hour).UnixNano())
+	if err := short(kmsg.NewPtrApiVersionsRequest()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("throttled request error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	if cxn.dead.Load() {
+		t.Error("a request canceled while waiting out a throttle killed the connection")
 	}
 }
