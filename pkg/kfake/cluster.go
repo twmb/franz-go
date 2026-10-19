@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -100,11 +101,10 @@ type (
 	controlFn func(kmsg.Request) (kmsg.Response, error, bool)
 
 	controlCtx struct {
-		key     int16
-		fn      controlFn
-		keep    bool
-		drop    bool
-		lastReq map[*clientConn]*clientReq // used to not re-run requests that slept, see doc comments below
+		key  int16
+		fn   controlFn
+		keep bool
+		drop bool
 	}
 
 	controlResp struct {
@@ -430,8 +430,8 @@ func (b *broker) listen() {
 			return
 		}
 
-		mute := make(chan bool, 1)
-		mute <- true // first request proceeds immediately
+		mute := make(chan struct{}, 1)
+		mute <- struct{}{} // first request proceeds immediately
 		cc := &clientConn{
 			c:      b.c,
 			b:      b,
@@ -632,7 +632,7 @@ outer:
 		// A parked fetch comes back through here with the same
 		// clientReq. Keeping its fault check keeps the request one
 		// request: hit's dedup still knows what it already took, the
-		// way a control knows through lastReq.
+		// way a control knows through creq.controls.
 		if creq.faults == nil {
 			creq.faults = c.faultsFor(creq)
 		}
@@ -782,7 +782,13 @@ outer:
 		}
 		if kresp == nil && err == nil {
 			// A slept request is answered once its control finishes.
+			// With SleepOutOfOrder, we release the mute so that
+			// read() can submit the next request in the meantime.
 			if asleep {
+				if c.cfg.sleepOutOfOrder && !creq.unmuted {
+					creq.unmuted = true
+					creq.cc.unmute()
+				}
 				continue
 			}
 			// A group request (JoinGroup, SyncGroup) can park in
@@ -796,7 +802,7 @@ outer:
 			// that read() can submit the next request.
 			if req, ok := creq.kreq.(*kmsg.ProduceRequest); ok && req.Acks == 0 {
 				select {
-				case creq.cc.respCh <- clientResp{corr: creq.corr, skip: true}:
+				case creq.cc.respCh <- clientResp{corr: creq.corr, seq: creq.seq, unmuted: creq.unmuted, skip: true}:
 				case <-creq.cc.done:
 				case <-c.die:
 					return
@@ -806,7 +812,7 @@ outer:
 		}
 
 		select {
-		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err}:
+		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err, seq: creq.seq, unmuted: creq.unmuted}:
 		case <-creq.cc.done:
 		case <-c.die:
 			return
@@ -869,9 +875,8 @@ func (c *Cluster) ControlKey(key int16, fn func(kmsg.Request) (kmsg.Response, er
 	c.controlMu.Lock()
 	defer c.controlMu.Unlock()
 	c.control[key] = append(c.control[key], &controlCtx{
-		key:     key,
-		fn:      fn,
-		lastReq: make(map[*clientConn]*clientReq),
+		key: key,
+		fn:  fn,
 	})
 }
 
@@ -905,6 +910,8 @@ func (c *Cluster) DropControl() {
 // if you sleep until a different request runs, you may sleep forever -- you
 // must know the semantics of your client to know whether requests run on
 // different connections (or, ensure you are writing to different brokers).
+// With [SleepOutOfOrder], later requests on the connection are handled while
+// you sleep, and their responses wait for yours.
 //
 // For example, franz-go uses a dedicated connection for:
 //   - produce requests
@@ -977,10 +984,10 @@ func (c *Cluster) tryControl(creq *clientReq) (kresp kmsg.Response, err error, h
 
 func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, error, bool, bool) { //nolint:revive,staticcheck // control handler signature
 	for _, cctx := range c.control[key] {
-		if cctx.lastReq[creq.cc] == creq {
+		if slices.Contains(creq.controls, cctx) {
 			continue
 		}
-		cctx.lastReq[creq.cc] = creq
+		creq.controls = append(creq.controls, cctx)
 		res := c.runControl(cctx, creq)
 	inner:
 		for {
