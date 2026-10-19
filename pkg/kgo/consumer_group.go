@@ -430,7 +430,7 @@ func (g *groupConsumer) manageFailWait(consecutiveErrors int, err error) (ctxCan
 	// block around the onLost and assigning.
 	g.c.waitAndAddRebalance()
 
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || g.cl.ctx.Err() != nil {
 		// The cooperative consumer does not revoke everything
 		// while rebalancing, meaning if our context is
 		// canceled, we may have uncommitted data. Rather than
@@ -485,7 +485,7 @@ func (g *groupConsumer) manageFailWait(consecutiveErrors int, err error) (ctxCan
 	// re-assigned.
 	g.c.unaddRebalance()
 
-	if errors.Is(err, context.Canceled) { // context was canceled, quit now
+	if errors.Is(err, context.Canceled) || g.cl.ctx.Err() != nil { // context was canceled, quit now
 		return true
 	}
 
@@ -2818,7 +2818,7 @@ func (g *groupConsumer) updateCommitted(
 
 func (g *groupConsumer) defaultCommitCallback(_ *Client, _ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if !errors.Is(err, context.Canceled) && g.cl.ctx.Err() == nil {
 			g.cfg.logger.Log(LogLevelError, "default commit failed", "group", g.cfg.group, "err", err)
 		} else {
 			g.cfg.logger.Log(LogLevelDebug, "default commit canceled", "group", g.cfg.group)

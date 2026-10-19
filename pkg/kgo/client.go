@@ -937,6 +937,13 @@ func (cl *Client) broker() *broker {
 	return b
 }
 
+func (cl *Client) ctxErr(ctx context.Context) error {
+	if cl.ctx.Err() != nil {
+		return ErrClientClosed
+	}
+	return ctx.Err()
+}
+
 func (cl *Client) waitTries(ctx context.Context, backoff time.Duration) bool {
 	after := time.NewTimer(backoff)
 	defer after.Stop()

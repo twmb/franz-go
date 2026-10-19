@@ -54,6 +54,12 @@ type promisedReq struct {
 	req     kmsg.Request
 	promise func(kmsg.Response, error)
 	enqueue time.Time // used to calculate writeWait
+
+	// Set by whichever of `handleReq` and `respWaiter.wait` claims the
+	// request first. `handleReq` releases its claim to retry on a new
+	// connection. Nil from `do`, which has no `respWaiter`: only the
+	// promise ends the request.
+	claimed *atomic.Bool
 }
 
 type promisedResp struct {
@@ -308,12 +314,14 @@ func (b *broker) do(
 	req kmsg.Request,
 	promise func(kmsg.Response, error),
 ) {
-	pr := promisedReq{ctx, req, promise, time.Now()}
+	b.push(promisedReq{ctx: ctx, req: req, promise: promise, enqueue: time.Now()})
+}
 
+func (b *broker) push(pr promisedReq) {
 	first, dead := b.reqs.push(pr)
 
 	if dead {
-		promise(nil, errChosenBrokerDead)
+		pr.promise(nil, errChosenBrokerDead)
 	} else if first {
 		go b.handleReqs(pr)
 	}
@@ -321,16 +329,53 @@ func (b *broker) do(
 
 // waitResp runs a req, waits for the resp and returns the resp and err.
 func (b *broker) waitResp(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
-	var resp kmsg.Response
-	var err error
-	done := make(chan struct{})
-	wait := func(kresp kmsg.Response, kerr error) {
-		resp, err = kresp, kerr
-		close(done)
+	return b.issue(ctx, req).wait()
+}
+
+// respWaiter waits for the response to a request from issue.
+type respWaiter struct {
+	ctx     context.Context
+	cl      *Client
+	claimed atomic.Bool
+	done    chan struct{}
+	resp    kmsg.Response
+	err     error
+}
+
+// issue issues req and returns without waiting for its response, so that a
+// caller can issue several requests before waiting on any.
+func (b *broker) issue(ctx context.Context, req kmsg.Request) *respWaiter {
+	w := &respWaiter{ctx: ctx, cl: b.cl, done: make(chan struct{})}
+	b.push(promisedReq{
+		ctx: ctx,
+		req: req,
+		promise: func(resp kmsg.Response, err error) {
+			w.resp, w.err = resp, err
+			close(w.done)
+		},
+		enqueue: time.Now(),
+		claimed: &w.claimed,
+	})
+	return w
+}
+
+// wait returns the request's resp and err, or the ctx error if ctx ends
+// before handleReq claims the request.
+//
+// handleReq claims the request just before first touching req. Before the
+// claim, handleReqs may spend a long time on earlier requests or on opening or
+// reauthenticating our connection. After the claim, handleReq may modify req,
+// which the caller may reuse once we return, so we wait for the promise.
+func (w *respWaiter) wait() (kmsg.Response, error) {
+	select {
+	case <-w.done:
+	case <-w.ctx.Done():
+		if w.claimed.CompareAndSwap(false, true) {
+			return nil, w.cl.ctxErr(w.ctx)
+		}
+		<-w.done
 	}
-	b.do(ctx, req, wait)
-	<-done
-	return resp, err
+	return w.resp, w.err
 }
 
 // growStack grows a goroutine's stack while it has one frame. Our request
@@ -371,8 +416,22 @@ func (b *broker) handleReq(pr promisedReq) {
 		return
 	}
 	var cxn *brokerCxn
-	var retriedOnNewConnection bool
+	var retriedOnNewConnection, claimed bool
 start:
+	if claimed {
+		// We are retrying on a new connection: we release our claim so
+		// that wait can return on ctx. If ctx already ended, wait may be
+		// waiting for the promise, so we fail the request now, unless
+		// wait claims the request first.
+		pr.claimed.Store(false)
+		claimed = false
+		if err := pr.ctx.Err(); err != nil {
+			if pr.claimed.CompareAndSwap(false, true) {
+				pr.promise(nil, err)
+			}
+			return
+		}
+	}
 	{
 		var err error
 		if cxn, err = b.loadConnection(pr.ctx, req); err != nil {
@@ -454,6 +513,13 @@ start:
 			pr.promise(nil, err)
 			return
 		}
+	}
+
+	if pr.claimed != nil {
+		if !pr.claimed.CompareAndSwap(false, true) {
+			return // respWaiter.wait returned on its ctx
+		}
+		claimed = true
 	}
 
 	v := b.loadVersions()
@@ -723,6 +789,13 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 	// address we no longer trust; the request retries on a live broker.
 	if b.dead.Load() {
 		return nil, errChosenBrokerDead
+	}
+
+	// Do not dial for a request whose ctx ended; respWaiter.wait may
+	// have returned already.
+	if err := ctx.Err(); err != nil {
+		maybeUpdateCtxErr(b.cl.ctx, ctx, &err)
+		return nil, err
 	}
 
 	var tries int

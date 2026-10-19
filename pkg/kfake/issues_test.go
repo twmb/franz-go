@@ -2421,6 +2421,9 @@ func TestIssue1245(t *testing.T) {
 // allSinksAndSources(reset). Without the fix, killSessionOnClose
 // goroutines concurrently call session.kill(), racing on fetchSession
 // fields. Run with -race to detect.
+//
+// Each cancel also lands while a heartbeat is in flight, which must not call
+// OnPartitionsLost: the client is closing, so the group revokes.
 func TestIssue1248(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t1248"))
@@ -2432,12 +2435,15 @@ func TestIssue1248(t *testing.T) {
 	// detector catching the concurrent reset()/kill() access.
 	for i := 0; i < 20; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
+		var lost atomic.Bool
 		cl := newPlainClient(t, c,
 			kgo.WithContext(ctx),
 			kgo.ConsumerGroup("g1248-"+strconv.Itoa(i)),
 			kgo.ConsumeTopics("t1248"),
 			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 			kgo.FetchMaxWait(250*time.Millisecond),
+			kgo.HeartbeatInterval(50*time.Millisecond),
+			kgo.OnPartitionsLost(func(context.Context, *kgo.Client, map[string][]int32) { lost.Store(true) }),
 		)
 
 		// Poll until we get records, establishing fetch sessions.
@@ -2454,12 +2460,29 @@ func TestIssue1248(t *testing.T) {
 		}
 		pollCancel()
 
+		// Hold the next heartbeat until the cancel.
+		heartbeating := make(chan struct{})
+		c.ControlKey(int16(kmsg.Heartbeat), func(kmsg.Request) (kmsg.Response, error, bool) {
+			c.DropControl()
+			close(heartbeating)
+			c.SleepControl(func() { <-ctx.Done() })
+			return nil, nil, false
+		})
+		select {
+		case <-heartbeating:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for a heartbeat")
+		}
+
 		// Cancel the client context, then Close. LeaveGroupContext
 		// returns immediately via ctx.Done() while its goroutine is
 		// still running stopSession -> reset(). Concurrently,
 		// killSessionOnClose calls session.kill().
 		cancel()
 		cl.Close()
+		if lost.Load() {
+			t.Fatalf("iteration %d: a heartbeat in flight at the cancel called OnPartitionsLost", i)
+		}
 	}
 }
 

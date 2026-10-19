@@ -1042,7 +1042,7 @@ func (sc *shareConsumer) manage() {
 		}
 
 		switch {
-		case errors.Is(err, context.Canceled):
+		case errors.Is(err, context.Canceled), sc.cl.ctx.Err() != nil:
 			return
 
 		case errors.Is(err, kerr.UnknownMemberID),

@@ -1217,13 +1217,9 @@ func (cl *Client) doInitProducerID(ctxFn func() context.Context, lastID int64, l
 			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old or the client is pinned to an old version, continuing without a producer id")
 			return &producerID{-1, -1, nil}, true
 		}
-		if errors.Is(err, errChosenBrokerDead) {
-			select {
-			case <-cl.ctx.Done():
-				cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure due to dying client", "err", err)
-				return &producerID{lastID, lastEpoch, ErrClientClosed}, true
-			default:
-			}
+		if cl.ctx.Err() != nil {
+			cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure due to dying client", "err", err)
+			return &producerID{lastID, lastEpoch, ErrClientClosed}, true
 		}
 		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure, discarding initialization attempt", "err", err)
 		return &producerID{lastID, lastEpoch, err}, false
