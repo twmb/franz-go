@@ -559,10 +559,12 @@ outer:
 				select {
 				case admin := <-c.adminCh:
 					admin()
-					select {
-					case <-c.die: // see the die check after tryControl
-						return
-					default:
+					if c.persist() {
+						select {
+						case <-c.die: // see the die check after tryControl
+							return
+						default:
+						}
 					}
 					continue inner
 				case fn := <-c.groupWorkCh:
@@ -611,7 +613,10 @@ outer:
 		// While a control function runs, tryControlKey and the wakeCh
 		// case receive on adminCh, where Close can run its persist
 		// shutdown. Both stop once it has run: anything we do after
-		// it changes state that saveToDisk did not capture.
+		// it changes state that saveToDisk did not capture. Without
+		// persistence, Close closes die directly, and both keep
+		// running the control function's Cluster calls until it
+		// returns.
 		select {
 		case <-c.die:
 			return
@@ -997,11 +1002,13 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 			select {
 			case admin := <-c.adminCh:
 				admin()
-				select {
-				case <-c.die: // see the die check after tryControl in run
-					c.controlMu.Lock() // tryControl unlocks
-					return nil, nil, true, false
-				default:
+				if c.persist() {
+					select {
+					case <-c.die: // see the die check after tryControl in run
+						c.controlMu.Lock() // tryControl unlocks
+						return nil, nil, true, false
+					default:
+					}
 				}
 				continue
 			case fn := <-c.groupWorkCh:
