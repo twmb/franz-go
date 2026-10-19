@@ -378,7 +378,7 @@ func ReadTags(b TagReader) Tags {
 // duplicated inner kbin.Reader.
 func internalReadTags(b *kbin.Reader) Tags {
 	var t Tags
-	for num := b.Uvarint(); num > 0; num-- {
+	for num := b.TagCount(); num > 0; num-- {
 		key, size := b.Uvarint(), b.Uvarint()
 		t.Set(key, b.Span(int(size)))
 	}

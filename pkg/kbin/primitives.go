@@ -811,6 +811,23 @@ func (b *Reader) CompactArrayLen() int32 {
 	return r
 }
 
+// TagCount returns the number of tagged fields in a flexible struct (KIP-482)
+// from the reader. Every tagged field holds at least two bytes (its key and
+// its size), so if the count is more than half the bytes left, it is bad.
+//
+// Without this bound, a decoder looping the count down keeps looping after
+// the source runs out, with every read returning a default: a count of
+// 2^32-1 (ff ff ff ff 0f) on a body of a few bytes spins ~4.3 billion times.
+func (b *Reader) TagCount() uint32 {
+	r := b.Uvarint()
+	if uint64(r) > uint64(len(b.Src))/2 {
+		b.bad = true
+		b.Src = nil
+		return 0
+	}
+	return r
+}
+
 // VarintBytes returns a Kafka encoded varint array from the reader, returning
 // nil as appropriate.
 func (b *Reader) VarintBytes() []byte {

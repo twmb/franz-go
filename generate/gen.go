@@ -547,7 +547,7 @@ func (s Struct) WriteDecode(l *LineWriter) {
 	}
 	defer l.Write("}")
 
-	l.Write("for i := b.Uvarint(); i > 0; i-- {")
+	l.Write("for i := b.TagCount(); i > 0; i-- {")
 	defer l.Write("}")
 
 	l.Write("switch key := b.Uvarint(); key {")

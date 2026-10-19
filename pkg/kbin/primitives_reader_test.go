@@ -107,3 +107,30 @@ func TestReaderBytesShortRead(t *testing.T) {
 		})
 	}
 }
+
+// TestReaderTagCount pins that a tagged-field count the remaining bytes cannot
+// hold (each field is at least a key and a size, two bytes) invalidates the
+// reader and reads as zero, so a decoder looping the count down does not spin
+// on a source that ran out.
+func TestReaderTagCount(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  []byte
+		want uint32
+		ok   bool
+	}{
+		{"2^32-1 with nothing left", []byte{0xff, 0xff, 0xff, 0xff, 0x0f}, 0, false},
+		{"2^32-1 with two bytes left", []byte{0xff, 0xff, 0xff, 0xff, 0x0f, 0, 0}, 0, false},
+		{"one with one byte left", []byte{0x01, 0x00}, 0, false},
+		{"one with two bytes left", []byte{0x01, 0x00, 0x00}, 1, true},
+		{"two with four bytes left", []byte{0x02, 0, 0, 0, 0}, 2, true},
+		{"zero", []byte{0x00}, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Reader{Src: tc.src}
+			if got := b.TagCount(); got != tc.want || b.Ok() != tc.ok {
+				t.Errorf("TagCount() = %d, ok %v; want %d, ok %v", got, b.Ok(), tc.want, tc.ok)
+			}
+		})
+	}
+}

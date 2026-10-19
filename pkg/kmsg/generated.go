@@ -914,7 +914,7 @@ func (v *OffsetCommitValue) readFrom(src []byte, unsafe bool) error {
 		s.ExpireTimestamp = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -1821,7 +1821,7 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 		s.StartTimestamp = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -4126,7 +4126,7 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorMessage = v
 					}
 					if isFlexible {
-						for i := b.Uvarint(); i > 0; i-- {
+						for i := b.TagCount(); i > 0; i-- {
 							switch key := b.Uvarint(); key {
 							default:
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -4168,7 +4168,7 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -4899,7 +4899,7 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 						s.PartitionMaxBytes = v
 					}
 					if isFlexible {
-						for i := b.Uvarint(); i > 0; i-- {
+						for i := b.TagCount(); i > 0; i-- {
 							switch key := b.Uvarint(); key {
 							default:
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -5020,7 +5020,7 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 		s.Rack = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -5903,7 +5903,7 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 						s.RecordBatches = v
 					}
 					if isFlexible {
-						for i := b.Uvarint(); i > 0; i-- {
+						for i := b.TagCount(); i > 0; i-- {
 							switch key := b.Uvarint(); key {
 							default:
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -5979,7 +5979,7 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -17810,7 +17810,7 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -18876,7 +18876,7 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 				s.Configs = v
 			}
 			if isFlexible {
-				for i := b.Uvarint(); i > 0; i-- {
+				for i := b.TagCount(); i > 0; i-- {
 					switch key := b.Uvarint(); key {
 					default:
 						s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -37926,7 +37926,7 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -38791,7 +38791,7 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -39753,7 +39753,7 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -42730,7 +42730,7 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 						s.Position = v
 					}
 					if isFlexible {
-						for i := b.Uvarint(); i > 0; i-- {
+						for i := b.TagCount(); i > 0; i-- {
 							switch key := b.Uvarint(); key {
 							default:
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -42756,7 +42756,7 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -43286,7 +43286,7 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 						s.Bytes = v
 					}
 					if isFlexible {
-						for i := b.Uvarint(); i > 0; i-- {
+						for i := b.TagCount(); i > 0; i-- {
 							switch key := b.Uvarint(); key {
 							default:
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -43324,7 +43324,7 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -45290,7 +45290,7 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		s.WantShutdown = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -56798,7 +56798,7 @@ func (v *UpdateRaftVoterResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.TagCount(); i > 0; i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
