@@ -2418,9 +2418,9 @@ func TestIssue1245(t *testing.T) {
 // TestIssue1248 verifies that closing a client whose parent context is
 // already canceled does not race. LeaveGroupContext can return early via
 // ctx.Done() while its goroutine is still running stopSession ->
-// allSinksAndSources(reset). Without the fix, killSessionOnClose
-// goroutines concurrently call session.kill(), racing on fetchSession
-// fields. Run with -race to detect.
+// allSources(reset). Without the fix, killSessionOnClose calls
+// session.kill() concurrently, racing on fetchSession fields. Run with
+// -race to detect.
 //
 // Each cancel also lands while a heartbeat is in flight, which must not call
 // OnPartitionsLost: the client is closing, so the group revokes.

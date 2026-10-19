@@ -184,18 +184,15 @@ func (cl *Client) EnsureProduceConnectionIsOpen(ctx context.Context, brokers ...
 		wg.Wait()
 	}
 
-	for _, br := range toOpen {
-		wg.Add(1)
-		br.do(ctx, &forceOpenReq{new(kmsg.ProduceRequest)}, func(_ kmsg.Response, err error) {
-			defer wg.Done()
-			if err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Errorf("%d: %w", br.meta.NodeID, err))
-				mu.Unlock()
-			}
-		})
+	waits := make([]*respWaiter, len(toOpen))
+	for i, br := range toOpen {
+		waits[i] = br.issue(ctx, &forceOpenReq{new(kmsg.ProduceRequest)})
 	}
-	wg.Wait()
+	for i, w := range waits {
+		if _, err := w.wait(); err != nil {
+			errs = append(errs, fmt.Errorf("%d: %w", toOpen[i].meta.NodeID, err))
+		}
+	}
 
 	return errors.Join(errs...)
 }

@@ -944,10 +944,12 @@ func (s *source) loopFetch() {
 	}
 }
 
-func (s *source) killSessionOnClose(ctx context.Context) {
+// killSessionOnClose issues a fetch that closes the source's fetch session,
+// returning nil if the source's broker is gone.
+func (s *source) killSessionOnClose(ctx context.Context) *respWaiter {
 	br, err := s.cl.brokerOrErr(nil, s.nodeID, errUnknownBroker)
 	if err != nil {
-		return
+		return nil
 	}
 	s.session.kill()
 	req := &fetchRequest{
@@ -959,9 +961,7 @@ func (s *source) killSessionOnClose(ctx context.Context) {
 		isolationLevel: s.cl.cfg.isolationLevel,
 		session:        s.session,
 	}
-	ch := make(chan struct{})
-	br.do(ctx, req, func(kmsg.Response, error) { close(ch) })
-	<-ch
+	return br.issue(ctx, req)
 }
 
 // fetch is the main logic center of fetching messages.

@@ -115,15 +115,6 @@ type sinkAndSource struct {
 	source *source
 }
 
-func (cl *Client) allSinksAndSources(fn func(sns sinkAndSource)) {
-	cl.sinksAndSourcesMu.Lock()
-	defer cl.sinksAndSourcesMu.Unlock()
-
-	for _, sns := range cl.sinksAndSources {
-		fn(sns)
-	}
-}
-
 func (cl *Client) allSources(fn func(s *source)) {
 	cl.sinksAndSourcesMu.Lock()
 	srcs := make([]*source, 0, len(cl.sinksAndSources))
@@ -1429,18 +1420,17 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 	// assignPartitions above is synchronous.
 
 	sessCloseCtx, sessCloseCancel := context.WithTimeout(ctx, time.Second)
-	var wg sync.WaitGroup
-	cl.allSinksAndSources(func(sns sinkAndSource) {
-		if sns.source.session.id != 0 {
-			sns := sns
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				sns.source.killSessionOnClose(sessCloseCtx)
-			}()
+	var kills []*respWaiter
+	cl.allSources(func(s *source) {
+		if s.session.id != 0 {
+			if w := s.killSessionOnClose(sessCloseCtx); w != nil {
+				kills = append(kills, w)
+			}
 		}
 	})
-	wg.Wait()
+	for _, w := range kills {
+		w.wait()
+	}
 	sessCloseCancel()
 
 	// Tell the metrics loop to send its final Terminating=true push and
