@@ -52,9 +52,10 @@ func appendUuid(dst []byte, v [16]byte) []byte { return kbin.AppendUuid(dst, v) 
 // kbin functions at every field.
 //
 // Most compact lengths are one byte. The read functions decode that byte
-// themselves, since Reader.Uvarint is not inlined.
+// themselves, since Reader.Uvarint is not inlined. The read functions for
+// strings and bytes store into dst; see decodesInPlace in the generator.
 
-func readString(b *kbin.Reader, flexible, unsafe bool) string {
+func readString(b *kbin.Reader, dst *string, flexible, unsafe bool) {
 	var l int
 	if flexible {
 		if src := b.Src; len(src) > 0 && src[0] < 0x80 {
@@ -67,12 +68,13 @@ func readString(b *kbin.Reader, flexible, unsafe bool) string {
 		l = int(b.Int16())
 	}
 	if unsafe {
-		return kbin.UnsafeString(b.Span(l))
+		*dst = kbin.UnsafeString(b.Span(l))
+	} else {
+		*dst = string(b.Span(l))
 	}
-	return string(b.Span(l))
 }
 
-func readNullableString(b *kbin.Reader, flexible, unsafe bool) *string {
+func readNullableString(b *kbin.Reader, dst **string, flexible, unsafe bool) {
 	var l int
 	if flexible {
 		if src := b.Src; len(src) > 0 && src[0] < 0x80 {
@@ -85,7 +87,8 @@ func readNullableString(b *kbin.Reader, flexible, unsafe bool) *string {
 		l = int(b.Int16())
 	}
 	if l < 0 {
-		return nil
+		*dst = nil
+		return
 	}
 	var s string
 	if unsafe {
@@ -93,17 +96,20 @@ func readNullableString(b *kbin.Reader, flexible, unsafe bool) *string {
 	} else {
 		s = string(b.Span(l))
 	}
-	return &s
+	*dst = &s
 }
 
-func readVarintString(b *kbin.Reader, unsafe bool) string {
+func readVarintString(b *kbin.Reader, dst *string, unsafe bool) {
 	if unsafe {
-		return kbin.UnsafeString(b.VarintBytes())
+		*dst = kbin.UnsafeString(b.VarintBytes())
+	} else {
+		*dst = string(b.VarintBytes())
 	}
-	return string(b.VarintBytes())
 }
 
-func readBytes(b *kbin.Reader, flexible bool) []byte {
+func readVarintBytes(b *kbin.Reader, dst *[]byte) { *dst = b.VarintBytes() }
+
+func readBytes(b *kbin.Reader, dst *[]byte, flexible bool) {
 	var l int
 	if flexible {
 		if src := b.Src; len(src) > 0 && src[0] < 0x80 {
@@ -116,12 +122,13 @@ func readBytes(b *kbin.Reader, flexible bool) []byte {
 		l = int(b.Int32())
 	}
 	if l == -1 { // see kbin.Reader.Bytes
-		return []byte{}
+		*dst = []byte{}
+		return
 	}
-	return b.Span(l)
+	*dst = b.Span(l)
 }
 
-func readNullableBytes(b *kbin.Reader, flexible bool) []byte {
+func readNullableBytes(b *kbin.Reader, dst *[]byte, flexible bool) {
 	var l int
 	if flexible {
 		if src := b.Src; len(src) > 0 && src[0] < 0x80 {
@@ -134,9 +141,10 @@ func readNullableBytes(b *kbin.Reader, flexible bool) []byte {
 		l = int(b.Int32())
 	}
 	if l < 0 {
-		return nil
+		*dst = nil
+		return
 	}
-	return b.Span(l)
+	*dst = b.Span(l)
 }
 
 func appendString(dst []byte, s string, flexible bool) []byte {

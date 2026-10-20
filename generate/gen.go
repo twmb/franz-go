@@ -346,21 +346,31 @@ func primDecode(name string, l *LineWriter) {
 	l.Write("v := b.%s()", name)
 }
 
-// compactDecode reads with a function in codec.go if the type can be compact
-// or unsafe, or with a kbin.Reader method otherwise.
+// compactDecode reads into *v with a function in codec.go; see
+// decodesInPlace.
 func compactDecode(fromFlexible, hasUnsafe bool, name string, l *LineWriter) {
 	flex := "false"
 	if fromFlexible {
 		flex = "isFlexible"
 	}
-	switch {
-	case hasUnsafe:
-		l.Write("v := read%s(&b, %s, unsafe)", name, flex)
-	case fromFlexible:
-		l.Write("v := read%s(&b, %s)", name, flex)
-	default:
-		primDecode(name, l)
+	if hasUnsafe {
+		l.Write("read%s(&b, v, %s, unsafe)", name, flex)
+	} else {
+		l.Write("read%s(&b, v, %s)", name, flex)
 	}
+}
+
+// decodesInPlace returns whether t is decoded into *v, where v points to the
+// destination, rather than into a new v that is then copied to the
+// destination. The read functions in codec.go store strings and bytes
+// themselves, so that the store and its write barrier are not repeated at
+// every field.
+func decodesInPlace(t Type) bool {
+	switch t.(type) {
+	case String, NullableString, Bytes, NullableBytes, VarintString, VarintBytes:
+		return true
+	}
+	return false
 }
 
 func (Bool) WriteDecode(l *LineWriter)         { primDecode("Bool", l) }
@@ -374,8 +384,8 @@ func (Uint32) WriteDecode(l *LineWriter)       { primDecode("Uint32", l) }
 func (Varint) WriteDecode(l *LineWriter)       { primDecode("Varint", l) }
 func (Varlong) WriteDecode(l *LineWriter)      { primDecode("Varlong", l) }
 func (Uuid) WriteDecode(l *LineWriter)         { primDecode("Uuid", l) }
-func (VarintString) WriteDecode(l *LineWriter) { l.Write("v := readVarintString(&b, unsafe)") }
-func (VarintBytes) WriteDecode(l *LineWriter)  { primDecode("VarintBytes", l) }
+func (VarintString) WriteDecode(l *LineWriter) { l.Write("readVarintString(&b, v, unsafe)") }
+func (VarintBytes) WriteDecode(l *LineWriter)  { l.Write("readVarintBytes(&b, v)") }
 func (Throttle) WriteDecode(l *LineWriter)     { primDecode("Int32", l) }
 
 func (v String) WriteDecode(l *LineWriter) {
@@ -397,15 +407,15 @@ func (v NullableString) WriteDecode(l *LineWriter) {
 	if v.FromFlexible {
 		flex = "isFlexible"
 	}
-	l.Write("var v *string")
 	if v.NullableVersion > 0 {
 		l.Write("if version < %d {", v.NullableVersion)
-		l.Write("vv := readString(&b, %s, unsafe)", flex)
-		l.Write("v = &vv")
+		l.Write("vv := new(string)")
+		l.Write("readString(&b, vv, %s, unsafe)", flex)
+		l.Write("*v = vv")
 		l.Write("} else {")
 		defer l.Write("}")
 	}
-	l.Write("v = readNullableString(&b, %s, unsafe)", flex)
+	l.Write("readNullableString(&b, v, %s, unsafe)", flex)
 }
 
 func (f FieldLengthMinusBytes) WriteDecode(l *LineWriter) {
@@ -456,6 +466,10 @@ func (a Array) WriteDecode(l *LineWriter) {
 		// so that the next level will not collide with our current "a".
 		l.Write("v := a[i]")
 		l.Write("{")
+	default:
+		if decodesInPlace(a.Inner) {
+			l.Write("v := &a[i]")
+		}
 	}
 
 	a.Inner.WriteDecode(l)
@@ -465,7 +479,7 @@ func (a Array) WriteDecode(l *LineWriter) {
 		l.Write("}")
 	}
 
-	if _, isStruct := a.Inner.(Struct); !isStruct {
+	if _, isStruct := a.Inner.(Struct); !isStruct && !decodesInPlace(a.Inner) {
 		l.Write("a[i] = v")
 	}
 
@@ -616,12 +630,15 @@ func (f StructField) WriteDecode(l *LineWriter) {
 		// field so that the array function can use it.
 		l.Write("v := s.%s", f.FieldName)
 	default:
+		if decodesInPlace(f.Type) {
+			l.Write("v := &s.%s", f.FieldName)
+		}
 		// All other types use primDecode, which does a `v :=`.
 	}
 	f.Type.WriteDecode(l)
 
 	_, isStruct := f.Type.(Struct)
-	if !isStruct {
+	if !isStruct && !decodesInPlace(f.Type) {
 		// If the field was not a struct or it was a nullable struct,
 		// we need to copy the changes back.
 		l.Write("s.%s = v", f.FieldName)
@@ -661,7 +678,7 @@ func (s Struct) WriteDecode(l *LineWriter) {
 
 	l.Write("if isFlexible {")
 	if len(tags) == 0 {
-		l.Write("s.UnknownTags = internalReadTags(&b)")
+		l.Write("internalReadTags(&b, &s.UnknownTags)")
 		l.Write("}")
 		return
 	}

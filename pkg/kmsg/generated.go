@@ -204,12 +204,12 @@ func (v *MessageV0) readFrom(src []byte, unsafe bool) error {
 		s.Attributes = v
 	}
 	{
-		v := b.NullableBytes()
-		s.Key = v
+		v := &s.Key
+		readNullableBytes(&b, v, false)
 	}
 	{
-		v := b.NullableBytes()
-		s.Value = v
+		v := &s.Value
+		readNullableBytes(&b, v, false)
 	}
 	return b.Complete()
 }
@@ -351,12 +351,12 @@ func (v *MessageV1) readFrom(src []byte, unsafe bool) error {
 		s.Timestamp = v
 	}
 	{
-		v := b.NullableBytes()
-		s.Key = v
+		v := &s.Key
+		readNullableBytes(&b, v, false)
 	}
 	{
-		v := b.NullableBytes()
-		s.Value = v
+		v := &s.Value
+		readNullableBytes(&b, v, false)
 	}
 	return b.Complete()
 }
@@ -404,12 +404,12 @@ func (v *Header) readFrom(src []byte, unsafe bool) error {
 	b := kbin.Reader{Src: src}
 	s := v
 	{
-		v := readVarintString(&b, unsafe)
-		s.Key = v
+		v := &s.Key
+		readVarintString(&b, v, unsafe)
 	}
 	{
-		v := b.VarintBytes()
-		s.Value = v
+		v := &s.Value
+		readVarintBytes(&b, v)
 	}
 	return b.Complete()
 }
@@ -726,12 +726,12 @@ func (v *OffsetCommitKey) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := readString(&b, false, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, false, unsafe)
 	}
 	{
-		v := readString(&b, false, unsafe)
-		s.Topic = v
+		v := &s.Topic
+		readString(&b, v, false, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -869,8 +869,8 @@ func (v *OffsetCommitValue) readFrom(src []byte, unsafe bool) error {
 		s.LeaderEpoch = v
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Metadata = v
+		v := &s.Metadata
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt64(&b)
@@ -952,8 +952,8 @@ func (v *GroupMetadataKey) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := readString(&b, false, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, false, unsafe)
 	}
 	return b.Complete()
 }
@@ -1154,22 +1154,20 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.ProtocolType = v
+		v := &s.ProtocolType
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
 		s.Generation = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.Protocol = v
+		v := &s.Protocol
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.Leader = v
+		v := &s.Leader
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 2 {
 		v := readInt64(&b)
@@ -1192,21 +1190,20 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.MemberID = v
+				v := &s.MemberID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 3 {
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.InstanceID = v
+				v := &s.InstanceID
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ClientID = v
+				v := &s.ClientID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ClientHost = v
+				v := &s.ClientHost
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 1 {
 				v := readInt32(&b)
@@ -1217,22 +1214,22 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 				s.SessionTimeoutMillis = v
 			}
 			{
-				v := readBytes(&b, isFlexible)
-				s.Subscription = v
+				v := &s.Subscription
+				readBytes(&b, v, isFlexible)
 			}
 			{
-				v := readBytes(&b, isFlexible)
-				s.Assignment = v
+				v := &s.Assignment
+				readBytes(&b, v, isFlexible)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Members = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -1289,8 +1286,8 @@ func (v *TxnMetadataKey) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := readString(&b, false, unsafe)
-		s.TransactionalID = v
+		v := &s.TransactionalID
+		readString(&b, v, false, unsafe)
 	}
 	return b.Complete()
 }
@@ -1562,8 +1559,8 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -1585,7 +1582,7 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -1832,15 +1829,15 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, false, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, false, unsafe)
 		}
 		v = a
 		s.Topics = v
 	}
 	{
-		v := b.NullableBytes()
-		s.UserData = v
+		v := &s.UserData
+		readNullableBytes(&b, v, false)
 	}
 	if version >= 1 {
 		v := s.OwnedPartitions
@@ -1859,8 +1856,8 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, false, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, false, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -1890,9 +1887,8 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 		s.Generation = v
 	}
 	if version >= 3 {
-		var v *string
-		v = readNullableString(&b, false, unsafe)
-		s.Rack = v
+		v := &s.Rack
+		readNullableString(&b, v, false, unsafe)
 	}
 	return b.Complete()
 }
@@ -2008,8 +2004,8 @@ func (v *ConsumerMemberAssignment) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, false, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, false, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -2035,8 +2031,8 @@ func (v *ConsumerMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	{
-		v := b.NullableBytes()
-		s.UserData = v
+		v := &s.UserData
+		readNullableBytes(&b, v, false)
 	}
 	return b.Complete()
 }
@@ -2105,16 +2101,16 @@ func (v *ConnectMemberMetadata) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := readString(&b, false, unsafe)
-		s.URL = v
+		v := &s.URL
+		readString(&b, v, false, unsafe)
 	}
 	{
 		v := readInt64(&b)
 		s.ConfigOffset = v
 	}
 	if version >= 1 {
-		v := b.NullableBytes()
-		s.CurrentAssignment = v
+		v := &s.CurrentAssignment
+		readNullableBytes(&b, v, false)
 	}
 	return b.Complete()
 }
@@ -2276,12 +2272,12 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		s.Error = v
 	}
 	{
-		v := readString(&b, false, unsafe)
-		s.Leader = v
+		v := &s.Leader
+		readString(&b, v, false, unsafe)
 	}
 	{
-		v := readString(&b, false, unsafe)
-		s.LeaderURL = v
+		v := &s.LeaderURL
+		readString(&b, v, false, unsafe)
 	}
 	{
 		v := readInt64(&b)
@@ -2304,8 +2300,8 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, false, unsafe)
-				s.Connector = v
+				v := &s.Connector
+				readString(&b, v, false, unsafe)
 			}
 			{
 				v := s.Tasks
@@ -2347,8 +2343,8 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, false, unsafe)
-				s.Connector = v
+				v := &s.Connector
+				readString(&b, v, false, unsafe)
 			}
 			{
 				v := s.Tasks
@@ -2453,19 +2449,19 @@ func (v *DefaultPrincipalData) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Type = v
+		v := &s.Type
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Name = v
+		v := &s.Name
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readBool(&b)
 		s.TokenAuthenticated = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -2737,7 +2733,7 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 				s.VoterDirectoryID = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -2768,14 +2764,14 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 				s.VoterDirectoryID = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.GrantingVoters = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -2987,9 +2983,8 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 3 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.TransactionID = v
+		v := &s.TransactionID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt16(&b)
@@ -3016,8 +3011,8 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 12 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 13 {
 				v := readUuid(&b)
@@ -3044,25 +3039,25 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 						s.Partition = v
 					}
 					{
-						v := readNullableBytes(&b, isFlexible)
-						s.Records = v
+						v := &s.Records
+						readNullableBytes(&b, v, isFlexible)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -3572,8 +3567,8 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 12 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 13 {
 				v := readUuid(&b)
@@ -3636,21 +3631,19 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 								s.RelativeOffset = v
 							}
 							{
-								var v *string
-								v = readNullableString(&b, isFlexible, unsafe)
-								s.ErrorMessage = v
+								v := &s.ErrorMessage
+								readNullableString(&b, v, isFlexible, unsafe)
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.ErrorRecords = v
 					}
 					if version >= 8 {
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
 						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -3671,7 +3664,7 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 									s.LeaderEpoch = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 								if err := b.Complete(); err != nil {
 									return err
@@ -3684,7 +3677,7 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -3721,20 +3714,19 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 						s.NodeID = v
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Host = v
+						v := &s.Host
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
 						s.Port = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Rack = v
+						v := &s.Rack
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -4293,8 +4285,8 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 12 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 13 {
 				v := readUuid(&b)
@@ -4367,7 +4359,7 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -4390,8 +4382,8 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 7 && version <= 12 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 13 {
 				v := readUuid(&b)
@@ -4417,15 +4409,15 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.ForgottenTopics = v
 	}
 	if version >= 11 {
-		v := readString(&b, isFlexible, unsafe)
-		s.Rack = v
+		v := &s.Rack
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if isFlexible {
 		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -4434,9 +4426,8 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 			case 0:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ClusterID = v
+				v := &s.ClusterID
+				readNullableString(&b, v, isFlexible, unsafe)
 				if err := b.Complete(); err != nil {
 					return err
 				}
@@ -4454,7 +4445,7 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 					s.Epoch = v
 				}
 				if isFlexible {
-					s.UnknownTags = internalReadTags(&b)
+					internalReadTags(&b, &s.UnknownTags)
 				}
 				if err := b.Complete(); err != nil {
 					return err
@@ -5133,8 +5124,8 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 12 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 13 {
 				v := readUuid(&b)
@@ -5204,7 +5195,7 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 								s.FirstOffset = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
@@ -5215,8 +5206,8 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 						s.PreferredReadReplica = v
 					}
 					{
-						v := readNullableBytes(&b, isFlexible)
-						s.RecordBatches = v
+						v := &s.RecordBatches
+						readNullableBytes(&b, v, isFlexible)
 					}
 					if isFlexible {
 						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -5237,7 +5228,7 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 									s.EndOffset = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 								if err := b.Complete(); err != nil {
 									return err
@@ -5256,7 +5247,7 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 									s.LeaderEpoch = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 								if err := b.Complete(); err != nil {
 									return err
@@ -5275,7 +5266,7 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 									s.Epoch = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 								if err := b.Complete(); err != nil {
 									return err
@@ -5288,7 +5279,7 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -5321,20 +5312,19 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 						s.NodeID = v
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Host = v
+						v := &s.Host
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
 						s.Port = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Rack = v
+						v := &s.Rack
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -5643,8 +5633,8 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -5679,14 +5669,14 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 						s.MaxNumOffsets = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -5697,7 +5687,7 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 		s.TimeoutMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -5970,8 +5960,8 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -6029,21 +6019,21 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 						s.LeaderEpoch = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -6241,17 +6231,17 @@ func (v *MetadataRequest) readFrom(src []byte, unsafe bool) error {
 				s.TopicID = v
 			}
 			{
-				var v *string
+				v := &s.Topic
 				if version < 10 {
-					vv := readString(&b, isFlexible, unsafe)
-					v = &vv
+					vv := new(string)
+					readString(&b, vv, isFlexible, unsafe)
+					*v = vv
 				} else {
-					v = readNullableString(&b, isFlexible, unsafe)
+					readNullableString(&b, v, isFlexible, unsafe)
 				}
-				s.Topic = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -6270,7 +6260,7 @@ func (v *MetadataRequest) readFrom(src []byte, unsafe bool) error {
 		s.IncludeTopicAuthorizedOperations = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -6680,29 +6670,27 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 				s.NodeID = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
 				s.Port = v
 			}
 			if version >= 1 {
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.Rack = v
+				v := &s.Rack
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Brokers = v
 	}
 	if version >= 2 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ClusterID = v
+		v := &s.ClusterID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 1 {
 		v := readInt32(&b)
@@ -6729,14 +6717,14 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			{
-				var v *string
+				v := &s.Topic
 				if version < 12 {
-					vv := readString(&b, isFlexible, unsafe)
-					v = &vv
+					vv := new(string)
+					readString(&b, vv, isFlexible, unsafe)
+					*v = vv
 				} else {
-					v = readNullableString(&b, isFlexible, unsafe)
+					readNullableString(&b, v, isFlexible, unsafe)
 				}
-				s.Topic = v
 			}
 			if version >= 10 {
 				v := readUuid(&b)
@@ -6836,7 +6824,7 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 						s.OfflineReplicas = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -6847,7 +6835,7 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 				s.AuthorizedOperations = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -6862,7 +6850,7 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -7339,8 +7327,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 1 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -7447,7 +7435,7 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				s.LeaderRecoveryState = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -7470,8 +7458,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 5 {
 				v := readUuid(&b)
@@ -7494,8 +7482,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 0 && version <= 1 {
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
@@ -7602,14 +7590,14 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						s.LeaderRecoveryState = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.PartitionStates = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -7636,22 +7624,22 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				s.BrokerID = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
 				s.Port = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.LiveLeaders = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -7831,8 +7819,8 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 4 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -7843,7 +7831,7 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -7886,8 +7874,8 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 0 && version <= 4 {
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
@@ -7898,21 +7886,21 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -8175,8 +8163,8 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 0 && version <= 0 {
 				v := readInt32(&b)
@@ -8230,21 +8218,21 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 						s.Delete = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.PartitionStates = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -8389,8 +8377,8 @@ func (v *StopReplicaResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -8401,14 +8389,14 @@ func (v *StopReplicaResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Partitions = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -8867,8 +8855,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 4 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -8948,7 +8936,7 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				s.OfflineReplicas = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -8971,8 +8959,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 7 {
 				v := readUuid(&b)
@@ -8995,8 +8983,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 0 && version <= 4 {
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
@@ -9076,14 +9064,14 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 						s.OfflineReplicas = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.PartitionStates = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -9110,8 +9098,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				s.ID = v
 			}
 			if version >= 0 && version <= 0 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 0 && version <= 0 {
 				v := readInt32(&b)
@@ -9138,38 +9126,37 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 						s.Port = v
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Host = v
+						v := &s.Host
+						readString(&b, v, isFlexible, unsafe)
 					}
 					if version >= 3 {
-						v := readString(&b, isFlexible, unsafe)
-						s.ListenerName = v
+						v := &s.ListenerName
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt16(&b)
 						s.SecurityProtocol = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Endpoints = v
 			}
 			if version >= 2 {
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.Rack = v
+				v := &s.Rack
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.LiveBrokers = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -9250,7 +9237,7 @@ func (v *UpdateMetadataResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -9362,7 +9349,7 @@ func (v *ControlledShutdownRequest) readFrom(src []byte, unsafe bool) error {
 		s.BrokerEpoch = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -9502,22 +9489,22 @@ func (v *ControlledShutdownResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
 				s.Partition = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.PartitionsRemaining = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -9781,21 +9768,20 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 1 {
 		v := readInt32(&b)
 		s.Generation = v
 	}
 	if version >= 1 {
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 7 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.InstanceID = v
+		v := &s.InstanceID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 2 && version <= 4 {
 		v := readInt64(&b)
@@ -9818,8 +9804,8 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 9 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 10 {
 				v := readUuid(&b)
@@ -9858,26 +9844,25 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 						s.LeaderEpoch = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Metadata = v
+						v := &s.Metadata
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -10106,8 +10091,8 @@ func (v *OffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 9 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 10 {
 				v := readUuid(&b)
@@ -10138,21 +10123,21 @@ func (v *OffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -10422,8 +10407,8 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 0 && version <= 7 {
-		v := readString(&b, isFlexible, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 7 {
 		v := s.Topics
@@ -10445,8 +10430,8 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -10468,7 +10453,7 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -10491,13 +10476,12 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Group = v
+				v := &s.Group
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 9 {
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.MemberID = v
+				v := &s.MemberID
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 9 {
 				v := readInt32(&b)
@@ -10523,8 +10507,8 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 8 && version <= 9 {
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					if version >= 10 {
 						v := readUuid(&b)
@@ -10550,14 +10534,14 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -10568,7 +10552,7 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 		s.RequireStable = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -10965,8 +10949,8 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -10997,23 +10981,22 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 						s.LeaderEpoch = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Metadata = v
+						v := &s.Metadata
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt16(&b)
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -11040,8 +11023,8 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Group = v
+				v := &s.Group
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -11060,8 +11043,8 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 8 && version <= 9 {
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					if version >= 10 {
 						v := readUuid(&b)
@@ -11096,23 +11079,22 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 								s.LeaderEpoch = v
 							}
 							{
-								var v *string
-								v = readNullableString(&b, isFlexible, unsafe)
-								s.Metadata = v
+								v := &s.Metadata
+								readNullableString(&b, v, isFlexible, unsafe)
 							}
 							{
 								v := readInt16(&b)
 								s.ErrorCode = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -11123,14 +11105,14 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -11246,8 +11228,8 @@ func (v *FindCoordinatorRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 0 && version <= 3 {
-		v := readString(&b, isFlexible, unsafe)
-		s.CoordinatorKey = v
+		v := &s.CoordinatorKey
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 1 {
 		v := readInt8(&b)
@@ -11266,14 +11248,14 @@ func (v *FindCoordinatorRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.CoordinatorKeys = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -11485,17 +11467,16 @@ func (v *FindCoordinatorResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	if version >= 1 && version <= 3 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 3 {
 		v := readInt32(&b)
 		s.NodeID = v
 	}
 	if version >= 0 && version <= 3 {
-		v := readString(&b, isFlexible, unsafe)
-		s.Host = v
+		v := &s.Host
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 3 {
 		v := readInt32(&b)
@@ -11518,16 +11499,16 @@ func (v *FindCoordinatorResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Key = v
+				v := &s.Key
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
 				s.NodeID = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -11538,19 +11519,18 @@ func (v *FindCoordinatorResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Coordinators = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -11777,8 +11757,8 @@ func (v *JoinGroupRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -11789,17 +11769,16 @@ func (v *JoinGroupRequest) readFrom(src []byte, unsafe bool) error {
 		s.RebalanceTimeoutMillis = v
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 5 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.InstanceID = v
+		v := &s.InstanceID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.ProtocolType = v
+		v := &s.ProtocolType
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Protocols
@@ -11818,27 +11797,26 @@ func (v *JoinGroupRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readBytes(&b, isFlexible)
-				s.Metadata = v
+				v := &s.Metadata
+				readBytes(&b, v, isFlexible)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Protocols = v
 	}
 	if version >= 8 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.Reason = v
+		v := &s.Reason
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -12091,31 +12069,30 @@ func (v *JoinGroupResponse) readFrom(src []byte, unsafe bool) error {
 		s.Generation = v
 	}
 	if version >= 7 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ProtocolType = v
+		v := &s.ProtocolType
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		var v *string
+		v := &s.Protocol
 		if version < 7 {
-			vv := readString(&b, isFlexible, unsafe)
-			v = &vv
+			vv := new(string)
+			readString(&b, vv, isFlexible, unsafe)
+			*v = vv
 		} else {
-			v = readNullableString(&b, isFlexible, unsafe)
+			readNullableString(&b, v, isFlexible, unsafe)
 		}
-		s.Protocol = v
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.LeaderID = v
+		v := &s.LeaderID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 9 {
 		v := readBool(&b)
 		s.SkipAssignment = v
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Members
@@ -12134,27 +12111,26 @@ func (v *JoinGroupResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.MemberID = v
+				v := &s.MemberID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 5 {
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.InstanceID = v
+				v := &s.InstanceID
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readBytes(&b, isFlexible)
-				s.ProtocolMetadata = v
+				v := &s.ProtocolMetadata
+				readBytes(&b, v, isFlexible)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Members = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -12266,24 +12242,23 @@ func (v *HeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
 		s.Generation = v
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.InstanceID = v
+		v := &s.InstanceID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -12398,7 +12373,7 @@ func (v *HeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -12550,12 +12525,12 @@ func (v *LeaveGroupRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 2 {
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 3 {
 		v := s.Members
@@ -12574,28 +12549,26 @@ func (v *LeaveGroupRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.MemberID = v
+				v := &s.MemberID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.InstanceID = v
+				v := &s.InstanceID
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 5 {
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.Reason = v
+				v := &s.Reason
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Members = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -12775,27 +12748,26 @@ func (v *LeaveGroupResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.MemberID = v
+				v := &s.MemberID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.InstanceID = v
+				v := &s.InstanceID
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt16(&b)
 				s.ErrorCode = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Members = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -12971,31 +12943,28 @@ func (v *SyncGroupRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
 		s.Generation = v
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.InstanceID = v
+		v := &s.InstanceID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 5 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ProtocolType = v
+		v := &s.ProtocolType
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 5 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.Protocol = v
+		v := &s.Protocol
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.GroupAssignment
@@ -13014,22 +12983,22 @@ func (v *SyncGroupRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.MemberID = v
+				v := &s.MemberID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readBytes(&b, isFlexible)
-				s.MemberAssignment = v
+				v := &s.MemberAssignment
+				readBytes(&b, v, isFlexible)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.GroupAssignment = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -13168,21 +13137,19 @@ func (v *SyncGroupResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	if version >= 5 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ProtocolType = v
+		v := &s.ProtocolType
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 5 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.Protocol = v
+		v := &s.Protocol
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readBytes(&b, isFlexible)
-		s.MemberAssignment = v
+		v := &s.MemberAssignment
+		readBytes(&b, v, isFlexible)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -13296,8 +13263,8 @@ func (v *DescribeGroupsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.Groups = v
@@ -13307,7 +13274,7 @@ func (v *DescribeGroupsRequest) readFrom(src []byte, unsafe bool) error {
 		s.IncludeAuthorizedOperations = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -13594,25 +13561,24 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			if version >= 6 {
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Group = v
+				v := &s.Group
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.State = v
+				v := &s.State
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ProtocolType = v
+				v := &s.ProtocolType
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Protocol = v
+				v := &s.Protocol
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Members
@@ -13631,32 +13597,31 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.MemberID = v
+						v := &s.MemberID
+						readString(&b, v, isFlexible, unsafe)
 					}
 					if version >= 4 {
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.InstanceID = v
+						v := &s.InstanceID
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.ClientID = v
+						v := &s.ClientID
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.ClientHost = v
+						v := &s.ClientHost
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						v := readBytes(&b, isFlexible)
-						s.ProtocolMetadata = v
+						v := &s.ProtocolMetadata
+						readBytes(&b, v, isFlexible)
 					}
 					{
-						v := readBytes(&b, isFlexible)
-						s.MemberAssignment = v
+						v := &s.MemberAssignment
+						readBytes(&b, v, isFlexible)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -13667,14 +13632,14 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 				s.AuthorizedOperations = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -13796,8 +13761,8 @@ func (v *ListGroupsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.StatesFilter = v
@@ -13815,14 +13780,14 @@ func (v *ListGroupsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.TypesFilter = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -13999,30 +13964,30 @@ func (v *ListGroupsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Group = v
+				v := &s.Group
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ProtocolType = v
+				v := &s.ProtocolType
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 4 {
-				v := readString(&b, isFlexible, unsafe)
-				s.GroupState = v
+				v := &s.GroupState
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 5 {
-				v := readString(&b, isFlexible, unsafe)
-				s.GroupType = v
+				v := &s.GroupType
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -14107,8 +14072,8 @@ func (v *SASLHandshakeRequest) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := readString(&b, false, unsafe)
-		s.Mechanism = v
+		v := &s.Mechanism
+		readString(&b, v, false, unsafe)
 	}
 	return b.Complete()
 }
@@ -14204,8 +14169,8 @@ func (v *SASLHandshakeResponse) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, false, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, false, unsafe)
 		}
 		v = a
 		s.SupportedMechanisms = v
@@ -14347,24 +14312,23 @@ func (v *ApiVersionsRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 3 {
-		v := readString(&b, isFlexible, unsafe)
-		s.ClientSoftwareName = v
+		v := &s.ClientSoftwareName
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		v := readString(&b, isFlexible, unsafe)
-		s.ClientSoftwareVersion = v
+		v := &s.ClientSoftwareVersion
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 5 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ClusterID = v
+		v := &s.ClusterID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 5 {
 		v := readInt32(&b)
 		s.NodeID = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -14714,7 +14678,7 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 				s.MaxVersion = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -14747,8 +14711,8 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt16(&b)
@@ -14759,7 +14723,7 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 						s.MaxVersion = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -14792,8 +14756,8 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt16(&b)
@@ -14804,7 +14768,7 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 						s.MinVersionLevel = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -15102,8 +15066,8 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -15153,7 +15117,7 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 						s.Replicas = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -15176,23 +15140,22 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Value = v
+						v := &s.Value
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Configs = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -15207,7 +15170,7 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 		s.ValidateOnly = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -15515,8 +15478,8 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 7 {
 				v := readUuid(&b)
@@ -15527,9 +15490,8 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			if version >= 1 {
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 5 {
 				v := readInt32(&b)
@@ -15559,13 +15521,12 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Value = v
+						v := &s.Value
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readBool(&b)
@@ -15580,7 +15541,7 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 						s.IsSensitive = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -15606,7 +15567,7 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -15769,8 +15730,8 @@ func (v *DeleteTopicsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.TopicNames = v
@@ -15792,16 +15753,15 @@ func (v *DeleteTopicsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readUuid(&b)
 				s.TopicID = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -15812,7 +15772,7 @@ func (v *DeleteTopicsRequest) readFrom(src []byte, unsafe bool) error {
 		s.TimeoutMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -16009,14 +15969,14 @@ func (v *DeleteTopicsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				var v *string
+				v := &s.Topic
 				if version < 6 {
-					vv := readString(&b, isFlexible, unsafe)
-					v = &vv
+					vv := new(string)
+					readString(&b, vv, isFlexible, unsafe)
+					*v = vv
 				} else {
-					v = readNullableString(&b, isFlexible, unsafe)
+					readNullableString(&b, v, isFlexible, unsafe)
 				}
-				s.Topic = v
 			}
 			if version >= 6 {
 				v := readUuid(&b)
@@ -16027,19 +15987,18 @@ func (v *DeleteTopicsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			if version >= 5 {
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -16249,8 +16208,8 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -16277,14 +16236,14 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 						s.Offset = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -16295,7 +16254,7 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 		s.TimeoutMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -16512,8 +16471,8 @@ func (v *DeleteRecordsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -16544,21 +16503,21 @@ func (v *DeleteRecordsResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -16684,9 +16643,8 @@ func (v *InitProducerIDRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.TransactionalID = v
+		v := &s.TransactionalID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -16701,7 +16659,7 @@ func (v *InitProducerIDRequest) readFrom(src []byte, unsafe bool) error {
 		s.ProducerEpoch = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -16846,7 +16804,7 @@ func (v *InitProducerIDResponse) readFrom(src []byte, unsafe bool) error {
 		s.ProducerEpoch = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -17062,8 +17020,8 @@ func (v *OffsetForLeaderEpochRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -17094,21 +17052,21 @@ func (v *OffsetForLeaderEpochRequest) readFrom(src []byte, unsafe bool) error {
 						s.LeaderEpoch = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -17354,8 +17312,8 @@ func (v *OffsetForLeaderEpochResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -17390,21 +17348,21 @@ func (v *OffsetForLeaderEpochResponse) readFrom(src []byte, unsafe bool) error {
 						s.EndOffset = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -17676,8 +17634,8 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 0 && version <= 3 {
-		v := readString(&b, isFlexible, unsafe)
-		s.TransactionalID = v
+		v := &s.TransactionalID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 3 {
 		v := readInt64(&b)
@@ -17704,8 +17662,8 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -17727,7 +17685,7 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -17750,8 +17708,8 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.TransactionalID = v
+				v := &s.TransactionalID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt64(&b)
@@ -17782,8 +17740,8 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -17805,21 +17763,21 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Transactions = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -18175,8 +18133,8 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.TransactionalID = v
+				v := &s.TransactionalID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -18195,8 +18153,8 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -18223,21 +18181,21 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 								s.ErrorCode = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -18260,8 +18218,8 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -18288,21 +18246,21 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -18421,8 +18379,8 @@ func (v *AddOffsetsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.TransactionalID = v
+		v := &s.TransactionalID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt64(&b)
@@ -18433,11 +18391,11 @@ func (v *AddOffsetsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 		s.ProducerEpoch = v
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -18547,7 +18505,7 @@ func (v *AddOffsetsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -18660,8 +18618,8 @@ func (v *EndTxnRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.TransactionalID = v
+		v := &s.TransactionalID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt64(&b)
@@ -18676,7 +18634,7 @@ func (v *EndTxnRequest) readFrom(src []byte, unsafe bool) error {
 		s.Commit = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -18821,7 +18779,7 @@ func (v *EndTxnResponse) readFrom(src []byte, unsafe bool) error {
 		s.ProducerEpoch = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -19071,8 +19029,8 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -19094,7 +19052,7 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -19109,14 +19067,14 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 				s.TransactionVersion = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Markers = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -19361,8 +19319,8 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -19389,28 +19347,28 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 								s.ErrorCode = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Markers = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -19664,12 +19622,12 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.TransactionalID = v
+		v := &s.TransactionalID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt64(&b)
@@ -19684,13 +19642,12 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 		s.Generation = v
 	}
 	if version >= 3 {
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.InstanceID = v
+		v := &s.InstanceID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -19709,8 +19666,8 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 5 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 6 {
 				v := readUuid(&b)
@@ -19745,26 +19702,25 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 						s.LeaderEpoch = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Metadata = v
+						v := &s.Metadata
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -20001,8 +19957,8 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 5 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 6 {
 				v := readUuid(&b)
@@ -20033,21 +19989,21 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -20211,9 +20167,8 @@ func (v *DescribeACLsRequest) readFrom(src []byte, unsafe bool) error {
 		s.ResourceType = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ResourceName = v
+		v := &s.ResourceName
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 1 {
 		var t ACLResourcePatternType
@@ -20225,14 +20180,12 @@ func (v *DescribeACLsRequest) readFrom(src []byte, unsafe bool) error {
 		s.ResourcePatternType = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.Principal = v
+		v := &s.Principal
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.Host = v
+		v := &s.Host
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		var t ACLOperation
@@ -20253,7 +20206,7 @@ func (v *DescribeACLsRequest) readFrom(src []byte, unsafe bool) error {
 		s.PermissionType = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -20491,9 +20444,8 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Resources
@@ -20521,8 +20473,8 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ResourceType = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ResourceName = v
+				v := &s.ResourceName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 1 {
 				var t ACLResourcePatternType
@@ -20550,12 +20502,12 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Principal = v
+						v := &s.Principal
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Host = v
+						v := &s.Host
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						var t ACLOperation
@@ -20576,21 +20528,21 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 						s.PermissionType = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.ACLs = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Resources = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -20804,8 +20756,8 @@ func (v *CreateACLsRequest) readFrom(src []byte, unsafe bool) error {
 				s.ResourceType = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ResourceName = v
+				v := &s.ResourceName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 1 {
 				var t ACLResourcePatternType
@@ -20817,12 +20769,12 @@ func (v *CreateACLsRequest) readFrom(src []byte, unsafe bool) error {
 				s.ResourcePatternType = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Principal = v
+				v := &s.Principal
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				var t ACLOperation
@@ -20843,14 +20795,14 @@ func (v *CreateACLsRequest) readFrom(src []byte, unsafe bool) error {
 				s.PermissionType = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Creations = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -21002,19 +20954,18 @@ func (v *CreateACLsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Results = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -21210,9 +21161,8 @@ func (v *DeleteACLsRequest) readFrom(src []byte, unsafe bool) error {
 				s.ResourceType = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ResourceName = v
+				v := &s.ResourceName
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 1 {
 				var t ACLResourcePatternType
@@ -21224,14 +21174,12 @@ func (v *DeleteACLsRequest) readFrom(src []byte, unsafe bool) error {
 				s.ResourcePatternType = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.Principal = v
+				v := &s.Principal
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
 				var t ACLOperation
@@ -21252,14 +21200,14 @@ func (v *DeleteACLsRequest) readFrom(src []byte, unsafe bool) error {
 				s.PermissionType = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Filters = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -21513,9 +21461,8 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.MatchingACLs
@@ -21538,9 +21485,8 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						var t ACLResourceType
@@ -21552,8 +21498,8 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 						s.ResourceType = v
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.ResourceName = v
+						v := &s.ResourceName
+						readString(&b, v, isFlexible, unsafe)
 					}
 					if version >= 1 {
 						var t ACLResourcePatternType
@@ -21565,12 +21511,12 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 						s.ResourcePatternType = v
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Principal = v
+						v := &s.Principal
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Host = v
+						v := &s.Host
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						var t ACLOperation
@@ -21591,21 +21537,21 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 						s.PermissionType = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.MatchingACLs = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Results = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -21796,8 +21742,8 @@ func (v *DescribeConfigsRequest) readFrom(src []byte, unsafe bool) error {
 				s.ResourceType = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ResourceName = v
+				v := &s.ResourceName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.ConfigNames
@@ -21815,14 +21761,14 @@ func (v *DescribeConfigsRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]string, l)...)
 				}
 				for i := range a {
-					v := readString(&b, isFlexible, unsafe)
-					a[i] = v
+					v := &a[i]
+					readString(&b, v, isFlexible, unsafe)
 				}
 				v = a
 				s.ConfigNames = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -21837,7 +21783,7 @@ func (v *DescribeConfigsRequest) readFrom(src []byte, unsafe bool) error {
 		s.IncludeDocumentation = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -22184,9 +22130,8 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
 				var t ConfigResourceType
@@ -22198,8 +22143,8 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ResourceType = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ResourceName = v
+				v := &s.ResourceName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Configs
@@ -22218,13 +22163,12 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Value = v
+						v := &s.Value
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readBool(&b)
@@ -22264,13 +22208,12 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readString(&b, isFlexible, unsafe)
-								s.Name = v
+								v := &s.Name
+								readString(&b, v, isFlexible, unsafe)
 							}
 							{
-								var v *string
-								v = readNullableString(&b, isFlexible, unsafe)
-								s.Value = v
+								v := &s.Value
+								readNullableString(&b, v, isFlexible, unsafe)
 							}
 							{
 								var t ConfigSource
@@ -22282,7 +22225,7 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 								s.Source = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
@@ -22298,26 +22241,25 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 						s.ConfigType = v
 					}
 					if version >= 3 {
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Documentation = v
+						v := &s.Documentation
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Configs = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Resources = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -22549,8 +22491,8 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 				s.ResourceType = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ResourceName = v
+				v := &s.ResourceName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Configs
@@ -22569,23 +22511,22 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Value = v
+						v := &s.Value
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Configs = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -22596,7 +22537,7 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 		s.ValidateOnly = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -22779,9 +22720,8 @@ func (v *AlterConfigsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
 				var t ConfigResourceType
@@ -22793,18 +22733,18 @@ func (v *AlterConfigsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ResourceType = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ResourceName = v
+				v := &s.ResourceName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Resources = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -22994,8 +22934,8 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Dir = v
+				v := &s.Dir
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -23014,8 +22954,8 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -23037,21 +22977,21 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Dirs = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -23256,8 +23196,8 @@ func (v *AlterReplicaLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -23284,21 +23224,21 @@ func (v *AlterReplicaLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -23450,8 +23390,8 @@ func (v *DescribeLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -23473,14 +23413,14 @@ func (v *DescribeLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -23790,8 +23730,8 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Dir = v
+				v := &s.Dir
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -23810,8 +23750,8 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -23846,14 +23786,14 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 								s.IsFuture = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -23872,14 +23812,14 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 				s.IsCordoned = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Dirs = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -23972,11 +23912,11 @@ func (v *SASLAuthenticateRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readBytes(&b, isFlexible)
-		s.SASLAuthBytes = v
+		v := &s.SASLAuthBytes
+		readBytes(&b, v, isFlexible)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -24081,20 +24021,19 @@ func (v *SASLAuthenticateResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readBytes(&b, isFlexible)
-		s.SASLAuthBytes = v
+		v := &s.SASLAuthBytes
+		readBytes(&b, v, isFlexible)
 	}
 	if version >= 1 {
 		v := readInt64(&b)
 		s.SessionLifetimeMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -24314,8 +24253,8 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -24360,14 +24299,14 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 						s.Replicas = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Assignment = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -24382,7 +24321,7 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 		s.ValidateOnly = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -24564,27 +24503,26 @@ func (v *CreatePartitionsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt16(&b)
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -24748,14 +24686,12 @@ func (v *CreateDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 3 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.OwnerPrincipalType = v
+		v := &s.OwnerPrincipalType
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.OwnerPrincipalName = v
+		v := &s.OwnerPrincipalName
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Renewers
@@ -24774,15 +24710,15 @@ func (v *CreateDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.PrincipalType = v
+				v := &s.PrincipalType
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.PrincipalName = v
+				v := &s.PrincipalName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -24793,7 +24729,7 @@ func (v *CreateDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 		s.MaxLifetimeMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -24963,20 +24899,20 @@ func (v *CreateDelegationTokenResponse) readFrom(src []byte, unsafe bool) error 
 		s.ErrorCode = v
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.PrincipalType = v
+		v := &s.PrincipalType
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.PrincipalName = v
+		v := &s.PrincipalName
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		v := readString(&b, isFlexible, unsafe)
-		s.TokenRequesterPrincipalType = v
+		v := &s.TokenRequesterPrincipalType
+		readString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		v := readString(&b, isFlexible, unsafe)
-		s.TokenRequesterPrincipalName = v
+		v := &s.TokenRequesterPrincipalName
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt64(&b)
@@ -24991,19 +24927,19 @@ func (v *CreateDelegationTokenResponse) readFrom(src []byte, unsafe bool) error 
 		s.MaxTimestamp = v
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.TokenID = v
+		v := &s.TokenID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readBytes(&b, isFlexible)
-		s.HMAC = v
+		v := &s.HMAC
+		readBytes(&b, v, isFlexible)
 	}
 	{
 		v := readInt32(&b)
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -25101,15 +25037,15 @@ func (v *RenewDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readBytes(&b, isFlexible)
-		s.HMAC = v
+		v := &s.HMAC
+		readBytes(&b, v, isFlexible)
 	}
 	{
 		v := readInt64(&b)
 		s.RenewTimeMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -25225,7 +25161,7 @@ func (v *RenewDelegationTokenResponse) readFrom(src []byte, unsafe bool) error {
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -25325,15 +25261,15 @@ func (v *ExpireDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readBytes(&b, isFlexible)
-		s.HMAC = v
+		v := &s.HMAC
+		readBytes(&b, v, isFlexible)
 	}
 	{
 		v := readInt64(&b)
 		s.ExpiryPeriodMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -25448,7 +25384,7 @@ func (v *ExpireDelegationTokenResponse) readFrom(src []byte, unsafe bool) error 
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -25598,22 +25534,22 @@ func (v *DescribeDelegationTokenRequest) readFrom(src []byte, unsafe bool) error
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.PrincipalType = v
+				v := &s.PrincipalType
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.PrincipalName = v
+				v := &s.PrincipalName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Owners = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -25869,20 +25805,20 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.PrincipalType = v
+				v := &s.PrincipalType
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.PrincipalName = v
+				v := &s.PrincipalName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 3 {
-				v := readString(&b, isFlexible, unsafe)
-				s.TokenRequesterPrincipalType = v
+				v := &s.TokenRequesterPrincipalType
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 3 {
-				v := readString(&b, isFlexible, unsafe)
-				s.TokenRequesterPrincipalName = v
+				v := &s.TokenRequesterPrincipalName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt64(&b)
@@ -25897,12 +25833,12 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 				s.MaxTimestamp = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.TokenID = v
+				v := &s.TokenID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readBytes(&b, isFlexible)
-				s.HMAC = v
+				v := &s.HMAC
+				readBytes(&b, v, isFlexible)
 			}
 			{
 				v := s.Renewers
@@ -25921,22 +25857,22 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.PrincipalType = v
+						v := &s.PrincipalType
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.PrincipalName = v
+						v := &s.PrincipalName
+						readString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Renewers = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -25947,7 +25883,7 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -26054,14 +25990,14 @@ func (v *DeleteGroupsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -26229,27 +26165,26 @@ func (v *DeleteGroupsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Group = v
+				v := &s.Group
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt16(&b)
 				s.ErrorCode = v
 			}
 			if version >= 3 {
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -26433,8 +26368,8 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -26456,7 +26391,7 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -26467,7 +26402,7 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 		s.TimeoutMillis = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -26688,8 +26623,8 @@ func (v *ElectLeadersResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -26716,26 +26651,25 @@ func (v *ElectLeadersResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -26982,8 +26916,8 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 				s.ResourceType = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ResourceName = v
+				v := &s.ResourceName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Configs
@@ -27002,8 +26936,8 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						var t IncrementalAlterConfigOp
@@ -27015,19 +26949,18 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 						s.Op = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Value = v
+						v := &s.Value
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Configs = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -27038,7 +26971,7 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 		s.ValidateOnly = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -27224,9 +27157,8 @@ func (v *IncrementalAlterConfigsResponse) readFrom(src []byte, unsafe bool) erro
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
 				var t ConfigResourceType
@@ -27238,18 +27170,18 @@ func (v *IncrementalAlterConfigsResponse) readFrom(src []byte, unsafe bool) erro
 				s.ResourceType = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.ResourceName = v
+				v := &s.ResourceName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Resources = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -27471,8 +27403,8 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -27517,21 +27449,21 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 						s.Replicas = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -27756,9 +27688,8 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -27777,8 +27708,8 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -27805,26 +27736,25 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -27998,8 +27928,8 @@ func (v *ListPartitionReassignmentsRequest) readFrom(src []byte, unsafe bool) er
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -28021,14 +27951,14 @@ func (v *ListPartitionReassignmentsRequest) readFrom(src []byte, unsafe bool) er
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -28251,9 +28181,8 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -28272,8 +28201,8 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -28353,21 +28282,21 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 						s.RemovingReplicas = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -28513,8 +28442,8 @@ func (v *OffsetDeleteRequest) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := readString(&b, false, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, false, unsafe)
 	}
 	{
 		v := s.Topics
@@ -28533,8 +28462,8 @@ func (v *OffsetDeleteRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, false, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, false, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -28753,8 +28682,8 @@ func (v *OffsetDeleteResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, false, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, false, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -28953,8 +28882,8 @@ func (v *DescribeClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.EntityType = v
+				v := &s.EntityType
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				var t QuotasMatchType
@@ -28966,12 +28895,11 @@ func (v *DescribeClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 				s.MatchType = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.Match = v
+				v := &s.Match
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -28982,7 +28910,7 @@ func (v *DescribeClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 		s.Strict = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -29212,9 +29140,8 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Entries
@@ -29252,16 +29179,15 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Type = v
+						v := &s.Type
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -29284,29 +29210,29 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Key = v
+						v := &s.Key
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := b.Float64()
 						s.Value = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Values = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Entries = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -29559,16 +29485,15 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Type = v
+						v := &s.Type
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -29591,8 +29516,8 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Key = v
+						v := &s.Key
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := b.Float64()
@@ -29603,14 +29528,14 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 						s.Remove = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Ops = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -29621,7 +29546,7 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 		s.ValidateOnly = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -29819,9 +29744,8 @@ func (v *AlterClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Entity
@@ -29840,30 +29764,29 @@ func (v *AlterClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Type = v
+						v := &s.Type
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Entity = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Entries = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -30006,18 +29929,18 @@ func (v *DescribeUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) 
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Users = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -30227,9 +30150,8 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Results
@@ -30248,17 +30170,16 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.User = v
+				v := &s.User
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt16(&b)
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.CredentialInfos
@@ -30285,21 +30206,21 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 						s.Iterations = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.CredentialInfos = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Results = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -30515,15 +30436,15 @@ func (v *AlterUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) err
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt8(&b)
 				s.Mechanism = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -30546,8 +30467,8 @@ func (v *AlterUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) err
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt8(&b)
@@ -30558,22 +30479,22 @@ func (v *AlterUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) err
 				s.Iterations = v
 			}
 			{
-				v := readBytes(&b, isFlexible)
-				s.Salt = v
+				v := &s.Salt
+				readBytes(&b, v, isFlexible)
 			}
 			{
-				v := readBytes(&b, isFlexible)
-				s.SaltedPassword = v
+				v := &s.SaltedPassword
+				readBytes(&b, v, isFlexible)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Upsertions = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -30729,27 +30650,26 @@ func (v *AlterUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool) er
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.User = v
+				v := &s.User
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt16(&b)
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Results = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -30968,9 +30888,8 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ClusterID = v
+		v := &s.ClusterID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 1 {
 		v := readInt32(&b)
@@ -30993,8 +30912,8 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -31045,21 +30964,21 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 						s.PreVote = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -31319,8 +31238,8 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -31359,14 +31278,14 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 						s.VoteGranted = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -31399,15 +31318,15 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 						s.NodeID = v
 					}
 					if version >= 1 {
-						v := readString(&b, isFlexible, unsafe)
-						s.Host = v
+						v := &s.Host
+						readString(&b, v, isFlexible, unsafe)
 					}
 					if version >= 1 {
 						v := readUint16(&b)
 						s.Port = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -31663,9 +31582,8 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ClusterID = v
+		v := &s.ClusterID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 1 {
 		v := readInt32(&b)
@@ -31688,8 +31606,8 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -31724,14 +31642,14 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 						s.LeaderEpoch = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -31754,26 +31672,26 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readUint16(&b)
 				s.Port = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.LeaderEndpoints = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -32032,8 +31950,8 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -32068,14 +31986,14 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 						s.LeaderEpoch = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -32108,15 +32026,15 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 						s.NodeID = v
 					}
 					if version >= 1 {
-						v := readString(&b, isFlexible, unsafe)
-						s.Host = v
+						v := &s.Host
+						readString(&b, v, isFlexible, unsafe)
 					}
 					if version >= 1 {
 						v := readUint16(&b)
 						s.Port = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -32411,9 +32329,8 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ClusterID = v
+		v := &s.ClusterID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -32432,8 +32349,8 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -32507,21 +32424,21 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 								s.CandidateDirectoryID = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.PreferredCandidates = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -32544,26 +32461,26 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readUint16(&b)
 				s.Port = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.LeaderEndpoints = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -32821,8 +32738,8 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -32857,14 +32774,14 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 						s.LeaderEpoch = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -32897,15 +32814,15 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 						s.NodeID = v
 					}
 					if version >= 1 {
-						v := readString(&b, isFlexible, unsafe)
-						s.Host = v
+						v := &s.Host
+						readString(&b, v, isFlexible, unsafe)
 					}
 					if version >= 1 {
 						v := readUint16(&b)
 						s.Port = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -33126,8 +33043,8 @@ func (v *DescribeQuorumRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -33150,21 +33067,21 @@ func (v *DescribeQuorumRequest) readFrom(src []byte, unsafe bool) error {
 						s.Partition = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -33500,9 +33417,8 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	if version >= 2 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -33521,8 +33437,8 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -33549,9 +33465,8 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					if version >= 2 {
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
@@ -33602,7 +33517,7 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 								s.LastCaughtUpTimestamp = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
@@ -33645,21 +33560,21 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 								s.LastCaughtUpTimestamp = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.Observers = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -33702,33 +33617,33 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Host = v
+						v := &s.Host
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readUint16(&b)
 						s.Port = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Listeners = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Nodes = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -34010,8 +33925,8 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 1 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 2 {
 				v := readUuid(&b)
@@ -34085,7 +34000,7 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 								s.BrokerEpoch = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
@@ -34100,21 +34015,21 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 						s.PartitionEpoch = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -34347,8 +34262,8 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 1 {
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 2 {
 				v := readUuid(&b)
@@ -34414,21 +34329,21 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 						s.PartitionEpoch = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -34619,8 +34534,8 @@ func (v *UpdateFeaturesRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Feature = v
+				v := &s.Feature
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt16(&b)
@@ -34635,7 +34550,7 @@ func (v *UpdateFeaturesRequest) readFrom(src []byte, unsafe bool) error {
 				s.UpgradeType = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -34646,7 +34561,7 @@ func (v *UpdateFeaturesRequest) readFrom(src []byte, unsafe bool) error {
 		s.ValidateOnly = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -34799,9 +34714,8 @@ func (v *UpdateFeaturesResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 1 {
 		v := s.Results
@@ -34820,27 +34734,26 @@ func (v *UpdateFeaturesResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Feature = v
+				v := &s.Feature
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt16(&b)
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Results = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -34943,19 +34856,19 @@ func (v *EnvelopeRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readBytes(&b, isFlexible)
-		s.RequestData = v
+		v := &s.RequestData
+		readBytes(&b, v, isFlexible)
 	}
 	{
-		v := readNullableBytes(&b, isFlexible)
-		s.RequestPrincipal = v
+		v := &s.RequestPrincipal
+		readNullableBytes(&b, v, isFlexible)
 	}
 	{
-		v := readBytes(&b, isFlexible)
-		s.ClientHostAddress = v
+		v := &s.ClientHostAddress
+		readBytes(&b, v, isFlexible)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -35039,15 +34952,15 @@ func (v *EnvelopeResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readNullableBytes(&b, isFlexible)
-		s.ResponseData = v
+		v := &s.ResponseData
+		readNullableBytes(&b, v, isFlexible)
 	}
 	{
 		v := readInt16(&b)
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -35349,8 +35262,8 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -35389,7 +35302,7 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 							s.Epoch = v
 						}
 						if isFlexible {
-							s.UnknownTags = internalReadTags(&b)
+							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					{
@@ -35416,7 +35329,7 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -35429,9 +35342,8 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 			case 0:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ClusterID = v
+				v := &s.ClusterID
+				readNullableString(&b, v, isFlexible, unsafe)
 				if err := b.Complete(); err != nil {
 					return err
 				}
@@ -35827,8 +35739,8 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -35867,7 +35779,7 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 							s.Epoch = v
 						}
 						if isFlexible {
-							s.UnknownTags = internalReadTags(&b)
+							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					{
@@ -35879,8 +35791,8 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 						s.Position = v
 					}
 					{
-						v := readBytes(&b, isFlexible)
-						s.Bytes = v
+						v := &s.Bytes
+						readBytes(&b, v, isFlexible)
 					}
 					if isFlexible {
 						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -35901,7 +35813,7 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 									s.LeaderEpoch = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 								if err := b.Complete(); err != nil {
 									return err
@@ -35914,7 +35826,7 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -35947,15 +35859,15 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 						s.NodeID = v
 					}
 					if version >= 1 {
-						v := readString(&b, isFlexible, unsafe)
-						s.Host = v
+						v := &s.Host
+						readString(&b, v, isFlexible, unsafe)
 					}
 					if version >= 1 {
 						v := readUint16(&b)
 						s.Port = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -36082,7 +35994,7 @@ func (v *DescribeClusterRequest) readFrom(src []byte, unsafe bool) error {
 		s.IncludeFencedBrokers = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -36286,17 +36198,16 @@ func (v *DescribeClusterResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 1 {
 		v := readInt8(&b)
 		s.EndpointType = v
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.ClusterID = v
+		v := &s.ClusterID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -36323,24 +36234,23 @@ func (v *DescribeClusterResponse) readFrom(src []byte, unsafe bool) error {
 				s.NodeID = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
 				s.Port = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.Rack = v
+				v := &s.Rack
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 2 {
 				v := readBool(&b)
 				s.IsFenced = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -36351,7 +36261,7 @@ func (v *DescribeClusterResponse) readFrom(src []byte, unsafe bool) error {
 		s.ClusterAuthorizedOperations = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -36503,8 +36413,8 @@ func (v *DescribeProducersRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -36526,14 +36436,14 @@ func (v *DescribeProducersRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -36811,8 +36721,8 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -36839,9 +36749,8 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.ActiveProducers
@@ -36884,28 +36793,28 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 								s.CurrentTxnStartOffset = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.ActiveProducers = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -37157,8 +37066,8 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		s.BrokerID = v
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.ClusterID = v
+		v := &s.ClusterID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readUuid(&b)
@@ -37181,12 +37090,12 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readUint16(&b)
@@ -37197,7 +37106,7 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 				s.SecurityProtocol = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -37220,8 +37129,8 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt16(&b)
@@ -37232,16 +37141,15 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 				s.MaxSupportedVersion = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Features = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.Rack = v
+		v := &s.Rack
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 1 {
 		v := readBool(&b)
@@ -37271,7 +37179,7 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		s.PreviousBrokerEpoch = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -37383,7 +37291,7 @@ func (v *BrokerRegistrationResponse) readFrom(src []byte, unsafe bool) error {
 		s.BrokerEpoch = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -37761,7 +37669,7 @@ func (v *BrokerHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 		s.ShouldShutdown = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -37854,7 +37762,7 @@ func (v *UnregisterBrokerRequest) readFrom(src []byte, unsafe bool) error {
 		s.BrokerID = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -37957,12 +37865,11 @@ func (v *UnregisterBrokerResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -38066,14 +37973,14 @@ func (v *DescribeTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.TransactionalIDs = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -38322,12 +38229,12 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.TransactionalID = v
+				v := &s.TransactionalID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.State = v
+				v := &s.State
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -38362,8 +38269,8 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -38385,21 +38292,21 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.TransactionStates = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -38540,8 +38447,8 @@ func (v *ListTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.StateFilters = v
@@ -38570,12 +38477,11 @@ func (v *ListTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 		s.DurationFilterMillis = v
 	}
 	if version >= 2 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.TransactionalIDPattern = v
+		v := &s.TransactionalIDPattern
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -38758,8 +38664,8 @@ func (v *ListTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.UnknownStateFilters = v
@@ -38781,26 +38687,26 @@ func (v *ListTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.TransactionalID = v
+				v := &s.TransactionalID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt64(&b)
 				s.ProducerID = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.TransactionState = v
+				v := &s.TransactionState
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.TransactionStates = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -38907,7 +38813,7 @@ func (v *AllocateProducerIDsRequest) readFrom(src []byte, unsafe bool) error {
 		s.BrokerEpoch = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -39028,7 +38934,7 @@ func (v *AllocateProducerIDsResponse) readFrom(src []byte, unsafe bool) error {
 		s.ProducerIDLen = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -39231,26 +39137,24 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
 		s.MemberEpoch = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.InstanceID = v
+		v := &s.InstanceID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.RackID = v
+		v := &s.RackID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -39272,21 +39176,19 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.SubscribedTopicNames = v
 	}
 	if version >= 1 {
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.SubscribedTopicRegex = v
+		v := &s.SubscribedTopicRegex
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ServerAssignor = v
+		v := &s.ServerAssignor
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -39331,14 +39233,14 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -39558,14 +39460,12 @@ func (v *ConsumerGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -39621,19 +39521,19 @@ func (v *ConsumerGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -39770,8 +39670,8 @@ func (v *ConsumerGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.Groups = v
@@ -39781,7 +39681,7 @@ func (v *ConsumerGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 		s.IncludeAuthorizedOperations = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -40165,17 +40065,16 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Group = v
+				v := &s.Group
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.State = v
+				v := &s.State
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -40186,8 +40085,8 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 				s.AssignmentEpoch = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.AssignorName = v
+				v := &s.AssignorName
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Members
@@ -40206,30 +40105,28 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.MemberID = v
+						v := &s.MemberID
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.InstanceID = v
+						v := &s.InstanceID
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.RackID = v
+						v := &s.RackID
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
 						s.MemberEpoch = v
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.ClientID = v
+						v := &s.ClientID
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.ClientHost = v
+						v := &s.ClientHost
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.SubscribedTopics
@@ -40244,16 +40141,15 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := readString(&b, isFlexible, unsafe)
-							a[i] = v
+							v := &a[i]
+							readString(&b, v, isFlexible, unsafe)
 						}
 						v = a
 						s.SubscribedTopics = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.SubscribedTopicRegex = v
+						v := &s.SubscribedTopicRegex
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := &s.Assignment
@@ -40280,8 +40176,8 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 									s.TopicID = v
 								}
 								{
-									v := readString(&b, isFlexible, unsafe)
-									s.Topic = v
+									v := &s.Topic
+									readString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -40303,14 +40199,14 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 									s.Partitions = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 							}
 							v = a
 							s.TopicPartitions = v
 						}
 						if isFlexible {
-							s.UnknownTags = internalReadTags(&b)
+							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					{
@@ -40338,8 +40234,8 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 									s.TopicID = v
 								}
 								{
-									v := readString(&b, isFlexible, unsafe)
-									s.Topic = v
+									v := &s.Topic
+									readString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -40361,14 +40257,14 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 									s.Partitions = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 							}
 							v = a
 							s.TopicPartitions = v
 						}
 						if isFlexible {
-							s.UnknownTags = internalReadTags(&b)
+							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					if version >= 1 {
@@ -40376,7 +40272,7 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 						s.MemberType = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -40387,14 +40283,14 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 				s.AuthorizedOperations = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -40630,12 +40526,12 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readUint16(&b)
@@ -40646,7 +40542,7 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 				s.SecurityProtocol = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -40669,8 +40565,8 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt16(&b)
@@ -40681,14 +40577,14 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 				s.MaxSupportedVersion = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Features = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -40790,12 +40686,11 @@ func (v *ControllerRegistrationResponse) readFrom(src []byte, unsafe bool) error
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -40889,7 +40784,7 @@ func (v *GetTelemetrySubscriptionsRequest) readFrom(src []byte, unsafe bool) err
 		s.ClientInstanceID = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -41094,14 +40989,14 @@ func (v *GetTelemetrySubscriptionsResponse) readFrom(src []byte, unsafe bool) er
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.RequestedMetrics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -41232,11 +41127,11 @@ func (v *PushTelemetryRequest) readFrom(src []byte, unsafe bool) error {
 		s.CompressionType = v
 	}
 	{
-		v := readBytes(&b, isFlexible)
-		s.Metrics = v
+		v := &s.Metrics
+		readBytes(&b, v, isFlexible)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -41328,7 +41223,7 @@ func (v *PushTelemetryResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -41608,28 +41503,28 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 								s.Partition = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Directories = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -41906,28 +41801,28 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 								s.ErrorCode = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Directories = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -42041,7 +41936,7 @@ func (v *ListConfigResourcesRequest) readFrom(src []byte, unsafe bool) error {
 		s.ResourceTypes = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -42201,22 +42096,22 @@ func (v *ListConfigResourcesResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if version >= 1 {
 				v := readInt8(&b)
 				s.Type = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.ConfigResources = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -42409,11 +42304,11 @@ func (v *DescribeTopicPartitionsRequest) readFrom(src []byte, unsafe bool) error
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -42430,20 +42325,20 @@ func (v *DescribeTopicPartitionsRequest) readFrom(src []byte, unsafe bool) error
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
 				s.Partition = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -42785,9 +42680,8 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readUuid(&b)
@@ -42931,7 +42825,7 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						s.OfflineReplicas = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -42942,7 +42836,7 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 				s.AuthorizedOperations = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -42955,20 +42849,20 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
 				s.Partition = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -43096,21 +42990,20 @@ func (v *ShareGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.GroupID = v
+		v := &s.GroupID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
 		s.MemberEpoch = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.RackID = v
+		v := &s.RackID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.SubscribedTopicNames
@@ -43128,14 +43021,14 @@ func (v *ShareGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.SubscribedTopicNames = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -43356,14 +43249,12 @@ func (v *ShareGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -43419,19 +43310,19 @@ func (v *ShareGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.TopicPartitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -43551,8 +43442,8 @@ func (v *ShareGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.GroupIDs = v
@@ -43562,7 +43453,7 @@ func (v *ShareGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 		s.IncludeAuthorizedOperations = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -43934,17 +43825,16 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.GroupID = v
+				v := &s.GroupID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.GroupState = v
+				v := &s.GroupState
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -43955,8 +43845,8 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				s.AssignmentEpoch = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Assignor = v
+				v := &s.Assignor
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Members
@@ -43975,25 +43865,24 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.MemberID = v
+						v := &s.MemberID
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.RackID = v
+						v := &s.RackID
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
 						s.MemberEpoch = v
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.ClientID = v
+						v := &s.ClientID
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.ClientHost = v
+						v := &s.ClientHost
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.SubscribedTopicNames
@@ -44008,8 +43897,8 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := readString(&b, isFlexible, unsafe)
-							a[i] = v
+							v := &a[i]
+							readString(&b, v, isFlexible, unsafe)
 						}
 						v = a
 						s.SubscribedTopicNames = v
@@ -44039,8 +43928,8 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									s.TopicID = v
 								}
 								{
-									v := readString(&b, isFlexible, unsafe)
-									s.Topic = v
+									v := &s.Topic
+									readString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -44062,18 +43951,18 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									s.Partitions = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 							}
 							v = a
 							s.TopicPartitions = v
 						}
 						if isFlexible {
-							s.UnknownTags = internalReadTags(&b)
+							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -44084,14 +43973,14 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				s.AuthorizedOperations = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -44450,14 +44339,12 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.GroupID = v
+		v := &s.GroupID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -44579,21 +44466,21 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 								s.AcknowledgeTypes = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.AcknowledgementBatches = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -44639,14 +44526,14 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.ForgottenTopicsData = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -45044,9 +44931,8 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 1 {
 		v := readInt32(&b)
@@ -45097,18 +44983,16 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt16(&b)
 						s.AcknowledgeErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.AcknowledgeErrorMessage = v
+						v := &s.AcknowledgeErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := &s.CurrentLeader
@@ -45123,12 +45007,12 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 							s.LeaderEpoch = v
 						}
 						if isFlexible {
-							s.UnknownTags = internalReadTags(&b)
+							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					{
-						v := readNullableBytes(&b, isFlexible)
-						s.Records = v
+						v := &s.Records
+						readNullableBytes(&b, v, isFlexible)
 					}
 					{
 						v := s.AcquiredRecords
@@ -45159,21 +45043,21 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 								s.DeliveryCount = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.AcquiredRecords = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -45200,27 +45084,26 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 				s.NodeID = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
 				s.Port = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.Rack = v
+				v := &s.Rack
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.NodeEndpoints = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -45472,14 +45355,12 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.GroupID = v
+		v := &s.GroupID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -45573,28 +45454,28 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 								s.AcknowledgeTypes = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.AcknowledgementBatches = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -45916,9 +45797,8 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if version >= 2 {
 		v := readInt32(&b)
@@ -45969,9 +45849,8 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := &s.CurrentLeader
@@ -45986,18 +45865,18 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 							s.LeaderEpoch = v
 						}
 						if isFlexible {
-							s.UnknownTags = internalReadTags(&b)
+							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -46024,27 +45903,26 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 				s.NodeID = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
 				s.Port = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.Rack = v
+				v := &s.Rack
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.NodeEndpoints = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -46223,9 +46101,8 @@ func (v *AddRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ClusterID = v
+		v := &s.ClusterID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -46256,19 +46133,19 @@ func (v *AddRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readUint16(&b)
 				s.Port = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -46279,7 +46156,7 @@ func (v *AddRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 		s.AckWhenCommitted = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -46377,12 +46254,11 @@ func (v *AddRaftVoterResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -46484,9 +46360,8 @@ func (v *RemoveRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ClusterID = v
+		v := &s.ClusterID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -46497,7 +46372,7 @@ func (v *RemoveRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 		s.VoterDirectoryID = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -46597,12 +46472,11 @@ func (v *RemoveRaftVoterResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -46804,9 +46678,8 @@ func (v *UpdateRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ClusterID = v
+		v := &s.ClusterID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -46837,19 +46710,19 @@ func (v *UpdateRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Name = v
+				v := &s.Name
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readUint16(&b)
 				s.Port = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -46868,11 +46741,11 @@ func (v *UpdateRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 			s.MaxSupportedVersion = v
 		}
 		if isFlexible {
-			s.UnknownTags = internalReadTags(&b)
+			internalReadTags(&b, &s.UnknownTags)
 		}
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -47068,15 +46941,15 @@ func (v *UpdateRaftVoterResponse) readFrom(src []byte, unsafe bool) error {
 					s.LeaderEpoch = v
 				}
 				{
-					v := readString(&b, isFlexible, unsafe)
-					s.Host = v
+					v := &s.Host
+					readString(&b, v, isFlexible, unsafe)
 				}
 				{
 					v := readInt32(&b)
 					s.Port = v
 				}
 				if isFlexible {
-					s.UnknownTags = internalReadTags(&b)
+					internalReadTags(&b, &s.UnknownTags)
 				}
 				if err := b.Complete(); err != nil {
 					return err
@@ -47267,8 +47140,8 @@ func (v *InitializeShareGroupStateRequest) readFrom(src []byte, unsafe bool) err
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.GroupID = v
+		v := &s.GroupID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -47319,21 +47192,21 @@ func (v *InitializeShareGroupStateRequest) readFrom(src []byte, unsafe bool) err
 						s.StartOffset = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -47543,26 +47416,25 @@ func (v *InitializeShareGroupStateResponse) readFrom(src []byte, unsafe bool) er
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -47733,8 +47605,8 @@ func (v *ReadShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.GroupID = v
+		v := &s.GroupID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -47781,21 +47653,21 @@ func (v *ReadShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 						s.LeaderEpoch = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -48082,9 +47954,8 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
@@ -48127,28 +47998,28 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 								s.DeliveryCount = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.StateBatches = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -48406,8 +48277,8 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.GroupID = v
+		v := &s.GroupID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -48498,28 +48369,28 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 								s.DeliveryCount = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.StateBatches = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -48732,26 +48603,25 @@ func (v *WriteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -48915,8 +48785,8 @@ func (v *DeleteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.GroupID = v
+		v := &s.GroupID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -48959,21 +48829,21 @@ func (v *DeleteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 						s.Partition = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -49185,26 +49055,25 @@ func (v *DeleteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error 
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -49377,8 +49246,8 @@ func (v *ReadShareGroupStateSummaryRequest) readFrom(src []byte, unsafe bool) er
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.GroupID = v
+		v := &s.GroupID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -49425,21 +49294,21 @@ func (v *ReadShareGroupStateSummaryRequest) readFrom(src []byte, unsafe bool) er
 						s.LeaderEpoch = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -49683,9 +49552,8 @@ func (v *ReadShareGroupStateSummaryResponse) readFrom(src []byte, unsafe bool) e
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
@@ -49704,21 +49572,21 @@ func (v *ReadShareGroupStateSummaryResponse) readFrom(src []byte, unsafe bool) e
 						s.DeliveryCompleteCount = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -50477,12 +50345,12 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -50493,14 +50361,12 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		s.EndpointInformationEpoch = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.InstanceID = v
+		v := &s.InstanceID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.RackID = v
+		v := &s.RackID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -50533,8 +50399,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.SubtopologyID = v
+						v := &s.SubtopologyID
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.SourceTopics
@@ -50549,8 +50415,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := readString(&b, isFlexible, unsafe)
-							a[i] = v
+							v := &a[i]
+							readString(&b, v, isFlexible, unsafe)
 						}
 						v = a
 						s.SourceTopics = v
@@ -50568,8 +50434,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := readString(&b, isFlexible, unsafe)
-							a[i] = v
+							v := &a[i]
+							readString(&b, v, isFlexible, unsafe)
 						}
 						v = a
 						s.SourceTopicRegex = v
@@ -50591,8 +50457,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readString(&b, isFlexible, unsafe)
-								s.Topic = v
+								v := &s.Topic
+								readString(&b, v, isFlexible, unsafe)
 							}
 							{
 								v := readInt32(&b)
@@ -50619,22 +50485,22 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 									v.Default()
 									s := v
 									{
-										v := readString(&b, isFlexible, unsafe)
-										s.Key = v
+										v := &s.Key
+										readString(&b, v, isFlexible, unsafe)
 									}
 									{
-										v := readString(&b, isFlexible, unsafe)
-										s.Value = v
+										v := &s.Value
+										readString(&b, v, isFlexible, unsafe)
 									}
 									if isFlexible {
-										s.UnknownTags = internalReadTags(&b)
+										internalReadTags(&b, &s.UnknownTags)
 									}
 								}
 								v = a
 								s.Configs = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
@@ -50653,8 +50519,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := readString(&b, isFlexible, unsafe)
-							a[i] = v
+							v := &a[i]
+							readString(&b, v, isFlexible, unsafe)
 						}
 						v = a
 						s.RepartitionSinkTopics = v
@@ -50676,8 +50542,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readString(&b, isFlexible, unsafe)
-								s.Topic = v
+								v := &s.Topic
+								readString(&b, v, isFlexible, unsafe)
 							}
 							{
 								v := readInt32(&b)
@@ -50704,22 +50570,22 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 									v.Default()
 									s := v
 									{
-										v := readString(&b, isFlexible, unsafe)
-										s.Key = v
+										v := &s.Key
+										readString(&b, v, isFlexible, unsafe)
 									}
 									{
-										v := readString(&b, isFlexible, unsafe)
-										s.Value = v
+										v := &s.Value
+										readString(&b, v, isFlexible, unsafe)
 									}
 									if isFlexible {
-										s.UnknownTags = internalReadTags(&b)
+										internalReadTags(&b, &s.UnknownTags)
 									}
 								}
 								v = a
 								s.Configs = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
@@ -50799,21 +50665,21 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								s.RepartitionSourceTopics = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.CopartitionGroups = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Subtopologies = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 	}
@@ -50837,8 +50703,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.SubtopologyID = v
+				v := &s.SubtopologyID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -50860,7 +50726,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -50886,8 +50752,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.SubtopologyID = v
+				v := &s.SubtopologyID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -50909,7 +50775,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -50935,8 +50801,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.SubtopologyID = v
+				v := &s.SubtopologyID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -50958,16 +50824,15 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.WarmupTasks = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ProcessID = v
+		v := &s.ProcessID
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		if present := b.Int8(); present != -1 && b.Ok() {
@@ -50976,15 +50841,15 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Host = v
+				v := &s.Host
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readUint16(&b)
 				s.Port = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 	}
@@ -51008,15 +50873,15 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Key = v
+				v := &s.Key
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Value = v
+				v := &s.Value
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -51042,8 +50907,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.SubtopologyID = v
+				v := &s.SubtopologyID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -51054,7 +50919,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				s.Offset = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -51080,8 +50945,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.SubtopologyID = v
+				v := &s.SubtopologyID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -51092,7 +50957,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				s.Offset = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -51103,7 +50968,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		s.ShutdownApplication = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -51562,13 +51427,12 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -51614,11 +51478,11 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				s.StatusCode = v
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.StatusDetail = v
+				v := &s.StatusDetail
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -51644,8 +51508,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.SubtopologyID = v
+				v := &s.SubtopologyID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -51667,7 +51531,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -51693,8 +51557,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.SubtopologyID = v
+				v := &s.SubtopologyID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -51716,7 +51580,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -51742,8 +51606,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.SubtopologyID = v
+				v := &s.SubtopologyID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -51765,7 +51629,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
@@ -51803,15 +51667,15 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				v.Default()
 				s := v
 				{
-					v := readString(&b, isFlexible, unsafe)
-					s.Host = v
+					v := &s.Host
+					readString(&b, v, isFlexible, unsafe)
 				}
 				{
 					v := readUint16(&b)
 					s.Port = v
 				}
 				if isFlexible {
-					s.UnknownTags = internalReadTags(&b)
+					internalReadTags(&b, &s.UnknownTags)
 				}
 			}
 			{
@@ -51831,8 +51695,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -51854,7 +51718,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -51877,8 +51741,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -51900,21 +51764,21 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.StandbyPartitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.PartitionsByUserEndpoint = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -52123,8 +51987,8 @@ func (v *StreamsGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := readString(&b, isFlexible, unsafe)
-			a[i] = v
+			v := &a[i]
+			readString(&b, v, isFlexible, unsafe)
 		}
 		v = a
 		s.Groups = v
@@ -52138,7 +52002,7 @@ func (v *StreamsGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 		s.IncludeTopologyDescription = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -53140,17 +53004,16 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Group = v
+				v := &s.Group
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.State = v
+				v := &s.State
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readInt32(&b)
@@ -53190,8 +53053,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readString(&b, isFlexible, unsafe)
-								s.SubtopologyID = v
+								v := &s.SubtopologyID
+								readString(&b, v, isFlexible, unsafe)
 							}
 							{
 								v := s.SourceTopics
@@ -53206,8 +53069,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									a = append(a, make([]string, l)...)
 								}
 								for i := range a {
-									v := readString(&b, isFlexible, unsafe)
-									a[i] = v
+									v := &a[i]
+									readString(&b, v, isFlexible, unsafe)
 								}
 								v = a
 								s.SourceTopics = v
@@ -53225,8 +53088,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									a = append(a, make([]string, l)...)
 								}
 								for i := range a {
-									v := readString(&b, isFlexible, unsafe)
-									a[i] = v
+									v := &a[i]
+									readString(&b, v, isFlexible, unsafe)
 								}
 								v = a
 								s.RepartitionSinkTopics = v
@@ -53248,8 +53111,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v.Default()
 									s := v
 									{
-										v := readString(&b, isFlexible, unsafe)
-										s.Topic = v
+										v := &s.Topic
+										readString(&b, v, isFlexible, unsafe)
 									}
 									{
 										v := readInt32(&b)
@@ -53276,22 +53139,22 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											v.Default()
 											s := v
 											{
-												v := readString(&b, isFlexible, unsafe)
-												s.Key = v
+												v := &s.Key
+												readString(&b, v, isFlexible, unsafe)
 											}
 											{
-												v := readString(&b, isFlexible, unsafe)
-												s.Value = v
+												v := &s.Value
+												readString(&b, v, isFlexible, unsafe)
 											}
 											if isFlexible {
-												s.UnknownTags = internalReadTags(&b)
+												internalReadTags(&b, &s.UnknownTags)
 											}
 										}
 										v = a
 										s.Configs = v
 									}
 									if isFlexible {
-										s.UnknownTags = internalReadTags(&b)
+										internalReadTags(&b, &s.UnknownTags)
 									}
 								}
 								v = a
@@ -53314,8 +53177,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v.Default()
 									s := v
 									{
-										v := readString(&b, isFlexible, unsafe)
-										s.Topic = v
+										v := &s.Topic
+										readString(&b, v, isFlexible, unsafe)
 									}
 									{
 										v := readInt32(&b)
@@ -53342,36 +53205,36 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											v.Default()
 											s := v
 											{
-												v := readString(&b, isFlexible, unsafe)
-												s.Key = v
+												v := &s.Key
+												readString(&b, v, isFlexible, unsafe)
 											}
 											{
-												v := readString(&b, isFlexible, unsafe)
-												s.Value = v
+												v := &s.Value
+												readString(&b, v, isFlexible, unsafe)
 											}
 											if isFlexible {
-												s.UnknownTags = internalReadTags(&b)
+												internalReadTags(&b, &s.UnknownTags)
 											}
 										}
 										v = a
 										s.Configs = v
 									}
 									if isFlexible {
-										s.UnknownTags = internalReadTags(&b)
+										internalReadTags(&b, &s.UnknownTags)
 									}
 								}
 								v = a
 								s.RepartitionSourceTopics = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.Subtopologies = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 			}
@@ -53392,38 +53255,36 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.MemberID = v
+						v := &s.MemberID
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
 						s.MemberEpoch = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.InstanceID = v
+						v := &s.InstanceID
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.RackID = v
+						v := &s.RackID
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.ClientID = v
+						v := &s.ClientID
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.ClientHost = v
+						v := &s.ClientHost
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt32(&b)
 						s.TopologyEpoch = v
 					}
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.ProcessID = v
+						v := &s.ProcessID
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						if present := b.Int8(); present != -1 && b.Ok() {
@@ -53432,15 +53293,15 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readString(&b, isFlexible, unsafe)
-								s.Host = v
+								v := &s.Host
+								readString(&b, v, isFlexible, unsafe)
 							}
 							{
 								v := readUint16(&b)
 								s.Port = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 					}
@@ -53461,15 +53322,15 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readString(&b, isFlexible, unsafe)
-								s.Key = v
+								v := &s.Key
+								readString(&b, v, isFlexible, unsafe)
 							}
 							{
-								v := readString(&b, isFlexible, unsafe)
-								s.Value = v
+								v := &s.Value
+								readString(&b, v, isFlexible, unsafe)
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
@@ -53492,8 +53353,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readString(&b, isFlexible, unsafe)
-								s.SubtopologyID = v
+								v := &s.SubtopologyID
+								readString(&b, v, isFlexible, unsafe)
 							}
 							{
 								v := readInt32(&b)
@@ -53504,7 +53365,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								s.Offset = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
@@ -53527,8 +53388,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readString(&b, isFlexible, unsafe)
-								s.SubtopologyID = v
+								v := &s.SubtopologyID
+								readString(&b, v, isFlexible, unsafe)
 							}
 							{
 								v := readInt32(&b)
@@ -53539,7 +53400,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								s.Offset = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
@@ -53566,8 +53427,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readString(&b, isFlexible, unsafe)
-									s.SubtopologyID = v
+									v := &s.SubtopologyID
+									readString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53589,7 +53450,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									s.Partitions = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 							}
 							v = a
@@ -53612,8 +53473,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readString(&b, isFlexible, unsafe)
-									s.SubtopologyID = v
+									v := &s.SubtopologyID
+									readString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53635,7 +53496,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									s.Partitions = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 							}
 							v = a
@@ -53658,8 +53519,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readString(&b, isFlexible, unsafe)
-									s.SubtopologyID = v
+									v := &s.SubtopologyID
+									readString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53681,14 +53542,14 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									s.Partitions = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 							}
 							v = a
 							s.WarmupTasks = v
 						}
 						if isFlexible {
-							s.UnknownTags = internalReadTags(&b)
+							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					{
@@ -53712,8 +53573,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readString(&b, isFlexible, unsafe)
-									s.SubtopologyID = v
+									v := &s.SubtopologyID
+									readString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53735,7 +53596,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									s.Partitions = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 							}
 							v = a
@@ -53758,8 +53619,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readString(&b, isFlexible, unsafe)
-									s.SubtopologyID = v
+									v := &s.SubtopologyID
+									readString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53781,7 +53642,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									s.Partitions = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 							}
 							v = a
@@ -53804,8 +53665,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readString(&b, isFlexible, unsafe)
-									s.SubtopologyID = v
+									v := &s.SubtopologyID
+									readString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53827,14 +53688,14 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									s.Partitions = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 							}
 							v = a
 							s.WarmupTasks = v
 						}
 						if isFlexible {
-							s.UnknownTags = internalReadTags(&b)
+							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					{
@@ -53842,7 +53703,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						s.IsClassic = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -53875,8 +53736,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readString(&b, isFlexible, unsafe)
-								s.SubtopologyID = v
+								v := &s.SubtopologyID
+								readString(&b, v, isFlexible, unsafe)
 							}
 							{
 								v := s.Nodes
@@ -53895,8 +53756,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v.Default()
 									s := v
 									{
-										v := readString(&b, isFlexible, unsafe)
-										s.Name = v
+										v := &s.Name
+										readString(&b, v, isFlexible, unsafe)
 									}
 									{
 										v := readInt8(&b)
@@ -53915,16 +53776,15 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											a = append(a, make([]string, l)...)
 										}
 										for i := range a {
-											v := readString(&b, isFlexible, unsafe)
-											a[i] = v
+											v := &a[i]
+											readString(&b, v, isFlexible, unsafe)
 										}
 										v = a
 										s.SourceTopics = v
 									}
 									{
-										var v *string
-										v = readNullableString(&b, isFlexible, unsafe)
-										s.SinkTopic = v
+										v := &s.SinkTopic
+										readNullableString(&b, v, isFlexible, unsafe)
 									}
 									{
 										v := s.Stores
@@ -53939,8 +53799,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											a = append(a, make([]string, l)...)
 										}
 										for i := range a {
-											v := readString(&b, isFlexible, unsafe)
-											a[i] = v
+											v := &a[i]
+											readString(&b, v, isFlexible, unsafe)
 										}
 										v = a
 										s.Stores = v
@@ -53958,21 +53818,21 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											a = append(a, make([]string, l)...)
 										}
 										for i := range a {
-											v := readString(&b, isFlexible, unsafe)
-											a[i] = v
+											v := &a[i]
+											readString(&b, v, isFlexible, unsafe)
 										}
 										v = a
 										s.Successors = v
 									}
 									if isFlexible {
-										s.UnknownTags = internalReadTags(&b)
+										internalReadTags(&b, &s.UnknownTags)
 									}
 								}
 								v = a
 								s.Nodes = v
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
@@ -53999,8 +53859,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readString(&b, isFlexible, unsafe)
-									s.Name = v
+									v := &s.Name
+									readString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := readInt8(&b)
@@ -54019,16 +53879,15 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := readString(&b, isFlexible, unsafe)
-										a[i] = v
+										v := &a[i]
+										readString(&b, v, isFlexible, unsafe)
 									}
 									v = a
 									s.SourceTopics = v
 								}
 								{
-									var v *string
-									v = readNullableString(&b, isFlexible, unsafe)
-									s.SinkTopic = v
+									v := &s.SinkTopic
+									readNullableString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := s.Stores
@@ -54043,8 +53902,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := readString(&b, isFlexible, unsafe)
-										a[i] = v
+										v := &a[i]
+										readString(&b, v, isFlexible, unsafe)
 									}
 									v = a
 									s.Stores = v
@@ -54062,14 +53921,14 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := readString(&b, isFlexible, unsafe)
-										a[i] = v
+										v := &a[i]
+										readString(&b, v, isFlexible, unsafe)
 									}
 									v = a
 									s.Successors = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 							}
 							{
@@ -54077,8 +53936,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readString(&b, isFlexible, unsafe)
-									s.Name = v
+									v := &s.Name
+									readString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := readInt8(&b)
@@ -54097,16 +53956,15 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := readString(&b, isFlexible, unsafe)
-										a[i] = v
+										v := &a[i]
+										readString(&b, v, isFlexible, unsafe)
 									}
 									v = a
 									s.SourceTopics = v
 								}
 								{
-									var v *string
-									v = readNullableString(&b, isFlexible, unsafe)
-									s.SinkTopic = v
+									v := &s.SinkTopic
+									readNullableString(&b, v, isFlexible, unsafe)
 								}
 								{
 									v := s.Stores
@@ -54121,8 +53979,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := readString(&b, isFlexible, unsafe)
-										a[i] = v
+										v := &a[i]
+										readString(&b, v, isFlexible, unsafe)
 									}
 									v = a
 									s.Stores = v
@@ -54140,25 +53998,25 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := readString(&b, isFlexible, unsafe)
-										a[i] = v
+										v := &a[i]
+										readString(&b, v, isFlexible, unsafe)
 									}
 									v = a
 									s.Successors = v
 								}
 								if isFlexible {
-									s.UnknownTags = internalReadTags(&b)
+									internalReadTags(&b, &s.UnknownTags)
 								}
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.GlobalStores = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 			}
@@ -54167,19 +54025,18 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				s.TopologyDescriptionStatus = v
 			}
 			if version >= 1 {
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.AssignorName = v
+				v := &s.AssignorName
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -54365,8 +54222,8 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.GroupID = v
+				v := &s.GroupID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -54388,8 +54245,8 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -54411,21 +54268,21 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -54714,8 +54571,8 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.GroupID = v
+				v := &s.GroupID
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -54734,8 +54591,8 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Topic = v
+						v := &s.Topic
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readUuid(&b)
@@ -54778,19 +54635,18 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 								s.ErrorCode = v
 							}
 							{
-								var v *string
-								v = readNullableString(&b, isFlexible, unsafe)
-								s.ErrorMessage = v
+								v := &s.ErrorMessage
+								readNullableString(&b, v, isFlexible, unsafe)
 							}
 							if isFlexible {
-								s.UnknownTags = internalReadTags(&b)
+								internalReadTags(&b, &s.UnknownTags)
 							}
 						}
 						v = a
 						s.Partitions = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
@@ -54801,19 +54657,18 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -54984,8 +54839,8 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.GroupID = v
+		v := &s.GroupID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -55004,8 +54859,8 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -55032,21 +54887,21 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 						s.StartOffset = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -55261,9 +55116,8 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -55282,8 +55136,8 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readUuid(&b)
@@ -55314,26 +55168,25 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 						s.ErrorCode = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.ErrorMessage = v
+						v := &s.ErrorMessage
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -55459,8 +55312,8 @@ func (v *DeleteShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.GroupID = v
+		v := &s.GroupID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -55479,18 +55332,18 @@ func (v *DeleteShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -55669,9 +55522,8 @@ func (v *DeleteShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) erro
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -55690,8 +55542,8 @@ func (v *DeleteShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) erro
 			v.Default()
 			s := v
 			{
-				v := readString(&b, isFlexible, unsafe)
-				s.Topic = v
+				v := &s.Topic
+				readString(&b, v, isFlexible, unsafe)
 			}
 			{
 				v := readUuid(&b)
@@ -55702,19 +55554,18 @@ func (v *DeleteShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) erro
 				s.ErrorCode = v
 			}
 			{
-				var v *string
-				v = readNullableString(&b, isFlexible, unsafe)
-				s.ErrorMessage = v
+				v := &s.ErrorMessage
+				readNullableString(&b, v, isFlexible, unsafe)
 			}
 			if isFlexible {
-				s.UnknownTags = internalReadTags(&b)
+				internalReadTags(&b, &s.UnknownTags)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -56007,12 +55858,12 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 	_ = isFlexible
 	s := v
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.Group = v
+		v := &s.Group
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
-		v := readString(&b, isFlexible, unsafe)
-		s.MemberID = v
+		v := &s.MemberID
+		readString(&b, v, isFlexible, unsafe)
 	}
 	{
 		v := readInt32(&b)
@@ -56039,8 +55890,8 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 				v.Default()
 				s := v
 				{
-					v := readString(&b, isFlexible, unsafe)
-					s.SubtopologyID = v
+					v := &s.SubtopologyID
+					readString(&b, v, isFlexible, unsafe)
 				}
 				{
 					v := s.Nodes
@@ -56059,8 +55910,8 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						v.Default()
 						s := v
 						{
-							v := readString(&b, isFlexible, unsafe)
-							s.Name = v
+							v := &s.Name
+							readString(&b, v, isFlexible, unsafe)
 						}
 						{
 							v := readInt8(&b)
@@ -56079,16 +55930,15 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 								a = append(a, make([]string, l)...)
 							}
 							for i := range a {
-								v := readString(&b, isFlexible, unsafe)
-								a[i] = v
+								v := &a[i]
+								readString(&b, v, isFlexible, unsafe)
 							}
 							v = a
 							s.SourceTopics = v
 						}
 						{
-							var v *string
-							v = readNullableString(&b, isFlexible, unsafe)
-							s.SinkTopic = v
+							v := &s.SinkTopic
+							readNullableString(&b, v, isFlexible, unsafe)
 						}
 						{
 							v := s.Stores
@@ -56103,8 +55953,8 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 								a = append(a, make([]string, l)...)
 							}
 							for i := range a {
-								v := readString(&b, isFlexible, unsafe)
-								a[i] = v
+								v := &a[i]
+								readString(&b, v, isFlexible, unsafe)
 							}
 							v = a
 							s.Stores = v
@@ -56122,21 +55972,21 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 								a = append(a, make([]string, l)...)
 							}
 							for i := range a {
-								v := readString(&b, isFlexible, unsafe)
-								a[i] = v
+								v := &a[i]
+								readString(&b, v, isFlexible, unsafe)
 							}
 							v = a
 							s.Successors = v
 						}
 						if isFlexible {
-							s.UnknownTags = internalReadTags(&b)
+							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					v = a
 					s.Nodes = v
 				}
 				if isFlexible {
-					s.UnknownTags = internalReadTags(&b)
+					internalReadTags(&b, &s.UnknownTags)
 				}
 			}
 			v = a
@@ -56163,8 +56013,8 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt8(&b)
@@ -56183,16 +56033,15 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := readString(&b, isFlexible, unsafe)
-							a[i] = v
+							v := &a[i]
+							readString(&b, v, isFlexible, unsafe)
 						}
 						v = a
 						s.SourceTopics = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.SinkTopic = v
+						v := &s.SinkTopic
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Stores
@@ -56207,8 +56056,8 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := readString(&b, isFlexible, unsafe)
-							a[i] = v
+							v := &a[i]
+							readString(&b, v, isFlexible, unsafe)
 						}
 						v = a
 						s.Stores = v
@@ -56226,14 +56075,14 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := readString(&b, isFlexible, unsafe)
-							a[i] = v
+							v := &a[i]
+							readString(&b, v, isFlexible, unsafe)
 						}
 						v = a
 						s.Successors = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				{
@@ -56241,8 +56090,8 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 					v.Default()
 					s := v
 					{
-						v := readString(&b, isFlexible, unsafe)
-						s.Name = v
+						v := &s.Name
+						readString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := readInt8(&b)
@@ -56261,16 +56110,15 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := readString(&b, isFlexible, unsafe)
-							a[i] = v
+							v := &a[i]
+							readString(&b, v, isFlexible, unsafe)
 						}
 						v = a
 						s.SourceTopics = v
 					}
 					{
-						var v *string
-						v = readNullableString(&b, isFlexible, unsafe)
-						s.SinkTopic = v
+						v := &s.SinkTopic
+						readNullableString(&b, v, isFlexible, unsafe)
 					}
 					{
 						v := s.Stores
@@ -56285,8 +56133,8 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := readString(&b, isFlexible, unsafe)
-							a[i] = v
+							v := &a[i]
+							readString(&b, v, isFlexible, unsafe)
 						}
 						v = a
 						s.Stores = v
@@ -56304,29 +56152,29 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := readString(&b, isFlexible, unsafe)
-							a[i] = v
+							v := &a[i]
+							readString(&b, v, isFlexible, unsafe)
 						}
 						v = a
 						s.Successors = v
 					}
 					if isFlexible {
-						s.UnknownTags = internalReadTags(&b)
+						internalReadTags(&b, &s.UnknownTags)
 					}
 				}
 				if isFlexible {
-					s.UnknownTags = internalReadTags(&b)
+					internalReadTags(&b, &s.UnknownTags)
 				}
 			}
 			v = a
 			s.GlobalStores = v
 		}
 		if isFlexible {
-			s.UnknownTags = internalReadTags(&b)
+			internalReadTags(&b, &s.UnknownTags)
 		}
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -56438,12 +56286,11 @@ func (v *StreamsGroupTopologyDescriptionUpdateResponse) readFrom(src []byte, uns
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -56536,7 +56383,7 @@ func (v *UnregisterControllerRequest) readFrom(src []byte, unsafe bool) error {
 		s.ControllerID = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }
@@ -56641,12 +56488,11 @@ func (v *UnregisterControllerResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	{
-		var v *string
-		v = readNullableString(&b, isFlexible, unsafe)
-		s.ErrorMessage = v
+		v := &s.ErrorMessage
+		readNullableString(&b, v, isFlexible, unsafe)
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		internalReadTags(&b, &s.UnknownTags)
 	}
 	return b.Complete()
 }

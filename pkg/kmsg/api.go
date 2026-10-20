@@ -387,14 +387,15 @@ func tagReaderOk(b TagReader) bool {
 	return !ok || r.Ok()
 }
 
-// internalReadTags reads tags in a reader and returns the tags from a
-// duplicated inner kbin.Reader.
-func internalReadTags(b *kbin.Reader) Tags {
+// internalReadTags reads tags in a reader into dst from a duplicated inner
+// kbin.Reader.
+func internalReadTags(b *kbin.Reader, dst *Tags) {
 	if len(b.Src) > 0 && b.Src[0] == 0 {
 		b.Src = b.Src[1:]
-		return Tags{}
+		*dst = Tags{}
+		return
 	}
-	return internalReadTagsSlow(b)
+	*dst = internalReadTagsSlow(b)
 }
 
 func internalReadTagsSlow(b *kbin.Reader) Tags {
