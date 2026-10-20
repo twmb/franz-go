@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -100,11 +101,10 @@ type (
 	controlFn func(kmsg.Request) (kmsg.Response, error, bool)
 
 	controlCtx struct {
-		key     int16
-		fn      controlFn
-		keep    bool
-		drop    bool
-		lastReq map[*clientConn]*clientReq // used to not re-run requests that slept, see doc comments below
+		key  int16
+		fn   controlFn
+		keep bool
+		drop bool
 	}
 
 	controlResp struct {
@@ -430,8 +430,8 @@ func (b *broker) listen() {
 			return
 		}
 
-		mute := make(chan bool, 1)
-		mute <- true // first request proceeds immediately
+		mute := make(chan struct{}, 1)
+		mute <- struct{}{} // first request proceeds immediately
 		cc := &clientConn{
 			c:      b.c,
 			b:      b,
@@ -479,6 +479,7 @@ outer:
 			kresp   kmsg.Response
 			err     error
 			handled bool
+			asleep  bool
 		)
 
 		select {
@@ -558,6 +559,13 @@ outer:
 				select {
 				case admin := <-c.adminCh:
 					admin()
+					if c.persist() {
+						select {
+						case <-c.die: // see the die check after tryControl
+							return
+						default:
+						}
+					}
 					continue inner
 				case fn := <-c.groupWorkCh:
 					fn()
@@ -572,11 +580,9 @@ outer:
 					c.shareGroups.sweepAllExpiredAcquisitions()
 					continue inner
 				case res := <-s.res:
-					c.finishSleptControl(s)
-					cctx := s.cctx
+					c.finishSleptControl(s, res.handled)
 					s = nil
 					kresp, err, handled = res.kresp, res.err, res.handled
-					c.maybePopControl(handled, cctx)
 					if handled {
 						goto afterControl
 					}
@@ -602,7 +608,20 @@ outer:
 			creq = wsf.creq
 		}
 
-		kresp, err, handled = c.tryControl(creq)
+		kresp, err, handled, asleep = c.tryControl(creq)
+
+		// While a control function runs, tryControlKey and the wakeCh
+		// case receive on adminCh, where Close can run its persist
+		// shutdown. Both stop once it has run: anything we do after
+		// it changes state that saveToDisk did not capture. Without
+		// persistence, Close closes die directly, and both keep
+		// running the control function's Cluster calls until it
+		// returns.
+		select {
+		case <-c.die:
+			return
+		default:
+		}
 		if handled {
 			goto afterControl
 		}
@@ -618,7 +637,7 @@ outer:
 		// A parked fetch comes back through here with the same
 		// clientReq. Keeping its fault check keeps the request one
 		// request: hit's dedup still knows what it already took, the
-		// way a control knows through lastReq.
+		// way a control knows through creq.controls.
 		if creq.faults == nil {
 			creq.faults = c.faultsFor(creq)
 		}
@@ -767,6 +786,16 @@ outer:
 			s.continueDequeue <- struct{}{}
 		}
 		if kresp == nil && err == nil {
+			// A slept request is answered once its control finishes.
+			// With SleepOutOfOrder, we release the mute so that
+			// read() can submit the next request in the meantime.
+			if asleep {
+				if c.cfg.sleepOutOfOrder && !creq.unmuted {
+					creq.unmuted = true
+					creq.cc.unmute()
+				}
+				continue
+			}
 			// A group request (JoinGroup, SyncGroup) can park in
 			// the group as a member's waitingReply; a later state
 			// transition on this loop replies to it. The mute stays
@@ -776,9 +805,9 @@ outer:
 			// the mute is held until write() runs. Send a skip
 			// sentinel: write() unmutes without writing anything so
 			// that read() can submit the next request.
-			if req, ok := kreq.(*kmsg.ProduceRequest); ok && req.Acks == 0 {
+			if req, ok := creq.kreq.(*kmsg.ProduceRequest); ok && req.Acks == 0 {
 				select {
-				case creq.cc.respCh <- clientResp{corr: creq.corr, skip: true}:
+				case creq.cc.respCh <- clientResp{corr: creq.corr, seq: creq.seq, unmuted: creq.unmuted, skip: true}:
 				case <-creq.cc.done:
 				case <-c.die:
 					return
@@ -788,7 +817,7 @@ outer:
 		}
 
 		select {
-		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err}:
+		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err, seq: creq.seq, unmuted: creq.unmuted}:
 		case <-creq.cc.done:
 		case <-c.die:
 			return
@@ -822,9 +851,10 @@ func (c *Cluster) Control(fn func(kmsg.Request) (kmsg.Response, error, bool)) {
 //
 // If the control function returns true (handled), then either the response is
 // written back to the client or, if the control function returns an error, the
-// client connection is closed. If both returns are nil, then the cluster will
-// loop continuing to read from the client and the client will likely have a
-// read timeout at some point.
+// client connection is closed. If both returns are nil, then the cluster does
+// not reply to this request or any later request on that connection; the
+// client will likely have a read timeout at some point. An acks=0 produce has
+// no reply, so returning nil for one only drops it.
 //
 // If the control function returns false (not handled), the next control
 // function for this key runs. If no control function handles the request,
@@ -850,9 +880,8 @@ func (c *Cluster) ControlKey(key int16, fn func(kmsg.Request) (kmsg.Response, er
 	c.controlMu.Lock()
 	defer c.controlMu.Unlock()
 	c.control[key] = append(c.control[key], &controlCtx{
-		key:     key,
-		fn:      fn,
-		lastReq: make(map[*clientConn]*clientReq),
+		key: key,
+		fn:  fn,
 	})
 }
 
@@ -886,6 +915,8 @@ func (c *Cluster) DropControl() {
 // if you sleep until a different request runs, you may sleep forever -- you
 // must know the semantics of your client to know whether requests run on
 // different connections (or, ensure you are writing to different brokers).
+// With [SleepOutOfOrder], later requests on the connection are handled while
+// you sleep, and their responses wait for yours.
 //
 // For example, franz-go uses a dedicated connection for:
 //   - produce requests
@@ -918,7 +949,11 @@ func (c *Cluster) SleepControl(wakeup func()) {
 		sleepChs.clientWait <- struct{}{}
 	}()
 
-	c.controlSleep <- sleepChs
+	select {
+	case c.controlSleep <- sleepChs:
+	case <-c.die:
+		return
+	}
 	select {
 	case <-sleepChs.clientCont:
 	case <-c.die:
@@ -937,31 +972,44 @@ func (c *Cluster) CurrentNode() int32 {
 	return -1
 }
 
-func (c *Cluster) tryControl(creq *clientReq) (kresp kmsg.Response, err error, handled bool) { //nolint:revive // control handler signature
+// tryControl returns asleep=true, with handled=true, if a control function
+// slept the request rather than returning.
+func (c *Cluster) tryControl(creq *clientReq) (kresp kmsg.Response, err error, handled, asleep bool) { //nolint:revive,staticcheck // control handler signature
 	c.controlMu.Lock()
 	defer c.controlMu.Unlock()
 	if len(c.control) == 0 {
-		return nil, nil, false
+		return nil, nil, false, false
 	}
-	kresp, err, handled = c.tryControlKey(creq.kreq.Key(), creq)
+	kresp, err, handled, asleep = c.tryControlKey(creq.kreq.Key(), creq)
 	if !handled {
-		kresp, err, handled = c.tryControlKey(-1, creq)
+		kresp, err, handled, asleep = c.tryControlKey(-1, creq)
 	}
-	return kresp, err, handled
+	return kresp, err, handled, asleep
 }
 
-func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, error, bool) { //nolint:revive // control handler signature
-	for _, cctx := range c.control[key] {
-		if cctx.lastReq[creq.cc] == creq {
+func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, error, bool, bool) { //nolint:revive,staticcheck // control handler signature
+	// maybePopControl removes a control by shifting c.control[key] in
+	// place, which would skip the control after it, so we range over a
+	// copy.
+	for _, cctx := range slices.Clone(c.control[key]) {
+		if slices.Contains(creq.controls, cctx) {
 			continue
 		}
-		cctx.lastReq[creq.cc] = creq
+		creq.controls = append(creq.controls, cctx)
 		res := c.runControl(cctx, creq)
 	inner:
 		for {
 			select {
 			case admin := <-c.adminCh:
 				admin()
+				if c.persist() {
+					select {
+					case <-c.die: // see the die check after tryControl in run
+						c.controlMu.Lock() // tryControl unlocks
+						return nil, nil, true, false
+					default:
+					}
+				}
 				continue
 			case fn := <-c.groupWorkCh:
 				fn()
@@ -979,7 +1027,7 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 				c.controlMu.Lock()
 				c.maybePopControl(res.handled, cctx)
 				if res.handled {
-					return res.kresp, res.err, true
+					return res.kresp, res.err, true, false
 				}
 				break inner
 			case sleepChs := <-c.controlSleep:
@@ -989,20 +1037,22 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 					res:      res,
 					creq:     creq,
 				})
-				return nil, nil, true
+				return nil, nil, true, true
 			}
 		}
 	}
-	return nil, nil, false
+	return nil, nil, false, false
 }
 
 func (c *Cluster) runControl(cctx *controlCtx, creq *clientReq) chan controlResp {
 	res := make(chan controlResp, 1)
 	c.currentBroker = creq.cc.b
 	c.currentControl = cctx
-	// Unlock so the control function can modify / add more control.
-	// Each goroutine releases its own lock: shutdown can return a sleeping
-	// control before continueSleptControl locks to resume it.
+	// We unlock before entering a control function so that the control
+	// function can modify / add more control. The goroutine below must
+	// unlock before sending res: Close wakes a sleeping control function,
+	// which can return while the run loop locks in continueSleptControl,
+	// before the run loop reads res.
 	c.controlMu.Unlock()
 	go func() {
 		kresp, err, handled := cctx.fn(creq.kreq)
@@ -1045,11 +1095,13 @@ func (c *Cluster) continueSleptControl(s *slept) {
 	s.sleepChs.clientCont <- struct{}{}
 }
 
-func (c *Cluster) finishSleptControl(s *slept) {
-	// Clear the control and allow the slept control to be dequeued.
+func (c *Cluster) finishSleptControl(s *slept, handled bool) {
+	// Clear and maybe pop the control, and allow the slept control to be
+	// dequeued.
 	c.controlMu.Lock()
 	c.currentControl = nil
 	c.currentBroker = nil
+	c.maybePopControl(handled, s.cctx)
 	c.controlMu.Unlock()
 	s.continueDequeue <- struct{}{}
 }
@@ -1091,6 +1143,7 @@ type bsleep struct {
 	queue   []*slept
 	set     map[*slept]struct{}
 	setWake chan *slept
+	running bool // a wait goroutine is running; it clears this when it sees nothing left
 }
 
 type slept struct {
@@ -1117,7 +1170,8 @@ type sleepChs struct {
 //
 // (2) If s is not waiting, this is a sleeping request. If the queue is empty,
 // this is the first sleeping request on a node. We enqueue and start our wait
-// goroutine. Easy.
+// goroutine, unless the previous one has not yet seen the queue empty: it
+// then handles s.
 //
 // (3) If s is not waiting, but our queue is non-empty, this must be from a
 // convoluted scenario:
@@ -1146,7 +1200,10 @@ func (bs *bsleep) enqueue(s *slept) bool {
 	}
 	if bs.empty() {
 		bs.keep(s)
-		go bs.wait() // Case (2)
+		if !bs.running { // Case (2)
+			bs.running = true
+			go bs.wait()
+		}
 		return true
 	}
 	if bs.c.cfg.sleepOutOfOrder {
@@ -1218,6 +1275,7 @@ func (bs *bsleep) waitSet() {
 	for {
 		bs.mu.Lock()
 		if len(bs.set) == 0 {
+			bs.running = false
 			bs.mu.Unlock()
 			return
 		}
@@ -1265,6 +1323,7 @@ func (bs *bsleep) waitQueue() {
 	for {
 		bs.mu.Lock()
 		if len(bs.queue) == 0 {
+			bs.running = false
 			bs.mu.Unlock()
 			return
 		}
@@ -1291,11 +1350,14 @@ func (bs *bsleep) waitQueue() {
 			return
 		case <-q0.continueDequeue:
 		}
+		// If a later control sleeps this request, enqueue updates q0's
+		// sleepChs under bs.mu after continueDequeue is sent, so we
+		// check and pop under the same lock.
+		bs.mu.Lock()
 		if q0.sleepChs.clientWait == nil {
-			bs.mu.Lock()
 			bs.queue = bs.queue[1:]
-			bs.mu.Unlock()
 		}
+		bs.mu.Unlock()
 	}
 }
 

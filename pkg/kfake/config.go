@@ -203,7 +203,7 @@ func SeedTopics(partitions int32, ts ...string) Opt {
 }
 
 // SleepOutOfOrder allows functions to be handled out of order when control
-// functions are sleeping. The functions are be handled internally out of
+// functions are sleeping. The functions are handled internally out of
 // order, but responses still wait for the sleeping requests to finish. This
 // can be used to set up complicated chains of control where functions only
 // advance when you know another request is actively being handled.
