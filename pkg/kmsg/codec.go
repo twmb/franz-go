@@ -50,11 +50,19 @@ func appendUuid(dst []byte, v [16]byte) []byte { return kbin.AppendUuid(dst, v) 
 // Generated code reads and appends strings, bytes, and array lengths that can
 // be compact or unsafe with the functions below, rather than choosing between
 // kbin functions at every field.
+//
+// Most compact lengths are one byte. The read functions decode that byte
+// themselves, since Reader.Uvarint is not inlined.
 
 func readString(b *kbin.Reader, flexible, unsafe bool) string {
 	var l int
 	if flexible {
-		l = int(b.Uvarint()) - 1
+		if src := b.Src; len(src) > 0 && src[0] < 0x80 {
+			b.Src = src[1:]
+			l = int(src[0]) - 1
+		} else {
+			l = int(b.Uvarint()) - 1
+		}
 	} else {
 		l = int(b.Int16())
 	}
@@ -67,7 +75,12 @@ func readString(b *kbin.Reader, flexible, unsafe bool) string {
 func readNullableString(b *kbin.Reader, flexible, unsafe bool) *string {
 	var l int
 	if flexible {
-		l = int(b.Uvarint()) - 1
+		if src := b.Src; len(src) > 0 && src[0] < 0x80 {
+			b.Src = src[1:]
+			l = int(src[0]) - 1
+		} else {
+			l = int(b.Uvarint()) - 1
+		}
 	} else {
 		l = int(b.Int16())
 	}
@@ -93,7 +106,12 @@ func readVarintString(b *kbin.Reader, unsafe bool) string {
 func readBytes(b *kbin.Reader, flexible bool) []byte {
 	var l int
 	if flexible {
-		l = int(b.Uvarint()) - 1
+		if src := b.Src; len(src) > 0 && src[0] < 0x80 {
+			b.Src = src[1:]
+			l = int(src[0]) - 1
+		} else {
+			l = int(b.Uvarint()) - 1
+		}
 	} else {
 		l = int(b.Int32())
 	}
@@ -106,7 +124,12 @@ func readBytes(b *kbin.Reader, flexible bool) []byte {
 func readNullableBytes(b *kbin.Reader, flexible bool) []byte {
 	var l int
 	if flexible {
-		l = int(b.Uvarint()) - 1
+		if src := b.Src; len(src) > 0 && src[0] < 0x80 {
+			b.Src = src[1:]
+			l = int(src[0]) - 1
+		} else {
+			l = int(b.Uvarint()) - 1
+		}
 	} else {
 		l = int(b.Int32())
 	}
@@ -166,6 +189,10 @@ func appendNullableBytes(dst, b []byte, flexible bool) []byte {
 
 func readArrayLen(b *kbin.Reader, flexible bool) int32 {
 	if flexible {
+		if src := b.Src; len(src) > 0 && src[0] < 0x80 && int(src[0]) <= len(src) {
+			b.Src = src[1:]
+			return int32(src[0]) - 1
+		}
 		return b.CompactArrayLen()
 	}
 	return b.ArrayLen()
