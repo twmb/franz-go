@@ -46,3 +46,120 @@ func appendInt64(dst []byte, v int64) []byte { return kbin.AppendInt64(dst, v) }
 
 //go:noinline
 func appendUuid(dst []byte, v [16]byte) []byte { return kbin.AppendUuid(dst, v) }
+
+// Generated code reads and appends strings and bytes that can be compact or
+// unsafe with the functions below, rather than choosing between kbin
+// functions at every field.
+
+func readString(b *kbin.Reader, flexible, unsafe bool) string {
+	var l int
+	if flexible {
+		l = int(b.Uvarint()) - 1
+	} else {
+		l = int(b.Int16())
+	}
+	if unsafe {
+		return kbin.UnsafeString(b.Span(l))
+	}
+	return string(b.Span(l))
+}
+
+func readNullableString(b *kbin.Reader, flexible, unsafe bool) *string {
+	var l int
+	if flexible {
+		l = int(b.Uvarint()) - 1
+	} else {
+		l = int(b.Int16())
+	}
+	if l < 0 {
+		return nil
+	}
+	var s string
+	if unsafe {
+		s = kbin.UnsafeString(b.Span(l))
+	} else {
+		s = string(b.Span(l))
+	}
+	return &s
+}
+
+func readVarintString(b *kbin.Reader, unsafe bool) string {
+	if unsafe {
+		return kbin.UnsafeString(b.VarintBytes())
+	}
+	return string(b.VarintBytes())
+}
+
+func readBytes(b *kbin.Reader, flexible bool) []byte {
+	var l int
+	if flexible {
+		l = int(b.Uvarint()) - 1
+	} else {
+		l = int(b.Int32())
+	}
+	if l == -1 { // see kbin.Reader.Bytes
+		return []byte{}
+	}
+	return b.Span(l)
+}
+
+func readNullableBytes(b *kbin.Reader, flexible bool) []byte {
+	var l int
+	if flexible {
+		l = int(b.Uvarint()) - 1
+	} else {
+		l = int(b.Int32())
+	}
+	if l < 0 {
+		return nil
+	}
+	return b.Span(l)
+}
+
+func appendString(dst []byte, s string, flexible bool) []byte {
+	if flexible {
+		dst = kbin.AppendUvarint(dst, 1+uint32(len(s)))
+	} else {
+		dst = kbin.AppendInt16(dst, int16(len(s)))
+	}
+	return append(dst, s...)
+}
+
+func appendNullableString(dst []byte, s *string, flexible bool) []byte {
+	if s == nil {
+		if flexible {
+			return append(dst, 0)
+		}
+		return kbin.AppendInt16(dst, -1)
+	}
+	if flexible {
+		dst = kbin.AppendUvarint(dst, 1+uint32(len(*s)))
+	} else {
+		dst = kbin.AppendInt16(dst, int16(len(*s)))
+	}
+	return append(dst, *s...)
+}
+
+func appendBytes(dst, b []byte, flexible bool) []byte {
+	if flexible {
+		dst = kbin.AppendUvarint(dst, 1+uint32(len(b)))
+	} else {
+		dst = kbin.AppendInt32(dst, int32(len(b)))
+	}
+	return append(dst, b...)
+}
+
+func appendNullableBytes(dst, b []byte, flexible bool) []byte {
+	if b == nil {
+		if flexible {
+			return append(dst, 0)
+		}
+		return kbin.AppendInt32(dst, -1)
+	}
+	if flexible {
+		dst = kbin.AppendUvarint(dst, 1+uint32(len(b)))
+	} else {
+		dst = kbin.AppendInt32(dst, int32(len(b)))
+	}
+	return append(dst, b...)
+}

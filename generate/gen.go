@@ -69,10 +69,8 @@ var fixedOutOfLine = map[string]bool{
 
 func compactAppend(fromFlexible bool, name string, l *LineWriter) {
 	if fromFlexible {
-		l.Write("if isFlexible {")
-		primAppend("Compact"+name, l)
-		l.Write("} else {")
-		defer l.Write("}")
+		l.Write("dst = append%s(dst, v, isFlexible)", name) // see codec.go
+		return
 	}
 	primAppend(name, l)
 }
@@ -361,14 +359,6 @@ func primDecode(name string, l *LineWriter) {
 	l.Write("v := b.%s()", name)
 }
 
-func unsafeDecode(l *LineWriter, fn func(string)) {
-	l.Write("if unsafe {")
-	fn("Unsafe")
-	l.Write("} else {")
-	fn("")
-	l.Write("}")
-}
-
 func flexDecode(supports bool, l *LineWriter, fn func(string)) {
 	if supports {
 		l.Write("if isFlexible {")
@@ -379,34 +369,20 @@ func flexDecode(supports bool, l *LineWriter, fn func(string)) {
 	fn("")
 }
 
-func primUnsafeDecode(name string, l *LineWriter) {
-	l.Write("var v string")
-	unsafeDecode(l, func(u string) {
-		l.Write("v = b.%s%s()", u, name)
-	})
-}
-
-func compactDecode(fromFlexible, hasUnsafe bool, name, typ string, l *LineWriter) {
+// compactDecode reads with a function in codec.go if the type can be compact
+// or unsafe, or with a kbin.Reader method otherwise.
+func compactDecode(fromFlexible, hasUnsafe bool, name string, l *LineWriter) {
+	flex := "false"
 	if fromFlexible {
-		l.Write("var v %s", typ)
-		fn := func(u string) {
-			l.Write("if isFlexible {")
-			l.Write("v = b.%sCompact%s()", u, name)
-			l.Write("} else {")
-			l.Write("v = b.%s%s()", u, name)
-			l.Write("}")
-		}
-		if hasUnsafe {
-			unsafeDecode(l, fn)
-		} else {
-			fn("")
-		}
-	} else {
-		if hasUnsafe {
-			primUnsafeDecode(name, l)
-		} else {
-			primDecode(name, l)
-		}
+		flex = "isFlexible"
+	}
+	switch {
+	case hasUnsafe:
+		l.Write("v := read%s(&b, %s, unsafe)", name, flex)
+	case fromFlexible:
+		l.Write("v := read%s(&b, %s)", name, flex)
+	default:
+		primDecode(name, l)
 	}
 }
 
@@ -421,44 +397,38 @@ func (Uint32) WriteDecode(l *LineWriter)       { primDecode("Uint32", l) }
 func (Varint) WriteDecode(l *LineWriter)       { primDecode("Varint", l) }
 func (Varlong) WriteDecode(l *LineWriter)      { primDecode("Varlong", l) }
 func (Uuid) WriteDecode(l *LineWriter)         { primDecode("Uuid", l) }
-func (VarintString) WriteDecode(l *LineWriter) { primUnsafeDecode("VarintString", l) }
+func (VarintString) WriteDecode(l *LineWriter) { l.Write("v := readVarintString(&b, unsafe)") }
 func (VarintBytes) WriteDecode(l *LineWriter)  { primDecode("VarintBytes", l) }
 func (Throttle) WriteDecode(l *LineWriter)     { primDecode("Int32", l) }
 
 func (v String) WriteDecode(l *LineWriter) {
-	compactDecode(v.FromFlexible, true, "String", "string", l)
+	compactDecode(v.FromFlexible, true, "String", l)
 }
 
 func (v Bytes) WriteDecode(l *LineWriter) {
-	compactDecode(v.FromFlexible, false, "Bytes", "[]byte", l)
+	compactDecode(v.FromFlexible, false, "Bytes", l)
 }
 
 func (v NullableBytes) WriteDecode(l *LineWriter) {
-	compactDecode(v.FromFlexible, false, "NullableBytes", "[]byte", l)
+	compactDecode(v.FromFlexible, false, "NullableBytes", l)
 }
 
 func (v NullableString) WriteDecode(l *LineWriter) {
 	// If there is a nullable version, we write a "read string, then set
 	// pointer" block.
+	flex := "false"
+	if v.FromFlexible {
+		flex = "isFlexible"
+	}
 	l.Write("var v *string")
 	if v.NullableVersion > 0 {
 		l.Write("if version < %d {", v.NullableVersion)
-		l.Write("var vv string")
-		flexDecode(v.FromFlexible, l, func(compact string) {
-			unsafeDecode(l, func(u string) {
-				l.Write("vv = b.%s%sString()", u, compact)
-			})
-		})
+		l.Write("vv := readString(&b, %s, unsafe)", flex)
 		l.Write("v = &vv")
 		l.Write("} else {")
 		defer l.Write("}")
 	}
-
-	flexDecode(v.FromFlexible, l, func(compact string) {
-		unsafeDecode(l, func(u string) {
-			l.Write("v = b.%s%sNullableString()", u, compact)
-		})
-	})
+	l.Write("v = readNullableString(&b, %s, unsafe)", flex)
 }
 
 func (f FieldLengthMinusBytes) WriteDecode(l *LineWriter) {
@@ -496,7 +466,7 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("a = append(a, make(%s, l)...)", a.TypeName())
 	l.Write("}")
 
-	l.Write("for i := int32(0); i < l; i++ {")
+	l.Write("for i := range a {")
 	switch t := a.Inner.(type) {
 	case Struct:
 		if t.Nullable {
