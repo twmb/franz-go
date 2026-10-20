@@ -205,7 +205,7 @@ func (s Struct) WriteAppend(l *LineWriter) {
 				}
 				switch t := f.Type.(type) {
 				case Struct:
-					l.Write("if !reflect.DeepEqual(v.%s, %v) {", f.FieldName, def)
+					l.Write("if %s {", strings.Join(notDefault("v."+f.FieldName, t), " || "))
 
 				case Array:
 					if t.IsNullableArray {
@@ -283,6 +283,42 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		}
 		l.Write("}")
 	}
+}
+
+// notDefault returns the conditions under which expr, a value of type t,
+// differs from its default; a tagged field is encoded if any is true.
+func notDefault(expr string, t Type) []string {
+	switch t := t.(type) {
+	case Struct:
+		if t.Nullable {
+			return []string{expr + " != nil"}
+		}
+		var conds []string
+		for _, f := range t.Fields {
+			conds = append(conds, notDefault(expr+"."+f.FieldName, f.Type)...)
+		}
+		if t.FromFlexible {
+			conds = append(conds, expr+".UnknownTags.Len() > 0")
+		}
+		return conds
+	case Array:
+		if t.IsNullableArray {
+			return []string{expr + " != nil"}
+		}
+		return []string{"len(" + expr + ") > 0"}
+	case Bytes, VarintBytes:
+		return []string{"len(" + expr + ") > 0"}
+	case String, VarintString:
+		return []string{expr + ` != ""`}
+	case Defaulter:
+		def, has := t.GetDefault()
+		if !has {
+			def = t.GetTypeDefault()
+		}
+		return []string{fmt.Sprintf("%s != %v", expr, def)}
+	}
+	die("no default comparison for %T", t)
+	return nil
 }
 
 // writeBeginAndTag begins a struct field encode/decode and adds the field to

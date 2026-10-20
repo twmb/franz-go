@@ -446,7 +446,6 @@ func main() {
 	l.Write(`"context"`)
 	l.Write(`"fmt"`)
 	l.Write(`"strings"`)
-	l.Write(`"reflect"`)
 	l.Write("")
 	l.Write(`"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"`)
 	l.Write(")")

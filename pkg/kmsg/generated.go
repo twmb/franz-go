@@ -3,7 +3,6 @@ package kmsg
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"
@@ -3899,11 +3898,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 					}
 					if isFlexible {
 						var toEncode []uint32
-						if !reflect.DeepEqual(v.CurrentLeader, (func() ProduceResponseTopicPartitionCurrentLeader {
-							var v ProduceResponseTopicPartitionCurrentLeader
-							v.Default()
-							return v
-						})()) {
+						if v.CurrentLeader.LeaderID != -1 || v.CurrentLeader.LeaderEpoch != -1 || v.CurrentLeader.UnknownTags.Len() > 0 {
 							toEncode = append(toEncode, 0)
 						}
 						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
@@ -4776,7 +4771,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		if v.ClusterID != nil {
 			toEncode = append(toEncode, 0)
 		}
-		if !reflect.DeepEqual(v.ReplicaState, (func() FetchRequestReplicaState { var v FetchRequestReplicaState; v.Default(); return v })()) {
+		if v.ReplicaState.ID != -1 || v.ReplicaState.Epoch != -1 || v.ReplicaState.UnknownTags.Len() > 0 {
 			toEncode = append(toEncode, 1)
 		}
 		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
@@ -5642,25 +5637,13 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 					}
 					if isFlexible {
 						var toEncode []uint32
-						if !reflect.DeepEqual(v.DivergingEpoch, (func() FetchResponseTopicPartitionDivergingEpoch {
-							var v FetchResponseTopicPartitionDivergingEpoch
-							v.Default()
-							return v
-						})()) {
+						if v.DivergingEpoch.Epoch != -1 || v.DivergingEpoch.EndOffset != -1 || v.DivergingEpoch.UnknownTags.Len() > 0 {
 							toEncode = append(toEncode, 0)
 						}
-						if !reflect.DeepEqual(v.CurrentLeader, (func() FetchResponseTopicPartitionCurrentLeader {
-							var v FetchResponseTopicPartitionCurrentLeader
-							v.Default()
-							return v
-						})()) {
+						if v.CurrentLeader.LeaderID != -1 || v.CurrentLeader.LeaderEpoch != -1 || v.CurrentLeader.UnknownTags.Len() > 0 {
 							toEncode = append(toEncode, 1)
 						}
-						if !reflect.DeepEqual(v.SnapshotID, (func() FetchResponseTopicPartitionSnapshotID {
-							var v FetchResponseTopicPartitionSnapshotID
-							v.Default()
-							return v
-						})()) {
+						if v.SnapshotID.EndOffset != -1 || v.SnapshotID.Epoch != -1 || v.SnapshotID.UnknownTags.Len() > 0 {
 							toEncode = append(toEncode, 2)
 						}
 						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
@@ -43792,11 +43775,7 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 					}
 					if isFlexible {
 						var toEncode []uint32
-						if !reflect.DeepEqual(v.CurrentLeader, (func() FetchSnapshotResponseTopicPartitionCurrentLeader {
-							var v FetchSnapshotResponseTopicPartitionCurrentLeader
-							v.Default()
-							return v
-						})()) {
+						if v.CurrentLeader.LeaderID != 0 || v.CurrentLeader.LeaderEpoch != 0 || v.CurrentLeader.UnknownTags.Len() > 0 {
 							toEncode = append(toEncode, 0)
 						}
 						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
@@ -57658,11 +57637,7 @@ func (v *UpdateRaftVoterResponse) AppendTo(dst []byte) []byte {
 	}
 	if isFlexible {
 		var toEncode []uint32
-		if !reflect.DeepEqual(v.CurrentLeader, (func() UpdateRaftVoterResponseCurrentLeader {
-			var v UpdateRaftVoterResponseCurrentLeader
-			v.Default()
-			return v
-		})()) {
+		if v.CurrentLeader.LeaderID != -1 || v.CurrentLeader.LeaderEpoch != -1 || v.CurrentLeader.Host != "" || v.CurrentLeader.Port != 0 || v.CurrentLeader.UnknownTags.Len() > 0 {
 			toEncode = append(toEncode, 0)
 		}
 		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
