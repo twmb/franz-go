@@ -166,3 +166,23 @@ func TestFetchOffsetsForTopicsDoesNotMutateInput(t *testing.T) {
 		t.Errorf("caller slice was mutated: %v", topics)
 	}
 }
+
+// Lag previously rebuilt its group list in the caller's variadic slice,
+// rewriting its backing array. A repeated name makes the set smaller than the
+// slice, so the rewrite is visible whatever the map order.
+func TestLagDoesNotMutateInput(t *testing.T) {
+	cl, err := kgo.NewClient(kgo.SeedBrokers("localhost:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	adm := NewClient(cl)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	groups := []string{"a", "a", "b"}
+	adm.Lag(ctx, groups...) //nolint:errcheck // the canceled ctx fails the call; we assert only non-mutation
+	if groups[0] != "a" || groups[1] != "a" || groups[2] != "b" {
+		t.Errorf("caller slice was mutated: %v", groups)
+	}
+}
