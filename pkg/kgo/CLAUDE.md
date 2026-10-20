@@ -13,15 +13,15 @@ franz-go is a pure Go Kafka client library. The `kgo` package is the main client
 - Internal comments should explain WHY we are doing something, not just WHAT we are doing. WHAT comments are almost never useful, unless the block that follows is complex.
 - Comments around subtle race conditions (logic or data) should contain a walkthrough of how the race is encountered. Don't JUST say what the race is, but also how a sequence of events can encounter the race.
 
-## Context keys: NEVER use empty struct as a key
+## Context keys
 
-Per the Go spec, two distinct zero-size variables may share the same address. That means `type myKey struct{}` is unsafe as a `context.WithValue` key - it can collide with any other package using the same pattern. Use the project's pointer-to-string idiom instead:
+Never use a pointer to a zero-size value (`new(struct{})`, `&struct{}{}`) as a `context.WithValue` key: per the Go spec, two distinct zero-size variables may share the same address, so two such keys can compare equal. A named empty struct type (`type myKey struct{}`, used as `myKey{}`) is safe: keys compare as interfaces, and values of distinct types never compare equal. Never flag one in review. This package uses the pointer-to-string idiom; match it:
 
 ```go
 var myKey = func() *string { s := "my_key"; return &s }()
 ```
 
-The string body is for debugging; the pointer's identity is what makes the key unique. Examples in this package: `ctxPinReq` (broker.go), `noShardRetryCtx` (client.go), `commitContextFn` / `txnCommitContextFn` (consumer_group.go), `ctxRecRecycle` (pools.go).
+The string body is for debugging; the pointer's identity is what makes the key unique. Keep the trailing `()`: without it the key is a func value, and `context.WithValue` panics because a func is not comparable. Examples in this package: `ctxPinReq` (broker.go), `noShardRetryCtx` (client.go), `commitContextFn` / `txnCommitContextFn` (consumer_group.go), `ctxRecRecycle` (pools.go).
 
 ## Commit Style
 
