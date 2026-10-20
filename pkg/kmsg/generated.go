@@ -144,32 +144,25 @@ type MessageV0 struct {
 
 func (v *MessageV0) AppendTo(dst []byte) []byte {
 	{
-		v := v.Offset
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.Offset)
 	}
 	{
-		v := v.MessageSize
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MessageSize)
 	}
 	{
-		v := v.CRC
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.CRC)
 	}
 	{
-		v := v.Magic
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.Magic)
 	}
 	{
-		v := v.Attributes
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.Attributes)
 	}
 	{
-		v := v.Key
-		dst = kbin.AppendNullableBytes(dst, v)
+		dst = kbin.AppendNullableBytes(dst, v.Key)
 	}
 	{
-		v := v.Value
-		dst = kbin.AppendNullableBytes(dst, v)
+		dst = kbin.AppendNullableBytes(dst, v.Value)
 	}
 	return dst
 }
@@ -184,32 +177,25 @@ func (v *MessageV0) readFrom(src []byte, unsafe bool) error {
 	b := kbin.Reader{Src: src}
 	s := v
 	{
-		v := readInt64(&b)
-		s.Offset = v
+		s.Offset = readInt64(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.MessageSize = v
+		s.MessageSize = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.CRC = v
+		s.CRC = readInt32(&b)
 	}
 	{
-		v := readInt8(&b)
-		s.Magic = v
+		s.Magic = readInt8(&b)
 	}
 	{
-		v := readInt8(&b)
-		s.Attributes = v
+		s.Attributes = readInt8(&b)
 	}
 	{
-		v := &s.Key
-		readNullableBytes(&b, v, false)
+		readNullableBytes(&b, &s.Key, false)
 	}
 	{
-		v := &s.Value
-		readNullableBytes(&b, v, false)
+		readNullableBytes(&b, &s.Value, false)
 	}
 	return b.Complete()
 }
@@ -283,36 +269,28 @@ type MessageV1 struct {
 
 func (v *MessageV1) AppendTo(dst []byte) []byte {
 	{
-		v := v.Offset
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.Offset)
 	}
 	{
-		v := v.MessageSize
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MessageSize)
 	}
 	{
-		v := v.CRC
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.CRC)
 	}
 	{
-		v := v.Magic
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.Magic)
 	}
 	{
-		v := v.Attributes
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.Attributes)
 	}
 	{
-		v := v.Timestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.Timestamp)
 	}
 	{
-		v := v.Key
-		dst = kbin.AppendNullableBytes(dst, v)
+		dst = kbin.AppendNullableBytes(dst, v.Key)
 	}
 	{
-		v := v.Value
-		dst = kbin.AppendNullableBytes(dst, v)
+		dst = kbin.AppendNullableBytes(dst, v.Value)
 	}
 	return dst
 }
@@ -327,36 +305,28 @@ func (v *MessageV1) readFrom(src []byte, unsafe bool) error {
 	b := kbin.Reader{Src: src}
 	s := v
 	{
-		v := readInt64(&b)
-		s.Offset = v
+		s.Offset = readInt64(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.MessageSize = v
+		s.MessageSize = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.CRC = v
+		s.CRC = readInt32(&b)
 	}
 	{
-		v := readInt8(&b)
-		s.Magic = v
+		s.Magic = readInt8(&b)
 	}
 	{
-		v := readInt8(&b)
-		s.Attributes = v
+		s.Attributes = readInt8(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.Timestamp = v
+		s.Timestamp = readInt64(&b)
 	}
 	{
-		v := &s.Key
-		readNullableBytes(&b, v, false)
+		readNullableBytes(&b, &s.Key, false)
 	}
 	{
-		v := &s.Value
-		readNullableBytes(&b, v, false)
+		readNullableBytes(&b, &s.Value, false)
 	}
 	return b.Complete()
 }
@@ -384,12 +354,10 @@ type Header struct {
 
 func (v *Header) AppendTo(dst []byte) []byte {
 	{
-		v := v.Key
-		dst = kbin.AppendVarintString(dst, v)
+		dst = kbin.AppendVarintString(dst, v.Key)
 	}
 	{
-		v := v.Value
-		dst = kbin.AppendVarintBytes(dst, v)
+		dst = kbin.AppendVarintBytes(dst, v.Value)
 	}
 	return dst
 }
@@ -404,12 +372,10 @@ func (v *Header) readFrom(src []byte, unsafe bool) error {
 	b := kbin.Reader{Src: src}
 	s := v
 	{
-		v := &s.Key
-		readVarintString(&b, v, unsafe)
+		readVarintString(&b, &s.Key, unsafe)
 	}
 	{
-		v := &s.Value
-		readVarintBytes(&b, v)
+		readVarintBytes(&b, &s.Value)
 	}
 	return b.Complete()
 }
@@ -533,60 +499,46 @@ type RecordBatch struct {
 
 func (v *RecordBatch) AppendTo(dst []byte) []byte {
 	{
-		v := v.FirstOffset
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.FirstOffset)
 	}
 	{
-		v := v.Length
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.Length)
 	}
 	{
-		v := v.PartitionLeaderEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.PartitionLeaderEpoch)
 	}
 	{
-		v := v.Magic
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.Magic)
 	}
 	{
-		v := v.CRC
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.CRC)
 	}
 	{
-		v := v.Attributes
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Attributes)
 	}
 	{
-		v := v.LastOffsetDelta
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.LastOffsetDelta)
 	}
 	{
-		v := v.FirstTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.FirstTimestamp)
 	}
 	{
-		v := v.MaxTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.MaxTimestamp)
 	}
 	{
-		v := v.ProducerID
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ProducerID)
 	}
 	{
-		v := v.ProducerEpoch
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ProducerEpoch)
 	}
 	{
-		v := v.FirstSequence
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.FirstSequence)
 	}
 	{
-		v := v.NumRecords
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.NumRecords)
 	}
 	{
-		v := v.Records
-		dst = append(dst, v...)
+		dst = append(dst, v.Records...)
 	}
 	return dst
 }
@@ -601,60 +553,46 @@ func (v *RecordBatch) readFrom(src []byte, unsafe bool) error {
 	b := kbin.Reader{Src: src}
 	s := v
 	{
-		v := readInt64(&b)
-		s.FirstOffset = v
+		s.FirstOffset = readInt64(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.Length = v
+		s.Length = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.PartitionLeaderEpoch = v
+		s.PartitionLeaderEpoch = readInt32(&b)
 	}
 	{
-		v := readInt8(&b)
-		s.Magic = v
+		s.Magic = readInt8(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.CRC = v
+		s.CRC = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.Attributes = v
+		s.Attributes = readInt16(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.LastOffsetDelta = v
+		s.LastOffsetDelta = readInt32(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.FirstTimestamp = v
+		s.FirstTimestamp = readInt64(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.MaxTimestamp = v
+		s.MaxTimestamp = readInt64(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.ProducerID = v
+		s.ProducerID = readInt64(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ProducerEpoch = v
+		s.ProducerEpoch = readInt16(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.FirstSequence = v
+		s.FirstSequence = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.NumRecords = v
+		s.NumRecords = readInt32(&b)
 	}
 	{
-		v := b.Span(int(s.Length) - 49)
-		s.Records = v
+		s.Records = b.Span(int(s.Length) - 49)
 	}
 	return b.Complete()
 }
@@ -695,20 +633,16 @@ func (v *OffsetCommitKey) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.Group
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendString(dst, v.Group)
 	}
 	{
-		v := v.Topic
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendString(dst, v.Topic)
 	}
 	{
-		v := v.Partition
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.Partition)
 	}
 	return dst
 }
@@ -726,16 +660,13 @@ func (v *OffsetCommitKey) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := &s.Group
-		readString(&b, v, false, unsafe)
+		readString(&b, &s.Group, false, unsafe)
 	}
 	{
-		v := &s.Topic
-		readString(&b, v, false, unsafe)
+		readString(&b, &s.Topic, false, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.Partition = v
+		s.Partition = readInt32(&b)
 	}
 	return b.Complete()
 }
@@ -801,28 +732,22 @@ func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.Offset
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.Offset)
 	}
 	if version >= 3 {
-		v := v.LeaderEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.LeaderEpoch)
 	}
 	{
-		v := v.Metadata
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Metadata, isFlexible)
 	}
 	{
-		v := v.CommitTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.CommitTimestamp)
 	}
 	if version >= 1 && version <= 1 {
-		v := v.ExpireTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ExpireTimestamp)
 	}
 	if isFlexible {
 		var toEncode []uint32
@@ -861,24 +786,19 @@ func (v *OffsetCommitValue) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt64(&b)
-		s.Offset = v
+		s.Offset = readInt64(&b)
 	}
 	if version >= 3 {
-		v := readInt32(&b)
-		s.LeaderEpoch = v
+		s.LeaderEpoch = readInt32(&b)
 	}
 	{
-		v := &s.Metadata
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Metadata, isFlexible, unsafe)
 	}
 	{
-		v := readInt64(&b)
-		s.CommitTimestamp = v
+		s.CommitTimestamp = readInt64(&b)
 	}
 	if version >= 1 && version <= 1 {
-		v := readInt64(&b)
-		s.ExpireTimestamp = v
+		s.ExpireTimestamp = readInt64(&b)
 	}
 	if isFlexible {
 		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -887,8 +807,7 @@ func (v *OffsetCommitValue) readFrom(src []byte, unsafe bool) error {
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 			case 0:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 				if err := b.Complete(); err != nil {
 					return err
 				}
@@ -929,12 +848,10 @@ func (v *GroupMetadataKey) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.Group
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendString(dst, v.Group)
 	}
 	return dst
 }
@@ -952,8 +869,7 @@ func (v *GroupMetadataKey) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := &s.Group
-		readString(&b, v, false, unsafe)
+		readString(&b, &s.Group, false, unsafe)
 	}
 	return b.Complete()
 }
@@ -1068,28 +984,22 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.ProtocolType
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.ProtocolType, isFlexible)
 	}
 	{
-		v := v.Generation
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.Generation)
 	}
 	{
-		v := v.Protocol
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.Protocol, isFlexible)
 	}
 	{
-		v := v.Leader
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.Leader, isFlexible)
 	}
 	if version >= 2 {
-		v := v.CurrentStateTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.CurrentStateTimestamp)
 	}
 	{
 		v := v.Members
@@ -1097,36 +1007,28 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.MemberID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.MemberID, isFlexible)
 			}
 			if version >= 3 {
-				v := v.InstanceID
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.InstanceID, isFlexible)
 			}
 			{
-				v := v.ClientID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ClientID, isFlexible)
 			}
 			{
-				v := v.ClientHost
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ClientHost, isFlexible)
 			}
 			if version >= 1 {
-				v := v.RebalanceTimeoutMillis
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.RebalanceTimeoutMillis)
 			}
 			{
-				v := v.SessionTimeoutMillis
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.SessionTimeoutMillis)
 			}
 			{
-				v := v.Subscription
-				dst = appendBytes(dst, v, isFlexible)
+				dst = appendBytes(dst, v.Subscription, isFlexible)
 			}
 			{
-				v := v.Assignment
-				dst = appendBytes(dst, v, isFlexible)
+				dst = appendBytes(dst, v.Assignment, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -1154,24 +1056,19 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.ProtocolType
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.ProtocolType, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.Generation = v
+		s.Generation = readInt32(&b)
 	}
 	{
-		v := &s.Protocol
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.Protocol, isFlexible, unsafe)
 	}
 	{
-		v := &s.Leader
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.Leader, isFlexible, unsafe)
 	}
 	if version >= 2 {
-		v := readInt64(&b)
-		s.CurrentStateTimestamp = v
+		s.CurrentStateTimestamp = readInt64(&b)
 	}
 	{
 		v := s.Members
@@ -1190,36 +1087,28 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.MemberID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.MemberID, isFlexible, unsafe)
 			}
 			if version >= 3 {
-				v := &s.InstanceID
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 			}
 			{
-				v := &s.ClientID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ClientID, isFlexible, unsafe)
 			}
 			{
-				v := &s.ClientHost
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ClientHost, isFlexible, unsafe)
 			}
 			if version >= 1 {
-				v := readInt32(&b)
-				s.RebalanceTimeoutMillis = v
+				s.RebalanceTimeoutMillis = readInt32(&b)
 			}
 			{
-				v := readInt32(&b)
-				s.SessionTimeoutMillis = v
+				s.SessionTimeoutMillis = readInt32(&b)
 			}
 			{
-				v := &s.Subscription
-				readBytes(&b, v, isFlexible)
+				readBytes(&b, &s.Subscription, isFlexible)
 			}
 			{
-				v := &s.Assignment
-				readBytes(&b, v, isFlexible)
+				readBytes(&b, &s.Assignment, isFlexible)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -1263,12 +1152,10 @@ func (v *TxnMetadataKey) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.TransactionalID
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendString(dst, v.TransactionalID)
 	}
 	return dst
 }
@@ -1286,8 +1173,7 @@ func (v *TxnMetadataKey) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := &s.TransactionalID
-		readString(&b, v, false, unsafe)
+		readString(&b, &s.TransactionalID, false, unsafe)
 	}
 	return b.Complete()
 }
@@ -1400,27 +1286,19 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 1
 	_ = isFlexible
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.ProducerID
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ProducerID)
 	}
 	{
-		v := v.ProducerEpoch
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ProducerEpoch)
 	}
 	{
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	{
-		v := v.State
-		{
-			v := int8(v)
-			dst = appendInt8(dst, v)
-		}
+		dst = appendInt8(dst, int8(v.State))
 	}
 	{
 		v := v.Topics
@@ -1428,15 +1306,13 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -1445,12 +1321,10 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.LastUpdateTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.LastUpdateTimestamp)
 	}
 	{
-		v := v.StartTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.StartTimestamp)
 	}
 	if isFlexible {
 		var toEncode []uint32
@@ -1519,25 +1393,16 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt64(&b)
-		s.ProducerID = v
+		s.ProducerID = readInt64(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ProducerEpoch = v
+		s.ProducerEpoch = readInt16(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	{
-		var t TransactionState
-		{
-			v := readInt8(&b)
-			t = TransactionState(v)
-		}
-		v := t
-		s.State = v
+		s.State = TransactionState(readInt8(&b))
 	}
 	{
 		v := s.Topics
@@ -1559,8 +1424,7 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -1575,8 +1439,7 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -1589,12 +1452,10 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	{
-		v := readInt64(&b)
-		s.LastUpdateTimestamp = v
+		s.LastUpdateTimestamp = readInt64(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.StartTimestamp = v
+		s.StartTimestamp = readInt64(&b)
 	}
 	if isFlexible {
 		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -1603,29 +1464,25 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 			case 0:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				v := readInt64(&b)
-				s.PreviousProducerID = v
+				s.PreviousProducerID = readInt64(&b)
 				if err := b.Complete(); err != nil {
 					return err
 				}
 			case 1:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				v := readInt64(&b)
-				s.NextProducerID = v
+				s.NextProducerID = readInt64(&b)
 				if err := b.Complete(); err != nil {
 					return err
 				}
 			case 2:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				v := readInt16(&b)
-				s.ClientTransactionVersion = v
+				s.ClientTransactionVersion = readInt16(&b)
 				if err := b.Complete(); err != nil {
 					return err
 				}
 			case 3:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				v := readInt16(&b)
-				s.NextProducerEpoch = v
+				s.NextProducerEpoch = readInt16(&b)
 				if err := b.Complete(); err != nil {
 					return err
 				}
@@ -1759,20 +1616,17 @@ func (v *ConsumerMemberMetadata) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
 		v := v.Topics
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
-			v := v[i]
-			dst = kbin.AppendString(dst, v)
+			dst = kbin.AppendString(dst, v[i])
 		}
 	}
 	{
-		v := v.UserData
-		dst = kbin.AppendNullableBytes(dst, v)
+		dst = kbin.AppendNullableBytes(dst, v.UserData)
 	}
 	if version >= 1 {
 		v := v.OwnedPartitions
@@ -1780,26 +1634,22 @@ func (v *ConsumerMemberMetadata) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				dst = kbin.AppendString(dst, v.Topic)
 			}
 			{
 				v := v.Partitions
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 		}
 	}
 	if version >= 2 {
-		v := v.Generation
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.Generation)
 	}
 	if version >= 3 {
-		v := v.Rack
-		dst = kbin.AppendNullableString(dst, v)
+		dst = kbin.AppendNullableString(dst, v.Rack)
 	}
 	return dst
 }
@@ -1829,15 +1679,13 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, false, unsafe)
+			readString(&b, &a[i], false, unsafe)
 		}
 		v = a
 		s.Topics = v
 	}
 	{
-		v := &s.UserData
-		readNullableBytes(&b, v, false)
+		readNullableBytes(&b, &s.UserData, false)
 	}
 	if version >= 1 {
 		v := s.OwnedPartitions
@@ -1856,8 +1704,7 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, false, unsafe)
+				readString(&b, &s.Topic, false, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -1872,8 +1719,7 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -1883,12 +1729,10 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 		s.OwnedPartitions = v
 	}
 	if version >= 2 {
-		v := readInt32(&b)
-		s.Generation = v
+		s.Generation = readInt32(&b)
 	}
 	if version >= 3 {
-		v := &s.Rack
-		readNullableString(&b, v, false, unsafe)
+		readNullableString(&b, &s.Rack, false, unsafe)
 	}
 	return b.Complete()
 }
@@ -1946,8 +1790,7 @@ func (v *ConsumerMemberAssignment) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
 		v := v.Topics
@@ -1955,22 +1798,19 @@ func (v *ConsumerMemberAssignment) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				dst = kbin.AppendString(dst, v.Topic)
 			}
 			{
 				v := v.Partitions
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 		}
 	}
 	{
-		v := v.UserData
-		dst = kbin.AppendNullableBytes(dst, v)
+		dst = kbin.AppendNullableBytes(dst, v.UserData)
 	}
 	return dst
 }
@@ -2004,8 +1844,7 @@ func (v *ConsumerMemberAssignment) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, false, unsafe)
+				readString(&b, &s.Topic, false, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -2020,8 +1859,7 @@ func (v *ConsumerMemberAssignment) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -2031,8 +1869,7 @@ func (v *ConsumerMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	{
-		v := &s.UserData
-		readNullableBytes(&b, v, false)
+		readNullableBytes(&b, &s.UserData, false)
 	}
 	return b.Complete()
 }
@@ -2070,20 +1907,16 @@ func (v *ConnectMemberMetadata) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.URL
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendString(dst, v.URL)
 	}
 	{
-		v := v.ConfigOffset
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ConfigOffset)
 	}
 	if version >= 1 {
-		v := v.CurrentAssignment
-		dst = kbin.AppendNullableBytes(dst, v)
+		dst = kbin.AppendNullableBytes(dst, v.CurrentAssignment)
 	}
 	return dst
 }
@@ -2101,16 +1934,13 @@ func (v *ConnectMemberMetadata) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := &s.URL
-		readString(&b, v, false, unsafe)
+		readString(&b, &s.URL, false, unsafe)
 	}
 	{
-		v := readInt64(&b)
-		s.ConfigOffset = v
+		s.ConfigOffset = readInt64(&b)
 	}
 	if version >= 1 {
-		v := &s.CurrentAssignment
-		readNullableBytes(&b, v, false)
+		readNullableBytes(&b, &s.CurrentAssignment, false)
 	}
 	return b.Complete()
 }
@@ -2191,24 +2021,19 @@ func (v *ConnectMemberAssignment) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.Error
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Error)
 	}
 	{
-		v := v.Leader
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendString(dst, v.Leader)
 	}
 	{
-		v := v.LeaderURL
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendString(dst, v.LeaderURL)
 	}
 	{
-		v := v.ConfigOffset
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ConfigOffset)
 	}
 	{
 		v := v.Assignment
@@ -2216,15 +2041,13 @@ func (v *ConnectMemberAssignment) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Connector
-				dst = kbin.AppendString(dst, v)
+				dst = kbin.AppendString(dst, v.Connector)
 			}
 			{
 				v := v.Tasks
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
-					v := v[i]
-					dst = appendInt16(dst, v)
+					dst = appendInt16(dst, v[i])
 				}
 			}
 		}
@@ -2235,22 +2058,19 @@ func (v *ConnectMemberAssignment) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Connector
-				dst = kbin.AppendString(dst, v)
+				dst = kbin.AppendString(dst, v.Connector)
 			}
 			{
 				v := v.Tasks
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
-					v := v[i]
-					dst = appendInt16(dst, v)
+					dst = appendInt16(dst, v[i])
 				}
 			}
 		}
 	}
 	if version >= 1 {
-		v := v.ScheduledDelay
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ScheduledDelay)
 	}
 	return dst
 }
@@ -2268,20 +2088,16 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := readInt16(&b)
-		s.Error = v
+		s.Error = readInt16(&b)
 	}
 	{
-		v := &s.Leader
-		readString(&b, v, false, unsafe)
+		readString(&b, &s.Leader, false, unsafe)
 	}
 	{
-		v := &s.LeaderURL
-		readString(&b, v, false, unsafe)
+		readString(&b, &s.LeaderURL, false, unsafe)
 	}
 	{
-		v := readInt64(&b)
-		s.ConfigOffset = v
+		s.ConfigOffset = readInt64(&b)
 	}
 	{
 		v := s.Assignment
@@ -2300,8 +2116,7 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Connector
-				readString(&b, v, false, unsafe)
+				readString(&b, &s.Connector, false, unsafe)
 			}
 			{
 				v := s.Tasks
@@ -2316,8 +2131,7 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int16, l)...)
 				}
 				for i := range a {
-					v := readInt16(&b)
-					a[i] = v
+					a[i] = readInt16(&b)
 				}
 				v = a
 				s.Tasks = v
@@ -2343,8 +2157,7 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Connector
-				readString(&b, v, false, unsafe)
+				readString(&b, &s.Connector, false, unsafe)
 			}
 			{
 				v := s.Tasks
@@ -2359,8 +2172,7 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int16, l)...)
 				}
 				for i := range a {
-					v := readInt16(&b)
-					a[i] = v
+					a[i] = readInt16(&b)
 				}
 				v = a
 				s.Tasks = v
@@ -2370,8 +2182,7 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		s.Revoked = v
 	}
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ScheduledDelay = v
+		s.ScheduledDelay = readInt32(&b)
 	}
 	return b.Complete()
 }
@@ -2413,20 +2224,16 @@ func (v *DefaultPrincipalData) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.Type
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Type, isFlexible)
 	}
 	{
-		v := v.Name
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Name, isFlexible)
 	}
 	{
-		v := v.TokenAuthenticated
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.TokenAuthenticated)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -2449,16 +2256,13 @@ func (v *DefaultPrincipalData) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.Type
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Type, isFlexible, unsafe)
 	}
 	{
-		v := &s.Name
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Name, isFlexible, unsafe)
 	}
 	{
-		v := readBool(&b)
-		s.TokenAuthenticated = v
+		s.TokenAuthenticated = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -2491,15 +2295,10 @@ func (v *ControlRecordKey) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.Type
-		{
-			v := int16(v)
-			dst = appendInt16(dst, v)
-		}
+		dst = appendInt16(dst, int16(v.Type))
 	}
 	return dst
 }
@@ -2517,13 +2316,7 @@ func (v *ControlRecordKey) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		var t ControlRecordKeyType
-		{
-			v := readInt16(&b)
-			t = ControlRecordKeyType(v)
-		}
-		v := t
-		s.Type = v
+		s.Type = ControlRecordKeyType(readInt16(&b))
 	}
 	return b.Complete()
 }
@@ -2552,12 +2345,10 @@ func (v *EndTxnMarker) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.CoordinatorEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.CoordinatorEpoch)
 	}
 	return dst
 }
@@ -2575,8 +2366,7 @@ func (v *EndTxnMarker) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := readInt32(&b)
-		s.CoordinatorEpoch = v
+		s.CoordinatorEpoch = readInt32(&b)
 	}
 	return b.Complete()
 }
@@ -2641,12 +2431,10 @@ func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.Version
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Version)
 	}
 	{
-		v := v.LeaderID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.LeaderID)
 	}
 	{
 		v := v.Voters
@@ -2654,12 +2442,10 @@ func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.VoterID
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.VoterID)
 			}
 			if version >= 1 {
-				v := v.VoterDirectoryID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.VoterDirectoryID)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -2672,12 +2458,10 @@ func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.VoterID
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.VoterID)
 			}
 			if version >= 1 {
-				v := v.VoterDirectoryID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.VoterDirectoryID)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -2705,8 +2489,7 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.LeaderID = v
+		s.LeaderID = readInt32(&b)
 	}
 	{
 		v := s.Voters
@@ -2725,12 +2508,10 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt32(&b)
-				s.VoterID = v
+				s.VoterID = readInt32(&b)
 			}
 			if version >= 1 {
-				v := readUuid(&b)
-				s.VoterDirectoryID = v
+				s.VoterDirectoryID = readUuid(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -2756,12 +2537,10 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt32(&b)
-				s.VoterID = v
+				s.VoterID = readInt32(&b)
 			}
 			if version >= 1 {
-				v := readUuid(&b)
-				s.VoterDirectoryID = v
+				s.VoterDirectoryID = readUuid(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -2916,16 +2695,13 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 9
 	_ = isFlexible
 	if version >= 3 {
-		v := v.TransactionID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.TransactionID, isFlexible)
 	}
 	{
-		v := v.Acks
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.Acks)
 	}
 	{
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	{
 		v := v.Topics
@@ -2933,12 +2709,10 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 12 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 13 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -2946,12 +2720,10 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.Records
-						dst = appendNullableBytes(dst, v, isFlexible)
+						dst = appendNullableBytes(dst, v.Records, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -2983,16 +2755,13 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 3 {
-		v := &s.TransactionID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.TransactionID, isFlexible, unsafe)
 	}
 	{
-		v := readInt16(&b)
-		s.Acks = v
+		s.Acks = readInt16(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -3011,12 +2780,10 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 12 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 13 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -3035,12 +2802,10 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := &s.Records
-						readNullableBytes(&b, v, isFlexible)
+						readNullableBytes(&b, &s.Records, isFlexible)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -3385,12 +3150,10 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 12 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 13 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -3398,24 +3161,19 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.BaseOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.BaseOffset)
 					}
 					if version >= 2 {
-						v := v.LogAppendTime
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.LogAppendTime)
 					}
 					if version >= 5 {
-						v := v.LogStartOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.LogStartOffset)
 					}
 					if version >= 8 {
 						v := v.ErrorRecords
@@ -3423,12 +3181,10 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.RelativeOffset
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.RelativeOffset)
 							}
 							{
-								v := v.ErrorMessage
-								dst = appendNullableString(dst, v, isFlexible)
+								dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -3436,8 +3192,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if version >= 8 {
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					if isFlexible {
 						var toEncode []uint32
@@ -3455,12 +3210,10 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 									lenAt := len(dst)
 								fCurrentLeader:
 									{
-										v := v.LeaderID
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v.LeaderID)
 									}
 									{
-										v := v.LeaderEpoch
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v.LeaderEpoch)
 									}
 									if isFlexible {
 										dst = v.UnknownTags.appendWithCount(dst)
@@ -3483,8 +3236,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 1 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if isFlexible {
 		var toEncode []uint32
@@ -3505,20 +3257,16 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 					for i := range v {
 						v := &v[i]
 						{
-							v := v.NodeID
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.NodeID)
 						}
 						{
-							v := v.Host
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v.Host, isFlexible)
 						}
 						{
-							v := v.Port
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.Port)
 						}
 						{
-							v := v.Rack
-							dst = appendNullableString(dst, v, isFlexible)
+							dst = appendNullableString(dst, v.Rack, isFlexible)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
@@ -3567,12 +3315,10 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 12 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 13 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -3591,24 +3337,19 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.BaseOffset = v
+						s.BaseOffset = readInt64(&b)
 					}
 					if version >= 2 {
-						v := readInt64(&b)
-						s.LogAppendTime = v
+						s.LogAppendTime = readInt64(&b)
 					}
 					if version >= 5 {
-						v := readInt64(&b)
-						s.LogStartOffset = v
+						s.LogStartOffset = readInt64(&b)
 					}
 					if version >= 8 {
 						v := s.ErrorRecords
@@ -3627,12 +3368,10 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.RelativeOffset = v
+								s.RelativeOffset = readInt32(&b)
 							}
 							{
-								v := &s.ErrorMessage
-								readNullableString(&b, v, isFlexible, unsafe)
+								readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -3642,8 +3381,7 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorRecords = v
 					}
 					if version >= 8 {
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					if isFlexible {
 						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -3656,12 +3394,10 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readInt32(&b)
-									s.LeaderID = v
+									s.LeaderID = readInt32(&b)
 								}
 								{
-									v := readInt32(&b)
-									s.LeaderEpoch = v
+									s.LeaderEpoch = readInt32(&b)
 								}
 								if isFlexible {
 									internalReadTags(&b, &s.UnknownTags)
@@ -3684,8 +3420,7 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if isFlexible {
 		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -3710,20 +3445,16 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.NodeID = v
+						s.NodeID = readInt32(&b)
 					}
 					{
-						v := &s.Host
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Host, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.Port = v
+						s.Port = readInt32(&b)
 					}
 					{
-						v := &s.Rack
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Rack, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -4036,32 +3767,25 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 12
 	_ = isFlexible
 	if version >= 0 && version <= 14 {
-		v := v.ReplicaID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ReplicaID)
 	}
 	{
-		v := v.MaxWaitMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MaxWaitMillis)
 	}
 	{
-		v := v.MinBytes
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MinBytes)
 	}
 	if version >= 3 {
-		v := v.MaxBytes
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MaxBytes)
 	}
 	if version >= 4 {
-		v := v.IsolationLevel
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.IsolationLevel)
 	}
 	if version >= 7 {
-		v := v.SessionID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.SessionID)
 	}
 	if version >= 7 {
-		v := v.SessionEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.SessionEpoch)
 	}
 	{
 		v := v.Topics
@@ -4069,12 +3793,10 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 12 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 13 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -4082,28 +3804,22 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					if version >= 9 {
-						v := v.CurrentLeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.CurrentLeaderEpoch)
 					}
 					{
-						v := v.FetchOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.FetchOffset)
 					}
 					if version >= 12 {
-						v := v.LastFetchedEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LastFetchedEpoch)
 					}
 					if version >= 5 {
-						v := v.LogStartOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.LogStartOffset)
 					}
 					{
-						v := v.PartitionMaxBytes
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.PartitionMaxBytes)
 					}
 					if isFlexible {
 						var toEncode []uint32
@@ -4147,19 +3863,16 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 7 && version <= 12 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 13 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -4168,8 +3881,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 11 {
-		v := v.Rack
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Rack, isFlexible)
 	}
 	if isFlexible {
 		var toEncode []uint32
@@ -4204,12 +3916,10 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 					lenAt := len(dst)
 				fReplicaState:
 					{
-						v := v.ID
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.ID)
 					}
 					{
-						v := v.Epoch
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Epoch)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -4241,32 +3951,25 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 0 && version <= 14 {
-		v := readInt32(&b)
-		s.ReplicaID = v
+		s.ReplicaID = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.MaxWaitMillis = v
+		s.MaxWaitMillis = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.MinBytes = v
+		s.MinBytes = readInt32(&b)
 	}
 	if version >= 3 {
-		v := readInt32(&b)
-		s.MaxBytes = v
+		s.MaxBytes = readInt32(&b)
 	}
 	if version >= 4 {
-		v := readInt8(&b)
-		s.IsolationLevel = v
+		s.IsolationLevel = readInt8(&b)
 	}
 	if version >= 7 {
-		v := readInt32(&b)
-		s.SessionID = v
+		s.SessionID = readInt32(&b)
 	}
 	if version >= 7 {
-		v := readInt32(&b)
-		s.SessionEpoch = v
+		s.SessionEpoch = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -4285,12 +3988,10 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 12 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 13 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -4309,28 +4010,22 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					if version >= 9 {
-						v := readInt32(&b)
-						s.CurrentLeaderEpoch = v
+						s.CurrentLeaderEpoch = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.FetchOffset = v
+						s.FetchOffset = readInt64(&b)
 					}
 					if version >= 12 {
-						v := readInt32(&b)
-						s.LastFetchedEpoch = v
+						s.LastFetchedEpoch = readInt32(&b)
 					}
 					if version >= 5 {
-						v := readInt64(&b)
-						s.LogStartOffset = v
+						s.LogStartOffset = readInt64(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.PartitionMaxBytes = v
+						s.PartitionMaxBytes = readInt32(&b)
 					}
 					if isFlexible {
 						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -4339,15 +4034,13 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 							case 0:
 								b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-								v := readUuid(&b)
-								s.ReplicaDirectoryID = v
+								s.ReplicaDirectoryID = readUuid(&b)
 								if err := b.Complete(); err != nil {
 									return err
 								}
 							case 1:
 								b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-								v := readInt64(&b)
-								s.HighWatermark = v
+								s.HighWatermark = readInt64(&b)
 								if err := b.Complete(); err != nil {
 									return err
 								}
@@ -4382,12 +4075,10 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 7 && version <= 12 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 13 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -4402,8 +4093,7 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -4416,8 +4106,7 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 		s.ForgottenTopics = v
 	}
 	if version >= 11 {
-		v := &s.Rack
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Rack, isFlexible, unsafe)
 	}
 	if isFlexible {
 		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -4426,8 +4115,7 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 			case 0:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				v := &s.ClusterID
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ClusterID, isFlexible, unsafe)
 				if err := b.Complete(); err != nil {
 					return err
 				}
@@ -4437,12 +4125,10 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 				v.Default()
 				s := v
 				{
-					v := readInt32(&b)
-					s.ID = v
+					s.ID = readInt32(&b)
 				}
 				{
-					v := readInt64(&b)
-					s.Epoch = v
+					s.Epoch = readInt64(&b)
 				}
 				if isFlexible {
 					internalReadTags(&b, &s.UnknownTags)
@@ -4859,16 +4545,13 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 12
 	_ = isFlexible
 	if version >= 1 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if version >= 7 {
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if version >= 7 {
-		v := v.SessionID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.SessionID)
 	}
 	{
 		v := v.Topics
@@ -4876,12 +4559,10 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 12 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 13 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -4889,24 +4570,19 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.HighWatermark
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.HighWatermark)
 					}
 					if version >= 4 {
-						v := v.LastStableOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.LastStableOffset)
 					}
 					if version >= 5 {
-						v := v.LogStartOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.LogStartOffset)
 					}
 					if version >= 4 {
 						v := v.AbortedTransactions
@@ -4914,12 +4590,10 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.ProducerID
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.ProducerID)
 							}
 							{
-								v := v.FirstOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.FirstOffset)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -4927,12 +4601,10 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if version >= 11 {
-						v := v.PreferredReadReplica
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.PreferredReadReplica)
 					}
 					{
-						v := v.RecordBatches
-						dst = appendNullableBytes(dst, v, isFlexible)
+						dst = appendNullableBytes(dst, v.RecordBatches, isFlexible)
 					}
 					if isFlexible {
 						var toEncode []uint32
@@ -4956,12 +4628,10 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 									lenAt := len(dst)
 								fDivergingEpoch:
 									{
-										v := v.Epoch
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v.Epoch)
 									}
 									{
-										v := v.EndOffset
-										dst = appendInt64(dst, v)
+										dst = appendInt64(dst, v.EndOffset)
 									}
 									if isFlexible {
 										dst = v.UnknownTags.appendWithCount(dst)
@@ -4980,12 +4650,10 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 									lenAt := len(dst)
 								fCurrentLeader:
 									{
-										v := v.LeaderID
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v.LeaderID)
 									}
 									{
-										v := v.LeaderEpoch
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v.LeaderEpoch)
 									}
 									if isFlexible {
 										dst = v.UnknownTags.appendWithCount(dst)
@@ -5004,12 +4672,10 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 									lenAt := len(dst)
 								fSnapshotID:
 									{
-										v := v.EndOffset
-										dst = appendInt64(dst, v)
+										dst = appendInt64(dst, v.EndOffset)
 									}
 									{
-										v := v.Epoch
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v.Epoch)
 									}
 									if isFlexible {
 										dst = v.UnknownTags.appendWithCount(dst)
@@ -5050,20 +4716,16 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 					for i := range v {
 						v := &v[i]
 						{
-							v := v.NodeID
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.NodeID)
 						}
 						{
-							v := v.Host
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v.Host, isFlexible)
 						}
 						{
-							v := v.Port
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.Port)
 						}
 						{
-							v := v.Rack
-							dst = appendNullableString(dst, v, isFlexible)
+							dst = appendNullableString(dst, v.Rack, isFlexible)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
@@ -5096,16 +4758,13 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if version >= 7 {
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if version >= 7 {
-		v := readInt32(&b)
-		s.SessionID = v
+		s.SessionID = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -5124,12 +4783,10 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 12 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 13 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -5148,24 +4805,19 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.HighWatermark = v
+						s.HighWatermark = readInt64(&b)
 					}
 					if version >= 4 {
-						v := readInt64(&b)
-						s.LastStableOffset = v
+						s.LastStableOffset = readInt64(&b)
 					}
 					if version >= 5 {
-						v := readInt64(&b)
-						s.LogStartOffset = v
+						s.LogStartOffset = readInt64(&b)
 					}
 					if version >= 4 {
 						v := s.AbortedTransactions
@@ -5187,12 +4839,10 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt64(&b)
-								s.ProducerID = v
+								s.ProducerID = readInt64(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.FirstOffset = v
+								s.FirstOffset = readInt64(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -5202,12 +4852,10 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 						s.AbortedTransactions = v
 					}
 					if version >= 11 {
-						v := readInt32(&b)
-						s.PreferredReadReplica = v
+						s.PreferredReadReplica = readInt32(&b)
 					}
 					{
-						v := &s.RecordBatches
-						readNullableBytes(&b, v, isFlexible)
+						readNullableBytes(&b, &s.RecordBatches, isFlexible)
 					}
 					if isFlexible {
 						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -5220,12 +4868,10 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readInt32(&b)
-									s.Epoch = v
+									s.Epoch = readInt32(&b)
 								}
 								{
-									v := readInt64(&b)
-									s.EndOffset = v
+									s.EndOffset = readInt64(&b)
 								}
 								if isFlexible {
 									internalReadTags(&b, &s.UnknownTags)
@@ -5239,12 +4885,10 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readInt32(&b)
-									s.LeaderID = v
+									s.LeaderID = readInt32(&b)
 								}
 								{
-									v := readInt32(&b)
-									s.LeaderEpoch = v
+									s.LeaderEpoch = readInt32(&b)
 								}
 								if isFlexible {
 									internalReadTags(&b, &s.UnknownTags)
@@ -5258,12 +4902,10 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readInt64(&b)
-									s.EndOffset = v
+									s.EndOffset = readInt64(&b)
 								}
 								{
-									v := readInt32(&b)
-									s.Epoch = v
+									s.Epoch = readInt32(&b)
 								}
 								if isFlexible {
 									internalReadTags(&b, &s.UnknownTags)
@@ -5308,20 +4950,16 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.NodeID = v
+						s.NodeID = readInt32(&b)
 					}
 					{
-						v := &s.Host
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Host, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.Port = v
+						s.Port = readInt32(&b)
 					}
 					{
-						v := &s.Rack
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Rack, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -5538,12 +5176,10 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 6
 	_ = isFlexible
 	{
-		v := v.ReplicaID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ReplicaID)
 	}
 	if version >= 2 {
-		v := v.IsolationLevel
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.IsolationLevel)
 	}
 	{
 		v := v.Topics
@@ -5551,8 +5187,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -5560,20 +5195,16 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					if version >= 4 {
-						v := v.CurrentLeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.CurrentLeaderEpoch)
 					}
 					{
-						v := v.Timestamp
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Timestamp)
 					}
 					if version >= 0 && version <= 0 {
-						v := v.MaxNumOffsets
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.MaxNumOffsets)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -5586,8 +5217,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 10 {
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -5609,12 +5239,10 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ReplicaID = v
+		s.ReplicaID = readInt32(&b)
 	}
 	if version >= 2 {
-		v := readInt8(&b)
-		s.IsolationLevel = v
+		s.IsolationLevel = readInt8(&b)
 	}
 	{
 		v := s.Topics
@@ -5633,8 +5261,7 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -5653,20 +5280,16 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					if version >= 4 {
-						v := readInt32(&b)
-						s.CurrentLeaderEpoch = v
+						s.CurrentLeaderEpoch = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.Timestamp = v
+						s.Timestamp = readInt64(&b)
 					}
 					if version >= 0 && version <= 0 {
-						v := readInt32(&b)
-						s.MaxNumOffsets = v
+						s.MaxNumOffsets = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -5683,8 +5306,7 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if version >= 10 {
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -5865,8 +5487,7 @@ func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 6
 	_ = isFlexible
 	if version >= 2 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -5874,8 +5495,7 @@ func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -5883,32 +5503,26 @@ func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					if version >= 0 && version <= 0 {
 						v := v.OldStyleOffsets
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt64(dst, v)
+							dst = appendInt64(dst, v[i])
 						}
 					}
 					if version >= 1 {
-						v := v.Timestamp
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Timestamp)
 					}
 					if version >= 1 {
-						v := v.Offset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Offset)
 					}
 					if version >= 4 {
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -5940,8 +5554,7 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 2 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -5960,8 +5573,7 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -5980,12 +5592,10 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					if version >= 0 && version <= 0 {
 						v := s.OldStyleOffsets
@@ -6000,23 +5610,19 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int64, l)...)
 						}
 						for i := range a {
-							v := readInt64(&b)
-							a[i] = v
+							a[i] = readInt64(&b)
 						}
 						v = a
 						s.OldStyleOffsets = v
 					}
 					if version >= 1 {
-						v := readInt64(&b)
-						s.Timestamp = v
+						s.Timestamp = readInt64(&b)
 					}
 					if version >= 1 {
-						v := readInt64(&b)
-						s.Offset = v
+						s.Offset = readInt64(&b)
 					}
 					if version >= 4 {
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -6153,22 +5759,17 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 10 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
-				v := v.Topic
 				if version < 10 {
 					var vv string
-					if v != nil {
-						vv = *v
+					if v.Topic != nil {
+						vv = *v.Topic
 					}
-					{
-						v := vv
-						dst = appendString(dst, v, isFlexible)
-					}
+					dst = appendString(dst, vv, isFlexible)
 				} else {
-					dst = appendNullableString(dst, v, isFlexible)
+					dst = appendNullableString(dst, v.Topic, isFlexible)
 				}
 			}
 			if isFlexible {
@@ -6177,16 +5778,13 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 4 {
-		v := v.AllowAutoTopicCreation
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.AllowAutoTopicCreation)
 	}
 	if version >= 8 && version <= 10 {
-		v := v.IncludeClusterAuthorizedOperations
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IncludeClusterAuthorizedOperations)
 	}
 	if version >= 8 {
-		v := v.IncludeTopicAuthorizedOperations
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IncludeTopicAuthorizedOperations)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -6227,17 +5825,15 @@ func (v *MetadataRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 10 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
-				v := &s.Topic
 				if version < 10 {
-					vv := new(string)
-					readString(&b, vv, isFlexible, unsafe)
-					*v = vv
+					v := new(string)
+					readString(&b, v, isFlexible, unsafe)
+					s.Topic = v
 				} else {
-					readNullableString(&b, v, isFlexible, unsafe)
+					readNullableString(&b, &s.Topic, isFlexible, unsafe)
 				}
 			}
 			if isFlexible {
@@ -6248,16 +5844,13 @@ func (v *MetadataRequest) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if version >= 4 {
-		v := readBool(&b)
-		s.AllowAutoTopicCreation = v
+		s.AllowAutoTopicCreation = readBool(&b)
 	}
 	if version >= 8 && version <= 10 {
-		v := readBool(&b)
-		s.IncludeClusterAuthorizedOperations = v
+		s.IncludeClusterAuthorizedOperations = readBool(&b)
 	}
 	if version >= 8 {
-		v := readBool(&b)
-		s.IncludeTopicAuthorizedOperations = v
+		s.IncludeTopicAuthorizedOperations = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -6490,8 +6083,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 9
 	_ = isFlexible
 	if version >= 3 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Brokers
@@ -6499,20 +6091,16 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.NodeID
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.NodeID)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Port)
 			}
 			if version >= 1 {
-				v := v.Rack
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.Rack, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -6520,12 +6108,10 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 2 {
-		v := v.ClusterID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ClusterID, isFlexible)
 	}
 	if version >= 1 {
-		v := v.ControllerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ControllerID)
 	}
 	{
 		v := v.Topics
@@ -6533,31 +6119,24 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.Topic
 				if version < 12 {
 					var vv string
-					if v != nil {
-						vv = *v
+					if v.Topic != nil {
+						vv = *v.Topic
 					}
-					{
-						v := vv
-						dst = appendString(dst, v, isFlexible)
-					}
+					dst = appendString(dst, vv, isFlexible)
 				} else {
-					dst = appendNullableString(dst, v, isFlexible)
+					dst = appendNullableString(dst, v.Topic, isFlexible)
 				}
 			}
 			if version >= 10 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			if version >= 1 {
-				v := v.IsInternal
-				dst = appendBool(dst, v)
+				dst = appendBool(dst, v.IsInternal)
 			}
 			{
 				v := v.Partitions
@@ -6565,43 +6144,36 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.Leader
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Leader)
 					}
 					if version >= 7 {
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
 						v := v.Replicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					{
 						v := v.ISR
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if version >= 5 {
 						v := v.OfflineReplicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -6610,8 +6182,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if version >= 8 {
-				v := v.AuthorizedOperations
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.AuthorizedOperations)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -6619,12 +6190,10 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 8 && version <= 10 {
-		v := v.AuthorizedOperations
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.AuthorizedOperations)
 	}
 	if version >= 13 {
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -6646,8 +6215,7 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 3 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Brokers
@@ -6666,20 +6234,16 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt32(&b)
-				s.NodeID = v
+				s.NodeID = readInt32(&b)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Port = v
+				s.Port = readInt32(&b)
 			}
 			if version >= 1 {
-				v := &s.Rack
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.Rack, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -6689,12 +6253,10 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 		s.Brokers = v
 	}
 	if version >= 2 {
-		v := &s.ClusterID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ClusterID, isFlexible, unsafe)
 	}
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ControllerID = v
+		s.ControllerID = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -6713,26 +6275,22 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.Topic
 				if version < 12 {
-					vv := new(string)
-					readString(&b, vv, isFlexible, unsafe)
-					*v = vv
+					v := new(string)
+					readString(&b, v, isFlexible, unsafe)
+					s.Topic = v
 				} else {
-					readNullableString(&b, v, isFlexible, unsafe)
+					readNullableString(&b, &s.Topic, isFlexible, unsafe)
 				}
 			}
 			if version >= 10 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			if version >= 1 {
-				v := readBool(&b)
-				s.IsInternal = v
+				s.IsInternal = readBool(&b)
 			}
 			{
 				v := s.Partitions
@@ -6751,20 +6309,16 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.Leader = v
+						s.Leader = readInt32(&b)
 					}
 					if version >= 7 {
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
 						v := s.Replicas
@@ -6779,8 +6333,7 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Replicas = v
@@ -6798,8 +6351,7 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.ISR = v
@@ -6817,8 +6369,7 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.OfflineReplicas = v
@@ -6831,8 +6382,7 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 				s.Partitions = v
 			}
 			if version >= 8 {
-				v := readInt32(&b)
-				s.AuthorizedOperations = v
+				s.AuthorizedOperations = readInt32(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -6842,12 +6392,10 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if version >= 8 && version <= 10 {
-		v := readInt32(&b)
-		s.AuthorizedOperations = v
+		s.AuthorizedOperations = readInt32(&b)
 	}
 	if version >= 13 {
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -7064,24 +6612,19 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	{
-		v := v.ControllerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ControllerID)
 	}
 	if version >= 7 {
-		v := v.IsKRaftController
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IsKRaftController)
 	}
 	{
-		v := v.ControllerEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ControllerEpoch)
 	}
 	if version >= 2 {
-		v := v.BrokerEpoch
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.BrokerEpoch)
 	}
 	if version >= 5 {
-		v := v.Type
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.Type)
 	}
 	if version >= 0 && version <= 1 {
 		v := v.PartitionStates
@@ -7089,68 +6632,56 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 1 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.Partition
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Partition)
 			}
 			{
-				v := v.ControllerEpoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.ControllerEpoch)
 			}
 			{
-				v := v.Leader
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Leader)
 			}
 			{
-				v := v.LeaderEpoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.LeaderEpoch)
 			}
 			{
 				v := v.ISR
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			{
-				v := v.ZKVersion
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.ZKVersion)
 			}
 			{
 				v := v.Replicas
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if version >= 3 {
 				v := v.AddingReplicas
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if version >= 3 {
 				v := v.RemovingReplicas
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if version >= 1 {
-				v := v.IsNew
-				dst = appendBool(dst, v)
+				dst = appendBool(dst, v.IsNew)
 			}
 			if version >= 6 {
-				v := v.LeaderRecoveryState
-				dst = appendInt8(dst, v)
+				dst = appendInt8(dst, v.LeaderRecoveryState)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -7163,12 +6694,10 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 5 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.PartitionStates
@@ -7176,68 +6705,56 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					if version >= 0 && version <= 1 {
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ControllerEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.ControllerEpoch)
 					}
 					{
-						v := v.Leader
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Leader)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
 						v := v.ISR
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					{
-						v := v.ZKVersion
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.ZKVersion)
 					}
 					{
 						v := v.Replicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if version >= 3 {
 						v := v.AddingReplicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if version >= 3 {
 						v := v.RemovingReplicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if version >= 1 {
-						v := v.IsNew
-						dst = appendBool(dst, v)
+						dst = appendBool(dst, v.IsNew)
 					}
 					if version >= 6 {
-						v := v.LeaderRecoveryState
-						dst = appendInt8(dst, v)
+						dst = appendInt8(dst, v.LeaderRecoveryState)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -7255,16 +6772,13 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.BrokerID
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.BrokerID)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Port)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -7291,24 +6805,19 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ControllerID = v
+		s.ControllerID = readInt32(&b)
 	}
 	if version >= 7 {
-		v := readBool(&b)
-		s.IsKRaftController = v
+		s.IsKRaftController = readBool(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.ControllerEpoch = v
+		s.ControllerEpoch = readInt32(&b)
 	}
 	if version >= 2 {
-		v := readInt64(&b)
-		s.BrokerEpoch = v
+		s.BrokerEpoch = readInt64(&b)
 	}
 	if version >= 5 {
-		v := readInt8(&b)
-		s.Type = v
+		s.Type = readInt8(&b)
 	}
 	if version >= 0 && version <= 1 {
 		v := s.PartitionStates
@@ -7327,24 +6836,19 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 1 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Partition = v
+				s.Partition = readInt32(&b)
 			}
 			{
-				v := readInt32(&b)
-				s.ControllerEpoch = v
+				s.ControllerEpoch = readInt32(&b)
 			}
 			{
-				v := readInt32(&b)
-				s.Leader = v
+				s.Leader = readInt32(&b)
 			}
 			{
-				v := readInt32(&b)
-				s.LeaderEpoch = v
+				s.LeaderEpoch = readInt32(&b)
 			}
 			{
 				v := s.ISR
@@ -7359,15 +6863,13 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.ISR = v
 			}
 			{
-				v := readInt32(&b)
-				s.ZKVersion = v
+				s.ZKVersion = readInt32(&b)
 			}
 			{
 				v := s.Replicas
@@ -7382,8 +6884,7 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Replicas = v
@@ -7401,8 +6902,7 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.AddingReplicas = v
@@ -7420,19 +6920,16 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.RemovingReplicas = v
 			}
 			if version >= 1 {
-				v := readBool(&b)
-				s.IsNew = v
+				s.IsNew = readBool(&b)
 			}
 			if version >= 6 {
-				v := readInt8(&b)
-				s.LeaderRecoveryState = v
+				s.LeaderRecoveryState = readInt8(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -7458,12 +6955,10 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 5 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.PartitionStates
@@ -7482,24 +6977,19 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 0 && version <= 1 {
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.ControllerEpoch = v
+						s.ControllerEpoch = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.Leader = v
+						s.Leader = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
 						v := s.ISR
@@ -7514,15 +7004,13 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.ISR = v
 					}
 					{
-						v := readInt32(&b)
-						s.ZKVersion = v
+						s.ZKVersion = readInt32(&b)
 					}
 					{
 						v := s.Replicas
@@ -7537,8 +7025,7 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Replicas = v
@@ -7556,8 +7043,7 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.AddingReplicas = v
@@ -7575,19 +7061,16 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.RemovingReplicas = v
 					}
 					if version >= 1 {
-						v := readBool(&b)
-						s.IsNew = v
+						s.IsNew = readBool(&b)
 					}
 					if version >= 6 {
-						v := readInt8(&b)
-						s.LeaderRecoveryState = v
+						s.LeaderRecoveryState = readInt8(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -7620,16 +7103,13 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt32(&b)
-				s.BrokerID = v
+				s.BrokerID = readInt32(&b)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Port = v
+				s.Port = readInt32(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -7718,8 +7198,7 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if version >= 0 && version <= 4 {
 		v := v.Partitions
@@ -7727,16 +7206,13 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 4 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.Partition
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Partition)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -7749,8 +7225,7 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -7758,16 +7233,13 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					if version >= 0 && version <= 4 {
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -7799,8 +7271,7 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if version >= 0 && version <= 4 {
 		v := s.Partitions
@@ -7819,16 +7290,13 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 4 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Partition = v
+				s.Partition = readInt32(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -7854,8 +7322,7 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -7874,16 +7341,13 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 0 && version <= 4 {
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -8040,24 +7504,19 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ControllerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ControllerID)
 	}
 	{
-		v := v.ControllerEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ControllerEpoch)
 	}
 	if version >= 4 {
-		v := v.IsKRaftController
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IsKRaftController)
 	}
 	if version >= 1 {
-		v := v.BrokerEpoch
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.BrokerEpoch)
 	}
 	if version >= 0 && version <= 2 {
-		v := v.DeletePartitions
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.DeletePartitions)
 	}
 	{
 		v := v.Topics
@@ -8065,19 +7524,16 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 0 && version <= 0 {
-				v := v.Partition
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Partition)
 			}
 			if version >= 1 && version <= 2 {
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if version >= 3 {
@@ -8086,16 +7542,13 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
-						v := v.Delete
-						dst = appendBool(dst, v)
+						dst = appendBool(dst, v.Delete)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -8127,24 +7580,19 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ControllerID = v
+		s.ControllerID = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.ControllerEpoch = v
+		s.ControllerEpoch = readInt32(&b)
 	}
 	if version >= 4 {
-		v := readBool(&b)
-		s.IsKRaftController = v
+		s.IsKRaftController = readBool(&b)
 	}
 	if version >= 1 {
-		v := readInt64(&b)
-		s.BrokerEpoch = v
+		s.BrokerEpoch = readInt64(&b)
 	}
 	if version >= 0 && version <= 2 {
-		v := readBool(&b)
-		s.DeletePartitions = v
+		s.DeletePartitions = readBool(&b)
 	}
 	{
 		v := s.Topics
@@ -8163,12 +7611,10 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 0 && version <= 0 {
-				v := readInt32(&b)
-				s.Partition = v
+				s.Partition = readInt32(&b)
 			}
 			if version >= 1 && version <= 2 {
 				v := s.Partitions
@@ -8183,8 +7629,7 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -8206,16 +7651,13 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
-						v := readBool(&b)
-						s.Delete = v
+						s.Delete = readBool(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -8312,8 +7754,7 @@ func (v *StopReplicaResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.Partitions
@@ -8321,16 +7762,13 @@ func (v *StopReplicaResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.Partition
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Partition)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -8357,8 +7795,7 @@ func (v *StopReplicaResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.Partitions
@@ -8377,16 +7814,13 @@ func (v *StopReplicaResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Partition = v
+				s.Partition = readInt32(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -8602,20 +8036,16 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 6
 	_ = isFlexible
 	{
-		v := v.ControllerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ControllerID)
 	}
 	if version >= 8 {
-		v := v.IsKRaftController
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IsKRaftController)
 	}
 	{
-		v := v.ControllerEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ControllerEpoch)
 	}
 	if version >= 5 {
-		v := v.BrokerEpoch
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.BrokerEpoch)
 	}
 	if version >= 0 && version <= 4 {
 		v := v.PartitionStates
@@ -8623,51 +8053,42 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 4 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.Partition
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Partition)
 			}
 			{
-				v := v.ControllerEpoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.ControllerEpoch)
 			}
 			{
-				v := v.Leader
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Leader)
 			}
 			{
-				v := v.LeaderEpoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.LeaderEpoch)
 			}
 			{
 				v := v.ISR
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			{
-				v := v.ZKVersion
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.ZKVersion)
 			}
 			{
 				v := v.Replicas
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if version >= 4 {
 				v := v.OfflineReplicas
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -8681,12 +8102,10 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 7 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.PartitionStates
@@ -8694,51 +8113,42 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					if version >= 0 && version <= 4 {
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ControllerEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.ControllerEpoch)
 					}
 					{
-						v := v.Leader
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Leader)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
 						v := v.ISR
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					{
-						v := v.ZKVersion
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.ZKVersion)
 					}
 					{
 						v := v.Replicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if version >= 4 {
 						v := v.OfflineReplicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -8757,16 +8167,13 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ID
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.ID)
 			}
 			if version >= 0 && version <= 0 {
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			if version >= 0 && version <= 0 {
-				v := v.Port
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Port)
 			}
 			if version >= 1 {
 				v := v.Endpoints
@@ -8774,20 +8181,16 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Port
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Port)
 					}
 					{
-						v := v.Host
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Host, isFlexible)
 					}
 					if version >= 3 {
-						v := v.ListenerName
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.ListenerName, isFlexible)
 					}
 					{
-						v := v.SecurityProtocol
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.SecurityProtocol)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -8795,8 +8198,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if version >= 2 {
-				v := v.Rack
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.Rack, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -8823,20 +8225,16 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ControllerID = v
+		s.ControllerID = readInt32(&b)
 	}
 	if version >= 8 {
-		v := readBool(&b)
-		s.IsKRaftController = v
+		s.IsKRaftController = readBool(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.ControllerEpoch = v
+		s.ControllerEpoch = readInt32(&b)
 	}
 	if version >= 5 {
-		v := readInt64(&b)
-		s.BrokerEpoch = v
+		s.BrokerEpoch = readInt64(&b)
 	}
 	if version >= 0 && version <= 4 {
 		v := s.PartitionStates
@@ -8855,24 +8253,19 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 4 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Partition = v
+				s.Partition = readInt32(&b)
 			}
 			{
-				v := readInt32(&b)
-				s.ControllerEpoch = v
+				s.ControllerEpoch = readInt32(&b)
 			}
 			{
-				v := readInt32(&b)
-				s.Leader = v
+				s.Leader = readInt32(&b)
 			}
 			{
-				v := readInt32(&b)
-				s.LeaderEpoch = v
+				s.LeaderEpoch = readInt32(&b)
 			}
 			{
 				v := s.ISR
@@ -8887,15 +8280,13 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.ISR = v
 			}
 			{
-				v := readInt32(&b)
-				s.ZKVersion = v
+				s.ZKVersion = readInt32(&b)
 			}
 			{
 				v := s.Replicas
@@ -8910,8 +8301,7 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Replicas = v
@@ -8929,8 +8319,7 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.OfflineReplicas = v
@@ -8959,12 +8348,10 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 7 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.PartitionStates
@@ -8983,24 +8370,19 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 0 && version <= 4 {
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.ControllerEpoch = v
+						s.ControllerEpoch = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.Leader = v
+						s.Leader = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
 						v := s.ISR
@@ -9015,15 +8397,13 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.ISR = v
 					}
 					{
-						v := readInt32(&b)
-						s.ZKVersion = v
+						s.ZKVersion = readInt32(&b)
 					}
 					{
 						v := s.Replicas
@@ -9038,8 +8418,7 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Replicas = v
@@ -9057,8 +8436,7 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.OfflineReplicas = v
@@ -9094,16 +8472,13 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt32(&b)
-				s.ID = v
+				s.ID = readInt32(&b)
 			}
 			if version >= 0 && version <= 0 {
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			if version >= 0 && version <= 0 {
-				v := readInt32(&b)
-				s.Port = v
+				s.Port = readInt32(&b)
 			}
 			if version >= 1 {
 				v := s.Endpoints
@@ -9122,20 +8497,16 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Port = v
+						s.Port = readInt32(&b)
 					}
 					{
-						v := &s.Host
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Host, isFlexible, unsafe)
 					}
 					if version >= 3 {
-						v := &s.ListenerName
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.ListenerName, isFlexible, unsafe)
 					}
 					{
-						v := readInt16(&b)
-						s.SecurityProtocol = v
+						s.SecurityProtocol = readInt16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -9145,8 +8516,7 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				s.Endpoints = v
 			}
 			if version >= 2 {
-				v := &s.Rack
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.Rack, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -9210,8 +8580,7 @@ func (v *UpdateMetadataResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 6
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -9233,8 +8602,7 @@ func (v *UpdateMetadataResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -9314,12 +8682,10 @@ func (v *ControlledShutdownRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	{
-		v := v.BrokerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.BrokerID)
 	}
 	if version >= 2 {
-		v := v.BrokerEpoch
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.BrokerEpoch)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -9341,12 +8707,10 @@ func (v *ControlledShutdownRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.BrokerID = v
+		s.BrokerID = readInt32(&b)
 	}
 	if version >= 2 {
-		v := readInt64(&b)
-		s.BrokerEpoch = v
+		s.BrokerEpoch = readInt64(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -9428,8 +8792,7 @@ func (v *ControlledShutdownResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.PartitionsRemaining
@@ -9437,12 +8800,10 @@ func (v *ControlledShutdownResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.Partition
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Partition)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -9469,8 +8830,7 @@ func (v *ControlledShutdownResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.PartitionsRemaining
@@ -9489,12 +8849,10 @@ func (v *ControlledShutdownResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Partition = v
+				s.Partition = readInt32(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -9681,24 +9039,19 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 8
 	_ = isFlexible
 	{
-		v := v.Group
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Group, isFlexible)
 	}
 	if version >= 1 {
-		v := v.Generation
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.Generation)
 	}
 	if version >= 1 {
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	if version >= 7 {
-		v := v.InstanceID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.InstanceID, isFlexible)
 	}
 	if version >= 2 && version <= 4 {
-		v := v.RetentionTimeMillis
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.RetentionTimeMillis)
 	}
 	{
 		v := v.Topics
@@ -9706,12 +9059,10 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 9 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 10 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -9719,24 +9070,19 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.Offset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Offset)
 					}
 					if version >= 1 && version <= 1 {
-						v := v.Timestamp
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Timestamp)
 					}
 					if version >= 6 {
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
-						v := v.Metadata
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Metadata, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -9768,24 +9114,19 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.Group
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Group, isFlexible, unsafe)
 	}
 	if version >= 1 {
-		v := readInt32(&b)
-		s.Generation = v
+		s.Generation = readInt32(&b)
 	}
 	if version >= 1 {
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	if version >= 7 {
-		v := &s.InstanceID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 	}
 	if version >= 2 && version <= 4 {
-		v := readInt64(&b)
-		s.RetentionTimeMillis = v
+		s.RetentionTimeMillis = readInt64(&b)
 	}
 	{
 		v := s.Topics
@@ -9804,12 +9145,10 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 9 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 10 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -9828,24 +9167,19 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.Offset = v
+						s.Offset = readInt64(&b)
 					}
 					if version >= 1 && version <= 1 {
-						v := readInt64(&b)
-						s.Timestamp = v
+						s.Timestamp = readInt64(&b)
 					}
 					if version >= 6 {
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
-						v := &s.Metadata
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Metadata, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -10012,8 +9346,7 @@ func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 8
 	_ = isFlexible
 	if version >= 3 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -10021,12 +9354,10 @@ func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 9 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 10 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -10034,12 +9365,10 @@ func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -10071,8 +9400,7 @@ func (v *OffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 3 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -10091,12 +9419,10 @@ func (v *OffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 9 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 10 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -10115,12 +9441,10 @@ func (v *OffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -10306,8 +9630,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 6
 	_ = isFlexible
 	if version >= 0 && version <= 7 {
-		v := v.Group
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Group, isFlexible)
 	}
 	if version >= 0 && version <= 7 {
 		v := v.Topics
@@ -10319,15 +9642,13 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -10341,16 +9662,13 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Group
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Group, isFlexible)
 			}
 			if version >= 9 {
-				v := v.MemberID
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.MemberID, isFlexible)
 			}
 			if version >= 9 {
-				v := v.MemberEpoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.MemberEpoch)
 			}
 			{
 				v := v.Topics
@@ -10358,19 +9676,16 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					if version >= 8 && version <= 9 {
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					if version >= 10 {
-						v := v.TopicID
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v.TopicID)
 					}
 					{
 						v := v.Partitions
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -10384,8 +9699,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 7 {
-		v := v.RequireStable
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.RequireStable)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -10407,8 +9721,7 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 0 && version <= 7 {
-		v := &s.Group
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Group, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 7 {
 		v := s.Topics
@@ -10430,8 +9743,7 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -10446,8 +9758,7 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -10476,16 +9787,13 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Group
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Group, isFlexible, unsafe)
 			}
 			if version >= 9 {
-				v := &s.MemberID
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.MemberID, isFlexible, unsafe)
 			}
 			if version >= 9 {
-				v := readInt32(&b)
-				s.MemberEpoch = v
+				s.MemberEpoch = readInt32(&b)
 			}
 			{
 				v := s.Topics
@@ -10507,12 +9815,10 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 8 && version <= 9 {
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					if version >= 10 {
-						v := readUuid(&b)
-						s.TopicID = v
+						s.TopicID = readUuid(&b)
 					}
 					{
 						v := s.Partitions
@@ -10527,8 +9833,7 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Partitions = v
@@ -10548,8 +9853,7 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 		s.Groups = v
 	}
 	if version >= 7 {
-		v := readBool(&b)
-		s.RequireStable = v
+		s.RequireStable = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -10792,8 +10096,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 6
 	_ = isFlexible
 	if version >= 3 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if version >= 0 && version <= 7 {
 		v := v.Topics
@@ -10801,8 +10104,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -10810,24 +10112,19 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.Offset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Offset)
 					}
 					if version >= 5 {
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
-						v := v.Metadata
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Metadata, isFlexible)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -10840,8 +10137,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 2 && version <= 7 {
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if version >= 8 {
 		v := v.Groups
@@ -10849,8 +10145,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Group
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Group, isFlexible)
 			}
 			{
 				v := v.Topics
@@ -10858,12 +10153,10 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					if version >= 8 && version <= 9 {
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					if version >= 10 {
-						v := v.TopicID
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v.TopicID)
 					}
 					{
 						v := v.Partitions
@@ -10871,24 +10164,19 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.Partition
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.Partition)
 							}
 							{
-								v := v.Offset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.Offset)
 							}
 							{
-								v := v.LeaderEpoch
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.LeaderEpoch)
 							}
 							{
-								v := v.Metadata
-								dst = appendNullableString(dst, v, isFlexible)
+								dst = appendNullableString(dst, v.Metadata, isFlexible)
 							}
 							{
-								v := v.ErrorCode
-								dst = appendInt16(dst, v)
+								dst = appendInt16(dst, v.ErrorCode)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -10901,8 +10189,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -10929,8 +10216,7 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 3 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if version >= 0 && version <= 7 {
 		v := s.Topics
@@ -10949,8 +10235,7 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -10969,24 +10254,19 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.Offset = v
+						s.Offset = readInt64(&b)
 					}
 					if version >= 5 {
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
-						v := &s.Metadata
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Metadata, isFlexible, unsafe)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -11003,8 +10283,7 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if version >= 2 && version <= 7 {
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if version >= 8 {
 		v := s.Groups
@@ -11023,8 +10302,7 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Group
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Group, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -11043,12 +10321,10 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 8 && version <= 9 {
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					if version >= 10 {
-						v := readUuid(&b)
-						s.TopicID = v
+						s.TopicID = readUuid(&b)
 					}
 					{
 						v := s.Partitions
@@ -11067,24 +10343,19 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.Partition = v
+								s.Partition = readInt32(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.Offset = v
+								s.Offset = readInt64(&b)
 							}
 							{
-								v := readInt32(&b)
-								s.LeaderEpoch = v
+								s.LeaderEpoch = readInt32(&b)
 							}
 							{
-								v := &s.Metadata
-								readNullableString(&b, v, isFlexible, unsafe)
+								readNullableString(&b, &s.Metadata, isFlexible, unsafe)
 							}
 							{
-								v := readInt16(&b)
-								s.ErrorCode = v
+								s.ErrorCode = readInt16(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -11101,8 +10372,7 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 				s.Topics = v
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -11193,19 +10463,16 @@ func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	if version >= 0 && version <= 3 {
-		v := v.CoordinatorKey
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.CoordinatorKey, isFlexible)
 	}
 	if version >= 1 {
-		v := v.CoordinatorType
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.CoordinatorType)
 	}
 	if version >= 4 {
 		v := v.CoordinatorKeys
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	if isFlexible {
@@ -11228,12 +10495,10 @@ func (v *FindCoordinatorRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 0 && version <= 3 {
-		v := &s.CoordinatorKey
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.CoordinatorKey, isFlexible, unsafe)
 	}
 	if version >= 1 {
-		v := readInt8(&b)
-		s.CoordinatorType = v
+		s.CoordinatorType = readInt8(&b)
 	}
 	if version >= 4 {
 		v := s.CoordinatorKeys
@@ -11248,8 +10513,7 @@ func (v *FindCoordinatorRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.CoordinatorKeys = v
@@ -11382,28 +10646,22 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	if version >= 1 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if version >= 0 && version <= 3 {
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if version >= 1 && version <= 3 {
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	if version >= 0 && version <= 3 {
-		v := v.NodeID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.NodeID)
 	}
 	if version >= 0 && version <= 3 {
-		v := v.Host
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Host, isFlexible)
 	}
 	if version >= 0 && version <= 3 {
-		v := v.Port
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.Port)
 	}
 	if version >= 4 {
 		v := v.Coordinators
@@ -11411,28 +10669,22 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Key
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Key, isFlexible)
 			}
 			{
-				v := v.NodeID
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.NodeID)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Port)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -11459,28 +10711,22 @@ func (v *FindCoordinatorResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if version >= 0 && version <= 3 {
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if version >= 1 && version <= 3 {
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 3 {
-		v := readInt32(&b)
-		s.NodeID = v
+		s.NodeID = readInt32(&b)
 	}
 	if version >= 0 && version <= 3 {
-		v := &s.Host
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Host, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 3 {
-		v := readInt32(&b)
-		s.Port = v
+		s.Port = readInt32(&b)
 	}
 	if version >= 4 {
 		v := s.Coordinators
@@ -11499,28 +10745,22 @@ func (v *FindCoordinatorResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Key
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Key, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.NodeID = v
+				s.NodeID = readInt32(&b)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Port = v
+				s.Port = readInt32(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -11692,28 +10932,22 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 6
 	_ = isFlexible
 	{
-		v := v.Group
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Group, isFlexible)
 	}
 	{
-		v := v.SessionTimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.SessionTimeoutMillis)
 	}
 	if version >= 1 {
-		v := v.RebalanceTimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.RebalanceTimeoutMillis)
 	}
 	{
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	if version >= 5 {
-		v := v.InstanceID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.InstanceID, isFlexible)
 	}
 	{
-		v := v.ProtocolType
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.ProtocolType, isFlexible)
 	}
 	{
 		v := v.Protocols
@@ -11721,12 +10955,10 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			{
-				v := v.Metadata
-				dst = appendBytes(dst, v, isFlexible)
+				dst = appendBytes(dst, v.Metadata, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -11734,8 +10966,7 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 8 {
-		v := v.Reason
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.Reason, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -11757,28 +10988,22 @@ func (v *JoinGroupRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.Group
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Group, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.SessionTimeoutMillis = v
+		s.SessionTimeoutMillis = readInt32(&b)
 	}
 	if version >= 1 {
-		v := readInt32(&b)
-		s.RebalanceTimeoutMillis = v
+		s.RebalanceTimeoutMillis = readInt32(&b)
 	}
 	{
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	if version >= 5 {
-		v := &s.InstanceID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 	}
 	{
-		v := &s.ProtocolType
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.ProtocolType, isFlexible, unsafe)
 	}
 	{
 		v := s.Protocols
@@ -11797,12 +11022,10 @@ func (v *JoinGroupRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			{
-				v := &s.Metadata
-				readBytes(&b, v, isFlexible)
+				readBytes(&b, &s.Metadata, isFlexible)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -11812,8 +11035,7 @@ func (v *JoinGroupRequest) readFrom(src []byte, unsafe bool) error {
 		s.Protocols = v
 	}
 	if version >= 8 {
-		v := &s.Reason
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.Reason, isFlexible, unsafe)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -11973,47 +11195,36 @@ func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 6
 	_ = isFlexible
 	if version >= 2 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.Generation
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.Generation)
 	}
 	if version >= 7 {
-		v := v.ProtocolType
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ProtocolType, isFlexible)
 	}
 	{
-		v := v.Protocol
 		if version < 7 {
 			var vv string
-			if v != nil {
-				vv = *v
+			if v.Protocol != nil {
+				vv = *v.Protocol
 			}
-			{
-				v := vv
-				dst = appendString(dst, v, isFlexible)
-			}
+			dst = appendString(dst, vv, isFlexible)
 		} else {
-			dst = appendNullableString(dst, v, isFlexible)
+			dst = appendNullableString(dst, v.Protocol, isFlexible)
 		}
 	}
 	{
-		v := v.LeaderID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.LeaderID, isFlexible)
 	}
 	if version >= 9 {
-		v := v.SkipAssignment
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.SkipAssignment)
 	}
 	{
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	{
 		v := v.Members
@@ -12021,16 +11232,13 @@ func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.MemberID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.MemberID, isFlexible)
 			}
 			if version >= 5 {
-				v := v.InstanceID
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.InstanceID, isFlexible)
 			}
 			{
-				v := v.ProtocolMetadata
-				dst = appendBytes(dst, v, isFlexible)
+				dst = appendBytes(dst, v.ProtocolMetadata, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -12057,42 +11265,34 @@ func (v *JoinGroupResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 2 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.Generation = v
+		s.Generation = readInt32(&b)
 	}
 	if version >= 7 {
-		v := &s.ProtocolType
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ProtocolType, isFlexible, unsafe)
 	}
 	{
-		v := &s.Protocol
 		if version < 7 {
-			vv := new(string)
-			readString(&b, vv, isFlexible, unsafe)
-			*v = vv
+			v := new(string)
+			readString(&b, v, isFlexible, unsafe)
+			s.Protocol = v
 		} else {
-			readNullableString(&b, v, isFlexible, unsafe)
+			readNullableString(&b, &s.Protocol, isFlexible, unsafe)
 		}
 	}
 	{
-		v := &s.LeaderID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.LeaderID, isFlexible, unsafe)
 	}
 	if version >= 9 {
-		v := readBool(&b)
-		s.SkipAssignment = v
+		s.SkipAssignment = readBool(&b)
 	}
 	{
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	{
 		v := s.Members
@@ -12111,16 +11311,13 @@ func (v *JoinGroupResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.MemberID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.MemberID, isFlexible, unsafe)
 			}
 			if version >= 5 {
-				v := &s.InstanceID
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 			}
 			{
-				v := &s.ProtocolMetadata
-				readBytes(&b, v, isFlexible)
+				readBytes(&b, &s.ProtocolMetadata, isFlexible)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -12207,20 +11404,16 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	{
-		v := v.Group
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Group, isFlexible)
 	}
 	{
-		v := v.Generation
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.Generation)
 	}
 	{
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	if version >= 3 {
-		v := v.InstanceID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.InstanceID, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -12242,20 +11435,16 @@ func (v *HeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.Group
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Group, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.Generation = v
+		s.Generation = readInt32(&b)
 	}
 	{
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		v := &s.InstanceID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -12338,12 +11527,10 @@ func (v *HeartbeatResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	if version >= 1 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -12365,12 +11552,10 @@ func (v *HeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -12476,12 +11661,10 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	{
-		v := v.Group
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Group, isFlexible)
 	}
 	if version >= 0 && version <= 2 {
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	if version >= 3 {
 		v := v.Members
@@ -12489,16 +11672,13 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.MemberID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.MemberID, isFlexible)
 			}
 			{
-				v := v.InstanceID
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.InstanceID, isFlexible)
 			}
 			if version >= 5 {
-				v := v.Reason
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.Reason, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -12525,12 +11705,10 @@ func (v *LeaveGroupRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.Group
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Group, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 2 {
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	if version >= 3 {
 		v := s.Members
@@ -12549,16 +11727,13 @@ func (v *LeaveGroupRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.MemberID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.MemberID, isFlexible, unsafe)
 			}
 			{
-				v := &s.InstanceID
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 			}
 			if version >= 5 {
-				v := &s.Reason
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.Reason, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -12675,12 +11850,10 @@ func (v *LeaveGroupResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	if version >= 1 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if version >= 3 {
 		v := v.Members
@@ -12688,16 +11861,13 @@ func (v *LeaveGroupResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.MemberID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.MemberID, isFlexible)
 			}
 			{
-				v := v.InstanceID
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.InstanceID, isFlexible)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -12724,12 +11894,10 @@ func (v *LeaveGroupResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if version >= 3 {
 		v := s.Members
@@ -12748,16 +11916,13 @@ func (v *LeaveGroupResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.MemberID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.MemberID, isFlexible, unsafe)
 			}
 			{
-				v := &s.InstanceID
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -12882,28 +12047,22 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	{
-		v := v.Group
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Group, isFlexible)
 	}
 	{
-		v := v.Generation
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.Generation)
 	}
 	{
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	if version >= 3 {
-		v := v.InstanceID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.InstanceID, isFlexible)
 	}
 	if version >= 5 {
-		v := v.ProtocolType
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ProtocolType, isFlexible)
 	}
 	if version >= 5 {
-		v := v.Protocol
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.Protocol, isFlexible)
 	}
 	{
 		v := v.GroupAssignment
@@ -12911,12 +12070,10 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.MemberID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.MemberID, isFlexible)
 			}
 			{
-				v := v.MemberAssignment
-				dst = appendBytes(dst, v, isFlexible)
+				dst = appendBytes(dst, v.MemberAssignment, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -12943,28 +12100,22 @@ func (v *SyncGroupRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.Group
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Group, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.Generation = v
+		s.Generation = readInt32(&b)
 	}
 	{
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		v := &s.InstanceID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 	}
 	if version >= 5 {
-		v := &s.ProtocolType
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ProtocolType, isFlexible, unsafe)
 	}
 	if version >= 5 {
-		v := &s.Protocol
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.Protocol, isFlexible, unsafe)
 	}
 	{
 		v := s.GroupAssignment
@@ -12983,12 +12134,10 @@ func (v *SyncGroupRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.MemberID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.MemberID, isFlexible, unsafe)
 			}
 			{
-				v := &s.MemberAssignment
-				readBytes(&b, v, isFlexible)
+				readBytes(&b, &s.MemberAssignment, isFlexible)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -13090,24 +12239,19 @@ func (v *SyncGroupResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	if version >= 1 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if version >= 5 {
-		v := v.ProtocolType
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ProtocolType, isFlexible)
 	}
 	if version >= 5 {
-		v := v.Protocol
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.Protocol, isFlexible)
 	}
 	{
-		v := v.MemberAssignment
-		dst = appendBytes(dst, v, isFlexible)
+		dst = appendBytes(dst, v.MemberAssignment, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -13129,24 +12273,19 @@ func (v *SyncGroupResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if version >= 5 {
-		v := &s.ProtocolType
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ProtocolType, isFlexible, unsafe)
 	}
 	if version >= 5 {
-		v := &s.Protocol
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.Protocol, isFlexible, unsafe)
 	}
 	{
-		v := &s.MemberAssignment
-		readBytes(&b, v, isFlexible)
+		readBytes(&b, &s.MemberAssignment, isFlexible)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -13223,13 +12362,11 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 		v := v.Groups
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	if version >= 3 {
-		v := v.IncludeAuthorizedOperations
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IncludeAuthorizedOperations)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -13263,15 +12400,13 @@ func (v *DescribeGroupsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.Groups = v
 	}
 	if version >= 3 {
-		v := readBool(&b)
-		s.IncludeAuthorizedOperations = v
+		s.IncludeAuthorizedOperations = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -13442,8 +12577,7 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 5
 	_ = isFlexible
 	if version >= 1 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Groups
@@ -13451,28 +12585,22 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			if version >= 6 {
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			{
-				v := v.Group
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Group, isFlexible)
 			}
 			{
-				v := v.State
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.State, isFlexible)
 			}
 			{
-				v := v.ProtocolType
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ProtocolType, isFlexible)
 			}
 			{
-				v := v.Protocol
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Protocol, isFlexible)
 			}
 			{
 				v := v.Members
@@ -13480,28 +12608,22 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.MemberID
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.MemberID, isFlexible)
 					}
 					if version >= 4 {
-						v := v.InstanceID
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.InstanceID, isFlexible)
 					}
 					{
-						v := v.ClientID
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.ClientID, isFlexible)
 					}
 					{
-						v := v.ClientHost
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.ClientHost, isFlexible)
 					}
 					{
-						v := v.ProtocolMetadata
-						dst = appendBytes(dst, v, isFlexible)
+						dst = appendBytes(dst, v.ProtocolMetadata, isFlexible)
 					}
 					{
-						v := v.MemberAssignment
-						dst = appendBytes(dst, v, isFlexible)
+						dst = appendBytes(dst, v.MemberAssignment, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -13509,8 +12631,7 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if version >= 3 {
-				v := v.AuthorizedOperations
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.AuthorizedOperations)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -13537,8 +12658,7 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Groups
@@ -13557,28 +12677,22 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			if version >= 6 {
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			{
-				v := &s.Group
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Group, isFlexible, unsafe)
 			}
 			{
-				v := &s.State
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.State, isFlexible, unsafe)
 			}
 			{
-				v := &s.ProtocolType
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ProtocolType, isFlexible, unsafe)
 			}
 			{
-				v := &s.Protocol
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Protocol, isFlexible, unsafe)
 			}
 			{
 				v := s.Members
@@ -13597,28 +12711,22 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.MemberID
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.MemberID, isFlexible, unsafe)
 					}
 					if version >= 4 {
-						v := &s.InstanceID
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 					}
 					{
-						v := &s.ClientID
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.ClientID, isFlexible, unsafe)
 					}
 					{
-						v := &s.ClientHost
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.ClientHost, isFlexible, unsafe)
 					}
 					{
-						v := &s.ProtocolMetadata
-						readBytes(&b, v, isFlexible)
+						readBytes(&b, &s.ProtocolMetadata, isFlexible)
 					}
 					{
-						v := &s.MemberAssignment
-						readBytes(&b, v, isFlexible)
+						readBytes(&b, &s.MemberAssignment, isFlexible)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -13628,8 +12736,7 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 				s.Members = v
 			}
 			if version >= 3 {
-				v := readInt32(&b)
-				s.AuthorizedOperations = v
+				s.AuthorizedOperations = readInt32(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -13717,16 +12824,14 @@ func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
 		v := v.StatesFilter
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	if version >= 5 {
 		v := v.TypesFilter
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	if isFlexible {
@@ -13761,8 +12866,7 @@ func (v *ListGroupsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.StatesFilter = v
@@ -13780,8 +12884,7 @@ func (v *ListGroupsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.TypesFilter = v
@@ -13887,12 +12990,10 @@ func (v *ListGroupsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	if version >= 1 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.Groups
@@ -13900,20 +13001,16 @@ func (v *ListGroupsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Group
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Group, isFlexible)
 			}
 			{
-				v := v.ProtocolType
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ProtocolType, isFlexible)
 			}
 			if version >= 4 {
-				v := v.GroupState
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.GroupState, isFlexible)
 			}
 			if version >= 5 {
-				v := v.GroupType
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.GroupType, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -13940,12 +13037,10 @@ func (v *ListGroupsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.Groups
@@ -13964,20 +13059,16 @@ func (v *ListGroupsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Group
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Group, isFlexible, unsafe)
 			}
 			{
-				v := &s.ProtocolType
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ProtocolType, isFlexible, unsafe)
 			}
 			if version >= 4 {
-				v := &s.GroupState
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.GroupState, isFlexible, unsafe)
 			}
 			if version >= 5 {
-				v := &s.GroupType
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.GroupType, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -14054,8 +13145,7 @@ func (v *SASLHandshakeRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.Mechanism
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendString(dst, v.Mechanism)
 	}
 	return dst
 }
@@ -14072,8 +13162,7 @@ func (v *SASLHandshakeRequest) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := &s.Mechanism
-		readString(&b, v, false, unsafe)
+		readString(&b, &s.Mechanism, false, unsafe)
 	}
 	return b.Complete()
 }
@@ -14127,15 +13216,13 @@ func (v *SASLHandshakeResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.SupportedMechanisms
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
-			v := v[i]
-			dst = kbin.AppendString(dst, v)
+			dst = kbin.AppendString(dst, v[i])
 		}
 	}
 	return dst
@@ -14153,8 +13240,7 @@ func (v *SASLHandshakeResponse) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.SupportedMechanisms
@@ -14169,8 +13255,7 @@ func (v *SASLHandshakeResponse) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, false, unsafe)
+			readString(&b, &a[i], false, unsafe)
 		}
 		v = a
 		s.SupportedMechanisms = v
@@ -14277,20 +13362,16 @@ func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	if version >= 3 {
-		v := v.ClientSoftwareName
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.ClientSoftwareName, isFlexible)
 	}
 	if version >= 3 {
-		v := v.ClientSoftwareVersion
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.ClientSoftwareVersion, isFlexible)
 	}
 	if version >= 5 {
-		v := v.ClusterID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ClusterID, isFlexible)
 	}
 	if version >= 5 {
-		v := v.NodeID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.NodeID)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -14312,20 +13393,16 @@ func (v *ApiVersionsRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 3 {
-		v := &s.ClientSoftwareName
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.ClientSoftwareName, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		v := &s.ClientSoftwareVersion
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.ClientSoftwareVersion, isFlexible, unsafe)
 	}
 	if version >= 5 {
-		v := &s.ClusterID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ClusterID, isFlexible, unsafe)
 	}
 	if version >= 5 {
-		v := readInt32(&b)
-		s.NodeID = v
+		s.NodeID = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -14501,8 +13578,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.ApiKeys
@@ -14510,16 +13586,13 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ApiKey
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ApiKey)
 			}
 			{
-				v := v.MinVersion
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.MinVersion)
 			}
 			{
-				v := v.MaxVersion
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.MaxVersion)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -14527,8 +13600,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 1 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if isFlexible {
 		var toEncode []uint32
@@ -14558,16 +13630,13 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					for i := range v {
 						v := &v[i]
 						{
-							v := v.Name
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v.Name, isFlexible)
 						}
 						{
-							v := v.MinVersion
-							dst = appendInt16(dst, v)
+							dst = appendInt16(dst, v.MinVersion)
 						}
 						{
-							v := v.MaxVersion
-							dst = appendInt16(dst, v)
+							dst = appendInt16(dst, v.MaxVersion)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
@@ -14597,16 +13666,13 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					for i := range v {
 						v := &v[i]
 						{
-							v := v.Name
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v.Name, isFlexible)
 						}
 						{
-							v := v.MaxVersionLevel
-							dst = appendInt16(dst, v)
+							dst = appendInt16(dst, v.MaxVersionLevel)
 						}
 						{
-							v := v.MinVersionLevel
-							dst = appendInt16(dst, v)
+							dst = appendInt16(dst, v.MinVersionLevel)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
@@ -14646,8 +13712,7 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.ApiKeys
@@ -14666,16 +13731,13 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ApiKey = v
+				s.ApiKey = readInt16(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.MinVersion = v
+				s.MinVersion = readInt16(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.MaxVersion = v
+				s.MaxVersion = readInt16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -14685,8 +13747,7 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 		s.ApiKeys = v
 	}
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if isFlexible {
 		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -14711,16 +13772,13 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Name
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Name, isFlexible, unsafe)
 					}
 					{
-						v := readInt16(&b)
-						s.MinVersion = v
+						s.MinVersion = readInt16(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.MaxVersion = v
+						s.MaxVersion = readInt16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -14733,8 +13791,7 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 			case 1:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				v := readInt64(&b)
-				s.FinalizedFeaturesEpoch = v
+				s.FinalizedFeaturesEpoch = readInt64(&b)
 				if err := b.Complete(); err != nil {
 					return err
 				}
@@ -14756,16 +13813,13 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Name
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Name, isFlexible, unsafe)
 					}
 					{
-						v := readInt16(&b)
-						s.MaxVersionLevel = v
+						s.MaxVersionLevel = readInt16(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.MinVersionLevel = v
+						s.MinVersionLevel = readInt16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -14778,8 +13832,7 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 			case 3:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				v := readBool(&b)
-				s.ZkMigrationReady = v
+				s.ZkMigrationReady = readBool(&b)
 				if err := b.Complete(); err != nil {
 					return err
 				}
@@ -14966,16 +14019,13 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.NumPartitions
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.NumPartitions)
 			}
 			{
-				v := v.ReplicationFactor
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ReplicationFactor)
 			}
 			{
 				v := v.ReplicaAssignment
@@ -14983,15 +14033,13 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
 						v := v.Replicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -15005,12 +14053,10 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Name
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Name, isFlexible)
 					}
 					{
-						v := v.Value
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Value, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -15023,12 +14069,10 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	if version >= 1 {
-		v := v.ValidateOnly
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.ValidateOnly)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -15066,16 +14110,13 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.NumPartitions = v
+				s.NumPartitions = readInt32(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.ReplicationFactor = v
+				s.ReplicationFactor = readInt16(&b)
 			}
 			{
 				v := s.ReplicaAssignment
@@ -15094,8 +14135,7 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
 						v := s.Replicas
@@ -15110,8 +14150,7 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Replicas = v
@@ -15140,12 +14179,10 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Name
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Name, isFlexible, unsafe)
 					}
 					{
-						v := &s.Value
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Value, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -15162,12 +14199,10 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	{
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	if version >= 1 {
-		v := readBool(&b)
-		s.ValidateOnly = v
+		s.ValidateOnly = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -15355,8 +14390,7 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 5
 	_ = isFlexible
 	if version >= 2 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -15364,28 +14398,22 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 7 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			if version >= 1 {
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			if version >= 5 {
-				v := v.NumPartitions
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.NumPartitions)
 			}
 			if version >= 5 {
-				v := v.ReplicationFactor
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ReplicationFactor)
 			}
 			if version >= 5 {
 				v := v.Configs
@@ -15393,24 +14421,19 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Name
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Name, isFlexible)
 					}
 					{
-						v := v.Value
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Value, isFlexible)
 					}
 					{
-						v := v.ReadOnly
-						dst = appendBool(dst, v)
+						dst = appendBool(dst, v.ReadOnly)
 					}
 					{
-						v := v.Source
-						dst = appendInt8(dst, v)
+						dst = appendInt8(dst, v.Source)
 					}
 					{
-						v := v.IsSensitive
-						dst = appendBool(dst, v)
+						dst = appendBool(dst, v.IsSensitive)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -15458,8 +14481,7 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 2 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -15478,28 +14500,22 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 7 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			if version >= 1 {
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			if version >= 5 {
-				v := readInt32(&b)
-				s.NumPartitions = v
+				s.NumPartitions = readInt32(&b)
 			}
 			if version >= 5 {
-				v := readInt16(&b)
-				s.ReplicationFactor = v
+				s.ReplicationFactor = readInt16(&b)
 			}
 			if version >= 5 {
 				v := s.Configs
@@ -15521,24 +14537,19 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Name
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Name, isFlexible, unsafe)
 					}
 					{
-						v := &s.Value
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Value, isFlexible, unsafe)
 					}
 					{
-						v := readBool(&b)
-						s.ReadOnly = v
+						s.ReadOnly = readBool(&b)
 					}
 					{
-						v := readInt8(&b)
-						s.Source = v
+						s.Source = readInt8(&b)
 					}
 					{
-						v := readBool(&b)
-						s.IsSensitive = v
+						s.IsSensitive = readBool(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -15554,8 +14565,7 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 						s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 					case 0:
 						b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-						v := readInt16(&b)
-						s.ConfigErrorCode = v
+						s.ConfigErrorCode = readInt16(&b)
 						if err := b.Complete(); err != nil {
 							return err
 						}
@@ -15672,8 +14682,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 		v := v.TopicNames
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	if version >= 6 {
@@ -15682,12 +14691,10 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -15695,8 +14702,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -15730,8 +14736,7 @@ func (v *DeleteTopicsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.TopicNames = v
@@ -15753,12 +14758,10 @@ func (v *DeleteTopicsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -15768,8 +14771,7 @@ func (v *DeleteTopicsRequest) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	{
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -15889,8 +14891,7 @@ func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	if version >= 1 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -15898,31 +14899,24 @@ func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
 				if version < 6 {
 					var vv string
-					if v != nil {
-						vv = *v
+					if v.Topic != nil {
+						vv = *v.Topic
 					}
-					{
-						v := vv
-						dst = appendString(dst, v, isFlexible)
-					}
+					dst = appendString(dst, vv, isFlexible)
 				} else {
-					dst = appendNullableString(dst, v, isFlexible)
+					dst = appendNullableString(dst, v.Topic, isFlexible)
 				}
 			}
 			if version >= 6 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			if version >= 5 {
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -15949,8 +14943,7 @@ func (v *DeleteTopicsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 1 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -15969,26 +14962,22 @@ func (v *DeleteTopicsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
 				if version < 6 {
-					vv := new(string)
-					readString(&b, vv, isFlexible, unsafe)
-					*v = vv
+					v := new(string)
+					readString(&b, v, isFlexible, unsafe)
+					s.Topic = v
 				} else {
-					readNullableString(&b, v, isFlexible, unsafe)
+					readNullableString(&b, &s.Topic, isFlexible, unsafe)
 				}
 			}
 			if version >= 6 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			if version >= 5 {
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -16142,8 +15131,7 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -16151,12 +15139,10 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.Offset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Offset)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -16169,8 +15155,7 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -16208,8 +15193,7 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -16228,12 +15212,10 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.Offset = v
+						s.Offset = readInt64(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -16250,8 +15232,7 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	{
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -16392,8 +15373,7 @@ func (v *DeleteRecordsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -16401,8 +15381,7 @@ func (v *DeleteRecordsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -16410,16 +15389,13 @@ func (v *DeleteRecordsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.LowWatermark
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.LowWatermark)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -16451,8 +15427,7 @@ func (v *DeleteRecordsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -16471,8 +15446,7 @@ func (v *DeleteRecordsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -16491,16 +15465,13 @@ func (v *DeleteRecordsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.LowWatermark = v
+						s.LowWatermark = readInt64(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -16608,20 +15579,16 @@ func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.TransactionalID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.TransactionalID, isFlexible)
 	}
 	{
-		v := v.TransactionTimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TransactionTimeoutMillis)
 	}
 	if version >= 3 {
-		v := v.ProducerID
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ProducerID)
 	}
 	if version >= 3 {
-		v := v.ProducerEpoch
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ProducerEpoch)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -16643,20 +15610,16 @@ func (v *InitProducerIDRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.TransactionalID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.TransactionalID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.TransactionTimeoutMillis = v
+		s.TransactionTimeoutMillis = readInt32(&b)
 	}
 	if version >= 3 {
-		v := readInt64(&b)
-		s.ProducerID = v
+		s.ProducerID = readInt64(&b)
 	}
 	if version >= 3 {
-		v := readInt16(&b)
-		s.ProducerEpoch = v
+		s.ProducerEpoch = readInt16(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -16753,20 +15716,16 @@ func (v *InitProducerIDResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ProducerID
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ProducerID)
 	}
 	{
-		v := v.ProducerEpoch
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ProducerEpoch)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -16788,20 +15747,16 @@ func (v *InitProducerIDResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.ProducerID = v
+		s.ProducerID = readInt64(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ProducerEpoch = v
+		s.ProducerEpoch = readInt16(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -16941,8 +15896,7 @@ func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	if version >= 3 {
-		v := v.ReplicaID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ReplicaID)
 	}
 	{
 		v := v.Topics
@@ -16950,8 +15904,7 @@ func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -16959,16 +15912,13 @@ func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					if version >= 2 {
-						v := v.CurrentLeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.CurrentLeaderEpoch)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -17000,8 +15950,7 @@ func (v *OffsetForLeaderEpochRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 3 {
-		v := readInt32(&b)
-		s.ReplicaID = v
+		s.ReplicaID = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -17020,8 +15969,7 @@ func (v *OffsetForLeaderEpochRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -17040,16 +15988,13 @@ func (v *OffsetForLeaderEpochRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					if version >= 2 {
-						v := readInt32(&b)
-						s.CurrentLeaderEpoch = v
+						s.CurrentLeaderEpoch = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -17229,8 +16174,7 @@ func (v *OffsetForLeaderEpochResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	if version >= 2 {
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -17238,8 +16182,7 @@ func (v *OffsetForLeaderEpochResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -17247,20 +16190,16 @@ func (v *OffsetForLeaderEpochResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					if version >= 1 {
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
-						v := v.EndOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.EndOffset)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -17292,8 +16231,7 @@ func (v *OffsetForLeaderEpochResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 2 {
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -17312,8 +16250,7 @@ func (v *OffsetForLeaderEpochResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -17332,20 +16269,16 @@ func (v *OffsetForLeaderEpochResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					if version >= 1 {
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.EndOffset = v
+						s.EndOffset = readInt64(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -17533,16 +16466,13 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	if version >= 0 && version <= 3 {
-		v := v.TransactionalID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.TransactionalID, isFlexible)
 	}
 	if version >= 0 && version <= 3 {
-		v := v.ProducerID
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ProducerID)
 	}
 	if version >= 0 && version <= 3 {
-		v := v.ProducerEpoch
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ProducerEpoch)
 	}
 	if version >= 0 && version <= 3 {
 		v := v.Topics
@@ -17550,15 +16480,13 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -17572,20 +16500,16 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TransactionalID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.TransactionalID, isFlexible)
 			}
 			{
-				v := v.ProducerID
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.ProducerID)
 			}
 			{
-				v := v.ProducerEpoch
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ProducerEpoch)
 			}
 			{
-				v := v.VerifyOnly
-				dst = appendBool(dst, v)
+				dst = appendBool(dst, v.VerifyOnly)
 			}
 			{
 				v := v.Topics
@@ -17593,15 +16517,13 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
 						v := v.Partitions
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -17634,16 +16556,13 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 0 && version <= 3 {
-		v := &s.TransactionalID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.TransactionalID, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 3 {
-		v := readInt64(&b)
-		s.ProducerID = v
+		s.ProducerID = readInt64(&b)
 	}
 	if version >= 0 && version <= 3 {
-		v := readInt16(&b)
-		s.ProducerEpoch = v
+		s.ProducerEpoch = readInt16(&b)
 	}
 	if version >= 0 && version <= 3 {
 		v := s.Topics
@@ -17662,8 +16581,7 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -17678,8 +16596,7 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -17708,20 +16625,16 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.TransactionalID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.TransactionalID, isFlexible, unsafe)
 			}
 			{
-				v := readInt64(&b)
-				s.ProducerID = v
+				s.ProducerID = readInt64(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.ProducerEpoch = v
+				s.ProducerEpoch = readInt16(&b)
 			}
 			{
-				v := readBool(&b)
-				s.VerifyOnly = v
+				s.VerifyOnly = readBool(&b)
 			}
 			{
 				v := s.Topics
@@ -17740,8 +16653,7 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -17756,8 +16668,7 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Partitions = v
@@ -18004,12 +16915,10 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if version >= 4 {
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if version >= 4 {
 		v := v.Transactions
@@ -18017,8 +16926,7 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TransactionalID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.TransactionalID, isFlexible)
 			}
 			{
 				v := v.Topics
@@ -18026,8 +16934,7 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
 						v := v.Partitions
@@ -18035,12 +16942,10 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.Partition
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.Partition)
 							}
 							{
-								v := v.ErrorCode
-								dst = appendInt16(dst, v)
+								dst = appendInt16(dst, v.ErrorCode)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -18063,8 +16968,7 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -18072,12 +16976,10 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -18109,12 +17011,10 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if version >= 4 {
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if version >= 4 {
 		v := s.Transactions
@@ -18133,8 +17033,7 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.TransactionalID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.TransactionalID, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -18153,8 +17052,7 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -18173,12 +17071,10 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.Partition = v
+								s.Partition = readInt32(&b)
 							}
 							{
-								v := readInt16(&b)
-								s.ErrorCode = v
+								s.ErrorCode = readInt16(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -18218,8 +17114,7 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -18238,12 +17133,10 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -18344,20 +17237,16 @@ func (v *AddOffsetsToTxnRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	{
-		v := v.TransactionalID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.TransactionalID, isFlexible)
 	}
 	{
-		v := v.ProducerID
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ProducerID)
 	}
 	{
-		v := v.ProducerEpoch
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ProducerEpoch)
 	}
 	{
-		v := v.Group
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Group, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -18379,20 +17268,16 @@ func (v *AddOffsetsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.TransactionalID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.TransactionalID, isFlexible, unsafe)
 	}
 	{
-		v := readInt64(&b)
-		s.ProducerID = v
+		s.ProducerID = readInt64(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ProducerEpoch = v
+		s.ProducerEpoch = readInt16(&b)
 	}
 	{
-		v := &s.Group
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Group, isFlexible, unsafe)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -18470,12 +17355,10 @@ func (v *AddOffsetsToTxnResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -18497,12 +17380,10 @@ func (v *AddOffsetsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -18583,20 +17464,16 @@ func (v *EndTxnRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	{
-		v := v.TransactionalID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.TransactionalID, isFlexible)
 	}
 	{
-		v := v.ProducerID
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ProducerID)
 	}
 	{
-		v := v.ProducerEpoch
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ProducerEpoch)
 	}
 	{
-		v := v.Commit
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.Commit)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -18618,20 +17495,16 @@ func (v *EndTxnRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.TransactionalID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.TransactionalID, isFlexible, unsafe)
 	}
 	{
-		v := readInt64(&b)
-		s.ProducerID = v
+		s.ProducerID = readInt64(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ProducerEpoch = v
+		s.ProducerEpoch = readInt16(&b)
 	}
 	{
-		v := readBool(&b)
-		s.Commit = v
+		s.Commit = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -18728,20 +17601,16 @@ func (v *EndTxnResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if version >= 5 {
-		v := v.ProducerID
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ProducerID)
 	}
 	if version >= 5 {
-		v := v.ProducerEpoch
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ProducerEpoch)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -18763,20 +17632,16 @@ func (v *EndTxnResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if version >= 5 {
-		v := readInt64(&b)
-		s.ProducerID = v
+		s.ProducerID = readInt64(&b)
 	}
 	if version >= 5 {
-		v := readInt16(&b)
-		s.ProducerEpoch = v
+		s.ProducerEpoch = readInt16(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -18919,16 +17784,13 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ProducerID
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.ProducerID)
 			}
 			{
-				v := v.ProducerEpoch
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ProducerEpoch)
 			}
 			{
-				v := v.Committed
-				dst = appendBool(dst, v)
+				dst = appendBool(dst, v.Committed)
 			}
 			{
 				v := v.Topics
@@ -18936,15 +17798,13 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
 						v := v.Partitions
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -18953,12 +17813,10 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			{
-				v := v.CoordinatorEpoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.CoordinatorEpoch)
 			}
 			if version >= 2 {
-				v := v.TransactionVersion
-				dst = appendInt8(dst, v)
+				dst = appendInt8(dst, v.TransactionVersion)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -19001,16 +17859,13 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt64(&b)
-				s.ProducerID = v
+				s.ProducerID = readInt64(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.ProducerEpoch = v
+				s.ProducerEpoch = readInt16(&b)
 			}
 			{
-				v := readBool(&b)
-				s.Committed = v
+				s.Committed = readBool(&b)
 			}
 			{
 				v := s.Topics
@@ -19029,8 +17884,7 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -19045,8 +17899,7 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Partitions = v
@@ -19059,12 +17912,10 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 				s.Topics = v
 			}
 			{
-				v := readInt32(&b)
-				s.CoordinatorEpoch = v
+				s.CoordinatorEpoch = readInt32(&b)
 			}
 			if version >= 2 {
-				v := readInt8(&b)
-				s.TransactionVersion = v
+				s.TransactionVersion = readInt8(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -19223,8 +18074,7 @@ func (v *WriteTxnMarkersResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ProducerID
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.ProducerID)
 			}
 			{
 				v := v.Topics
@@ -19232,8 +18082,7 @@ func (v *WriteTxnMarkersResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
 						v := v.Partitions
@@ -19241,12 +18090,10 @@ func (v *WriteTxnMarkersResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.Partition
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.Partition)
 							}
 							{
-								v := v.ErrorCode
-								dst = appendInt16(dst, v)
+								dst = appendInt16(dst, v.ErrorCode)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -19299,8 +18146,7 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt64(&b)
-				s.ProducerID = v
+				s.ProducerID = readInt64(&b)
 			}
 			{
 				v := s.Topics
@@ -19319,8 +18165,7 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -19339,12 +18184,10 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.Partition = v
+								s.Partition = readInt32(&b)
 							}
 							{
-								v := readInt16(&b)
-								s.ErrorCode = v
+								s.ErrorCode = readInt16(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -19531,32 +18374,25 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	{
-		v := v.TransactionalID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.TransactionalID, isFlexible)
 	}
 	{
-		v := v.Group
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Group, isFlexible)
 	}
 	{
-		v := v.ProducerID
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ProducerID)
 	}
 	{
-		v := v.ProducerEpoch
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ProducerEpoch)
 	}
 	if version >= 3 {
-		v := v.Generation
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.Generation)
 	}
 	if version >= 3 {
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	if version >= 3 {
-		v := v.InstanceID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.InstanceID, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -19564,12 +18400,10 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 5 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 6 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -19577,20 +18411,16 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.Offset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Offset)
 					}
 					if version >= 2 {
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
-						v := v.Metadata
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Metadata, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -19622,32 +18452,25 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.TransactionalID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.TransactionalID, isFlexible, unsafe)
 	}
 	{
-		v := &s.Group
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Group, isFlexible, unsafe)
 	}
 	{
-		v := readInt64(&b)
-		s.ProducerID = v
+		s.ProducerID = readInt64(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ProducerEpoch = v
+		s.ProducerEpoch = readInt16(&b)
 	}
 	if version >= 3 {
-		v := readInt32(&b)
-		s.Generation = v
+		s.Generation = readInt32(&b)
 	}
 	if version >= 3 {
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		v := &s.InstanceID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -19666,12 +18489,10 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 5 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 6 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -19690,20 +18511,16 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.Offset = v
+						s.Offset = readInt64(&b)
 					}
 					if version >= 2 {
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
-						v := &s.Metadata
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Metadata, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -19878,8 +18695,7 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 3
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -19887,12 +18703,10 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 5 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 6 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -19900,12 +18714,10 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -19937,8 +18749,7 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -19957,12 +18768,10 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 5 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 6 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -19981,12 +18790,10 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -20099,44 +18906,25 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ResourceType
-		{
-			v := int8(v)
-			dst = appendInt8(dst, v)
-		}
+		dst = appendInt8(dst, int8(v.ResourceType))
 	}
 	{
-		v := v.ResourceName
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ResourceName, isFlexible)
 	}
 	if version >= 1 {
-		v := v.ResourcePatternType
-		{
-			v := int8(v)
-			dst = appendInt8(dst, v)
-		}
+		dst = appendInt8(dst, int8(v.ResourcePatternType))
 	}
 	{
-		v := v.Principal
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.Principal, isFlexible)
 	}
 	{
-		v := v.Host
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.Host, isFlexible)
 	}
 	{
-		v := v.Operation
-		{
-			v := int8(v)
-			dst = appendInt8(dst, v)
-		}
+		dst = appendInt8(dst, int8(v.Operation))
 	}
 	{
-		v := v.PermissionType
-		{
-			v := int8(v)
-			dst = appendInt8(dst, v)
-		}
+		dst = appendInt8(dst, int8(v.PermissionType))
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -20158,52 +18946,25 @@ func (v *DescribeACLsRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		var t ACLResourceType
-		{
-			v := readInt8(&b)
-			t = ACLResourceType(v)
-		}
-		v := t
-		s.ResourceType = v
+		s.ResourceType = ACLResourceType(readInt8(&b))
 	}
 	{
-		v := &s.ResourceName
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ResourceName, isFlexible, unsafe)
 	}
 	if version >= 1 {
-		var t ACLResourcePatternType
-		{
-			v := readInt8(&b)
-			t = ACLResourcePatternType(v)
-		}
-		v := t
-		s.ResourcePatternType = v
+		s.ResourcePatternType = ACLResourcePatternType(readInt8(&b))
 	}
 	{
-		v := &s.Principal
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.Principal, isFlexible, unsafe)
 	}
 	{
-		v := &s.Host
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.Host, isFlexible, unsafe)
 	}
 	{
-		var t ACLOperation
-		{
-			v := readInt8(&b)
-			t = ACLOperation(v)
-		}
-		v := t
-		s.Operation = v
+		s.Operation = ACLOperation(readInt8(&b))
 	}
 	{
-		var t ACLPermissionType
-		{
-			v := readInt8(&b)
-			t = ACLPermissionType(v)
-		}
-		v := t
-		s.PermissionType = v
+		s.PermissionType = ACLPermissionType(readInt8(&b))
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -20345,16 +19106,13 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
 		v := v.Resources
@@ -20362,22 +19120,13 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ResourceType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourceType))
 			}
 			{
-				v := v.ResourceName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ResourceName, isFlexible)
 			}
 			if version >= 1 {
-				v := v.ResourcePatternType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourcePatternType))
 			}
 			{
 				v := v.ACLs
@@ -20385,26 +19134,16 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Principal
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Principal, isFlexible)
 					}
 					{
-						v := v.Host
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Host, isFlexible)
 					}
 					{
-						v := v.Operation
-						{
-							v := int8(v)
-							dst = appendInt8(dst, v)
-						}
+						dst = appendInt8(dst, int8(v.Operation))
 					}
 					{
-						v := v.PermissionType
-						{
-							v := int8(v)
-							dst = appendInt8(dst, v)
-						}
+						dst = appendInt8(dst, int8(v.PermissionType))
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -20436,16 +19175,13 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
 		v := s.Resources
@@ -20464,26 +19200,13 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				var t ACLResourceType
-				{
-					v := readInt8(&b)
-					t = ACLResourceType(v)
-				}
-				v := t
-				s.ResourceType = v
+				s.ResourceType = ACLResourceType(readInt8(&b))
 			}
 			{
-				v := &s.ResourceName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ResourceName, isFlexible, unsafe)
 			}
 			if version >= 1 {
-				var t ACLResourcePatternType
-				{
-					v := readInt8(&b)
-					t = ACLResourcePatternType(v)
-				}
-				v := t
-				s.ResourcePatternType = v
+				s.ResourcePatternType = ACLResourcePatternType(readInt8(&b))
 			}
 			{
 				v := s.ACLs
@@ -20502,30 +19225,16 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Principal
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Principal, isFlexible, unsafe)
 					}
 					{
-						v := &s.Host
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Host, isFlexible, unsafe)
 					}
 					{
-						var t ACLOperation
-						{
-							v := readInt8(&b)
-							t = ACLOperation(v)
-						}
-						v := t
-						s.Operation = v
+						s.Operation = ACLOperation(readInt8(&b))
 					}
 					{
-						var t ACLPermissionType
-						{
-							v := readInt8(&b)
-							t = ACLPermissionType(v)
-						}
-						v := t
-						s.PermissionType = v
+						s.PermissionType = ACLPermissionType(readInt8(&b))
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -20667,44 +19376,25 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ResourceType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourceType))
 			}
 			{
-				v := v.ResourceName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ResourceName, isFlexible)
 			}
 			if version >= 1 {
-				v := v.ResourcePatternType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourcePatternType))
 			}
 			{
-				v := v.Principal
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Principal, isFlexible)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Operation
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.Operation))
 			}
 			{
-				v := v.PermissionType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.PermissionType))
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -20747,52 +19437,25 @@ func (v *CreateACLsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				var t ACLResourceType
-				{
-					v := readInt8(&b)
-					t = ACLResourceType(v)
-				}
-				v := t
-				s.ResourceType = v
+				s.ResourceType = ACLResourceType(readInt8(&b))
 			}
 			{
-				v := &s.ResourceName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ResourceName, isFlexible, unsafe)
 			}
 			if version >= 1 {
-				var t ACLResourcePatternType
-				{
-					v := readInt8(&b)
-					t = ACLResourcePatternType(v)
-				}
-				v := t
-				s.ResourcePatternType = v
+				s.ResourcePatternType = ACLResourcePatternType(readInt8(&b))
 			}
 			{
-				v := &s.Principal
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Principal, isFlexible, unsafe)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				var t ACLOperation
-				{
-					v := readInt8(&b)
-					t = ACLOperation(v)
-				}
-				v := t
-				s.Operation = v
+				s.Operation = ACLOperation(readInt8(&b))
 			}
 			{
-				var t ACLPermissionType
-				{
-					v := readInt8(&b)
-					t = ACLPermissionType(v)
-				}
-				v := t
-				s.PermissionType = v
+				s.PermissionType = ACLPermissionType(readInt8(&b))
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -20889,8 +19552,7 @@ func (v *CreateACLsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Results
@@ -20898,12 +19560,10 @@ func (v *CreateACLsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -20930,8 +19590,7 @@ func (v *CreateACLsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Results
@@ -20950,12 +19609,10 @@ func (v *CreateACLsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -21072,44 +19729,25 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ResourceType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourceType))
 			}
 			{
-				v := v.ResourceName
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ResourceName, isFlexible)
 			}
 			if version >= 1 {
-				v := v.ResourcePatternType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourcePatternType))
 			}
 			{
-				v := v.Principal
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.Principal, isFlexible)
 			}
 			{
-				v := v.Host
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Operation
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.Operation))
 			}
 			{
-				v := v.PermissionType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.PermissionType))
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -21152,52 +19790,25 @@ func (v *DeleteACLsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				var t ACLResourceType
-				{
-					v := readInt8(&b)
-					t = ACLResourceType(v)
-				}
-				v := t
-				s.ResourceType = v
+				s.ResourceType = ACLResourceType(readInt8(&b))
 			}
 			{
-				v := &s.ResourceName
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ResourceName, isFlexible, unsafe)
 			}
 			if version >= 1 {
-				var t ACLResourcePatternType
-				{
-					v := readInt8(&b)
-					t = ACLResourcePatternType(v)
-				}
-				v := t
-				s.ResourcePatternType = v
+				s.ResourcePatternType = ACLResourcePatternType(readInt8(&b))
 			}
 			{
-				v := &s.Principal
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.Principal, isFlexible, unsafe)
 			}
 			{
-				v := &s.Host
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				var t ACLOperation
-				{
-					v := readInt8(&b)
-					t = ACLOperation(v)
-				}
-				v := t
-				s.Operation = v
+				s.Operation = ACLOperation(readInt8(&b))
 			}
 			{
-				var t ACLPermissionType
-				{
-					v := readInt8(&b)
-					t = ACLPermissionType(v)
-				}
-				v := t
-				s.PermissionType = v
+				s.PermissionType = ACLPermissionType(readInt8(&b))
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -21338,8 +19949,7 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Results
@@ -21347,12 +19957,10 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			{
 				v := v.MatchingACLs
@@ -21360,52 +19968,31 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					{
-						v := v.ResourceType
-						{
-							v := int8(v)
-							dst = appendInt8(dst, v)
-						}
+						dst = appendInt8(dst, int8(v.ResourceType))
 					}
 					{
-						v := v.ResourceName
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.ResourceName, isFlexible)
 					}
 					if version >= 1 {
-						v := v.ResourcePatternType
-						{
-							v := int8(v)
-							dst = appendInt8(dst, v)
-						}
+						dst = appendInt8(dst, int8(v.ResourcePatternType))
 					}
 					{
-						v := v.Principal
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Principal, isFlexible)
 					}
 					{
-						v := v.Host
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Host, isFlexible)
 					}
 					{
-						v := v.Operation
-						{
-							v := int8(v)
-							dst = appendInt8(dst, v)
-						}
+						dst = appendInt8(dst, int8(v.Operation))
 					}
 					{
-						v := v.PermissionType
-						{
-							v := int8(v)
-							dst = appendInt8(dst, v)
-						}
+						dst = appendInt8(dst, int8(v.PermissionType))
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -21437,8 +20024,7 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Results
@@ -21457,12 +20043,10 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			{
 				v := s.MatchingACLs
@@ -21481,60 +20065,31 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					{
-						var t ACLResourceType
-						{
-							v := readInt8(&b)
-							t = ACLResourceType(v)
-						}
-						v := t
-						s.ResourceType = v
+						s.ResourceType = ACLResourceType(readInt8(&b))
 					}
 					{
-						v := &s.ResourceName
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.ResourceName, isFlexible, unsafe)
 					}
 					if version >= 1 {
-						var t ACLResourcePatternType
-						{
-							v := readInt8(&b)
-							t = ACLResourcePatternType(v)
-						}
-						v := t
-						s.ResourcePatternType = v
+						s.ResourcePatternType = ACLResourcePatternType(readInt8(&b))
 					}
 					{
-						v := &s.Principal
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Principal, isFlexible, unsafe)
 					}
 					{
-						v := &s.Host
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Host, isFlexible, unsafe)
 					}
 					{
-						var t ACLOperation
-						{
-							v := readInt8(&b)
-							t = ACLOperation(v)
-						}
-						v := t
-						s.Operation = v
+						s.Operation = ACLOperation(readInt8(&b))
 					}
 					{
-						var t ACLPermissionType
-						{
-							v := readInt8(&b)
-							t = ACLPermissionType(v)
-						}
-						v := t
-						s.PermissionType = v
+						s.PermissionType = ACLPermissionType(readInt8(&b))
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -21666,22 +20221,16 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ResourceType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourceType))
 			}
 			{
-				v := v.ResourceName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ResourceName, isFlexible)
 			}
 			{
 				v := v.ConfigNames
 				dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendString(dst, v, isFlexible)
+					dst = appendString(dst, v[i], isFlexible)
 				}
 			}
 			if isFlexible {
@@ -21690,12 +20239,10 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 1 {
-		v := v.IncludeSynonyms
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IncludeSynonyms)
 	}
 	if version >= 3 {
-		v := v.IncludeDocumentation
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IncludeDocumentation)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -21733,17 +20280,10 @@ func (v *DescribeConfigsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				var t ConfigResourceType
-				{
-					v := readInt8(&b)
-					t = ConfigResourceType(v)
-				}
-				v := t
-				s.ResourceType = v
+				s.ResourceType = ConfigResourceType(readInt8(&b))
 			}
 			{
-				v := &s.ResourceName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ResourceName, isFlexible, unsafe)
 			}
 			{
 				v := s.ConfigNames
@@ -21761,8 +20301,7 @@ func (v *DescribeConfigsRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]string, l)...)
 				}
 				for i := range a {
-					v := &a[i]
-					readString(&b, v, isFlexible, unsafe)
+					readString(&b, &a[i], isFlexible, unsafe)
 				}
 				v = a
 				s.ConfigNames = v
@@ -21775,12 +20314,10 @@ func (v *DescribeConfigsRequest) readFrom(src []byte, unsafe bool) error {
 		s.Resources = v
 	}
 	if version >= 1 {
-		v := readBool(&b)
-		s.IncludeSynonyms = v
+		s.IncludeSynonyms = readBool(&b)
 	}
 	if version >= 3 {
-		v := readBool(&b)
-		s.IncludeDocumentation = v
+		s.IncludeDocumentation = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -21981,8 +20518,7 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 4
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Resources
@@ -21990,23 +20526,16 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			{
-				v := v.ResourceType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourceType))
 			}
 			{
-				v := v.ResourceName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ResourceName, isFlexible)
 			}
 			{
 				v := v.Configs
@@ -22014,31 +20543,22 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Name
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Name, isFlexible)
 					}
 					{
-						v := v.Value
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Value, isFlexible)
 					}
 					{
-						v := v.ReadOnly
-						dst = appendBool(dst, v)
+						dst = appendBool(dst, v.ReadOnly)
 					}
 					if version >= 0 && version <= 0 {
-						v := v.IsDefault
-						dst = appendBool(dst, v)
+						dst = appendBool(dst, v.IsDefault)
 					}
 					if version >= 1 {
-						v := v.Source
-						{
-							v := int8(v)
-							dst = appendInt8(dst, v)
-						}
+						dst = appendInt8(dst, int8(v.Source))
 					}
 					{
-						v := v.IsSensitive
-						dst = appendBool(dst, v)
+						dst = appendBool(dst, v.IsSensitive)
 					}
 					if version >= 1 {
 						v := v.ConfigSynonyms
@@ -22046,19 +20566,13 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.Name
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v.Name, isFlexible)
 							}
 							{
-								v := v.Value
-								dst = appendNullableString(dst, v, isFlexible)
+								dst = appendNullableString(dst, v.Value, isFlexible)
 							}
 							{
-								v := v.Source
-								{
-									v := int8(v)
-									dst = appendInt8(dst, v)
-								}
+								dst = appendInt8(dst, int8(v.Source))
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -22066,15 +20580,10 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if version >= 3 {
-						v := v.ConfigType
-						{
-							v := int8(v)
-							dst = appendInt8(dst, v)
-						}
+						dst = appendInt8(dst, int8(v.ConfigType))
 					}
 					if version >= 3 {
-						v := v.Documentation
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Documentation, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -22106,8 +20615,7 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Resources
@@ -22126,25 +20634,16 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			{
-				var t ConfigResourceType
-				{
-					v := readInt8(&b)
-					t = ConfigResourceType(v)
-				}
-				v := t
-				s.ResourceType = v
+				s.ResourceType = ConfigResourceType(readInt8(&b))
 			}
 			{
-				v := &s.ResourceName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ResourceName, isFlexible, unsafe)
 			}
 			{
 				v := s.Configs
@@ -22163,33 +20662,22 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Name
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Name, isFlexible, unsafe)
 					}
 					{
-						v := &s.Value
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Value, isFlexible, unsafe)
 					}
 					{
-						v := readBool(&b)
-						s.ReadOnly = v
+						s.ReadOnly = readBool(&b)
 					}
 					if version >= 0 && version <= 0 {
-						v := readBool(&b)
-						s.IsDefault = v
+						s.IsDefault = readBool(&b)
 					}
 					if version >= 1 {
-						var t ConfigSource
-						{
-							v := readInt8(&b)
-							t = ConfigSource(v)
-						}
-						v := t
-						s.Source = v
+						s.Source = ConfigSource(readInt8(&b))
 					}
 					{
-						v := readBool(&b)
-						s.IsSensitive = v
+						s.IsSensitive = readBool(&b)
 					}
 					if version >= 1 {
 						v := s.ConfigSynonyms
@@ -22208,21 +20696,13 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := &s.Name
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &s.Name, isFlexible, unsafe)
 							}
 							{
-								v := &s.Value
-								readNullableString(&b, v, isFlexible, unsafe)
+								readNullableString(&b, &s.Value, isFlexible, unsafe)
 							}
 							{
-								var t ConfigSource
-								{
-									v := readInt8(&b)
-									t = ConfigSource(v)
-								}
-								v := t
-								s.Source = v
+								s.Source = ConfigSource(readInt8(&b))
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -22232,17 +20712,10 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 						s.ConfigSynonyms = v
 					}
 					if version >= 3 {
-						var t ConfigType
-						{
-							v := readInt8(&b)
-							t = ConfigType(v)
-						}
-						v := t
-						s.ConfigType = v
+						s.ConfigType = ConfigType(readInt8(&b))
 					}
 					if version >= 3 {
-						v := &s.Documentation
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Documentation, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -22409,15 +20882,10 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ResourceType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourceType))
 			}
 			{
-				v := v.ResourceName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ResourceName, isFlexible)
 			}
 			{
 				v := v.Configs
@@ -22425,12 +20893,10 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Name
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Name, isFlexible)
 					}
 					{
-						v := v.Value
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Value, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -22443,8 +20909,7 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.ValidateOnly
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.ValidateOnly)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -22482,17 +20947,10 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				var t ConfigResourceType
-				{
-					v := readInt8(&b)
-					t = ConfigResourceType(v)
-				}
-				v := t
-				s.ResourceType = v
+				s.ResourceType = ConfigResourceType(readInt8(&b))
 			}
 			{
-				v := &s.ResourceName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ResourceName, isFlexible, unsafe)
 			}
 			{
 				v := s.Configs
@@ -22511,12 +20969,10 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Name
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Name, isFlexible, unsafe)
 					}
 					{
-						v := &s.Value
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Value, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -22533,8 +20989,7 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 		s.Resources = v
 	}
 	{
-		v := readBool(&b)
-		s.ValidateOnly = v
+		s.ValidateOnly = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -22644,8 +21099,7 @@ func (v *AlterConfigsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Resources
@@ -22653,23 +21107,16 @@ func (v *AlterConfigsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			{
-				v := v.ResourceType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourceType))
 			}
 			{
-				v := v.ResourceName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ResourceName, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -22696,8 +21143,7 @@ func (v *AlterConfigsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Resources
@@ -22716,25 +21162,16 @@ func (v *AlterConfigsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			{
-				var t ConfigResourceType
-				{
-					v := readInt8(&b)
-					t = ConfigResourceType(v)
-				}
-				v := t
-				s.ResourceType = v
+				s.ResourceType = ConfigResourceType(readInt8(&b))
 			}
 			{
-				v := &s.ResourceName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ResourceName, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -22868,8 +21305,7 @@ func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Dir
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Dir, isFlexible)
 			}
 			{
 				v := v.Topics
@@ -22877,15 +21313,13 @@ func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
 						v := v.Partitions
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -22934,8 +21368,7 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Dir
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Dir, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -22954,8 +21387,7 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -22970,8 +21402,7 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Partitions = v
@@ -23121,8 +21552,7 @@ func (v *AlterReplicaLogDirsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -23130,8 +21560,7 @@ func (v *AlterReplicaLogDirsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -23139,12 +21568,10 @@ func (v *AlterReplicaLogDirsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -23176,8 +21603,7 @@ func (v *AlterReplicaLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -23196,8 +21622,7 @@ func (v *AlterReplicaLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -23216,12 +21641,10 @@ func (v *AlterReplicaLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -23335,15 +21758,13 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -23390,8 +21811,7 @@ func (v *DescribeLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -23406,8 +21826,7 @@ func (v *DescribeLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -23605,12 +22024,10 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if version >= 3 {
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.Dirs
@@ -23618,12 +22035,10 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.Dir
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Dir, isFlexible)
 			}
 			{
 				v := v.Topics
@@ -23631,8 +22046,7 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
 						v := v.Partitions
@@ -23640,20 +22054,16 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.Partition
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.Partition)
 							}
 							{
-								v := v.Size
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.Size)
 							}
 							{
-								v := v.OffsetLag
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.OffsetLag)
 							}
 							{
-								v := v.IsFuture
-								dst = appendBool(dst, v)
+								dst = appendBool(dst, v.IsFuture)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -23666,16 +22076,13 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if version >= 4 {
-				v := v.TotalBytes
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.TotalBytes)
 			}
 			if version >= 4 {
-				v := v.UsableBytes
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.UsableBytes)
 			}
 			if version >= 5 {
-				v := v.IsCordoned
-				dst = appendBool(dst, v)
+				dst = appendBool(dst, v.IsCordoned)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -23702,12 +22109,10 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if version >= 3 {
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.Dirs
@@ -23726,12 +22131,10 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.Dir
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Dir, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -23750,8 +22153,7 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -23770,20 +22172,16 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.Partition = v
+								s.Partition = readInt32(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.Size = v
+								s.Size = readInt64(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.OffsetLag = v
+								s.OffsetLag = readInt64(&b)
 							}
 							{
-								v := readBool(&b)
-								s.IsFuture = v
+								s.IsFuture = readBool(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -23800,16 +22198,13 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 				s.Topics = v
 			}
 			if version >= 4 {
-				v := readInt64(&b)
-				s.TotalBytes = v
+				s.TotalBytes = readInt64(&b)
 			}
 			if version >= 4 {
-				v := readInt64(&b)
-				s.UsableBytes = v
+				s.UsableBytes = readInt64(&b)
 			}
 			if version >= 5 {
-				v := readBool(&b)
-				s.IsCordoned = v
+				s.IsCordoned = readBool(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -23889,8 +22284,7 @@ func (v *SASLAuthenticateRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.SASLAuthBytes
-		dst = appendBytes(dst, v, isFlexible)
+		dst = appendBytes(dst, v.SASLAuthBytes, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -23912,8 +22306,7 @@ func (v *SASLAuthenticateRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.SASLAuthBytes
-		readBytes(&b, v, isFlexible)
+		readBytes(&b, &s.SASLAuthBytes, isFlexible)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -23982,20 +22375,16 @@ func (v *SASLAuthenticateResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
-		v := v.SASLAuthBytes
-		dst = appendBytes(dst, v, isFlexible)
+		dst = appendBytes(dst, v.SASLAuthBytes, isFlexible)
 	}
 	if version >= 1 {
-		v := v.SessionLifetimeMillis
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.SessionLifetimeMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -24017,20 +22406,16 @@ func (v *SASLAuthenticateResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
-		v := &s.SASLAuthBytes
-		readBytes(&b, v, isFlexible)
+		readBytes(&b, &s.SASLAuthBytes, isFlexible)
 	}
 	if version >= 1 {
-		v := readInt64(&b)
-		s.SessionLifetimeMillis = v
+		s.SessionLifetimeMillis = readInt64(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -24179,12 +22564,10 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.Count
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Count)
 			}
 			{
 				v := v.Assignment
@@ -24195,8 +22578,7 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 						v := v.Replicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -24210,12 +22592,10 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	{
-		v := v.ValidateOnly
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.ValidateOnly)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -24253,12 +22633,10 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Count = v
+				s.Count = readInt32(&b)
 			}
 			{
 				v := s.Assignment
@@ -24292,8 +22670,7 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Replicas = v
@@ -24313,12 +22690,10 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	{
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	{
-		v := readBool(&b)
-		s.ValidateOnly = v
+		s.ValidateOnly = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -24438,8 +22813,7 @@ func (v *CreatePartitionsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -24447,16 +22821,13 @@ func (v *CreatePartitionsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -24483,8 +22854,7 @@ func (v *CreatePartitionsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -24503,16 +22873,13 @@ func (v *CreatePartitionsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -24637,12 +23004,10 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	if version >= 3 {
-		v := v.OwnerPrincipalType
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.OwnerPrincipalType, isFlexible)
 	}
 	if version >= 3 {
-		v := v.OwnerPrincipalName
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.OwnerPrincipalName, isFlexible)
 	}
 	{
 		v := v.Renewers
@@ -24650,12 +23015,10 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.PrincipalType
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.PrincipalType, isFlexible)
 			}
 			{
-				v := v.PrincipalName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.PrincipalName, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -24663,8 +23026,7 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.MaxLifetimeMillis
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.MaxLifetimeMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -24686,12 +23048,10 @@ func (v *CreateDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 3 {
-		v := &s.OwnerPrincipalType
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.OwnerPrincipalType, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		v := &s.OwnerPrincipalName
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.OwnerPrincipalName, isFlexible, unsafe)
 	}
 	{
 		v := s.Renewers
@@ -24710,12 +23070,10 @@ func (v *CreateDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.PrincipalType
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.PrincipalType, isFlexible, unsafe)
 			}
 			{
-				v := &s.PrincipalName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.PrincipalName, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -24725,8 +23083,7 @@ func (v *CreateDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 		s.Renewers = v
 	}
 	{
-		v := readInt64(&b)
-		s.MaxLifetimeMillis = v
+		s.MaxLifetimeMillis = readInt64(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -24832,48 +23189,37 @@ func (v *CreateDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.PrincipalType
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.PrincipalType, isFlexible)
 	}
 	{
-		v := v.PrincipalName
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.PrincipalName, isFlexible)
 	}
 	if version >= 3 {
-		v := v.TokenRequesterPrincipalType
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.TokenRequesterPrincipalType, isFlexible)
 	}
 	if version >= 3 {
-		v := v.TokenRequesterPrincipalName
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.TokenRequesterPrincipalName, isFlexible)
 	}
 	{
-		v := v.IssueTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.IssueTimestamp)
 	}
 	{
-		v := v.ExpiryTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ExpiryTimestamp)
 	}
 	{
-		v := v.MaxTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.MaxTimestamp)
 	}
 	{
-		v := v.TokenID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.TokenID, isFlexible)
 	}
 	{
-		v := v.HMAC
-		dst = appendBytes(dst, v, isFlexible)
+		dst = appendBytes(dst, v.HMAC, isFlexible)
 	}
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -24895,48 +23241,37 @@ func (v *CreateDelegationTokenResponse) readFrom(src []byte, unsafe bool) error 
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.PrincipalType
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.PrincipalType, isFlexible, unsafe)
 	}
 	{
-		v := &s.PrincipalName
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.PrincipalName, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		v := &s.TokenRequesterPrincipalType
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.TokenRequesterPrincipalType, isFlexible, unsafe)
 	}
 	if version >= 3 {
-		v := &s.TokenRequesterPrincipalName
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.TokenRequesterPrincipalName, isFlexible, unsafe)
 	}
 	{
-		v := readInt64(&b)
-		s.IssueTimestamp = v
+		s.IssueTimestamp = readInt64(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.ExpiryTimestamp = v
+		s.ExpiryTimestamp = readInt64(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.MaxTimestamp = v
+		s.MaxTimestamp = readInt64(&b)
 	}
 	{
-		v := &s.TokenID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.TokenID, isFlexible, unsafe)
 	}
 	{
-		v := &s.HMAC
-		readBytes(&b, v, isFlexible)
+		readBytes(&b, &s.HMAC, isFlexible)
 	}
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -25010,12 +23345,10 @@ func (v *RenewDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.HMAC
-		dst = appendBytes(dst, v, isFlexible)
+		dst = appendBytes(dst, v.HMAC, isFlexible)
 	}
 	{
-		v := v.RenewTimeMillis
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.RenewTimeMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -25037,12 +23370,10 @@ func (v *RenewDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.HMAC
-		readBytes(&b, v, isFlexible)
+		readBytes(&b, &s.HMAC, isFlexible)
 	}
 	{
-		v := readInt64(&b)
-		s.RenewTimeMillis = v
+		s.RenewTimeMillis = readInt64(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -25118,16 +23449,13 @@ func (v *RenewDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ExpiryTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ExpiryTimestamp)
 	}
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -25149,16 +23477,13 @@ func (v *RenewDelegationTokenResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.ExpiryTimestamp = v
+		s.ExpiryTimestamp = readInt64(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -25234,12 +23559,10 @@ func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.HMAC
-		dst = appendBytes(dst, v, isFlexible)
+		dst = appendBytes(dst, v.HMAC, isFlexible)
 	}
 	{
-		v := v.ExpiryPeriodMillis
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ExpiryPeriodMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -25261,12 +23584,10 @@ func (v *ExpireDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.HMAC
-		readBytes(&b, v, isFlexible)
+		readBytes(&b, &s.HMAC, isFlexible)
 	}
 	{
-		v := readInt64(&b)
-		s.ExpiryPeriodMillis = v
+		s.ExpiryPeriodMillis = readInt64(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -25341,16 +23662,13 @@ func (v *ExpireDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ExpiryTimestamp
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ExpiryTimestamp)
 	}
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -25372,16 +23690,13 @@ func (v *ExpireDelegationTokenResponse) readFrom(src []byte, unsafe bool) error 
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.ExpiryTimestamp = v
+		s.ExpiryTimestamp = readInt64(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -25483,12 +23798,10 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.PrincipalType
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.PrincipalType, isFlexible)
 			}
 			{
-				v := v.PrincipalName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.PrincipalName, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -25534,12 +23847,10 @@ func (v *DescribeDelegationTokenRequest) readFrom(src []byte, unsafe bool) error
 			v.Default()
 			s := v
 			{
-				v := &s.PrincipalType
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.PrincipalType, isFlexible, unsafe)
 			}
 			{
-				v := &s.PrincipalName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.PrincipalName, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -25694,8 +24005,7 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.TokenDetails
@@ -25703,40 +24013,31 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.PrincipalType
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.PrincipalType, isFlexible)
 			}
 			{
-				v := v.PrincipalName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.PrincipalName, isFlexible)
 			}
 			if version >= 3 {
-				v := v.TokenRequesterPrincipalType
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.TokenRequesterPrincipalType, isFlexible)
 			}
 			if version >= 3 {
-				v := v.TokenRequesterPrincipalName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.TokenRequesterPrincipalName, isFlexible)
 			}
 			{
-				v := v.IssueTimestamp
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.IssueTimestamp)
 			}
 			{
-				v := v.ExpiryTimestamp
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.ExpiryTimestamp)
 			}
 			{
-				v := v.MaxTimestamp
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.MaxTimestamp)
 			}
 			{
-				v := v.TokenID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.TokenID, isFlexible)
 			}
 			{
-				v := v.HMAC
-				dst = appendBytes(dst, v, isFlexible)
+				dst = appendBytes(dst, v.HMAC, isFlexible)
 			}
 			{
 				v := v.Renewers
@@ -25744,12 +24045,10 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.PrincipalType
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.PrincipalType, isFlexible)
 					}
 					{
-						v := v.PrincipalName
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.PrincipalName, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -25762,8 +24061,7 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -25785,8 +24083,7 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.TokenDetails
@@ -25805,40 +24102,31 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 			v.Default()
 			s := v
 			{
-				v := &s.PrincipalType
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.PrincipalType, isFlexible, unsafe)
 			}
 			{
-				v := &s.PrincipalName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.PrincipalName, isFlexible, unsafe)
 			}
 			if version >= 3 {
-				v := &s.TokenRequesterPrincipalType
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.TokenRequesterPrincipalType, isFlexible, unsafe)
 			}
 			if version >= 3 {
-				v := &s.TokenRequesterPrincipalName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.TokenRequesterPrincipalName, isFlexible, unsafe)
 			}
 			{
-				v := readInt64(&b)
-				s.IssueTimestamp = v
+				s.IssueTimestamp = readInt64(&b)
 			}
 			{
-				v := readInt64(&b)
-				s.ExpiryTimestamp = v
+				s.ExpiryTimestamp = readInt64(&b)
 			}
 			{
-				v := readInt64(&b)
-				s.MaxTimestamp = v
+				s.MaxTimestamp = readInt64(&b)
 			}
 			{
-				v := &s.TokenID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.TokenID, isFlexible, unsafe)
 			}
 			{
-				v := &s.HMAC
-				readBytes(&b, v, isFlexible)
+				readBytes(&b, &s.HMAC, isFlexible)
 			}
 			{
 				v := s.Renewers
@@ -25857,12 +24145,10 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 					v.Default()
 					s := v
 					{
-						v := &s.PrincipalType
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.PrincipalType, isFlexible, unsafe)
 					}
 					{
-						v := &s.PrincipalName
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.PrincipalName, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -25879,8 +24165,7 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 		s.TokenDetails = v
 	}
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -25954,8 +24239,7 @@ func (v *DeleteGroupsRequest) AppendTo(dst []byte) []byte {
 		v := v.Groups
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	if isFlexible {
@@ -25990,8 +24274,7 @@ func (v *DeleteGroupsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.Groups = v
@@ -26100,8 +24383,7 @@ func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Groups
@@ -26109,16 +24391,13 @@ func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Group
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Group, isFlexible)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			if version >= 3 {
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -26145,8 +24424,7 @@ func (v *DeleteGroupsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Groups
@@ -26165,16 +24443,13 @@ func (v *DeleteGroupsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Group
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Group, isFlexible, unsafe)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			if version >= 3 {
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -26296,8 +24571,7 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	if version >= 1 {
-		v := v.ElectionType
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.ElectionType)
 	}
 	{
 		v := v.Topics
@@ -26305,15 +24579,13 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -26322,8 +24594,7 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -26345,8 +24616,7 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	if version >= 1 {
-		v := readInt8(&b)
-		s.ElectionType = v
+		s.ElectionType = readInt8(&b)
 	}
 	{
 		v := s.Topics
@@ -26368,8 +24638,7 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -26384,8 +24653,7 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -26398,8 +24666,7 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	{
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -26536,12 +24803,10 @@ func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 2
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if version >= 1 {
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.Topics
@@ -26549,8 +24814,7 @@ func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -26558,16 +24822,13 @@ func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -26599,12 +24860,10 @@ func (v *ElectLeadersResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if version >= 1 {
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.Topics
@@ -26623,8 +24882,7 @@ func (v *ElectLeadersResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -26643,16 +24901,13 @@ func (v *ElectLeadersResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -26827,15 +25082,10 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ResourceType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourceType))
 			}
 			{
-				v := v.ResourceName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ResourceName, isFlexible)
 			}
 			{
 				v := v.Configs
@@ -26843,19 +25093,13 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Name
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Name, isFlexible)
 					}
 					{
-						v := v.Op
-						{
-							v := int8(v)
-							dst = appendInt8(dst, v)
-						}
+						dst = appendInt8(dst, int8(v.Op))
 					}
 					{
-						v := v.Value
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Value, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -26868,8 +25112,7 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.ValidateOnly
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.ValidateOnly)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -26907,17 +25150,10 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 			v.Default()
 			s := v
 			{
-				var t ConfigResourceType
-				{
-					v := readInt8(&b)
-					t = ConfigResourceType(v)
-				}
-				v := t
-				s.ResourceType = v
+				s.ResourceType = ConfigResourceType(readInt8(&b))
 			}
 			{
-				v := &s.ResourceName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ResourceName, isFlexible, unsafe)
 			}
 			{
 				v := s.Configs
@@ -26936,21 +25172,13 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 					v.Default()
 					s := v
 					{
-						v := &s.Name
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Name, isFlexible, unsafe)
 					}
 					{
-						var t IncrementalAlterConfigOp
-						{
-							v := readInt8(&b)
-							t = IncrementalAlterConfigOp(v)
-						}
-						v := t
-						s.Op = v
+						s.Op = IncrementalAlterConfigOp(readInt8(&b))
 					}
 					{
-						v := &s.Value
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Value, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -26967,8 +25195,7 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 		s.Resources = v
 	}
 	{
-		v := readBool(&b)
-		s.ValidateOnly = v
+		s.ValidateOnly = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -27081,8 +25308,7 @@ func (v *IncrementalAlterConfigsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 1
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Resources
@@ -27090,23 +25316,16 @@ func (v *IncrementalAlterConfigsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			{
-				v := v.ResourceType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.ResourceType))
 			}
 			{
-				v := v.ResourceName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.ResourceName, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -27133,8 +25352,7 @@ func (v *IncrementalAlterConfigsResponse) readFrom(src []byte, unsafe bool) erro
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Resources
@@ -27153,25 +25371,16 @@ func (v *IncrementalAlterConfigsResponse) readFrom(src []byte, unsafe bool) erro
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			{
-				var t ConfigResourceType
-				{
-					v := readInt8(&b)
-					t = ConfigResourceType(v)
-				}
-				v := t
-				s.ResourceType = v
+				s.ResourceType = ConfigResourceType(readInt8(&b))
 			}
 			{
-				v := &s.ResourceName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.ResourceName, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -27316,12 +25525,10 @@ func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	if version >= 1 {
-		v := v.AllowReplicationFactorChange
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.AllowReplicationFactorChange)
 	}
 	{
 		v := v.Topics
@@ -27329,8 +25536,7 @@ func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -27338,15 +25544,13 @@ func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
 						v := v.Replicas
 						dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -27379,12 +25583,10 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	if version >= 1 {
-		v := readBool(&b)
-		s.AllowReplicationFactorChange = v
+		s.AllowReplicationFactorChange = readBool(&b)
 	}
 	{
 		v := s.Topics
@@ -27403,8 +25605,7 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -27423,8 +25624,7 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
 						v := s.Replicas
@@ -27442,8 +25642,7 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Replicas = v
@@ -27605,20 +25804,16 @@ func (v *AlterPartitionAssignmentsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	if version >= 1 {
-		v := v.AllowReplicationFactorChange
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.AllowReplicationFactorChange)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -27626,8 +25821,7 @@ func (v *AlterPartitionAssignmentsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -27635,16 +25829,13 @@ func (v *AlterPartitionAssignmentsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -27676,20 +25867,16 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	if version >= 1 {
-		v := readBool(&b)
-		s.AllowReplicationFactorChange = v
+		s.AllowReplicationFactorChange = readBool(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -27708,8 +25895,7 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -27728,16 +25914,13 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -27860,8 +26043,7 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	{
 		v := v.Topics
@@ -27869,15 +26051,13 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -27905,8 +26085,7 @@ func (v *ListPartitionReassignmentsRequest) readFrom(src []byte, unsafe bool) er
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -27928,8 +26107,7 @@ func (v *ListPartitionReassignmentsRequest) readFrom(src []byte, unsafe bool) er
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -27944,8 +26122,7 @@ func (v *ListPartitionReassignmentsRequest) readFrom(src []byte, unsafe bool) er
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -28090,16 +26267,13 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -28107,8 +26281,7 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -28116,31 +26289,27 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
 						v := v.Replicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					{
 						v := v.AddingReplicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					{
 						v := v.RemovingReplicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -28173,16 +26342,13 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -28201,8 +26367,7 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -28221,8 +26386,7 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
 						v := s.Replicas
@@ -28237,8 +26401,7 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Replicas = v
@@ -28256,8 +26419,7 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.AddingReplicas = v
@@ -28275,8 +26437,7 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.RemovingReplicas = v
@@ -28402,8 +26563,7 @@ func (v *OffsetDeleteRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.Group
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendString(dst, v.Group)
 	}
 	{
 		v := v.Topics
@@ -28411,8 +26571,7 @@ func (v *OffsetDeleteRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				dst = kbin.AppendString(dst, v.Topic)
 			}
 			{
 				v := v.Partitions
@@ -28420,8 +26579,7 @@ func (v *OffsetDeleteRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 				}
 			}
@@ -28442,8 +26600,7 @@ func (v *OffsetDeleteRequest) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := &s.Group
-		readString(&b, v, false, unsafe)
+		readString(&b, &s.Group, false, unsafe)
 	}
 	{
 		v := s.Topics
@@ -28462,8 +26619,7 @@ func (v *OffsetDeleteRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, false, unsafe)
+				readString(&b, &s.Topic, false, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -28482,8 +26638,7 @@ func (v *OffsetDeleteRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 				}
 				v = a
@@ -28610,12 +26765,10 @@ func (v *OffsetDeleteResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -28623,8 +26776,7 @@ func (v *OffsetDeleteResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				dst = kbin.AppendString(dst, v.Topic)
 			}
 			{
 				v := v.Partitions
@@ -28632,12 +26784,10 @@ func (v *OffsetDeleteResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 				}
 			}
@@ -28658,12 +26808,10 @@ func (v *OffsetDeleteResponse) readFrom(src []byte, unsafe bool) error {
 	_ = version
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -28682,8 +26830,7 @@ func (v *OffsetDeleteResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, false, unsafe)
+				readString(&b, &s.Topic, false, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -28702,12 +26849,10 @@ func (v *OffsetDeleteResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 				}
 				v = a
@@ -28823,19 +26968,13 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.EntityType
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.EntityType, isFlexible)
 			}
 			{
-				v := v.MatchType
-				{
-					v := int8(v)
-					dst = appendInt8(dst, v)
-				}
+				dst = appendInt8(dst, int8(v.MatchType))
 			}
 			{
-				v := v.Match
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.Match, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -28843,8 +26982,7 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.Strict
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.Strict)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -28882,21 +27020,13 @@ func (v *DescribeClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.EntityType
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.EntityType, isFlexible, unsafe)
 			}
 			{
-				var t QuotasMatchType
-				{
-					v := readInt8(&b)
-					t = QuotasMatchType(v)
-				}
-				v := t
-				s.MatchType = v
+				s.MatchType = QuotasMatchType(readInt8(&b))
 			}
 			{
-				v := &s.Match
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.Match, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -28906,8 +27036,7 @@ func (v *DescribeClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 		s.Components = v
 	}
 	{
-		v := readBool(&b)
-		s.Strict = v
+		s.Strict = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -29055,16 +27184,13 @@ func (v *DescribeClientQuotasResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 1
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
 		v := v.Entries
@@ -29077,12 +27203,10 @@ func (v *DescribeClientQuotasResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Type
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Type, isFlexible)
 					}
 					{
-						v := v.Name
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Name, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -29095,12 +27219,10 @@ func (v *DescribeClientQuotasResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Key
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Key, isFlexible)
 					}
 					{
-						v := v.Value
-						dst = kbin.AppendFloat64(dst, v)
+						dst = kbin.AppendFloat64(dst, v.Value)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -29132,16 +27254,13 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
 		v := s.Entries
@@ -29179,12 +27298,10 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Type
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Type, isFlexible, unsafe)
 					}
 					{
-						v := &s.Name
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Name, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -29210,12 +27327,10 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Key
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Key, isFlexible, unsafe)
 					}
 					{
-						v := b.Float64()
-						s.Value = v
+						s.Value = b.Float64()
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -29390,12 +27505,10 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Type
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Type, isFlexible)
 					}
 					{
-						v := v.Name
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Name, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -29408,16 +27521,13 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Key
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Key, isFlexible)
 					}
 					{
-						v := v.Value
-						dst = kbin.AppendFloat64(dst, v)
+						dst = kbin.AppendFloat64(dst, v.Value)
 					}
 					{
-						v := v.Remove
-						dst = appendBool(dst, v)
+						dst = appendBool(dst, v.Remove)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -29430,8 +27540,7 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.ValidateOnly
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.ValidateOnly)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -29485,12 +27594,10 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Type
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Type, isFlexible, unsafe)
 					}
 					{
-						v := &s.Name
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Name, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -29516,16 +27623,13 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Key
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Key, isFlexible, unsafe)
 					}
 					{
-						v := b.Float64()
-						s.Value = v
+						s.Value = b.Float64()
 					}
 					{
-						v := readBool(&b)
-						s.Remove = v
+						s.Remove = readBool(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -29542,8 +27646,7 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 		s.Entries = v
 	}
 	{
-		v := readBool(&b)
-		s.ValidateOnly = v
+		s.ValidateOnly = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -29661,8 +27764,7 @@ func (v *AlterClientQuotasResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 1
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Entries
@@ -29670,12 +27772,10 @@ func (v *AlterClientQuotasResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			{
 				v := v.Entity
@@ -29683,12 +27783,10 @@ func (v *AlterClientQuotasResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Type
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Type, isFlexible)
 					}
 					{
-						v := v.Name
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.Name, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -29720,8 +27818,7 @@ func (v *AlterClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Entries
@@ -29740,12 +27837,10 @@ func (v *AlterClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			{
 				v := s.Entity
@@ -29764,12 +27859,10 @@ func (v *AlterClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Type
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Type, isFlexible, unsafe)
 					}
 					{
-						v := &s.Name
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.Name, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -29882,8 +27975,7 @@ func (v *DescribeUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -29929,8 +28021,7 @@ func (v *DescribeUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) 
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -30071,16 +28162,13 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
 		v := v.Results
@@ -30088,16 +28176,13 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.User
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.User, isFlexible)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			{
 				v := v.CredentialInfos
@@ -30105,12 +28190,10 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Mechanism
-						dst = appendInt8(dst, v)
+						dst = appendInt8(dst, v.Mechanism)
 					}
 					{
-						v := v.Iterations
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Iterations)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -30142,16 +28225,13 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
 		v := s.Results
@@ -30170,16 +28250,13 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 			v.Default()
 			s := v
 			{
-				v := &s.User
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.User, isFlexible, unsafe)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			{
 				v := s.CredentialInfos
@@ -30198,12 +28275,10 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 					v.Default()
 					s := v
 					{
-						v := readInt8(&b)
-						s.Mechanism = v
+						s.Mechanism = readInt8(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.Iterations = v
+						s.Iterations = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -30358,12 +28433,10 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			{
-				v := v.Mechanism
-				dst = appendInt8(dst, v)
+				dst = appendInt8(dst, v.Mechanism)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -30376,24 +28449,19 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			{
-				v := v.Mechanism
-				dst = appendInt8(dst, v)
+				dst = appendInt8(dst, v.Mechanism)
 			}
 			{
-				v := v.Iterations
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Iterations)
 			}
 			{
-				v := v.Salt
-				dst = appendBytes(dst, v, isFlexible)
+				dst = appendBytes(dst, v.Salt, isFlexible)
 			}
 			{
-				v := v.SaltedPassword
-				dst = appendBytes(dst, v, isFlexible)
+				dst = appendBytes(dst, v.SaltedPassword, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -30436,12 +28504,10 @@ func (v *AlterUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) err
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			{
-				v := readInt8(&b)
-				s.Mechanism = v
+				s.Mechanism = readInt8(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -30467,24 +28533,19 @@ func (v *AlterUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) err
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			{
-				v := readInt8(&b)
-				s.Mechanism = v
+				s.Mechanism = readInt8(&b)
 			}
 			{
-				v := readInt32(&b)
-				s.Iterations = v
+				s.Iterations = readInt32(&b)
 			}
 			{
-				v := &s.Salt
-				readBytes(&b, v, isFlexible)
+				readBytes(&b, &s.Salt, isFlexible)
 			}
 			{
-				v := &s.SaltedPassword
-				readBytes(&b, v, isFlexible)
+				readBytes(&b, &s.SaltedPassword, isFlexible)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -30585,8 +28646,7 @@ func (v *AlterUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Results
@@ -30594,16 +28654,13 @@ func (v *AlterUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.User
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.User, isFlexible)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -30630,8 +28687,7 @@ func (v *AlterUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool) er
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Results
@@ -30650,16 +28706,13 @@ func (v *AlterUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool) er
 			v.Default()
 			s := v
 			{
-				v := &s.User
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.User, isFlexible, unsafe)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -30805,12 +28858,10 @@ func (v *VoteRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ClusterID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ClusterID, isFlexible)
 	}
 	if version >= 1 {
-		v := v.VoterID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.VoterID)
 	}
 	{
 		v := v.Topics
@@ -30818,8 +28869,7 @@ func (v *VoteRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -30827,36 +28877,28 @@ func (v *VoteRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.CandidateEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.CandidateEpoch)
 					}
 					{
-						v := v.CandidateID
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.CandidateID)
 					}
 					if version >= 1 {
-						v := v.CandidateDirectoryID
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v.CandidateDirectoryID)
 					}
 					if version >= 1 {
-						v := v.VoterDirectoryID
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v.VoterDirectoryID)
 					}
 					{
-						v := v.LastOffsetEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LastOffsetEpoch)
 					}
 					{
-						v := v.LastOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.LastOffset)
 					}
 					if version >= 2 {
-						v := v.PreVote
-						dst = appendBool(dst, v)
+						dst = appendBool(dst, v.PreVote)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -30888,12 +28930,10 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.ClusterID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ClusterID, isFlexible, unsafe)
 	}
 	if version >= 1 {
-		v := readInt32(&b)
-		s.VoterID = v
+		s.VoterID = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -30912,8 +28952,7 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -30932,36 +28971,28 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.CandidateEpoch = v
+						s.CandidateEpoch = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.CandidateID = v
+						s.CandidateID = readInt32(&b)
 					}
 					if version >= 1 {
-						v := readUuid(&b)
-						s.CandidateDirectoryID = v
+						s.CandidateDirectoryID = readUuid(&b)
 					}
 					if version >= 1 {
-						v := readUuid(&b)
-						s.VoterDirectoryID = v
+						s.VoterDirectoryID = readUuid(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LastOffsetEpoch = v
+						s.LastOffsetEpoch = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.LastOffset = v
+						s.LastOffset = readInt64(&b)
 					}
 					if version >= 2 {
-						v := readBool(&b)
-						s.PreVote = v
+						s.PreVote = readBool(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -31110,8 +29141,7 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.Topics
@@ -31119,8 +29149,7 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -31128,24 +29157,19 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.LeaderID
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderID)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
-						v := v.VoteGranted
-						dst = appendBool(dst, v)
+						dst = appendBool(dst, v.VoteGranted)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -31176,16 +29200,13 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 					for i := range v {
 						v := &v[i]
 						if version >= 1 {
-							v := v.NodeID
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.NodeID)
 						}
 						if version >= 1 {
-							v := v.Host
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v.Host, isFlexible)
 						}
 						if version >= 1 {
-							v := v.Port
-							dst = appendUint16(dst, v)
+							dst = appendUint16(dst, v.Port)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
@@ -31218,8 +29239,7 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.Topics
@@ -31238,8 +29258,7 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -31258,24 +29277,19 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderID = v
+						s.LeaderID = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
-						v := readBool(&b)
-						s.VoteGranted = v
+						s.VoteGranted = readBool(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -31314,16 +29328,13 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 1 {
-						v := readInt32(&b)
-						s.NodeID = v
+						s.NodeID = readInt32(&b)
 					}
 					if version >= 1 {
-						v := &s.Host
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Host, isFlexible, unsafe)
 					}
 					if version >= 1 {
-						v := readUint16(&b)
-						s.Port = v
+						s.Port = readUint16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -31493,12 +29504,10 @@ func (v *BeginQuorumEpochRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 1
 	_ = isFlexible
 	{
-		v := v.ClusterID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ClusterID, isFlexible)
 	}
 	if version >= 1 {
-		v := v.VoterID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.VoterID)
 	}
 	{
 		v := v.Topics
@@ -31506,8 +29515,7 @@ func (v *BeginQuorumEpochRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -31515,20 +29523,16 @@ func (v *BeginQuorumEpochRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					if version >= 1 {
-						v := v.VoterDirectoryID
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v.VoterDirectoryID)
 					}
 					{
-						v := v.LeaderID
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderID)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -31546,16 +29550,13 @@ func (v *BeginQuorumEpochRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendUint16(dst, v)
+				dst = appendUint16(dst, v.Port)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -31582,12 +29583,10 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.ClusterID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ClusterID, isFlexible, unsafe)
 	}
 	if version >= 1 {
-		v := readInt32(&b)
-		s.VoterID = v
+		s.VoterID = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -31606,8 +29605,7 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -31626,20 +29624,16 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					if version >= 1 {
-						v := readUuid(&b)
-						s.VoterDirectoryID = v
+						s.VoterDirectoryID = readUuid(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderID = v
+						s.LeaderID = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -31672,16 +29666,13 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readUint16(&b)
-				s.Port = v
+				s.Port = readUint16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -31826,8 +29817,7 @@ func (v *BeginQuorumEpochResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 1
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.Topics
@@ -31835,8 +29825,7 @@ func (v *BeginQuorumEpochResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -31844,20 +29833,16 @@ func (v *BeginQuorumEpochResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.LeaderID
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderID)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -31888,16 +29873,13 @@ func (v *BeginQuorumEpochResponse) AppendTo(dst []byte) []byte {
 					for i := range v {
 						v := &v[i]
 						if version >= 1 {
-							v := v.NodeID
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.NodeID)
 						}
 						if version >= 1 {
-							v := v.Host
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v.Host, isFlexible)
 						}
 						if version >= 1 {
-							v := v.Port
-							dst = appendUint16(dst, v)
+							dst = appendUint16(dst, v.Port)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
@@ -31930,8 +29912,7 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.Topics
@@ -31950,8 +29931,7 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -31970,20 +29950,16 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderID = v
+						s.LeaderID = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -32022,16 +29998,13 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 1 {
-						v := readInt32(&b)
-						s.NodeID = v
+						s.NodeID = readInt32(&b)
 					}
 					if version >= 1 {
-						v := &s.Host
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Host, isFlexible, unsafe)
 					}
 					if version >= 1 {
-						v := readUint16(&b)
-						s.Port = v
+						s.Port = readUint16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -32222,8 +30195,7 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 1
 	_ = isFlexible
 	{
-		v := v.ClusterID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ClusterID, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -32231,8 +30203,7 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -32240,23 +30211,19 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.LeaderID
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderID)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					if version >= 0 && version <= 0 {
 						v := v.PreferredSuccessors
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if version >= 1 {
@@ -32265,12 +30232,10 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.CandidateID
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.CandidateID)
 							}
 							{
-								v := v.CandidateDirectoryID
-								dst = appendUuid(dst, v)
+								dst = appendUuid(dst, v.CandidateDirectoryID)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -32293,16 +30258,13 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendUint16(dst, v)
+				dst = appendUint16(dst, v.Port)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -32329,8 +30291,7 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.ClusterID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ClusterID, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -32349,8 +30310,7 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -32369,16 +30329,13 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderID = v
+						s.LeaderID = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					if version >= 0 && version <= 0 {
 						v := s.PreferredSuccessors
@@ -32393,8 +30350,7 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.PreferredSuccessors = v
@@ -32416,12 +30372,10 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.CandidateID = v
+								s.CandidateID = readInt32(&b)
 							}
 							{
-								v := readUuid(&b)
-								s.CandidateDirectoryID = v
+								s.CandidateDirectoryID = readUuid(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -32461,16 +30415,13 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readUint16(&b)
-				s.Port = v
+				s.Port = readUint16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -32614,8 +30565,7 @@ func (v *EndQuorumEpochResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 1
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.Topics
@@ -32623,8 +30573,7 @@ func (v *EndQuorumEpochResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -32632,20 +30581,16 @@ func (v *EndQuorumEpochResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.LeaderID
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderID)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -32676,16 +30621,13 @@ func (v *EndQuorumEpochResponse) AppendTo(dst []byte) []byte {
 					for i := range v {
 						v := &v[i]
 						if version >= 1 {
-							v := v.NodeID
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.NodeID)
 						}
 						if version >= 1 {
-							v := v.Host
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v.Host, isFlexible)
 						}
 						if version >= 1 {
-							v := v.Port
-							dst = appendUint16(dst, v)
+							dst = appendUint16(dst, v.Port)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
@@ -32718,8 +30660,7 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.Topics
@@ -32738,8 +30679,7 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -32758,20 +30698,16 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderID = v
+						s.LeaderID = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -32810,16 +30746,13 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 1 {
-						v := readInt32(&b)
-						s.NodeID = v
+						s.NodeID = readInt32(&b)
 					}
 					if version >= 1 {
-						v := &s.Host
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Host, isFlexible, unsafe)
 					}
 					if version >= 1 {
-						v := readUint16(&b)
-						s.Port = v
+						s.Port = readUint16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -32985,8 +30918,7 @@ func (v *DescribeQuorumRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -32994,8 +30926,7 @@ func (v *DescribeQuorumRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -33043,8 +30974,7 @@ func (v *DescribeQuorumRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -33063,8 +30993,7 @@ func (v *DescribeQuorumRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -33242,12 +31171,10 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if version >= 2 {
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -33255,8 +31182,7 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -33264,28 +31190,22 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					if version >= 2 {
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					{
-						v := v.LeaderID
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderID)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
-						v := v.HighWatermark
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.HighWatermark)
 					}
 					{
 						v := v.CurrentVoters
@@ -33293,24 +31213,19 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.ReplicaID
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.ReplicaID)
 							}
 							if version >= 2 {
-								v := v.ReplicaDirectoryID
-								dst = appendUuid(dst, v)
+								dst = appendUuid(dst, v.ReplicaDirectoryID)
 							}
 							{
-								v := v.LogEndOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LogEndOffset)
 							}
 							if version >= 1 {
-								v := v.LastFetchTimestamp
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LastFetchTimestamp)
 							}
 							if version >= 1 {
-								v := v.LastCaughtUpTimestamp
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LastCaughtUpTimestamp)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -33323,24 +31238,19 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.ReplicaID
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.ReplicaID)
 							}
 							if version >= 2 {
-								v := v.ReplicaDirectoryID
-								dst = appendUuid(dst, v)
+								dst = appendUuid(dst, v.ReplicaDirectoryID)
 							}
 							{
-								v := v.LogEndOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LogEndOffset)
 							}
 							if version >= 1 {
-								v := v.LastFetchTimestamp
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LastFetchTimestamp)
 							}
 							if version >= 1 {
-								v := v.LastCaughtUpTimestamp
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LastCaughtUpTimestamp)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -33363,8 +31273,7 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.NodeID
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.NodeID)
 			}
 			{
 				v := v.Listeners
@@ -33372,16 +31281,13 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Name
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Name, isFlexible)
 					}
 					{
-						v := v.Host
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Host, isFlexible)
 					}
 					{
-						v := v.Port
-						dst = appendUint16(dst, v)
+						dst = appendUint16(dst, v.Port)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -33413,12 +31319,10 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if version >= 2 {
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -33437,8 +31341,7 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -33457,28 +31360,22 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					if version >= 2 {
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderID = v
+						s.LeaderID = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.HighWatermark = v
+						s.HighWatermark = readInt64(&b)
 					}
 					{
 						v := s.CurrentVoters
@@ -33497,24 +31394,19 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.ReplicaID = v
+								s.ReplicaID = readInt32(&b)
 							}
 							if version >= 2 {
-								v := readUuid(&b)
-								s.ReplicaDirectoryID = v
+								s.ReplicaDirectoryID = readUuid(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.LogEndOffset = v
+								s.LogEndOffset = readInt64(&b)
 							}
 							if version >= 1 {
-								v := readInt64(&b)
-								s.LastFetchTimestamp = v
+								s.LastFetchTimestamp = readInt64(&b)
 							}
 							if version >= 1 {
-								v := readInt64(&b)
-								s.LastCaughtUpTimestamp = v
+								s.LastCaughtUpTimestamp = readInt64(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -33540,24 +31432,19 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.ReplicaID = v
+								s.ReplicaID = readInt32(&b)
 							}
 							if version >= 2 {
-								v := readUuid(&b)
-								s.ReplicaDirectoryID = v
+								s.ReplicaDirectoryID = readUuid(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.LogEndOffset = v
+								s.LogEndOffset = readInt64(&b)
 							}
 							if version >= 1 {
-								v := readInt64(&b)
-								s.LastFetchTimestamp = v
+								s.LastFetchTimestamp = readInt64(&b)
 							}
 							if version >= 1 {
-								v := readInt64(&b)
-								s.LastCaughtUpTimestamp = v
+								s.LastCaughtUpTimestamp = readInt64(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -33597,8 +31484,7 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt32(&b)
-				s.NodeID = v
+				s.NodeID = readInt32(&b)
 			}
 			{
 				v := s.Listeners
@@ -33617,16 +31503,13 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Name
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Name, isFlexible, unsafe)
 					}
 					{
-						v := &s.Host
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Host, isFlexible, unsafe)
 					}
 					{
-						v := readUint16(&b)
-						s.Port = v
+						s.Port = readUint16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -33804,12 +31687,10 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.BrokerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.BrokerID)
 	}
 	{
-		v := v.BrokerEpoch
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.BrokerEpoch)
 	}
 	{
 		v := v.Topics
@@ -33817,12 +31698,10 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 1 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 2 {
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -33830,19 +31709,16 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					if version >= 0 && version <= 2 {
 						v := v.NewISR
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if version >= 3 {
@@ -33851,12 +31727,10 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.BrokerID
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.BrokerID)
 							}
 							{
-								v := v.BrokerEpoch
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.BrokerEpoch)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -33864,12 +31738,10 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if version >= 1 {
-						v := v.LeaderRecoveryState
-						dst = appendInt8(dst, v)
+						dst = appendInt8(dst, v.LeaderRecoveryState)
 					}
 					{
-						v := v.PartitionEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.PartitionEpoch)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -33901,12 +31773,10 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.BrokerID = v
+		s.BrokerID = readInt32(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.BrokerEpoch = v
+		s.BrokerEpoch = readInt64(&b)
 	}
 	{
 		v := s.Topics
@@ -33925,12 +31795,10 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 1 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 2 {
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -33949,12 +31817,10 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					if version >= 0 && version <= 2 {
 						v := s.NewISR
@@ -33969,8 +31835,7 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.NewISR = v
@@ -33992,12 +31857,10 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.BrokerID = v
+								s.BrokerID = readInt32(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.BrokerEpoch = v
+								s.BrokerEpoch = readInt64(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -34007,12 +31870,10 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 						s.NewEpochISR = v
 					}
 					if version >= 1 {
-						v := readInt8(&b)
-						s.LeaderRecoveryState = v
+						s.LeaderRecoveryState = readInt8(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.PartitionEpoch = v
+						s.PartitionEpoch = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -34151,12 +32012,10 @@ func (v *AlterPartitionResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.Topics
@@ -34164,12 +32023,10 @@ func (v *AlterPartitionResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 1 {
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if version >= 2 {
-				v := v.TopidID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopidID)
 			}
 			{
 				v := v.Partitions
@@ -34177,36 +32034,29 @@ func (v *AlterPartitionResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.LeaderID
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderID)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
 						v := v.ISR
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if version >= 1 {
-						v := v.LeaderRecoveryState
-						dst = appendInt8(dst, v)
+						dst = appendInt8(dst, v.LeaderRecoveryState)
 					}
 					{
-						v := v.PartitionEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.PartitionEpoch)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -34238,12 +32088,10 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.Topics
@@ -34262,12 +32110,10 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 1 {
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if version >= 2 {
-				v := readUuid(&b)
-				s.TopidID = v
+				s.TopidID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -34286,20 +32132,16 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderID = v
+						s.LeaderID = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
 						v := s.ISR
@@ -34314,19 +32156,16 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.ISR = v
 					}
 					if version >= 1 {
-						v := readInt8(&b)
-						s.LeaderRecoveryState = v
+						s.LeaderRecoveryState = readInt8(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.PartitionEpoch = v
+						s.PartitionEpoch = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -34461,8 +32300,7 @@ func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	{
 		v := v.FeatureUpdates
@@ -34470,20 +32308,16 @@ func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Feature
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Feature, isFlexible)
 			}
 			{
-				v := v.MaxVersionLevel
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.MaxVersionLevel)
 			}
 			if version >= 0 && version <= 0 {
-				v := v.AllowDowngrade
-				dst = appendBool(dst, v)
+				dst = appendBool(dst, v.AllowDowngrade)
 			}
 			if version >= 1 {
-				v := v.UpgradeType
-				dst = appendInt8(dst, v)
+				dst = appendInt8(dst, v.UpgradeType)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -34491,8 +32325,7 @@ func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 1 {
-		v := v.ValidateOnly
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.ValidateOnly)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -34514,8 +32347,7 @@ func (v *UpdateFeaturesRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	{
 		v := s.FeatureUpdates
@@ -34534,20 +32366,16 @@ func (v *UpdateFeaturesRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Feature
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Feature, isFlexible, unsafe)
 			}
 			{
-				v := readInt16(&b)
-				s.MaxVersionLevel = v
+				s.MaxVersionLevel = readInt16(&b)
 			}
 			if version >= 0 && version <= 0 {
-				v := readBool(&b)
-				s.AllowDowngrade = v
+				s.AllowDowngrade = readBool(&b)
 			}
 			if version >= 1 {
-				v := readInt8(&b)
-				s.UpgradeType = v
+				s.UpgradeType = readInt8(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -34557,8 +32385,7 @@ func (v *UpdateFeaturesRequest) readFrom(src []byte, unsafe bool) error {
 		s.FeatureUpdates = v
 	}
 	if version >= 1 {
-		v := readBool(&b)
-		s.ValidateOnly = v
+		s.ValidateOnly = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -34653,16 +32480,13 @@ func (v *UpdateFeaturesResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	if version >= 0 && version <= 1 {
 		v := v.Results
@@ -34670,16 +32494,13 @@ func (v *UpdateFeaturesResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Feature
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Feature, isFlexible)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -34706,16 +32527,13 @@ func (v *UpdateFeaturesResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	if version >= 0 && version <= 1 {
 		v := s.Results
@@ -34734,16 +32552,13 @@ func (v *UpdateFeaturesResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Feature
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Feature, isFlexible, unsafe)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -34825,16 +32640,13 @@ func (v *EnvelopeRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.RequestData
-		dst = appendBytes(dst, v, isFlexible)
+		dst = appendBytes(dst, v.RequestData, isFlexible)
 	}
 	{
-		v := v.RequestPrincipal
-		dst = appendNullableBytes(dst, v, isFlexible)
+		dst = appendNullableBytes(dst, v.RequestPrincipal, isFlexible)
 	}
 	{
-		v := v.ClientHostAddress
-		dst = appendBytes(dst, v, isFlexible)
+		dst = appendBytes(dst, v.ClientHostAddress, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -34856,16 +32668,13 @@ func (v *EnvelopeRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.RequestData
-		readBytes(&b, v, isFlexible)
+		readBytes(&b, &s.RequestData, isFlexible)
 	}
 	{
-		v := &s.RequestPrincipal
-		readNullableBytes(&b, v, isFlexible)
+		readNullableBytes(&b, &s.RequestPrincipal, isFlexible)
 	}
 	{
-		v := &s.ClientHostAddress
-		readBytes(&b, v, isFlexible)
+		readBytes(&b, &s.ClientHostAddress, isFlexible)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -34925,12 +32734,10 @@ func (v *EnvelopeResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ResponseData
-		dst = appendNullableBytes(dst, v, isFlexible)
+		dst = appendNullableBytes(dst, v.ResponseData, isFlexible)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -34952,12 +32759,10 @@ func (v *EnvelopeResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.ResponseData
-		readNullableBytes(&b, v, isFlexible)
+		readNullableBytes(&b, &s.ResponseData, isFlexible)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -35122,12 +32927,10 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ReplicaID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ReplicaID)
 	}
 	{
-		v := v.MaxBytes
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MaxBytes)
 	}
 	{
 		v := v.Topics
@@ -35135,8 +32938,7 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -35144,30 +32946,25 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.CurrentLeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.CurrentLeaderEpoch)
 					}
 					{
 						v := &v.SnapshotID
 						{
-							v := v.EndOffset
-							dst = appendInt64(dst, v)
+							dst = appendInt64(dst, v.EndOffset)
 						}
 						{
-							v := v.Epoch
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.Epoch)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					{
-						v := v.Position
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Position)
 					}
 					if isFlexible {
 						var toEncode []uint32
@@ -35238,12 +33035,10 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ReplicaID = v
+		s.ReplicaID = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.MaxBytes = v
+		s.MaxBytes = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -35262,8 +33057,7 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -35282,32 +33076,27 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.CurrentLeaderEpoch = v
+						s.CurrentLeaderEpoch = readInt32(&b)
 					}
 					{
 						v := &s.SnapshotID
 						v.Default()
 						s := v
 						{
-							v := readInt64(&b)
-							s.EndOffset = v
+							s.EndOffset = readInt64(&b)
 						}
 						{
-							v := readInt32(&b)
-							s.Epoch = v
+							s.Epoch = readInt32(&b)
 						}
 						if isFlexible {
 							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					{
-						v := readInt64(&b)
-						s.Position = v
+						s.Position = readInt64(&b)
 					}
 					if isFlexible {
 						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -35316,8 +33105,7 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 							case 0:
 								b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-								v := readUuid(&b)
-								s.ReplicaDirectoryID = v
+								s.ReplicaDirectoryID = readUuid(&b)
 								if err := b.Complete(); err != nil {
 									return err
 								}
@@ -35342,8 +33130,7 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 			case 0:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				v := &s.ClusterID
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ClusterID, isFlexible, unsafe)
 				if err := b.Complete(); err != nil {
 					return err
 				}
@@ -35556,12 +33343,10 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.Topics
@@ -35569,8 +33354,7 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -35578,38 +33362,31 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
 						v := &v.SnapshotID
 						{
-							v := v.EndOffset
-							dst = appendInt64(dst, v)
+							dst = appendInt64(dst, v.EndOffset)
 						}
 						{
-							v := v.Epoch
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.Epoch)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					{
-						v := v.Size
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Size)
 					}
 					{
-						v := v.Position
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.Position)
 					}
 					{
-						v := v.Bytes
-						dst = appendBytes(dst, v, isFlexible)
+						dst = appendBytes(dst, v.Bytes, isFlexible)
 					}
 					if isFlexible {
 						var toEncode []uint32
@@ -35627,12 +33404,10 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 									lenAt := len(dst)
 								fCurrentLeader:
 									{
-										v := v.LeaderID
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v.LeaderID)
 									}
 									{
-										v := v.LeaderEpoch
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v.LeaderEpoch)
 									}
 									if isFlexible {
 										dst = v.UnknownTags.appendWithCount(dst)
@@ -35673,16 +33448,13 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 					for i := range v {
 						v := &v[i]
 						if version >= 1 {
-							v := v.NodeID
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.NodeID)
 						}
 						if version >= 1 {
-							v := v.Host
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v.Host, isFlexible)
 						}
 						if version >= 1 {
-							v := v.Port
-							dst = appendUint16(dst, v)
+							dst = appendUint16(dst, v.Port)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
@@ -35715,12 +33487,10 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.Topics
@@ -35739,8 +33509,7 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -35759,40 +33528,33 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
 						v := &s.SnapshotID
 						v.Default()
 						s := v
 						{
-							v := readInt64(&b)
-							s.EndOffset = v
+							s.EndOffset = readInt64(&b)
 						}
 						{
-							v := readInt32(&b)
-							s.Epoch = v
+							s.Epoch = readInt32(&b)
 						}
 						if isFlexible {
 							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					{
-						v := readInt64(&b)
-						s.Size = v
+						s.Size = readInt64(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.Position = v
+						s.Position = readInt64(&b)
 					}
 					{
-						v := &s.Bytes
-						readBytes(&b, v, isFlexible)
+						readBytes(&b, &s.Bytes, isFlexible)
 					}
 					if isFlexible {
 						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -35805,12 +33567,10 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readInt32(&b)
-									s.LeaderID = v
+									s.LeaderID = readInt32(&b)
 								}
 								{
-									v := readInt32(&b)
-									s.LeaderEpoch = v
+									s.LeaderEpoch = readInt32(&b)
 								}
 								if isFlexible {
 									internalReadTags(&b, &s.UnknownTags)
@@ -35855,16 +33615,13 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					if version >= 1 {
-						v := readInt32(&b)
-						s.NodeID = v
+						s.NodeID = readInt32(&b)
 					}
 					if version >= 1 {
-						v := &s.Host
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Host, isFlexible, unsafe)
 					}
 					if version >= 1 {
-						v := readUint16(&b)
-						s.Port = v
+						s.Port = readUint16(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -35951,16 +33708,13 @@ func (v *DescribeClusterRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.IncludeClusterAuthorizedOperations
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IncludeClusterAuthorizedOperations)
 	}
 	if version >= 1 {
-		v := v.EndpointType
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.EndpointType)
 	}
 	if version >= 2 {
-		v := v.IncludeFencedBrokers
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IncludeFencedBrokers)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -35982,16 +33736,13 @@ func (v *DescribeClusterRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readBool(&b)
-		s.IncludeClusterAuthorizedOperations = v
+		s.IncludeClusterAuthorizedOperations = readBool(&b)
 	}
 	if version >= 1 {
-		v := readInt8(&b)
-		s.EndpointType = v
+		s.EndpointType = readInt8(&b)
 	}
 	if version >= 2 {
-		v := readBool(&b)
-		s.IncludeFencedBrokers = v
+		s.IncludeFencedBrokers = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -36113,28 +33864,22 @@ func (v *DescribeClusterResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	if version >= 1 {
-		v := v.EndpointType
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.EndpointType)
 	}
 	{
-		v := v.ClusterID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.ClusterID, isFlexible)
 	}
 	{
-		v := v.ControllerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ControllerID)
 	}
 	{
 		v := v.Brokers
@@ -36142,24 +33887,19 @@ func (v *DescribeClusterResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.NodeID
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.NodeID)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Port)
 			}
 			{
-				v := v.Rack
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.Rack, isFlexible)
 			}
 			if version >= 2 {
-				v := v.IsFenced
-				dst = appendBool(dst, v)
+				dst = appendBool(dst, v.IsFenced)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -36167,8 +33907,7 @@ func (v *DescribeClusterResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.ClusterAuthorizedOperations
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ClusterAuthorizedOperations)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -36190,28 +33929,22 @@ func (v *DescribeClusterResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	if version >= 1 {
-		v := readInt8(&b)
-		s.EndpointType = v
+		s.EndpointType = readInt8(&b)
 	}
 	{
-		v := &s.ClusterID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.ClusterID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.ControllerID = v
+		s.ControllerID = readInt32(&b)
 	}
 	{
 		v := s.Brokers
@@ -36230,24 +33963,19 @@ func (v *DescribeClusterResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt32(&b)
-				s.NodeID = v
+				s.NodeID = readInt32(&b)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Port = v
+				s.Port = readInt32(&b)
 			}
 			{
-				v := &s.Rack
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.Rack, isFlexible, unsafe)
 			}
 			if version >= 2 {
-				v := readBool(&b)
-				s.IsFenced = v
+				s.IsFenced = readBool(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -36257,8 +33985,7 @@ func (v *DescribeClusterResponse) readFrom(src []byte, unsafe bool) error {
 		s.Brokers = v
 	}
 	{
-		v := readInt32(&b)
-		s.ClusterAuthorizedOperations = v
+		s.ClusterAuthorizedOperations = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -36361,15 +34088,13 @@ func (v *DescribeProducersRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -36413,8 +34138,7 @@ func (v *DescribeProducersRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -36429,8 +34153,7 @@ func (v *DescribeProducersRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -36608,8 +34331,7 @@ func (v *DescribeProducersResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -36617,8 +34339,7 @@ func (v *DescribeProducersResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -36626,16 +34347,13 @@ func (v *DescribeProducersResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					{
 						v := v.ActiveProducers
@@ -36643,28 +34361,22 @@ func (v *DescribeProducersResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.ProducerID
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.ProducerID)
 							}
 							{
-								v := v.ProducerEpoch
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.ProducerEpoch)
 							}
 							{
-								v := v.LastSequence
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.LastSequence)
 							}
 							{
-								v := v.LastTimestamp
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LastTimestamp)
 							}
 							{
-								v := v.CoordinatorEpoch
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.CoordinatorEpoch)
 							}
 							{
-								v := v.CurrentTxnStartOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.CurrentTxnStartOffset)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -36701,8 +34413,7 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -36721,8 +34432,7 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -36741,16 +34451,13 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					{
 						v := s.ActiveProducers
@@ -36769,28 +34476,22 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt64(&b)
-								s.ProducerID = v
+								s.ProducerID = readInt64(&b)
 							}
 							{
-								v := readInt32(&b)
-								s.ProducerEpoch = v
+								s.ProducerEpoch = readInt32(&b)
 							}
 							{
-								v := readInt32(&b)
-								s.LastSequence = v
+								s.LastSequence = readInt32(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.LastTimestamp = v
+								s.LastTimestamp = readInt64(&b)
 							}
 							{
-								v := readInt32(&b)
-								s.CoordinatorEpoch = v
+								s.CoordinatorEpoch = readInt32(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.CurrentTxnStartOffset = v
+								s.CurrentTxnStartOffset = readInt64(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -36963,16 +34664,13 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.BrokerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.BrokerID)
 	}
 	{
-		v := v.ClusterID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.ClusterID, isFlexible)
 	}
 	{
-		v := v.IncarnationID
-		dst = appendUuid(dst, v)
+		dst = appendUuid(dst, v.IncarnationID)
 	}
 	{
 		v := v.Listeners
@@ -36980,20 +34678,16 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendUint16(dst, v)
+				dst = appendUint16(dst, v.Port)
 			}
 			{
-				v := v.SecurityProtocol
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.SecurityProtocol)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -37006,16 +34700,13 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			{
-				v := v.MinSupportedVersion
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.MinSupportedVersion)
 			}
 			{
-				v := v.MaxSupportedVersion
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.MaxSupportedVersion)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -37023,24 +34714,20 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.Rack
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.Rack, isFlexible)
 	}
 	if version >= 1 {
-		v := v.IsMigratingZkBroker
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IsMigratingZkBroker)
 	}
 	if version >= 2 {
 		v := v.LogDirs
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendUuid(dst, v)
+			dst = appendUuid(dst, v[i])
 		}
 	}
 	if version >= 3 {
-		v := v.PreviousBrokerEpoch
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.PreviousBrokerEpoch)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -37062,16 +34749,13 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.BrokerID = v
+		s.BrokerID = readInt32(&b)
 	}
 	{
-		v := &s.ClusterID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.ClusterID, isFlexible, unsafe)
 	}
 	{
-		v := readUuid(&b)
-		s.IncarnationID = v
+		s.IncarnationID = readUuid(&b)
 	}
 	{
 		v := s.Listeners
@@ -37090,20 +34774,16 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readUint16(&b)
-				s.Port = v
+				s.Port = readUint16(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.SecurityProtocol = v
+				s.SecurityProtocol = readInt16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -37129,16 +34809,13 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			{
-				v := readInt16(&b)
-				s.MinSupportedVersion = v
+				s.MinSupportedVersion = readInt16(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.MaxSupportedVersion = v
+				s.MaxSupportedVersion = readInt16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -37148,12 +34825,10 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		s.Features = v
 	}
 	{
-		v := &s.Rack
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.Rack, isFlexible, unsafe)
 	}
 	if version >= 1 {
-		v := readBool(&b)
-		s.IsMigratingZkBroker = v
+		s.IsMigratingZkBroker = readBool(&b)
 	}
 	if version >= 2 {
 		v := s.LogDirs
@@ -37168,15 +34843,13 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([][16]byte, l)...)
 		}
 		for i := range a {
-			v := readUuid(&b)
-			a[i] = v
+			a[i] = readUuid(&b)
 		}
 		v = a
 		s.LogDirs = v
 	}
 	if version >= 3 {
-		v := readInt64(&b)
-		s.PreviousBrokerEpoch = v
+		s.PreviousBrokerEpoch = readInt64(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -37248,16 +34921,13 @@ func (v *BrokerRegistrationResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.BrokerEpoch
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.BrokerEpoch)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -37279,16 +34949,13 @@ func (v *BrokerRegistrationResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.BrokerEpoch = v
+		s.BrokerEpoch = readInt64(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -37378,24 +35045,19 @@ func (v *BrokerHeartbeatRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.BrokerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.BrokerID)
 	}
 	{
-		v := v.BrokerEpoch
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.BrokerEpoch)
 	}
 	{
-		v := v.CurrentMetadataOffset
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.CurrentMetadataOffset)
 	}
 	{
-		v := v.WantFence
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.WantFence)
 	}
 	{
-		v := v.WantShutdown
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.WantShutdown)
 	}
 	if isFlexible {
 		var toEncode []uint32
@@ -37417,8 +35079,7 @@ func (v *BrokerHeartbeatRequest) AppendTo(dst []byte) []byte {
 				fOfflineLogDirs:
 					dst = appendArrayLen(dst, len(v), isFlexible)
 					for i := range v {
-						v := v[i]
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v[i])
 					}
 					if !sized {
 						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -37435,8 +35096,7 @@ func (v *BrokerHeartbeatRequest) AppendTo(dst []byte) []byte {
 				fCordonedLogDirs:
 					dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 					for i := range v {
-						v := v[i]
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v[i])
 					}
 					if !sized {
 						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -37465,24 +35125,19 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.BrokerID = v
+		s.BrokerID = readInt32(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.BrokerEpoch = v
+		s.BrokerEpoch = readInt64(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.CurrentMetadataOffset = v
+		s.CurrentMetadataOffset = readInt64(&b)
 	}
 	{
-		v := readBool(&b)
-		s.WantFence = v
+		s.WantFence = readBool(&b)
 	}
 	{
-		v := readBool(&b)
-		s.WantShutdown = v
+		s.WantShutdown = readBool(&b)
 	}
 	if isFlexible {
 		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -37503,8 +35158,7 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([][16]byte, l)...)
 				}
 				for i := range a {
-					v := readUuid(&b)
-					a[i] = v
+					a[i] = readUuid(&b)
 				}
 				v = a
 				s.OfflineLogDirs = v
@@ -37528,8 +35182,7 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([][16]byte, l)...)
 				}
 				for i := range a {
-					v := readUuid(&b)
-					a[i] = v
+					a[i] = readUuid(&b)
 				}
 				v = a
 				s.CordonedLogDirs = v
@@ -37610,24 +35263,19 @@ func (v *BrokerHeartbeatResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.IsCaughtUp
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IsCaughtUp)
 	}
 	{
-		v := v.IsFenced
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IsFenced)
 	}
 	{
-		v := v.ShouldShutdown
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.ShouldShutdown)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -37649,24 +35297,19 @@ func (v *BrokerHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := readBool(&b)
-		s.IsCaughtUp = v
+		s.IsCaughtUp = readBool(&b)
 	}
 	{
-		v := readBool(&b)
-		s.IsFenced = v
+		s.IsFenced = readBool(&b)
 	}
 	{
-		v := readBool(&b)
-		s.ShouldShutdown = v
+		s.ShouldShutdown = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -37735,8 +35378,7 @@ func (v *UnregisterBrokerRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.BrokerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.BrokerID)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -37758,8 +35400,7 @@ func (v *UnregisterBrokerRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.BrokerID = v
+		s.BrokerID = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -37826,16 +35467,13 @@ func (v *UnregisterBrokerResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -37857,16 +35495,13 @@ func (v *UnregisterBrokerResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -37937,8 +35572,7 @@ func (v *DescribeTransactionsRequest) AppendTo(dst []byte) []byte {
 		v := v.TransactionalIDs
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	if isFlexible {
@@ -37973,8 +35607,7 @@ func (v *DescribeTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.TransactionalIDs = v
@@ -38122,8 +35755,7 @@ func (v *DescribeTransactionsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.TransactionStates
@@ -38131,32 +35763,25 @@ func (v *DescribeTransactionsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.TransactionalID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.TransactionalID, isFlexible)
 			}
 			{
-				v := v.State
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.State, isFlexible)
 			}
 			{
-				v := v.TimeoutMillis
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.TimeoutMillis)
 			}
 			{
-				v := v.StartTimestamp
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.StartTimestamp)
 			}
 			{
-				v := v.ProducerID
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.ProducerID)
 			}
 			{
-				v := v.ProducerEpoch
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ProducerEpoch)
 			}
 			{
 				v := v.Topics
@@ -38164,15 +35789,13 @@ func (v *DescribeTransactionsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
 						v := v.Partitions
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -38205,8 +35828,7 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.TransactionStates
@@ -38225,32 +35847,25 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.TransactionalID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.TransactionalID, isFlexible, unsafe)
 			}
 			{
-				v := &s.State
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.State, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.TimeoutMillis = v
+				s.TimeoutMillis = readInt32(&b)
 			}
 			{
-				v := readInt64(&b)
-				s.StartTimestamp = v
+				s.StartTimestamp = readInt64(&b)
 			}
 			{
-				v := readInt64(&b)
-				s.ProducerID = v
+				s.ProducerID = readInt64(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.ProducerEpoch = v
+				s.ProducerEpoch = readInt16(&b)
 			}
 			{
 				v := s.Topics
@@ -38269,8 +35884,7 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -38285,8 +35899,7 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Partitions = v
@@ -38395,25 +36008,21 @@ func (v *ListTransactionsRequest) AppendTo(dst []byte) []byte {
 		v := v.StateFilters
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	{
 		v := v.ProducerIDFilters
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendInt64(dst, v)
+			dst = appendInt64(dst, v[i])
 		}
 	}
 	if version >= 1 {
-		v := v.DurationFilterMillis
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.DurationFilterMillis)
 	}
 	if version >= 2 {
-		v := v.TransactionalIDPattern
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.TransactionalIDPattern, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -38447,8 +36056,7 @@ func (v *ListTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.StateFilters = v
@@ -38466,19 +36074,16 @@ func (v *ListTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]int64, l)...)
 		}
 		for i := range a {
-			v := readInt64(&b)
-			a[i] = v
+			a[i] = readInt64(&b)
 		}
 		v = a
 		s.ProducerIDFilters = v
 	}
 	if version >= 1 {
-		v := readInt64(&b)
-		s.DurationFilterMillis = v
+		s.DurationFilterMillis = readInt64(&b)
 	}
 	if version >= 2 {
-		v := &s.TransactionalIDPattern
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.TransactionalIDPattern, isFlexible, unsafe)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -38587,19 +36192,16 @@ func (v *ListTransactionsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.UnknownStateFilters
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	{
@@ -38608,16 +36210,13 @@ func (v *ListTransactionsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TransactionalID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.TransactionalID, isFlexible)
 			}
 			{
-				v := v.ProducerID
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.ProducerID)
 			}
 			{
-				v := v.TransactionState
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.TransactionState, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -38644,12 +36243,10 @@ func (v *ListTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.UnknownStateFilters
@@ -38664,8 +36261,7 @@ func (v *ListTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.UnknownStateFilters = v
@@ -38687,16 +36283,13 @@ func (v *ListTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.TransactionalID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.TransactionalID, isFlexible, unsafe)
 			}
 			{
-				v := readInt64(&b)
-				s.ProducerID = v
+				s.ProducerID = readInt64(&b)
 			}
 			{
-				v := &s.TransactionState
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.TransactionState, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -38778,12 +36371,10 @@ func (v *AllocateProducerIDsRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.BrokerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.BrokerID)
 	}
 	{
-		v := v.BrokerEpoch
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.BrokerEpoch)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -38805,12 +36396,10 @@ func (v *AllocateProducerIDsRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.BrokerID = v
+		s.BrokerID = readInt32(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.BrokerEpoch = v
+		s.BrokerEpoch = readInt64(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -38883,20 +36472,16 @@ func (v *AllocateProducerIDsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ProducerIDStart
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.ProducerIDStart)
 	}
 	{
-		v := v.ProducerIDLen
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ProducerIDLen)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -38918,20 +36503,16 @@ func (v *AllocateProducerIDsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.ProducerIDStart = v
+		s.ProducerIDStart = readInt64(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.ProducerIDLen = v
+		s.ProducerIDLen = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -39056,44 +36637,35 @@ func (v *ConsumerGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.Group
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Group, isFlexible)
 	}
 	{
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	{
-		v := v.MemberEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MemberEpoch)
 	}
 	{
-		v := v.InstanceID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.InstanceID, isFlexible)
 	}
 	{
-		v := v.RackID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.RackID, isFlexible)
 	}
 	{
-		v := v.RebalanceTimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.RebalanceTimeoutMillis)
 	}
 	{
 		v := v.SubscribedTopicNames
 		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	if version >= 1 {
-		v := v.SubscribedTopicRegex
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.SubscribedTopicRegex, isFlexible)
 	}
 	{
-		v := v.ServerAssignor
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ServerAssignor, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -39101,15 +36673,13 @@ func (v *ConsumerGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -39137,28 +36707,22 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 	_ = isFlexible
 	s := v
 	{
-		v := &s.Group
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Group, isFlexible, unsafe)
 	}
 	{
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.MemberEpoch = v
+		s.MemberEpoch = readInt32(&b)
 	}
 	{
-		v := &s.InstanceID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 	}
 	{
-		v := &s.RackID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.RackID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.RebalanceTimeoutMillis = v
+		s.RebalanceTimeoutMillis = readInt32(&b)
 	}
 	{
 		v := s.SubscribedTopicNames
@@ -39176,19 +36740,16 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.SubscribedTopicNames = v
 	}
 	if version >= 1 {
-		v := &s.SubscribedTopicRegex
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.SubscribedTopicRegex, isFlexible, unsafe)
 	}
 	{
-		v := &s.ServerAssignor
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ServerAssignor, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -39210,8 +36771,7 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -39226,8 +36786,7 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -39376,28 +36935,22 @@ func (v *ConsumerGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
-		v := v.MemberID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.MemberID, isFlexible)
 	}
 	{
-		v := v.MemberEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MemberEpoch)
 	}
 	{
-		v := v.HeartbeatIntervalMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.HeartbeatIntervalMillis)
 	}
 	{
 		v := v.Assignment
@@ -39411,15 +36964,13 @@ func (v *ConsumerGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.TopicID
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v.TopicID)
 					}
 					{
 						v := v.Partitions
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -39452,28 +37003,22 @@ func (v *ConsumerGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
-		v := &s.MemberID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.MemberEpoch = v
+		s.MemberEpoch = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.HeartbeatIntervalMillis = v
+		s.HeartbeatIntervalMillis = readInt32(&b)
 	}
 	{
 		if present := b.Int8(); present != -1 && b.Ok() {
@@ -39498,8 +37043,7 @@ func (v *ConsumerGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error
 					v.Default()
 					s := v
 					{
-						v := readUuid(&b)
-						s.TopicID = v
+						s.TopicID = readUuid(&b)
 					}
 					{
 						v := s.Partitions
@@ -39514,8 +37058,7 @@ func (v *ConsumerGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Partitions = v
@@ -39630,13 +37173,11 @@ func (v *ConsumerGroupDescribeRequest) AppendTo(dst []byte) []byte {
 		v := v.Groups
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	{
-		v := v.IncludeAuthorizedOperations
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IncludeAuthorizedOperations)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -39670,15 +37211,13 @@ func (v *ConsumerGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.Groups = v
 	}
 	{
-		v := readBool(&b)
-		s.IncludeAuthorizedOperations = v
+		s.IncludeAuthorizedOperations = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -39862,8 +37401,7 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Groups
@@ -39871,32 +37409,25 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			{
-				v := v.Group
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Group, isFlexible)
 			}
 			{
-				v := v.State
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.State, isFlexible)
 			}
 			{
-				v := v.Epoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Epoch)
 			}
 			{
-				v := v.AssignmentEpoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.AssignmentEpoch)
 			}
 			{
-				v := v.AssignorName
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.AssignorName, isFlexible)
 			}
 			{
 				v := v.Members
@@ -39904,40 +37435,32 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.MemberID
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.MemberID, isFlexible)
 					}
 					{
-						v := v.InstanceID
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.InstanceID, isFlexible)
 					}
 					{
-						v := v.RackID
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.RackID, isFlexible)
 					}
 					{
-						v := v.MemberEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.MemberEpoch)
 					}
 					{
-						v := v.ClientID
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.ClientID, isFlexible)
 					}
 					{
-						v := v.ClientHost
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.ClientHost, isFlexible)
 					}
 					{
 						v := v.SubscribedTopics
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v[i], isFlexible)
 						}
 					}
 					{
-						v := v.SubscribedTopicRegex
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.SubscribedTopicRegex, isFlexible)
 					}
 					{
 						v := &v.Assignment
@@ -39947,19 +37470,16 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							for i := range v {
 								v := &v[i]
 								{
-									v := v.TopicID
-									dst = appendUuid(dst, v)
+									dst = appendUuid(dst, v.TopicID)
 								}
 								{
-									v := v.Topic
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v.Topic, isFlexible)
 								}
 								{
 									v := v.Partitions
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v[i])
 									}
 								}
 								if isFlexible {
@@ -39979,19 +37499,16 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							for i := range v {
 								v := &v[i]
 								{
-									v := v.TopicID
-									dst = appendUuid(dst, v)
+									dst = appendUuid(dst, v.TopicID)
 								}
 								{
-									v := v.Topic
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v.Topic, isFlexible)
 								}
 								{
 									v := v.Partitions
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v[i])
 									}
 								}
 								if isFlexible {
@@ -40004,8 +37521,7 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if version >= 1 {
-						v := v.MemberType
-						dst = appendInt8(dst, v)
+						dst = appendInt8(dst, v.MemberType)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -40013,8 +37529,7 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			{
-				v := v.AuthorizedOperations
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.AuthorizedOperations)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -40041,8 +37556,7 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Groups
@@ -40061,32 +37575,25 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			{
-				v := &s.Group
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Group, isFlexible, unsafe)
 			}
 			{
-				v := &s.State
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.State, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Epoch = v
+				s.Epoch = readInt32(&b)
 			}
 			{
-				v := readInt32(&b)
-				s.AssignmentEpoch = v
+				s.AssignmentEpoch = readInt32(&b)
 			}
 			{
-				v := &s.AssignorName
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.AssignorName, isFlexible, unsafe)
 			}
 			{
 				v := s.Members
@@ -40105,28 +37612,22 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 					v.Default()
 					s := v
 					{
-						v := &s.MemberID
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.MemberID, isFlexible, unsafe)
 					}
 					{
-						v := &s.InstanceID
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 					}
 					{
-						v := &s.RackID
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.RackID, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.MemberEpoch = v
+						s.MemberEpoch = readInt32(&b)
 					}
 					{
-						v := &s.ClientID
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.ClientID, isFlexible, unsafe)
 					}
 					{
-						v := &s.ClientHost
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.ClientHost, isFlexible, unsafe)
 					}
 					{
 						v := s.SubscribedTopics
@@ -40141,15 +37642,13 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := &a[i]
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &a[i], isFlexible, unsafe)
 						}
 						v = a
 						s.SubscribedTopics = v
 					}
 					{
-						v := &s.SubscribedTopicRegex
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.SubscribedTopicRegex, isFlexible, unsafe)
 					}
 					{
 						v := &s.Assignment
@@ -40172,12 +37671,10 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 								v.Default()
 								s := v
 								{
-									v := readUuid(&b)
-									s.TopicID = v
+									s.TopicID = readUuid(&b)
 								}
 								{
-									v := &s.Topic
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &s.Topic, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -40192,8 +37689,7 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 										a = append(a, make([]int32, l)...)
 									}
 									for i := range a {
-										v := readInt32(&b)
-										a[i] = v
+										a[i] = readInt32(&b)
 									}
 									v = a
 									s.Partitions = v
@@ -40230,12 +37726,10 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 								v.Default()
 								s := v
 								{
-									v := readUuid(&b)
-									s.TopicID = v
+									s.TopicID = readUuid(&b)
 								}
 								{
-									v := &s.Topic
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &s.Topic, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -40250,8 +37744,7 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 										a = append(a, make([]int32, l)...)
 									}
 									for i := range a {
-										v := readInt32(&b)
-										a[i] = v
+										a[i] = readInt32(&b)
 									}
 									v = a
 									s.Partitions = v
@@ -40268,8 +37761,7 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 						}
 					}
 					if version >= 1 {
-						v := readInt8(&b)
-						s.MemberType = v
+						s.MemberType = readInt8(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -40279,8 +37771,7 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 				s.Members = v
 			}
 			{
-				v := readInt32(&b)
-				s.AuthorizedOperations = v
+				s.AuthorizedOperations = readInt32(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -40419,16 +37910,13 @@ func (v *ControllerRegistrationRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ControllerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ControllerID)
 	}
 	{
-		v := v.IncarnationID
-		dst = appendUuid(dst, v)
+		dst = appendUuid(dst, v.IncarnationID)
 	}
 	{
-		v := v.ZkMigrationReady
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.ZkMigrationReady)
 	}
 	{
 		v := v.Listeners
@@ -40436,20 +37924,16 @@ func (v *ControllerRegistrationRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendUint16(dst, v)
+				dst = appendUint16(dst, v.Port)
 			}
 			{
-				v := v.SecurityProtocol
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.SecurityProtocol)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -40462,16 +37946,13 @@ func (v *ControllerRegistrationRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			{
-				v := v.MinSupportedVersion
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.MinSupportedVersion)
 			}
 			{
-				v := v.MaxSupportedVersion
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.MaxSupportedVersion)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -40498,16 +37979,13 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ControllerID = v
+		s.ControllerID = readInt32(&b)
 	}
 	{
-		v := readUuid(&b)
-		s.IncarnationID = v
+		s.IncarnationID = readUuid(&b)
 	}
 	{
-		v := readBool(&b)
-		s.ZkMigrationReady = v
+		s.ZkMigrationReady = readBool(&b)
 	}
 	{
 		v := s.Listeners
@@ -40526,20 +38004,16 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readUint16(&b)
-				s.Port = v
+				s.Port = readUint16(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.SecurityProtocol = v
+				s.SecurityProtocol = readInt16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -40565,16 +38039,13 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			{
-				v := readInt16(&b)
-				s.MinSupportedVersion = v
+				s.MinSupportedVersion = readInt16(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.MaxSupportedVersion = v
+				s.MaxSupportedVersion = readInt16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -40647,16 +38118,13 @@ func (v *ControllerRegistrationResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -40678,16 +38146,13 @@ func (v *ControllerRegistrationResponse) readFrom(src []byte, unsafe bool) error
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -40757,8 +38222,7 @@ func (v *GetTelemetrySubscriptionsRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ClientInstanceID
-		dst = appendUuid(dst, v)
+		dst = appendUuid(dst, v.ClientInstanceID)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -40780,8 +38244,7 @@ func (v *GetTelemetrySubscriptionsRequest) readFrom(src []byte, unsafe bool) err
 	_ = isFlexible
 	s := v
 	{
-		v := readUuid(&b)
-		s.ClientInstanceID = v
+		s.ClientInstanceID = readUuid(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -40867,47 +38330,38 @@ func (v *GetTelemetrySubscriptionsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ClientInstanceID
-		dst = appendUuid(dst, v)
+		dst = appendUuid(dst, v.ClientInstanceID)
 	}
 	{
-		v := v.SubscriptionID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.SubscriptionID)
 	}
 	{
 		v := v.AcceptedCompressionTypes
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendInt8(dst, v)
+			dst = appendInt8(dst, v[i])
 		}
 	}
 	{
-		v := v.PushIntervalMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.PushIntervalMillis)
 	}
 	{
-		v := v.TelemetryMaxBytes
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TelemetryMaxBytes)
 	}
 	{
-		v := v.DeltaTemporality
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.DeltaTemporality)
 	}
 	{
 		v := v.RequestedMetrics
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	if isFlexible {
@@ -40930,20 +38384,16 @@ func (v *GetTelemetrySubscriptionsResponse) readFrom(src []byte, unsafe bool) er
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := readUuid(&b)
-		s.ClientInstanceID = v
+		s.ClientInstanceID = readUuid(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.SubscriptionID = v
+		s.SubscriptionID = readInt32(&b)
 	}
 	{
 		v := s.AcceptedCompressionTypes
@@ -40958,23 +38408,19 @@ func (v *GetTelemetrySubscriptionsResponse) readFrom(src []byte, unsafe bool) er
 			a = append(a, make([]int8, l)...)
 		}
 		for i := range a {
-			v := readInt8(&b)
-			a[i] = v
+			a[i] = readInt8(&b)
 		}
 		v = a
 		s.AcceptedCompressionTypes = v
 	}
 	{
-		v := readInt32(&b)
-		s.PushIntervalMillis = v
+		s.PushIntervalMillis = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.TelemetryMaxBytes = v
+		s.TelemetryMaxBytes = readInt32(&b)
 	}
 	{
-		v := readBool(&b)
-		s.DeltaTemporality = v
+		s.DeltaTemporality = readBool(&b)
 	}
 	{
 		v := s.RequestedMetrics
@@ -40989,8 +38435,7 @@ func (v *GetTelemetrySubscriptionsResponse) readFrom(src []byte, unsafe bool) er
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.RequestedMetrics = v
@@ -41072,24 +38517,19 @@ func (v *PushTelemetryRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ClientInstanceID
-		dst = appendUuid(dst, v)
+		dst = appendUuid(dst, v.ClientInstanceID)
 	}
 	{
-		v := v.SubscriptionID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.SubscriptionID)
 	}
 	{
-		v := v.Terminating
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.Terminating)
 	}
 	{
-		v := v.CompressionType
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.CompressionType)
 	}
 	{
-		v := v.Metrics
-		dst = appendBytes(dst, v, isFlexible)
+		dst = appendBytes(dst, v.Metrics, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -41111,24 +38551,19 @@ func (v *PushTelemetryRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readUuid(&b)
-		s.ClientInstanceID = v
+		s.ClientInstanceID = readUuid(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.SubscriptionID = v
+		s.SubscriptionID = readInt32(&b)
 	}
 	{
-		v := readBool(&b)
-		s.Terminating = v
+		s.Terminating = readBool(&b)
 	}
 	{
-		v := readInt8(&b)
-		s.CompressionType = v
+		s.CompressionType = readInt8(&b)
 	}
 	{
-		v := &s.Metrics
-		readBytes(&b, v, isFlexible)
+		readBytes(&b, &s.Metrics, isFlexible)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -41188,12 +38623,10 @@ func (v *PushTelemetryResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -41215,12 +38648,10 @@ func (v *PushTelemetryResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -41366,12 +38797,10 @@ func (v *AssignReplicasToDirsRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.BrokerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.BrokerID)
 	}
 	{
-		v := v.BrokerEpoch
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.BrokerEpoch)
 	}
 	{
 		v := v.Directories
@@ -41379,8 +38808,7 @@ func (v *AssignReplicasToDirsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.ID)
 			}
 			{
 				v := v.Topics
@@ -41388,8 +38816,7 @@ func (v *AssignReplicasToDirsRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.TopicID
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v.TopicID)
 					}
 					{
 						v := v.Partitions
@@ -41397,8 +38824,7 @@ func (v *AssignReplicasToDirsRequest) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.Partition
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.Partition)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -41435,12 +38861,10 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.BrokerID = v
+		s.BrokerID = readInt32(&b)
 	}
 	{
-		v := readInt64(&b)
-		s.BrokerEpoch = v
+		s.BrokerEpoch = readInt64(&b)
 	}
 	{
 		v := s.Directories
@@ -41459,8 +38883,7 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.ID = v
+				s.ID = readUuid(&b)
 			}
 			{
 				v := s.Topics
@@ -41479,8 +38902,7 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readUuid(&b)
-						s.TopicID = v
+						s.TopicID = readUuid(&b)
 					}
 					{
 						v := s.Partitions
@@ -41499,8 +38921,7 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.Partition = v
+								s.Partition = readInt32(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -41656,12 +39077,10 @@ func (v *AssignReplicasToDirsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.Directories
@@ -41669,8 +39088,7 @@ func (v *AssignReplicasToDirsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.ID)
 			}
 			{
 				v := v.Topics
@@ -41678,8 +39096,7 @@ func (v *AssignReplicasToDirsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.TopicID
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v.TopicID)
 					}
 					{
 						v := v.Partitions
@@ -41687,12 +39104,10 @@ func (v *AssignReplicasToDirsResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.Partition
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.Partition)
 							}
 							{
-								v := v.ErrorCode
-								dst = appendInt16(dst, v)
+								dst = appendInt16(dst, v.ErrorCode)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -41729,12 +39144,10 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.Directories
@@ -41753,8 +39166,7 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.ID = v
+				s.ID = readUuid(&b)
 			}
 			{
 				v := s.Topics
@@ -41773,8 +39185,7 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readUuid(&b)
-						s.TopicID = v
+						s.TopicID = readUuid(&b)
 					}
 					{
 						v := s.Partitions
@@ -41793,12 +39204,10 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.Partition = v
+								s.Partition = readInt32(&b)
 							}
 							{
-								v := readInt16(&b)
-								s.ErrorCode = v
+								s.ErrorCode = readInt16(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -41893,8 +39302,7 @@ func (v *ListConfigResourcesRequest) AppendTo(dst []byte) []byte {
 		v := v.ResourceTypes
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendInt8(dst, v)
+			dst = appendInt8(dst, v[i])
 		}
 	}
 	if isFlexible {
@@ -41929,8 +39337,7 @@ func (v *ListConfigResourcesRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]int8, l)...)
 		}
 		for i := range a {
-			v := readInt8(&b)
-			a[i] = v
+			a[i] = readInt8(&b)
 		}
 		v = a
 		s.ResourceTypes = v
@@ -42027,12 +39434,10 @@ func (v *ListConfigResourcesResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
 		v := v.ConfigResources
@@ -42040,12 +39445,10 @@ func (v *ListConfigResourcesResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			if version >= 1 {
-				v := v.Type
-				dst = appendInt8(dst, v)
+				dst = appendInt8(dst, v.Type)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -42072,12 +39475,10 @@ func (v *ListConfigResourcesResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
 		v := s.ConfigResources
@@ -42096,12 +39497,10 @@ func (v *ListConfigResourcesResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			if version >= 1 {
-				v := readInt8(&b)
-				s.Type = v
+				s.Type = readInt8(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -42237,8 +39636,7 @@ func (v *DescribeTopicPartitionsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -42246,8 +39644,7 @@ func (v *DescribeTopicPartitionsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.ResponsePartitionLimit
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ResponsePartitionLimit)
 	}
 	{
 		v := v.Cursor
@@ -42256,12 +39653,10 @@ func (v *DescribeTopicPartitionsRequest) AppendTo(dst []byte) []byte {
 		} else {
 			dst = append(dst, 1)
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.Partition
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Partition)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -42304,8 +39699,7 @@ func (v *DescribeTopicPartitionsRequest) readFrom(src []byte, unsafe bool) error
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -42315,8 +39709,7 @@ func (v *DescribeTopicPartitionsRequest) readFrom(src []byte, unsafe bool) error
 		s.Topics = v
 	}
 	{
-		v := readInt32(&b)
-		s.ResponsePartitionLimit = v
+		s.ResponsePartitionLimit = readInt32(&b)
 	}
 	{
 		if present := b.Int8(); present != -1 && b.Ok() {
@@ -42325,12 +39718,10 @@ func (v *DescribeTopicPartitionsRequest) readFrom(src []byte, unsafe bool) error
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Partition = v
+				s.Partition = readInt32(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -42518,8 +39909,7 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Topics
@@ -42527,20 +39917,16 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.Topic
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
-				v := v.IsInternal
-				dst = appendBool(dst, v)
+				dst = appendBool(dst, v.IsInternal)
 			}
 			{
 				v := v.Partitions
@@ -42548,59 +39934,50 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.LeaderID
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderID)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
 						v := v.Replicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					{
 						v := v.ISR
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					{
 						v := v.EligibleLeaderReplicas
 						dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					{
 						v := v.LastKnownELR
 						dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					{
 						v := v.OfflineReplicas
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -42609,8 +39986,7 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			{
-				v := v.AuthorizedOperations
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.AuthorizedOperations)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -42624,12 +40000,10 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 		} else {
 			dst = append(dst, 1)
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.Partition
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Partition)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -42656,8 +40030,7 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -42676,20 +40049,16 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.Topic
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
-				v := readBool(&b)
-				s.IsInternal = v
+				s.IsInternal = readBool(&b)
 			}
 			{
 				v := s.Partitions
@@ -42708,20 +40077,16 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 					v.Default()
 					s := v
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderID = v
+						s.LeaderID = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
 						v := s.Replicas
@@ -42736,8 +40101,7 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Replicas = v
@@ -42755,8 +40119,7 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.ISR = v
@@ -42777,8 +40140,7 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.EligibleLeaderReplicas = v
@@ -42799,8 +40161,7 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.LastKnownELR = v
@@ -42818,8 +40179,7 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.OfflineReplicas = v
@@ -42832,8 +40192,7 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 				s.Partitions = v
 			}
 			{
-				v := readInt32(&b)
-				s.AuthorizedOperations = v
+				s.AuthorizedOperations = readInt32(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -42849,12 +40208,10 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Partition = v
+				s.Partition = readInt32(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -42947,27 +40304,22 @@ func (v *ShareGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.GroupID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.GroupID, isFlexible)
 	}
 	{
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	{
-		v := v.MemberEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MemberEpoch)
 	}
 	{
-		v := v.RackID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.RackID, isFlexible)
 	}
 	{
 		v := v.SubscribedTopicNames
 		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	if isFlexible {
@@ -42990,20 +40342,16 @@ func (v *ShareGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.GroupID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.GroupID, isFlexible, unsafe)
 	}
 	{
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.MemberEpoch = v
+		s.MemberEpoch = readInt32(&b)
 	}
 	{
-		v := &s.RackID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.RackID, isFlexible, unsafe)
 	}
 	{
 		v := s.SubscribedTopicNames
@@ -43021,8 +40369,7 @@ func (v *ShareGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.SubscribedTopicNames = v
@@ -43165,28 +40512,22 @@ func (v *ShareGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
-		v := v.MemberID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.MemberID, isFlexible)
 	}
 	{
-		v := v.MemberEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MemberEpoch)
 	}
 	{
-		v := v.HeartbeatIntervalMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.HeartbeatIntervalMillis)
 	}
 	{
 		v := v.Assignment
@@ -43200,15 +40541,13 @@ func (v *ShareGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.TopicID
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v.TopicID)
 					}
 					{
 						v := v.Partitions
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -43241,28 +40580,22 @@ func (v *ShareGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
-		v := &s.MemberID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.MemberEpoch = v
+		s.MemberEpoch = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.HeartbeatIntervalMillis = v
+		s.HeartbeatIntervalMillis = readInt32(&b)
 	}
 	{
 		if present := b.Int8(); present != -1 && b.Ok() {
@@ -43287,8 +40620,7 @@ func (v *ShareGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readUuid(&b)
-						s.TopicID = v
+						s.TopicID = readUuid(&b)
 					}
 					{
 						v := s.Partitions
@@ -43303,8 +40635,7 @@ func (v *ShareGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Partitions = v
@@ -43402,13 +40733,11 @@ func (v *ShareGroupDescribeRequest) AppendTo(dst []byte) []byte {
 		v := v.GroupIDs
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	{
-		v := v.IncludeAuthorizedOperations
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IncludeAuthorizedOperations)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -43442,15 +40771,13 @@ func (v *ShareGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.GroupIDs = v
 	}
 	{
-		v := readBool(&b)
-		s.IncludeAuthorizedOperations = v
+		s.IncludeAuthorizedOperations = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -43666,8 +40993,7 @@ func (v *ShareGroupDescribeResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Groups
@@ -43675,32 +41001,25 @@ func (v *ShareGroupDescribeResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			{
-				v := v.GroupID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.GroupID, isFlexible)
 			}
 			{
-				v := v.GroupState
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.GroupState, isFlexible)
 			}
 			{
-				v := v.GroupEpoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.GroupEpoch)
 			}
 			{
-				v := v.AssignmentEpoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.AssignmentEpoch)
 			}
 			{
-				v := v.Assignor
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Assignor, isFlexible)
 			}
 			{
 				v := v.Members
@@ -43708,31 +41027,25 @@ func (v *ShareGroupDescribeResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.MemberID
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.MemberID, isFlexible)
 					}
 					{
-						v := v.RackID
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.RackID, isFlexible)
 					}
 					{
-						v := v.MemberEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.MemberEpoch)
 					}
 					{
-						v := v.ClientID
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.ClientID, isFlexible)
 					}
 					{
-						v := v.ClientHost
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.ClientHost, isFlexible)
 					}
 					{
 						v := v.SubscribedTopicNames
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v[i], isFlexible)
 						}
 					}
 					{
@@ -43743,19 +41056,16 @@ func (v *ShareGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							for i := range v {
 								v := &v[i]
 								{
-									v := v.TopicID
-									dst = appendUuid(dst, v)
+									dst = appendUuid(dst, v.TopicID)
 								}
 								{
-									v := v.Topic
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v.Topic, isFlexible)
 								}
 								{
 									v := v.Partitions
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v[i])
 									}
 								}
 								if isFlexible {
@@ -43773,8 +41083,7 @@ func (v *ShareGroupDescribeResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			{
-				v := v.AuthorizedOperations
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.AuthorizedOperations)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -43801,8 +41110,7 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Groups
@@ -43821,32 +41129,25 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			{
-				v := &s.GroupID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.GroupID, isFlexible, unsafe)
 			}
 			{
-				v := &s.GroupState
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.GroupState, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.GroupEpoch = v
+				s.GroupEpoch = readInt32(&b)
 			}
 			{
-				v := readInt32(&b)
-				s.AssignmentEpoch = v
+				s.AssignmentEpoch = readInt32(&b)
 			}
 			{
-				v := &s.Assignor
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Assignor, isFlexible, unsafe)
 			}
 			{
 				v := s.Members
@@ -43865,24 +41166,19 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.MemberID
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.MemberID, isFlexible, unsafe)
 					}
 					{
-						v := &s.RackID
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.RackID, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.MemberEpoch = v
+						s.MemberEpoch = readInt32(&b)
 					}
 					{
-						v := &s.ClientID
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.ClientID, isFlexible, unsafe)
 					}
 					{
-						v := &s.ClientHost
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.ClientHost, isFlexible, unsafe)
 					}
 					{
 						v := s.SubscribedTopicNames
@@ -43897,8 +41193,7 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := &a[i]
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &a[i], isFlexible, unsafe)
 						}
 						v = a
 						s.SubscribedTopicNames = v
@@ -43924,12 +41219,10 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := readUuid(&b)
-									s.TopicID = v
+									s.TopicID = readUuid(&b)
 								}
 								{
-									v := &s.Topic
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &s.Topic, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -43944,8 +41237,7 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]int32, l)...)
 									}
 									for i := range a {
-										v := readInt32(&b)
-										a[i] = v
+										a[i] = readInt32(&b)
 									}
 									v = a
 									s.Partitions = v
@@ -43969,8 +41261,7 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				s.Members = v
 			}
 			{
-				v := readInt32(&b)
-				s.AuthorizedOperations = v
+				s.AuthorizedOperations = readInt32(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -44200,44 +41491,34 @@ func (v *ShareFetchRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.GroupID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.GroupID, isFlexible)
 	}
 	{
-		v := v.MemberID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.MemberID, isFlexible)
 	}
 	{
-		v := v.ShareSessionEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ShareSessionEpoch)
 	}
 	{
-		v := v.MaxWaitMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MaxWaitMillis)
 	}
 	{
-		v := v.MinBytes
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MinBytes)
 	}
 	{
-		v := v.MaxBytes
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MaxBytes)
 	}
 	if version >= 1 {
-		v := v.MaxRecords
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MaxRecords)
 	}
 	if version >= 1 {
-		v := v.BatchSize
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.BatchSize)
 	}
 	if version >= 2 {
-		v := v.ShareAcquireMode
-		dst = appendInt8(dst, v)
+		dst = appendInt8(dst, v.ShareAcquireMode)
 	}
 	if version >= 2 {
-		v := v.IsRenewAck
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IsRenewAck)
 	}
 	{
 		v := v.Topics
@@ -44245,8 +41526,7 @@ func (v *ShareFetchRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -44254,12 +41534,10 @@ func (v *ShareFetchRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					if version >= 0 && version <= 0 {
-						v := v.PartitionMaxBytes
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.PartitionMaxBytes)
 					}
 					{
 						v := v.AcknowledgementBatches
@@ -44267,19 +41545,16 @@ func (v *ShareFetchRequest) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.FirstOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.FirstOffset)
 							}
 							{
-								v := v.LastOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LastOffset)
 							}
 							{
 								v := v.AcknowledgeTypes
 								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
-									v := v[i]
-									dst = appendInt8(dst, v)
+									dst = appendInt8(dst, v[i])
 								}
 							}
 							if isFlexible {
@@ -44303,15 +41578,13 @@ func (v *ShareFetchRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -44339,44 +41612,34 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.GroupID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.GroupID, isFlexible, unsafe)
 	}
 	{
-		v := &s.MemberID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.ShareSessionEpoch = v
+		s.ShareSessionEpoch = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.MaxWaitMillis = v
+		s.MaxWaitMillis = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.MinBytes = v
+		s.MinBytes = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.MaxBytes = v
+		s.MaxBytes = readInt32(&b)
 	}
 	if version >= 1 {
-		v := readInt32(&b)
-		s.MaxRecords = v
+		s.MaxRecords = readInt32(&b)
 	}
 	if version >= 1 {
-		v := readInt32(&b)
-		s.BatchSize = v
+		s.BatchSize = readInt32(&b)
 	}
 	if version >= 2 {
-		v := readInt8(&b)
-		s.ShareAcquireMode = v
+		s.ShareAcquireMode = readInt8(&b)
 	}
 	if version >= 2 {
-		v := readBool(&b)
-		s.IsRenewAck = v
+		s.IsRenewAck = readBool(&b)
 	}
 	{
 		v := s.Topics
@@ -44395,8 +41658,7 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -44415,12 +41677,10 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					if version >= 0 && version <= 0 {
-						v := readInt32(&b)
-						s.PartitionMaxBytes = v
+						s.PartitionMaxBytes = readInt32(&b)
 					}
 					{
 						v := s.AcknowledgementBatches
@@ -44439,12 +41699,10 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt64(&b)
-								s.FirstOffset = v
+								s.FirstOffset = readInt64(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.LastOffset = v
+								s.LastOffset = readInt64(&b)
 							}
 							{
 								v := s.AcknowledgeTypes
@@ -44459,8 +41717,7 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 									a = append(a, make([]int8, l)...)
 								}
 								for i := range a {
-									v := readInt8(&b)
-									a[i] = v
+									a[i] = readInt8(&b)
 								}
 								v = a
 								s.AcknowledgeTypes = v
@@ -44503,8 +41760,7 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -44519,8 +41775,7 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -44778,20 +42033,16 @@ func (v *ShareFetchResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	if version >= 1 {
-		v := v.AcquisitionLockTimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.AcquisitionLockTimeoutMillis)
 	}
 	{
 		v := v.Topics
@@ -44799,8 +42050,7 @@ func (v *ShareFetchResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -44808,42 +42058,34 @@ func (v *ShareFetchResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					{
-						v := v.AcknowledgeErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.AcknowledgeErrorCode)
 					}
 					{
-						v := v.AcknowledgeErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.AcknowledgeErrorMessage, isFlexible)
 					}
 					{
 						v := &v.CurrentLeader
 						{
-							v := v.LeaderID
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.LeaderID)
 						}
 						{
-							v := v.LeaderEpoch
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.LeaderEpoch)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					{
-						v := v.Records
-						dst = appendNullableBytes(dst, v, isFlexible)
+						dst = appendNullableBytes(dst, v.Records, isFlexible)
 					}
 					{
 						v := v.AcquiredRecords
@@ -44851,16 +42093,13 @@ func (v *ShareFetchResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.FirstOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.FirstOffset)
 							}
 							{
-								v := v.LastOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LastOffset)
 							}
 							{
-								v := v.DeliveryCount
-								dst = appendInt16(dst, v)
+								dst = appendInt16(dst, v.DeliveryCount)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -44883,20 +42122,16 @@ func (v *ShareFetchResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.NodeID
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.NodeID)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Port)
 			}
 			{
-				v := v.Rack
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.Rack, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -44923,20 +42158,16 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	if version >= 1 {
-		v := readInt32(&b)
-		s.AcquisitionLockTimeoutMillis = v
+		s.AcquisitionLockTimeoutMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -44955,8 +42186,7 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -44975,44 +42205,36 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					{
-						v := readInt16(&b)
-						s.AcknowledgeErrorCode = v
+						s.AcknowledgeErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.AcknowledgeErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.AcknowledgeErrorMessage, isFlexible, unsafe)
 					}
 					{
 						v := &s.CurrentLeader
 						v.Default()
 						s := v
 						{
-							v := readInt32(&b)
-							s.LeaderID = v
+							s.LeaderID = readInt32(&b)
 						}
 						{
-							v := readInt32(&b)
-							s.LeaderEpoch = v
+							s.LeaderEpoch = readInt32(&b)
 						}
 						if isFlexible {
 							internalReadTags(&b, &s.UnknownTags)
 						}
 					}
 					{
-						v := &s.Records
-						readNullableBytes(&b, v, isFlexible)
+						readNullableBytes(&b, &s.Records, isFlexible)
 					}
 					{
 						v := s.AcquiredRecords
@@ -45031,16 +42253,13 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt64(&b)
-								s.FirstOffset = v
+								s.FirstOffset = readInt64(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.LastOffset = v
+								s.LastOffset = readInt64(&b)
 							}
 							{
-								v := readInt16(&b)
-								s.DeliveryCount = v
+								s.DeliveryCount = readInt16(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -45080,20 +42299,16 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt32(&b)
-				s.NodeID = v
+				s.NodeID = readInt32(&b)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Port = v
+				s.Port = readInt32(&b)
 			}
 			{
-				v := &s.Rack
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.Rack, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -45266,20 +42481,16 @@ func (v *ShareAcknowledgeRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.GroupID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.GroupID, isFlexible)
 	}
 	{
-		v := v.MemberID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.MemberID, isFlexible)
 	}
 	{
-		v := v.ShareSessionEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ShareSessionEpoch)
 	}
 	if version >= 2 {
-		v := v.IsRenewAck
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IsRenewAck)
 	}
 	{
 		v := v.Topics
@@ -45287,8 +42498,7 @@ func (v *ShareAcknowledgeRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -45296,8 +42506,7 @@ func (v *ShareAcknowledgeRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
 						v := v.AcknowledgementBatches
@@ -45305,19 +42514,16 @@ func (v *ShareAcknowledgeRequest) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.FirstOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.FirstOffset)
 							}
 							{
-								v := v.LastOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LastOffset)
 							}
 							{
 								v := v.AcknowledgeTypes
 								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
-									v := v[i]
-									dst = appendInt8(dst, v)
+									dst = appendInt8(dst, v[i])
 								}
 							}
 							if isFlexible {
@@ -45355,20 +42561,16 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.GroupID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.GroupID, isFlexible, unsafe)
 	}
 	{
-		v := &s.MemberID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.ShareSessionEpoch = v
+		s.ShareSessionEpoch = readInt32(&b)
 	}
 	if version >= 2 {
-		v := readBool(&b)
-		s.IsRenewAck = v
+		s.IsRenewAck = readBool(&b)
 	}
 	{
 		v := s.Topics
@@ -45387,8 +42589,7 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -45407,8 +42608,7 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
 						v := s.AcknowledgementBatches
@@ -45427,12 +42627,10 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt64(&b)
-								s.FirstOffset = v
+								s.FirstOffset = readInt64(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.LastOffset = v
+								s.LastOffset = readInt64(&b)
 							}
 							{
 								v := s.AcknowledgeTypes
@@ -45447,8 +42645,7 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 									a = append(a, make([]int8, l)...)
 								}
 								for i := range a {
-									v := readInt8(&b)
-									a[i] = v
+									a[i] = readInt8(&b)
 								}
 								v = a
 								s.AcknowledgeTypes = v
@@ -45678,20 +42875,16 @@ func (v *ShareAcknowledgeResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	if version >= 2 {
-		v := v.AcquisitionLockTimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.AcquisitionLockTimeoutMillis)
 	}
 	{
 		v := v.Topics
@@ -45699,8 +42892,7 @@ func (v *ShareAcknowledgeResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -45708,26 +42900,21 @@ func (v *ShareAcknowledgeResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					{
 						v := &v.CurrentLeader
 						{
-							v := v.LeaderID
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.LeaderID)
 						}
 						{
-							v := v.LeaderEpoch
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v.LeaderEpoch)
 						}
 						if isFlexible {
 							dst = v.UnknownTags.appendWithCount(dst)
@@ -45749,20 +42936,16 @@ func (v *ShareAcknowledgeResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.NodeID
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.NodeID)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Port)
 			}
 			{
-				v := v.Rack
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.Rack, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -45789,20 +42972,16 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	if version >= 2 {
-		v := readInt32(&b)
-		s.AcquisitionLockTimeoutMillis = v
+		s.AcquisitionLockTimeoutMillis = readInt32(&b)
 	}
 	{
 		v := s.Topics
@@ -45821,8 +43000,7 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -45841,28 +43019,23 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					{
 						v := &s.CurrentLeader
 						v.Default()
 						s := v
 						{
-							v := readInt32(&b)
-							s.LeaderID = v
+							s.LeaderID = readInt32(&b)
 						}
 						{
-							v := readInt32(&b)
-							s.LeaderEpoch = v
+							s.LeaderEpoch = readInt32(&b)
 						}
 						if isFlexible {
 							internalReadTags(&b, &s.UnknownTags)
@@ -45899,20 +43072,16 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt32(&b)
-				s.NodeID = v
+				s.NodeID = readInt32(&b)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Port = v
+				s.Port = readInt32(&b)
 			}
 			{
-				v := &s.Rack
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.Rack, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -46040,20 +43209,16 @@ func (v *AddRaftVoterRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ClusterID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ClusterID, isFlexible)
 	}
 	{
-		v := v.TimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TimeoutMillis)
 	}
 	{
-		v := v.VoterID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.VoterID)
 	}
 	{
-		v := v.VoterDirectoryID
-		dst = appendUuid(dst, v)
+		dst = appendUuid(dst, v.VoterDirectoryID)
 	}
 	{
 		v := v.Listeners
@@ -46061,16 +43226,13 @@ func (v *AddRaftVoterRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendUint16(dst, v)
+				dst = appendUint16(dst, v.Port)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -46078,8 +43240,7 @@ func (v *AddRaftVoterRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 1 {
-		v := v.AckWhenCommitted
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.AckWhenCommitted)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -46101,20 +43262,16 @@ func (v *AddRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.ClusterID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ClusterID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.TimeoutMillis = v
+		s.TimeoutMillis = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.VoterID = v
+		s.VoterID = readInt32(&b)
 	}
 	{
-		v := readUuid(&b)
-		s.VoterDirectoryID = v
+		s.VoterDirectoryID = readUuid(&b)
 	}
 	{
 		v := s.Listeners
@@ -46133,16 +43290,13 @@ func (v *AddRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readUint16(&b)
-				s.Port = v
+				s.Port = readUint16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -46152,8 +43306,7 @@ func (v *AddRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 		s.Listeners = v
 	}
 	if version >= 1 {
-		v := readBool(&b)
-		s.AckWhenCommitted = v
+		s.AckWhenCommitted = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -46215,16 +43368,13 @@ func (v *AddRaftVoterResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -46246,16 +43396,13 @@ func (v *AddRaftVoterResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -46329,16 +43476,13 @@ func (v *RemoveRaftVoterRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ClusterID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ClusterID, isFlexible)
 	}
 	{
-		v := v.VoterID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.VoterID)
 	}
 	{
-		v := v.VoterDirectoryID
-		dst = appendUuid(dst, v)
+		dst = appendUuid(dst, v.VoterDirectoryID)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -46360,16 +43504,13 @@ func (v *RemoveRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.ClusterID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ClusterID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.VoterID = v
+		s.VoterID = readInt32(&b)
 	}
 	{
-		v := readUuid(&b)
-		s.VoterDirectoryID = v
+		s.VoterDirectoryID = readUuid(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -46433,16 +43574,13 @@ func (v *RemoveRaftVoterResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -46464,16 +43602,13 @@ func (v *RemoveRaftVoterResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -46607,20 +43742,16 @@ func (v *UpdateRaftVoterRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ClusterID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ClusterID, isFlexible)
 	}
 	{
-		v := v.CurrentLeaderEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.CurrentLeaderEpoch)
 	}
 	{
-		v := v.VoterID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.VoterID)
 	}
 	{
-		v := v.VoterDirectoryID
-		dst = appendUuid(dst, v)
+		dst = appendUuid(dst, v.VoterDirectoryID)
 	}
 	{
 		v := v.Listeners
@@ -46628,16 +43759,13 @@ func (v *UpdateRaftVoterRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Name
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Name, isFlexible)
 			}
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendUint16(dst, v)
+				dst = appendUint16(dst, v.Port)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -46647,12 +43775,10 @@ func (v *UpdateRaftVoterRequest) AppendTo(dst []byte) []byte {
 	{
 		v := &v.KRaftVersionFeature
 		{
-			v := v.MinSupportedVersion
-			dst = appendInt16(dst, v)
+			dst = appendInt16(dst, v.MinSupportedVersion)
 		}
 		{
-			v := v.MaxSupportedVersion
-			dst = appendInt16(dst, v)
+			dst = appendInt16(dst, v.MaxSupportedVersion)
 		}
 		if isFlexible {
 			dst = v.UnknownTags.appendWithCount(dst)
@@ -46678,20 +43804,16 @@ func (v *UpdateRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.ClusterID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ClusterID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.CurrentLeaderEpoch = v
+		s.CurrentLeaderEpoch = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.VoterID = v
+		s.VoterID = readInt32(&b)
 	}
 	{
-		v := readUuid(&b)
-		s.VoterDirectoryID = v
+		s.VoterDirectoryID = readUuid(&b)
 	}
 	{
 		v := s.Listeners
@@ -46710,16 +43832,13 @@ func (v *UpdateRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Name
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Name, isFlexible, unsafe)
 			}
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readUint16(&b)
-				s.Port = v
+				s.Port = readUint16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -46733,12 +43852,10 @@ func (v *UpdateRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 		v.Default()
 		s := v
 		{
-			v := readInt16(&b)
-			s.MinSupportedVersion = v
+			s.MinSupportedVersion = readInt16(&b)
 		}
 		{
-			v := readInt16(&b)
-			s.MaxSupportedVersion = v
+			s.MaxSupportedVersion = readInt16(&b)
 		}
 		if isFlexible {
 			internalReadTags(&b, &s.UnknownTags)
@@ -46847,12 +43964,10 @@ func (v *UpdateRaftVoterResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	if isFlexible {
 		var toEncode []uint32
@@ -46870,20 +43985,16 @@ func (v *UpdateRaftVoterResponse) AppendTo(dst []byte) []byte {
 					lenAt := len(dst)
 				fCurrentLeader:
 					{
-						v := v.LeaderID
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderID)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
-						v := v.Host
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Host, isFlexible)
 					}
 					{
-						v := v.Port
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Port)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -46915,12 +44026,10 @@ func (v *UpdateRaftVoterResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	if isFlexible {
 		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
@@ -46933,20 +44042,16 @@ func (v *UpdateRaftVoterResponse) readFrom(src []byte, unsafe bool) error {
 				v.Default()
 				s := v
 				{
-					v := readInt32(&b)
-					s.LeaderID = v
+					s.LeaderID = readInt32(&b)
 				}
 				{
-					v := readInt32(&b)
-					s.LeaderEpoch = v
+					s.LeaderEpoch = readInt32(&b)
 				}
 				{
-					v := &s.Host
-					readString(&b, v, isFlexible, unsafe)
+					readString(&b, &s.Host, isFlexible, unsafe)
 				}
 				{
-					v := readInt32(&b)
-					s.Port = v
+					s.Port = readInt32(&b)
 				}
 				if isFlexible {
 					internalReadTags(&b, &s.UnknownTags)
@@ -47081,8 +44186,7 @@ func (v *InitializeShareGroupStateRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.GroupID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.GroupID, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -47090,8 +44194,7 @@ func (v *InitializeShareGroupStateRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -47099,16 +44202,13 @@ func (v *InitializeShareGroupStateRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.StateEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.StateEpoch)
 					}
 					{
-						v := v.StartOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.StartOffset)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -47140,8 +44240,7 @@ func (v *InitializeShareGroupStateRequest) readFrom(src []byte, unsafe bool) err
 	_ = isFlexible
 	s := v
 	{
-		v := &s.GroupID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.GroupID, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -47160,8 +44259,7 @@ func (v *InitializeShareGroupStateRequest) readFrom(src []byte, unsafe bool) err
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -47180,16 +44278,13 @@ func (v *InitializeShareGroupStateRequest) readFrom(src []byte, unsafe bool) err
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.StateEpoch = v
+						s.StateEpoch = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.StartOffset = v
+						s.StartOffset = readInt64(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -47322,8 +44417,7 @@ func (v *InitializeShareGroupStateResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -47331,16 +44425,13 @@ func (v *InitializeShareGroupStateResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -47388,8 +44479,7 @@ func (v *InitializeShareGroupStateResponse) readFrom(src []byte, unsafe bool) er
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -47408,16 +44498,13 @@ func (v *InitializeShareGroupStateResponse) readFrom(src []byte, unsafe bool) er
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -47550,8 +44637,7 @@ func (v *ReadShareGroupStateRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.GroupID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.GroupID, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -47559,8 +44645,7 @@ func (v *ReadShareGroupStateRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -47568,12 +44653,10 @@ func (v *ReadShareGroupStateRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -47605,8 +44688,7 @@ func (v *ReadShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.GroupID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.GroupID, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -47625,8 +44707,7 @@ func (v *ReadShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -47645,12 +44726,10 @@ func (v *ReadShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -47826,8 +44905,7 @@ func (v *ReadShareGroupStateResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -47835,24 +44913,19 @@ func (v *ReadShareGroupStateResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					{
-						v := v.StateEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.StateEpoch)
 					}
 					{
-						v := v.StartOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.StartOffset)
 					}
 					{
 						v := v.StateBatches
@@ -47860,20 +44933,16 @@ func (v *ReadShareGroupStateResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.FirstOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.FirstOffset)
 							}
 							{
-								v := v.LastOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LastOffset)
 							}
 							{
-								v := v.DeliveryState
-								dst = appendInt8(dst, v)
+								dst = appendInt8(dst, v.DeliveryState)
 							}
 							{
-								v := v.DeliveryCount
-								dst = appendInt16(dst, v)
+								dst = appendInt16(dst, v.DeliveryCount)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -47926,8 +44995,7 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -47946,24 +45014,19 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.StateEpoch = v
+						s.StateEpoch = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.StartOffset = v
+						s.StartOffset = readInt64(&b)
 					}
 					{
 						v := s.StateBatches
@@ -47982,20 +45045,16 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt64(&b)
-								s.FirstOffset = v
+								s.FirstOffset = readInt64(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.LastOffset = v
+								s.LastOffset = readInt64(&b)
 							}
 							{
-								v := readInt8(&b)
-								s.DeliveryState = v
+								s.DeliveryState = readInt8(&b)
 							}
 							{
-								v := readInt16(&b)
-								s.DeliveryCount = v
+								s.DeliveryCount = readInt16(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -48184,8 +45243,7 @@ func (v *WriteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.GroupID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.GroupID, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -48193,8 +45251,7 @@ func (v *WriteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -48202,24 +45259,19 @@ func (v *WriteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.StateEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.StateEpoch)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
-						v := v.StartOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.StartOffset)
 					}
 					if version >= 1 {
-						v := v.DeliveryCompleteCount
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.DeliveryCompleteCount)
 					}
 					{
 						v := v.StateBatches
@@ -48227,20 +45279,16 @@ func (v *WriteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.FirstOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.FirstOffset)
 							}
 							{
-								v := v.LastOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.LastOffset)
 							}
 							{
-								v := v.DeliveryState
-								dst = appendInt8(dst, v)
+								dst = appendInt8(dst, v.DeliveryState)
 							}
 							{
-								v := v.DeliveryCount
-								dst = appendInt16(dst, v)
+								dst = appendInt16(dst, v.DeliveryCount)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -48277,8 +45325,7 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.GroupID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.GroupID, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -48297,8 +45344,7 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -48317,24 +45363,19 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.StateEpoch = v
+						s.StateEpoch = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.StartOffset = v
+						s.StartOffset = readInt64(&b)
 					}
 					if version >= 1 {
-						v := readInt32(&b)
-						s.DeliveryCompleteCount = v
+						s.DeliveryCompleteCount = readInt32(&b)
 					}
 					{
 						v := s.StateBatches
@@ -48353,20 +45394,16 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := readInt64(&b)
-								s.FirstOffset = v
+								s.FirstOffset = readInt64(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.LastOffset = v
+								s.LastOffset = readInt64(&b)
 							}
 							{
-								v := readInt8(&b)
-								s.DeliveryState = v
+								s.DeliveryState = readInt8(&b)
 							}
 							{
-								v := readInt16(&b)
-								s.DeliveryCount = v
+								s.DeliveryCount = readInt16(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -48509,8 +45546,7 @@ func (v *WriteShareGroupStateResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -48518,16 +45554,13 @@ func (v *WriteShareGroupStateResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -48575,8 +45608,7 @@ func (v *WriteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -48595,16 +45627,13 @@ func (v *WriteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -48734,8 +45763,7 @@ func (v *DeleteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.GroupID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.GroupID, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -48743,8 +45771,7 @@ func (v *DeleteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -48752,8 +45779,7 @@ func (v *DeleteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -48785,8 +45811,7 @@ func (v *DeleteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.GroupID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.GroupID, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -48805,8 +45830,7 @@ func (v *DeleteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -48825,8 +45849,7 @@ func (v *DeleteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -48961,8 +45984,7 @@ func (v *DeleteShareGroupStateResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -48970,16 +45992,13 @@ func (v *DeleteShareGroupStateResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -49027,8 +46046,7 @@ func (v *DeleteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -49047,16 +46065,13 @@ func (v *DeleteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error 
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -49191,8 +46206,7 @@ func (v *ReadShareGroupStateSummaryRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.GroupID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.GroupID, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -49200,8 +46214,7 @@ func (v *ReadShareGroupStateSummaryRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -49209,12 +46222,10 @@ func (v *ReadShareGroupStateSummaryRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -49246,8 +46257,7 @@ func (v *ReadShareGroupStateSummaryRequest) readFrom(src []byte, unsafe bool) er
 	_ = isFlexible
 	s := v
 	{
-		v := &s.GroupID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.GroupID, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -49266,8 +46276,7 @@ func (v *ReadShareGroupStateSummaryRequest) readFrom(src []byte, unsafe bool) er
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -49286,12 +46295,10 @@ func (v *ReadShareGroupStateSummaryRequest) readFrom(src []byte, unsafe bool) er
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -49442,8 +46449,7 @@ func (v *ReadShareGroupStateSummaryResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -49451,32 +46457,25 @@ func (v *ReadShareGroupStateSummaryResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					{
-						v := v.StateEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.StateEpoch)
 					}
 					{
-						v := v.LeaderEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.LeaderEpoch)
 					}
 					{
-						v := v.StartOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.StartOffset)
 					}
 					if version >= 1 {
-						v := v.DeliveryCompleteCount
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.DeliveryCompleteCount)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -49524,8 +46523,7 @@ func (v *ReadShareGroupStateSummaryResponse) readFrom(src []byte, unsafe bool) e
 			v.Default()
 			s := v
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -49544,32 +46542,25 @@ func (v *ReadShareGroupStateSummaryResponse) readFrom(src []byte, unsafe bool) e
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.StateEpoch = v
+						s.StateEpoch = readInt32(&b)
 					}
 					{
-						v := readInt32(&b)
-						s.LeaderEpoch = v
+						s.LeaderEpoch = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.StartOffset = v
+						s.StartOffset = readInt64(&b)
 					}
 					if version >= 1 {
-						v := readInt32(&b)
-						s.DeliveryCompleteCount = v
+						s.DeliveryCompleteCount = readInt32(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -49976,32 +46967,25 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.Group
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Group, isFlexible)
 	}
 	{
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	{
-		v := v.MemberEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MemberEpoch)
 	}
 	{
-		v := v.EndpointInformationEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.EndpointInformationEpoch)
 	}
 	{
-		v := v.InstanceID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.InstanceID, isFlexible)
 	}
 	{
-		v := v.RackID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.RackID, isFlexible)
 	}
 	{
-		v := v.RebalanceTimeoutMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.RebalanceTimeoutMillis)
 	}
 	{
 		v := v.Topology
@@ -50010,8 +46994,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		} else {
 			dst = append(dst, 1)
 			{
-				v := v.Epoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Epoch)
 			}
 			{
 				v := v.Subtopologies
@@ -50019,23 +47002,20 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.SubtopologyID
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.SubtopologyID, isFlexible)
 					}
 					{
 						v := v.SourceTopics
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v[i], isFlexible)
 						}
 					}
 					{
 						v := v.SourceTopicRegex
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v[i], isFlexible)
 						}
 					}
 					{
@@ -50044,16 +47024,13 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.Topic
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v.Topic, isFlexible)
 							}
 							{
-								v := v.NumPartitions
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.NumPartitions)
 							}
 							{
-								v := v.ReplicationFactor
-								dst = appendInt16(dst, v)
+								dst = appendInt16(dst, v.ReplicationFactor)
 							}
 							{
 								v := v.Configs
@@ -50061,12 +47038,10 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 								for i := range v {
 									v := &v[i]
 									{
-										v := v.Key
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v.Key, isFlexible)
 									}
 									{
-										v := v.Value
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v.Value, isFlexible)
 									}
 									if isFlexible {
 										dst = v.UnknownTags.appendWithCount(dst)
@@ -50082,8 +47057,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 						v := v.RepartitionSinkTopics
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v[i], isFlexible)
 						}
 					}
 					{
@@ -50092,16 +47066,13 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.Topic
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v.Topic, isFlexible)
 							}
 							{
-								v := v.NumPartitions
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.NumPartitions)
 							}
 							{
-								v := v.ReplicationFactor
-								dst = appendInt16(dst, v)
+								dst = appendInt16(dst, v.ReplicationFactor)
 							}
 							{
 								v := v.Configs
@@ -50109,12 +47080,10 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 								for i := range v {
 									v := &v[i]
 									{
-										v := v.Key
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v.Key, isFlexible)
 									}
 									{
-										v := v.Value
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v.Value, isFlexible)
 									}
 									if isFlexible {
 										dst = v.UnknownTags.appendWithCount(dst)
@@ -50135,24 +47104,21 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 								v := v.SourceTopics
 								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
-									v := v[i]
-									dst = appendInt16(dst, v)
+									dst = appendInt16(dst, v[i])
 								}
 							}
 							{
 								v := v.SourceTopicRegex
 								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
-									v := v[i]
-									dst = appendInt16(dst, v)
+									dst = appendInt16(dst, v[i])
 								}
 							}
 							{
 								v := v.RepartitionSourceTopics
 								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
-									v := v[i]
-									dst = appendInt16(dst, v)
+									dst = appendInt16(dst, v[i])
 								}
 							}
 							if isFlexible {
@@ -50176,15 +47142,13 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.SubtopologyID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.SubtopologyID, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -50198,15 +47162,13 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.SubtopologyID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.SubtopologyID, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -50220,15 +47182,13 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.SubtopologyID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.SubtopologyID, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -50237,8 +47197,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.ProcessID
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ProcessID, isFlexible)
 	}
 	{
 		v := v.UserEndpoint
@@ -50247,12 +47206,10 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		} else {
 			dst = append(dst, 1)
 			{
-				v := v.Host
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Host, isFlexible)
 			}
 			{
-				v := v.Port
-				dst = appendUint16(dst, v)
+				dst = appendUint16(dst, v.Port)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -50265,12 +47222,10 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Key
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Key, isFlexible)
 			}
 			{
-				v := v.Value
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Value, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -50283,16 +47238,13 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.SubtopologyID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.SubtopologyID, isFlexible)
 			}
 			{
-				v := v.Partition
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Partition)
 			}
 			{
-				v := v.Offset
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.Offset)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -50305,16 +47257,13 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.SubtopologyID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.SubtopologyID, isFlexible)
 			}
 			{
-				v := v.Partition
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Partition)
 			}
 			{
-				v := v.Offset
-				dst = appendInt64(dst, v)
+				dst = appendInt64(dst, v.Offset)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -50322,8 +47271,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.ShutdownApplication
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.ShutdownApplication)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -50345,32 +47293,25 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := &s.Group
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Group, isFlexible, unsafe)
 	}
 	{
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.MemberEpoch = v
+		s.MemberEpoch = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.EndpointInformationEpoch = v
+		s.EndpointInformationEpoch = readInt32(&b)
 	}
 	{
-		v := &s.InstanceID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 	}
 	{
-		v := &s.RackID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.RackID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.RebalanceTimeoutMillis = v
+		s.RebalanceTimeoutMillis = readInt32(&b)
 	}
 	{
 		if present := b.Int8(); present != -1 && b.Ok() {
@@ -50379,8 +47320,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt32(&b)
-				s.Epoch = v
+				s.Epoch = readInt32(&b)
 			}
 			{
 				v := s.Subtopologies
@@ -50399,8 +47339,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.SubtopologyID
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 					}
 					{
 						v := s.SourceTopics
@@ -50415,8 +47354,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := &a[i]
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &a[i], isFlexible, unsafe)
 						}
 						v = a
 						s.SourceTopics = v
@@ -50434,8 +47372,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := &a[i]
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &a[i], isFlexible, unsafe)
 						}
 						v = a
 						s.SourceTopicRegex = v
@@ -50457,16 +47394,13 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := &s.Topic
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &s.Topic, isFlexible, unsafe)
 							}
 							{
-								v := readInt32(&b)
-								s.NumPartitions = v
+								s.NumPartitions = readInt32(&b)
 							}
 							{
-								v := readInt16(&b)
-								s.ReplicationFactor = v
+								s.ReplicationFactor = readInt16(&b)
 							}
 							{
 								v := s.Configs
@@ -50485,12 +47419,10 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 									v.Default()
 									s := v
 									{
-										v := &s.Key
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &s.Key, isFlexible, unsafe)
 									}
 									{
-										v := &s.Value
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &s.Value, isFlexible, unsafe)
 									}
 									if isFlexible {
 										internalReadTags(&b, &s.UnknownTags)
@@ -50519,8 +47451,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := &a[i]
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &a[i], isFlexible, unsafe)
 						}
 						v = a
 						s.RepartitionSinkTopics = v
@@ -50542,16 +47473,13 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := &s.Topic
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &s.Topic, isFlexible, unsafe)
 							}
 							{
-								v := readInt32(&b)
-								s.NumPartitions = v
+								s.NumPartitions = readInt32(&b)
 							}
 							{
-								v := readInt16(&b)
-								s.ReplicationFactor = v
+								s.ReplicationFactor = readInt16(&b)
 							}
 							{
 								v := s.Configs
@@ -50570,12 +47498,10 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 									v.Default()
 									s := v
 									{
-										v := &s.Key
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &s.Key, isFlexible, unsafe)
 									}
 									{
-										v := &s.Value
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &s.Value, isFlexible, unsafe)
 									}
 									if isFlexible {
 										internalReadTags(&b, &s.UnknownTags)
@@ -50620,8 +47546,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 									a = append(a, make([]int16, l)...)
 								}
 								for i := range a {
-									v := readInt16(&b)
-									a[i] = v
+									a[i] = readInt16(&b)
 								}
 								v = a
 								s.SourceTopics = v
@@ -50639,8 +47564,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 									a = append(a, make([]int16, l)...)
 								}
 								for i := range a {
-									v := readInt16(&b)
-									a[i] = v
+									a[i] = readInt16(&b)
 								}
 								v = a
 								s.SourceTopicRegex = v
@@ -50658,8 +47582,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 									a = append(a, make([]int16, l)...)
 								}
 								for i := range a {
-									v := readInt16(&b)
-									a[i] = v
+									a[i] = readInt16(&b)
 								}
 								v = a
 								s.RepartitionSourceTopics = v
@@ -50703,8 +47626,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.SubtopologyID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -50719,8 +47641,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -50752,8 +47673,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.SubtopologyID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -50768,8 +47688,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -50801,8 +47720,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.SubtopologyID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -50817,8 +47735,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -50831,8 +47748,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		s.WarmupTasks = v
 	}
 	{
-		v := &s.ProcessID
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ProcessID, isFlexible, unsafe)
 	}
 	{
 		if present := b.Int8(); present != -1 && b.Ok() {
@@ -50841,12 +47757,10 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Host
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Host, isFlexible, unsafe)
 			}
 			{
-				v := readUint16(&b)
-				s.Port = v
+				s.Port = readUint16(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -50873,12 +47787,10 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.Key
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Key, isFlexible, unsafe)
 			}
 			{
-				v := &s.Value
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Value, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -50907,16 +47819,13 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.SubtopologyID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Partition = v
+				s.Partition = readInt32(&b)
 			}
 			{
-				v := readInt64(&b)
-				s.Offset = v
+				s.Offset = readInt64(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -50945,16 +47854,13 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := &s.SubtopologyID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Partition = v
+				s.Partition = readInt32(&b)
 			}
 			{
-				v := readInt64(&b)
-				s.Offset = v
+				s.Offset = readInt64(&b)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -50964,8 +47870,7 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		s.TaskEndOffsets = v
 	}
 	{
-		v := readBool(&b)
-		s.ShutdownApplication = v
+		s.ShutdownApplication = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -51204,40 +48109,31 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	{
-		v := v.MemberEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.MemberEpoch)
 	}
 	{
-		v := v.HeartbeatIntervalMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.HeartbeatIntervalMillis)
 	}
 	if version >= 0 && version <= 0 {
-		v := v.AcceptableRecoveryLagLegacy
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.AcceptableRecoveryLagLegacy)
 	}
 	{
-		v := v.TaskOffsetIntervalMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TaskOffsetIntervalMillis)
 	}
 	if version >= 1 {
-		v := v.AcceptableRecoveryLag
-		dst = appendInt64(dst, v)
+		dst = appendInt64(dst, v.AcceptableRecoveryLag)
 	}
 	{
 		v := v.Status
@@ -51245,12 +48141,10 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.StatusCode
-				dst = appendInt8(dst, v)
+				dst = appendInt8(dst, v.StatusCode)
 			}
 			{
-				v := v.StatusDetail
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.StatusDetail, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -51263,15 +48157,13 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.SubtopologyID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.SubtopologyID, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -51285,15 +48177,13 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.SubtopologyID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.SubtopologyID, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -51307,15 +48197,13 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.SubtopologyID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.SubtopologyID, isFlexible)
 			}
 			{
 				v := v.Partitions
 				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
-					v := v[i]
-					dst = appendInt32(dst, v)
+					dst = appendInt32(dst, v[i])
 				}
 			}
 			if isFlexible {
@@ -51324,12 +48212,10 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 1 {
-		v := v.TopologyDescriptionRequired
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.TopologyDescriptionRequired)
 	}
 	{
-		v := v.EndpointInformationEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.EndpointInformationEpoch)
 	}
 	{
 		v := v.PartitionsByUserEndpoint
@@ -51339,12 +48225,10 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 			{
 				v := &v.UserEndpoint
 				{
-					v := v.Host
-					dst = appendString(dst, v, isFlexible)
+					dst = appendString(dst, v.Host, isFlexible)
 				}
 				{
-					v := v.Port
-					dst = appendUint16(dst, v)
+					dst = appendUint16(dst, v.Port)
 				}
 				if isFlexible {
 					dst = v.UnknownTags.appendWithCount(dst)
@@ -51356,15 +48240,13 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
 						v := v.Partitions
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -51378,15 +48260,13 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
 						v := v.Partitions
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -51419,40 +48299,31 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.MemberEpoch = v
+		s.MemberEpoch = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.HeartbeatIntervalMillis = v
+		s.HeartbeatIntervalMillis = readInt32(&b)
 	}
 	if version >= 0 && version <= 0 {
-		v := readInt32(&b)
-		s.AcceptableRecoveryLagLegacy = v
+		s.AcceptableRecoveryLagLegacy = readInt32(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.TaskOffsetIntervalMillis = v
+		s.TaskOffsetIntervalMillis = readInt32(&b)
 	}
 	if version >= 1 {
-		v := readInt64(&b)
-		s.AcceptableRecoveryLag = v
+		s.AcceptableRecoveryLag = readInt64(&b)
 	}
 	{
 		v := s.Status
@@ -51474,12 +48345,10 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := readInt8(&b)
-				s.StatusCode = v
+				s.StatusCode = readInt8(&b)
 			}
 			{
-				v := &s.StatusDetail
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.StatusDetail, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -51508,8 +48377,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := &s.SubtopologyID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -51524,8 +48392,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -51557,8 +48424,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := &s.SubtopologyID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -51573,8 +48439,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -51606,8 +48471,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := &s.SubtopologyID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -51622,8 +48486,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 					a = append(a, make([]int32, l)...)
 				}
 				for i := range a {
-					v := readInt32(&b)
-					a[i] = v
+					a[i] = readInt32(&b)
 				}
 				v = a
 				s.Partitions = v
@@ -51636,12 +48499,10 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		s.WarmupTasks = v
 	}
 	if version >= 1 {
-		v := readBool(&b)
-		s.TopologyDescriptionRequired = v
+		s.TopologyDescriptionRequired = readBool(&b)
 	}
 	{
-		v := readInt32(&b)
-		s.EndpointInformationEpoch = v
+		s.EndpointInformationEpoch = readInt32(&b)
 	}
 	{
 		v := s.PartitionsByUserEndpoint
@@ -51667,12 +48528,10 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				v.Default()
 				s := v
 				{
-					v := &s.Host
-					readString(&b, v, isFlexible, unsafe)
+					readString(&b, &s.Host, isFlexible, unsafe)
 				}
 				{
-					v := readUint16(&b)
-					s.Port = v
+					s.Port = readUint16(&b)
 				}
 				if isFlexible {
 					internalReadTags(&b, &s.UnknownTags)
@@ -51695,8 +48554,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 					v.Default()
 					s := v
 					{
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -51711,8 +48569,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Partitions = v
@@ -51741,8 +48598,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 					v.Default()
 					s := v
 					{
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -51757,8 +48613,7 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Partitions = v
@@ -51943,17 +48798,14 @@ func (v *StreamsGroupDescribeRequest) AppendTo(dst []byte) []byte {
 		v := v.Groups
 		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
-			v := v[i]
-			dst = appendString(dst, v, isFlexible)
+			dst = appendString(dst, v[i], isFlexible)
 		}
 	}
 	{
-		v := v.IncludeAuthorizedOperations
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IncludeAuthorizedOperations)
 	}
 	if version >= 1 {
-		v := v.IncludeTopologyDescription
-		dst = appendBool(dst, v)
+		dst = appendBool(dst, v.IncludeTopologyDescription)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -51987,19 +48839,16 @@ func (v *StreamsGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 			a = append(a, make([]string, l)...)
 		}
 		for i := range a {
-			v := &a[i]
-			readString(&b, v, isFlexible, unsafe)
+			readString(&b, &a[i], isFlexible, unsafe)
 		}
 		v = a
 		s.Groups = v
 	}
 	{
-		v := readBool(&b)
-		s.IncludeAuthorizedOperations = v
+		s.IncludeAuthorizedOperations = readBool(&b)
 	}
 	if version >= 1 {
-		v := readBool(&b)
-		s.IncludeTopologyDescription = v
+		s.IncludeTopologyDescription = readBool(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -52350,8 +49199,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Groups
@@ -52359,28 +49207,22 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			{
-				v := v.Group
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Group, isFlexible)
 			}
 			{
-				v := v.State
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.State, isFlexible)
 			}
 			{
-				v := v.Epoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.Epoch)
 			}
 			{
-				v := v.AssignmentEpoch
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.AssignmentEpoch)
 			}
 			{
 				v := v.Topology
@@ -52389,8 +49231,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 				} else {
 					dst = append(dst, 1)
 					{
-						v := v.Epoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Epoch)
 					}
 					{
 						v := v.Subtopologies
@@ -52398,23 +49239,20 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.SubtopologyID
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v.SubtopologyID, isFlexible)
 							}
 							{
 								v := v.SourceTopics
 								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
-									v := v[i]
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v[i], isFlexible)
 								}
 							}
 							{
 								v := v.RepartitionSinkTopics
 								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
-									v := v[i]
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v[i], isFlexible)
 								}
 							}
 							{
@@ -52423,16 +49261,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								for i := range v {
 									v := &v[i]
 									{
-										v := v.Topic
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v.Topic, isFlexible)
 									}
 									{
-										v := v.NumPartitions
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v.NumPartitions)
 									}
 									{
-										v := v.ReplicationFactor
-										dst = appendInt16(dst, v)
+										dst = appendInt16(dst, v.ReplicationFactor)
 									}
 									{
 										v := v.Configs
@@ -52440,12 +49275,10 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 										for i := range v {
 											v := &v[i]
 											{
-												v := v.Key
-												dst = appendString(dst, v, isFlexible)
+												dst = appendString(dst, v.Key, isFlexible)
 											}
 											{
-												v := v.Value
-												dst = appendString(dst, v, isFlexible)
+												dst = appendString(dst, v.Value, isFlexible)
 											}
 											if isFlexible {
 												dst = v.UnknownTags.appendWithCount(dst)
@@ -52463,16 +49296,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								for i := range v {
 									v := &v[i]
 									{
-										v := v.Topic
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v.Topic, isFlexible)
 									}
 									{
-										v := v.NumPartitions
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v.NumPartitions)
 									}
 									{
-										v := v.ReplicationFactor
-										dst = appendInt16(dst, v)
+										dst = appendInt16(dst, v.ReplicationFactor)
 									}
 									{
 										v := v.Configs
@@ -52480,12 +49310,10 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 										for i := range v {
 											v := &v[i]
 											{
-												v := v.Key
-												dst = appendString(dst, v, isFlexible)
+												dst = appendString(dst, v.Key, isFlexible)
 											}
 											{
-												v := v.Value
-												dst = appendString(dst, v, isFlexible)
+												dst = appendString(dst, v.Value, isFlexible)
 											}
 											if isFlexible {
 												dst = v.UnknownTags.appendWithCount(dst)
@@ -52513,36 +49341,28 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.MemberID
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.MemberID, isFlexible)
 					}
 					{
-						v := v.MemberEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.MemberEpoch)
 					}
 					{
-						v := v.InstanceID
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.InstanceID, isFlexible)
 					}
 					{
-						v := v.RackID
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.RackID, isFlexible)
 					}
 					{
-						v := v.ClientID
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.ClientID, isFlexible)
 					}
 					{
-						v := v.ClientHost
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.ClientHost, isFlexible)
 					}
 					{
-						v := v.TopologyEpoch
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.TopologyEpoch)
 					}
 					{
-						v := v.ProcessID
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.ProcessID, isFlexible)
 					}
 					{
 						v := v.UserEndpoint
@@ -52551,12 +49371,10 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						} else {
 							dst = append(dst, 1)
 							{
-								v := v.Host
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v.Host, isFlexible)
 							}
 							{
-								v := v.Port
-								dst = appendUint16(dst, v)
+								dst = appendUint16(dst, v.Port)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -52569,12 +49387,10 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.Key
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v.Key, isFlexible)
 							}
 							{
-								v := v.Value
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v.Value, isFlexible)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -52587,16 +49403,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.SubtopologyID
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v.SubtopologyID, isFlexible)
 							}
 							{
-								v := v.Partition
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.Partition)
 							}
 							{
-								v := v.Offset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.Offset)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -52609,16 +49422,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.SubtopologyID
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v.SubtopologyID, isFlexible)
 							}
 							{
-								v := v.Partition
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.Partition)
 							}
 							{
-								v := v.Offset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.Offset)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -52633,15 +49443,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							for i := range v {
 								v := &v[i]
 								{
-									v := v.SubtopologyID
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v.SubtopologyID, isFlexible)
 								}
 								{
 									v := v.Partitions
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v[i])
 									}
 								}
 								if isFlexible {
@@ -52655,15 +49463,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							for i := range v {
 								v := &v[i]
 								{
-									v := v.SubtopologyID
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v.SubtopologyID, isFlexible)
 								}
 								{
 									v := v.Partitions
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v[i])
 									}
 								}
 								if isFlexible {
@@ -52677,15 +49483,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							for i := range v {
 								v := &v[i]
 								{
-									v := v.SubtopologyID
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v.SubtopologyID, isFlexible)
 								}
 								{
 									v := v.Partitions
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v[i])
 									}
 								}
 								if isFlexible {
@@ -52705,15 +49509,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							for i := range v {
 								v := &v[i]
 								{
-									v := v.SubtopologyID
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v.SubtopologyID, isFlexible)
 								}
 								{
 									v := v.Partitions
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v[i])
 									}
 								}
 								if isFlexible {
@@ -52727,15 +49529,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							for i := range v {
 								v := &v[i]
 								{
-									v := v.SubtopologyID
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v.SubtopologyID, isFlexible)
 								}
 								{
 									v := v.Partitions
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v[i])
 									}
 								}
 								if isFlexible {
@@ -52749,15 +49549,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							for i := range v {
 								v := &v[i]
 								{
-									v := v.SubtopologyID
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v.SubtopologyID, isFlexible)
 								}
 								{
 									v := v.Partitions
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendInt32(dst, v)
+										dst = appendInt32(dst, v[i])
 									}
 								}
 								if isFlexible {
@@ -52770,8 +49568,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					{
-						v := v.IsClassic
-						dst = appendBool(dst, v)
+						dst = appendBool(dst, v.IsClassic)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -52779,8 +49576,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			{
-				v := v.AuthorizedOperations
-				dst = appendInt32(dst, v)
+				dst = appendInt32(dst, v.AuthorizedOperations)
 			}
 			if version >= 1 {
 				v := v.TopologyDescription
@@ -52794,8 +49590,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.SubtopologyID
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v.SubtopologyID, isFlexible)
 							}
 							{
 								v := v.Nodes
@@ -52803,39 +49598,33 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								for i := range v {
 									v := &v[i]
 									{
-										v := v.Name
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v.Name, isFlexible)
 									}
 									{
-										v := v.NodeType
-										dst = appendInt8(dst, v)
+										dst = appendInt8(dst, v.NodeType)
 									}
 									{
 										v := v.SourceTopics
 										dst = appendArrayLen(dst, len(v), isFlexible)
 										for i := range v {
-											v := v[i]
-											dst = appendString(dst, v, isFlexible)
+											dst = appendString(dst, v[i], isFlexible)
 										}
 									}
 									{
-										v := v.SinkTopic
-										dst = appendNullableString(dst, v, isFlexible)
+										dst = appendNullableString(dst, v.SinkTopic, isFlexible)
 									}
 									{
 										v := v.Stores
 										dst = appendArrayLen(dst, len(v), isFlexible)
 										for i := range v {
-											v := v[i]
-											dst = appendString(dst, v, isFlexible)
+											dst = appendString(dst, v[i], isFlexible)
 										}
 									}
 									{
 										v := v.Successors
 										dst = appendArrayLen(dst, len(v), isFlexible)
 										for i := range v {
-											v := v[i]
-											dst = appendString(dst, v, isFlexible)
+											dst = appendString(dst, v[i], isFlexible)
 										}
 									}
 									if isFlexible {
@@ -52856,39 +49645,33 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							{
 								v := &v.Source
 								{
-									v := v.Name
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v.Name, isFlexible)
 								}
 								{
-									v := v.NodeType
-									dst = appendInt8(dst, v)
+									dst = appendInt8(dst, v.NodeType)
 								}
 								{
 									v := v.SourceTopics
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v[i], isFlexible)
 									}
 								}
 								{
-									v := v.SinkTopic
-									dst = appendNullableString(dst, v, isFlexible)
+									dst = appendNullableString(dst, v.SinkTopic, isFlexible)
 								}
 								{
 									v := v.Stores
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v[i], isFlexible)
 									}
 								}
 								{
 									v := v.Successors
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v[i], isFlexible)
 									}
 								}
 								if isFlexible {
@@ -52898,39 +49681,33 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							{
 								v := &v.Processor
 								{
-									v := v.Name
-									dst = appendString(dst, v, isFlexible)
+									dst = appendString(dst, v.Name, isFlexible)
 								}
 								{
-									v := v.NodeType
-									dst = appendInt8(dst, v)
+									dst = appendInt8(dst, v.NodeType)
 								}
 								{
 									v := v.SourceTopics
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v[i], isFlexible)
 									}
 								}
 								{
-									v := v.SinkTopic
-									dst = appendNullableString(dst, v, isFlexible)
+									dst = appendNullableString(dst, v.SinkTopic, isFlexible)
 								}
 								{
 									v := v.Stores
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v[i], isFlexible)
 									}
 								}
 								{
 									v := v.Successors
 									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
-										v := v[i]
-										dst = appendString(dst, v, isFlexible)
+										dst = appendString(dst, v[i], isFlexible)
 									}
 								}
 								if isFlexible {
@@ -52948,12 +49725,10 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if version >= 1 {
-				v := v.TopologyDescriptionStatus
-				dst = appendInt8(dst, v)
+				dst = appendInt8(dst, v.TopologyDescriptionStatus)
 			}
 			if version >= 1 {
-				v := v.AssignorName
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.AssignorName, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -52980,8 +49755,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Groups
@@ -53000,28 +49774,22 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 			v.Default()
 			s := v
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			{
-				v := &s.Group
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Group, isFlexible, unsafe)
 			}
 			{
-				v := &s.State
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.State, isFlexible, unsafe)
 			}
 			{
-				v := readInt32(&b)
-				s.Epoch = v
+				s.Epoch = readInt32(&b)
 			}
 			{
-				v := readInt32(&b)
-				s.AssignmentEpoch = v
+				s.AssignmentEpoch = readInt32(&b)
 			}
 			{
 				if present := b.Int8(); present != -1 && b.Ok() {
@@ -53030,8 +49798,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Epoch = v
+						s.Epoch = readInt32(&b)
 					}
 					{
 						v := s.Subtopologies
@@ -53053,8 +49820,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := &s.SubtopologyID
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 							}
 							{
 								v := s.SourceTopics
@@ -53069,8 +49835,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									a = append(a, make([]string, l)...)
 								}
 								for i := range a {
-									v := &a[i]
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &a[i], isFlexible, unsafe)
 								}
 								v = a
 								s.SourceTopics = v
@@ -53088,8 +49853,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									a = append(a, make([]string, l)...)
 								}
 								for i := range a {
-									v := &a[i]
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &a[i], isFlexible, unsafe)
 								}
 								v = a
 								s.RepartitionSinkTopics = v
@@ -53111,16 +49875,13 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v.Default()
 									s := v
 									{
-										v := &s.Topic
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &s.Topic, isFlexible, unsafe)
 									}
 									{
-										v := readInt32(&b)
-										s.NumPartitions = v
+										s.NumPartitions = readInt32(&b)
 									}
 									{
-										v := readInt16(&b)
-										s.ReplicationFactor = v
+										s.ReplicationFactor = readInt16(&b)
 									}
 									{
 										v := s.Configs
@@ -53139,12 +49900,10 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											v.Default()
 											s := v
 											{
-												v := &s.Key
-												readString(&b, v, isFlexible, unsafe)
+												readString(&b, &s.Key, isFlexible, unsafe)
 											}
 											{
-												v := &s.Value
-												readString(&b, v, isFlexible, unsafe)
+												readString(&b, &s.Value, isFlexible, unsafe)
 											}
 											if isFlexible {
 												internalReadTags(&b, &s.UnknownTags)
@@ -53177,16 +49936,13 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v.Default()
 									s := v
 									{
-										v := &s.Topic
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &s.Topic, isFlexible, unsafe)
 									}
 									{
-										v := readInt32(&b)
-										s.NumPartitions = v
+										s.NumPartitions = readInt32(&b)
 									}
 									{
-										v := readInt16(&b)
-										s.ReplicationFactor = v
+										s.ReplicationFactor = readInt16(&b)
 									}
 									{
 										v := s.Configs
@@ -53205,12 +49961,10 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											v.Default()
 											s := v
 											{
-												v := &s.Key
-												readString(&b, v, isFlexible, unsafe)
+												readString(&b, &s.Key, isFlexible, unsafe)
 											}
 											{
-												v := &s.Value
-												readString(&b, v, isFlexible, unsafe)
+												readString(&b, &s.Value, isFlexible, unsafe)
 											}
 											if isFlexible {
 												internalReadTags(&b, &s.UnknownTags)
@@ -53255,36 +50009,28 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 					v.Default()
 					s := v
 					{
-						v := &s.MemberID
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.MemberID, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.MemberEpoch = v
+						s.MemberEpoch = readInt32(&b)
 					}
 					{
-						v := &s.InstanceID
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.InstanceID, isFlexible, unsafe)
 					}
 					{
-						v := &s.RackID
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.RackID, isFlexible, unsafe)
 					}
 					{
-						v := &s.ClientID
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.ClientID, isFlexible, unsafe)
 					}
 					{
-						v := &s.ClientHost
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.ClientHost, isFlexible, unsafe)
 					}
 					{
-						v := readInt32(&b)
-						s.TopologyEpoch = v
+						s.TopologyEpoch = readInt32(&b)
 					}
 					{
-						v := &s.ProcessID
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.ProcessID, isFlexible, unsafe)
 					}
 					{
 						if present := b.Int8(); present != -1 && b.Ok() {
@@ -53293,12 +50039,10 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := &s.Host
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &s.Host, isFlexible, unsafe)
 							}
 							{
-								v := readUint16(&b)
-								s.Port = v
+								s.Port = readUint16(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -53322,12 +50066,10 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := &s.Key
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &s.Key, isFlexible, unsafe)
 							}
 							{
-								v := &s.Value
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &s.Value, isFlexible, unsafe)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -53353,16 +50095,13 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := &s.SubtopologyID
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 							}
 							{
-								v := readInt32(&b)
-								s.Partition = v
+								s.Partition = readInt32(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.Offset = v
+								s.Offset = readInt64(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -53388,16 +50127,13 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := &s.SubtopologyID
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 							}
 							{
-								v := readInt32(&b)
-								s.Partition = v
+								s.Partition = readInt32(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.Offset = v
+								s.Offset = readInt64(&b)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -53427,8 +50163,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := &s.SubtopologyID
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53443,8 +50178,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]int32, l)...)
 									}
 									for i := range a {
-										v := readInt32(&b)
-										a[i] = v
+										a[i] = readInt32(&b)
 									}
 									v = a
 									s.Partitions = v
@@ -53473,8 +50207,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := &s.SubtopologyID
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53489,8 +50222,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]int32, l)...)
 									}
 									for i := range a {
-										v := readInt32(&b)
-										a[i] = v
+										a[i] = readInt32(&b)
 									}
 									v = a
 									s.Partitions = v
@@ -53519,8 +50251,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := &s.SubtopologyID
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53535,8 +50266,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]int32, l)...)
 									}
 									for i := range a {
-										v := readInt32(&b)
-										a[i] = v
+										a[i] = readInt32(&b)
 									}
 									v = a
 									s.Partitions = v
@@ -53573,8 +50303,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := &s.SubtopologyID
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53589,8 +50318,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]int32, l)...)
 									}
 									for i := range a {
-										v := readInt32(&b)
-										a[i] = v
+										a[i] = readInt32(&b)
 									}
 									v = a
 									s.Partitions = v
@@ -53619,8 +50347,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := &s.SubtopologyID
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53635,8 +50362,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]int32, l)...)
 									}
 									for i := range a {
-										v := readInt32(&b)
-										a[i] = v
+										a[i] = readInt32(&b)
 									}
 									v = a
 									s.Partitions = v
@@ -53665,8 +50391,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := &s.SubtopologyID
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 								}
 								{
 									v := s.Partitions
@@ -53681,8 +50406,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]int32, l)...)
 									}
 									for i := range a {
-										v := readInt32(&b)
-										a[i] = v
+										a[i] = readInt32(&b)
 									}
 									v = a
 									s.Partitions = v
@@ -53699,8 +50423,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						}
 					}
 					{
-						v := readBool(&b)
-						s.IsClassic = v
+						s.IsClassic = readBool(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -53710,8 +50433,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				s.Members = v
 			}
 			{
-				v := readInt32(&b)
-				s.AuthorizedOperations = v
+				s.AuthorizedOperations = readInt32(&b)
 			}
 			if version >= 1 {
 				if present := b.Int8(); present != -1 && b.Ok() {
@@ -53736,8 +50458,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v.Default()
 							s := v
 							{
-								v := &s.SubtopologyID
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 							}
 							{
 								v := s.Nodes
@@ -53756,12 +50477,10 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v.Default()
 									s := v
 									{
-										v := &s.Name
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &s.Name, isFlexible, unsafe)
 									}
 									{
-										v := readInt8(&b)
-										s.NodeType = v
+										s.NodeType = readInt8(&b)
 									}
 									{
 										v := s.SourceTopics
@@ -53776,15 +50495,13 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											a = append(a, make([]string, l)...)
 										}
 										for i := range a {
-											v := &a[i]
-											readString(&b, v, isFlexible, unsafe)
+											readString(&b, &a[i], isFlexible, unsafe)
 										}
 										v = a
 										s.SourceTopics = v
 									}
 									{
-										v := &s.SinkTopic
-										readNullableString(&b, v, isFlexible, unsafe)
+										readNullableString(&b, &s.SinkTopic, isFlexible, unsafe)
 									}
 									{
 										v := s.Stores
@@ -53799,8 +50516,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											a = append(a, make([]string, l)...)
 										}
 										for i := range a {
-											v := &a[i]
-											readString(&b, v, isFlexible, unsafe)
+											readString(&b, &a[i], isFlexible, unsafe)
 										}
 										v = a
 										s.Stores = v
@@ -53818,8 +50534,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 											a = append(a, make([]string, l)...)
 										}
 										for i := range a {
-											v := &a[i]
-											readString(&b, v, isFlexible, unsafe)
+											readString(&b, &a[i], isFlexible, unsafe)
 										}
 										v = a
 										s.Successors = v
@@ -53859,12 +50574,10 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := &s.Name
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &s.Name, isFlexible, unsafe)
 								}
 								{
-									v := readInt8(&b)
-									s.NodeType = v
+									s.NodeType = readInt8(&b)
 								}
 								{
 									v := s.SourceTopics
@@ -53879,15 +50592,13 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := &a[i]
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &a[i], isFlexible, unsafe)
 									}
 									v = a
 									s.SourceTopics = v
 								}
 								{
-									v := &s.SinkTopic
-									readNullableString(&b, v, isFlexible, unsafe)
+									readNullableString(&b, &s.SinkTopic, isFlexible, unsafe)
 								}
 								{
 									v := s.Stores
@@ -53902,8 +50613,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := &a[i]
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &a[i], isFlexible, unsafe)
 									}
 									v = a
 									s.Stores = v
@@ -53921,8 +50631,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := &a[i]
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &a[i], isFlexible, unsafe)
 									}
 									v = a
 									s.Successors = v
@@ -53936,12 +50645,10 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v.Default()
 								s := v
 								{
-									v := &s.Name
-									readString(&b, v, isFlexible, unsafe)
+									readString(&b, &s.Name, isFlexible, unsafe)
 								}
 								{
-									v := readInt8(&b)
-									s.NodeType = v
+									s.NodeType = readInt8(&b)
 								}
 								{
 									v := s.SourceTopics
@@ -53956,15 +50663,13 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := &a[i]
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &a[i], isFlexible, unsafe)
 									}
 									v = a
 									s.SourceTopics = v
 								}
 								{
-									v := &s.SinkTopic
-									readNullableString(&b, v, isFlexible, unsafe)
+									readNullableString(&b, &s.SinkTopic, isFlexible, unsafe)
 								}
 								{
 									v := s.Stores
@@ -53979,8 +50684,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := &a[i]
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &a[i], isFlexible, unsafe)
 									}
 									v = a
 									s.Stores = v
@@ -53998,8 +50702,7 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										a = append(a, make([]string, l)...)
 									}
 									for i := range a {
-										v := &a[i]
-										readString(&b, v, isFlexible, unsafe)
+										readString(&b, &a[i], isFlexible, unsafe)
 									}
 									v = a
 									s.Successors = v
@@ -54021,12 +50724,10 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				}
 			}
 			if version >= 1 {
-				v := readInt8(&b)
-				s.TopologyDescriptionStatus = v
+				s.TopologyDescriptionStatus = readInt8(&b)
 			}
 			if version >= 1 {
-				v := &s.AssignorName
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.AssignorName, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -54156,8 +50857,7 @@ func (v *DescribeShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.GroupID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.GroupID, isFlexible)
 			}
 			{
 				v := v.Topics
@@ -54165,15 +50865,13 @@ func (v *DescribeShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
 						v := v.Partitions
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendInt32(dst, v)
+							dst = appendInt32(dst, v[i])
 						}
 					}
 					if isFlexible {
@@ -54222,8 +50920,7 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 			v.Default()
 			s := v
 			{
-				v := &s.GroupID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.GroupID, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -54245,8 +50942,7 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 					v.Default()
 					s := v
 					{
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
 						v := s.Partitions
@@ -54261,8 +50957,7 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 							a = append(a, make([]int32, l)...)
 						}
 						for i := range a {
-							v := readInt32(&b)
-							a[i] = v
+							a[i] = readInt32(&b)
 						}
 						v = a
 						s.Partitions = v
@@ -54454,8 +51149,7 @@ func (v *DescribeShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
 		v := v.Groups
@@ -54463,8 +51157,7 @@ func (v *DescribeShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.GroupID
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.GroupID, isFlexible)
 			}
 			{
 				v := v.Topics
@@ -54472,12 +51165,10 @@ func (v *DescribeShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Topic
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Topic, isFlexible)
 					}
 					{
-						v := v.TopicID
-						dst = appendUuid(dst, v)
+						dst = appendUuid(dst, v.TopicID)
 					}
 					{
 						v := v.Partitions
@@ -54485,28 +51176,22 @@ func (v *DescribeShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := &v[i]
 							{
-								v := v.Partition
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.Partition)
 							}
 							{
-								v := v.StartOffset
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.StartOffset)
 							}
 							{
-								v := v.LeaderEpoch
-								dst = appendInt32(dst, v)
+								dst = appendInt32(dst, v.LeaderEpoch)
 							}
 							if version >= 1 {
-								v := v.Lag
-								dst = appendInt64(dst, v)
+								dst = appendInt64(dst, v.Lag)
 							}
 							{
-								v := v.ErrorCode
-								dst = appendInt16(dst, v)
+								dst = appendInt16(dst, v.ErrorCode)
 							}
 							{
-								v := v.ErrorMessage
-								dst = appendNullableString(dst, v, isFlexible)
+								dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 							}
 							if isFlexible {
 								dst = v.UnknownTags.appendWithCount(dst)
@@ -54519,12 +51204,10 @@ func (v *DescribeShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -54551,8 +51234,7 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
 		v := s.Groups
@@ -54571,8 +51253,7 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 			v.Default()
 			s := v
 			{
-				v := &s.GroupID
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.GroupID, isFlexible, unsafe)
 			}
 			{
 				v := s.Topics
@@ -54591,12 +51272,10 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 					v.Default()
 					s := v
 					{
-						v := &s.Topic
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Topic, isFlexible, unsafe)
 					}
 					{
-						v := readUuid(&b)
-						s.TopicID = v
+						s.TopicID = readUuid(&b)
 					}
 					{
 						v := s.Partitions
@@ -54615,28 +51294,22 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 							v.Default()
 							s := v
 							{
-								v := readInt32(&b)
-								s.Partition = v
+								s.Partition = readInt32(&b)
 							}
 							{
-								v := readInt64(&b)
-								s.StartOffset = v
+								s.StartOffset = readInt64(&b)
 							}
 							{
-								v := readInt32(&b)
-								s.LeaderEpoch = v
+								s.LeaderEpoch = readInt32(&b)
 							}
 							if version >= 1 {
-								v := readInt64(&b)
-								s.Lag = v
+								s.Lag = readInt64(&b)
 							}
 							{
-								v := readInt16(&b)
-								s.ErrorCode = v
+								s.ErrorCode = readInt16(&b)
 							}
 							{
-								v := &s.ErrorMessage
-								readNullableString(&b, v, isFlexible, unsafe)
+								readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 							}
 							if isFlexible {
 								internalReadTags(&b, &s.UnknownTags)
@@ -54653,12 +51326,10 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 				s.Topics = v
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -54784,8 +51455,7 @@ func (v *AlterShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.GroupID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.GroupID, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -54793,8 +51463,7 @@ func (v *AlterShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
 				v := v.Partitions
@@ -54802,12 +51471,10 @@ func (v *AlterShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.StartOffset
-						dst = appendInt64(dst, v)
+						dst = appendInt64(dst, v.StartOffset)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -54839,8 +51506,7 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 	_ = isFlexible
 	s := v
 	{
-		v := &s.GroupID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.GroupID, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -54859,8 +51525,7 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
 				v := s.Partitions
@@ -54879,12 +51544,10 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt64(&b)
-						s.StartOffset = v
+						s.StartOffset = readInt64(&b)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -55037,16 +51700,13 @@ func (v *AlterShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -55054,12 +51714,10 @@ func (v *AlterShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
 				v := v.Partitions
@@ -55067,16 +51725,13 @@ func (v *AlterShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.Partition
-						dst = appendInt32(dst, v)
+						dst = appendInt32(dst, v.Partition)
 					}
 					{
-						v := v.ErrorCode
-						dst = appendInt16(dst, v)
+						dst = appendInt16(dst, v.ErrorCode)
 					}
 					{
-						v := v.ErrorMessage
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 					}
 					if isFlexible {
 						dst = v.UnknownTags.appendWithCount(dst)
@@ -55108,16 +51763,13 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -55136,12 +51788,10 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
 				v := s.Partitions
@@ -55160,16 +51810,13 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 					v.Default()
 					s := v
 					{
-						v := readInt32(&b)
-						s.Partition = v
+						s.Partition = readInt32(&b)
 					}
 					{
-						v := readInt16(&b)
-						s.ErrorCode = v
+						s.ErrorCode = readInt16(&b)
 					}
 					{
-						v := &s.ErrorMessage
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 					}
 					if isFlexible {
 						internalReadTags(&b, &s.UnknownTags)
@@ -55275,8 +51922,7 @@ func (v *DeleteShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.GroupID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.GroupID, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -55284,8 +51930,7 @@ func (v *DeleteShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -55312,8 +51957,7 @@ func (v *DeleteShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error
 	_ = isFlexible
 	s := v
 	{
-		v := &s.GroupID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.GroupID, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -55332,8 +51976,7 @@ func (v *DeleteShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -55457,16 +52100,13 @@ func (v *DeleteShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	{
 		v := v.Topics
@@ -55474,20 +52114,16 @@ func (v *DeleteShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.Topic
-				dst = appendString(dst, v, isFlexible)
+				dst = appendString(dst, v.Topic, isFlexible)
 			}
 			{
-				v := v.TopicID
-				dst = appendUuid(dst, v)
+				dst = appendUuid(dst, v.TopicID)
 			}
 			{
-				v := v.ErrorCode
-				dst = appendInt16(dst, v)
+				dst = appendInt16(dst, v.ErrorCode)
 			}
 			{
-				v := v.ErrorMessage
-				dst = appendNullableString(dst, v, isFlexible)
+				dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 			}
 			if isFlexible {
 				dst = v.UnknownTags.appendWithCount(dst)
@@ -55514,16 +52150,13 @@ func (v *DeleteShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) erro
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	{
 		v := s.Topics
@@ -55542,20 +52175,16 @@ func (v *DeleteShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) erro
 			v.Default()
 			s := v
 			{
-				v := &s.Topic
-				readString(&b, v, isFlexible, unsafe)
+				readString(&b, &s.Topic, isFlexible, unsafe)
 			}
 			{
-				v := readUuid(&b)
-				s.TopicID = v
+				s.TopicID = readUuid(&b)
 			}
 			{
-				v := readInt16(&b)
-				s.ErrorCode = v
+				s.ErrorCode = readInt16(&b)
 			}
 			{
-				v := &s.ErrorMessage
-				readNullableString(&b, v, isFlexible, unsafe)
+				readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 			}
 			if isFlexible {
 				internalReadTags(&b, &s.UnknownTags)
@@ -55667,16 +52296,13 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.Group
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.Group, isFlexible)
 	}
 	{
-		v := v.MemberID
-		dst = appendString(dst, v, isFlexible)
+		dst = appendString(dst, v.MemberID, isFlexible)
 	}
 	{
-		v := v.TopologyEpoch
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.TopologyEpoch)
 	}
 	{
 		v := &v.TopologyDescription
@@ -55686,8 +52312,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 			for i := range v {
 				v := &v[i]
 				{
-					v := v.SubtopologyID
-					dst = appendString(dst, v, isFlexible)
+					dst = appendString(dst, v.SubtopologyID, isFlexible)
 				}
 				{
 					v := v.Nodes
@@ -55695,39 +52320,33 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 					for i := range v {
 						v := &v[i]
 						{
-							v := v.Name
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v.Name, isFlexible)
 						}
 						{
-							v := v.NodeType
-							dst = appendInt8(dst, v)
+							dst = appendInt8(dst, v.NodeType)
 						}
 						{
 							v := v.SourceTopics
 							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
-								v := v[i]
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v[i], isFlexible)
 							}
 						}
 						{
-							v := v.SinkTopic
-							dst = appendNullableString(dst, v, isFlexible)
+							dst = appendNullableString(dst, v.SinkTopic, isFlexible)
 						}
 						{
 							v := v.Stores
 							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
-								v := v[i]
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v[i], isFlexible)
 							}
 						}
 						{
 							v := v.Successors
 							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
-								v := v[i]
-								dst = appendString(dst, v, isFlexible)
+								dst = appendString(dst, v[i], isFlexible)
 							}
 						}
 						if isFlexible {
@@ -55748,39 +52367,33 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 				{
 					v := &v.Source
 					{
-						v := v.Name
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Name, isFlexible)
 					}
 					{
-						v := v.NodeType
-						dst = appendInt8(dst, v)
+						dst = appendInt8(dst, v.NodeType)
 					}
 					{
 						v := v.SourceTopics
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v[i], isFlexible)
 						}
 					}
 					{
-						v := v.SinkTopic
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.SinkTopic, isFlexible)
 					}
 					{
 						v := v.Stores
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v[i], isFlexible)
 						}
 					}
 					{
 						v := v.Successors
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v[i], isFlexible)
 						}
 					}
 					if isFlexible {
@@ -55790,39 +52403,33 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 				{
 					v := &v.Processor
 					{
-						v := v.Name
-						dst = appendString(dst, v, isFlexible)
+						dst = appendString(dst, v.Name, isFlexible)
 					}
 					{
-						v := v.NodeType
-						dst = appendInt8(dst, v)
+						dst = appendInt8(dst, v.NodeType)
 					}
 					{
 						v := v.SourceTopics
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v[i], isFlexible)
 						}
 					}
 					{
-						v := v.SinkTopic
-						dst = appendNullableString(dst, v, isFlexible)
+						dst = appendNullableString(dst, v.SinkTopic, isFlexible)
 					}
 					{
 						v := v.Stores
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v[i], isFlexible)
 						}
 					}
 					{
 						v := v.Successors
 						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
-							v := v[i]
-							dst = appendString(dst, v, isFlexible)
+							dst = appendString(dst, v[i], isFlexible)
 						}
 					}
 					if isFlexible {
@@ -55858,16 +52465,13 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 	_ = isFlexible
 	s := v
 	{
-		v := &s.Group
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.Group, isFlexible, unsafe)
 	}
 	{
-		v := &s.MemberID
-		readString(&b, v, isFlexible, unsafe)
+		readString(&b, &s.MemberID, isFlexible, unsafe)
 	}
 	{
-		v := readInt32(&b)
-		s.TopologyEpoch = v
+		s.TopologyEpoch = readInt32(&b)
 	}
 	{
 		v := &s.TopologyDescription
@@ -55890,8 +52494,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 				v.Default()
 				s := v
 				{
-					v := &s.SubtopologyID
-					readString(&b, v, isFlexible, unsafe)
+					readString(&b, &s.SubtopologyID, isFlexible, unsafe)
 				}
 				{
 					v := s.Nodes
@@ -55910,12 +52513,10 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						v.Default()
 						s := v
 						{
-							v := &s.Name
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &s.Name, isFlexible, unsafe)
 						}
 						{
-							v := readInt8(&b)
-							s.NodeType = v
+							s.NodeType = readInt8(&b)
 						}
 						{
 							v := s.SourceTopics
@@ -55930,15 +52531,13 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 								a = append(a, make([]string, l)...)
 							}
 							for i := range a {
-								v := &a[i]
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &a[i], isFlexible, unsafe)
 							}
 							v = a
 							s.SourceTopics = v
 						}
 						{
-							v := &s.SinkTopic
-							readNullableString(&b, v, isFlexible, unsafe)
+							readNullableString(&b, &s.SinkTopic, isFlexible, unsafe)
 						}
 						{
 							v := s.Stores
@@ -55953,8 +52552,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 								a = append(a, make([]string, l)...)
 							}
 							for i := range a {
-								v := &a[i]
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &a[i], isFlexible, unsafe)
 							}
 							v = a
 							s.Stores = v
@@ -55972,8 +52570,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 								a = append(a, make([]string, l)...)
 							}
 							for i := range a {
-								v := &a[i]
-								readString(&b, v, isFlexible, unsafe)
+								readString(&b, &a[i], isFlexible, unsafe)
 							}
 							v = a
 							s.Successors = v
@@ -56013,12 +52610,10 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 					v.Default()
 					s := v
 					{
-						v := &s.Name
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Name, isFlexible, unsafe)
 					}
 					{
-						v := readInt8(&b)
-						s.NodeType = v
+						s.NodeType = readInt8(&b)
 					}
 					{
 						v := s.SourceTopics
@@ -56033,15 +52628,13 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := &a[i]
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &a[i], isFlexible, unsafe)
 						}
 						v = a
 						s.SourceTopics = v
 					}
 					{
-						v := &s.SinkTopic
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.SinkTopic, isFlexible, unsafe)
 					}
 					{
 						v := s.Stores
@@ -56056,8 +52649,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := &a[i]
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &a[i], isFlexible, unsafe)
 						}
 						v = a
 						s.Stores = v
@@ -56075,8 +52667,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := &a[i]
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &a[i], isFlexible, unsafe)
 						}
 						v = a
 						s.Successors = v
@@ -56090,12 +52681,10 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 					v.Default()
 					s := v
 					{
-						v := &s.Name
-						readString(&b, v, isFlexible, unsafe)
+						readString(&b, &s.Name, isFlexible, unsafe)
 					}
 					{
-						v := readInt8(&b)
-						s.NodeType = v
+						s.NodeType = readInt8(&b)
 					}
 					{
 						v := s.SourceTopics
@@ -56110,15 +52699,13 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := &a[i]
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &a[i], isFlexible, unsafe)
 						}
 						v = a
 						s.SourceTopics = v
 					}
 					{
-						v := &s.SinkTopic
-						readNullableString(&b, v, isFlexible, unsafe)
+						readNullableString(&b, &s.SinkTopic, isFlexible, unsafe)
 					}
 					{
 						v := s.Stores
@@ -56133,8 +52720,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := &a[i]
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &a[i], isFlexible, unsafe)
 						}
 						v = a
 						s.Stores = v
@@ -56152,8 +52738,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							a = append(a, make([]string, l)...)
 						}
 						for i := range a {
-							v := &a[i]
-							readString(&b, v, isFlexible, unsafe)
+							readString(&b, &a[i], isFlexible, unsafe)
 						}
 						v = a
 						s.Successors = v
@@ -56247,16 +52832,13 @@ func (v *StreamsGroupTopologyDescriptionUpdateResponse) AppendTo(dst []byte) []b
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -56278,16 +52860,13 @@ func (v *StreamsGroupTopologyDescriptionUpdateResponse) readFrom(src []byte, uns
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -56356,8 +52935,7 @@ func (v *UnregisterControllerRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ControllerID
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ControllerID)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -56379,8 +52957,7 @@ func (v *UnregisterControllerRequest) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ControllerID = v
+		s.ControllerID = readInt32(&b)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)
@@ -56449,16 +53026,13 @@ func (v *UnregisterControllerResponse) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 0
 	_ = isFlexible
 	{
-		v := v.ThrottleMillis
-		dst = appendInt32(dst, v)
+		dst = appendInt32(dst, v.ThrottleMillis)
 	}
 	{
-		v := v.ErrorCode
-		dst = appendInt16(dst, v)
+		dst = appendInt16(dst, v.ErrorCode)
 	}
 	{
-		v := v.ErrorMessage
-		dst = appendNullableString(dst, v, isFlexible)
+		dst = appendNullableString(dst, v.ErrorMessage, isFlexible)
 	}
 	if isFlexible {
 		dst = v.UnknownTags.appendWithCount(dst)
@@ -56480,16 +53054,13 @@ func (v *UnregisterControllerResponse) readFrom(src []byte, unsafe bool) error {
 	_ = isFlexible
 	s := v
 	{
-		v := readInt32(&b)
-		s.ThrottleMillis = v
+		s.ThrottleMillis = readInt32(&b)
 	}
 	{
-		v := readInt16(&b)
-		s.ErrorCode = v
+		s.ErrorCode = readInt16(&b)
 	}
 	{
-		v := &s.ErrorMessage
-		readNullableString(&b, v, isFlexible, unsafe)
+		readNullableString(&b, &s.ErrorMessage, isFlexible, unsafe)
 	}
 	if isFlexible {
 		internalReadTags(&b, &s.UnknownTags)

@@ -25,8 +25,6 @@ type (
 	}
 
 	Type interface {
-		WriteAppend(*LineWriter)
-		WriteDecode(*LineWriter)
 		TypeName() string
 	}
 

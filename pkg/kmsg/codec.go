@@ -53,7 +53,7 @@ func appendUuid(dst []byte, v [16]byte) []byte { return kbin.AppendUuid(dst, v) 
 //
 // Most compact lengths are one byte. The read functions decode that byte
 // themselves, since Reader.Uvarint is not inlined. The read functions for
-// strings and bytes store into dst; see decodesInPlace in the generator.
+// strings and bytes store into dst; see writeDecodeInto in the generator.
 
 func readString(b *kbin.Reader, dst *string, flexible, unsafe bool) {
 	var l int
