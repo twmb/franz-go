@@ -438,6 +438,7 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("if !b.Ok() {")
 	l.Write("return b.Complete()")
 	l.Write("}")
+	a.writeLenBound(l)
 
 	l.Write("a = a[:0]")
 
@@ -475,6 +476,132 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("}") // close the for loop
 
 	l.Write("v = a")
+}
+
+// writeLenBound fails a decode if l elements, each at least its fewest
+// encoded bytes, cannot fit in the bytes left. The ArrayLen functions allow a
+// byte per element, but we allocate every element before reading any, and an
+// element can take hundreds of bytes in memory.
+//
+// The fewest bytes can change with version; we check the size of the latest
+// versions, and the smallest size of every version before them. We do not
+// know here which versions are flexible, so a size is the smaller of the
+// flexible and non-flexible sizes.
+func (a Array) writeLenBound(l *LineWriter) {
+	size := func(v int) int {
+		return min(minSize(a.Inner, v, false), minSize(a.Inner, v, true))
+	}
+	last := lastVersionChange(a.Inner)
+	latest := size(last)
+	since, least := last, latest
+	for v := last - 1; v >= -1; v-- { // -1 is every negative version
+		n := size(v)
+		if n == latest && since == v+1 {
+			since = v
+		}
+		least = min(least, n)
+	}
+	var conds []string
+	if least > 1 {
+		conds = append(conds, fmt.Sprintf("int64(l)*%d > int64(len(b.Src))", least))
+	}
+	if latest > least {
+		conds = append(conds, fmt.Sprintf("version >= %d && int64(l)*%d > int64(len(b.Src))", since, latest))
+	}
+	if len(conds) == 0 {
+		return
+	}
+	l.Write("if %s {", strings.Join(conds, " || "))
+	l.Write("return kbin.ErrNotEnoughData")
+	l.Write("}")
+}
+
+// minSize returns the fewest bytes t can be encoded in at version, if the
+// version is flexible or not.
+func minSize(t Type, version int, flexible bool) int {
+	switch t := t.(type) {
+	case Bool, Int8, Varint, Varlong, VarintString, VarintBytes:
+		return 1
+	case Int16, Uint16:
+		return 2
+	case Int32, Uint32, Throttle, Timeout:
+		return 4
+	case Int64, Float64:
+		return 8
+	case Uuid:
+		return 16
+	case FieldLengthMinusBytes:
+		return 0
+	case Enum:
+		return minSize(t.Type, version, flexible)
+	case String:
+		return lenSize(t.FromFlexible && flexible, 2)
+	case NullableString:
+		return lenSize(t.FromFlexible && flexible, 2)
+	case Bytes:
+		return lenSize(t.FromFlexible && flexible, 4)
+	case NullableBytes:
+		return lenSize(t.FromFlexible && flexible, 4)
+	case Array:
+		return lenSize(t.FromFlexible && flexible || t.IsVarintArray, 4)
+	case Struct:
+		if t.Nullable {
+			return 1
+		}
+		fields := t.Fields
+		if t.WithVersionField {
+			fields = fields[1:] // see Struct.WriteDecode
+		}
+		var n int
+		for _, f := range fields {
+			if f.inBody(version) {
+				n += minSize(f.Type, version, flexible)
+			}
+		}
+		if t.FromFlexible && flexible {
+			n++ // the tag count
+		}
+		return n
+	}
+	die("unknown type %T for minSize", t)
+	return 0
+}
+
+// lenSize returns the fewest bytes of a length: a one byte uvarint if compact,
+// or the classic size.
+func lenSize(compact bool, classic int) int {
+	if compact {
+		return 1
+	}
+	return classic
+}
+
+// inBody returns whether f is decoded outside of tags at version, matching
+// writeBeginAndTag.
+func (f StructField) inBody(version int) bool {
+	switch {
+	case f.MaxVersion > -1:
+		return version >= f.MinVersion && version <= f.MaxVersion
+	case f.MinVersion > 0:
+		return version >= f.MinVersion
+	case f.MinVersion == -1:
+		return false
+	default:
+		return true
+	}
+}
+
+// lastVersionChange returns the version from which minSize(t) stops changing.
+func lastVersionChange(t Type) int {
+	s, ok := t.(Struct)
+	if !ok || s.Nullable {
+		return 0
+	}
+	var last int
+	for _, f := range s.Fields {
+		last = max(last, f.MinVersion, f.MaxVersion+1, lastVersionChange(f.Type))
+	}
+	return last
 }
 
 func (f StructField) WriteDecode(l *LineWriter) {
@@ -547,7 +674,7 @@ func (s Struct) WriteDecode(l *LineWriter) {
 	}
 	defer l.Write("}")
 
-	l.Write("for i := b.Uvarint(); i > 0; i-- {")
+	l.Write("for i := b.Uvarint(); i > 0 && b.Ok(); i-- {")
 	defer l.Write("}")
 
 	l.Write("switch key := b.Uvarint(); key {")

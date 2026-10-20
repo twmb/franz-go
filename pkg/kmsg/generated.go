@@ -914,7 +914,7 @@ func (v *OffsetCommitValue) readFrom(src []byte, unsafe bool) error {
 		s.ExpireTimestamp = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -1303,6 +1303,9 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*10 > int64(len(b.Src)) || version >= 3 && int64(l)*15 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -1757,6 +1760,9 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TxnMetadataValueTopic, l)...)
@@ -1794,6 +1800,9 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -1821,7 +1830,7 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 		s.StartTimestamp = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -2048,6 +2057,9 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]string, l)...)
@@ -2076,6 +2088,9 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ConsumerMemberMetadataOwnedPartition, l)...)
@@ -2100,6 +2115,9 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 				l = b.ArrayLen()
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -2234,6 +2252,9 @@ func (v *ConsumerMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ConsumerMemberAssignmentTopic, l)...)
@@ -2258,6 +2279,9 @@ func (v *ConsumerMemberAssignment) readFrom(src []byte, unsafe bool) error {
 				l = b.ArrayLen()
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -2550,6 +2574,9 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ConnectMemberAssignmentAssignment, l)...)
@@ -2575,6 +2602,9 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*2 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int16, l)...)
@@ -2597,6 +2627,9 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		l = b.ArrayLen()
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -2622,6 +2655,9 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 				l = b.ArrayLen()
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*2 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -3035,6 +3071,9 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*4 > int64(len(b.Src)) || version >= 1 && int64(l)*20 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]LeaderChangeMessageVoter, l)...)
@@ -3069,6 +3108,9 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*4 > int64(len(b.Src)) || version >= 1 && int64(l)*20 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -3365,6 +3407,9 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ProduceRequestTopic, l)...)
@@ -3405,6 +3450,9 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -3991,6 +4039,9 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ProduceResponseTopic, l)...)
@@ -4032,6 +4083,9 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*14 > int64(len(b.Src)) || version >= 8 && int64(l)*33 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ProduceResponseTopicPartition, l)...)
@@ -4071,6 +4125,9 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*6 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -4126,7 +4183,7 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 						s.ErrorMessage = v
 					}
 					if isFlexible {
-						for i := b.Uvarint(); i > 0; i-- {
+						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 							switch key := b.Uvarint(); key {
 							default:
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -4168,7 +4225,7 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -4184,6 +4241,9 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*11 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -4825,6 +4885,9 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]FetchRequestTopic, l)...)
@@ -4866,6 +4929,9 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*16 > int64(len(b.Src)) || version >= 12 && int64(l)*32 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]FetchRequestTopicPartition, l)...)
@@ -4899,7 +4965,7 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 						s.PartitionMaxBytes = v
 					}
 					if isFlexible {
-						for i := b.Uvarint(); i > 0; i-- {
+						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 							switch key := b.Uvarint(); key {
 							default:
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -4943,6 +5009,9 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]FetchRequestForgottenTopic, l)...)
@@ -4984,6 +5053,9 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -5020,7 +5092,7 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 		s.Rack = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -5782,6 +5854,9 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]FetchResponseTopic, l)...)
@@ -5822,6 +5897,9 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*16 > int64(len(b.Src)) || version >= 11 && int64(l)*37 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -5866,6 +5944,9 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*16 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]FetchResponseTopicPartitionAbortedTransaction, l)...)
@@ -5903,7 +5984,7 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 						s.RecordBatches = v
 					}
 					if isFlexible {
-						for i := b.Uvarint(); i > 0; i-- {
+						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 							switch key := b.Uvarint(); key {
 							default:
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -5979,7 +6060,7 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -5995,6 +6076,9 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*11 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -6366,6 +6450,9 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ListOffsetsRequestTopic, l)...)
@@ -6402,6 +6489,9 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*12 > int64(len(b.Src)) || version >= 4 && int64(l)*16 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -6733,6 +6823,9 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ListOffsetsResponseTopic, l)...)
@@ -6770,6 +6863,9 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*6 > int64(len(b.Src)) || version >= 4 && int64(l)*26 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ListOffsetsResponseTopicPartition, l)...)
@@ -6797,6 +6893,9 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*8 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -7042,6 +7141,9 @@ func (v *MetadataRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -7559,6 +7661,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*10 > int64(len(b.Src)) || version >= 1 && int64(l)*11 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]MetadataResponseBroker, l)...)
@@ -7649,6 +7754,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*5 > int64(len(b.Src)) || version >= 10 && int64(l)*26 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]MetadataResponseTopic, l)...)
@@ -7716,6 +7824,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*13 > int64(len(b.Src)) || version >= 7 && int64(l)*18 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]MetadataResponseTopicPartition, l)...)
@@ -7752,6 +7863,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -7775,6 +7889,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -7797,6 +7914,9 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -8377,6 +8497,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*23 > int64(len(b.Src)) || version >= 6 && int64(l)*27 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]LeaderAndISRRequestTopicPartition, l)...)
@@ -8430,6 +8553,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -8457,6 +8583,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -8480,6 +8609,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -8502,6 +8634,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -8540,6 +8675,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*19 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -8581,6 +8719,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*23 > int64(len(b.Src)) || version >= 6 && int64(l)*27 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -8635,6 +8776,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -8662,6 +8806,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -8685,6 +8832,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -8707,6 +8857,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -8752,6 +8905,9 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*10 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -8993,6 +9149,9 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]LeaderAndISRResponseTopicPartition, l)...)
@@ -9045,6 +9204,9 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]LeaderAndISRResponseTopic, l)...)
@@ -9068,6 +9230,9 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -9394,6 +9559,9 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 1 && int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]StopReplicaRequestTopic, l)...)
@@ -9435,6 +9603,9 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -9457,6 +9628,9 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*9 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -9642,6 +9816,9 @@ func (v *StopReplicaResponse) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*8 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -10216,6 +10393,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*23 > int64(len(b.Src)) || version >= 5 && int64(l)*24 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]UpdateMetadataRequestTopicPartition, l)...)
@@ -10269,6 +10449,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -10296,6 +10479,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -10318,6 +10504,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -10348,6 +10537,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*3 > int64(len(b.Src)) || version >= 7 && int64(l)*19 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -10389,6 +10581,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*23 > int64(len(b.Src)) || version >= 5 && int64(l)*24 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -10443,6 +10638,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -10470,6 +10668,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -10492,6 +10693,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -10529,6 +10733,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*4 > int64(len(b.Src)) || version >= 2 && int64(l)*7 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -10574,6 +10781,9 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*8 > int64(len(b.Src)) || version >= 3 && int64(l)*9 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -10997,6 +11207,9 @@ func (v *ControlledShutdownResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ControlledShutdownResponsePartitionsRemaining, l)...)
@@ -11399,6 +11612,9 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetCommitRequestTopic, l)...)
@@ -11439,6 +11655,9 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*14 > int64(len(b.Src)) || version >= 6 && int64(l)*18 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -11735,6 +11954,9 @@ func (v *OffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetCommitResponseTopic, l)...)
@@ -11775,6 +11997,9 @@ func (v *OffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -12156,6 +12381,9 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetFetchRequestTopic, l)...)
@@ -12193,6 +12421,9 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -12222,6 +12453,9 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*3 > int64(len(b.Src)) || version >= 9 && int64(l)*8 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -12284,6 +12518,9 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]OffsetFetchRequestGroupTopic, l)...)
@@ -12324,6 +12561,9 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -12793,6 +13033,9 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetFetchResponseTopic, l)...)
@@ -12829,6 +13072,9 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*16 > int64(len(b.Src)) || version >= 5 && int64(l)*20 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -12901,6 +13147,9 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetFetchResponseGroup, l)...)
@@ -12937,6 +13186,9 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -12978,6 +13230,9 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*20 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -13523,6 +13778,9 @@ func (v *FindCoordinatorResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*14 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]FindCoordinatorResponseCoordinator, l)...)
@@ -13949,6 +14207,9 @@ func (v *JoinGroupRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -14400,6 +14661,9 @@ func (v *JoinGroupResponse) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*4 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -14979,6 +15243,9 @@ func (v *LeaveGroupRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*4 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]LeaveGroupRequestMember, l)...)
@@ -15234,6 +15501,9 @@ func (v *LeaveGroupResponse) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -15598,6 +15868,9 @@ func (v *SyncGroupRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -16320,6 +16593,9 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*8 > int64(len(b.Src)) || version >= 6 && int64(l)*13 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeGroupsResponseGroup, l)...)
@@ -16428,6 +16704,9 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*6 > int64(len(b.Src)) || version >= 4 && int64(l)*7 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -16935,6 +17214,9 @@ func (v *ListGroupsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ListGroupsResponseGroup, l)...)
@@ -17200,6 +17482,9 @@ func (v *SASLHandshakeResponse) readFrom(src []byte, unsafe bool) error {
 		l = b.ArrayLen()
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*2 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -17778,6 +18063,9 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ApiVersionsResponseApiKey, l)...)
@@ -17810,7 +18098,7 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -17826,6 +18114,9 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -17888,6 +18179,9 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -18248,6 +18542,9 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*10 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]CreateTopicsRequestTopic, l)...)
@@ -18293,6 +18590,9 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]CreateTopicsRequestTopicReplicaAssignment, l)...)
@@ -18316,6 +18616,9 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -18346,6 +18649,9 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -18741,6 +19047,9 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*4 > int64(len(b.Src)) || version >= 7 && int64(l)*28 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]CreateTopicsResponseTopic, l)...)
@@ -18814,6 +19123,9 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]CreateTopicsResponseTopicConfig, l)...)
@@ -18876,7 +19188,7 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 				s.Configs = v
 			}
 			if isFlexible {
-				for i := b.Uvarint(); i > 0; i-- {
+				for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 					switch key := b.Uvarint(); key {
 					default:
 						s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -19110,6 +19422,9 @@ func (v *DeleteTopicsRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -19361,6 +19676,9 @@ func (v *DeleteTopicsResponse) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*4 > int64(len(b.Src)) || version >= 6 && int64(l)*21 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -19658,6 +19976,9 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DeleteRecordsRequestTopic, l)...)
@@ -19694,6 +20015,9 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*12 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -19957,6 +20281,9 @@ func (v *DeleteRecordsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DeleteRecordsResponseTopic, l)...)
@@ -19993,6 +20320,9 @@ func (v *DeleteRecordsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*14 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -20561,6 +20891,9 @@ func (v *OffsetForLeaderEpochRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetForLeaderEpochRequestTopic, l)...)
@@ -20597,6 +20930,9 @@ func (v *OffsetForLeaderEpochRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*8 > int64(len(b.Src)) || version >= 2 && int64(l)*12 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -20889,6 +21225,9 @@ func (v *OffsetForLeaderEpochResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetForLeaderEpochResponseTopic, l)...)
@@ -20925,6 +21264,9 @@ func (v *OffsetForLeaderEpochResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*14 > int64(len(b.Src)) || version >= 1 && int64(l)*18 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -21313,6 +21655,9 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AddPartitionsToTxnRequestTopic, l)...)
@@ -21350,6 +21695,9 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]int32, l)...)
@@ -21379,6 +21727,9 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*14 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -21429,6 +21780,9 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AddPartitionsToTxnRequestTransactionTopic, l)...)
@@ -21465,6 +21819,9 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -21881,6 +22238,9 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AddPartitionsToTxnResponseTransaction, l)...)
@@ -21918,6 +22278,9 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AddPartitionsToTxnResponseTransactionTopic, l)...)
@@ -21954,6 +22317,9 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*6 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -22004,6 +22370,9 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AddPartitionsToTxnResponseTopic, l)...)
@@ -22040,6 +22409,9 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -22882,6 +23254,9 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*17 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]WriteTxnMarkersRequestMarker, l)...)
@@ -22913,6 +23288,9 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -22950,6 +23328,9 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -23225,6 +23606,9 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*10 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]WriteTxnMarkersResponseMarker, l)...)
@@ -23248,6 +23632,9 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -23285,6 +23672,9 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*6 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -23704,6 +24094,9 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 6 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TxnOffsetCommitRequestTopic, l)...)
@@ -23744,6 +24137,9 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*14 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -24044,6 +24440,9 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 6 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TxnOffsetCommitResponseTopic, l)...)
@@ -24084,6 +24483,9 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -24664,6 +25066,9 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*4 > int64(len(b.Src)) || version >= 1 && int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeACLsResponseResource, l)...)
@@ -24718,6 +25123,9 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*5 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -25012,6 +25420,9 @@ func (v *CreateACLsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*7 > int64(len(b.Src)) || version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]CreateACLsRequestCreation, l)...)
@@ -25268,6 +25679,9 @@ func (v *CreateACLsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*4 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]CreateACLsResponseResult, l)...)
@@ -25504,6 +25918,9 @@ func (v *DeleteACLsRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*7 > int64(len(b.Src)) || version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -25884,6 +26301,9 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DeleteACLsResponseResult, l)...)
@@ -25924,6 +26344,9 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*10 > int64(len(b.Src)) || version >= 1 && int64(l)*11 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -26250,6 +26673,9 @@ func (v *DescribeConfigsRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*4 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -26722,6 +27148,9 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*7 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeConfigsResponseResource, l)...)
@@ -26788,6 +27217,9 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*5 > int64(len(b.Src)) || version >= 3 && int64(l)*9 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -26863,6 +27295,9 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -27204,6 +27639,9 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*4 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterConfigsRequestResource, l)...)
@@ -27249,6 +27687,9 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -27498,6 +27939,9 @@ func (v *AlterConfigsResponse) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -27770,6 +28214,9 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterReplicaLogDirsRequestDir, l)...)
@@ -27807,6 +28254,9 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AlterReplicaLogDirsRequestDirTopic, l)...)
@@ -27843,6 +28293,9 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -28085,6 +28538,9 @@ func (v *AlterReplicaLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterReplicaLogDirsResponseTopic, l)...)
@@ -28121,6 +28577,9 @@ func (v *AlterReplicaLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -28314,6 +28773,9 @@ func (v *DescribeLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeLogDirsRequestTopic, l)...)
@@ -28350,6 +28812,9 @@ func (v *DescribeLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -28695,6 +29160,9 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*5 > int64(len(b.Src)) || version >= 5 && int64(l)*22 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeLogDirsResponseDir, l)...)
@@ -28736,6 +29204,9 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]DescribeLogDirsResponseDirTopic, l)...)
@@ -28772,6 +29243,9 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*21 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -29316,6 +29790,9 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*7 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]CreatePartitionsRequestTopic, l)...)
@@ -29360,6 +29837,9 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*2 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]CreatePartitionsRequestTopicAssignment, l)...)
@@ -29379,6 +29859,9 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -29604,6 +30087,9 @@ func (v *CreatePartitionsResponse) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -29889,6 +30375,9 @@ func (v *CreateDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -30875,6 +31364,9 @@ func (v *DescribeDelegationTokenRequest) readFrom(src []byte, unsafe bool) error
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeDelegationTokenRequestOwner, l)...)
@@ -31219,6 +31711,9 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*30 > int64(len(b.Src)) || version >= 3 && int64(l)*32 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeDelegationTokenResponseTokenDetail, l)...)
@@ -31344,6 +31839,9 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -31723,6 +32221,9 @@ func (v *DeleteGroupsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*4 > int64(len(b.Src)) || version >= 3 && int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DeleteGroupsResponseGroup, l)...)
@@ -31970,6 +32471,9 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ElectLeadersRequestTopic, l)...)
@@ -32006,6 +32510,9 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -32265,6 +32772,9 @@ func (v *ElectLeadersResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ElectLeadersResponseTopic, l)...)
@@ -32301,6 +32811,9 @@ func (v *ElectLeadersResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -32606,6 +33119,9 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*4 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]IncrementalAlterConfigsRequestResource, l)...)
@@ -32651,6 +33167,9 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -32912,6 +33431,9 @@ func (v *IncrementalAlterConfigsResponse) readFrom(src []byte, unsafe bool) erro
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -33212,6 +33734,9 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterPartitionAssignmentsRequestTopic, l)...)
@@ -33249,6 +33774,9 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AlterPartitionAssignmentsRequestTopicPartition, l)...)
@@ -33275,6 +33803,9 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -33578,6 +34109,9 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterPartitionAssignmentsResponseTopic, l)...)
@@ -33614,6 +34148,9 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -33846,6 +34383,9 @@ func (v *ListPartitionReassignmentsRequest) readFrom(src []byte, unsafe bool) er
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ListPartitionReassignmentsRequestTopic, l)...)
@@ -33882,6 +34422,9 @@ func (v *ListPartitionReassignmentsRequest) readFrom(src []byte, unsafe bool) er
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -34184,6 +34727,9 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ListPartitionReassignmentsResponseTopic, l)...)
@@ -34221,6 +34767,9 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ListPartitionReassignmentsResponseTopicPartition, l)...)
@@ -34245,6 +34794,9 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -34268,6 +34820,9 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -34290,6 +34845,9 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -34479,6 +35037,9 @@ func (v *OffsetDeleteRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetDeleteRequestTopic, l)...)
@@ -34503,6 +35064,9 @@ func (v *OffsetDeleteRequest) readFrom(src []byte, unsafe bool) error {
 				l = b.ArrayLen()
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -34704,6 +35268,9 @@ func (v *OffsetDeleteResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]OffsetDeleteResponseTopic, l)...)
@@ -34728,6 +35295,9 @@ func (v *OffsetDeleteResponse) readFrom(src []byte, unsafe bool) error {
 				l = b.ArrayLen()
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -34926,6 +35496,9 @@ func (v *DescribeClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*4 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -35283,6 +35856,9 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeClientQuotasResponseEntry, l)...)
@@ -35302,6 +35878,9 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -35363,6 +35942,9 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*10 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -35668,6 +36250,9 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterClientQuotasRequestEntry, l)...)
@@ -35687,6 +36272,9 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -35748,6 +36336,9 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*11 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -36013,6 +36604,9 @@ func (v *AlterClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterClientQuotasResponseEntry, l)...)
@@ -36053,6 +36647,9 @@ func (v *AlterClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -36258,6 +36855,9 @@ func (v *DescribeUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) 
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*2 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -36553,6 +37153,9 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeUserSCRAMCredentialsResponseResult, l)...)
@@ -36610,6 +37213,9 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*5 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -36880,6 +37486,9 @@ func (v *AlterUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) err
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterUserSCRAMCredentialsRequestDeletion, l)...)
@@ -36927,6 +37536,9 @@ func (v *AlterUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) err
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*9 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -37151,6 +37763,9 @@ func (v *AlterUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool) er
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -37476,6 +38091,9 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]VoteRequestTopic, l)...)
@@ -37512,6 +38130,9 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*24 > int64(len(b.Src)) || version >= 2 && int64(l)*57 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -37846,6 +38467,9 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]VoteResponseTopic, l)...)
@@ -37882,6 +38506,9 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*15 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -37926,7 +38553,7 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -37942,6 +38569,9 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -38297,6 +38927,9 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]BeginQuorumEpochRequestTopic, l)...)
@@ -38333,6 +38966,9 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*12 > int64(len(b.Src)) || version >= 1 && int64(l)*28 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -38383,6 +39019,9 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -38715,6 +39354,9 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]BeginQuorumEpochResponseTopic, l)...)
@@ -38751,6 +39393,9 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*14 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -38791,7 +39436,7 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -38807,6 +39452,9 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -39206,6 +39854,9 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]EndQuorumEpochRequestTopic, l)...)
@@ -39243,6 +39894,9 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*12 > int64(len(b.Src)) || version >= 0 && int64(l)*14 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]EndQuorumEpochRequestTopicPartition, l)...)
@@ -39275,6 +39929,9 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -39297,6 +39954,9 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*20 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -39346,6 +40006,9 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -39677,6 +40340,9 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]EndQuorumEpochResponseTopic, l)...)
@@ -39713,6 +40379,9 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*14 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -39753,7 +40422,7 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -39769,6 +40438,9 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -40035,6 +40707,9 @@ func (v *DescribeQuorumRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeQuorumRequestTopic, l)...)
@@ -40071,6 +40746,9 @@ func (v *DescribeQuorumRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -40514,6 +41192,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeQuorumResponseTopic, l)...)
@@ -40550,6 +41231,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*25 > int64(len(b.Src)) || version >= 2 && int64(l)*26 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -40608,6 +41292,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*12 > int64(len(b.Src)) || version >= 2 && int64(l)*44 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]DescribeQuorumResponseTopicPartitionReplicaState, l)...)
@@ -40654,6 +41341,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*12 > int64(len(b.Src)) || version >= 2 && int64(l)*44 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -40716,6 +41406,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeQuorumResponseNode, l)...)
@@ -40739,6 +41432,9 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*5 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -41102,6 +41798,9 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterPartitionRequestTopic, l)...)
@@ -41143,6 +41842,9 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*12 > int64(len(b.Src)) || version >= 1 && int64(l)*15 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AlterPartitionRequestTopicPartition, l)...)
@@ -41171,6 +41873,9 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -41193,6 +41898,9 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*12 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -41487,6 +42195,9 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterPartitionResponseTopic, l)...)
@@ -41528,6 +42239,9 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*20 > int64(len(b.Src)) || version >= 1 && int64(l)*21 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AlterPartitionResponseTopicPartition, l)...)
@@ -41563,6 +42277,9 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -41793,6 +42510,9 @@ func (v *UpdateFeaturesRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*4 > int64(len(b.Src)) || version >= 0 && int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -42041,6 +42761,9 @@ func (v *UpdateFeaturesResponse) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -42656,6 +43379,9 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]FetchSnapshotRequestTopic, l)...)
@@ -42692,6 +43418,9 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*28 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -42730,7 +43459,7 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 						s.Position = v
 					}
 					if isFlexible {
-						for i := b.Uvarint(); i > 0; i-- {
+						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 							switch key := b.Uvarint(); key {
 							default:
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -42756,7 +43485,7 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -43199,6 +43928,9 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]FetchSnapshotResponseTopic, l)...)
@@ -43235,6 +43967,9 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*37 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -43286,7 +44021,7 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 						s.Bytes = v
 					}
 					if isFlexible {
-						for i := b.Uvarint(); i > 0; i-- {
+						for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 							switch key := b.Uvarint(); key {
 							default:
 								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -43324,7 +44059,7 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -43340,6 +44075,9 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -43782,6 +44520,9 @@ func (v *DescribeClusterResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*11 > int64(len(b.Src)) || version >= 2 && int64(l)*12 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeClusterResponseBroker, l)...)
@@ -44009,6 +44750,9 @@ func (v *DescribeProducersRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeProducersRequestTopic, l)...)
@@ -44045,6 +44789,9 @@ func (v *DescribeProducersRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -44362,6 +45109,9 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeProducersResponseTopic, l)...)
@@ -44398,6 +45148,9 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*9 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -44443,6 +45196,9 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*36 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -44817,6 +45573,9 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*7 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]BrokerRegistrationRequestListener, l)...)
@@ -44885,6 +45644,9 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -44958,6 +45720,9 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*16 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -45290,7 +46055,7 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		s.WantShutdown = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -45306,6 +46071,9 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*16 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -45335,6 +46103,9 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*16 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -46106,6 +46877,9 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*28 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeTransactionsResponseTransactionState, l)...)
@@ -46180,6 +46954,9 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]DescribeTransactionsResponseTransactionStateTopic, l)...)
@@ -46216,6 +46993,9 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -46435,6 +47215,9 @@ func (v *ListTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*8 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -46708,6 +47491,9 @@ func (v *ListTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*11 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -47401,6 +48187,9 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ConsumerGroupHeartbeatRequestTopic, l)...)
@@ -47424,6 +48213,9 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -47742,6 +48534,9 @@ func (v *ConsumerGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*18 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ConsumerGroupHeartbeatResponseAssignmentTopic, l)...)
@@ -47765,6 +48560,9 @@ func (v *ConsumerGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -48426,6 +49224,9 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*20 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ConsumerGroupDescribeResponseGroup, l)...)
@@ -48525,6 +49326,9 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*16 > int64(len(b.Src)) || version >= 1 && int64(l)*17 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -48692,6 +49496,9 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if int64(l)*19 > int64(len(b.Src)) {
+								return kbin.ErrNotEnoughData
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]AssignmentTopicPartition, l)...)
@@ -48732,6 +49539,9 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 									}
 									if !b.Ok() {
 										return b.Complete()
+									}
+									if int64(l)*4 > int64(len(b.Src)) {
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -48771,6 +49581,9 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if int64(l)*19 > int64(len(b.Src)) {
+								return kbin.ErrNotEnoughData
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]AssignmentTopicPartition, l)...)
@@ -48811,6 +49624,9 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 									}
 									if !b.Ok() {
 										return b.Complete()
+									}
+									if int64(l)*4 > int64(len(b.Src)) {
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -49111,6 +49927,9 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*7 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ControllerRegistrationRequestListener, l)...)
@@ -49179,6 +49998,9 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -50171,6 +50993,9 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AssignReplicasToDirsRequestDirectory, l)...)
@@ -50195,6 +51020,9 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*18 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AssignReplicasToDirsRequestDirectoryTopic, l)...)
@@ -50218,6 +51046,9 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -50493,6 +51324,9 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AssignReplicasToDirsResponseDirectory, l)...)
@@ -50517,6 +51351,9 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*18 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]AssignReplicasToDirsResponseDirectoryTopic, l)...)
@@ -50540,6 +51377,9 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*6 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -50867,6 +51707,9 @@ func (v *ListConfigResourcesResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*2 > int64(len(b.Src)) || version >= 1 && int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ListConfigResourcesResponseConfigResource, l)...)
@@ -51106,6 +51949,9 @@ func (v *DescribeTopicPartitionsRequest) readFrom(src []byte, unsafe bool) error
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*2 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -51549,6 +52395,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*26 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeTopicPartitionsResponseTopic, l)...)
@@ -51598,6 +52447,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*20 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]DescribeTopicPartitionsResponseTopicPartition, l)...)
@@ -51634,6 +52486,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -51656,6 +52511,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -51683,6 +52541,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -51709,6 +52570,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -51731,6 +52595,9 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -52336,6 +53203,9 @@ func (v *ShareGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*18 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ShareGroupHeartbeatResponseAssignmentTopicPartition, l)...)
@@ -52359,6 +53229,9 @@ func (v *ShareGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -52969,6 +53842,9 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*20 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareGroupDescribeResponseGroup, l)...)
@@ -53068,6 +53944,9 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*12 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -53201,6 +54080,9 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if int64(l)*19 > int64(len(b.Src)) {
+								return kbin.ErrNotEnoughData
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]ShareGroupDescribeResponseGroupMemberAssignmentTopicPartition, l)...)
@@ -53241,6 +54123,9 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									}
 									if !b.Ok() {
 										return b.Complete()
+									}
+									if int64(l)*4 > int64(len(b.Src)) {
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -53756,6 +54641,9 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareFetchRequestTopic, l)...)
@@ -53779,6 +54667,9 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -53807,6 +54698,9 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*18 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -53880,6 +54774,9 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareFetchRequestForgottenTopicsData, l)...)
@@ -53903,6 +54800,9 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -54399,6 +55299,9 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareFetchResponseTopic, l)...)
@@ -54422,6 +55325,9 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*22 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -54514,6 +55420,9 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*18 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]ShareFetchResponseTopicPartitionAcquiredRecord, l)...)
@@ -54566,6 +55475,9 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*11 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -54958,6 +55870,9 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareAcknowledgeRequestTopic, l)...)
@@ -54982,6 +55897,9 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*6 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]ShareAcknowledgeRequestTopicPartition, l)...)
@@ -55005,6 +55923,9 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*18 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -55454,6 +56375,9 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ShareAcknowledgeResponseTopic, l)...)
@@ -55477,6 +56401,9 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*16 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -55552,6 +56479,9 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*11 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -55847,6 +56777,9 @@ func (v *AddRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -56541,6 +57474,9 @@ func (v *UpdateRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*5 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]UpdateRaftVoterRequestListener, l)...)
@@ -56798,7 +57734,7 @@ func (v *UpdateRaftVoterResponse) readFrom(src []byte, unsafe bool) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
+		for i := b.Uvarint(); i > 0 && b.Ok(); i-- {
 			switch key := b.Uvarint(); key {
 			default:
 				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
@@ -57071,6 +58007,9 @@ func (v *InitializeShareGroupStateRequest) readFrom(src []byte, unsafe bool) err
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]InitializeShareGroupStateRequestTopic, l)...)
@@ -57094,6 +58033,9 @@ func (v *InitializeShareGroupStateRequest) readFrom(src []byte, unsafe bool) err
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*16 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -57322,6 +58264,9 @@ func (v *InitializeShareGroupStateResponse) readFrom(src []byte, unsafe bool) er
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]InitializeShareGroupStateResponseTopic, l)...)
@@ -57345,6 +58290,9 @@ func (v *InitializeShareGroupStateResponse) readFrom(src []byte, unsafe bool) er
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -57608,6 +58556,9 @@ func (v *ReadShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ReadShareGroupStateRequestTopic, l)...)
@@ -57631,6 +58582,9 @@ func (v *ReadShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -57937,6 +58891,9 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ReadShareGroupStateResponseTopic, l)...)
@@ -57960,6 +58917,9 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*21 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -58013,6 +58973,9 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*19 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -58366,6 +59329,9 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]WriteShareGroupStateRequestTopic, l)...)
@@ -58389,6 +59355,9 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*22 > int64(len(b.Src)) || version >= 1 && int64(l)*26 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -58429,6 +59398,9 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*19 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -58671,6 +59643,9 @@ func (v *WriteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]WriteShareGroupStateResponseTopic, l)...)
@@ -58694,6 +59669,9 @@ func (v *WriteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -58950,6 +59928,9 @@ func (v *DeleteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DeleteShareGroupStateRequestTopic, l)...)
@@ -58973,6 +59954,9 @@ func (v *DeleteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -59195,6 +60179,9 @@ func (v *DeleteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DeleteShareGroupStateResponseTopic, l)...)
@@ -59218,6 +60205,9 @@ func (v *DeleteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error 
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -59483,6 +60473,9 @@ func (v *ReadShareGroupStateSummaryRequest) readFrom(src []byte, unsafe bool) er
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ReadShareGroupStateSummaryRequestTopic, l)...)
@@ -59506,6 +60499,9 @@ func (v *ReadShareGroupStateSummaryRequest) readFrom(src []byte, unsafe bool) er
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -59764,6 +60760,9 @@ func (v *ReadShareGroupStateSummaryResponse) readFrom(src []byte, unsafe bool) e
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*18 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]ReadShareGroupStateSummaryResponseTopic, l)...)
@@ -59787,6 +60786,9 @@ func (v *ReadShareGroupStateSummaryResponse) readFrom(src []byte, unsafe bool) e
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*24 > int64(len(b.Src)) || version >= 1 && int64(l)*28 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -60903,6 +61905,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]StreamsGroupHeartbeatRequestTopologySubtopology, l)...)
@@ -61012,6 +62017,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*9 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]TopicInfo, l)...)
@@ -61056,6 +62064,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								}
 								if !b.Ok() {
 									return b.Complete()
+								}
+								if int64(l)*3 > int64(len(b.Src)) {
+									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
 								if l > 0 {
@@ -61161,6 +62172,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*9 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]TopicInfo, l)...)
@@ -61205,6 +62219,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								}
 								if !b.Ok() {
 									return b.Complete()
+								}
+								if int64(l)*3 > int64(len(b.Src)) {
+									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
 								if l > 0 {
@@ -61274,6 +62291,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]StreamsGroupHeartbeatRequestTopologySubtopologyCopartitionGroup, l)...)
@@ -61293,6 +62313,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								}
 								if !b.Ok() {
 									return b.Complete()
+								}
+								if int64(l)*2 > int64(len(b.Src)) {
+									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
 								if l > 0 {
@@ -61317,6 +62340,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								if !b.Ok() {
 									return b.Complete()
 								}
+								if int64(l)*2 > int64(len(b.Src)) {
+									return kbin.ErrNotEnoughData
+								}
 								a = a[:0]
 								if l > 0 {
 									a = append(a, make([]int16, l)...)
@@ -61339,6 +62365,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								}
 								if !b.Ok() {
 									return b.Complete()
+								}
+								if int64(l)*2 > int64(len(b.Src)) {
+									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
 								if l > 0 {
@@ -61385,6 +62414,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TaskIDs, l)...)
@@ -61421,6 +62453,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -61455,6 +62490,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TaskIDs, l)...)
@@ -61491,6 +62529,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -61525,6 +62566,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TaskIDs, l)...)
@@ -61561,6 +62605,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -61644,6 +62691,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]StreamsGroupHeartbeatRequestClientTag, l)...)
@@ -61708,6 +62758,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*14 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TaskOffset, l)...)
@@ -61762,6 +62815,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*14 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -62428,6 +63484,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]StreamsGroupHeartbeatResponseStatus, l)...)
@@ -62479,6 +63538,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TaskIDs, l)...)
@@ -62515,6 +63577,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -62549,6 +63614,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TaskIDs, l)...)
@@ -62585,6 +63653,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -62619,6 +63690,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]TaskIDs, l)...)
@@ -62655,6 +63729,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*4 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -62696,6 +63773,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*7 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -62746,6 +63826,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]StreamsGroupHeartbeatResponsePartitionsByUserEndpointActivePartition, l)...)
@@ -62783,6 +63866,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]int32, l)...)
@@ -62812,6 +63898,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -62849,6 +63938,9 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -64474,6 +65566,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*20 > int64(len(b.Src)) || version >= 1 && int64(l)*23 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]StreamsGroupDescribeResponseGroup, l)...)
@@ -64569,6 +65664,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*6 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -64679,6 +65777,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								if !b.Ok() {
 									return b.Complete()
 								}
+								if int64(l)*9 > int64(len(b.Src)) {
+									return kbin.ErrNotEnoughData
+								}
 								a = a[:0]
 								if l > 0 {
 									a = append(a, make([]TopicInfo, l)...)
@@ -64723,6 +65824,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										}
 										if !b.Ok() {
 											return b.Complete()
+										}
+										if int64(l)*3 > int64(len(b.Src)) {
+											return kbin.ErrNotEnoughData
 										}
 										a = a[:0]
 										if l > 0 {
@@ -64792,6 +65896,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								if !b.Ok() {
 									return b.Complete()
 								}
+								if int64(l)*9 > int64(len(b.Src)) {
+									return kbin.ErrNotEnoughData
+								}
 								a = a[:0]
 								if l > 0 {
 									a = append(a, make([]TopicInfo, l)...)
@@ -64836,6 +65943,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										}
 										if !b.Ok() {
 											return b.Complete()
+										}
+										if int64(l)*3 > int64(len(b.Src)) {
+											return kbin.ErrNotEnoughData
 										}
 										a = a[:0]
 										if l > 0 {
@@ -64916,6 +66026,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*28 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -65079,6 +66192,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*3 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]StreamsGroupDescribeResponseGroupMemberClientTag, l)...)
@@ -65140,6 +66256,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*14 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]TaskOffset, l)...)
@@ -65191,6 +66310,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*14 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -65248,6 +66370,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if int64(l)*3 > int64(len(b.Src)) {
+								return kbin.ErrNotEnoughData
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]TaskIDs, l)...)
@@ -65284,6 +66409,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									}
 									if !b.Ok() {
 										return b.Complete()
+									}
+									if int64(l)*4 > int64(len(b.Src)) {
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -65315,6 +66443,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if int64(l)*3 > int64(len(b.Src)) {
+								return kbin.ErrNotEnoughData
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]TaskIDs, l)...)
@@ -65351,6 +66482,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									}
 									if !b.Ok() {
 										return b.Complete()
+									}
+									if int64(l)*4 > int64(len(b.Src)) {
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -65382,6 +66516,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if int64(l)*3 > int64(len(b.Src)) {
+								return kbin.ErrNotEnoughData
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]TaskIDs, l)...)
@@ -65418,6 +66555,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									}
 									if !b.Ok() {
 										return b.Complete()
+									}
+									if int64(l)*4 > int64(len(b.Src)) {
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -65457,6 +66597,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if int64(l)*3 > int64(len(b.Src)) {
+								return kbin.ErrNotEnoughData
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]TaskIDs, l)...)
@@ -65493,6 +66636,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									}
 									if !b.Ok() {
 										return b.Complete()
+									}
+									if int64(l)*4 > int64(len(b.Src)) {
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -65524,6 +66670,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if int64(l)*3 > int64(len(b.Src)) {
+								return kbin.ErrNotEnoughData
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]TaskIDs, l)...)
@@ -65560,6 +66709,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									}
 									if !b.Ok() {
 										return b.Complete()
+									}
+									if int64(l)*4 > int64(len(b.Src)) {
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -65591,6 +66743,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							if !b.Ok() {
 								return b.Complete()
 							}
+							if int64(l)*3 > int64(len(b.Src)) {
+								return kbin.ErrNotEnoughData
+							}
 							a = a[:0]
 							if l > 0 {
 								a = append(a, make([]TaskIDs, l)...)
@@ -65627,6 +66782,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									}
 									if !b.Ok() {
 										return b.Complete()
+									}
+									if int64(l)*4 > int64(len(b.Src)) {
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -65683,6 +66841,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						if !b.Ok() {
 							return b.Complete()
 						}
+						if int64(l)*3 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
+						}
 						a = a[:0]
 						if l > 0 {
 							a = append(a, make([]TopologyDescriptionSubtopology, l)...)
@@ -65719,6 +66880,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								}
 								if !b.Ok() {
 									return b.Complete()
+								}
+								if int64(l)*7 > int64(len(b.Src)) {
+									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
 								if l > 0 {
@@ -65899,6 +67063,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*15 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -66461,6 +67628,9 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeShareGroupOffsetsRequestGroup, l)...)
@@ -66501,6 +67671,9 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 				if !b.Ok() {
 					return b.Complete()
 				}
+				if int64(l)*3 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
+				}
 				a = a[:0]
 				if l > 0 {
 					a = append(a, make([]DescribeShareGroupOffsetsRequestGroupTopic, l)...)
@@ -66537,6 +67710,9 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*4 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -66880,6 +68056,9 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*6 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]DescribeShareGroupOffsetsResponseGroup, l)...)
@@ -66916,6 +68095,9 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*19 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -66957,6 +68139,9 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 						}
 						if !b.Ok() {
 							return b.Complete()
+						}
+						if int64(l)*20 > int64(len(b.Src)) || version >= 1 && int64(l)*28 > int64(len(b.Src)) {
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -67264,6 +68449,9 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*3 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterShareGroupOffsetsRequestTopic, l)...)
@@ -67300,6 +68488,9 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*12 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -67598,6 +68789,9 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 		if !b.Ok() {
 			return b.Complete()
 		}
+		if int64(l)*19 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]AlterShareGroupOffsetsResponseTopic, l)...)
@@ -67638,6 +68832,9 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 				}
 				if !b.Ok() {
 					return b.Complete()
+				}
+				if int64(l)*8 > int64(len(b.Src)) {
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -67854,6 +69051,9 @@ func (v *DeleteShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*2 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -68112,6 +69312,9 @@ func (v *DeleteShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) erro
 		}
 		if !b.Ok() {
 			return b.Complete()
+		}
+		if int64(l)*21 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -68644,6 +69847,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 			if !b.Ok() {
 				return b.Complete()
 			}
+			if int64(l)*3 > int64(len(b.Src)) {
+				return kbin.ErrNotEnoughData
+			}
 			a = a[:0]
 			if l > 0 {
 				a = append(a, make([]TopologyDescriptionSubtopology, l)...)
@@ -68680,6 +69886,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 					}
 					if !b.Ok() {
 						return b.Complete()
+					}
+					if int64(l)*7 > int64(len(b.Src)) {
+						return kbin.ErrNotEnoughData
 					}
 					a = a[:0]
 					if l > 0 {
@@ -68860,6 +70069,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 			}
 			if !b.Ok() {
 				return b.Complete()
+			}
+			if int64(l)*15 > int64(len(b.Src)) {
+				return kbin.ErrNotEnoughData
 			}
 			a = a[:0]
 			if l > 0 {

@@ -357,28 +357,41 @@ type TagReader interface {
 }
 
 // SkipTags skips tags in a TagReader.
+//
+// If b has an Ok method, as kbin.Reader does, we stop once it returns false.
+// Otherwise, a tag count larger than the input loops until the count is
+// exhausted.
 func SkipTags(b TagReader) {
-	for num := b.Uvarint(); num > 0; num-- {
+	for num := b.Uvarint(); num > 0 && tagReaderOk(b); num-- {
 		_, size := b.Uvarint(), b.Uvarint()
 		b.Span(int(size))
 	}
 }
 
 // ReadTags reads tags in a TagReader and returns the tags.
+//
+// If b has an Ok method, as kbin.Reader does, we stop once it returns false.
+// Otherwise, a tag count larger than the input loops until the count is
+// exhausted.
 func ReadTags(b TagReader) Tags {
 	var t Tags
-	for num := b.Uvarint(); num > 0; num-- {
+	for num := b.Uvarint(); num > 0 && tagReaderOk(b); num-- {
 		key, size := b.Uvarint(), b.Uvarint()
 		t.Set(key, b.Span(int(size)))
 	}
 	return t
 }
 
+func tagReaderOk(b TagReader) bool {
+	r, ok := b.(interface{ Ok() bool })
+	return !ok || r.Ok()
+}
+
 // internalReadTags reads tags in a reader and returns the tags from a
 // duplicated inner kbin.Reader.
 func internalReadTags(b *kbin.Reader) Tags {
 	var t Tags
-	for num := b.Uvarint(); num > 0; num-- {
+	for num := b.Uvarint(); num > 0 && b.Ok(); num-- {
 		key, size := b.Uvarint(), b.Uvarint()
 		t.Set(key, b.Span(int(size)))
 	}
