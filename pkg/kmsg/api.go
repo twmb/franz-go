@@ -390,6 +390,14 @@ func tagReaderOk(b TagReader) bool {
 // internalReadTags reads tags in a reader and returns the tags from a
 // duplicated inner kbin.Reader.
 func internalReadTags(b *kbin.Reader) Tags {
+	if len(b.Src) > 0 && b.Src[0] == 0 {
+		b.Src = b.Src[1:]
+		return Tags{}
+	}
+	return internalReadTagsSlow(b)
+}
+
+func internalReadTagsSlow(b *kbin.Reader) Tags {
 	var t Tags
 	for num := b.Uvarint(); num > 0 && b.Ok(); num-- {
 		key, size := b.Uvarint(), b.Uvarint()
@@ -437,6 +445,13 @@ func (t *Tags) Set(key uint32, val []byte) {
 
 // AppendEach appends each keyval in tags to dst and returns the updated dst.
 func (t *Tags) AppendEach(dst []byte) []byte {
+	if len(t.keyvals) == 0 {
+		return dst
+	}
+	return t.appendEach(dst)
+}
+
+func (t *Tags) appendEach(dst []byte) []byte {
 	t.Each(func(key uint32, val []byte) {
 		dst = kbin.AppendUvarint(dst, key)
 		dst = kbin.AppendUvarint(dst, uint32(len(val)))
