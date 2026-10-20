@@ -451,6 +451,16 @@ func (t *Tags) AppendEach(dst []byte) []byte {
 	return t.appendEach(dst)
 }
 
+// appendWithCount appends the number of tags and then each tag, for a struct
+// that has no tags of its own.
+func (t *Tags) appendWithCount(dst []byte) []byte {
+	if len(t.keyvals) == 0 {
+		return append(dst, 0)
+	}
+	dst = kbin.AppendUvarint(dst, uint32(len(t.keyvals)))
+	return t.appendEach(dst)
+}
+
 func (t *Tags) appendEach(dst []byte) []byte {
 	t.Each(func(key uint32, val []byte) {
 		dst = kbin.AppendUvarint(dst, key)

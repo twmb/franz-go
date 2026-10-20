@@ -117,11 +117,7 @@ func (FieldLengthMinusBytes) WriteAppend(l *LineWriter) {
 func (a Array) WriteAppend(l *LineWriter) {
 	writeNullable := func() {
 		if a.FromFlexible {
-			l.Write("if isFlexible {")
-			l.Write("dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)")
-			l.Write("} else {")
-			l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
-			l.Write("}")
+			l.Write("dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)") // see codec.go
 		} else {
 			l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
 		}
@@ -129,11 +125,7 @@ func (a Array) WriteAppend(l *LineWriter) {
 
 	writeNormal := func() {
 		if a.FromFlexible {
-			l.Write("if isFlexible {")
-			l.Write("dst = kbin.AppendCompactArrayLen(dst, len(v))")
-			l.Write("} else {")
-			l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
-			l.Write("}")
+			l.Write("dst = appendArrayLen(dst, len(v), isFlexible)") // see codec.go
 		} else {
 			l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
 		}
@@ -198,9 +190,9 @@ func (s Struct) WriteAppend(l *LineWriter) {
 	l.Write("if isFlexible {")
 	defer l.Write("}")
 
-	defer l.Write("dst = v.UnknownTags.AppendEach(dst)")
-
 	if len(tags) > 0 {
+		defer l.Write("dst = v.UnknownTags.AppendEach(dst)")
+
 		l.Write("var toEncode []uint32")
 		for i := range len(tags) {
 			f := tags[i]
@@ -239,12 +231,7 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		defer l.Write("}")
 	} else {
 		// No defined tags, we add unknown only.
-		//
-		// We keep a 0+ at the beginning for now to not cause a large
-		// delta on the generated code (previous versions of the
-		// generator did something slightly different here). This can
-		// be removed someday.
-		l.Write("dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))")
+		l.Write("dst = v.UnknownTags.appendWithCount(dst)")
 	}
 
 	for i := range len(tags) {

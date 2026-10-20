@@ -1093,11 +1093,7 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Members
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -1133,14 +1129,12 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 				dst = appendBytes(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -1440,11 +1434,7 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -1453,19 +1443,14 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -2496,8 +2481,7 @@ func (v *DefaultPrincipalData) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -2718,11 +2702,7 @@ func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Voters
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -2734,18 +2714,13 @@ func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
 				dst = appendUuid(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.GrantingVoters
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -2757,14 +2732,12 @@ func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
 				dst = appendUuid(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -3022,11 +2995,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 12 {
@@ -3039,11 +3008,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -3055,20 +3020,17 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 						dst = appendNullableBytes(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -3500,11 +3462,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 12 {
@@ -3517,11 +3475,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -3546,11 +3500,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 					}
 					if version >= 8 {
 						v := v.ErrorRecords
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -3562,8 +3512,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 								dst = appendNullableString(dst, v, isFlexible)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
@@ -3595,8 +3544,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 										dst = appendInt32(dst, v)
 									}
 									if isFlexible {
-										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-										dst = v.UnknownTags.AppendEach(dst)
+										dst = v.UnknownTags.appendWithCount(dst)
 									}
 									if !sized {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -3611,8 +3559,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -3635,11 +3582,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 					sized := false
 					lenAt := len(dst)
 				fBrokers:
-					if isFlexible {
-						dst = kbin.AppendCompactArrayLen(dst, len(v))
-					} else {
-						dst = kbin.AppendArrayLen(dst, len(v))
-					}
+					dst = appendArrayLen(dst, len(v), isFlexible)
 					for i := range v {
 						v := &v[i]
 						{
@@ -3659,8 +3602,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 							dst = appendNullableString(dst, v, isFlexible)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					if !sized {
@@ -4235,11 +4177,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 12 {
@@ -4252,11 +4190,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -4315,18 +4249,13 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if version >= 7 {
 		v := v.ForgottenTopics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 7 && version <= 12 {
@@ -4339,19 +4268,14 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -4400,8 +4324,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt64(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 					if !sized {
 						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -5090,11 +5013,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 12 {
@@ -5107,11 +5026,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -5136,11 +5051,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 					}
 					if version >= 4 {
 						v := v.AbortedTransactions
-						if isFlexible {
-							dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-						} else {
-							dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-						}
+						dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -5152,8 +5063,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
@@ -5195,8 +5105,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 										dst = appendInt64(dst, v)
 									}
 									if isFlexible {
-										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-										dst = v.UnknownTags.AppendEach(dst)
+										dst = v.UnknownTags.appendWithCount(dst)
 									}
 									if !sized {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -5220,8 +5129,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 										dst = appendInt32(dst, v)
 									}
 									if isFlexible {
-										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-										dst = v.UnknownTags.AppendEach(dst)
+										dst = v.UnknownTags.appendWithCount(dst)
 									}
 									if !sized {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -5245,8 +5153,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 										dst = appendInt32(dst, v)
 									}
 									if isFlexible {
-										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-										dst = v.UnknownTags.AppendEach(dst)
+										dst = v.UnknownTags.appendWithCount(dst)
 									}
 									if !sized {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -5261,8 +5168,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -5281,11 +5187,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 					sized := false
 					lenAt := len(dst)
 				fBrokers:
-					if isFlexible {
-						dst = kbin.AppendCompactArrayLen(dst, len(v))
-					} else {
-						dst = kbin.AppendArrayLen(dst, len(v))
-					}
+					dst = appendArrayLen(dst, len(v), isFlexible)
 					for i := range v {
 						v := &v[i]
 						{
@@ -5305,8 +5207,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 							dst = appendNullableString(dst, v, isFlexible)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					if !sized {
@@ -5816,11 +5717,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -5829,11 +5726,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -5853,14 +5746,12 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -5869,8 +5760,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -6164,11 +6054,7 @@ func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -6177,11 +6063,7 @@ func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -6194,11 +6076,7 @@ func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 					}
 					if version >= 0 && version <= 0 {
 						v := v.OldStyleOffsets
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt64(dst, v)
@@ -6217,20 +6095,17 @@ func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -6476,17 +6351,9 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 	{
 		v := v.Topics
 		if version >= 1 {
-			if isFlexible {
-				dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-			} else {
-				dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-			}
+			dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		} else {
-			if isFlexible {
-				dst = kbin.AppendCompactArrayLen(dst, len(v))
-			} else {
-				dst = kbin.AppendArrayLen(dst, len(v))
-			}
+			dst = appendArrayLen(dst, len(v), isFlexible)
 		}
 		for i := range v {
 			v := &v[i]
@@ -6510,8 +6377,7 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -6528,8 +6394,7 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -6842,11 +6707,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Brokers
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -6866,8 +6727,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -6881,11 +6741,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -6917,11 +6773,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -6942,11 +6794,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Replicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -6954,11 +6802,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.ISR
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -6966,19 +6810,14 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 					}
 					if version >= 5 {
 						v := v.OfflineReplicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -6987,8 +6826,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -7001,8 +6839,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -7504,11 +7341,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 0 && version <= 1 {
 		v := v.PartitionStates
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 1 {
@@ -7533,11 +7366,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ISR
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
@@ -7549,11 +7378,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Replicas
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
@@ -7561,11 +7386,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 3 {
 				v := v.AddingReplicas
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
@@ -7573,11 +7394,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 3 {
 				v := v.RemovingReplicas
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
@@ -7592,18 +7409,13 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt8(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if version >= 2 {
 		v := v.TopicStates
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -7616,11 +7428,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.PartitionStates
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					if version >= 0 && version <= 1 {
@@ -7645,11 +7453,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.ISR
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -7661,11 +7465,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Replicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -7673,11 +7473,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					}
 					if version >= 3 {
 						v := v.AddingReplicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -7685,11 +7481,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					}
 					if version >= 3 {
 						v := v.RemovingReplicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -7704,24 +7496,18 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt8(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.LiveLeaders
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -7737,14 +7523,12 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -8279,11 +8063,7 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 	}
 	if version >= 0 && version <= 4 {
 		v := v.Partitions
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 4 {
@@ -8299,18 +8079,13 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if version >= 5 {
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -8319,11 +8094,7 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					if version >= 0 && version <= 4 {
@@ -8339,20 +8110,17 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -8654,11 +8422,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -8671,11 +8435,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 1 && version <= 2 {
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
@@ -8683,11 +8443,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 3 {
 				v := v.PartitionStates
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -8703,20 +8459,17 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 						dst = appendBool(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -8946,11 +8699,7 @@ func (v *StopReplicaResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Partitions
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -8966,14 +8715,12 @@ func (v *StopReplicaResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -9261,11 +9008,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 0 && version <= 4 {
 		v := v.PartitionStates
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 4 {
@@ -9290,11 +9033,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ISR
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
@@ -9306,11 +9045,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Replicas
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
@@ -9318,29 +9053,20 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 4 {
 				v := v.OfflineReplicas
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if version >= 5 {
 		v := v.TopicStates
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -9353,11 +9079,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.PartitionStates
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					if version >= 0 && version <= 4 {
@@ -9382,11 +9104,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.ISR
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -9398,11 +9116,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Replicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -9410,35 +9124,25 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 					}
 					if version >= 4 {
 						v := v.OfflineReplicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.LiveBrokers
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -9455,11 +9159,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 1 {
 				v := v.Endpoints
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -9479,8 +9179,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -9489,14 +9188,12 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -9984,8 +9681,7 @@ func (v *UpdateMetadataResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -10093,8 +9789,7 @@ func (v *ControlledShutdownRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -10205,11 +9900,7 @@ func (v *ControlledShutdownResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.PartitionsRemaining
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -10221,14 +9912,12 @@ func (v *ControlledShutdownResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -10487,11 +10176,7 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 9 {
@@ -10504,11 +10189,7 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -10532,20 +10213,17 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -10829,11 +10507,7 @@ func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 9 {
@@ -10846,11 +10520,7 @@ func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -10862,20 +10532,17 @@ func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -11149,17 +10816,9 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	if version >= 0 && version <= 7 {
 		v := v.Topics
 		if version >= 2 {
-			if isFlexible {
-				dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-			} else {
-				dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-			}
+			dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		} else {
-			if isFlexible {
-				dst = kbin.AppendCompactArrayLen(dst, len(v))
-			} else {
-				dst = kbin.AppendArrayLen(dst, len(v))
-			}
+			dst = appendArrayLen(dst, len(v), isFlexible)
 		}
 		for i := range v {
 			v := &v[i]
@@ -11169,29 +10828,20 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if version >= 8 {
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -11208,11 +10858,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-				} else {
-					dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-				}
+				dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 				for i := range v {
 					v := &v[i]
 					if version >= 8 && version <= 9 {
@@ -11225,25 +10871,19 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -11252,8 +10892,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -11698,11 +11337,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 	}
 	if version >= 0 && version <= 7 {
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -11711,11 +11346,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -11739,14 +11370,12 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -11756,11 +11385,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 	}
 	if version >= 8 {
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -11769,11 +11394,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					if version >= 8 && version <= 9 {
@@ -11786,11 +11407,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -11814,14 +11431,12 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt16(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -11830,14 +11445,12 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -12166,19 +11779,14 @@ func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 4 {
 		v := v.CoordinatorKeys
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -12380,11 +11988,7 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 	}
 	if version >= 4 {
 		v := v.Coordinators
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -12412,14 +12016,12 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -12705,11 +12307,7 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Protocols
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -12721,8 +12319,7 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 				dst = appendBytes(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -12731,8 +12328,7 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 		dst = appendNullableString(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -13020,11 +12616,7 @@ func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Members
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -13040,14 +12632,12 @@ func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 				dst = appendBytes(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -13241,8 +12831,7 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 		dst = appendNullableString(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -13366,8 +12955,7 @@ func (v *HeartbeatResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -13506,11 +13094,7 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 3 {
 		v := v.Members
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -13526,14 +13110,12 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -13720,11 +13302,7 @@ func (v *LeaveGroupResponse) AppendTo(dst []byte) []byte {
 	}
 	if version >= 3 {
 		v := v.Members
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -13740,14 +13318,12 @@ func (v *LeaveGroupResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -13957,11 +13533,7 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.GroupAssignment
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -13973,14 +13545,12 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 				dst = appendBytes(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -14176,8 +13746,7 @@ func (v *SyncGroupResponse) AppendTo(dst []byte) []byte {
 		dst = appendBytes(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -14290,11 +13859,7 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
@@ -14305,8 +13870,7 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -14525,11 +14089,7 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -14558,11 +14118,7 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Members
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -14590,8 +14146,7 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 						dst = appendBytes(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -14600,14 +14155,12 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -14820,11 +14373,7 @@ func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	if version >= 4 {
 		v := v.StatesFilter
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
@@ -14832,19 +14381,14 @@ func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 5 {
 		v := v.TypesFilter
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -15018,11 +14562,7 @@ func (v *ListGroupsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -15042,14 +14582,12 @@ func (v *ListGroupsResponse) AppendTo(dst []byte) []byte {
 				dst = appendString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -15431,8 +14969,7 @@ func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -15646,11 +15183,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.ApiKeys
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -15666,8 +15199,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -15699,11 +15231,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					sized := false
 					lenAt := len(dst)
 				fSupportedFeatures:
-					if isFlexible {
-						dst = kbin.AppendCompactArrayLen(dst, len(v))
-					} else {
-						dst = kbin.AppendArrayLen(dst, len(v))
-					}
+					dst = appendArrayLen(dst, len(v), isFlexible)
 					for i := range v {
 						v := &v[i]
 						{
@@ -15719,8 +15247,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 							dst = appendInt16(dst, v)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					if !sized {
@@ -15743,11 +15270,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					sized := false
 					lenAt := len(dst)
 				fFinalizedFeatures:
-					if isFlexible {
-						dst = kbin.AppendCompactArrayLen(dst, len(v))
-					} else {
-						dst = kbin.AppendArrayLen(dst, len(v))
-					}
+					dst = appendArrayLen(dst, len(v), isFlexible)
 					for i := range v {
 						v := &v[i]
 						{
@@ -15763,8 +15286,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 							dst = appendInt16(dst, v)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					if !sized {
@@ -16138,11 +15660,7 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -16159,11 +15677,7 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ReplicaAssignment
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -16172,29 +15686,20 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Replicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			{
 				v := v.Configs
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -16206,14 +15711,12 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -16226,8 +15729,7 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -16585,11 +16087,7 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -16618,11 +16116,7 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 			}
 			if version >= 5 {
 				v := v.Configs
-				if isFlexible {
-					dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-				} else {
-					dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-				}
+				dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -16646,8 +16140,7 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 						dst = appendBool(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -16673,8 +16166,7 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -16921,11 +16413,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	if version >= 0 && version <= 5 {
 		v := v.TopicNames
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
@@ -16933,11 +16421,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 6 {
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -16949,8 +16433,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 				dst = appendUuid(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -16959,8 +16442,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -17167,11 +16649,7 @@ func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -17202,14 +16680,12 @@ func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -17425,11 +16901,7 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -17438,11 +16910,7 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -17454,14 +16922,12 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt64(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -17470,8 +16936,7 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -17709,11 +17174,7 @@ func (v *DeleteRecordsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -17722,11 +17183,7 @@ func (v *DeleteRecordsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -17742,20 +17199,17 @@ func (v *DeleteRecordsResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -17961,8 +17415,7 @@ func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -18108,8 +17561,7 @@ func (v *InitProducerIDResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -18286,11 +17738,7 @@ func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -18299,11 +17747,7 @@ func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -18319,20 +17763,17 @@ func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -18599,11 +18040,7 @@ func (v *OffsetForLeaderEpochResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -18612,11 +18049,7 @@ func (v *OffsetForLeaderEpochResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -18636,20 +18069,17 @@ func (v *OffsetForLeaderEpochResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt64(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -18936,11 +18366,7 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 0 && version <= 3 {
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -18949,29 +18375,20 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if version >= 4 {
 		v := v.Transactions
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -18992,11 +18409,7 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -19005,31 +18418,24 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -19462,11 +18868,7 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 	}
 	if version >= 4 {
 		v := v.Transactions
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -19475,11 +18877,7 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -19488,11 +18886,7 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -19504,30 +18898,23 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt16(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if version >= 0 && version <= 3 {
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -19536,11 +18923,7 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -19552,20 +18935,17 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -19870,8 +19250,7 @@ func (v *AddOffsetsToTxnRequest) AppendTo(dst []byte) []byte {
 		dst = appendString(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -19989,8 +19368,7 @@ func (v *AddOffsetsToTxnResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -20111,8 +19489,7 @@ func (v *EndTxnRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -20257,8 +19634,7 @@ func (v *EndTxnResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -20429,11 +19805,7 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Markers
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -20450,11 +19822,7 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -20463,19 +19831,14 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -20488,14 +19851,12 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt8(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -20769,11 +20130,7 @@ func (v *WriteTxnMarkersResponse) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Markers
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -20782,11 +20139,7 @@ func (v *WriteTxnMarkersResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -20795,11 +20148,7 @@ func (v *WriteTxnMarkersResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -20811,26 +20160,22 @@ func (v *WriteTxnMarkersResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt16(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -21147,11 +20492,7 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 5 {
@@ -21164,11 +20505,7 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -21188,20 +20525,17 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -21497,11 +20831,7 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 5 {
@@ -21514,11 +20844,7 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -21530,20 +20856,17 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -21778,8 +21101,7 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -22001,11 +21323,7 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Resources
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -22028,11 +21346,7 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ACLs
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -22058,20 +21372,17 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -22332,11 +21643,7 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Creations
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -22380,14 +21687,12 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -22576,11 +21881,7 @@ func (v *CreateACLsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Results
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -22592,14 +21893,12 @@ func (v *CreateACLsResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -22764,11 +22063,7 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Filters
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -22812,14 +22107,12 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -23055,11 +22348,7 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Results
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -23072,11 +22361,7 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.MatchingACLs
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -23128,20 +22413,17 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -23401,11 +22683,7 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Resources
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -23421,19 +22699,14 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ConfigNames
-				if isFlexible {
-					dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-				} else {
-					dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-				}
+				dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendString(dst, v, isFlexible)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -23446,8 +22719,7 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -23746,11 +23018,7 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Resources
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -23774,11 +23042,7 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Configs
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -23810,11 +23074,7 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 					}
 					if version >= 1 {
 						v := v.ConfigSynonyms
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -23833,8 +23093,7 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 								}
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
@@ -23850,20 +23109,17 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -24206,11 +23462,7 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Resources
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -24226,11 +23478,7 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Configs
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -24242,14 +23490,12 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -24258,8 +23504,7 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -24476,11 +23721,7 @@ func (v *AlterConfigsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Resources
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -24503,14 +23744,12 @@ func (v *AlterConfigsResponse) AppendTo(dst []byte) []byte {
 				dst = appendString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -24705,11 +23944,7 @@ func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Dirs
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -24718,11 +23953,7 @@ func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -24731,31 +23962,24 @@ func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -25003,11 +24227,7 @@ func (v *AlterReplicaLogDirsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -25016,11 +24236,7 @@ func (v *AlterReplicaLogDirsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -25032,20 +24248,17 @@ func (v *AlterReplicaLogDirsResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -25233,11 +24446,7 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -25246,25 +24455,19 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -25540,11 +24743,7 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Dirs
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -25557,11 +24756,7 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -25570,11 +24765,7 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -25594,14 +24785,12 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 								dst = appendBool(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -25618,14 +24807,12 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 				dst = appendBool(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -25856,8 +25043,7 @@ func (v *SASLAuthenticateRequest) AppendTo(dst []byte) []byte {
 		dst = appendBytes(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -25962,8 +25148,7 @@ func (v *SASLAuthenticateResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -26141,11 +25326,7 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -26158,34 +25339,24 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Assignment
-				if isFlexible {
-					dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-				} else {
-					dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-				}
+				dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
 						v := v.Replicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -26198,8 +25369,7 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -26445,11 +25615,7 @@ func (v *CreatePartitionsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -26465,14 +25631,12 @@ func (v *CreatePartitionsResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -26662,11 +25826,7 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Renewers
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -26678,8 +25838,7 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 				dst = appendString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -26688,8 +25847,7 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -26907,8 +26065,7 @@ func (v *CreateDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -27050,8 +26207,7 @@ func (v *RenewDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -27163,8 +26319,7 @@ func (v *RenewDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -27276,8 +26431,7 @@ func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -27388,8 +26542,7 @@ func (v *ExpireDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -27515,11 +26668,7 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Owners
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -27531,14 +26680,12 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 				dst = appendString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -27748,11 +26895,7 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.TokenDetails
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -27793,11 +26936,7 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Renewers
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -27809,14 +26948,12 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 						dst = appendString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -27825,8 +26962,7 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -28026,19 +27162,14 @@ func (v *DeleteGroupsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -28188,11 +27319,7 @@ func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -28208,14 +27335,12 @@ func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -28398,11 +27523,7 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -28411,19 +27532,14 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -28432,8 +27548,7 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -28666,11 +27781,7 @@ func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -28679,11 +27790,7 @@ func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -28699,20 +27806,17 @@ func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -28970,11 +28074,7 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Resources
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -28990,11 +28090,7 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Configs
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -29013,14 +28109,12 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -29029,8 +28123,7 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -29259,11 +28352,7 @@ func (v *IncrementalAlterConfigsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Resources
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -29286,14 +28375,12 @@ func (v *IncrementalAlterConfigsResponse) AppendTo(dst []byte) []byte {
 				dst = appendString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -29512,11 +28599,7 @@ func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -29525,11 +28608,7 @@ func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -29538,31 +28617,24 @@ func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Replicas
-						if isFlexible {
-							dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-						} else {
-							dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-						}
+						dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -29845,11 +28917,7 @@ func (v *AlterPartitionAssignmentsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -29858,11 +28926,7 @@ func (v *AlterPartitionAssignmentsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -29878,20 +28942,17 @@ func (v *AlterPartitionAssignmentsResponse) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -30115,11 +29176,7 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -30128,25 +29185,19 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -30377,11 +29428,7 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -30390,11 +29437,7 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -30403,11 +29446,7 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Replicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -30415,11 +29454,7 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.AddingReplicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -30427,31 +29462,24 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.RemovingReplicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -31164,11 +30192,7 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Components
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -31187,8 +30211,7 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -31197,8 +30220,7 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -31427,20 +30449,12 @@ func (v *DescribeClientQuotasResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Entries
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.Entity
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -31452,18 +30466,13 @@ func (v *DescribeClientQuotasResponse) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			{
 				v := v.Values
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -31475,20 +30484,17 @@ func (v *DescribeClientQuotasResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendFloat64(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -31779,20 +30785,12 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Entries
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.Entity
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -31804,18 +30802,13 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			{
 				v := v.Ops
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -31831,14 +30824,12 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 						dst = appendBool(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -31847,8 +30838,7 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -32102,11 +31092,7 @@ func (v *AlterClientQuotasResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Entries
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -32119,11 +31105,7 @@ func (v *AlterClientQuotasResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Entity
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -32135,20 +31117,17 @@ func (v *AlterClientQuotasResponse) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -32341,11 +31320,7 @@ func (v *DescribeUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Users
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -32353,14 +31328,12 @@ func (v *DescribeUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 				dst = appendString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -32560,11 +31533,7 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Results
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -32581,11 +31550,7 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.CredentialInfos
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -32597,20 +31562,17 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -32857,11 +31819,7 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Deletions
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -32873,18 +31831,13 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt8(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.Upsertions
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -32908,14 +31861,12 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 				dst = appendBytes(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -33118,11 +32069,7 @@ func (v *AlterUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Results
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -33138,14 +32085,12 @@ func (v *AlterUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -33356,11 +32301,7 @@ func (v *VoteRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -33369,11 +32310,7 @@ func (v *VoteRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -33409,20 +32346,17 @@ func (v *VoteRequest) AppendTo(dst []byte) []byte {
 						dst = appendBool(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -33683,11 +32617,7 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -33696,11 +32626,7 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -33724,14 +32650,12 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 						dst = appendBool(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -33750,11 +32674,7 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 					sized := false
 					lenAt := len(dst)
 				fNodeEndpoints:
-					if isFlexible {
-						dst = kbin.AppendCompactArrayLen(dst, len(v))
-					} else {
-						dst = kbin.AppendArrayLen(dst, len(v))
-					}
+					dst = appendArrayLen(dst, len(v), isFlexible)
 					for i := range v {
 						v := &v[i]
 						if version >= 1 {
@@ -33770,8 +32690,7 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 							dst = appendUint16(dst, v)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					if !sized {
@@ -34106,11 +33025,7 @@ func (v *BeginQuorumEpochRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -34119,11 +33034,7 @@ func (v *BeginQuorumEpochRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -34143,24 +33054,18 @@ func (v *BeginQuorumEpochRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if version >= 1 {
 		v := v.LeaderEndpoints
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -34176,14 +33081,12 @@ func (v *BeginQuorumEpochRequest) AppendTo(dst []byte) []byte {
 				dst = appendUint16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -34473,11 +33376,7 @@ func (v *BeginQuorumEpochResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -34486,11 +33385,7 @@ func (v *BeginQuorumEpochResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -34510,14 +33405,12 @@ func (v *BeginQuorumEpochResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -34536,11 +33429,7 @@ func (v *BeginQuorumEpochResponse) AppendTo(dst []byte) []byte {
 					sized := false
 					lenAt := len(dst)
 				fNodeEndpoints:
-					if isFlexible {
-						dst = kbin.AppendCompactArrayLen(dst, len(v))
-					} else {
-						dst = kbin.AppendArrayLen(dst, len(v))
-					}
+					dst = appendArrayLen(dst, len(v), isFlexible)
 					for i := range v {
 						v := &v[i]
 						if version >= 1 {
@@ -34556,8 +33445,7 @@ func (v *BeginQuorumEpochResponse) AppendTo(dst []byte) []byte {
 							dst = appendUint16(dst, v)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					if !sized {
@@ -34905,11 +33793,7 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -34918,11 +33802,7 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -34939,11 +33819,7 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 					}
 					if version >= 0 && version <= 0 {
 						v := v.PreferredSuccessors
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -34951,11 +33827,7 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 					}
 					if version >= 1 {
 						v := v.PreferredCandidates
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -34967,30 +33839,23 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 								dst = appendUuid(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if version >= 1 {
 		v := v.LeaderEndpoints
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -35006,14 +33871,12 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 				dst = appendUint16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -35358,11 +34221,7 @@ func (v *EndQuorumEpochResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -35371,11 +34230,7 @@ func (v *EndQuorumEpochResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -35395,14 +34250,12 @@ func (v *EndQuorumEpochResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -35421,11 +34274,7 @@ func (v *EndQuorumEpochResponse) AppendTo(dst []byte) []byte {
 					sized := false
 					lenAt := len(dst)
 				fNodeEndpoints:
-					if isFlexible {
-						dst = kbin.AppendCompactArrayLen(dst, len(v))
-					} else {
-						dst = kbin.AppendArrayLen(dst, len(v))
-					}
+					dst = appendArrayLen(dst, len(v), isFlexible)
 					for i := range v {
 						v := &v[i]
 						if version >= 1 {
@@ -35441,8 +34290,7 @@ func (v *EndQuorumEpochResponse) AppendTo(dst []byte) []byte {
 							dst = appendUint16(dst, v)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					if !sized {
@@ -35756,11 +34604,7 @@ func (v *DescribeQuorumRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -35769,11 +34613,7 @@ func (v *DescribeQuorumRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -35781,20 +34621,17 @@ func (v *DescribeQuorumRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -36051,11 +34888,7 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -36064,11 +34897,7 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -36097,11 +34926,7 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.CurrentVoters
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -36125,18 +34950,13 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					{
 						v := v.Observers
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -36160,30 +34980,23 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if version >= 2 {
 		v := v.Nodes
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -36192,11 +35005,7 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Listeners
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -36212,20 +35021,17 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 						dst = appendUint16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -36688,11 +35494,7 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 1 {
@@ -36705,11 +35507,7 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -36722,11 +35520,7 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 					}
 					if version >= 0 && version <= 2 {
 						v := v.NewISR
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -36734,11 +35528,7 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 					}
 					if version >= 3 {
 						v := v.NewEpochISR
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -36750,8 +35540,7 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 								dst = appendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
@@ -36764,20 +35553,17 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -37083,11 +35869,7 @@ func (v *AlterPartitionResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			if version >= 0 && version <= 1 {
@@ -37100,11 +35882,7 @@ func (v *AlterPartitionResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -37125,11 +35903,7 @@ func (v *AlterPartitionResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.ISR
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -37144,20 +35918,17 @@ func (v *AlterPartitionResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -37425,11 +36196,7 @@ func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.FeatureUpdates
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -37449,8 +36216,7 @@ func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt8(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -37459,8 +36225,7 @@ func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -37638,11 +36403,7 @@ func (v *UpdateFeaturesResponse) AppendTo(dst []byte) []byte {
 	}
 	if version >= 0 && version <= 1 {
 		v := v.Results
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -37658,14 +36419,12 @@ func (v *UpdateFeaturesResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -37824,8 +36583,7 @@ func (v *EnvelopeRequest) AppendTo(dst []byte) []byte {
 		dst = appendBytes(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -37921,8 +36679,7 @@ func (v *EnvelopeResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -38120,11 +36877,7 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -38133,11 +36886,7 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -38159,8 +36908,7 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 							dst = appendInt32(dst, v)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					{
@@ -38189,8 +36937,7 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -38579,11 +37326,7 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -38592,11 +37335,7 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -38618,8 +37357,7 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 							dst = appendInt32(dst, v)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					{
@@ -38658,8 +37396,7 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 										dst = appendInt32(dst, v)
 									}
 									if isFlexible {
-										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-										dst = v.UnknownTags.AppendEach(dst)
+										dst = v.UnknownTags.appendWithCount(dst)
 									}
 									if !sized {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -38674,8 +37411,7 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -38694,11 +37430,7 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 					sized := false
 					lenAt := len(dst)
 				fNodeEndpoints:
-					if isFlexible {
-						dst = kbin.AppendCompactArrayLen(dst, len(v))
-					} else {
-						dst = kbin.AppendArrayLen(dst, len(v))
-					}
+					dst = appendArrayLen(dst, len(v), isFlexible)
 					for i := range v {
 						v := &v[i]
 						if version >= 1 {
@@ -38714,8 +37446,7 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 							dst = appendUint16(dst, v)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					if !sized {
@@ -39014,8 +37745,7 @@ func (v *DescribeClusterRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -39190,11 +37920,7 @@ func (v *DescribeClusterResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Brokers
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -39218,8 +37944,7 @@ func (v *DescribeClusterResponse) AppendTo(dst []byte) []byte {
 				dst = appendBool(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -39228,8 +37953,7 @@ func (v *DescribeClusterResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -39424,11 +38148,7 @@ func (v *DescribeProducersRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -39437,25 +38157,19 @@ func (v *DescribeProducersRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -39704,11 +38418,7 @@ func (v *DescribeProducersResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -39717,11 +38427,7 @@ func (v *DescribeProducersResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -39738,11 +38444,7 @@ func (v *DescribeProducersResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.ActiveProducers
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -39770,26 +38472,22 @@ func (v *DescribeProducersResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -40105,11 +38803,7 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Listeners
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -40129,18 +38823,13 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.Features
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -40156,8 +38845,7 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -40171,11 +38859,7 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 2 {
 		v := v.LogDirs
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendUuid(dst, v)
@@ -40186,8 +38870,7 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -40426,8 +39109,7 @@ func (v *BrokerRegistrationResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -40582,11 +39264,7 @@ func (v *BrokerHeartbeatRequest) AppendTo(dst []byte) []byte {
 					sized := false
 					lenAt := len(dst)
 				fOfflineLogDirs:
-					if isFlexible {
-						dst = kbin.AppendCompactArrayLen(dst, len(v))
-					} else {
-						dst = kbin.AppendArrayLen(dst, len(v))
-					}
+					dst = appendArrayLen(dst, len(v), isFlexible)
 					for i := range v {
 						v := v[i]
 						dst = appendUuid(dst, v)
@@ -40604,11 +39282,7 @@ func (v *BrokerHeartbeatRequest) AppendTo(dst []byte) []byte {
 					sized := false
 					lenAt := len(dst)
 				fCordonedLogDirs:
-					if isFlexible {
-						dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-					} else {
-						dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-					}
+					dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 					for i := range v {
 						v := v[i]
 						dst = appendUuid(dst, v)
@@ -40819,8 +39493,7 @@ func (v *BrokerHeartbeatResponse) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -40929,8 +39602,7 @@ func (v *UnregisterBrokerRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -41029,8 +39701,7 @@ func (v *UnregisterBrokerResponse) AppendTo(dst []byte) []byte {
 		dst = appendNullableString(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -41128,19 +39799,14 @@ func (v *DescribeTransactionsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.TransactionalIDs
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -41329,11 +39995,7 @@ func (v *DescribeTransactionsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.TransactionStates
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -41366,11 +40028,7 @@ func (v *DescribeTransactionsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -41379,31 +40037,24 @@ func (v *DescribeTransactionsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -41631,11 +40282,7 @@ func (v *ListTransactionsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.StateFilters
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
@@ -41643,11 +40290,7 @@ func (v *ListTransactionsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.ProducerIDFilters
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendInt64(dst, v)
@@ -41662,8 +40305,7 @@ func (v *ListTransactionsRequest) AppendTo(dst []byte) []byte {
 		dst = appendNullableString(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -41855,11 +40497,7 @@ func (v *ListTransactionsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.UnknownStateFilters
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
@@ -41867,11 +40505,7 @@ func (v *ListTransactionsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.TransactionStates
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -41887,14 +40521,12 @@ func (v *ListTransactionsResponse) AppendTo(dst []byte) []byte {
 				dst = appendString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -42066,8 +40698,7 @@ func (v *AllocateProducerIDsRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -42180,8 +40811,7 @@ func (v *AllocateProducerIDsResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -42363,11 +40993,7 @@ func (v *ConsumerGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.SubscribedTopicNames
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
@@ -42383,11 +41009,7 @@ func (v *ConsumerGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -42396,25 +41018,19 @@ func (v *ConsumerGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -42725,11 +41341,7 @@ func (v *ConsumerGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 			dst = append(dst, 1)
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -42738,31 +41350,24 @@ func (v *ConsumerGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -42973,11 +41578,7 @@ func (v *ConsumerGroupDescribeRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
@@ -42988,8 +41589,7 @@ func (v *ConsumerGroupDescribeRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -43221,11 +41821,7 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -43258,11 +41854,7 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Members
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -43291,11 +41883,7 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.SubscribedTopics
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendString(dst, v, isFlexible)
@@ -43309,11 +41897,7 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						v := &v.Assignment
 						{
 							v := v.TopicPartitions
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := &v[i]
 								{
@@ -43326,36 +41910,26 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Partitions
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendInt32(dst, v)
 									}
 								}
 								if isFlexible {
-									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-									dst = v.UnknownTags.AppendEach(dst)
+									dst = v.UnknownTags.appendWithCount(dst)
 								}
 							}
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					{
 						v := &v.TargetAssignment
 						{
 							v := v.TopicPartitions
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := &v[i]
 								{
@@ -43368,25 +41942,19 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Partitions
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendInt32(dst, v)
 									}
 								}
 								if isFlexible {
-									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-									dst = v.UnknownTags.AppendEach(dst)
+									dst = v.UnknownTags.appendWithCount(dst)
 								}
 							}
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					if version >= 1 {
@@ -43394,8 +41962,7 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt8(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -43404,14 +41971,12 @@ func (v *ConsumerGroupDescribeResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -43871,11 +42436,7 @@ func (v *ControllerRegistrationRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Listeners
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -43895,18 +42456,13 @@ func (v *ControllerRegistrationRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.Features
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -43922,14 +42478,12 @@ func (v *ControllerRegistrationRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -44123,8 +42677,7 @@ func (v *ControllerRegistrationResponse) AppendTo(dst []byte) []byte {
 		dst = appendNullableString(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -44227,8 +42780,7 @@ func (v *GetTelemetrySubscriptionsRequest) AppendTo(dst []byte) []byte {
 		dst = appendUuid(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -44351,11 +42903,7 @@ func (v *GetTelemetrySubscriptionsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.AcceptedCompressionTypes
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendInt8(dst, v)
@@ -44375,19 +42923,14 @@ func (v *GetTelemetrySubscriptionsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.RequestedMetrics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -44576,8 +43119,7 @@ func (v *PushTelemetryRequest) AppendTo(dst []byte) []byte {
 		dst = appendBytes(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -44681,8 +43223,7 @@ func (v *PushTelemetryResponse) AppendTo(dst []byte) []byte {
 		dst = appendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -44861,11 +43402,7 @@ func (v *AssignReplicasToDirsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Directories
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -44874,11 +43411,7 @@ func (v *AssignReplicasToDirsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -44887,11 +43420,7 @@ func (v *AssignReplicasToDirsRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -44899,26 +43428,22 @@ func (v *AssignReplicasToDirsRequest) AppendTo(dst []byte) []byte {
 								dst = appendInt32(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -45188,11 +43713,7 @@ func (v *AssignReplicasToDirsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Directories
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -45201,11 +43722,7 @@ func (v *AssignReplicasToDirsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -45214,11 +43731,7 @@ func (v *AssignReplicasToDirsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -45230,26 +43743,22 @@ func (v *AssignReplicasToDirsResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt16(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -45451,19 +43960,14 @@ func (v *ListConfigResourcesRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	if version >= 1 {
 		v := v.ResourceTypes
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendInt8(dst, v)
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -45605,11 +44109,7 @@ func (v *ListConfigResourcesResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.ConfigResources
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -45621,14 +44121,12 @@ func (v *ListConfigResourcesResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt8(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -45815,11 +44313,7 @@ func (v *DescribeTopicPartitionsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -45827,8 +44321,7 @@ func (v *DescribeTopicPartitionsRequest) AppendTo(dst []byte) []byte {
 				dst = appendString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -45851,14 +44344,12 @@ func (v *DescribeTopicPartitionsRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -46119,11 +44610,7 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -46144,11 +44631,7 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -46169,11 +44652,7 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Replicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -46181,11 +44660,7 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.ISR
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -46193,11 +44668,7 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.EligibleLeaderReplicas
-						if isFlexible {
-							dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-						} else {
-							dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-						}
+						dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -46205,11 +44676,7 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.LastKnownELR
-						if isFlexible {
-							dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-						} else {
-							dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-						}
+						dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
@@ -46217,19 +44684,14 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.OfflineReplicas
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -46238,8 +44700,7 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -46258,14 +44719,12 @@ func (v *DescribeTopicPartitionsResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -46642,19 +45101,14 @@ func (v *ShareGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.SubscribedTopicNames
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -46884,11 +45338,7 @@ func (v *ShareGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 			dst = append(dst, 1)
 			{
 				v := v.TopicPartitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -46897,31 +45347,24 @@ func (v *ShareGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -47115,11 +45558,7 @@ func (v *ShareGroupDescribeRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.GroupIDs
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
@@ -47130,8 +45569,7 @@ func (v *ShareGroupDescribeRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -47395,11 +45833,7 @@ func (v *ShareGroupDescribeResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -47432,11 +45866,7 @@ func (v *ShareGroupDescribeResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Members
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -47461,11 +45891,7 @@ func (v *ShareGroupDescribeResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.SubscribedTopicNames
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendString(dst, v, isFlexible)
@@ -47475,11 +45901,7 @@ func (v *ShareGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						v := &v.Assignment
 						{
 							v := v.TopicPartitions
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := &v[i]
 								{
@@ -47492,30 +45914,23 @@ func (v *ShareGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Partitions
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendInt32(dst, v)
 									}
 								}
 								if isFlexible {
-									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-									dst = v.UnknownTags.AppendEach(dst)
+									dst = v.UnknownTags.appendWithCount(dst)
 								}
 							}
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -47524,14 +45939,12 @@ func (v *ShareGroupDescribeResponse) AppendTo(dst []byte) []byte {
 				dst = appendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -48024,11 +46437,7 @@ func (v *ShareFetchRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -48037,11 +46446,7 @@ func (v *ShareFetchRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -48054,11 +46459,7 @@ func (v *ShareFetchRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.AcknowledgementBatches
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -48071,41 +46472,30 @@ func (v *ShareFetchRequest) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.AcknowledgeTypes
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := v[i]
 									dst = appendInt8(dst, v)
 								}
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.ForgottenTopicsData
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -48114,25 +46504,19 @@ func (v *ShareFetchRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -48648,11 +47032,7 @@ func (v *ShareFetchResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -48661,11 +47041,7 @@ func (v *ShareFetchResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -48699,8 +47075,7 @@ func (v *ShareFetchResponse) AppendTo(dst []byte) []byte {
 							dst = appendInt32(dst, v)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					{
@@ -48709,11 +47084,7 @@ func (v *ShareFetchResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.AcquiredRecords
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -48729,30 +47100,23 @@ func (v *ShareFetchResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt16(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.NodeEndpoints
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -48772,14 +47136,12 @@ func (v *ShareFetchResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -49190,11 +47552,7 @@ func (v *ShareAcknowledgeRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -49203,11 +47561,7 @@ func (v *ShareAcknowledgeRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -49216,11 +47570,7 @@ func (v *ShareAcknowledgeRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.AcknowledgementBatches
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -49233,37 +47583,29 @@ func (v *ShareAcknowledgeRequest) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.AcknowledgeTypes
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := v[i]
 									dst = appendInt8(dst, v)
 								}
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -49649,11 +47991,7 @@ func (v *ShareAcknowledgeResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -49662,11 +48000,7 @@ func (v *ShareAcknowledgeResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -49692,29 +48026,22 @@ func (v *ShareAcknowledgeResponse) AppendTo(dst []byte) []byte {
 							dst = appendInt32(dst, v)
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.NodeEndpoints
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -49734,14 +48061,12 @@ func (v *ShareAcknowledgeResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -50052,11 +48377,7 @@ func (v *AddRaftVoterRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Listeners
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -50072,8 +48393,7 @@ func (v *AddRaftVoterRequest) AppendTo(dst []byte) []byte {
 				dst = appendUint16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -50082,8 +48402,7 @@ func (v *AddRaftVoterRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -50236,8 +48555,7 @@ func (v *AddRaftVoterResponse) AppendTo(dst []byte) []byte {
 		dst = appendNullableString(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -50352,8 +48670,7 @@ func (v *RemoveRaftVoterRequest) AppendTo(dst []byte) []byte {
 		dst = appendUuid(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -50458,8 +48775,7 @@ func (v *RemoveRaftVoterResponse) AppendTo(dst []byte) []byte {
 		dst = appendNullableString(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -50639,11 +48955,7 @@ func (v *UpdateRaftVoterRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Listeners
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -50659,8 +48971,7 @@ func (v *UpdateRaftVoterRequest) AppendTo(dst []byte) []byte {
 				dst = appendUint16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -50675,13 +48986,11 @@ func (v *UpdateRaftVoterRequest) AppendTo(dst []byte) []byte {
 			dst = appendInt16(dst, v)
 		}
 		if isFlexible {
-			dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-			dst = v.UnknownTags.AppendEach(dst)
+			dst = v.UnknownTags.appendWithCount(dst)
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -50916,8 +49225,7 @@ func (v *UpdateRaftVoterResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 					if !sized {
 						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -51117,11 +49425,7 @@ func (v *InitializeShareGroupStateRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -51130,11 +49434,7 @@ func (v *InitializeShareGroupStateRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -51150,20 +49450,17 @@ func (v *InitializeShareGroupStateRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt64(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -51374,11 +49671,7 @@ func (v *InitializeShareGroupStateResponse) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -51387,11 +49680,7 @@ func (v *InitializeShareGroupStateResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -51407,20 +49696,17 @@ func (v *InitializeShareGroupStateResponse) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -51637,11 +49923,7 @@ func (v *ReadShareGroupStateRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -51650,11 +49932,7 @@ func (v *ReadShareGroupStateRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -51666,20 +49944,17 @@ func (v *ReadShareGroupStateRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -51929,11 +50204,7 @@ func (v *ReadShareGroupStateResponse) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -51942,11 +50213,7 @@ func (v *ReadShareGroupStateResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -51971,11 +50238,7 @@ func (v *ReadShareGroupStateResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.StateBatches
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -51995,26 +50258,22 @@ func (v *ReadShareGroupStateResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt16(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -52334,11 +50593,7 @@ func (v *WriteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -52347,11 +50602,7 @@ func (v *WriteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -52376,11 +50627,7 @@ func (v *WriteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.StateBatches
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -52400,26 +50647,22 @@ func (v *WriteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 								dst = appendInt16(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -52687,11 +50930,7 @@ func (v *WriteShareGroupStateResponse) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -52700,11 +50939,7 @@ func (v *WriteShareGroupStateResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -52720,20 +50955,17 @@ func (v *WriteShareGroupStateResponse) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -52947,11 +51179,7 @@ func (v *DeleteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -52960,11 +51188,7 @@ func (v *DeleteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -52972,20 +51196,17 @@ func (v *DeleteShareGroupStateRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -53190,11 +51411,7 @@ func (v *DeleteShareGroupStateResponse) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -53203,11 +51420,7 @@ func (v *DeleteShareGroupStateResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -53223,20 +51436,17 @@ func (v *DeleteShareGroupStateResponse) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -53455,11 +51665,7 @@ func (v *ReadShareGroupStateSummaryRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -53468,11 +51674,7 @@ func (v *ReadShareGroupStateSummaryRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -53484,20 +51686,17 @@ func (v *ReadShareGroupStateSummaryRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -53722,11 +51921,7 @@ func (v *ReadShareGroupStateSummaryResponse) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -53735,11 +51930,7 @@ func (v *ReadShareGroupStateSummaryResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -53771,20 +51962,17 @@ func (v *ReadShareGroupStateSummaryResponse) AppendTo(dst []byte) []byte {
 						dst = appendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -54325,11 +52513,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Subtopologies
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -54338,11 +52522,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.SourceTopics
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendString(dst, v, isFlexible)
@@ -54350,11 +52530,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.SourceTopicRegex
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendString(dst, v, isFlexible)
@@ -54362,11 +52538,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.StateChangelogTopics
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -54383,11 +52555,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.Configs
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := &v[i]
 									{
@@ -54399,24 +52567,18 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 										dst = appendString(dst, v, isFlexible)
 									}
 									if isFlexible {
-										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-										dst = v.UnknownTags.AppendEach(dst)
+										dst = v.UnknownTags.appendWithCount(dst)
 									}
 								}
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					{
 						v := v.RepartitionSinkTopics
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendString(dst, v, isFlexible)
@@ -54424,11 +52586,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.RepartitionSourceTopics
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -54445,11 +52603,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.Configs
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := &v[i]
 									{
@@ -54461,33 +52615,23 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 										dst = appendString(dst, v, isFlexible)
 									}
 									if isFlexible {
-										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-										dst = v.UnknownTags.AppendEach(dst)
+										dst = v.UnknownTags.appendWithCount(dst)
 									}
 								}
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					{
 						v := v.CopartitionGroups
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
 								v := v.SourceTopics
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := v[i]
 									dst = appendInt16(dst, v)
@@ -54495,11 +52639,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.SourceTopicRegex
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := v[i]
 									dst = appendInt16(dst, v)
@@ -54507,41 +52647,30 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.RepartitionSourceTopics
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := v[i]
 									dst = appendInt16(dst, v)
 								}
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.ActiveTasks
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -54550,29 +52679,20 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.StandbyTasks
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -54581,29 +52701,20 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.WarmupTasks
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -54612,19 +52723,14 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -54647,18 +52753,13 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 				dst = appendUint16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.ClientTags
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -54670,18 +52771,13 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 				dst = appendString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.TaskOffsets
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -54697,18 +52793,13 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt64(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.TaskEndOffsets
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -54724,8 +52815,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 				dst = appendInt64(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -54734,8 +52824,7 @@ func (v *StreamsGroupHeartbeatRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -55791,11 +53880,7 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Status
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -55807,18 +53892,13 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 				dst = appendString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.ActiveTasks
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -55827,29 +53907,20 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.StandbyTasks
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -55858,29 +53929,20 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	{
 		v := v.WarmupTasks
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -55889,19 +53951,14 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := v[i]
 					dst = appendInt32(dst, v)
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
@@ -55915,11 +53972,7 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.PartitionsByUserEndpoint
-		if isFlexible {
-			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-		} else {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-		}
+		dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -55933,17 +53986,12 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 					dst = appendUint16(dst, v)
 				}
 				if isFlexible {
-					dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-					dst = v.UnknownTags.AppendEach(dst)
+					dst = v.UnknownTags.appendWithCount(dst)
 				}
 			}
 			{
 				v := v.ActivePartitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -55952,29 +54000,20 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			{
 				v := v.StandbyPartitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -55983,31 +54022,24 @@ func (v *StreamsGroupHeartbeatResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -56633,11 +54665,7 @@ func (v *StreamsGroupDescribeRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := v[i]
 			dst = appendString(dst, v, isFlexible)
@@ -56652,8 +54680,7 @@ func (v *StreamsGroupDescribeRequest) AppendTo(dst []byte) []byte {
 		dst = appendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -57056,11 +55083,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -57099,11 +55122,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Subtopologies
-						if isFlexible {
-							dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-						} else {
-							dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-						}
+						dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -57112,11 +55131,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.SourceTopics
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := v[i]
 									dst = appendString(dst, v, isFlexible)
@@ -57124,11 +55139,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.RepartitionSinkTopics
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := v[i]
 									dst = appendString(dst, v, isFlexible)
@@ -57136,11 +55147,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.StateChangelogTopics
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := &v[i]
 									{
@@ -57157,11 +55164,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 									}
 									{
 										v := v.Configs
-										if isFlexible {
-											dst = kbin.AppendCompactArrayLen(dst, len(v))
-										} else {
-											dst = kbin.AppendArrayLen(dst, len(v))
-										}
+										dst = appendArrayLen(dst, len(v), isFlexible)
 										for i := range v {
 											v := &v[i]
 											{
@@ -57173,24 +55176,18 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 												dst = appendString(dst, v, isFlexible)
 											}
 											if isFlexible {
-												dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-												dst = v.UnknownTags.AppendEach(dst)
+												dst = v.UnknownTags.appendWithCount(dst)
 											}
 										}
 									}
 									if isFlexible {
-										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-										dst = v.UnknownTags.AppendEach(dst)
+										dst = v.UnknownTags.appendWithCount(dst)
 									}
 								}
 							}
 							{
 								v := v.RepartitionSourceTopics
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := &v[i]
 									{
@@ -57207,11 +55204,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 									}
 									{
 										v := v.Configs
-										if isFlexible {
-											dst = kbin.AppendCompactArrayLen(dst, len(v))
-										} else {
-											dst = kbin.AppendArrayLen(dst, len(v))
-										}
+										dst = appendArrayLen(dst, len(v), isFlexible)
 										for i := range v {
 											v := &v[i]
 											{
@@ -57223,36 +55216,28 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 												dst = appendString(dst, v, isFlexible)
 											}
 											if isFlexible {
-												dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-												dst = v.UnknownTags.AppendEach(dst)
+												dst = v.UnknownTags.appendWithCount(dst)
 											}
 										}
 									}
 									if isFlexible {
-										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-										dst = v.UnknownTags.AppendEach(dst)
+										dst = v.UnknownTags.appendWithCount(dst)
 									}
 								}
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			{
 				v := v.Members
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -57302,18 +55287,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								dst = appendUint16(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					{
 						v := v.ClientTags
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -57325,18 +55305,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								dst = appendString(dst, v, isFlexible)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					{
 						v := v.TaskOffsets
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -57352,18 +55327,13 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					{
 						v := v.TaskEndOffsets
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -57379,8 +55349,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								dst = appendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
@@ -57388,11 +55357,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						v := &v.Assignment
 						{
 							v := v.ActiveTasks
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := &v[i]
 								{
@@ -57401,29 +55366,20 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Partitions
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendInt32(dst, v)
 									}
 								}
 								if isFlexible {
-									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-									dst = v.UnknownTags.AppendEach(dst)
+									dst = v.UnknownTags.appendWithCount(dst)
 								}
 							}
 						}
 						{
 							v := v.StandbyTasks
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := &v[i]
 								{
@@ -57432,29 +55388,20 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Partitions
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendInt32(dst, v)
 									}
 								}
 								if isFlexible {
-									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-									dst = v.UnknownTags.AppendEach(dst)
+									dst = v.UnknownTags.appendWithCount(dst)
 								}
 							}
 						}
 						{
 							v := v.WarmupTasks
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := &v[i]
 								{
@@ -57463,36 +55410,26 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Partitions
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendInt32(dst, v)
 									}
 								}
 								if isFlexible {
-									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-									dst = v.UnknownTags.AppendEach(dst)
+									dst = v.UnknownTags.appendWithCount(dst)
 								}
 							}
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					{
 						v := &v.TargetAssignment
 						{
 							v := v.ActiveTasks
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := &v[i]
 								{
@@ -57501,29 +55438,20 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Partitions
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendInt32(dst, v)
 									}
 								}
 								if isFlexible {
-									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-									dst = v.UnknownTags.AppendEach(dst)
+									dst = v.UnknownTags.appendWithCount(dst)
 								}
 							}
 						}
 						{
 							v := v.StandbyTasks
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := &v[i]
 								{
@@ -57532,29 +55460,20 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Partitions
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendInt32(dst, v)
 									}
 								}
 								if isFlexible {
-									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-									dst = v.UnknownTags.AppendEach(dst)
+									dst = v.UnknownTags.appendWithCount(dst)
 								}
 							}
 						}
 						{
 							v := v.WarmupTasks
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := &v[i]
 								{
@@ -57563,25 +55482,19 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Partitions
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendInt32(dst, v)
 									}
 								}
 								if isFlexible {
-									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-									dst = v.UnknownTags.AppendEach(dst)
+									dst = v.UnknownTags.appendWithCount(dst)
 								}
 							}
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 					{
@@ -57589,8 +55502,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 						dst = appendBool(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -57606,11 +55518,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 					dst = append(dst, 1)
 					{
 						v := v.Subtopologies
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -57619,11 +55527,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.Nodes
-								if isFlexible {
-									dst = kbin.AppendCompactArrayLen(dst, len(v))
-								} else {
-									dst = kbin.AppendArrayLen(dst, len(v))
-								}
+								dst = appendArrayLen(dst, len(v), isFlexible)
 								for i := range v {
 									v := &v[i]
 									{
@@ -57636,11 +55540,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 									}
 									{
 										v := v.SourceTopics
-										if isFlexible {
-											dst = kbin.AppendCompactArrayLen(dst, len(v))
-										} else {
-											dst = kbin.AppendArrayLen(dst, len(v))
-										}
+										dst = appendArrayLen(dst, len(v), isFlexible)
 										for i := range v {
 											v := v[i]
 											dst = appendString(dst, v, isFlexible)
@@ -57652,11 +55552,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 									}
 									{
 										v := v.Stores
-										if isFlexible {
-											dst = kbin.AppendCompactArrayLen(dst, len(v))
-										} else {
-											dst = kbin.AppendArrayLen(dst, len(v))
-										}
+										dst = appendArrayLen(dst, len(v), isFlexible)
 										for i := range v {
 											v := v[i]
 											dst = appendString(dst, v, isFlexible)
@@ -57664,35 +55560,25 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 									}
 									{
 										v := v.Successors
-										if isFlexible {
-											dst = kbin.AppendCompactArrayLen(dst, len(v))
-										} else {
-											dst = kbin.AppendArrayLen(dst, len(v))
-										}
+										dst = appendArrayLen(dst, len(v), isFlexible)
 										for i := range v {
 											v := v[i]
 											dst = appendString(dst, v, isFlexible)
 										}
 									}
 									if isFlexible {
-										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-										dst = v.UnknownTags.AppendEach(dst)
+										dst = v.UnknownTags.appendWithCount(dst)
 									}
 								}
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					{
 						v := v.GlobalStores
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -57707,11 +55593,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.SourceTopics
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendString(dst, v, isFlexible)
@@ -57723,11 +55605,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Stores
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendString(dst, v, isFlexible)
@@ -57735,19 +55613,14 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Successors
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendString(dst, v, isFlexible)
 									}
 								}
 								if isFlexible {
-									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-									dst = v.UnknownTags.AppendEach(dst)
+									dst = v.UnknownTags.appendWithCount(dst)
 								}
 							}
 							{
@@ -57762,11 +55635,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.SourceTopics
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendString(dst, v, isFlexible)
@@ -57778,11 +55647,7 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Stores
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendString(dst, v, isFlexible)
@@ -57790,30 +55655,23 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Successors
-									if isFlexible {
-										dst = kbin.AppendCompactArrayLen(dst, len(v))
-									} else {
-										dst = kbin.AppendArrayLen(dst, len(v))
-									}
+									dst = appendArrayLen(dst, len(v), isFlexible)
 									for i := range v {
 										v := v[i]
 										dst = appendString(dst, v, isFlexible)
 									}
 								}
 								if isFlexible {
-									dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-									dst = v.UnknownTags.AppendEach(dst)
+									dst = v.UnknownTags.appendWithCount(dst)
 								}
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -57826,14 +55684,12 @@ func (v *StreamsGroupDescribeResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -59250,11 +57106,7 @@ func (v *DescribeShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -59263,11 +57115,7 @@ func (v *DescribeShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
-				} else {
-					dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
-				}
+				dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -59276,31 +57124,24 @@ func (v *DescribeShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendInt32(dst, v)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -59593,11 +57434,7 @@ func (v *DescribeShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Groups
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -59606,11 +57443,7 @@ func (v *DescribeShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topics
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -59623,11 +57456,7 @@ func (v *DescribeShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Partitions
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := &v[i]
 							{
@@ -59655,14 +57484,12 @@ func (v *DescribeShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 								dst = appendNullableString(dst, v, isFlexible)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-								dst = v.UnknownTags.AppendEach(dst)
+								dst = v.UnknownTags.appendWithCount(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
@@ -59675,14 +57502,12 @@ func (v *DescribeShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -59962,11 +57787,7 @@ func (v *AlterShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -59975,11 +57796,7 @@ func (v *AlterShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -59991,20 +57808,17 @@ func (v *AlterShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 						dst = appendInt64(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -60248,11 +58062,7 @@ func (v *AlterShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -60265,11 +58075,7 @@ func (v *AlterShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				if isFlexible {
-					dst = kbin.AppendCompactArrayLen(dst, len(v))
-				} else {
-					dst = kbin.AppendArrayLen(dst, len(v))
-				}
+				dst = appendArrayLen(dst, len(v), isFlexible)
 				for i := range v {
 					v := &v[i]
 					{
@@ -60285,20 +58091,17 @@ func (v *AlterShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 						dst = appendNullableString(dst, v, isFlexible)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -60505,11 +58308,7 @@ func (v *DeleteShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -60517,14 +58316,12 @@ func (v *DeleteShareGroupOffsetsRequest) AppendTo(dst []byte) []byte {
 				dst = appendString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -60708,11 +58505,7 @@ func (v *DeleteShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
-		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
-		}
+		dst = appendArrayLen(dst, len(v), isFlexible)
 		for i := range v {
 			v := &v[i]
 			{
@@ -60732,14 +58525,12 @@ func (v *DeleteShareGroupOffsetsResponse) AppendTo(dst []byte) []byte {
 				dst = appendNullableString(dst, v, isFlexible)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-				dst = v.UnknownTags.AppendEach(dst)
+				dst = v.UnknownTags.appendWithCount(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -60935,11 +58726,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 		v := &v.TopologyDescription
 		{
 			v := v.Subtopologies
-			if isFlexible {
-				dst = kbin.AppendCompactArrayLen(dst, len(v))
-			} else {
-				dst = kbin.AppendArrayLen(dst, len(v))
-			}
+			dst = appendArrayLen(dst, len(v), isFlexible)
 			for i := range v {
 				v := &v[i]
 				{
@@ -60948,11 +58735,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 				}
 				{
 					v := v.Nodes
-					if isFlexible {
-						dst = kbin.AppendCompactArrayLen(dst, len(v))
-					} else {
-						dst = kbin.AppendArrayLen(dst, len(v))
-					}
+					dst = appendArrayLen(dst, len(v), isFlexible)
 					for i := range v {
 						v := &v[i]
 						{
@@ -60965,11 +58748,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 						}
 						{
 							v := v.SourceTopics
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := v[i]
 								dst = appendString(dst, v, isFlexible)
@@ -60981,11 +58760,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 						}
 						{
 							v := v.Stores
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := v[i]
 								dst = appendString(dst, v, isFlexible)
@@ -60993,35 +58768,25 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 						}
 						{
 							v := v.Successors
-							if isFlexible {
-								dst = kbin.AppendCompactArrayLen(dst, len(v))
-							} else {
-								dst = kbin.AppendArrayLen(dst, len(v))
-							}
+							dst = appendArrayLen(dst, len(v), isFlexible)
 							for i := range v {
 								v := v[i]
 								dst = appendString(dst, v, isFlexible)
 							}
 						}
 						if isFlexible {
-							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-							dst = v.UnknownTags.AppendEach(dst)
+							dst = v.UnknownTags.appendWithCount(dst)
 						}
 					}
 				}
 				if isFlexible {
-					dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-					dst = v.UnknownTags.AppendEach(dst)
+					dst = v.UnknownTags.appendWithCount(dst)
 				}
 			}
 		}
 		{
 			v := v.GlobalStores
-			if isFlexible {
-				dst = kbin.AppendCompactArrayLen(dst, len(v))
-			} else {
-				dst = kbin.AppendArrayLen(dst, len(v))
-			}
+			dst = appendArrayLen(dst, len(v), isFlexible)
 			for i := range v {
 				v := &v[i]
 				{
@@ -61036,11 +58801,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 					}
 					{
 						v := v.SourceTopics
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendString(dst, v, isFlexible)
@@ -61052,11 +58813,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 					}
 					{
 						v := v.Stores
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendString(dst, v, isFlexible)
@@ -61064,19 +58821,14 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 					}
 					{
 						v := v.Successors
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendString(dst, v, isFlexible)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 				{
@@ -61091,11 +58843,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 					}
 					{
 						v := v.SourceTopics
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendString(dst, v, isFlexible)
@@ -61107,11 +58855,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 					}
 					{
 						v := v.Stores
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendString(dst, v, isFlexible)
@@ -61119,35 +58863,27 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) AppendTo(dst []byte) []by
 					}
 					{
 						v := v.Successors
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
+						dst = appendArrayLen(dst, len(v), isFlexible)
 						for i := range v {
 							v := v[i]
 							dst = appendString(dst, v, isFlexible)
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-						dst = v.UnknownTags.AppendEach(dst)
+						dst = v.UnknownTags.appendWithCount(dst)
 					}
 				}
 				if isFlexible {
-					dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-					dst = v.UnknownTags.AppendEach(dst)
+					dst = v.UnknownTags.appendWithCount(dst)
 				}
 			}
 		}
 		if isFlexible {
-			dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-			dst = v.UnknownTags.AppendEach(dst)
+			dst = v.UnknownTags.appendWithCount(dst)
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -61627,8 +59363,7 @@ func (v *StreamsGroupTopologyDescriptionUpdateResponse) AppendTo(dst []byte) []b
 		dst = appendNullableString(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -61730,8 +59465,7 @@ func (v *UnregisterControllerRequest) AppendTo(dst []byte) []byte {
 		dst = appendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }
@@ -61832,8 +59566,7 @@ func (v *UnregisterControllerResponse) AppendTo(dst []byte) []byte {
 		dst = appendNullableString(dst, v, isFlexible)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
+		dst = v.UnknownTags.appendWithCount(dst)
 	}
 	return dst
 }

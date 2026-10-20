@@ -47,9 +47,9 @@ func appendInt64(dst []byte, v int64) []byte { return kbin.AppendInt64(dst, v) }
 //go:noinline
 func appendUuid(dst []byte, v [16]byte) []byte { return kbin.AppendUuid(dst, v) }
 
-// Generated code reads and appends strings and bytes that can be compact or
-// unsafe with the functions below, rather than choosing between kbin
-// functions at every field.
+// Generated code reads and appends strings, bytes, and array lengths that can
+// be compact or unsafe with the functions below, rather than choosing between
+// kbin functions at every field.
 
 func readString(b *kbin.Reader, flexible, unsafe bool) string {
 	var l int
@@ -162,4 +162,18 @@ func appendNullableBytes(dst, b []byte, flexible bool) []byte {
 		dst = kbin.AppendInt32(dst, int32(len(b)))
 	}
 	return append(dst, b...)
+}
+
+func appendArrayLen(dst []byte, n int, flexible bool) []byte {
+	if flexible {
+		return kbin.AppendCompactArrayLen(dst, n)
+	}
+	return kbin.AppendArrayLen(dst, n)
+}
+
+func appendNullableArrayLen(dst []byte, n int, isNil, flexible bool) []byte {
+	if flexible {
+		return kbin.AppendCompactNullableArrayLen(dst, n, isNil)
+	}
+	return kbin.AppendNullableArrayLen(dst, n, isNil)
 }
