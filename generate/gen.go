@@ -54,7 +54,17 @@ func (e Enum) WriteDecode(l *LineWriter) {
 // primAppend corresponds to the primitive append functions in
 // kmsg/primitives.go.
 func primAppend(name string, l *LineWriter) {
+	if fixedOutOfLine[name] {
+		l.Write("dst = append%s(dst, v)", name) // see codec.go
+		return
+	}
 	l.Write("dst = kbin.Append%s(dst, v)", name)
+}
+
+// fixedOutOfLine are the types that codec.go reads and appends out of line.
+var fixedOutOfLine = map[string]bool{
+	"Bool": true, "Int8": true, "Int16": true, "Uint16": true,
+	"Int32": true, "Int64": true, "Uuid": true,
 }
 
 func compactAppend(fromFlexible bool, name string, l *LineWriter) {
@@ -344,6 +354,10 @@ func (f StructField) writeBeginAndTag(l *LineWriter, tags map[int]StructField) (
 // primDecode corresponds to the binreader primitive decoding functions in
 // kmsg/primitives.go.
 func primDecode(name string, l *LineWriter) {
+	if fixedOutOfLine[name] {
+		l.Write("v := read%s(&b)", name) // see codec.go
+		return
+	}
 	l.Write("v := b.%s()", name)
 }
 
