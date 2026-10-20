@@ -1179,15 +1179,8 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 		v := s.Members
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*10 > int64(len(b.Src)) || version >= 3 && int64(l)*15 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*10 > int64(len(b.Src)) || version >= 3 && int64(l)*15 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -1553,18 +1546,11 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []TxnMetadataValueTopic{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -1583,15 +1569,8 @@ func (v *TxnMetadataValue) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -1845,10 +1824,7 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 		a := v
 		var l int32
 		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -1871,10 +1847,7 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 		a := v
 		var l int32
 		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -1894,10 +1867,7 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 				a := v
 				var l int32
 				l = b.ArrayLen()
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -2026,10 +1996,7 @@ func (v *ConsumerMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		a := v
 		var l int32
 		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -2049,10 +2016,7 @@ func (v *ConsumerMemberAssignment) readFrom(src []byte, unsafe bool) error {
 				a := v
 				var l int32
 				l = b.ArrayLen()
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -2328,10 +2292,7 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		a := v
 		var l int32
 		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -2351,10 +2312,7 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 				a := v
 				var l int32
 				l = b.ArrayLen()
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*2 > int64(len(b.Src)) {
+				if !b.Ok() || int64(l)*2 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -2377,10 +2335,7 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 		a := v
 		var l int32
 		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -2400,10 +2355,7 @@ func (v *ConnectMemberAssignment) readFrom(src []byte, unsafe bool) error {
 				a := v
 				var l int32
 				l = b.ArrayLen()
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*2 > int64(len(b.Src)) {
+				if !b.Ok() || int64(l)*2 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -2764,15 +2716,8 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 		v := s.Voters
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) || version >= 1 && int64(l)*20 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) || version >= 1 && int64(l)*20 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -2802,15 +2747,8 @@ func (v *LeaderChangeMessage) readFrom(src []byte, unsafe bool) error {
 		v := s.GrantingVoters
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) || version >= 1 && int64(l)*20 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) || version >= 1 && int64(l)*20 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -3065,15 +3003,8 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -3096,15 +3027,8 @@ func (v *ProduceRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -3635,15 +3559,8 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -3666,15 +3583,8 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*14 > int64(len(b.Src)) || version >= 8 && int64(l)*33 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*14 > int64(len(b.Src)) || version >= 8 && int64(l)*33 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -3709,15 +3619,8 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.ErrorRecords
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*6 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -3801,15 +3704,8 @@ func (v *ProduceResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Brokers
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*11 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*11 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -4384,15 +4280,8 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -4415,15 +4304,8 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*16 > int64(len(b.Src)) || version >= 12 && int64(l)*32 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*16 > int64(len(b.Src)) || version >= 12 && int64(l)*32 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -4495,15 +4377,8 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.ForgottenTopics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -4526,15 +4401,8 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -5252,15 +5120,8 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 13 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -5283,15 +5144,8 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*16 > int64(len(b.Src)) || version >= 11 && int64(l)*37 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*16 > int64(len(b.Src)) || version >= 11 && int64(l)*37 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -5326,18 +5180,11 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.AbortedTransactions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if version < 0 || l == 0 {
 							a = []FetchResponseTopicPartitionAbortedTransaction{}
 						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*16 > int64(len(b.Src)) {
+						if !b.Ok() || int64(l)*16 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -5457,15 +5304,8 @@ func (v *FetchResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Brokers
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*11 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*11 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -5790,15 +5630,8 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -5817,15 +5650,8 @@ func (v *ListOffsetsRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*12 > int64(len(b.Src)) || version >= 4 && int64(l)*16 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*12 > int64(len(b.Src)) || version >= 4 && int64(l)*16 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -6131,15 +5957,8 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -6158,15 +5977,8 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) || version >= 4 && int64(l)*26 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) || version >= 4 && int64(l)*26 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -6189,15 +6001,8 @@ func (v *ListOffsetsResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.OldStyleOffsets
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*8 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -6416,18 +6221,11 @@ func (v *MetadataRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 1 || l == 0 {
 			a = []MetadataRequestTopic{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -6865,15 +6663,8 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Brokers
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*10 > int64(len(b.Src)) || version >= 1 && int64(l)*11 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*10 > int64(len(b.Src)) || version >= 1 && int64(l)*11 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -6921,15 +6712,8 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) || version >= 10 && int64(l)*26 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) || version >= 10 && int64(l)*26 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -6966,15 +6750,8 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*13 > int64(len(b.Src)) || version >= 7 && int64(l)*18 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*13 > int64(len(b.Src)) || version >= 7 && int64(l)*18 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -7005,15 +6782,8 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.Replicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -7031,15 +6801,8 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.ISR
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -7057,15 +6820,8 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.OfflineReplicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -7570,15 +7326,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.PartitionStates
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*23 > int64(len(b.Src)) || version >= 6 && int64(l)*27 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*23 > int64(len(b.Src)) || version >= 6 && int64(l)*27 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -7613,15 +7362,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.ISR
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -7643,15 +7385,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Replicas
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -7669,15 +7404,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.AddingReplicas
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -7695,15 +7423,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.RemovingReplicas
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -7736,15 +7457,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.TopicStates
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*19 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*19 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -7767,15 +7481,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.PartitionStates
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*23 > int64(len(b.Src)) || version >= 6 && int64(l)*27 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*23 > int64(len(b.Src)) || version >= 6 && int64(l)*27 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -7810,15 +7517,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.ISR
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -7840,15 +7540,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.Replicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -7866,15 +7559,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.AddingReplicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -7892,15 +7578,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.RemovingReplicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -7940,15 +7619,8 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.LiveLeaders
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*10 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*10 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -8146,15 +7818,8 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Partitions
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -8188,15 +7853,8 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -8215,15 +7873,8 @@ func (v *LeaderAndISRResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -8511,15 +8162,8 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 1 && int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 1 && int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -8542,15 +8186,8 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -8568,15 +8205,8 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.PartitionStates
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*9 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*9 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -8746,15 +8376,8 @@ func (v *StopReplicaResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Partitions
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*8 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -9231,15 +8854,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.PartitionStates
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*23 > int64(len(b.Src)) || version >= 5 && int64(l)*24 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*23 > int64(len(b.Src)) || version >= 5 && int64(l)*24 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -9274,15 +8890,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.ISR
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -9304,15 +8913,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Replicas
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -9330,15 +8932,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.OfflineReplicas
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -9363,15 +8958,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.TopicStates
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) || version >= 7 && int64(l)*19 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) || version >= 7 && int64(l)*19 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -9394,15 +8982,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.PartitionStates
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*23 > int64(len(b.Src)) || version >= 5 && int64(l)*24 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*23 > int64(len(b.Src)) || version >= 5 && int64(l)*24 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -9437,15 +9018,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.ISR
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -9467,15 +9041,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.Replicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -9493,15 +9060,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.OfflineReplicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -9533,15 +9093,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.LiveBrokers
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) || version >= 2 && int64(l)*7 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) || version >= 2 && int64(l)*7 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -9568,15 +9121,8 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Endpoints
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) || version >= 3 && int64(l)*9 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) || version >= 3 && int64(l)*9 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -9943,15 +9489,8 @@ func (v *ControlledShutdownResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.PartitionsRemaining
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -10266,15 +9805,8 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -10297,15 +9829,8 @@ func (v *OffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*14 > int64(len(b.Src)) || version >= 6 && int64(l)*18 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*14 > int64(len(b.Src)) || version >= 6 && int64(l)*18 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -10568,15 +10093,8 @@ func (v *OffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -10599,15 +10117,8 @@ func (v *OffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -10918,18 +10429,11 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 2 || l == 0 {
 			a = []OffsetFetchRequestTopic{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -10948,15 +10452,8 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -10981,15 +10478,8 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) || version >= 9 && int64(l)*8 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) || version >= 9 && int64(l)*8 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -11017,18 +10507,11 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
+				l = readArrayLen(&b, isFlexible)
 				if version < 0 || l == 0 {
 					a = []OffsetFetchRequestGroupTopic{}
 				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
+				if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -11051,15 +10534,8 @@ func (v *OffsetFetchRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -11476,15 +10952,8 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -11503,15 +10972,8 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*16 > int64(len(b.Src)) || version >= 5 && int64(l)*20 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*16 > int64(len(b.Src)) || version >= 5 && int64(l)*20 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -11565,15 +11027,8 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -11592,15 +11047,8 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 10 && int64(l)*18 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -11623,15 +11071,8 @@ func (v *OffsetFetchResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*20 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*20 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -11816,13 +11257,9 @@ func (v *FindCoordinatorRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.CoordinatorKeys
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -12068,15 +11505,8 @@ func (v *FindCoordinatorResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Coordinators
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*14 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*14 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -12375,15 +11805,8 @@ func (v *JoinGroupRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Protocols
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -12698,15 +12121,8 @@ func (v *JoinGroupResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Members
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*4 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*4 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -13145,15 +12561,8 @@ func (v *LeaveGroupRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Members
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*4 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*4 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -13353,15 +12762,8 @@ func (v *LeaveGroupResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Members
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -13599,15 +13001,8 @@ func (v *SyncGroupRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.GroupAssignment
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -13892,13 +13287,9 @@ func (v *DescribeGroupsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -14186,15 +13577,8 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*8 > int64(len(b.Src)) || version >= 6 && int64(l)*13 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*8 > int64(len(b.Src)) || version >= 6 && int64(l)*13 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -14234,15 +13618,8 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Members
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) || version >= 4 && int64(l)*7 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) || version >= 4 && int64(l)*7 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -14410,13 +13787,9 @@ func (v *ListGroupsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.StatesFilter
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -14433,13 +13806,9 @@ func (v *ListGroupsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.TypesFilter
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -14617,15 +13986,8 @@ func (v *ListGroupsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) || version >= 5 && int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -14834,10 +14196,7 @@ func (v *SASLHandshakeResponse) readFrom(src []byte, unsafe bool) error {
 		a := v
 		var l int32
 		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -15330,15 +14689,8 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.ApiKeys
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -15382,15 +14734,8 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.SupportedFeatures
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -15434,15 +14779,8 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.FinalizedFeatures
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -15751,15 +15089,8 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*10 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*10 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -15786,15 +15117,8 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.ReplicaAssignment
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -15813,15 +15137,8 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.Replicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -15846,15 +15163,8 @@ func (v *CreateTopicsRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Configs
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -16192,15 +15502,8 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) || version >= 7 && int64(l)*28 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) || version >= 7 && int64(l)*28 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -16240,18 +15543,11 @@ func (v *CreateTopicsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Configs
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
+				l = readArrayLen(&b, isFlexible)
 				if version < 0 || l == 0 {
 					a = []CreateTopicsResponseTopicConfig{}
 				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -16464,13 +15760,9 @@ func (v *DeleteTopicsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.TopicNames
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -16487,15 +15779,8 @@ func (v *DeleteTopicsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -16711,15 +15996,8 @@ func (v *DeleteTopicsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) || version >= 6 && int64(l)*21 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) || version >= 6 && int64(l)*21 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -16958,15 +16236,8 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -16985,15 +16256,8 @@ func (v *DeleteRecordsRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*12 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*12 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -17235,15 +16499,8 @@ func (v *DeleteRecordsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -17262,15 +16519,8 @@ func (v *DeleteRecordsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*14 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*14 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -17799,15 +17049,8 @@ func (v *OffsetForLeaderEpochRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -17826,15 +17069,8 @@ func (v *OffsetForLeaderEpochRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) || version >= 2 && int64(l)*12 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) || version >= 2 && int64(l)*12 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -18105,15 +17341,8 @@ func (v *OffsetForLeaderEpochResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -18132,15 +17361,8 @@ func (v *OffsetForLeaderEpochResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*14 > int64(len(b.Src)) || version >= 1 && int64(l)*18 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*14 > int64(len(b.Src)) || version >= 1 && int64(l)*18 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -18469,15 +17691,8 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -18496,15 +17711,8 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -18529,15 +17737,8 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Transactions
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*14 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*14 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -18568,15 +17769,8 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -18595,15 +17789,8 @@ func (v *AddPartitionsToTxnRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -18975,15 +18162,8 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Transactions
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -19002,15 +18182,8 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -19029,15 +18202,8 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*6 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -19081,15 +18247,8 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -19108,15 +18267,8 @@ func (v *AddPartitionsToTxnResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -19878,15 +19030,8 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Markers
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*17 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*17 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -19913,15 +19058,8 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -19940,15 +19078,8 @@ func (v *WriteTxnMarkersRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -20197,15 +19328,8 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Markers
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*10 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*10 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -20224,15 +19348,8 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -20251,15 +19368,8 @@ func (v *WriteTxnMarkersResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*6 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -20586,15 +19696,8 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 6 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 6 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -20617,15 +19720,8 @@ func (v *TxnOffsetCommitRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*14 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*14 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -20892,15 +19988,8 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 6 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 6 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -20923,15 +20012,8 @@ func (v *TxnOffsetCommitResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -21417,15 +20499,8 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Resources
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) || version >= 1 && int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) || version >= 1 && int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -21462,15 +20537,8 @@ func (v *DescribeACLsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.ACLs
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*5 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -21714,15 +20782,8 @@ func (v *CreateACLsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Creations
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*7 > int64(len(b.Src)) || version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*7 > int64(len(b.Src)) || version >= 1 && int64(l)*8 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -21924,15 +20985,8 @@ func (v *CreateACLsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Results
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -22134,15 +21188,8 @@ func (v *DeleteACLsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Filters
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*7 > int64(len(b.Src)) || version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*7 > int64(len(b.Src)) || version >= 1 && int64(l)*8 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -22449,15 +21496,8 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Results
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -22481,15 +21521,8 @@ func (v *DeleteACLsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.MatchingACLs
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*10 > int64(len(b.Src)) || version >= 1 && int64(l)*11 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*10 > int64(len(b.Src)) || version >= 1 && int64(l)*11 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -22741,15 +21774,8 @@ func (v *DescribeConfigsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Resources
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -22777,16 +21803,12 @@ func (v *DescribeConfigsRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.ConfigNames
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
+				l = readArrayLen(&b, isFlexible)
 				if version < 0 || l == 0 {
 					a = []string{}
 				}
 				if !b.Ok() {
-					return b.Complete()
+					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
 				if l > 0 {
@@ -23145,15 +22167,8 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Resources
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*7 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*7 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -23190,15 +22205,8 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Configs
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*5 > int64(len(b.Src)) || version >= 3 && int64(l)*9 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*5 > int64(len(b.Src)) || version >= 3 && int64(l)*9 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -23243,15 +22251,8 @@ func (v *DescribeConfigsResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.ConfigSynonyms
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -23526,15 +22527,8 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Resources
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -23562,15 +22556,8 @@ func (v *AlterConfigsRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Configs
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -23775,15 +22762,8 @@ func (v *AlterConfigsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Resources
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -24001,15 +22981,8 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Dirs
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -24028,15 +23001,8 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -24055,15 +23021,8 @@ func (v *AlterReplicaLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -24284,15 +23243,8 @@ func (v *AlterReplicaLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -24311,15 +23263,8 @@ func (v *AlterReplicaLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -24489,18 +23434,11 @@ func (v *DescribeLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []DescribeLogDirsRequestTopic{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -24519,15 +23457,8 @@ func (v *DescribeLogDirsRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -24842,15 +23773,8 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Dirs
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) || version >= 5 && int64(l)*22 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) || version >= 5 && int64(l)*22 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -24873,15 +23797,8 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -24900,15 +23817,8 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*21 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*21 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -25391,15 +24301,8 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*7 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*7 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -25422,18 +24325,11 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Assignment
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
+				l = readArrayLen(&b, isFlexible)
 				if version < 0 || l == 0 {
 					a = []CreatePartitionsRequestTopicAssignment{}
 				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*2 > int64(len(b.Src)) {
+				if !b.Ok() || int64(l)*2 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -25448,15 +24344,8 @@ func (v *CreatePartitionsRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.Replicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -25662,15 +24551,8 @@ func (v *CreatePartitionsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -25879,15 +24761,8 @@ func (v *CreateDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Renewers
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -26707,18 +25582,11 @@ func (v *DescribeDelegationTokenRequest) readFrom(src []byte, unsafe bool) error
 		v := s.Owners
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []DescribeDelegationTokenRequestOwner{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -26988,15 +25856,8 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 		v := s.TokenDetails
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*30 > int64(len(b.Src)) || version >= 3 && int64(l)*32 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*30 > int64(len(b.Src)) || version >= 3 && int64(l)*32 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -27047,15 +25908,8 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 				v := s.Renewers
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -27191,13 +26045,9 @@ func (v *DeleteGroupsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -27366,15 +26216,8 @@ func (v *DeleteGroupsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) || version >= 3 && int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) || version >= 3 && int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -27574,18 +26417,11 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []ElectLeadersRequestTopic{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -27604,15 +26440,8 @@ func (v *ElectLeadersRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -27846,15 +26675,8 @@ func (v *ElectLeadersResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -27873,15 +26695,8 @@ func (v *ElectLeadersResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -28145,15 +26960,8 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 		v := s.Resources
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -28181,15 +26989,8 @@ func (v *IncrementalAlterConfigsRequest) readFrom(src []byte, unsafe bool) error
 				v := s.Configs
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -28406,15 +27207,8 @@ func (v *IncrementalAlterConfigsResponse) readFrom(src []byte, unsafe bool) erro
 		v := s.Resources
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -28664,15 +27458,8 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -28691,15 +27478,8 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -28718,18 +27498,11 @@ func (v *AlterPartitionAssignmentsRequest) readFrom(src []byte, unsafe bool) err
 						v := s.Replicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if version < 0 || l == 0 {
 							a = []int32{}
 						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -28991,15 +27764,8 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -29018,15 +27784,8 @@ func (v *AlterPartitionAssignmentsResponse) readFrom(src []byte, unsafe bool) er
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -29223,18 +27982,11 @@ func (v *ListPartitionReassignmentsRequest) readFrom(src []byte, unsafe bool) er
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []ListPartitionReassignmentsRequestTopic{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -29253,15 +28005,8 @@ func (v *ListPartitionReassignmentsRequest) readFrom(src []byte, unsafe bool) er
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -29514,15 +28259,8 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -29541,15 +28279,8 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -29568,15 +28299,8 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 						v := s.Replicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -29594,15 +28318,8 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 						v := s.AddingReplicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -29620,15 +28337,8 @@ func (v *ListPartitionReassignmentsResponse) readFrom(src []byte, unsafe bool) e
 						v := s.RemovingReplicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -29811,10 +28521,7 @@ func (v *OffsetDeleteRequest) readFrom(src []byte, unsafe bool) error {
 		a := v
 		var l int32
 		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -29834,10 +28541,7 @@ func (v *OffsetDeleteRequest) readFrom(src []byte, unsafe bool) error {
 				a := v
 				var l int32
 				l = b.ArrayLen()
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -30037,10 +28741,7 @@ func (v *OffsetDeleteResponse) readFrom(src []byte, unsafe bool) error {
 		a := v
 		var l int32
 		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -30060,10 +28761,7 @@ func (v *OffsetDeleteResponse) readFrom(src []byte, unsafe bool) error {
 				a := v
 				var l int32
 				l = b.ArrayLen()
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -30242,15 +28940,8 @@ func (v *DescribeClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Components
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -30529,18 +29220,11 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Entries
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []DescribeClientQuotasResponseEntry{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -30555,15 +29239,8 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Entity
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -30594,15 +29271,8 @@ func (v *DescribeClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Values
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*10 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*10 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -30860,15 +29530,8 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Entries
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -30883,15 +29546,8 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Entity
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -30922,15 +29578,8 @@ func (v *AlterClientQuotasRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Ops
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*11 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*11 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -31153,15 +29802,8 @@ func (v *AlterClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Entries
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -31185,15 +29827,8 @@ func (v *AlterClientQuotasResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Entity
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -31355,18 +29990,11 @@ func (v *DescribeUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) 
 		v := s.Users
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []DescribeUserSCRAMCredentialsRequestUser{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -31607,15 +30235,8 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 		v := s.Results
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -31643,15 +30264,8 @@ func (v *DescribeUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool)
 				v := s.CredentialInfos
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*5 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -31888,15 +30502,8 @@ func (v *AlterUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) err
 		v := s.Deletions
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -31926,15 +30533,8 @@ func (v *AlterUserSCRAMCredentialsRequest) readFrom(src []byte, unsafe bool) err
 		v := s.Upsertions
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*9 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*9 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -32116,15 +30716,8 @@ func (v *AlterUserSCRAMCredentialsResponse) readFrom(src []byte, unsafe bool) er
 		v := s.Results
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -32387,15 +30980,8 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -32414,15 +31000,8 @@ func (v *VoteRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*24 > int64(len(b.Src)) || version >= 2 && int64(l)*57 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*24 > int64(len(b.Src)) || version >= 2 && int64(l)*57 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -32727,15 +31306,8 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -32754,15 +31326,8 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*15 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*15 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -32817,15 +31382,8 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.NodeEndpoints
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || version >= 1 && int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -33117,15 +31675,8 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -33144,15 +31695,8 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*12 > int64(len(b.Src)) || version >= 1 && int64(l)*28 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*12 > int64(len(b.Src)) || version >= 1 && int64(l)*28 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -33197,15 +31741,8 @@ func (v *BeginQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.LeaderEndpoints
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -33482,15 +32019,8 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -33509,15 +32039,8 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*14 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*14 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -33568,15 +32091,8 @@ func (v *BeginQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.NodeEndpoints
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || version >= 1 && int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -33903,15 +32419,8 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -33930,15 +32439,8 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*12 > int64(len(b.Src)) || version >= 0 && int64(l)*14 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*12 > int64(len(b.Src)) || version >= 0 && int64(l)*14 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -33965,15 +32467,8 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.PreferredSuccessors
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -33991,15 +32486,8 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.PreferredCandidates
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*20 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*20 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -34043,15 +32531,8 @@ func (v *EndQuorumEpochRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.LeaderEndpoints
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -34327,15 +32808,8 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -34354,15 +32828,8 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*14 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*14 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -34413,15 +32880,8 @@ func (v *EndQuorumEpochResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.NodeEndpoints
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || version >= 1 && int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -34653,15 +33113,8 @@ func (v *DescribeQuorumRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -34680,15 +33133,8 @@ func (v *DescribeQuorumRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -35062,15 +33508,8 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -35089,15 +33528,8 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*25 > int64(len(b.Src)) || version >= 2 && int64(l)*26 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*25 > int64(len(b.Src)) || version >= 2 && int64(l)*26 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -35137,15 +33569,8 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.CurrentVoters
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*12 > int64(len(b.Src)) || version >= 2 && int64(l)*44 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*12 > int64(len(b.Src)) || version >= 2 && int64(l)*44 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -35187,15 +33612,8 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.Observers
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*12 > int64(len(b.Src)) || version >= 2 && int64(l)*44 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*12 > int64(len(b.Src)) || version >= 2 && int64(l)*44 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -35251,15 +33669,8 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Nodes
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -35278,15 +33689,8 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Listeners
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*5 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -35593,15 +33997,8 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -35624,15 +34021,8 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*12 > int64(len(b.Src)) || version >= 1 && int64(l)*15 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*12 > int64(len(b.Src)) || version >= 1 && int64(l)*15 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -35655,15 +34045,8 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.NewISR
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -35681,15 +34064,8 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.NewEpochISR
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*12 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*12 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -35958,15 +34334,8 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 2 && int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -35989,15 +34358,8 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*20 > int64(len(b.Src)) || version >= 1 && int64(l)*21 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*20 > int64(len(b.Src)) || version >= 1 && int64(l)*21 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -36028,15 +34390,8 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.ISR
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -36251,15 +34606,8 @@ func (v *UpdateFeaturesRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.FeatureUpdates
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*4 > int64(len(b.Src)) || version >= 0 && int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*4 > int64(len(b.Src)) || version >= 0 && int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -36459,15 +34807,8 @@ func (v *UpdateFeaturesResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Results
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -36995,15 +35336,8 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -37022,15 +35356,8 @@ func (v *FetchSnapshotRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*28 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*28 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -37487,15 +35814,8 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -37514,15 +35834,8 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*37 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*37 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -37617,15 +35930,8 @@ func (v *FetchSnapshotResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.NodeEndpoints
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if version >= 1 && int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || version >= 1 && int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -38000,15 +36306,8 @@ func (v *DescribeClusterResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Brokers
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*11 > int64(len(b.Src)) || version >= 2 && int64(l)*12 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*11 > int64(len(b.Src)) || version >= 2 && int64(l)*12 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -38191,15 +36490,8 @@ func (v *DescribeProducersRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -38218,15 +36510,8 @@ func (v *DescribeProducersRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -38513,15 +36798,8 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -38540,15 +36818,8 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*9 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*9 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -38576,15 +36847,8 @@ func (v *DescribeProducersResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.ActiveProducers
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*36 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*36 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -38904,15 +37168,8 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Listeners
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*7 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*7 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -38950,15 +37207,8 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Features
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -39001,15 +37251,8 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.LogDirs
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*16 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*16 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -39343,15 +37586,8 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.OfflineLogDirs
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*16 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*16 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -39372,18 +37608,11 @@ func (v *BrokerHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.CordonedLogDirs
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
+				l = readArrayLen(&b, isFlexible)
 				if version < 0 || l == 0 {
 					a = [][16]byte{}
 				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*16 > int64(len(b.Src)) {
+				if !b.Ok() || int64(l)*16 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -39828,13 +38057,9 @@ func (v *DescribeTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.TransactionalIDs
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -40080,15 +38305,8 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.TransactionStates
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*28 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*28 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -40131,15 +38349,8 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -40158,15 +38369,8 @@ func (v *DescribeTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -40327,13 +38531,9 @@ func (v *ListTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.StateFilters
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -40350,15 +38550,8 @@ func (v *ListTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.ProducerIDFilters
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*8 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -40556,13 +38749,9 @@ func (v *ListTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.UnknownStateFilters
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -40579,15 +38768,8 @@ func (v *ListTransactionsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.TransactionStates
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*11 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*11 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -41078,16 +39260,12 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 		v := s.SubscribedTopicNames
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []string{}
 		}
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -41114,18 +39292,11 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []ConsumerGroupHeartbeatRequestTopic{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -41144,15 +39315,8 @@ func (v *ConsumerGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error 
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -41421,15 +39585,8 @@ func (v *ConsumerGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*18 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -41448,15 +39605,8 @@ func (v *ConsumerGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -41611,13 +39761,9 @@ func (v *ConsumerGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -42002,15 +40148,8 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*20 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*20 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -42054,15 +40193,8 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 				v := s.Members
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*16 > int64(len(b.Src)) || version >= 1 && int64(l)*17 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*16 > int64(len(b.Src)) || version >= 1 && int64(l)*17 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -42103,13 +40235,9 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 						v := s.SubscribedTopics
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if !b.Ok() {
-							return b.Complete()
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -42135,15 +40263,8 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 							v := s.TopicPartitions
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
-								return b.Complete()
-							}
-							if int64(l)*19 > int64(len(b.Src)) {
+							l = readArrayLen(&b, isFlexible)
+							if !b.Ok() || int64(l)*19 > int64(len(b.Src)) {
 								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
@@ -42166,15 +40287,8 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 									v := s.Partitions
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									if int64(l)*4 > int64(len(b.Src)) {
+									l = readArrayLen(&b, isFlexible)
+									if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
@@ -42207,15 +40321,8 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 							v := s.TopicPartitions
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
-								return b.Complete()
-							}
-							if int64(l)*19 > int64(len(b.Src)) {
+							l = readArrayLen(&b, isFlexible)
+							if !b.Ok() || int64(l)*19 > int64(len(b.Src)) {
 								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
@@ -42238,15 +40345,8 @@ func (v *ConsumerGroupDescribeResponse) readFrom(src []byte, unsafe bool) error 
 									v := s.Partitions
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									if int64(l)*4 > int64(len(b.Src)) {
+									l = readArrayLen(&b, isFlexible)
+									if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
@@ -42517,15 +40617,8 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 		v := s.Listeners
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*7 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*7 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -42563,15 +40656,8 @@ func (v *ControllerRegistrationRequest) readFrom(src []byte, unsafe bool) error 
 		v := s.Features
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -42968,13 +41054,9 @@ func (v *GetTelemetrySubscriptionsResponse) readFrom(src []byte, unsafe bool) er
 		v := s.AcceptedCompressionTypes
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -43003,13 +41085,9 @@ func (v *GetTelemetrySubscriptionsResponse) readFrom(src []byte, unsafe bool) er
 		v := s.RequestedMetrics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -43473,15 +41551,8 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Directories
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -43500,15 +41571,8 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*18 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -43527,15 +41591,8 @@ func (v *AssignReplicasToDirsRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -43788,15 +41845,8 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Directories
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -43815,15 +41865,8 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*18 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -43842,15 +41885,8 @@ func (v *AssignReplicasToDirsResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*6 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -43989,13 +42025,9 @@ func (v *ListConfigResourcesRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.ResourceTypes
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -44156,15 +42188,8 @@ func (v *ListConfigResourcesResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.ConfigResources
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) || version >= 1 && int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) || version >= 1 && int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -44371,15 +42396,8 @@ func (v *DescribeTopicPartitionsRequest) readFrom(src []byte, unsafe bool) error
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -44750,15 +42768,8 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*26 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*26 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -44790,15 +42801,8 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*20 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*20 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -44829,15 +42833,8 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						v := s.Replicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -44855,15 +42852,8 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						v := s.ISR
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -44881,18 +42871,11 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						v := s.EligibleLeaderReplicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if version < 0 || l == 0 {
 							a = []int32{}
 						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -44910,18 +42893,11 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						v := s.LastKnownELR
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if version < 0 || l == 0 {
 							a = []int32{}
 						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -44939,15 +42915,8 @@ func (v *DescribeTopicPartitionsResponse) readFrom(src []byte, unsafe bool) erro
 						v := s.OfflineReplicas
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -45147,16 +43116,12 @@ func (v *ShareGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.SubscribedTopicNames
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []string{}
 		}
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -45418,15 +43383,8 @@ func (v *ShareGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.TopicPartitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*18 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -45445,15 +43403,8 @@ func (v *ShareGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -45591,13 +43542,9 @@ func (v *ShareGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.GroupIDs
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -45970,15 +43917,8 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*20 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*20 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -46022,15 +43962,8 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Members
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*12 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*12 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -46066,13 +43999,9 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.SubscribedTopicNames
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if !b.Ok() {
-							return b.Complete()
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -46093,15 +44022,8 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v := s.TopicPartitions
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
-								return b.Complete()
-							}
-							if int64(l)*19 > int64(len(b.Src)) {
+							l = readArrayLen(&b, isFlexible)
+							if !b.Ok() || int64(l)*19 > int64(len(b.Src)) {
 								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
@@ -46124,15 +44046,8 @@ func (v *ShareGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.Partitions
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									if int64(l)*4 > int64(len(b.Src)) {
+									l = readArrayLen(&b, isFlexible)
+									if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
@@ -46580,15 +44495,8 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -46607,15 +44515,8 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -46638,15 +44539,8 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.AcknowledgementBatches
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*18 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -46669,13 +44563,9 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 								v := s.AcknowledgeTypes
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
+								l = readArrayLen(&b, isFlexible)
 								if !b.Ok() {
-									return b.Complete()
+									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
 								if l > 0 {
@@ -46713,15 +44603,8 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.ForgottenTopicsData
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -46740,15 +44623,8 @@ func (v *ShareFetchRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -47180,15 +45056,8 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -47207,15 +45076,8 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*22 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*22 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -47272,15 +45134,8 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.AcquiredRecords
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*18 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -47328,15 +45183,8 @@ func (v *ShareFetchResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.NodeEndpoints
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*11 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*11 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -47645,15 +45493,8 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -47672,15 +45513,8 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*6 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -47699,15 +45533,8 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.AcknowledgementBatches
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*18 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -47730,13 +45557,9 @@ func (v *ShareAcknowledgeRequest) readFrom(src []byte, unsafe bool) error {
 								v := s.AcknowledgeTypes
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
+								l = readArrayLen(&b, isFlexible)
 								if !b.Ok() {
-									return b.Complete()
+									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
 								if l > 0 {
@@ -48105,15 +45928,8 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -48132,15 +45948,8 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*16 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*16 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -48198,15 +46007,8 @@ func (v *ShareAcknowledgeResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.NodeEndpoints
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*11 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*11 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -48441,15 +46243,8 @@ func (v *AddRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Listeners
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -49029,15 +46824,8 @@ func (v *UpdateRaftVoterRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Listeners
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*5 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*5 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -49486,15 +47274,8 @@ func (v *InitializeShareGroupStateRequest) readFrom(src []byte, unsafe bool) err
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -49513,15 +47294,8 @@ func (v *InitializeShareGroupStateRequest) readFrom(src []byte, unsafe bool) err
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*16 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*16 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -49728,15 +47502,8 @@ func (v *InitializeShareGroupStateResponse) readFrom(src []byte, unsafe bool) er
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -49755,15 +47522,8 @@ func (v *InitializeShareGroupStateResponse) readFrom(src []byte, unsafe bool) er
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -49980,15 +47740,8 @@ func (v *ReadShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -50007,15 +47760,8 @@ func (v *ReadShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -50295,15 +48041,8 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -50322,15 +48061,8 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*21 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*21 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -50366,15 +48098,8 @@ func (v *ReadShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.StateBatches
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*19 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*19 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -50688,15 +48413,8 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -50715,15 +48433,8 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*22 > int64(len(b.Src)) || version >= 1 && int64(l)*26 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*22 > int64(len(b.Src)) || version >= 1 && int64(l)*26 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -50758,15 +48469,8 @@ func (v *WriteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.StateBatches
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*19 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*19 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -50987,15 +48691,8 @@ func (v *WriteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -51014,15 +48711,8 @@ func (v *WriteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -51232,15 +48922,8 @@ func (v *DeleteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -51259,15 +48942,8 @@ func (v *DeleteShareGroupStateRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -51468,15 +49144,8 @@ func (v *DeleteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error 
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -51495,15 +49164,8 @@ func (v *DeleteShareGroupStateResponse) readFrom(src []byte, unsafe bool) error 
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -51722,15 +49384,8 @@ func (v *ReadShareGroupStateSummaryRequest) readFrom(src []byte, unsafe bool) er
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -51749,15 +49404,8 @@ func (v *ReadShareGroupStateSummaryRequest) readFrom(src []byte, unsafe bool) er
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -51994,15 +49642,8 @@ func (v *ReadShareGroupStateSummaryResponse) readFrom(src []byte, unsafe bool) e
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*18 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*18 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -52021,15 +49662,8 @@ func (v *ReadShareGroupStateSummaryResponse) readFrom(src []byte, unsafe bool) e
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*24 > int64(len(b.Src)) || version >= 1 && int64(l)*28 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*24 > int64(len(b.Src)) || version >= 1 && int64(l)*28 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -52886,15 +50520,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Subtopologies
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -52913,13 +50540,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.SourceTopics
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if !b.Ok() {
-							return b.Complete()
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -52936,13 +50559,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.SourceTopicRegex
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if !b.Ok() {
-							return b.Complete()
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -52959,15 +50578,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.StateChangelogTopics
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*9 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*9 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -52994,15 +50606,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								v := s.Configs
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
-								if !b.Ok() {
-									return b.Complete()
-								}
-								if int64(l)*3 > int64(len(b.Src)) {
+								l = readArrayLen(&b, isFlexible)
+								if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
@@ -53039,13 +50644,9 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.RepartitionSinkTopics
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if !b.Ok() {
-							return b.Complete()
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -53062,15 +50663,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.RepartitionSourceTopics
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*9 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*9 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -53097,15 +50691,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								v := s.Configs
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
-								if !b.Ok() {
-									return b.Complete()
-								}
-								if int64(l)*3 > int64(len(b.Src)) {
+								l = readArrayLen(&b, isFlexible)
+								if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
@@ -53142,15 +50729,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 						v := s.CopartitionGroups
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -53165,15 +50745,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								v := s.SourceTopics
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
-								if !b.Ok() {
-									return b.Complete()
-								}
-								if int64(l)*2 > int64(len(b.Src)) {
+								l = readArrayLen(&b, isFlexible)
+								if !b.Ok() || int64(l)*2 > int64(len(b.Src)) {
 									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
@@ -53191,15 +50764,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								v := s.SourceTopicRegex
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
-								if !b.Ok() {
-									return b.Complete()
-								}
-								if int64(l)*2 > int64(len(b.Src)) {
+								l = readArrayLen(&b, isFlexible)
+								if !b.Ok() || int64(l)*2 > int64(len(b.Src)) {
 									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
@@ -53217,15 +50783,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 								v := s.RepartitionSourceTopics
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
-								if !b.Ok() {
-									return b.Complete()
-								}
-								if int64(l)*2 > int64(len(b.Src)) {
+								l = readArrayLen(&b, isFlexible)
+								if !b.Ok() || int64(l)*2 > int64(len(b.Src)) {
 									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
@@ -53262,18 +50821,11 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.ActiveTasks
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []TaskIDs{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -53292,15 +50844,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -53325,18 +50870,11 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.StandbyTasks
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []TaskIDs{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -53355,15 +50893,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -53388,18 +50919,11 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.WarmupTasks
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []TaskIDs{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -53418,15 +50942,8 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -53475,18 +50992,11 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.ClientTags
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []StreamsGroupHeartbeatRequestClientTag{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -53516,18 +51026,11 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.TaskOffsets
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []TaskOffset{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*14 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*14 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -53561,18 +51064,11 @@ func (v *StreamsGroupHeartbeatRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.TaskEndOffsets
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []TaskOffset{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*14 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*14 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -54098,18 +51594,11 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		v := s.Status
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []StreamsGroupHeartbeatResponseStatus{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -54139,18 +51628,11 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		v := s.ActiveTasks
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []TaskIDs{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -54169,15 +51651,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -54202,18 +51677,11 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		v := s.StandbyTasks
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []TaskIDs{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -54232,15 +51700,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -54265,18 +51726,11 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		v := s.WarmupTasks
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []TaskIDs{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -54295,15 +51749,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*4 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -54336,18 +51783,11 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 		v := s.PartitionsByUserEndpoint
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if version < 0 || l == 0 {
 			a = []StreamsGroupHeartbeatResponsePartitionsByUserEndpoint{}
 		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*7 > int64(len(b.Src)) {
+		if !b.Ok() || int64(l)*7 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -54378,15 +51818,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				v := s.ActivePartitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -54405,15 +51838,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -54438,15 +51864,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 				v := s.StandbyPartitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -54465,15 +51884,8 @@ func (v *StreamsGroupHeartbeatResponse) readFrom(src []byte, unsafe bool) error 
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -54702,13 +52114,9 @@ func (v *StreamsGroupDescribeRequest) readFrom(src []byte, unsafe bool) error {
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = readArrayLen(&b, isFlexible)
 		if !b.Ok() {
-			return b.Complete()
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {
@@ -55715,15 +53123,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*20 > int64(len(b.Src)) || version >= 1 && int64(l)*23 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*20 > int64(len(b.Src)) || version >= 1 && int64(l)*23 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -55773,18 +53174,11 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.Subtopologies
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if version < 0 || l == 0 {
 							a = []StreamsGroupDescribeResponseGroupTopologySubtopology{}
 						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*6 > int64(len(b.Src)) {
+						if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -55803,13 +53197,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v := s.SourceTopics
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
+								l = readArrayLen(&b, isFlexible)
 								if !b.Ok() {
-									return b.Complete()
+									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
 								if l > 0 {
@@ -55826,13 +53216,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v := s.RepartitionSinkTopics
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
+								l = readArrayLen(&b, isFlexible)
 								if !b.Ok() {
-									return b.Complete()
+									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
 								if l > 0 {
@@ -55849,15 +53235,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v := s.StateChangelogTopics
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
-								if !b.Ok() {
-									return b.Complete()
-								}
-								if int64(l)*9 > int64(len(b.Src)) {
+								l = readArrayLen(&b, isFlexible)
+								if !b.Ok() || int64(l)*9 > int64(len(b.Src)) {
 									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
@@ -55884,15 +53263,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										v := s.Configs
 										a := v
 										var l int32
-										if isFlexible {
-											l = b.CompactArrayLen()
-										} else {
-											l = b.ArrayLen()
-										}
-										if !b.Ok() {
-											return b.Complete()
-										}
-										if int64(l)*3 > int64(len(b.Src)) {
+										l = readArrayLen(&b, isFlexible)
+										if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 											return kbin.ErrNotEnoughData
 										}
 										a = a[:0]
@@ -55929,15 +53301,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v := s.RepartitionSourceTopics
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
-								if !b.Ok() {
-									return b.Complete()
-								}
-								if int64(l)*9 > int64(len(b.Src)) {
+								l = readArrayLen(&b, isFlexible)
+								if !b.Ok() || int64(l)*9 > int64(len(b.Src)) {
 									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
@@ -55964,15 +53329,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										v := s.Configs
 										a := v
 										var l int32
-										if isFlexible {
-											l = b.CompactArrayLen()
-										} else {
-											l = b.ArrayLen()
-										}
-										if !b.Ok() {
-											return b.Complete()
-										}
-										if int64(l)*3 > int64(len(b.Src)) {
+										l = readArrayLen(&b, isFlexible)
+										if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 											return kbin.ErrNotEnoughData
 										}
 										a = a[:0]
@@ -56021,15 +53379,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 				v := s.Members
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*28 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*28 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -56097,15 +53448,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.ClientTags
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*3 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -56135,15 +53479,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.TaskOffsets
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*14 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*14 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -56177,15 +53514,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.TaskEndOffsets
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*14 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*14 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -56223,15 +53553,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v := s.ActiveTasks
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
-								return b.Complete()
-							}
-							if int64(l)*3 > int64(len(b.Src)) {
+							l = readArrayLen(&b, isFlexible)
+							if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
@@ -56250,15 +53573,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.Partitions
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									if int64(l)*4 > int64(len(b.Src)) {
+									l = readArrayLen(&b, isFlexible)
+									if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
@@ -56283,15 +53599,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v := s.StandbyTasks
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
-								return b.Complete()
-							}
-							if int64(l)*3 > int64(len(b.Src)) {
+							l = readArrayLen(&b, isFlexible)
+							if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
@@ -56310,15 +53619,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.Partitions
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									if int64(l)*4 > int64(len(b.Src)) {
+									l = readArrayLen(&b, isFlexible)
+									if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
@@ -56343,15 +53645,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v := s.WarmupTasks
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
-								return b.Complete()
-							}
-							if int64(l)*3 > int64(len(b.Src)) {
+							l = readArrayLen(&b, isFlexible)
+							if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
@@ -56370,15 +53665,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.Partitions
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									if int64(l)*4 > int64(len(b.Src)) {
+									l = readArrayLen(&b, isFlexible)
+									if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
@@ -56411,15 +53699,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v := s.ActiveTasks
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
-								return b.Complete()
-							}
-							if int64(l)*3 > int64(len(b.Src)) {
+							l = readArrayLen(&b, isFlexible)
+							if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
@@ -56438,15 +53719,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.Partitions
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									if int64(l)*4 > int64(len(b.Src)) {
+									l = readArrayLen(&b, isFlexible)
+									if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
@@ -56471,15 +53745,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v := s.StandbyTasks
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
-								return b.Complete()
-							}
-							if int64(l)*3 > int64(len(b.Src)) {
+							l = readArrayLen(&b, isFlexible)
+							if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
@@ -56498,15 +53765,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.Partitions
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									if int64(l)*4 > int64(len(b.Src)) {
+									l = readArrayLen(&b, isFlexible)
+									if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
@@ -56531,15 +53791,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 							v := s.WarmupTasks
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
-							if !b.Ok() {
-								return b.Complete()
-							}
-							if int64(l)*3 > int64(len(b.Src)) {
+							l = readArrayLen(&b, isFlexible)
+							if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
@@ -56558,15 +53811,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.Partitions
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
-									if !b.Ok() {
-										return b.Complete()
-									}
-									if int64(l)*4 > int64(len(b.Src)) {
+									l = readArrayLen(&b, isFlexible)
+									if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
@@ -56616,15 +53862,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.Subtopologies
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*3 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -56643,15 +53882,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 								v := s.Nodes
 								a := v
 								var l int32
-								if isFlexible {
-									l = b.CompactArrayLen()
-								} else {
-									l = b.ArrayLen()
-								}
-								if !b.Ok() {
-									return b.Complete()
-								}
-								if int64(l)*7 > int64(len(b.Src)) {
+								l = readArrayLen(&b, isFlexible)
+								if !b.Ok() || int64(l)*7 > int64(len(b.Src)) {
 									return kbin.ErrNotEnoughData
 								}
 								a = a[:0]
@@ -56674,13 +53906,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										v := s.SourceTopics
 										a := v
 										var l int32
-										if isFlexible {
-											l = b.CompactArrayLen()
-										} else {
-											l = b.ArrayLen()
-										}
+										l = readArrayLen(&b, isFlexible)
 										if !b.Ok() {
-											return b.Complete()
+											return kbin.ErrNotEnoughData
 										}
 										a = a[:0]
 										if l > 0 {
@@ -56702,13 +53930,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										v := s.Stores
 										a := v
 										var l int32
-										if isFlexible {
-											l = b.CompactArrayLen()
-										} else {
-											l = b.ArrayLen()
-										}
+										l = readArrayLen(&b, isFlexible)
 										if !b.Ok() {
-											return b.Complete()
+											return kbin.ErrNotEnoughData
 										}
 										a = a[:0]
 										if l > 0 {
@@ -56725,13 +53949,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 										v := s.Successors
 										a := v
 										var l int32
-										if isFlexible {
-											l = b.CompactArrayLen()
-										} else {
-											l = b.ArrayLen()
-										}
+										l = readArrayLen(&b, isFlexible)
 										if !b.Ok() {
-											return b.Complete()
+											return kbin.ErrNotEnoughData
 										}
 										a = a[:0]
 										if l > 0 {
@@ -56762,15 +53982,8 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 						v := s.GlobalStores
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*15 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*15 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -56797,13 +54010,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.SourceTopics
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
+									l = readArrayLen(&b, isFlexible)
 									if !b.Ok() {
-										return b.Complete()
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -56825,13 +54034,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.Stores
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
+									l = readArrayLen(&b, isFlexible)
 									if !b.Ok() {
-										return b.Complete()
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -56848,13 +54053,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.Successors
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
+									l = readArrayLen(&b, isFlexible)
 									if !b.Ok() {
-										return b.Complete()
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -56887,13 +54088,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.SourceTopics
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
+									l = readArrayLen(&b, isFlexible)
 									if !b.Ok() {
-										return b.Complete()
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -56915,13 +54112,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.Stores
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
+									l = readArrayLen(&b, isFlexible)
 									if !b.Ok() {
-										return b.Complete()
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -56938,13 +54131,9 @@ func (v *StreamsGroupDescribeResponse) readFrom(src []byte, unsafe bool) error {
 									v := s.Successors
 									a := v
 									var l int32
-									if isFlexible {
-										l = b.CompactArrayLen()
-									} else {
-										l = b.ArrayLen()
-									}
+									l = readArrayLen(&b, isFlexible)
 									if !b.Ok() {
-										return b.Complete()
+										return kbin.ErrNotEnoughData
 									}
 									a = a[:0]
 									if l > 0 {
@@ -57163,15 +54352,8 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -57190,18 +54372,11 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
+				l = readArrayLen(&b, isFlexible)
 				if version < 0 || l == 0 {
 					a = []DescribeShareGroupOffsetsRequestGroupTopic{}
 				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*3 > int64(len(b.Src)) {
+				if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -57220,15 +54395,8 @@ func (v *DescribeShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) err
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*4 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*4 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -57533,15 +54701,8 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 		v := s.Groups
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*6 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*6 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -57560,15 +54721,8 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 				v := s.Topics
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*19 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*19 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -57591,15 +54745,8 @@ func (v *DescribeShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) er
 						v := s.Partitions
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if int64(l)*20 > int64(len(b.Src)) || version >= 1 && int64(l)*28 > int64(len(b.Src)) {
+						l = readArrayLen(&b, isFlexible)
+						if !b.Ok() || int64(l)*20 > int64(len(b.Src)) || version >= 1 && int64(l)*28 > int64(len(b.Src)) {
 							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
@@ -57844,15 +54991,8 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*3 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -57871,15 +55011,8 @@ func (v *AlterShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error 
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*12 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*12 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -58136,15 +55269,8 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*19 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*19 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -58167,15 +55293,8 @@ func (v *AlterShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) error
 				v := s.Partitions
 				a := v
 				var l int32
-				if isFlexible {
-					l = b.CompactArrayLen()
-				} else {
-					l = b.ArrayLen()
-				}
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if int64(l)*8 > int64(len(b.Src)) {
+				l = readArrayLen(&b, isFlexible)
+				if !b.Ok() || int64(l)*8 > int64(len(b.Src)) {
 					return kbin.ErrNotEnoughData
 				}
 				a = a[:0]
@@ -58347,15 +55466,8 @@ func (v *DeleteShareGroupOffsetsRequest) readFrom(src []byte, unsafe bool) error
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*2 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*2 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -58565,15 +55677,8 @@ func (v *DeleteShareGroupOffsetsResponse) readFrom(src []byte, unsafe bool) erro
 		v := s.Topics
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if int64(l)*21 > int64(len(b.Src)) {
+		l = readArrayLen(&b, isFlexible)
+		if !b.Ok() || int64(l)*21 > int64(len(b.Src)) {
 			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
@@ -58921,15 +56026,8 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 			v := s.Subtopologies
 			a := v
 			var l int32
-			if isFlexible {
-				l = b.CompactArrayLen()
-			} else {
-				l = b.ArrayLen()
-			}
-			if !b.Ok() {
-				return b.Complete()
-			}
-			if int64(l)*3 > int64(len(b.Src)) {
+			l = readArrayLen(&b, isFlexible)
+			if !b.Ok() || int64(l)*3 > int64(len(b.Src)) {
 				return kbin.ErrNotEnoughData
 			}
 			a = a[:0]
@@ -58948,15 +56046,8 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 					v := s.Nodes
 					a := v
 					var l int32
-					if isFlexible {
-						l = b.CompactArrayLen()
-					} else {
-						l = b.ArrayLen()
-					}
-					if !b.Ok() {
-						return b.Complete()
-					}
-					if int64(l)*7 > int64(len(b.Src)) {
+					l = readArrayLen(&b, isFlexible)
+					if !b.Ok() || int64(l)*7 > int64(len(b.Src)) {
 						return kbin.ErrNotEnoughData
 					}
 					a = a[:0]
@@ -58979,13 +56070,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							v := s.SourceTopics
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
+							l = readArrayLen(&b, isFlexible)
 							if !b.Ok() {
-								return b.Complete()
+								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
 							if l > 0 {
@@ -59007,13 +56094,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							v := s.Stores
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
+							l = readArrayLen(&b, isFlexible)
 							if !b.Ok() {
-								return b.Complete()
+								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
 							if l > 0 {
@@ -59030,13 +56113,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 							v := s.Successors
 							a := v
 							var l int32
-							if isFlexible {
-								l = b.CompactArrayLen()
-							} else {
-								l = b.ArrayLen()
-							}
+							l = readArrayLen(&b, isFlexible)
 							if !b.Ok() {
-								return b.Complete()
+								return kbin.ErrNotEnoughData
 							}
 							a = a[:0]
 							if l > 0 {
@@ -59067,15 +56146,8 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 			v := s.GlobalStores
 			a := v
 			var l int32
-			if isFlexible {
-				l = b.CompactArrayLen()
-			} else {
-				l = b.ArrayLen()
-			}
-			if !b.Ok() {
-				return b.Complete()
-			}
-			if int64(l)*15 > int64(len(b.Src)) {
+			l = readArrayLen(&b, isFlexible)
+			if !b.Ok() || int64(l)*15 > int64(len(b.Src)) {
 				return kbin.ErrNotEnoughData
 			}
 			a = a[:0]
@@ -59102,13 +56174,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						v := s.SourceTopics
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if !b.Ok() {
-							return b.Complete()
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -59130,13 +56198,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						v := s.Stores
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if !b.Ok() {
-							return b.Complete()
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -59153,13 +56217,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						v := s.Successors
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if !b.Ok() {
-							return b.Complete()
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -59192,13 +56252,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						v := s.SourceTopics
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if !b.Ok() {
-							return b.Complete()
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -59220,13 +56276,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						v := s.Stores
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if !b.Ok() {
-							return b.Complete()
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {
@@ -59243,13 +56295,9 @@ func (v *StreamsGroupTopologyDescriptionUpdateRequest) readFrom(src []byte, unsa
 						v := s.Successors
 						a := v
 						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
+						l = readArrayLen(&b, isFlexible)
 						if !b.Ok() {
-							return b.Complete()
+							return kbin.ErrNotEnoughData
 						}
 						a = a[:0]
 						if l > 0 {

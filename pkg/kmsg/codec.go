@@ -164,6 +164,13 @@ func appendNullableBytes(dst, b []byte, flexible bool) []byte {
 	return append(dst, b...)
 }
 
+func readArrayLen(b *kbin.Reader, flexible bool) int32 {
+	if flexible {
+		return b.CompactArrayLen()
+	}
+	return b.ArrayLen()
+}
+
 func appendArrayLen(dst []byte, n int, flexible bool) []byte {
 	if flexible {
 		return kbin.AppendCompactArrayLen(dst, n)

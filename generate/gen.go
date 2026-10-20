@@ -346,16 +346,6 @@ func primDecode(name string, l *LineWriter) {
 	l.Write("v := b.%s()", name)
 }
 
-func flexDecode(supports bool, l *LineWriter, fn func(string)) {
-	if supports {
-		l.Write("if isFlexible {")
-		fn("Compact")
-		l.Write("} else {")
-		defer l.Write("}")
-	}
-	fn("")
-}
-
 // compactDecode reads with a function in codec.go if the type can be compact
 // or unsafe, or with a kbin.Reader method otherwise.
 func compactDecode(fromFlexible, hasUnsafe bool, name string, l *LineWriter) {
@@ -432,9 +422,11 @@ func (a Array) WriteDecode(l *LineWriter) {
 	if a.IsVarintArray {
 		l.Write("l = b.VarintArrayLen()")
 	} else {
-		flexDecode(a.FromFlexible, l, func(compact string) {
-			l.Write("l = b.%sArrayLen()", compact)
-		})
+		if a.FromFlexible {
+			l.Write("l = readArrayLen(&b, isFlexible)") // see codec.go
+		} else {
+			l.Write("l = b.ArrayLen()")
+		}
 		if a.IsNullableArray {
 			l.Write("if version < %d || l == 0 {", a.NullableVersion)
 			l.Write("a = %s{}", a.TypeName())
@@ -442,9 +434,6 @@ func (a Array) WriteDecode(l *LineWriter) {
 		}
 	}
 
-	l.Write("if !b.Ok() {")
-	l.Write("return b.Complete()")
-	l.Write("}")
 	a.writeLenBound(l)
 
 	l.Write("a = a[:0]")
@@ -485,10 +474,10 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("v = a")
 }
 
-// writeLenBound fails a decode if l elements, each at least its fewest
-// encoded bytes, cannot fit in the bytes left. The ArrayLen functions allow a
-// byte per element, but we allocate every element before reading any, and an
-// element can take hundreds of bytes in memory.
+// writeLenBound fails a decode if reading l failed, or if l elements, each at
+// least its fewest encoded bytes, cannot fit in the bytes left. The ArrayLen
+// functions allow a byte per element, but we allocate every element before
+// reading any, and an element can take hundreds of bytes in memory.
 //
 // The fewest bytes can change with version; we check the size of the latest
 // versions, and the smallest size of every version before them. We do not
@@ -508,15 +497,12 @@ func (a Array) writeLenBound(l *LineWriter) {
 		}
 		least = min(least, n)
 	}
-	var conds []string
+	conds := []string{"!b.Ok()"}
 	if least > 1 {
 		conds = append(conds, fmt.Sprintf("int64(l)*%d > int64(len(b.Src))", least))
 	}
 	if latest > least {
 		conds = append(conds, fmt.Sprintf("version >= %d && int64(l)*%d > int64(len(b.Src))", since, latest))
-	}
-	if len(conds) == 0 {
-		return
 	}
 	l.Write("if %s {", strings.Join(conds, " || "))
 	l.Write("return kbin.ErrNotEnoughData")
