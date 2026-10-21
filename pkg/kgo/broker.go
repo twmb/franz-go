@@ -438,7 +438,9 @@ start:
 	}
 	{
 		var err error
-		if cxn, err = b.loadConnection(pr.ctx, req); err != nil {
+		// pr.req, not req: a force-open replaces req with ApiVersions
+		// below, and a retry must still open the produce connection.
+		if cxn, err = b.loadConnection(pr.ctx, pr.req); err != nil {
 			// It is rare, but it is possible that the broker has
 			// an immediate issue on a new connection. We retry
 			// once.
