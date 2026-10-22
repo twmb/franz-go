@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"slices"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -273,7 +274,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		totalRecords   int32
 		targets        []fetchTarget
 		acquiredParts  []acquiredPart
-		includeBrokers bool
 		toFire         []*partData
 		maxRecordLocks = c.shareMaxRecordLocks(groupID)
 	)
@@ -328,7 +328,14 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 				sp := donep(topicID, p, kerr.NotLeaderForPartition.Code)
 				sp.CurrentLeader.LeaderID = pd.leader.node
 				sp.CurrentLeader.LeaderEpoch = pd.epoch
-				includeBrokers = true
+				// Kafka sends the endpoint of each leader it names.
+				if !slices.ContainsFunc(resp.NodeEndpoints, func(ne kmsg.ShareFetchResponseNodeEndpoint) bool { return ne.NodeID == pd.leader.node }) {
+					ne := kmsg.NewShareFetchResponseNodeEndpoint()
+					ne.NodeID = pd.leader.node
+					ne.Host, ne.Port = pd.leader.hostport()
+					ne.Rack = &brokerRack
+					resp.NodeEndpoints = append(resp.NodeEndpoints, ne)
+				}
 				continue
 			}
 			targets = append(targets, fetchTarget{topicID, topicName, p, pd})
@@ -488,16 +495,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			}
 			wsf.t = time.AfterFunc(remaining, wsf.cb)
 			return nil, nil
-		}
-	}
-
-	if includeBrokers {
-		for _, b := range c.bs {
-			ne := kmsg.NewShareFetchResponseNodeEndpoint()
-			ne.NodeID = b.node
-			ne.Host, ne.Port = b.hostport()
-			ne.Rack = &brokerRack
-			resp.NodeEndpoints = append(resp.NodeEndpoints, ne)
 		}
 	}
 
