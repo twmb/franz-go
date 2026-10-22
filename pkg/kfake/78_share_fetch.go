@@ -112,18 +112,29 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 		return i
 	}
+	// Kafka answers a partition once: the result of a piggybacked ack
+	// goes into the entry of the partition's fetch.
+	partIdx := make(map[tpKey]int)
 	donep := func(tid uuid, p int32, errCode int16) *kmsg.ShareFetchResponseTopicPartition {
-		idx := addTopic(tid)
-		sp := kmsg.NewShareFetchResponseTopicPartition()
-		sp.Partition = p
-		sp.ErrorCode = errCode
-		// Real brokers serialize the Java schema default -1/-1 when
-		// they do not populate a leader hint; the Go zero value 0/0
-		// would be read by clients as a valid hint to node 0.
-		sp.CurrentLeader.LeaderID = -1
-		sp.CurrentLeader.LeaderEpoch = -1
-		resp.Topics[idx].Partitions = append(resp.Topics[idx].Partitions, sp)
-		return &resp.Topics[idx].Partitions[len(resp.Topics[idx].Partitions)-1]
+		ps := &resp.Topics[addTopic(tid)].Partitions
+		i, ok := partIdx[tpKey{tid, p}]
+		if !ok {
+			i = len(*ps)
+			partIdx[tpKey{tid, p}] = i
+			sp := kmsg.NewShareFetchResponseTopicPartition()
+			sp.Partition = p
+			// Real brokers serialize the Java schema default -1/-1 when
+			// they do not populate a leader hint; the Go zero value 0/0
+			// would be read by clients as a valid hint to node 0.
+			sp.CurrentLeader.LeaderID = -1
+			sp.CurrentLeader.LeaderEpoch = -1
+			*ps = append(*ps, sp)
+		}
+		sp := &(*ps)[i]
+		if errCode != 0 {
+			sp.ErrorCode = errCode
+		}
+		return sp
 	}
 	onAck := func(tid uuid, p int32, ec int16) {
 		if ec == 0 {

@@ -2245,6 +2245,61 @@ func TestShareGroupAckDedupRenewThenTerminal(t *testing.T) {
 	}
 }
 
+// TestShareFetchAckedPartitionAnsweredOnce fails a ShareFetch that carries a
+// piggybacked ack for the partition it also fetches. Kafka answers that
+// partition once, with the ack error and the fetch error in one entry. The
+// client keeps the first entry it sees for a partition, so a second entry
+// loses the fetch error, or the records, that it carries.
+func TestShareFetchAckedPartitionAnsweredOnce(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "share-ack-fetch-once", "share-ack-fetch-once-g"
+	c := newCluster(t,
+		SeedTopics(1, topic),
+		BrokerConfigs(map[string]string{
+			"group.share.heartbeat.interval.ms": "100",
+		}),
+	)
+	produceShareN(t, c, topic, group, 1)
+
+	injected := c.Fault(Fault{
+		Keys:       []kmsg.Key{kmsg.ShareFetch},
+		TopicID:    c.TopicInfo(topic).TopicID,
+		Partitions: []int32{0},
+		Err:        kerr.TopicAuthorizationFailed,
+		When: func(kreq kmsg.Request) bool {
+			for _, rt := range kreq.(*kmsg.ShareFetchRequest).Topics {
+				for _, rp := range rt.Partitions {
+					if len(rp.AcknowledgementBatches) > 0 {
+						return true
+					}
+				}
+			}
+			return false
+		},
+	})
+
+	cl := newShareConsumer(t, c, topic, group)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var sawErr bool
+	for !sawErr && ctx.Err() == nil {
+		fetches := cl.PollFetches(ctx)
+		for _, r := range fetches.Records() {
+			r.Ack(kgo.AckAccept)
+		}
+		for _, fe := range fetches.Errors() {
+			sawErr = sawErr || errors.Is(fe.Err, kerr.TopicAuthorizationFailed)
+		}
+	}
+	if injected.Hits() == 0 {
+		t.Fatal("no ShareFetch carried an ack")
+	}
+	if !sawErr {
+		t.Error("the fetch error for a partition we also acked never reached PollFetches")
+	}
+}
+
 // TestShareGroupLeaderMoveInFlightAcks is the TestShareGroupCurrentLeaderMove
 // complement: records are consumed from the original leader and acked
 // AFTER the move (not before). This exercises the PR review finding
