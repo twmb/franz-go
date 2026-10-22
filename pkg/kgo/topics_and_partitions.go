@@ -799,7 +799,8 @@ func (k *kip951move) maybeAddProducePartition(resp *kmsg.ProduceResponse, p *kms
 		p.ErrorCode != kerr.NotLeaderForPartition.Code ||
 		len(resp.Brokers) == 0 ||
 		p.CurrentLeader.LeaderID < 0 ||
-		p.CurrentLeader.LeaderEpoch < 0 {
+		p.CurrentLeader.LeaderEpoch < 0 ||
+		rb.leaderEpoch < 0 { // epochs unknown: let metadata move the partition
 		return false
 	}
 	// Only a newer epoch moves us. An equal or older epoch, whatever leader
@@ -839,7 +840,8 @@ func (k *kip951move) maybeAddFetchPartition(resp *kmsg.FetchResponse, p *kmsg.Fe
 		p.ErrorCode != kerr.NotLeaderForPartition.Code ||
 		len(resp.Brokers) == 0 ||
 		p.CurrentLeader.LeaderID < 0 ||
-		p.CurrentLeader.LeaderEpoch < 0 {
+		p.CurrentLeader.LeaderEpoch < 0 ||
+		c.leaderEpoch < 0 { // as in maybeAddProducePartition
 		return false
 	}
 
@@ -887,6 +889,9 @@ func (k *kip951move) maybeAddSharePartition(sc *shareConsumer, c *shareCursor, e
 	}
 	ps := tp.load().partitions
 	if int(c.partition) >= len(ps) || ps[c.partition].shareCursor != c {
+		return false
+	}
+	if ps[c.partition].leaderEpoch < 0 { // epochs unknown: let metadata move the cursor
 		return false
 	}
 	if epoch <= ps[c.partition].leaderEpoch { // as in maybeAddProducePartition
