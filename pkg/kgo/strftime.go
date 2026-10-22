@@ -125,14 +125,14 @@ func strftimeAppendFormat(dst []byte, format string, t time.Time) []byte {
 			}
 			dst = append(dst, '0'+day)
 		case 'U': // week number of year starting from first Sunday
-			dst = append0Pad(dst, (t.YearDay()-int(t.Weekday())+7)/7, 2)
+			dst = append0Pad(dst, (t.YearDay()-1-int(t.Weekday())+7)/7, 2)
 		case 'V': // iso8601 week number
 			_, week := t.ISOWeek()
 			dst = append0Pad(dst, week, 2)
 		case 'w': // day of week, 0 to 6, Sunday 0
 			dst = strconv.AppendInt(dst, int64(t.Weekday()), 10)
 		case 'W': // week number of year starting from first Monday
-			dst = append0Pad(dst, (t.YearDay()-(int(t.Weekday())+6)%7+7)/7, 2)
+			dst = append0Pad(dst, (t.YearDay()-1-(int(t.Weekday())+6)%7+7)/7, 2)
 		case 'x': // date representation for current locale; we go DD/MM/YY
 			dst = append0Pad(dst, t.Day(), 2)
 			dst = append(dst, '/')

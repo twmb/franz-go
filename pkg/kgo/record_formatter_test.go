@@ -164,6 +164,23 @@ func TestRecordFormatter(t *testing.T) {
 			expR:   "16725225600000 \x00\x00\x0f6%!t\x00 \x00t!%6\x0f\x00\x00",
 		},
 
+		// Weeks before the first Sunday or Monday are week 00.
+		{
+			layout: "%d{strftime[%U %W]}",
+			rec:    &Record{Timestamp: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+			expR:   "00 01",
+		},
+		{
+			layout: "%d{strftime[%U %W]}",
+			rec:    &Record{Timestamp: time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)},
+			expR:   "00 00",
+		},
+		{
+			layout: "%d{strftime[%U %W]}",
+			rec:    &Record{Timestamp: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)},
+			expR:   "01 00",
+		},
+
 		// strftime's 12-hour clock runs 1 through 12; it has no hour 0.
 		{
 			layout: "%d{strftime[%I %l %r]}",
