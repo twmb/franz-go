@@ -143,7 +143,7 @@ func TestShareFetchLeaderMoveNoHintHeals(t *testing.T) {
 // TestShareFetchLeaderMoveNoHintHeals: when the old leader's NOT_LEADER
 // response carries a CurrentLeader hint (kfake fills it whenever it knows
 // the leader, like a settled real broker), the client migrates the cursor
-// via applyMoves with no metadata round trip and surfaces nothing. This
+// through kip951move with no metadata round trip and surfaces nothing. This
 // passes pre-fix and post-fix; it pins the moves arm staying first.
 func TestShareFetchLeaderMoveHintHeals(t *testing.T) {
 	t.Parallel()
@@ -164,10 +164,14 @@ func TestShareFetchLeaderMoveHintHeals(t *testing.T) {
 	)
 	produceShareN(t, c, topic, group, pre)
 
-	cl := shareChurnConsumer(t, c, topic, group)
+	// A minute of MetadataMinAge keeps the fetch backoff from refreshing
+	// metadata, so only the hint can move the cursor in time.
+	var metas metadataCounter
+	cl := shareChurnConsumer(t, c, topic, group, kgo.MetadataMinAge(time.Minute), kgo.WithHooks(&metas))
 	if got, _ := pollShareUntil(t, cl, pre, 10*time.Second, nil); got < pre {
 		t.Fatalf("pre-move: consumed %d of %d records", got, pre)
 	}
+	metasBefore := metas.n.Load()
 
 	oldLeader := c.LeaderFor(topic, 0)
 	if err := c.MoveTopicPartition(topic, 0, (oldLeader+1)%2); err != nil {
@@ -181,6 +185,18 @@ func TestShareFetchLeaderMoveHintHeals(t *testing.T) {
 	}
 	if got < post {
 		t.Errorf("consumed %d of %d post-move records; CurrentLeader hint migration failed", got, post)
+	}
+	if n := metas.n.Load() - metasBefore; n > 0 {
+		t.Errorf("the client sent %d metadata requests after the move; the hint alone should move the cursor", n)
+	}
+}
+
+// metadataCounter counts the metadata requests a client sends.
+type metadataCounter struct{ n atomic.Int32 }
+
+func (m *metadataCounter) OnBrokerWrite(_ kgo.BrokerMetadata, key int16, _ int, _, _ time.Duration, _ error) {
+	if key == int16(kmsg.Metadata) {
+		m.n.Add(1)
 	}
 }
 

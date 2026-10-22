@@ -77,13 +77,14 @@ func TestAuditShareLeaveWaitsForInflightMigration(t *testing.T) {
 	sc.mu.Unlock()
 
 	// Fire an in-flight migration. The move target is irrelevant -- the fn
-	// resolves no cursor (empty id2t) -- we only need applyMoves to spawn its
-	// goroutine. It does carry a cursor: applyMoves marks each move's cursor
-	// unusable before spawning (the collapse), and applyMovesBlocking
-	// re-signals cursor.source on the way out, so both must be non-nil.
+	// resolves no cursor (topic "t" is not consumed) -- we only need
+	// applyMoves to spawn its goroutine. It does carry a cursor: applyMoves
+	// marks each move's cursor unusable before spawning (the collapse), and
+	// applyMovesBlocking re-signals cursor.source on the way out, so both
+	// must be non-nil.
 	mc := &shareCursor{topic: "t", topicID: [16]byte{9}, partition: 0}
 	mc.source.Store(cl.newSource(1))
-	sc.applyMoves([]shareMove{{topicID: mc.topicID, partition: 0, leaderID: 1, cursor: mc}}, nil)
+	sc.applyMoves(kip951move{shareCursors: map[*shareCursor]topicPartitionData{mc: {leader: 1, leaderEpoch: 1}}})
 
 	// With the fix the goroutine incWorkers, then blocks on its
 	// blockingMetadataFn send (queued behind us), so sc.workers stays
@@ -217,10 +218,10 @@ func TestAuditShareMoveCollapseMarksCursorUnusable(t *testing.T) {
 	}
 
 	// Queue a move. applyMoves marks the cursor moving synchronously before
-	// spawning, so the next createShareReq skips it. The topic id is not in
-	// id2t, so the migration itself is a no-op -- but the re-enable still
+	// spawning, so the next createShareReq skips it. Topic "t" is not
+	// consumed, so the migration itself is a no-op -- but the re-enable still
 	// runs, which is what we verify after release.
-	sc.applyMoves([]shareMove{{topicID: c.topicID, partition: c.partition, leaderID: 1, cursor: c}}, nil)
+	sc.applyMoves(kip951move{shareCursors: map[*shareCursor]topicPartitionData{c: {leader: 1, leaderEpoch: 1}}})
 
 	if !c.moving.Load() {
 		close(release)
