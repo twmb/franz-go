@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -40,51 +41,93 @@ func failNextOFLE(c *Cluster) *FaultHandle {
 	})
 }
 
-// TestAuditSetOffsetsNotClobberedByPendingLoad verifies that SetOffsets on a
-// previously-consumed partition wins over a pending offset load for that
-// partition. Pre-fix, assignSetMatching set the cursor's offset but KEPT the
-// pending load (an epoch validation at the old offset here); the load
-// completed in the new session and overwrote the seek with its stale result,
-// so the consumer silently resumed at the pre-seek position.
+// TestAuditSetOffsetsNotClobberedByPendingLoad verifies that SetOffsets wins
+// over an offset load pending for the partition, with and without a cursor
+// in use. Pre-fix, assignSetMatching kept the load and set nothing when the
+// partition had no cursor in use yet; the load completed in the new session
+// and the consumer silently started at the load's offset.
 func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 	t.Parallel()
 
 	const (
 		topic = "setoffsets-clobber"
+		group = "setoffsets-clobber-g"
 		msgs  = 10
 		seek  = int64(1)
 	)
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	produceN(t, c, topic, msgs)
+	newConsumer := func(t *testing.T, c *Cluster) *kgo.Client {
+		return newPlainClient(t, c,
+			kgo.ConsumeTopics(topic),
+			kgo.ConsumerGroup(group),
+			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+			kgo.DisableAutoCommit(),
+			kgo.DisableFetchSessions(),
+			kgo.FetchMaxWait(100*time.Millisecond),
+		)
+	}
 
-	cl := newPlainClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.DisableFetchSessions(),
-		kgo.FetchMaxWait(100*time.Millisecond),
-	)
+	for _, tt := range []struct {
+		name string
+		// load is the request key of partition 0's pending offset load.
+		load kmsg.Key
+		// pend returns a consumer with partition 0's offset load pending.
+		pend func(*testing.T, *Cluster) *kgo.Client
+	}{
+		{"direct, first load", kmsg.ListOffsets, func(t *testing.T, c *Cluster) *kgo.Client {
+			// A direct consumer's first load lists the start offset.
+			return newPlainClient(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.DisableFetchSessions(),
+				kgo.FetchMaxWait(100*time.Millisecond),
+			)
+		}},
 
-	// Consume everything so the cursor sits at the log end with a
-	// non-negative last consumed epoch.
-	consumeN(t, cl, msgs, 8*time.Second)
+		{"reload after consuming", kmsg.OffsetForLeaderEpoch, func(t *testing.T, c *Cluster) *kgo.Client {
+			// Consume everything so the cursor sits at the log end with
+			// a non-negative last consumed epoch, then fence the next
+			// fetch so the client validates offset 10.
+			cl := newConsumer(t, c)
+			consumeN(t, cl, msgs, 8*time.Second)
+			fenceNextFetch(c, topic)
+			return cl
+		}},
 
-	// Fence the next fetch so the client queues an epoch validation at
-	// offset 10, and fail that validation retriably so it stays pending.
-	ofle := failNextOFLE(c)
-	fenceNextFetch(c, topic)
+		{"first load", kmsg.OffsetForLeaderEpoch, func(t *testing.T, c *Cluster) *kgo.Client {
+			// Commit offset 3 at epoch 0 so that the consumer's first
+			// load validates it. The partition has no cursor in use
+			// until that load finishes.
+			commitOffset(t, c, group, topic, 3)
+			return newConsumer(t, c)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	waitHits(t, ofle, 1, "the epoch validation load was never issued")
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			produceN(t, c, topic, msgs)
 
-	// The validation load for offset 10 is now pending (its retriable
-	// failure scheduled a reload). Seek to offset 1: the seek must win.
-	cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{
-		topic: {0: {Epoch: -1, Offset: seek}},
-	})
+			// Fail every load retryably until the seek is in, so the
+			// load is still pending when SetOffsets runs.
+			load := c.Fault(Fault{
+				Keys:  []kmsg.Key{tt.load},
+				Err:   kerr.NotLeaderForPartition,
+				Count: -1,
+			})
+			cl := tt.pend(t, c)
+			waitHits(t, load, 1, "the offset load was never issued")
 
-	got := consumeN(t, cl, 1, 8*time.Second)
-	if got[0].Offset != seek {
-		t.Fatalf("BUG REPRODUCED: first record after SetOffsets(%d) has offset %d; the pending epoch validation overwrote the seek", seek, got[0].Offset)
+			cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{
+				topic: {0: {Epoch: -1, Offset: seek}},
+			})
+			load.Remove()
+
+			got := consumeN(t, cl, 1, 8*time.Second)
+			if got[0].Offset != seek {
+				t.Fatalf("BUG REPRODUCED: first record after SetOffsets(%d) has offset %d; the pending epoch validation overwrote the seek", seek, got[0].Offset)
+			}
+		})
 	}
 }
 
@@ -212,6 +255,17 @@ func TestAuditPendingReloadSurvivesPartitionRevoke(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("BUG: kept consumed %d/%d records after another partition was revoked; its pending offset load was dropped by the session stop", got, msgs)
 		}
+	}
+}
+
+// commitOffset commits offset at leader epoch 0 for partition 0 of topic in
+// the group through kadm, as a prior member would have.
+func commitOffset(t *testing.T, c *Cluster, group, topic string, offset int64) {
+	t.Helper()
+	var os kadm.Offsets
+	os.AddOffset(topic, 0, offset, 0)
+	if err := kadm.NewClient(newPlainClient(t, c)).CommitAllOffsets(context.Background(), group, os); err != nil {
+		t.Fatal(err)
 	}
 }
 
