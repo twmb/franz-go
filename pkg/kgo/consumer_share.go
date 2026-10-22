@@ -2708,10 +2708,10 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 
 			// then records.
 			if rp.ErrorCode != 0 {
-				partitionsWithErrs++
 				if kmove.maybeAddSharePartition(sc, cursor, rp.ErrorCode, rp.CurrentLeader.LeaderID, rp.CurrentLeader.LeaderEpoch, brokers) {
-					continue
+					continue // handled: the move needs no backoff
 				}
+				partitionsWithErrs++
 				// No hint we can act on: classify like the classic
 				// fetch path (source.go handleReqResp). Retryable errors
 				// are stripped and heal via the metadata update
