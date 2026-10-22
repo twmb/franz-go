@@ -2245,6 +2245,117 @@ func TestShareGroupAckDedupRenewThenTerminal(t *testing.T) {
 	}
 }
 
+// TestShareFetchAckedPartitionAnsweredOnce fails a ShareFetch that carries a
+// piggybacked ack for the partition it also fetches. Kafka answers that
+// partition once, with the ack error and the fetch error in one entry. The
+// client keeps the first entry it sees for a partition, so a second entry
+// loses the fetch error, or the records, that it carries.
+func TestShareFetchAckedPartitionAnsweredOnce(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "share-ack-fetch-once", "share-ack-fetch-once-g"
+	c := newCluster(t,
+		SeedTopics(1, topic),
+		BrokerConfigs(map[string]string{
+			"group.share.heartbeat.interval.ms": "100",
+		}),
+	)
+	produceShareN(t, c, topic, group, 1)
+
+	injected := c.Fault(Fault{
+		Keys:       []kmsg.Key{kmsg.ShareFetch},
+		TopicID:    c.TopicInfo(topic).TopicID,
+		Partitions: []int32{0},
+		Err:        kerr.TopicAuthorizationFailed,
+		When: func(kreq kmsg.Request) bool {
+			for _, rt := range kreq.(*kmsg.ShareFetchRequest).Topics {
+				for _, rp := range rt.Partitions {
+					if len(rp.AcknowledgementBatches) > 0 {
+						return true
+					}
+				}
+			}
+			return false
+		},
+	})
+
+	cl := newShareConsumer(t, c, topic, group)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var sawErr bool
+	for !sawErr && ctx.Err() == nil {
+		fetches := cl.PollFetches(ctx)
+		for _, r := range fetches.Records() {
+			r.Ack(kgo.AckAccept)
+		}
+		for _, fe := range fetches.Errors() {
+			sawErr = sawErr || errors.Is(fe.Err, kerr.TopicAuthorizationFailed)
+		}
+	}
+	if injected.Hits() == 0 {
+		t.Fatal("no ShareFetch carried an ack")
+	}
+	if !sawErr {
+		t.Error("the fetch error for a partition we also acked never reached PollFetches")
+	}
+}
+
+// TestShareFetchWaitKeepsAckErrors verifies that a ShareFetch that waits for
+// records still answers its failed piggybacked acks.
+func TestShareFetchWaitKeepsAckErrors(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "share-wait-ack-err", "share-wait-ack-err-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	produceShareN(t, c, topic, group, 1)
+	cl := newPlainClient(t, c)
+	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+	if _, n := rawShareFetch(t, cl, group, memberID, topicID, 0); n != 1 {
+		t.Fatalf("acquired %d records, wanted 1", n)
+	}
+
+	// Another member acks the record we hold. The ack fails, and with
+	// nothing to acquire, the fetch waits MaxWait.
+	other := "other-member"
+	rawShareFetch(t, cl, group, other, topicID, 0)
+	req := kmsg.NewPtrShareFetchRequest()
+	req.GroupID = kmsg.StringPtr(group)
+	req.MemberID = &other
+	req.ShareSessionEpoch = 1
+	req.MaxWaitMillis = 100
+	req.MaxRecords = 500
+	rt := kmsg.NewShareFetchRequestTopic()
+	rt.TopicID = topicID
+	rp := kmsg.NewShareFetchRequestTopicPartition()
+	rp.PartitionMaxBytes = 1 << 20
+	ab := kmsg.NewShareFetchRequestTopicPartitionAcknowledgementBatch()
+	ab.AcknowledgeTypes = []int8{1} // Accept offset 0
+	rp.AcknowledgementBatches = append(rp.AcknowledgementBatches, ab)
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	start := time.Now()
+	resp, err := req.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) < 100*time.Millisecond {
+		t.Fatal("the ShareFetch answered without waiting")
+	}
+	var answered bool
+	for _, rt := range resp.Topics {
+		for _, rp := range rt.Partitions {
+			answered = true
+			if rp.AcknowledgeErrorCode != kerr.InvalidRecordState.Code {
+				t.Errorf("ack error %v, wanted INVALID_RECORD_STATE", kerr.ErrorForCode(rp.AcknowledgeErrorCode))
+			}
+		}
+	}
+	if !answered {
+		t.Error("the ShareFetch did not answer the acked partition")
+	}
+}
+
 // TestShareGroupLeaderMoveInFlightAcks is the TestShareGroupCurrentLeaderMove
 // complement: records are consumed from the original leader and acked
 // AFTER the move (not before). This exercises the PR review finding
