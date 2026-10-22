@@ -750,11 +750,16 @@ func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) 
 	cl.sinksAndSourcesMu.Lock()
 	sns := cl.sinksAndSources[new.leader]
 	cl.sinksAndSourcesMu.Unlock()
-	if oldSource := c.source.Load(); oldSource != nil {
-		oldSource.removeShareCursor(c)
+	// A new epoch on the same leader keeps the cursor where it is: removing
+	// and re-adding it would let a request built in between forget the
+	// partition from the broker's share session.
+	if oldSource := c.source.Load(); oldSource != sns.source {
+		if oldSource != nil {
+			oldSource.removeShareCursor(c)
+		}
+		c.source.Store(sns.source)
+		sns.source.addShareCursor(c)
 	}
-	c.source.Store(sns.source)
-	sns.source.addShareCursor(c)
 }
 
 type kip951move struct {
