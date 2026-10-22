@@ -164,6 +164,28 @@ func TestRecordFormatter(t *testing.T) {
 			expR:   "16725225600000 \x00\x00\x0f6%!t\x00 \x00t!%6\x0f\x00\x00",
 		},
 
+		// strftime's 12-hour clock runs 1 through 12; it has no hour 0.
+		{
+			layout: "%d{strftime[%I %l %r]}",
+			rec:    &Record{Timestamp: time.Date(2024, 1, 2, 0, 5, 6, 0, time.UTC)},
+			expR:   "12 12 12:05:06 AM",
+		},
+		{
+			layout: "%d{strftime[%I %l %r]}",
+			rec:    &Record{Timestamp: time.Date(2024, 1, 2, 12, 5, 6, 0, time.UTC)},
+			expR:   "12 12 12:05:06 PM",
+		},
+		{
+			layout: "%d{strftime[%I %l %r]}",
+			rec:    &Record{Timestamp: time.Date(2024, 1, 2, 1, 5, 6, 0, time.UTC)},
+			expR:   "01  1 01:05:06 AM",
+		},
+		{
+			layout: "%d{strftime[%I %l %r]}",
+			rec:    &Record{Timestamp: time.Date(2024, 1, 2, 13, 5, 6, 0, time.UTC)},
+			expR:   "01  1 01:05:06 PM",
+		},
+
 		//
 	} {
 		f, err := NewRecordFormatter(test.layout)
