@@ -186,6 +186,52 @@ func TestRecordFormatter(t *testing.T) {
 			expR:   "01  1 01:05:06 PM",
 		},
 
+		// Days before the year's first Sunday (%U) or Monday (%W) are
+		// in week 00.
+		{
+			layout: "%d{strftime[%U %W]}",
+			rec:    &Record{Timestamp: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+			expR:   "00 01",
+		},
+		{
+			layout: "%d{strftime[%U %W]}",
+			rec:    &Record{Timestamp: time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)},
+			expR:   "00 00",
+		},
+
+		// glibc's flags and field widths.
+		{
+			layout: "%d{strftime[%-d %_m %^a %#b %#Z %5Y %-5d %012F %^c]}",
+			rec:    &Record{Timestamp: time.Date(2024, 3, 5, 13, 4, 5, 0, time.UTC)},
+			expR:   "5  3 TUE MAR utc 02024     5 002024-03-05 TUE MAR  5 13:04:05 2024",
+		},
+		{layout: "%v%", expR: "value%"}, // a trailing % is a raw %
+
+		// A size is the raw length unless it asks for the encoded one.
+		{
+			layout: "%V{encoded} %v{base64} %K{ascii;decoded} %k{hex} %V %v{hex}",
+			expR:   "8 dmFsdWU= 3 6b6579 5 76616c7565",
+		},
+		{
+			layout: "%V{encoded} %V{hex8;encoded} %v{hex}",
+			expR:   "10 0a 76616c7565",
+		},
+
+		// %E and %O change nothing in the C locale, and glibc prints a pair
+		// it rejects as written. %v is BSD's, and %x is %m/%d/%y.
+		{
+			layout: "%d{strftime[%Ey %Od %Ed %v %x]}",
+			rec:    &Record{Timestamp: time.Date(2024, 3, 5, 13, 4, 5, 0, time.UTC)},
+			expR:   "24 05 %Ed  5-Mar-2024 03/05/24",
+		},
+		// Years are not zero padded, and %C rounds down so that
+		// 100*%C + %y is the year.
+		{
+			layout: "%d{strftime[%Y %C %y %F]}",
+			rec:    &Record{Timestamp: time.Date(-101, 1, 1, 13, 4, 5, 0, time.UTC)},
+			expR:   "-101 -2 99 -101-01-01",
+		},
+
 		//
 	} {
 		f, err := NewRecordFormatter(test.layout)
@@ -220,7 +266,11 @@ func TestRecordFormatter(t *testing.T) {
 	if got := string(f.AppendRecord(nil, nil)); got != "<nil>" {
 		t.Errorf("nil record: got %s != exp <nil>", got)
 	}
-	for _, layout := range []string{"%d{", "%v{", "%T{"} {
+	for _, layout := range []string{
+		"%d{", "%v{", "%T{",
+		"%v{hex} %V{encoded}",  // no %v after the ;encoded size
+		"%h{%p}", "%h{%h{%k}}", // a header has only a key and value
+	} {
 		if _, err := NewRecordFormatter(layout); err == nil {
 			t.Errorf("%s: got nil error, want an error", layout)
 		}
@@ -515,6 +565,22 @@ func TestRecordReader(t *testing.T) {
 			layout: "%V %v{base64}asdf",
 			in:     "4 a2V5asdf",
 			exp:    []*Record{StringRecord("key")},
+		},
+		{
+			layout: "%V %v{base64raw} %k{base64raw}\n",
+			in:     "3 Zm8 YmFy\n",
+			exp:    []*Record{KeyStringRecord("bar", "fo")},
+		},
+		{
+			layout: "%V{decoded} %v{base64} %K{ascii;encoded} %k{hex}\n",
+			in:     "3 Zm9v 6 6b6579\n",
+			exp:    []*Record{KeyStringRecord("key", "foo")},
+		},
+
+		{
+			layout: "%p{hex} %o{hex} %d{go#2006-01-02T15:04:05.000Z07:00#}\n",
+			in:     "ff ffffffffffffffff 2024-03-05T13:04:05.123Z\n",
+			exp:    []*Record{{Partition: 255, Offset: -1, Timestamp: time.Date(2024, 3, 5, 13, 4, 5, 123e6, time.UTC)}},
 		},
 
 		{
@@ -824,6 +890,77 @@ func TestRecordReader(t *testing.T) {
 			in:     strings.Repeat("a", 4094) + "\U0001f642",
 			exp:    []*Record{KeyStringRecord(strings.Repeat("a", 4094), "\U0001f642")},
 		},
+		// A match can be longer than that buffer.
+		{
+			layout: `%v{re[a+]}\n`,
+			in:     strings.Repeat("a", 5000) + "\n",
+			exp:    []*Record{StringRecord(strings.Repeat("a", 5000))},
+		},
+		// Every alternative is anchored at the start of the field.
+		{
+			layout: `%v{re[a|b]}\n`,
+			in:     "zzzb\n",
+			expErr: true,
+		},
+		{
+			layout: `%v{re[\Q1+1]}\n`, // \Q quotes to the end
+			in:     "1+1\n",
+			exp:    []*Record{StringRecord("1+1")},
+		},
+
+		// A record cut off before a header %H counted is an error, not a
+		// record with fewer headers or the end of the input.
+		{
+			layout: "%H{2}%h{%k=%v;}\n",
+			in:     "a=b;c=d;\na=b;",
+			exp:    []*Record{{Headers: []RecordHeader{{"a", []byte("b")}, {"c", []byte("d")}}}},
+			expErr: true,
+		},
+
+		{
+			layout: "%p\n",
+			in:     "4294967295\n",
+			expErr: true,
+		},
+		{
+			layout: "%p{hex}\n",
+			in:     "100000001\n",
+			expErr: true,
+		},
+		{
+			layout: "%k%p{-1} %v\n",
+			in:     "key value\n",
+			exp:    []*Record{{Key: []byte("key"), Value: []byte("value"), Partition: -1}},
+		},
+
+		// Whitespace after the last JSON value ends the input cleanly.
+		{
+			layout: `%v{json}`,
+			in:     "{\"a\":1}\n",
+			exp:    []*Record{StringRecord(`{"a":1}`)},
+		},
+		{
+			layout: `%v{json}%k`,
+			in:     "1",
+			exp:    []*Record{StringRecord("1")},
+		},
+		{
+			layout: `%V %v{json}`,
+			in:     `7 {"a":1}`,
+			exp:    []*Record{StringRecord(`{"a":1}`)},
+		},
+		{
+			layout: `%H{1}%h{%v{json}}`,
+			in:     "{\"a\":1}\n",
+			exp:    []*Record{{Headers: []RecordHeader{{"", []byte(`{"a":1}`)}}}},
+		},
+
+		// A trailing % is a raw %.
+		{
+			layout: "%v%",
+			in:     "abc%",
+			exp:    []*Record{StringRecord("abc")},
+		},
 
 		//
 	} {
@@ -1030,15 +1167,82 @@ func TestRecordReaderJson(t *testing.T) {
 				t.Errorf("got err? %v, exp err? %v", gotErr, expErr)
 				return
 			}
-			if expErr || !gotErr {
+			if expErr {
 				return
 			}
 
-			if !bytes.Equal(rec.Value, in) {
-				t.Errorf("got %q, exp %q", rec.Value, in)
+			var exp bytes.Buffer
+			json.Compact(&exp, in)
+			if !bytes.Equal(rec.Value, exp.Bytes()) {
+				t.Errorf("got %q, exp %q", rec.Value, exp.Bytes())
 			}
 		})
 	}
+}
+
+// Ensure RecordReader reads back what RecordFormatter writes with the same
+// layout. Every layout carries every field the reader can read.
+func FuzzRecordRoundTrip(f *testing.F) {
+	const nums = "%p %o %e %d %x %y"
+	layouts := []string{
+		"%T{big32}%t%K{big32}%k%V{big32}%v%H{big32}%h{%K{big32}%k%V{big32}%v}%p{big32}%o{big64}%e{big32}%d{big64}%x{big64}%y{big16}",
+		"%T{little32}%t%K{little64}%k%V{little32}%v%H{little16}%h{%K{little32}%k%V{little32}%v}%p{little32}%o{little64}%e{little32}%d{little64}%x{little64}%y{little16}",
+		"%T{hex32}%t%K{hex64}%k%V{hex64}%v%H{hex16}%h{%K{hex32}%k%V{hex32}%v}%p{hex32}%o{hex64}%e{hex32}%d{hex64}%x{hex64}%y{hex16}",
+		"%T{decoded} %t{base64} %K{encoded} %k{hex} %V{big32;decoded}%v{base64raw} %H %h{%K{decoded} %k{base64raw} %V{hex32;encoded} %v{hex} } " + nums + "\n",
+		"%t{hex} %k{hex} %v{base64} %H %h{%k{base64}:%v{hex};} " + nums + "\n",
+		"%T %t %K %k %V %v %H %h{%K %k %V %v} %p{hex} %o{hex} %e{hex} %x{hex} %y{hex} %d{go#2006-01-02T15:04:05.000Z07:00#}\n",
+	}
+	for i := range layouts {
+		f.Add(uint8(i), "topic", []byte("key"), []byte("value"), "hk", []byte("hv"), uint8(2), int32(-3), int64(4), int32(-1), int64(1700000000123), int64(-1), int16(-1))
+		f.Add(uint8(i), "", []byte{}, []byte{}, "", []byte{}, uint8(0), int32(0), int64(0), int32(0), int64(0), int64(0), int16(0))
+	}
+
+	type fields struct {
+		t, k, v, h string
+		p, e       int32
+		o, d, x    int64
+		y          int16
+	}
+	norm := func(r *Record) fields {
+		var h []byte
+		for _, hdr := range r.Headers {
+			h = strconv.AppendQuote(h, hdr.Key)
+			h = strconv.AppendQuote(h, string(hdr.Value))
+		}
+		return fields{r.Topic, string(r.Key), string(r.Value), string(h), r.Partition, r.LeaderEpoch, r.Offset, r.Timestamp.UnixMilli(), r.ProducerID, r.ProducerEpoch}
+	}
+
+	f.Fuzz(func(t *testing.T, li uint8, topic string, key, value []byte, hk string, hv []byte, nh uint8, p int32, o int64, e int32, ts, x int64, y int16) {
+		layout := layouts[int(li)%len(layouts)]
+		if strings.Contains(layout, "%d{go") {
+			const yearTenThousand = 253402300800000 // in millis; Go's Parse wants a four digit year
+			ts = (ts%yearTenThousand + yearTenThousand) % yearTenThousand
+		}
+		rec := &Record{Topic: topic, Key: key, Value: value, Partition: p, Offset: o, LeaderEpoch: e, Timestamp: time.UnixMilli(ts), ProducerID: x, ProducerEpoch: y}
+		for range nh % 4 {
+			rec.Headers = append(rec.Headers, RecordHeader{hk, hv})
+		}
+
+		fm, err := NewRecordFormatter(layout)
+		if err != nil {
+			t.Fatalf("%q: %v", layout, err)
+		}
+		out := fm.AppendRecord(nil, rec)
+		r, err := NewRecordReader(bytes.NewReader(out), layout)
+		if err != nil {
+			t.Fatalf("%q: %v", layout, err)
+		}
+		got, err := r.ReadRecord()
+		if err != nil {
+			t.Fatalf("%q: reading %q: %v", layout, out, err)
+		}
+		if g, w := norm(got), norm(rec); g != w {
+			t.Fatalf("%q: reading %q:\ngot  %+v\nwant %+v", layout, out, g, w)
+		}
+		if _, err := r.ReadRecord(); !errors.Is(err, io.EOF) {
+			t.Fatalf("%q: reading %q: second read got %v, want io.EOF", layout, out, err)
+		}
+	})
 }
 
 func BenchmarkFormatter(b *testing.B) {
@@ -1102,6 +1306,13 @@ func TestNewRecordReaderRejectsBadLayouts(t *testing.T) {
 		"%T{3}",      // only a fixed-size spec with no value verb: reads nothing
 		"%p{3}%o{4}", // all fixed-number verbs: reads nothing
 		"%v{",        // unclosed brace at end of layout
+		"%k%v",       // %k would read the input that %v needs
+		"%H%h{%t}",   // a header spec setting the topic
+
+		"%V{decoded} %v{json}",           // json has no decoded size
+		"%v{re[a)|(b]}",                  // escapes the anchoring group
+		"%d{go#2006-01-02 15:04:05#} %v", // reading the timestamp stops at its space
+		"%H %h{%k=%v}\n",                 // the first header's value reads the rest
 	} {
 		t.Run(layout, func(t *testing.T) {
 			defer func() {
@@ -1157,12 +1368,12 @@ func TestRecordReaderOverflowingSizeNoPanic(t *testing.T) {
 	}
 }
 
-// A fixed-width number read (%o{big64}, %p{byte}, ...) at the end of a layout,
-// where the input EOFs right at that field after an earlier read already
-// consumed bytes, must surface as io.ErrUnexpectedEOF (the documented
-// mid-record EOF) rather than panicking in the binary decoder on the empty
-// buffer that the io.EOF fall-through in next() hands it.
-func TestRecordReaderTruncatedFixedSizeNoPanic(t *testing.T) {
+// A record whose input ends at its last field, after an earlier field consumed
+// bytes, must surface as io.ErrUnexpectedEOF (the documented mid-record EOF)
+// rather than panicking in the binary decoder on the empty buffer that the
+// io.EOF fall-through in next() hands it, failing to parse the empty field, or
+// returning the record without it.
+func TestRecordReaderTruncatedLastField(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		layout string
@@ -1173,6 +1384,9 @@ func TestRecordReaderTruncatedFixedSizeNoPanic(t *testing.T) {
 		{"big32", "%o{big64}%p{big32}", "\x00\x00\x00\x00\x00\x00\x00\x01"}, // offset read, 4-byte partition truncated
 		{"big16", "%k:%e{big16}", "key:"},                                   // key read via delim, 2-byte epoch truncated
 		{"byte", "%k:%p{byte}", "key:"},                                     // key read via delim, 1-byte partition truncated
+		{"ascii", "%k %o", "k "},                                            // ascii offset truncated to 0 bytes
+		{"re", "%k %v{re[a+]}", "k "},                                       // value regexp truncated to 0 bytes
+		{"headers", "%H %h{%k=%v;}", "1 "},                                  // one header counted, none present
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			r, err := NewRecordReader(strings.NewReader(test.in), test.layout)
@@ -1181,7 +1395,7 @@ func TestRecordReaderTruncatedFixedSizeNoPanic(t *testing.T) {
 			}
 			defer func() {
 				if p := recover(); p != nil {
-					t.Fatalf("ReadRecord panicked on a truncated fixed-size read: %v", p)
+					t.Fatalf("ReadRecord panicked on a truncated read: %v", p)
 				}
 			}()
 			if _, err := r.ReadRecord(); err != io.ErrUnexpectedEOF {
