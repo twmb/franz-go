@@ -534,6 +534,9 @@ retry:
 			"postcommit", postcommit,
 		)
 		s.cl.setOffsets(postcommit, false)
+		if g != nil {
+			g.setCommitted(postcommit)
+		}
 	}
 
 	switch {
@@ -1164,8 +1167,8 @@ start:
 // and only allow transaction sessions to commit.
 //
 // Unlike CommitOffsets, we do not update the group's uncommitted map. We leave
-// that to the calling code to do properly with SetOffsets depending on whether
-// an eventual abort happens or not.
+// that to the calling code to do properly with SetOffsets and setCommitted
+// depending on whether an eventual abort happens or not.
 func (cl *Client) commitTransactionOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
@@ -1292,7 +1295,7 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 
 // commitTxn is ALMOST EXACTLY THE SAME as commit, but changed for txn types
 // and we avoid updateCommitted. We avoid updating because we manually
-// SetOffsets when ending the transaction.
+// SetOffsets and setCommitted when ending the transaction.
 func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.TxnOffsetCommitRequest, onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error)) {
 	if onDone == nil { // note we must always call onDone
 		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}

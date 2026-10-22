@@ -45,6 +45,8 @@ func failNextOFLE(c *Cluster) *FaultHandle {
 // set the cursor's offset but KEPT the pending load, or kept the load and set
 // nothing when the partition had no cursor in use yet; the load completed in
 // the new session and the consumer silently started at the load's offset.
+// It also verifies that the set offset is uncommitted, so the next commit
+// commits it.
 func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 	t.Parallel()
 
@@ -60,6 +62,7 @@ func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(group),
 			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+			kgo.DisableAutoCommit(),
 			kgo.DisableFetchSessions(),
 			kgo.FetchMaxWait(100*time.Millisecond),
 		)
@@ -124,6 +127,9 @@ func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 				topic: {0: {Epoch: -1, Offset: seek}},
 			})
 			ofle.Remove()
+			if got := cl.UncommittedOffsets()[topic][0].Offset; got != seek {
+				t.Fatalf("BUG REPRODUCED: uncommitted offset after SetOffsets(%d) is %d; the next commit would not commit the seek", seek, got)
+			}
 
 			got := consumeN(t, cl, 1, 8*time.Second)
 			if got[0].Offset != seek {

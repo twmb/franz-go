@@ -839,10 +839,11 @@ func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
 // If using transactions, it is advised to just use a GroupTransactSession and
 // avoid this function entirely.
 //
-// If using group consuming, it is strongly recommended to only set partitions
-// you have polled, from the goroutine that polls, while no revoke can run: use
-// BlockRebalanceOnPoll and call this before AllowRebalance. Do not use this
-// concurrent with committing.
+// If using group consuming, a set offset is uncommitted: autocommitting,
+// CommitUncommittedOffsets, and CommitMarkedOffsets commit it. It is strongly
+// recommended to call this from the goroutine that polls, while no revoke can
+// run: use BlockRebalanceOnPoll and call this before AllowRebalance. Do not use
+// this concurrent with committing.
 func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 	cl.setOffsets(setOffsets, true)
 }
