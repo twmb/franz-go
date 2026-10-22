@@ -1,9 +1,14 @@
 package kgo
 
 import (
+	"errors"
 	"net"
+	"strconv"
 	"testing"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // TestAuditShareLeaveWaitsForInflightMigration is the regression test for
@@ -243,5 +248,300 @@ func TestAuditShareMoveCollapseMarksCursorUnusable(t *testing.T) {
 	}
 	if !hasPartition() {
 		t.Fatal("after the migration ran, the re-enabled cursor should be back in the fetch request")
+	}
+}
+
+// No topics are subscribed and the cursor stays unassigned: this exercises
+// routing on the real metadata loop without starting group traffic.
+func newShareRoutingClient(t testing.TB) (*Client, *topicPartitions, *metadataTopic) {
+	t.Helper()
+	cl, err := NewClient(SeedBrokers("127.0.0.1:1"), ShareGroup("share-routing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cl.Close)
+	id := [16]byte{1}
+	var tp topicPartitions
+	var mt *metadataTopic
+	cl.blockingMetadataFn(func() {
+		s := cl.newSource(2)
+		cl.sinksAndSourcesMu.Lock()
+		cl.sinksAndSources[2] = sinkAndSource{sink: cl.newSink(2), source: s}
+		cl.sinksAndSourcesMu.Unlock()
+		k := kip951move{brokers: []BrokerMetadata{{NodeID: 2, Host: "127.0.0.1", Port: 1}, {NodeID: 3, Host: "127.0.0.1", Port: 1}}}
+		k.ensureBrokers(cl)
+		mt = &metadataTopic{topic: "t", id: id, partitions: []metadataPartition{{topic: "t", topicID: id, leader: 2, leaderEpoch: 10, sns: sinkAndSource{source: s}}}}
+		tp.v.Store(mt.newPartitions(cl, partitionKindShare))
+		c := tp.load().partitions[0].shareCursor
+		c.cursorsIdx = 0
+		s.share.cursors = []*shareCursor{c}
+		cl.consumer.s.tps.storeData(topicsPartitionsData{"t": &tp})
+		cl.id2t.Store(map[[16]byte]string{id: "t"})
+	})
+	return cl, &tp, mt
+}
+
+func TestShareFetchDefaultLeaderErrors(t *testing.T) {
+	t.Parallel()
+	for _, partErr := range []*kerr.Error{kerr.KafkaStorageError, kerr.TopicAuthorizationFailed, kerr.UnknownTopicID, kerr.InvalidRequest} {
+		t.Run(partErr.Message, func(t *testing.T) {
+			t.Parallel()
+			_, tp, _ := newShareRoutingClient(t)
+			c := tp.load().partitions[0].shareCursor
+			s := c.source.Load()
+			req := kmsg.NewPtrShareFetchRequest()
+			req.SetVersion(1)
+			resp := kmsg.NewPtrShareFetchResponse()
+			resp.SetVersion(1)
+			resp.AcquisitionLockTimeoutMillis = 30000
+			rp := kmsg.NewShareFetchResponseTopicPartition()
+			rp.ErrorCode = partErr.Code // CurrentLeader deliberately remains 0/0.
+			resp.Topics = []kmsg.ShareFetchResponseTopic{{TopicID: c.topicID, Partitions: []kmsg.ShareFetchResponseTopicPartition{rp}}}
+			decoded := kmsg.NewPtrShareFetchResponse()
+			decoded.SetVersion(1)
+			if err := decoded.ReadFrom(resp.AppendTo(nil)); err != nil {
+				t.Fatal(err)
+			}
+			res := s.handleShareReqResp(req, decoded, []*shareCursor{c}, nil, nil)
+			if len(res.moves) != 0 {
+				t.Fatalf("ordinary error scheduled leader moves: %+v", res.moves)
+			}
+			if !kerr.IsRetriable(partErr) {
+				if len(res.fetch.Topics) != 1 || len(res.fetch.Topics[0].Partitions) != 1 || !errors.Is(res.fetch.Topics[0].Partitions[0].Err, partErr) {
+					t.Fatalf("original error lost: %+v", res.fetch)
+				}
+			} else if !res.allErrsStripped {
+				t.Fatal("retryable error did not take the backoff path")
+			}
+			if c.source.Load().nodeID != 2 {
+				t.Fatal("cursor left its leader")
+			}
+		})
+	}
+}
+
+func TestShareLeaderHintRouting(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name          string
+		target, epoch int32
+		endpoints     []BrokerMetadata
+		staleCursor   bool
+		wantMove      bool
+	}{
+		{name: "known target", target: 3, epoch: 11, wantMove: true},
+		{name: "same leader newer epoch", target: 2, epoch: 11, wantMove: true},
+		{name: "old epoch", target: 3, epoch: 9},
+		{name: "old epoch with endpoint", target: 3, epoch: 9, endpoints: []BrokerMetadata{{NodeID: 3, Host: "127.0.0.1", Port: 2}}},
+		{name: "old unknown target with endpoint", target: 0, epoch: 9, endpoints: []BrokerMetadata{{NodeID: 0, Host: "127.0.0.1", Port: 1}}},
+		{name: "equal epoch conflicting leader", target: 3, epoch: 10},
+		{name: "duplicate", target: 2, epoch: 10},
+		{name: "duplicate with endpoint", target: 2, epoch: 10, endpoints: []BrokerMetadata{{NodeID: 2, Host: "127.0.0.1", Port: 2}}},
+		{name: "conflicting epoch with endpoint", target: 3, epoch: 10, endpoints: []BrokerMetadata{{NodeID: 3, Host: "127.0.0.1", Port: 2}}},
+		{name: "unknown target", target: 0, epoch: 11},
+		{name: "invalid endpoint", target: 0, epoch: 11, endpoints: []BrokerMetadata{{NodeID: 0, Port: 9092}}},
+		{name: "legal broker zero", target: 0, epoch: 11, endpoints: []BrokerMetadata{{NodeID: 0, Host: "127.0.0.1", Port: 1}}, wantMove: true},
+		{name: "new broker", target: 4, epoch: 11, endpoints: []BrokerMetadata{{NodeID: 4, Host: "127.0.0.1", Port: 1}}, wantMove: true},
+		{name: "purged cursor", target: 3, epoch: 11, staleCursor: true},
+		{name: "purged cursor with endpoint", target: 3, epoch: 11, staleCursor: true, endpoints: []BrokerMetadata{{NodeID: 3, Host: "127.0.0.1", Port: 2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cl, tp, mt := newShareRoutingClient(t)
+			cl.brokersMu.RLock()
+			beforeBrokers := make(map[int32]*broker, len(cl.brokers))
+			for _, br := range cl.brokers {
+				beforeBrokers[br.meta.NodeID] = br
+			}
+			cl.brokersMu.RUnlock()
+			original := tp.load()
+			cursor := original.partitions[0].shareCursor
+			moveCursor := cursor
+			if tc.staleCursor {
+				moveCursor = &shareCursor{topic: "t", topicID: mt.id}
+				moveCursor.source.Store(cursor.source.Load())
+			}
+			moveCursor.moving.Store(true)
+			cl.consumer.s.applyMovesBlocking([]shareMove{{topicID: mt.id, partition: 0, leaderID: tc.target, leaderEpoch: tc.epoch, cursor: moveCursor}}, tc.endpoints)
+			got := tp.load().partitions[0]
+			wantLeader, wantEpoch := int32(2), int32(10)
+			if tc.wantMove {
+				wantLeader, wantEpoch = tc.target, tc.epoch
+			}
+			if got.leader != wantLeader || got.leaderEpoch != wantEpoch || got.shareCursor.source.Load().nodeID != wantLeader {
+				t.Fatalf("metadata=%d/%d source=%d, want %d/%d", got.leader, got.leaderEpoch, got.shareCursor.source.Load().nodeID, wantLeader, wantEpoch)
+			}
+			if moveCursor.moving.Load() {
+				t.Fatal("rejected or applied move left cursor disabled")
+			}
+			if original.partitions[0].leader != 2 || original.writablePartitions[0].leaderEpoch != 10 {
+				t.Fatal("move mutated an existing metadata snapshot")
+			}
+			if got != tp.load().writablePartitions[0] {
+				t.Fatal("writable partition snapshot diverged")
+			}
+			if !tc.wantMove {
+				cl.brokersMu.RLock()
+				unchanged := len(cl.brokers) == len(beforeBrokers)
+				for _, br := range cl.brokers {
+					unchanged = unchanged && beforeBrokers[br.meta.NodeID] == br
+				}
+				cl.brokersMu.RUnlock()
+				if !unchanged {
+					t.Fatal("rejected hint registered or replaced a broker")
+				}
+			}
+			if !tc.wantMove && tc.target == 0 {
+				cl.sinksAndSourcesMu.Lock()
+				_, exists := cl.sinksAndSources[0]
+				cl.sinksAndSourcesMu.Unlock()
+				if exists {
+					t.Fatal("unknown target acquired a source")
+				}
+			}
+			// A delayed response cannot roll back a newer accepted hint.
+			if tc.wantMove {
+				cl.consumer.s.applyMovesBlocking([]shareMove{{topicID: mt.id, partition: 0, leaderID: 2, leaderEpoch: 10, cursor: cursor}}, nil)
+				cl.blockingMetadataFn(func() {
+					var why multiUpdateWhy
+					cl.mergeTopicPartitions("t", tp, mt, partitionKindShare, nil, &why)
+				})
+				if got := tp.load().partitions[0]; got.leader != wantLeader || got.leaderEpoch != wantEpoch || got.shareCursor.source.Load().nodeID != wantLeader {
+					t.Fatal("stale response or metadata rolled routing backwards")
+				}
+			}
+		})
+	}
+}
+
+func TestShareIdenticalMetadataRepairsSource(t *testing.T) {
+	t.Parallel()
+	cl, tp, mt := newShareRoutingClient(t)
+	cl.blockingMetadataFn(func() {
+		cursor := tp.load().partitions[0].shareCursor
+		oldSource := cursor.source.Load()
+		bad := cl.newSource(0) // Reproduce the state left by the old hint path.
+		oldSource.removeShareCursor(cursor)
+		cursor.source.Store(bad)
+		bad.addShareCursor(cursor)
+		var why multiUpdateWhy
+		cl.mergeTopicPartitions("t", tp, mt, partitionKindShare, nil, &why)
+		got := tp.load().partitions[0]
+		if got.shareCursor != cursor || cursor.source.Load() != oldSource {
+			t.Error("identical metadata failed to repair the existing cursor")
+		}
+		if got.leader != 2 || got.leaderEpoch != 10 {
+			t.Error("repair changed authoritative metadata")
+		}
+	})
+}
+
+// A batch can update several partitions of one topic, with later hints
+// superseding earlier ones. Only the final targets may install endpoints.
+func TestShareLeaderHintBatch(t *testing.T) {
+	t.Parallel()
+	cl, tp, mt := newShareRoutingClient(t)
+	cl.blockingMetadataFn(func() {
+		src := tp.load().partitions[0].shareCursor.source.Load()
+		next := *tp.load()
+		next.partitions = append([]*topicPartition(nil), next.partitions...)
+		for i := int32(1); i < 3; i++ {
+			p := metadataPartition{topic: "t", topicID: mt.id, partition: i, leader: 2, leaderEpoch: 10, sns: sinkAndSource{source: src}}.newPartition(cl, partitionKindShare)
+			p.shareCursor.cursorsIdx = len(src.share.cursors)
+			src.share.cursors = append(src.share.cursors, p.shareCursor)
+			next.partitions = append(next.partitions, p)
+		}
+		next.writablePartitions = []*topicPartition{next.partitions[0], next.partitions[2]}
+		tp.v.Store(&next)
+	})
+	original := tp.load()
+	broker2, _ := cl.brokerOrErr(nil, 2, errUnknownBroker)
+	broker3, _ := cl.brokerOrErr(nil, 3, errUnknownBroker)
+	c0, c2 := original.partitions[0].shareCursor, original.partitions[2].shareCursor
+	c0.moving.Store(true)
+	c2.moving.Store(true)
+	cl.consumer.s.applyMovesBlocking([]shareMove{
+		{topicID: mt.id, partition: 2, leaderID: 3, leaderEpoch: 11, cursor: c2},
+		{topicID: mt.id, partition: 0, leaderID: 0, leaderEpoch: 11, cursor: c0},
+		{topicID: mt.id, partition: 2, leaderID: 0, leaderEpoch: 12, cursor: c2},
+		{topicID: mt.id, partition: 2, leaderID: 3, leaderEpoch: 11, cursor: c2},
+	}, []BrokerMetadata{
+		{NodeID: 0, Host: "127.0.0.1", Port: 1},
+		{NodeID: 2, Host: "127.0.0.1", Port: 2},
+		{NodeID: 3, Host: "127.0.0.1", Port: 2},
+	})
+	got := tp.load()
+	for i, want := range []topicPartitionData{{leader: 0, leaderEpoch: 11}, {leader: 2, leaderEpoch: 10}, {leader: 0, leaderEpoch: 12}} {
+		p := got.partitions[i]
+		if p.topicPartitionData != want || p.shareCursor.source.Load().nodeID != want.leader {
+			t.Fatalf("partition %d: metadata=%+v source=%d, want %+v", i, p.topicPartitionData, p.shareCursor.source.Load().nodeID, want)
+		}
+		if original.partitions[i].leader != 2 || original.partitions[i].leaderEpoch != 10 {
+			t.Fatal("batch modified the old snapshot")
+		}
+		if p.shareCursor.moving.Load() {
+			t.Fatal("batch left a cursor disabled")
+		}
+	}
+	if got.partitions[1] != original.partitions[1] {
+		t.Fatal("batch replaced an untouched partition")
+	}
+	if len(got.writablePartitions) != 2 || got.writablePartitions[0] != got.partitions[0] || got.writablePartitions[1] != got.partitions[2] {
+		t.Fatal("batch lost writable partition membership")
+	}
+	for _, before := range []*broker{broker2, broker3} {
+		after, _ := cl.brokerOrErr(nil, before.meta.NodeID, errUnknownBroker)
+		if after != before {
+			t.Fatalf("batch replaced unrelated or superseded broker %d", before.meta.NodeID)
+		}
+	}
+	cl.sinksAndSourcesMu.Lock()
+	_, created := cl.sinksAndSources[3]
+	cl.sinksAndSourcesMu.Unlock()
+	if created {
+		t.Fatal("superseded target acquired a source")
+	}
+}
+
+func BenchmarkShareLeaderHintBatch(b *testing.B) {
+	for _, n := range []int{100, 1000, 4000} {
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
+			cl, tp, mt := newShareRoutingClient(b)
+			moves := make([]shareMove, n)
+			cl.blockingMetadataFn(func() {
+				src := tp.load().partitions[0].shareCursor.source.Load()
+				// Keep fetch loops parked so measurements isolate metadata migration,
+				// rather than scheduling unassigned cursors on background source loops.
+				src.fetchState.state.Store(stateWorking)
+				dst := cl.newSource(3)
+				dst.fetchState.state.Store(stateWorking)
+				cl.sinksAndSourcesMu.Lock()
+				cl.sinksAndSources[3] = sinkAndSource{sink: cl.newSink(3), source: dst}
+				cl.sinksAndSourcesMu.Unlock()
+				next := *tp.load()
+				next.partitions = make([]*topicPartition, n)
+				next.writablePartitions = make([]*topicPartition, n)
+				src.share.cursors = make([]*shareCursor, n)
+				for i := range n {
+					c := &shareCursor{topic: "t", topicID: mt.id, partition: int32(i), cursorsIdx: i}
+					c.source.Store(src)
+					src.share.cursors[i] = c
+					p := &topicPartition{topicPartitionData: topicPartitionData{leader: 2, leaderEpoch: 10}, shareCursor: c}
+					next.partitions[i], next.writablePartitions[i] = p, p
+					moves[i] = shareMove{topicID: mt.id, partition: int32(i), leaderID: 3, cursor: c}
+				}
+				tp.v.Store(&next)
+			})
+			epoch := int32(10)
+			b.ReportAllocs()
+			for b.Loop() {
+				epoch++
+				for i := range moves {
+					moves[i].leaderEpoch = epoch
+					moves[i].cursor.moving.Store(true)
+				}
+				cl.consumer.s.applyMovesBlocking(moves, nil)
+			}
+		})
 	}
 }

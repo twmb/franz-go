@@ -1053,11 +1053,9 @@ func (cl *Client) mergeTopicPartitions(
 			}
 		}
 
-		// If the tp data is the same, we simply copy over the records
-		// and cursor pointers.
-		//
-		// If the tp data equals the old, then the sink / source is the
-		// same, because the sink/source is from the tp leader.
+		// Identical partition data normally lets us reuse records / cursors.
+		// Share cursors also need their actual source checked: older clients
+		// could move a cursor without updating the stored leader and epoch.
 		if newTP.topicPartitionData == oldTP.topicPartitionData {
 			if debug {
 				cl.cfg.logger.Log(LogLevelDebug, "metadata refresh has identical topic partition data",
@@ -1072,7 +1070,20 @@ func (cl *Client) mergeTopicPartitions(
 				newTP.records = oldTP.records
 				newTP.records.clearFailing() // always clear failing state for producing after meta update
 			case partitionKindShare:
-				newTP.shareCursor = oldTP.shareCursor
+				// CurrentLeader moves and metadata must agree on the source,
+				// even when the stored partition metadata itself did not change.
+				// This also repairs cursors stranded by an earlier invalid hint.
+				s := oldTP.shareCursor.source.Load()
+				if newTP.leader >= 0 && (s == nil || s.nodeID != newTP.leader) {
+					if br, _ := cl.brokerOrErr(nil, newTP.leader, errUnknownBroker); br != nil {
+						oldTP.migrateShareCursorTo(cl, newTP)
+					} else {
+						newTP.shareCursor = oldTP.shareCursor
+						retryWhy.add(topic, int32(part), errUnknownBroker)
+					}
+				} else {
+					newTP.shareCursor = oldTP.shareCursor
+				}
 			default:
 				newTP.cursor = oldTP.cursor // unlike records, there is no failing state for a cursor
 			}

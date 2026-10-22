@@ -549,3 +549,115 @@ func waitFor(t *testing.T, timeout time.Duration, msg string, cond func() bool) 
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// Broker zero is valid but is not this partition's leader. Ordinary errors
+// leave CurrentLeader at 0/0 and must never redirect Fetch or ACK traffic there.
+func TestShareDefaultLeaderDoesNotRedirect(t *testing.T) {
+	for _, ack := range []bool{false, true} {
+		name := "fetch"
+		if ack {
+			name = "acknowledge"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			const topic, group = "share-default-leader", "share-default-leader-group"
+			c := newCluster(t, NumBrokers(2), SeedTopics(1, topic), BrokerConfigs(map[string]string{"group.share.heartbeat.interval.ms": "100"}))
+			if err := c.MoveTopicPartition(topic, 0, 1); err != nil {
+				t.Fatal(err)
+			}
+			produceShareN(t, c, topic, group, 1)
+			var injected atomic.Bool
+			var wrongBroker atomic.Int32
+			c.ControlKey(int16(kmsg.ShareFetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+				c.KeepControl()
+				req := kreq.(*kmsg.ShareFetchRequest)
+				if len(req.Topics) == 0 {
+					return nil, nil, false
+				}
+				if c.CurrentNode() != 1 {
+					wrongBroker.Add(1)
+				}
+				if ack || injected.Load() {
+					return nil, nil, false
+				}
+				injected.Store(true)
+				resp := kmsg.NewPtrShareFetchResponse()
+				resp.SetVersion(req.GetVersion())
+				resp.AcquisitionLockTimeoutMillis = 30000
+				for _, rt := range req.Topics {
+					topicResp := kmsg.NewShareFetchResponseTopic()
+					topicResp.TopicID = rt.TopicID
+					for _, rp := range rt.Partitions {
+						p := kmsg.NewShareFetchResponseTopicPartition()
+						p.Partition = rp.Partition
+						p.ErrorCode = kerr.KafkaStorageError.Code
+						topicResp.Partitions = append(topicResp.Partitions, p)
+					}
+					resp.Topics = append(resp.Topics, topicResp)
+				}
+				return resp, nil, true
+			})
+			var ackError atomic.Bool
+			cl := shareChurnConsumer(t, c, topic, group, kgo.ShareAckCallback(func(_ *kgo.Client, results kgo.ShareAckResults) {
+				for _, r := range results {
+					if r.Err == kerr.InvalidRequest {
+						ackError.Store(true)
+					}
+				}
+			}))
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			records := cl.PollFetches(ctx).Records()
+			if len(records) != 1 {
+				t.Fatalf("initial fetch: got %d records", len(records))
+			}
+			if ack {
+				// Renew acknowledgements always use standalone ShareAcknowledge,
+				// regardless of whether a fetch is already in flight.
+				c.ControlKey(int16(kmsg.ShareAcknowledge), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+					req := kreq.(*kmsg.ShareAcknowledgeRequest)
+					if len(req.Topics) == 0 {
+						c.KeepControl()
+						return nil, nil, false
+					}
+					injected.Store(true)
+					resp := kmsg.NewPtrShareAcknowledgeResponse()
+					resp.SetVersion(req.GetVersion())
+					for _, rt := range req.Topics {
+						tr := kmsg.NewShareAcknowledgeResponseTopic()
+						tr.TopicID = rt.TopicID
+						for _, rp := range rt.Partitions {
+							p := kmsg.NewShareAcknowledgeResponseTopicPartition()
+							p.Partition = rp.Partition
+							p.ErrorCode = kerr.InvalidRequest.Code
+							tr.Partitions = append(tr.Partitions, p)
+						}
+						resp.Topics = append(resp.Topics, tr)
+					}
+					return resp, nil, true
+				})
+				records[0].Ack(kgo.AckRenew)
+				if err := cl.FlushAcks(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if !ackError.Load() {
+					t.Fatalf("original acknowledge error was not reported (injected=%v)", injected.Load())
+				}
+			}
+			records[0].Ack(kgo.AckAccept)
+			if err := cl.FlushAcks(ctx); err != nil {
+				t.Fatal(err)
+			}
+			produceN(t, c, topic, 1)
+			if got, _ := pollShareUntil(t, cl, 1, 10*time.Second, nil); got != 1 {
+				t.Fatalf("consumption did not recover: got %d", got)
+			}
+			if !injected.Load() {
+				t.Fatal("partition error was not injected")
+			}
+			if got := wrongBroker.Load(); got != 0 {
+				t.Fatalf("ordinary error redirected %d fetch requests to broker zero", got)
+			}
+		})
+	}
+}

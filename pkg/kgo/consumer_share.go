@@ -178,10 +178,11 @@ type (
 	// shareMove records a partition that should be moved to a new leader,
 	// collected from CurrentLeader hints in ShareFetch responses.
 	shareMove struct {
-		topicID   [16]byte
-		partition int32
-		leaderID  int32
-		cursor    *shareCursor // cursor to re-enable (clear moving) after the migration runs; see shareCursor.moving
+		topicID     [16]byte
+		partition   int32
+		leaderID    int32
+		leaderEpoch int32
+		cursor      *shareCursor // cursor to re-enable (clear moving) after the migration runs; see shareCursor.moving
 	}
 
 	// shareAckRange is a contiguous offset range with a fixed ack
@@ -312,6 +313,12 @@ func isShareAckRetryable(err error) bool {
 		return false
 	}
 	return true
+}
+
+// Only these errors give CurrentLeader routing semantics. For other errors,
+// brokers may leave the required CurrentLeader fields at their zero values.
+func isShareLeaderError(code int16) bool {
+	return code == kerr.NotLeaderForPartition.Code || code == kerr.FencedLeaderEpoch.Code
 }
 
 // add accumulates state under its cursor (state.slab.cursor).
@@ -1409,55 +1416,18 @@ func (sc *shareConsumer) applyMovesBlocking(moves []shareMove, endpoints []Broke
 	}
 	defer sc.decWorker()
 	sc.cl.blockingMetadataFn(func() {
-		// Seed any brokers from the response's NodeEndpoints that we
-		// do not yet know about. Same merge-without-remove invariant
-		// as kip951move.ensureBrokers.
-		if len(endpoints) > 0 {
-			k := kip951move{brokers: endpoints}
-			k.ensureBrokers(sc.cl)
-		}
-		// Ensure per-broker sink+source exist for every move target,
-		// and snapshot the sink+source pointer per leader to avoid
-		// repeated locks.
-		leaderSrcs := make(map[int32]*source, len(moves))
-		sc.cl.sinksAndSourcesMu.Lock()
-		for _, m := range moves {
-			if _, exists := leaderSrcs[m.leaderID]; exists {
-				continue
-			}
-			sns, ok := sc.cl.sinksAndSources[m.leaderID]
-			if !ok {
-				sns = sinkAndSource{
-					sink:   sc.cl.newSink(m.leaderID),
-					source: sc.cl.newSource(m.leaderID),
-				}
-				sc.cl.sinksAndSources[m.leaderID] = sns
-			}
-			leaderSrcs[m.leaderID] = sns.source
-		}
-		sc.cl.sinksAndSourcesMu.Unlock()
-
-		// Safety: Any leader whose endpoint we didn't see needs
-		// metadata to populate cl.brokers.
-		seenEndpoint := make(map[int32]struct{}, len(endpoints))
+		// Stage hints before touching broker addresses: a delayed response
+		// may carry obsolete endpoints even if its epoch or cursor is stale.
+		validEndpoints := make(map[int32]BrokerMetadata, len(endpoints))
 		for _, ep := range endpoints {
-			seenEndpoint[ep.NodeID] = struct{}{}
-		}
-		needsMeta := false
-		for _, m := range moves {
-			if _, ok := seenEndpoint[m.leaderID]; !ok {
-				needsMeta = true
-				break
+			if ep.NodeID >= 0 && ep.Host != "" && ep.Port > 0 && ep.Port <= 65535 {
+				validEndpoints[ep.NodeID] = ep
 			}
-		}
-		if needsMeta {
-			sc.cl.triggerUpdateMetadataNow("share cursor CurrentLeader hint points to broker not in NodeEndpoints")
 		}
 
 		id2t := sc.cl.id2tMap()
 		tps := sc.tps.load()
-
-		var moved int
+		updates := make(map[*topicPartitions]*topicPartitionsData)
 		for _, m := range moves {
 			topicName := id2t[m.topicID]
 			if topicName == "" {
@@ -1467,20 +1437,108 @@ func (sc *shareConsumer) applyMovesBlocking(moves []shareMove, endpoints []Broke
 			if !ok {
 				continue
 			}
-			td := tp.load()
+			td := updates[tp]
+			if td == nil {
+				td = tp.load()
+			}
 			if m.partition < 0 || int(m.partition) >= len(td.partitions) {
 				continue
 			}
-			cursor := td.partitions[m.partition].shareCursor
-			oldSource := cursor.source.Load()
-			if oldSource.nodeID == m.leaderID {
+			old := td.partitions[m.partition]
+			if td.recreatedFrom != noID || old.shareCursor != m.cursor || m.cursor.topicID != m.topicID || m.leaderID < 0 || m.leaderEpoch < 0 {
 				continue
 			}
-			newSource := leaderSrcs[m.leaderID]
-			oldSource.removeShareCursor(cursor)
-			cursor.source.Store(newSource)
-			newSource.addShareCursor(cursor)
-			moved++
+			if m.leaderEpoch <= old.leaderEpoch {
+				if m.leaderEpoch == old.leaderEpoch && m.leaderID != old.leader {
+					sc.cl.triggerUpdateMetadataNow("share CurrentLeader hint conflicts with the known leader at the same epoch")
+				}
+				continue
+			}
+			if _, ok := validEndpoints[m.leaderID]; !ok {
+				if br, _ := sc.cl.brokerOrErr(nil, m.leaderID, errUnknownBroker); br == nil {
+					sc.cl.triggerUpdateMetadataNow("share CurrentLeader hint points to an unknown broker without a usable endpoint")
+					continue
+				}
+			}
+
+			// A batch may move many partitions of one topic. Clone its snapshot
+			// once, then stage all changes without modifying readers' snapshots.
+			if updates[tp] == nil {
+				next := *td
+				next.partitions = slices.Clone(td.partitions)
+				next.writablePartitions = slices.Clone(td.writablePartitions)
+				td = &next
+				updates[tp] = td
+			}
+			partition := *old
+			partition.leader = m.leaderID
+			partition.leaderEpoch = m.leaderEpoch
+			partition.epochRewinds = 0
+			td.partitions[m.partition] = &partition
+		}
+
+		// Only the final accepted targets may change broker addresses or
+		// acquire sources. Superseded hints must not register endpoints either.
+		targets := make(map[int32]sinkAndSource)
+		for tp, next := range updates {
+			old := tp.load()
+			for i, partition := range next.partitions {
+				if partition != old.partitions[i] {
+					targets[partition.leader] = sinkAndSource{}
+				}
+			}
+		}
+		var acceptedEndpoints []BrokerMetadata
+		for id := range targets {
+			if ep, ok := validEndpoints[id]; ok {
+				acceptedEndpoints = append(acceptedEndpoints, ep)
+			}
+		}
+		if len(acceptedEndpoints) > 0 {
+			k := kip951move{brokers: acceptedEndpoints}
+			k.ensureBrokers(sc.cl)
+		}
+		sc.cl.sinksAndSourcesMu.Lock()
+		for id := range targets {
+			sns, ok := sc.cl.sinksAndSources[id]
+			if !ok {
+				sns = sinkAndSource{sink: sc.cl.newSink(id), source: sc.cl.newSource(id)}
+				sc.cl.sinksAndSources[id] = sns
+			}
+			targets[id] = sns
+		}
+		sc.cl.sinksAndSourcesMu.Unlock()
+
+		var moved int
+		for tp, next := range updates {
+			old := tp.load()
+			for i, partition := range next.partitions {
+				previous := old.partitions[i]
+				if partition == previous {
+					continue
+				}
+				cursor := partition.shareCursor
+				newSource := targets[partition.leader].source
+				if oldSource := cursor.source.Load(); oldSource != newSource {
+					if oldSource != nil {
+						oldSource.removeShareCursor(cursor)
+					}
+					cursor.source.Store(newSource)
+					newSource.addShareCursor(cursor)
+				}
+				sc.cfg.logger.Log(LogLevelDebug, "updated share partition leader from CurrentLeader hint",
+					"topic", cursor.topic, "partition", cursor.partition,
+					"old_leader", previous.leader, "old_leader_epoch", previous.leaderEpoch,
+					"new_leader", partition.leader, "new_leader_epoch", partition.leaderEpoch,
+				)
+				moved++
+			}
+			// Rebuild writable references once per topic, rather than searching
+			// this slice again for every moved partition.
+			for i, partition := range next.writablePartitions {
+				next.writablePartitions[i] = next.partitions[partition.partition()]
+			}
+			tp.v.Store(next)
 		}
 		if moved > 0 {
 			sc.cfg.logger.Log(LogLevelInfo, "migrated share cursors via CurrentLeader hints",
@@ -1949,13 +2007,16 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 			var partErr error
 			if rp.ErrorCode != 0 {
 				partErr = kerr.ErrorForCode(rp.ErrorCode)
-				if rp.CurrentLeader.LeaderID >= 0 && rp.CurrentLeader.LeaderEpoch >= 0 {
+				if isShareLeaderError(rp.ErrorCode) && rp.CurrentLeader.LeaderID >= 0 && rp.CurrentLeader.LeaderEpoch >= 0 {
 					moves = append(moves, shareMove{
-						topicID:   rt.TopicID,
-						partition: rp.Partition,
-						leaderID:  rp.CurrentLeader.LeaderID,
-						cursor:    drained.cursor,
+						topicID:     rt.TopicID,
+						partition:   rp.Partition,
+						leaderID:    rp.CurrentLeader.LeaderID,
+						leaderEpoch: rp.CurrentLeader.LeaderEpoch,
+						cursor:      drained.cursor,
 					})
+				} else if isShareLeaderError(rp.ErrorCode) {
+					sc.cl.triggerUpdateMetadataNow("share acknowledge leader error without a valid CurrentLeader hint")
 				}
 				if isShareAckRetryable(partErr) {
 					drained.requeue(sc)
@@ -2801,12 +2862,13 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 			// then records.
 			if rp.ErrorCode != 0 {
 				partitionsWithErrs++
-				if rp.CurrentLeader.LeaderID >= 0 && rp.CurrentLeader.LeaderEpoch >= 0 {
+				if isShareLeaderError(rp.ErrorCode) && rp.CurrentLeader.LeaderID >= 0 && rp.CurrentLeader.LeaderEpoch >= 0 {
 					moves = append(moves, shareMove{
-						topicID:   rt.TopicID,
-						partition: rp.Partition,
-						leaderID:  rp.CurrentLeader.LeaderID,
-						cursor:    cursor,
+						topicID:     rt.TopicID,
+						partition:   rp.Partition,
+						leaderID:    rp.CurrentLeader.LeaderID,
+						leaderEpoch: rp.CurrentLeader.LeaderEpoch,
+						cursor:      cursor,
 					})
 					continue
 				}
