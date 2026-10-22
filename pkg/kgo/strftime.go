@@ -76,13 +76,13 @@ func strftimeAppendFormat(dst []byte, format string, t time.Time) []byte {
 		case 'H': // hour as number on 24hr clock
 			dst = append0Pad(dst, t.Hour(), 2)
 		case 'I': // hour as number on 12hr clock
-			dst = append0Pad(dst, t.Hour()%12, 2)
+			dst = append0Pad(dst, hour12(t.Hour()), 2)
 		case 'j': // day of year as decimal number
 			dst = append0Pad(dst, t.YearDay(), 3)
 		case 'k': // 24hr as number, space padded
 			dst = appendSpacePad(dst, t.Hour())
 		case 'l': // 12hr as number, space padded
-			dst = appendSpacePad(dst, t.Hour()%12)
+			dst = appendSpacePad(dst, hour12(t.Hour()))
 		case 'm': // month as number
 			dst = append0Pad(dst, int(t.Month()), 2)
 		case 'M': // minute as number
@@ -95,7 +95,7 @@ func strftimeAppendFormat(dst []byte, format string, t time.Time) []byte {
 			dst = appendampm(dst, t.Hour())
 		case 'r': // %I:%M:%S %p
 			h := t.Hour()
-			dst = append0Pad(dst, h%12, 2)
+			dst = append0Pad(dst, hour12(h), 2)
 			dst = append(dst, ':')
 			dst = append0Pad(dst, t.Minute(), 2)
 			dst = append(dst, ':')
@@ -188,6 +188,14 @@ func append0Pad(dst []byte, n, size int) []byte {
 		}
 	}
 	return strconv.AppendInt(dst, int64(n), 10)
+}
+
+// hour12 returns hour h of a 24hr clock as an hour of a 12hr clock, 1 to 12.
+func hour12(h int) int {
+	if h %= 12; h == 0 {
+		return 12
+	}
+	return h
 }
 
 func appendampm(p []byte, h int) []byte {
