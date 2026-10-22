@@ -430,7 +430,7 @@ func (g *groupConsumer) manageFailWait(consecutiveErrors int, err error) (ctxCan
 	// block around the onLost and assigning.
 	g.c.waitAndAddRebalance()
 
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || g.cl.ctx.Err() != nil {
 		// The cooperative consumer does not revoke everything
 		// while rebalancing, meaning if our context is
 		// canceled, we may have uncommitted data. Rather than
@@ -485,7 +485,7 @@ func (g *groupConsumer) manageFailWait(consecutiveErrors int, err error) (ctxCan
 	// re-assigned.
 	g.c.unaddRebalance()
 
-	if errors.Is(err, context.Canceled) { // context was canceled, quit now
+	if errors.Is(err, context.Canceled) || g.cl.ctx.Err() != nil { // context was canceled, quit now
 		return true
 	}
 
@@ -1460,8 +1460,7 @@ func (g *groupConsumer) signalSubscriptionChange(why string) {
 	g.rejoin(why)
 }
 
-// Joins and then syncs, issuing the two slow requests in goroutines to allow
-// for group cancelation to return early.
+// Joins and then syncs.
 func (g *groupConsumer) joinAndSync(joinWhy string) error {
 	g.noCommitDuringJoinAndSync.Lock()
 	g.cfg.logger.Log(LogLevelDebug, "blocking commits from join&sync")
@@ -1497,12 +1496,6 @@ start:
 	if joinWhy != "" {
 		joinReq.Reason = kmsg.StringPtr(joinWhy)
 	}
-	var (
-		joinResp *kmsg.JoinGroupResponse
-		err      error
-		joined   = make(chan struct{})
-	)
-
 	// NOTE: For this function, we have to use the client context, not the
 	// group context. We want to allow people to issue one final commit in
 	// OnPartitionsRevoked before leaving a group, so we need to block
@@ -1510,17 +1503,7 @@ start:
 	// cancled immediately when leaving while a join or sync is inflight,
 	// and then our final commit will receive either REBALANCE_IN_PROGRESS
 	// or ILLEGAL_GENERATION.
-
-	go func() {
-		defer close(joined)
-		joinResp, err = joinReq.RequestWith(g.cl.ctx, g.cl)
-	}()
-
-	select {
-	case <-joined:
-	case <-g.cl.ctx.Done():
-		return g.cl.ctx.Err() // client closed
-	}
+	joinResp, err := joinReq.RequestWith(g.cl.ctx, g.cl)
 	if err != nil {
 		return err
 	}
@@ -1545,22 +1528,8 @@ start:
 	if !joinResp.SkipAssignment {
 		syncReq.GroupAssignment = plan // nil unless we are the leader
 	}
-	var (
-		syncResp *kmsg.SyncGroupResponse
-		synced   = make(chan struct{})
-	)
-
 	g.cfg.logger.Log(LogLevelInfo, "syncing", "group", g.cfg.group, "protocol_type", g.cfg.protocol, "protocol", protocol)
-	go func() {
-		defer close(synced)
-		syncResp, err = syncReq.RequestWith(g.cl.ctx, g.cl)
-	}()
-
-	select {
-	case <-synced:
-	case <-g.cl.ctx.Done():
-		return g.cl.ctx.Err()
-	}
+	syncResp, err := syncReq.RequestWith(g.cl.ctx, g.cl)
 	if err != nil {
 		return err
 	}
@@ -2038,18 +2007,12 @@ start:
 		"require_stable", req.RequireStable,
 		"num_topics", len(reqg.Topics),
 	)
-	fetchDone := make(chan struct{})
-	go func() {
-		defer close(fetchDone)
-		resp, err = req.RequestWith(reqCtx, g.cl)
-	}()
-	select {
-	case <-fetchDone:
-		g.cfg.logger.Log(LogLevelDebug, "fetch offsets returned", "group", g.cfg.group, "err", err)
-	case <-ctx.Done():
+	resp, err = req.RequestWith(reqCtx, g.cl)
+	if ctx.Err() != nil {
 		g.cfg.logger.Log(LogLevelInfo, "fetch offsets failed due to context cancelation", "group", g.cfg.group)
 		return ctx.Err()
 	}
+	g.cfg.logger.Log(LogLevelDebug, "fetch offsets returned", "group", g.cfg.group, "err", err)
 	if err != nil {
 		g.cfg.logger.Log(LogLevelError, "fetch offsets failed with non-retryable error", "group", g.cfg.group, "err", err)
 		return err
@@ -2818,7 +2781,7 @@ func (g *groupConsumer) updateCommitted(
 
 func (g *groupConsumer) defaultCommitCallback(_ *Client, _ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if !errors.Is(err, context.Canceled) && g.cl.ctx.Err() == nil {
 			g.cfg.logger.Log(LogLevelError, "default commit failed", "group", g.cfg.group, "err", err)
 		} else {
 			g.cfg.logger.Log(LogLevelDebug, "default commit canceled", "group", g.cfg.group)
@@ -3429,9 +3392,8 @@ func (g *groupConsumer) commitOffsetsSync(
 //
 // Note that this function ensures absolute ordering of commit requests by
 // waiting for any prior in-flight commit to complete before issuing a new
-// one. Prior commits are never canceled: canceling kills the connection,
-// and the broker could then process a replacement commit issued on a new
-// connection before the original. This means, for absolute control, you can
+// one. Prior commits are never canceled, so each onDone receives its
+// commit's real result. This means, for absolute control, you can
 // use this function to periodically commit async and then issue a final sync
 // commit before quitting (this is the behavior of autocommiting and using
 // the default revoke). This differs from the Java async commit, which does
@@ -3621,20 +3583,15 @@ func (g *groupConsumer) commit(
 		defer close(commitDone) // allow future commits to continue when we are done
 		defer commitCancel()
 		if priorDone != nil { // wait for any prior request to finish
-			// We must NOT cancel the prior commit. Canceling an
-			// in-flight request kills the TCP connection. Our
-			// subsequent request would then use a new connection,
-			// and the broker can process the two requests out of
-			// order (different connections have no ordering
-			// guarantee). If the prior commit had a lower offset
-			// (e.g. autocommit HEAD vs. sync commit DIRTY), the
-			// broker could process it AFTER ours and overwrite
-			// our higher offset, causing duplicate consumption.
-			//
-			// By waiting for the prior commit to complete
-			// naturally, we keep the connection alive and
-			// guarantee our request is queued behind the prior on
-			// the same connection, preserving ordering.
+			// We must NOT cancel the prior commit. Waiting gives
+			// its callback its real result, and keeps the two
+			// commits in order if a cancel ever kills the
+			// connection again: our commit would then use a new
+			// connection, and the broker could process the prior
+			// commit after ours. If the prior commit had a lower
+			// offset (e.g. autocommit HEAD vs. sync commit DIRTY),
+			// the prior commit would overwrite our higher offset,
+			// causing duplicate consumption.
 			select {
 			case <-priorDone:
 			default:

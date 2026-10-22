@@ -184,18 +184,15 @@ func (cl *Client) EnsureProduceConnectionIsOpen(ctx context.Context, brokers ...
 		wg.Wait()
 	}
 
-	for _, br := range toOpen {
-		wg.Add(1)
-		br.do(ctx, &forceOpenReq{new(kmsg.ProduceRequest)}, func(_ kmsg.Response, err error) {
-			defer wg.Done()
-			if err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Errorf("%d: %w", br.meta.NodeID, err))
-				mu.Unlock()
-			}
-		})
+	waits := make([]*respWaiter, len(toOpen))
+	for i, br := range toOpen {
+		waits[i] = br.issue(ctx, &forceOpenReq{new(kmsg.ProduceRequest)})
 	}
-	wg.Wait()
+	for i, w := range waits {
+		if _, err := w.wait(); err != nil {
+			errs = append(errs, fmt.Errorf("%d: %w", toOpen[i].meta.NodeID, err))
+		}
+	}
 
 	return errors.Join(errs...)
 }
@@ -1217,13 +1214,9 @@ func (cl *Client) doInitProducerID(ctxFn func() context.Context, lastID int64, l
 			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old or the client is pinned to an old version, continuing without a producer id")
 			return &producerID{-1, -1, nil}, true
 		}
-		if errors.Is(err, errChosenBrokerDead) {
-			select {
-			case <-cl.ctx.Done():
-				cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure due to dying client", "err", err)
-				return &producerID{lastID, lastEpoch, ErrClientClosed}, true
-			default:
-			}
+		if cl.ctx.Err() != nil {
+			cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure due to dying client", "err", err)
+			return &producerID{lastID, lastEpoch, ErrClientClosed}, true
 		}
 		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure, discarding initialization attempt", "err", err)
 		return &producerID{lastID, lastEpoch, err}, false

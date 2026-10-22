@@ -2312,7 +2312,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 
 		default: // from ErrorCode in a response, or broker request err, or request is canceled as our session is ending
 			reloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
-			if !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialNonTimeoutErr(load.err) && !isContextErr(load.err) { // non-retryable response error; signal such in a response
+			if !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialNonTimeoutErr(load.err) && !isContextErr(load.err) && s.c.cl.ctx.Err() == nil { // non-retryable response error; signal such in a response
 				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err, fmt.Sprintf("notification of non-retryable error from %s request", loaded.loadType))
 			}
 
@@ -2511,29 +2511,27 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 		return
 	}
 	req1, req2, req3 := load.buildListReq(cl.cfg.isolationLevel, cl.cfg.resetOffset, lookbacks)
+	w1 := broker.issue(ctx, req1)
+	var w2, w3 *respWaiter
+	if req2 != nil {
+		w2 = broker.issue(ctx, req2)
+	}
+	if req3 != nil {
+		w3 = broker.issue(ctx, req3)
+	}
 	var (
-		wg     sync.WaitGroup
 		kresp2 kmsg.Response
 		err2   error
 		kresp3 kmsg.Response
 		err3   error
 	)
-	if req2 != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			kresp2, err2 = broker.waitResp(ctx, req2)
-		}()
+	kresp, err := w1.wait()
+	if w2 != nil {
+		kresp2, err2 = w2.wait()
 	}
-	if req3 != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			kresp3, err3 = broker.waitResp(ctx, req3)
-		}()
+	if w3 != nil {
+		kresp3, err3 = w3.wait()
 	}
-	kresp, err := broker.waitResp(ctx, req1)
-	wg.Wait()
 	if err == nil {
 		err = err2
 	}

@@ -817,23 +817,13 @@ func (s *source) closeShareSession(ctx context.Context) {
 		sc.enqueueAckErrors(drains, err, nAcks-nStaleAcks) // piggybacked acks lost, decrement pendingAcks
 		return
 	}
-	done := make(chan struct{})
-	var respErr error
-	var resp *kmsg.ShareAcknowledgeResponse
-	br.do(ctx, req, func(k kmsg.Response, e error) {
-		respErr = e
-		if k != nil {
-			resp, _ = k.(*kmsg.ShareAcknowledgeResponse)
-		}
-		close(done)
-	})
-	select {
-	case <-done:
-	case <-ctx.Done():
+	kresp, respErr := br.waitResp(ctx, req)
+	if respErr != nil && ctx.Err() != nil {
 		sc.enqueueAckErrors(drains, ctx.Err(), nAcks-nStaleAcks) // ctx expired before response; acks lost, decrement pendingAcks
 		s.resetShareSession()
 		return
 	}
+	resp, _ := kresp.(*kmsg.ShareAcknowledgeResponse)
 
 	// Per-partition callback dispatch.
 	if respErr != nil {
@@ -1042,7 +1032,7 @@ func (sc *shareConsumer) manage() {
 		}
 
 		switch {
-		case errors.Is(err, context.Canceled):
+		case errors.Is(err, context.Canceled), sc.cl.ctx.Err() != nil:
 			return
 
 		case errors.Is(err, kerr.UnknownMemberID),
@@ -2540,24 +2530,8 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 	// the broker already processed, causing double-ack or stale-
 	// epoch errors on the FINAL_EPOCH resend path).
 	timeout := time.Duration(req.MaxWaitMillis)*time.Millisecond + 5*time.Second
-	var (
-		kresp       kmsg.Response
-		err         error
-		requested   = make(chan struct{})
-		ctx, cancel = context.WithTimeout(sc.cl.ctx, timeout)
-	)
+	ctx, cancel := context.WithTimeout(sc.cl.ctx, timeout)
 	defer cancel()
-
-	br, brerr := s.cl.brokerOrErr(ctx, s.nodeID, errUnknownBroker)
-	if brerr != nil {
-		close(requested)
-		err = brerr
-	} else {
-		br.do(ctx, req, func(k kmsg.Response, e error) {
-			kresp, err = k, e
-			close(requested)
-		})
-	}
 
 	// Wait for the response. ctx carries a MaxWait+5s deadline rather
 	// than fm.ctx cancellation: cancelling mid-fetch is lossy (the
@@ -2568,24 +2542,20 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 	// hard-stuck case (broker unresponsive past the deadline) falls
 	// into the requeue path below, where closeShareSession re-sends
 	// the acks on the userCtx-bounded FINAL_EPOCH ShareAcknowledge.
-	select {
-	case <-requested:
-		if isContextErr(err) && ctx.Err() != nil {
-			// Deadline hit or cl.ctx cancelled. Requeue piggybacked
-			// acks so closeShareSession or a later fetch can retry.
-			for _, pa := range piggybackAcks {
-				pa.requeue(sc)
-			}
-			return s.shareFetchAbandoned(), false
-		}
-		fetched = true
-	case <-ctx.Done():
-		// cl.ctx cancelled or deadline. Requeue for closeShareSession.
+	var kresp kmsg.Response
+	br, err := s.cl.brokerOrErr(ctx, s.nodeID, errUnknownBroker)
+	if err == nil {
+		kresp, err = br.waitResp(ctx, req)
+	}
+	if err != nil && ctx.Err() != nil {
+		// Deadline hit or cl.ctx cancelled. Requeue piggybacked
+		// acks so closeShareSession or a later fetch can retry.
 		for _, pa := range piggybackAcks {
 			pa.requeue(sc)
 		}
 		return s.shareFetchAbandoned(), false
 	}
+	fetched = true
 
 	var didBackoff bool
 	backoff := func(why any) {
