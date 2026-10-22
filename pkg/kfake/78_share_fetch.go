@@ -123,16 +123,18 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			partIdx[tpKey{tid, p}] = i
 			sp := kmsg.NewShareFetchResponseTopicPartition()
 			sp.Partition = p
-			// Real brokers serialize the Java schema default -1/-1 when
-			// they do not populate a leader hint; the Go zero value 0/0
-			// would be read by clients as a valid hint to node 0.
-			sp.CurrentLeader.LeaderID = -1
-			sp.CurrentLeader.LeaderEpoch = -1
 			*ps = append(*ps, sp)
 		}
 		sp := &(*ps)[i]
 		if errCode != 0 {
 			sp.ErrorCode = errCode
+			// Kafka fills CurrentLeader only for leader errors, with
+			// -1/-1 when it does not know the leader. Every other
+			// partition gets 0/0.
+			if errCode == kerr.NotLeaderForPartition.Code || errCode == kerr.FencedLeaderEpoch.Code {
+				sp.CurrentLeader.LeaderID = -1
+				sp.CurrentLeader.LeaderEpoch = -1
+			}
 		}
 		return sp
 	}

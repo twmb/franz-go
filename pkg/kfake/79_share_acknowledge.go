@@ -1,6 +1,8 @@
 package kfake
 
 import (
+	"slices"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -81,11 +83,13 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		sp := kmsg.NewShareAcknowledgeResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = ec
-		// Real brokers serialize the Java schema default -1/-1 when
-		// they do not populate a leader hint; the Go zero value 0/0
-		// would be read by clients as a valid hint to node 0.
-		sp.CurrentLeader.LeaderID = -1
-		sp.CurrentLeader.LeaderEpoch = -1
+		// Kafka fills CurrentLeader only for leader errors, with -1/-1
+		// when it does not know the leader. Every other partition gets
+		// 0/0.
+		if ec == kerr.NotLeaderForPartition.Code || ec == kerr.FencedLeaderEpoch.Code {
+			sp.CurrentLeader.LeaderID = -1
+			sp.CurrentLeader.LeaderEpoch = -1
+		}
 		resp.Topics[i].Partitions = append(resp.Topics[i].Partitions, sp)
 		return &resp.Topics[i].Partitions[len(resp.Topics[i].Partitions)-1]
 	}
@@ -96,6 +100,14 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		sp := donep(tid, p, kerr.NotLeaderForPartition.Code)
 		sp.CurrentLeader.LeaderID = pd.leader.node
 		sp.CurrentLeader.LeaderEpoch = pd.epoch
+		// Kafka sends the endpoint of each leader it names.
+		if !slices.ContainsFunc(resp.NodeEndpoints, func(ne kmsg.ShareAcknowledgeResponseNodeEndpoint) bool { return ne.NodeID == pd.leader.node }) {
+			ne := kmsg.NewShareAcknowledgeResponseNodeEndpoint()
+			ne.NodeID = pd.leader.node
+			ne.Host, ne.Port = pd.leader.hostport()
+			ne.Rack = &brokerRack
+			resp.NodeEndpoints = append(resp.NodeEndpoints, ne)
+		}
 	}
 
 	// Session close: process acks, release remaining acquired records,
