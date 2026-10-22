@@ -125,7 +125,8 @@ type (
 		creq    *clientReq
 		session *shareSession // session at registration time; stale if overwritten
 		in      []*partData
-		ackTs   []ackTopic // piggybacked ack topics from the initial request
+		ackTs   []ackTopic      // piggybacked ack topics from the initial request
+		ackErrs map[tpKey]int16 // failed piggybacked acks from the initial request
 		cb      func()
 		t       *time.Timer
 

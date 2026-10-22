@@ -136,11 +136,18 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 		return sp
 	}
+	// Kafka holds ack results until the fetch completes, so a fetch that
+	// waits keeps its failed acks to answer them when it completes.
+	var ackErrs map[tpKey]int16
 	onAck := func(tid uuid, p int32, ec int16) {
 		if ec == 0 {
 			return // success - fetch phase handles the response entry
 		}
 		donep(tid, p, 0).AcknowledgeErrorCode = ec
+		if ackErrs == nil {
+			ackErrs = make(map[tpKey]int16)
+		}
+		ackErrs[tpKey{tid, p}] = ec
 	}
 	// onAckNotLeader routes a leader-mismatch on a piggybacked ack to
 	// the AcknowledgeErrorCode field. The ShareFetch response has no
@@ -151,7 +158,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	// migrates the cursor via the fetch-side NOT_LEADER path if the
 	// same partition was also being fetched.
 	onAckNotLeader := func(tid uuid, p int32, _ *partData) {
-		donep(tid, p, 0).AcknowledgeErrorCode = kerr.NotLeaderForPartition.Code
+		onAck(tid, p, kerr.NotLeaderForPartition.Code)
 	}
 
 	// Session management.
@@ -275,9 +282,14 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	}
 
 	// Process piggybacked acks first (skipped on watcher re-invocation,
-	// since acks were already processed in the initial call).
+	// since acks were already processed in the initial call). The
+	// re-invocation answers the failed acks the initial call kept.
 	if len(ackTs) > 0 {
 		toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, onAck, onAckNotLeader)
+	} else if w != nil {
+		for k, ec := range w.ackErrs {
+			onAck(k.tid, k.p, ec)
+		}
 	}
 
 	// Build target list from session partitions.
@@ -460,6 +472,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 				creq:    creq,
 				session: session,
 				ackTs:   ackTs,
+				ackErrs: ackErrs,
 			}
 			wsf.cb = func() {
 				select {

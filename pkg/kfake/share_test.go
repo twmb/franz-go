@@ -2300,6 +2300,62 @@ func TestShareFetchAckedPartitionAnsweredOnce(t *testing.T) {
 	}
 }
 
+// TestShareFetchWaitKeepsAckErrors verifies that a ShareFetch that waits for
+// records still answers its failed piggybacked acks.
+func TestShareFetchWaitKeepsAckErrors(t *testing.T) {
+	t.Parallel()
+
+	const topic, group = "share-wait-ack-err", "share-wait-ack-err-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	produceShareN(t, c, topic, group, 1)
+	cl := newPlainClient(t, c)
+	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+	if _, n := rawShareFetch(t, cl, group, memberID, topicID, 0); n != 1 {
+		t.Fatalf("acquired %d records, wanted 1", n)
+	}
+
+	// Another member acks the record we hold. The ack fails, and with
+	// nothing to acquire, the fetch waits MaxWait.
+	other := "other-member"
+	rawShareFetch(t, cl, group, other, topicID, 0)
+	req := kmsg.NewPtrShareFetchRequest()
+	req.GroupID = kmsg.StringPtr(group)
+	req.MemberID = &other
+	req.ShareSessionEpoch = 1
+	req.MaxWaitMillis = 100
+	req.MaxRecords = 500
+	rt := kmsg.NewShareFetchRequestTopic()
+	rt.TopicID = topicID
+	rp := kmsg.NewShareFetchRequestTopicPartition()
+	rp.PartitionMaxBytes = 1 << 20
+	ab := kmsg.NewShareFetchRequestTopicPartitionAcknowledgementBatch()
+	ab.AcknowledgeTypes = []int8{1} // Accept offset 0
+	rp.AcknowledgementBatches = append(rp.AcknowledgementBatches, ab)
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+
+	start := time.Now()
+	resp, err := req.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) < 100*time.Millisecond {
+		t.Fatal("the ShareFetch answered without waiting")
+	}
+	var answered bool
+	for _, rt := range resp.Topics {
+		for _, rp := range rt.Partitions {
+			answered = true
+			if rp.AcknowledgeErrorCode != kerr.InvalidRecordState.Code {
+				t.Errorf("ack error %v, wanted INVALID_RECORD_STATE", kerr.ErrorForCode(rp.AcknowledgeErrorCode))
+			}
+		}
+	}
+	if !answered {
+		t.Error("the ShareFetch did not answer the acked partition")
+	}
+}
+
 // TestShareGroupLeaderMoveInFlightAcks is the TestShareGroupCurrentLeaderMove
 // complement: records are consumed from the original leader and acked
 // AFTER the move (not before). This exercises the PR review finding
