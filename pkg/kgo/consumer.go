@@ -829,12 +829,12 @@ func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
 }
 
 // SetOffsets sets any matching offsets in setOffsets to the given
-// epoch/offset. Partitions that are not specified are not set. This sets only
-// partitions that are being consumed, including partitions whose starting
-// offset is still loading; any extra partitions are skipped. A group consumer
-// skips a partition until its committed offset is fetched or you poll a record
-// from it: to choose where a newly assigned partition starts, use
-// AdjustFetchOffsetsFn.
+// epoch/offset. Partitions that are not specified are not set, and negative
+// offsets are skipped. This sets only partitions that are being consumed,
+// including partitions whose starting offset is still loading; any extra
+// partitions are skipped. A group consumer skips a partition until its
+// committed offset is fetched or you poll a record from it: to choose where a
+// newly assigned partition starts, use AdjustFetchOffsetsFn.
 //
 // If using transactions, it is advised to just use a GroupTransactSession and
 // avoid this function entirely.
