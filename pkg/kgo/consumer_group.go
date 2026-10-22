@@ -2880,12 +2880,14 @@ func (g *groupConsumer) loopCommit() {
 }
 
 // applySetOffsets applies the given offsets to g.uncommitted for partitions
-// that are currently being consumed, updating their dirty, head, and committed
-// fields. Partitions not in g.uncommitted are skipped (per SetOffsets docs:
-// "any extra partitions are skipped"). If any partition's dirty field actually
-// changed, the partition is returned in assigns so the caller can reassign
-// cursors. If all partitions already had the same dirty offset, this returns
-// nil and no cursor reassignment is needed - this is a key optimization for
+// that are currently being consumed, updating their dirty and head fields.
+// Committed is left alone so that the next commit commits the set offset
+// (GroupTransactSession.End records a transaction's commit). Partitions not in
+// g.uncommitted are skipped (per SetOffsets docs: "any extra partitions are
+// skipped"). If any partition's dirty field actually changed, the partition
+// is returned in assigns so the caller can reassign cursors. If all
+// partitions already had the same dirty offset, this returns nil and no
+// cursor reassignment is needed - this is a key optimization for
 // transactions resetting state on abort.
 func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOffset) (assigns map[string]map[int32]Offset) {
 	g.mu.Lock()
@@ -2910,15 +2912,14 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 			if !exists {
 				continue // partition was not being consumed
 			}
-			topicUncommitted[partition] = uncommit{
-				dirty:     epochOffset,
-				head:      epochOffset,
-				committed: epochOffset,
-				topicID:   current.topicID,
-			}
-			if current.dirty == epochOffset {
+			same := current.dirty == epochOffset
+			current.dirty, current.head = epochOffset, epochOffset
+			topicUncommitted[partition] = current
+			// Already at this offset: no cursor to reassign.
+			if same {
 				continue
-			} else if topicAssigns == nil {
+			}
+			if topicAssigns == nil {
 				topicAssigns = make(map[int32]Offset, len(partitions))
 			}
 			topicAssigns[partition] = Offset{
