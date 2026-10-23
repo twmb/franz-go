@@ -2100,6 +2100,7 @@ start:
 
 	id2t := g.cl.id2tMap()
 	offsets := make(map[string]map[int32]Offset)
+	var fetched mtmps // partitions the group has a commit for
 	for _, rTopic := range resp.Groups[0].Topics {
 		topic := rTopic.Topic
 		if topic == "" {
@@ -2212,6 +2213,8 @@ start:
 			// negative offset.
 			if rPartition.Offset < 0 {
 				offset = g.cfg.startOffset
+			} else {
+				fetched.add(topic, rPartition.Partition)
 			}
 			topicOffsets[rPartition.Partition] = offset
 		}
@@ -2352,9 +2355,14 @@ start:
 			topicUncommitted = make(map[int32]uncommit, 20)
 			g.uncommitted[topic] = topicUncommitted
 		}
+		fetchedTopic := fetched[topic]
 		for partition, offset := range partitions {
-			if offset.at < 0 {
-				continue // not yet committed
+			// No commit: the first poll, or a SetOffsets before the
+			// first poll, records where consuming starts; see uncommit.
+			// AdjustFetchOffsetsFn can replace a commit with a relative
+			// or AfterMilli offset, where at is not an offset.
+			if _, hasCommit := fetchedTopic[partition]; !hasCommit || offset.at < 0 || offset.relative != 0 || offset.afterMilli {
+				continue
 			}
 			committed := EpochOffset{
 				Epoch:  offset.epoch,
@@ -2364,6 +2372,7 @@ start:
 				dirty:     committed,
 				head:      committed,
 				committed: committed,
+				hasCommit: true,
 			}
 		}
 	}
@@ -2482,7 +2491,24 @@ func (g *groupConsumer) findNewAssignments() {
 type uncommit struct {
 	dirty     EpochOffset // if autocommitting, what will move to head on next Poll
 	head      EpochOffset // ready to commit
-	committed EpochOffset // what is committed
+	committed EpochOffset // what is committed; see hasCommit
+
+	// hasCommit is set once the group has a commit for the partition:
+	// the offset fetch returned a commit, or a commit of ours succeeded.
+	// Without a commit, committed holds where consuming the partition
+	// started: the first polled record, the offset SetOffsets set, or a
+	// mark before the first poll. A mark before the first poll is the
+	// start for every reader of the entry, the abort rewind included.
+	// CommittedOffsets omits the partition, a commit includes the
+	// partition once a mark or SetOffsets moved head, and a transaction
+	// abort rewinds to committed.
+	hasCommit bool
+
+	// userHead is set once a mark or a SetOffsets moved head. A poll
+	// creates an entry with head at the first polled record and never
+	// sets userHead. A partition the group has no commit for is
+	// committed only once userHead is set; see getUncommittedLocked.
+	userHead bool
 
 	// topicID is the ID of the topic the offsets were fetched under, if
 	// the fetch carried one. We commit under it, and refuse the offsets
@@ -2572,10 +2598,11 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 				}
 				prior, ok := topicOffsets[partition.Partition]
 				// Records under a new ID come from a recreated topic
-				// that was purged and added back; the entry starts over.
+				// that was purged and added back; the entry starts over
+				// at the first record; see uncommit.
 				if !ok || prior.topicID != noID && topic.TopicID != noID && prior.topicID != topic.TopicID {
-					uninit := EpochOffset{-1, 0}
-					uncommit := uncommit{dirty: uninit, head: uninit, committed: uninit}
+					start := EpochOffset{-1, partition.Records[0].Offset}
+					uncommit := uncommit{dirty: start, head: start, committed: start}
 					prior, topicOffsets[partition.Partition] = uncommit, uncommit
 				}
 				if prior.topicID == noID {
@@ -2758,7 +2785,7 @@ func (g *groupConsumer) updateCommitted(
 				reqPart.LeaderEpoch,
 				reqPart.Offset,
 			}
-			uncommit.committed = set
+			uncommit.committed, uncommit.hasCommit = set, true
 
 			// head is set in four places:
 			//  (1) if manually committing or greedily autocommitting,
@@ -2914,6 +2941,7 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 			}
 			same := current.dirty == epochOffset
 			current.dirty, current.head = epochOffset, epochOffset
+			current.userHead = true
 			topicUncommitted[partition] = current
 			// Already at this offset: no cursor to reassign.
 			if same {
@@ -2962,7 +2990,8 @@ func (cl *Client) MarkedOffsets() map[string]map[int32]EpochOffset {
 }
 
 // CommittedOffsets returns the latest committed offsets. Committed offsets are
-// updated from commits or from joining a group and fetching offsets.
+// updated from commits or from joining a group and fetching offsets. A
+// partition the group has no commit for is not included.
 //
 // If there are no committed offsets, this returns nil.
 func (cl *Client) CommittedOffsets() map[string]map[int32]EpochOffset {
@@ -2973,6 +3002,30 @@ func (cl *Client) CommittedOffsets() map[string]map[int32]EpochOffset {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	committed := g.getUncommittedLocked(false, false)
+	for topic, partitions := range committed {
+		topicUncommitted := g.uncommitted[topic]
+		for partition := range partitions {
+			if !topicUncommitted[partition].hasCommit {
+				delete(partitions, partition)
+			}
+		}
+		if len(partitions) == 0 {
+			delete(committed, topic)
+		}
+	}
+	if len(committed) == 0 {
+		return nil
+	}
+	return committed
+}
+
+// getCommitted returns every consumed partition's committed offset, or where
+// we started consuming a partition the group has no commit for (see
+// uncommit). A transaction abort rewinds to the returned offsets.
+func (g *groupConsumer) getCommitted() map[string]map[int32]EpochOffset {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	return g.getUncommittedLocked(false, false)
 }
 
@@ -3014,7 +3067,17 @@ func (g *groupConsumer) getUncommittedLocked(head, dirty bool) map[string]map[in
 	for topic, partitions := range g.uncommitted {
 		var topicUncommitted map[int32]EpochOffset
 		for partition, uncommit := range partitions {
-			if head && (dirty && uncommit.dirty == uncommit.committed || !dirty && uncommit.head == uncommit.committed) {
+			// Nothing to commit when:
+			//  * the caller wants dirty, the group has a commit, and
+			//    dirty is that commit: nothing was polled since;
+			//  * the caller wants head, the group has a commit, and
+			//    head is that commit: nothing was marked or set since;
+			//  * the caller wants head, the group has no commit, head
+			//    is where consuming started, and no mark or SetOffsets
+			//    moved head: the partition was only polled, and a poll
+			//    alone does not commit the start; see userHead.
+			if head && (dirty && uncommit.hasCommit && uncommit.dirty == uncommit.committed ||
+				!dirty && uncommit.head == uncommit.committed && (uncommit.hasCommit || !uncommit.userHead)) {
 				continue
 			}
 			if topicUncommitted == nil {
@@ -3182,16 +3245,18 @@ func (cl *Client) MarkCommitRecords(rs ...*Record) {
 		}
 
 		current, ok := curPartitions[r.Partition]
-		if newHead := (EpochOffset{
+		newHead := EpochOffset{
 			r.LeaderEpoch,
 			r.Offset + 1,
-		}); !ok || current.head.Less(newHead) {
-			curPartitions[r.Partition] = uncommit{
-				dirty:     current.dirty,
-				committed: current.committed,
-				head:      newHead,
-				topicID:   current.topicID,
-			}
+		}
+		if !ok {
+			// A mark before the first poll: the partition's offsets
+			// start at the mark; see uncommit.
+			current = uncommit{dirty: newHead, head: newHead, committed: newHead, userHead: true}
+			curPartitions[r.Partition] = current
+		} else if current.head.Less(newHead) {
+			current.head, current.userHead = newHead, true
+			curPartitions[r.Partition] = current
 		}
 	}
 }
@@ -3223,13 +3288,14 @@ func (cl *Client) MarkCommitOffsets(unmarked map[string]map[int32]EpochOffset) {
 
 		for partition, newHead := range partitions {
 			current, ok := curPartitions[partition]
-			if !ok || current.head.Less(newHead) {
-				curPartitions[partition] = uncommit{
-					dirty:     current.dirty,
-					committed: current.committed,
-					head:      newHead,
-					topicID:   current.topicID,
-				}
+			if !ok {
+				// A mark before the first poll: the partition's
+				// offsets start at the mark; see uncommit.
+				current = uncommit{dirty: newHead, head: newHead, committed: newHead, userHead: true}
+				curPartitions[partition] = current
+			} else if current.head.Less(newHead) {
+				current.head, current.userHead = newHead, true
+				curPartitions[partition] = current
 			}
 		}
 	}
