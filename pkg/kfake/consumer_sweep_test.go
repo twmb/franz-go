@@ -40,51 +40,106 @@ func failNextOFLE(c *Cluster) *FaultHandle {
 	})
 }
 
-// TestAuditSetOffsetsNotClobberedByPendingLoad verifies that SetOffsets on a
-// previously-consumed partition wins over a pending offset load for that
-// partition. Pre-fix, assignSetMatching set the cursor's offset but KEPT the
-// pending load (an epoch validation at the old offset here); the load
-// completed in the new session and overwrote the seek with its stale result,
-// so the consumer silently resumed at the pre-seek position.
+// TestAuditSetOffsetsNotClobberedByPendingLoad verifies that SetOffsets wins
+// over an offset load pending for the partition. Pre-fix, assignSetMatching
+// set the cursor's offset but KEPT the pending load, or kept the load and set
+// nothing when the partition had no cursor in use yet; the load completed in
+// the new session and the consumer silently started at the load's offset.
+// It also verifies that the set offset is uncommitted, so the next commit
+// commits it, and that a negative offset is skipped.
 func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 	t.Parallel()
 
 	const (
 		topic = "setoffsets-clobber"
+		group = "setoffsets-clobber-g"
 		msgs  = 10
 		seek  = int64(1)
 	)
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	produceN(t, c, topic, msgs)
+	newConsumer := func(t *testing.T, c *Cluster) *kgo.Client {
+		return newPlainClient(t, c,
+			kgo.ConsumeTopics(topic),
+			kgo.ConsumerGroup(group),
+			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+			kgo.DisableAutoCommit(),
+			kgo.DisableFetchSessions(),
+			kgo.FetchMaxWait(100*time.Millisecond),
+		)
+	}
 
-	cl := newPlainClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.DisableFetchSessions(),
-		kgo.FetchMaxWait(100*time.Millisecond),
-	)
+	for _, tt := range []struct {
+		name string
+		// pend returns a consumer that will validate partition 0's offset
+		// with OffsetForLeaderEpoch.
+		pend func(*testing.T, *Cluster) *kgo.Client
+	}{
+		{"reload after consuming", func(t *testing.T, c *Cluster) *kgo.Client {
+			// Consume everything so the cursor sits at the log end with
+			// a non-negative last consumed epoch, then fence the next
+			// fetch so the client validates offset 10.
+			cl := newConsumer(t, c)
+			consumeN(t, cl, msgs, 8*time.Second)
+			fenceNextFetch(c, topic)
+			return cl
+		}},
 
-	// Consume everything so the cursor sits at the log end with a
-	// non-negative last consumed epoch.
-	consumeN(t, cl, msgs, 8*time.Second)
+		{"first load", func(t *testing.T, c *Cluster) *kgo.Client {
+			// Commit offset 3 at epoch 0 so that the consumer's first
+			// load validates it. The partition has no cursor in use
+			// until that load finishes.
+			commit := kmsg.NewPtrOffsetCommitRequest()
+			commit.Group = group
+			ct := kmsg.NewOffsetCommitRequestTopic()
+			ct.Topic, ct.TopicID = topic, c.TopicInfo(topic).TopicID
+			cp := kmsg.NewOffsetCommitRequestTopicPartition()
+			cp.Offset, cp.LeaderEpoch = 3, 0
+			ct.Partitions = append(ct.Partitions, cp)
+			commit.Topics = append(commit.Topics, ct)
+			resp, err := commit.RequestWith(context.Background(), newPlainClient(t, c))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if code := resp.Topics[0].Partitions[0].ErrorCode; code != 0 {
+				t.Fatalf("commit answered %d", code)
+			}
 
-	// Fence the next fetch so the client queues an epoch validation at
-	// offset 10, and fail that validation retriably so it stays pending.
-	ofle := failNextOFLE(c)
-	fenceNextFetch(c, topic)
+			return newConsumer(t, c)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	waitHits(t, ofle, 1, "the epoch validation load was never issued")
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			produceN(t, c, topic, msgs)
 
-	// The validation load for offset 10 is now pending (its retriable
-	// failure scheduled a reload). Seek to offset 1: the seek must win.
-	cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{
-		topic: {0: {Epoch: -1, Offset: seek}},
-	})
+			// Fail every validation retryably until the seek is in, so
+			// the load is still pending when SetOffsets runs.
+			ofle := c.Fault(Fault{
+				Keys:  []kmsg.Key{kmsg.OffsetForLeaderEpoch},
+				Err:   kerr.NotLeaderForPartition,
+				Count: -1,
+			})
+			cl := tt.pend(t, c)
+			waitHits(t, ofle, 1, "the epoch validation load was never issued")
 
-	got := consumeN(t, cl, 1, 8*time.Second)
-	if got[0].Offset != seek {
-		t.Fatalf("BUG REPRODUCED: first record after SetOffsets(%d) has offset %d; the pending epoch validation overwrote the seek", seek, got[0].Offset)
+			cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{
+				topic: {0: {Epoch: -1, Offset: seek}},
+			})
+			ofle.Remove()
+			// A negative offset is not an offset: skipped.
+			cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{
+				topic: {0: {Epoch: -1, Offset: -1}},
+			})
+			if got := cl.UncommittedOffsets()[topic][0].Offset; got != seek {
+				t.Fatalf("BUG REPRODUCED: uncommitted offset after SetOffsets(%d) is %d; the next commit would not commit the seek", seek, got)
+			}
+
+			got := consumeN(t, cl, 1, 8*time.Second)
+			if got[0].Offset != seek {
+				t.Fatalf("BUG REPRODUCED: first record after SetOffsets(%d) has offset %d; the pending epoch validation overwrote the seek", seek, got[0].Offset)
+			}
+		})
 	}
 }
 
@@ -223,88 +278,108 @@ func TestAuditPendingReloadSurvivesPartitionRevoke(t *testing.T) {
 // survived the rewind and reset the cursor back to the pre-abort position:
 // the aborted records were never re-consumed and the next transaction
 // committed past them - an exactly-once violation.
+//
+// The "no commit" row verifies that a partition the group has no commit for
+// rewinds to where the transaction started reading. Pre-fix, the first poll
+// recorded offset 0 as committed, and the abort rewound to 0.
 func TestAuditTxnAbortRewindNotClobberedByPendingLoad(t *testing.T) {
 	t.Parallel()
 
 	const (
-		topic     = "txn-rewind-clobber"
-		group     = "txn-rewind-g"
-		msgs      = 10
-		committed = 2
+		topic = "txn-rewind-clobber"
+		group = "txn-rewind-g"
+		msgs  = 10
 	)
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	produceN(t, c, topic, msgs)
+	for _, tt := range []struct {
+		name      string
+		reset     kgo.Offset
+		precommit bool  // consume and commit the records before start first
+		start     int64 // where the aborted transaction starts reading; the abort rewinds to it
+	}{
+		{"after a commit", kgo.NewOffset().AtStart(), true, 2},
+		{"no commit", kgo.NewOffset().AtEnd().Relative(-5), false, 5},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	s, err := kgo.NewGroupTransactSession(
-		kgo.SeedBrokers(c.ListenAddrs()...),
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.TransactionalID("txn-rewind-id"),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.DisableFetchSessions(),
-		kgo.FetchMaxWait(100*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			produceN(t, c, topic, msgs)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	pollN := func(n int) []*kgo.Record {
-		t.Helper()
-		var records []*kgo.Record
-		for ctx.Err() == nil && len(records) < n {
-			fetches := s.PollRecords(ctx, n-len(records))
-			if err := fetches.Err0(); err != nil {
-				t.Fatalf("poll error: %v", err)
+			s, err := kgo.NewGroupTransactSession(
+				kgo.SeedBrokers(c.ListenAddrs()...),
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.TransactionalID("txn-rewind-id"),
+				kgo.ConsumeResetOffset(tt.reset),
+				kgo.DisableFetchSessions(),
+				kgo.FetchMaxWait(100*time.Millisecond),
+			)
+			if err != nil {
+				t.Fatal(err)
 			}
-			records = append(records, fetches.Records()...)
-		}
-		if len(records) < n {
-			t.Fatalf("polled %d/%d records", len(records), n)
-		}
-		return records
-	}
+			defer s.Close()
 
-	// Transaction 1: consume two records and commit, so the committed
-	// offset is 2.
-	if err := s.Begin(); err != nil {
-		t.Fatal(err)
-	}
-	pollN(committed)
-	if ok, err := s.End(ctx, kgo.TryCommit); !ok || err != nil {
-		t.Fatalf("commit failed: ok=%v err=%v", ok, err)
-	}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 
-	// Transaction 2: consume the rest, then abort while an epoch
-	// validation for the cursor's position is pending.
-	if err := s.Begin(); err != nil {
-		t.Fatal(err)
-	}
-	pollN(msgs - committed)
+			pollN := func(n int) []*kgo.Record {
+				t.Helper()
+				var records []*kgo.Record
+				for ctx.Err() == nil && len(records) < n {
+					fetches := s.PollRecords(ctx, n-len(records))
+					if err := fetches.Err0(); err != nil {
+						t.Fatalf("poll error: %v", err)
+					}
+					records = append(records, fetches.Records()...)
+				}
+				if len(records) < n {
+					t.Fatalf("polled %d/%d records", len(records), n)
+				}
+				return records
+			}
 
-	ofle := failNextOFLE(c)
-	fenceNextFetch(c, topic)
-	waitHits(t, ofle, 1, "the epoch validation load was never issued")
+			if tt.precommit {
+				if err := s.Begin(); err != nil {
+					t.Fatal(err)
+				}
+				pollN(int(tt.start))
+				if ok, err := s.End(ctx, kgo.TryCommit); !ok || err != nil {
+					t.Fatalf("commit failed: ok=%v err=%v", ok, err)
+				}
+			}
 
-	if _, err := s.End(ctx, kgo.TryAbort); err != nil {
-		t.Fatalf("abort failed: %v", err)
-	}
+			// Consume the rest, then abort while an epoch validation
+			// for the cursor's position is pending.
+			if err := s.Begin(); err != nil {
+				t.Fatal(err)
+			}
+			pollN(msgs - int(tt.start))
+			if got := s.Client().CommittedOffsets()[topic][0].Offset; got != tt.start {
+				t.Fatalf("committed offset before the abort is %d, want %d", got, tt.start)
+			}
 
-	// Transaction 3: the abort rewound us to offset 2; the previously
-	// aborted records must be re-consumed, starting at offset 2.
-	if err := s.Begin(); err != nil {
-		t.Fatal(err)
-	}
-	re := pollN(msgs - committed)
-	if _, err := s.End(ctx, kgo.TryAbort); err != nil {
-		t.Fatalf("cleanup abort failed: %v", err)
-	}
-	if re[0].Offset != committed {
-		t.Fatalf("BUG REPRODUCED: first record after abort rewind has offset %d, want %d; the pending epoch validation undid the rewind", re[0].Offset, committed)
+			ofle := failNextOFLE(c)
+			fenceNextFetch(c, topic)
+			waitHits(t, ofle, 1, "the epoch validation load was never issued")
+
+			if _, err := s.End(ctx, kgo.TryAbort); err != nil {
+				t.Fatalf("abort failed: %v", err)
+			}
+
+			// The abort rewound us to start; the aborted records must be
+			// re-consumed from there.
+			if err := s.Begin(); err != nil {
+				t.Fatal(err)
+			}
+			re := pollN(msgs - int(tt.start))
+			if _, err := s.End(ctx, kgo.TryAbort); err != nil {
+				t.Fatalf("cleanup abort failed: %v", err)
+			}
+			if re[0].Offset != tt.start {
+				t.Fatalf("BUG REPRODUCED: first record after abort rewind has offset %d, want %d", re[0].Offset, tt.start)
+			}
+		})
 	}
 }
 

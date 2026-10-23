@@ -2479,6 +2479,11 @@ func (g *groupConsumer) findNewAssignments() {
 // uncommit tracks the latest offset polled (+1) and the latest commit.
 // The reason head is just past the latest offset is because we want
 // to commit TO an offset, not BEFORE an offset.
+//
+// A partition the group has no commit for starts with committed at the
+// offset we began consuming at: an absolute ConsumeResetOffset, or the first
+// record we polled. CommittedOffsets reports it, and a transaction abort
+// rewinds to it.
 type uncommit struct {
 	dirty     EpochOffset // if autocommitting, what will move to head on next Poll
 	head      EpochOffset // ready to commit
@@ -2572,10 +2577,11 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 				}
 				prior, ok := topicOffsets[partition.Partition]
 				// Records under a new ID come from a recreated topic
-				// that was purged and added back; the entry starts over.
+				// that was purged and added back; the entry starts over
+				// at the first record, see uncommit.
 				if !ok || prior.topicID != noID && topic.TopicID != noID && prior.topicID != topic.TopicID {
-					uninit := EpochOffset{-1, 0}
-					uncommit := uncommit{dirty: uninit, head: uninit, committed: uninit}
+					start := EpochOffset{-1, partition.Records[0].Offset}
+					uncommit := uncommit{dirty: start, head: start, committed: start}
 					prior, topicOffsets[partition.Partition] = uncommit, uncommit
 				}
 				if prior.topicID == noID {
@@ -2880,13 +2886,14 @@ func (g *groupConsumer) loopCommit() {
 }
 
 // applySetOffsets applies the given offsets to g.uncommitted for partitions
-// that are currently being consumed, updating their dirty, head, and committed
-// fields. Partitions not in g.uncommitted are skipped (per SetOffsets docs:
-// "any extra partitions are skipped"). If any partition's dirty field actually
-// changed, the partition is returned in assigns so the caller can reassign
-// cursors. If all partitions already had the same dirty offset, this returns
-// nil and no cursor reassignment is needed - this is a key optimization for
-// transactions resetting state on abort.
+// that are currently being consumed, updating their dirty and head fields. We
+// keep committed so that the next commit commits the set offset; a transaction
+// records what it committed with setCommitted. Partitions not in g.uncommitted
+// are skipped (per SetOffsets docs: "any extra partitions are skipped"). If
+// any partition's dirty field actually changed, the partition is returned in
+// assigns so the caller can reassign cursors. If all partitions already had
+// the same dirty offset, this returns nil and no cursor reassignment is needed
+// - this is a key optimization for transactions resetting state on abort.
 func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOffset) (assigns map[string]map[int32]Offset) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -2907,18 +2914,18 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 		var topicAssigns map[int32]Offset
 		for partition, epochOffset := range partitions {
 			current, exists := topicUncommitted[partition]
-			if !exists {
-				continue // partition was not being consumed
+			if !exists || epochOffset.Offset < 0 {
+				continue // partition was not being consumed, or the input is not an offset
 			}
-			topicUncommitted[partition] = uncommit{
-				dirty:     epochOffset,
-				head:      epochOffset,
-				committed: epochOffset,
-				topicID:   current.topicID,
-			}
+			// An unchanged partition keeps its head: moving head to
+			// dirty would autocommit the latest poll before you
+			// process it.
 			if current.dirty == epochOffset {
 				continue
-			} else if topicAssigns == nil {
+			}
+			current.dirty, current.head = epochOffset, epochOffset
+			topicUncommitted[partition] = current
+			if topicAssigns == nil {
 				topicAssigns = make(map[int32]Offset, len(partitions))
 			}
 			topicAssigns[partition] = Offset{
@@ -2935,6 +2942,22 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 	}
 
 	return assigns
+}
+
+// Records offsets a transaction committed; see commitTransactionOffsets.
+func (g *groupConsumer) setCommitted(offsets map[string]map[int32]EpochOffset) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	for topic, partitions := range offsets {
+		topicUncommitted := g.uncommitted[topic]
+		for partition, epochOffset := range partitions {
+			if current, exists := topicUncommitted[partition]; exists {
+				current.committed = epochOffset
+				topicUncommitted[partition] = current
+			}
+		}
+	}
 }
 
 // UncommittedOffsets returns the latest uncommitted offsets. Uncommitted
@@ -2961,7 +2984,9 @@ func (cl *Client) MarkedOffsets() map[string]map[int32]EpochOffset {
 }
 
 // CommittedOffsets returns the latest committed offsets. Committed offsets are
-// updated from commits or from joining a group and fetching offsets.
+// updated from commits or from joining a group and fetching offsets. A
+// partition the group has no commit for reports the offset we started
+// consuming it at.
 //
 // If there are no committed offsets, this returns nil.
 func (cl *Client) CommittedOffsets() map[string]map[int32]EpochOffset {

@@ -829,22 +829,21 @@ func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
 }
 
 // SetOffsets sets any matching offsets in setOffsets to the given
-// epoch/offset. Partitions that are not specified are not set. It is invalid
-// to set topics that were not yet returned from a PollFetches: this function
-// sets only partitions that were previously consumed, any extra partitions are
-// skipped.
-//
-// If directly consuming, this function operates as expected given the caveats
-// of the prior paragraph.
+// epoch/offset. Partitions that are not specified are not set, and negative
+// offsets are skipped. This sets only partitions that are being consumed,
+// including partitions whose starting offset is still loading; any extra
+// partitions are skipped. A group consumer skips a partition until its
+// committed offset is fetched or you poll a record from it: to choose where a
+// newly assigned partition starts, use AdjustFetchOffsetsFn.
 //
 // If using transactions, it is advised to just use a GroupTransactSession and
 // avoid this function entirely.
 //
-// If using group consuming, it is strongly recommended to use this function
-// outside of the context of a PollFetches loop and only when you know the
-// group is not revoked (i.e., block any concurrent revoke while issuing this
-// call) and to not use this concurrent with committing. Any other usage is
-// prone to odd interactions.
+// If using group consuming, a set offset is uncommitted: autocommitting,
+// CommitUncommittedOffsets, and CommitMarkedOffsets commit it. It is strongly
+// recommended to call this from the goroutine that polls, while no revoke can
+// run: use BlockRebalanceOnPoll and call this before AllowRebalance. Do not use
+// this concurrent with committing.
 func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 	cl.setOffsets(setOffsets, true)
 }
@@ -1280,21 +1279,26 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		case assignInvalidateAll:
 			loadOffsets = listOrEpochLoads{}
 		case assignSetMatching:
-			// Loads for partitions that were being consumed were
-			// handled in the cursor walk above (offset set directly,
-			// pending load dropped). Anything remaining is a load for
-			// a partition that never finished loading; SetOffsets
-			// documents those are skipped, so we keep their loads
-			// untouched.
-			//
-			// NOTE: the direct consumer's applySetOffsets translates
-			// all user input blindly (unlike the group path, which
-			// filters to g.uncommitted); the "extra partitions are
-			// skipped" contract holds only because this arm touches
-			// nothing beyond usingCursors and returns before the
-			// offset-loading section below. If setMatching ever gains
-			// load handling, filter never-consumed direct partitions
-			// first or they will silently start loading.
+			// The cursor walk above set every partition with a cursor
+			// in use. A partition still on its first offset load has
+			// no cursor in use, and the load would start it at the
+			// load's offset rather than the set one: we drop the load
+			// and assign the set offset below like a new assignment.
+			// The direct consumer's applySetOffsets passes through
+			// partitions it is not consuming; they have no load and no
+			// cursor in use, so they are skipped.
+			reassign := make(map[string]map[int32]Offset)
+			for t, ps := range assignments {
+				for p, o := range ps {
+					if loadOffsets.removeLoad(t, p) {
+						if reassign[t] == nil {
+							reassign[t] = make(map[int32]Offset)
+						}
+						reassign[t][p] = o
+					}
+				}
+			}
+			assignments = reassign
 		case assignInvalidateMatching:
 			loadOffsets.keepFilter(func(t string, p int32) bool {
 				if assignTopic, ok := assignments[t]; ok {
@@ -1329,7 +1333,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 
 	// This assignment could contain nothing (for the purposes of
 	// invalidating active fetches), so we only do this if needed.
-	if len(assignments) == 0 || how != assignWithoutInvalidating {
+	if len(assignments) == 0 || how != assignWithoutInvalidating && how != assignSetMatching {
 		return
 	}
 
@@ -1344,8 +1348,13 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 	// there is no epoch to validate, so we immediately begin consuming
 	// at the offset. The epoch request returns and tries also using the
 	// cursor concurrently. We need to guard it.
-	session.listOrEpochMu.Lock()
-	defer session.listOrEpochMu.Unlock()
+	//
+	// If we stopped the session (assignSetMatching), no results can
+	// arrive until the new session starts.
+	if session != nil {
+		session.listOrEpochMu.Lock()
+		defer session.listOrEpochMu.Unlock()
+	}
 
 	topics := tps.load()
 	for topic, partitions := range assignments {
