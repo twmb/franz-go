@@ -1390,8 +1390,6 @@ func (sc *shareConsumer) applyMovesBlocking(k kip951move) {
 	}
 	defer sc.decWorker()
 	sc.cl.blockingMetadataFn(func() {
-		k.ensureBrokers(sc.cl)
-		k.ensureSinksAndSources(sc.cl)
 		k.doMove(sc.cl)
 
 		// Re-enable each cursor for fetching now that its move has run, and

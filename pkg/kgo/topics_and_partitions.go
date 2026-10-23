@@ -1008,11 +1008,7 @@ func (k *kip951move) maybeBeginMove(cl *Client) {
 	}
 	// We want to do the move independent of whatever is calling us, BUT we
 	// want to ensure it is not concurrent with a metadata request.
-	go cl.blockingMetadataFn(func() {
-		k.ensureBrokers(cl)
-		k.ensureSinksAndSources(cl)
-		k.doMove(cl)
-	})
+	go cl.blockingMetadataFn(func() { k.doMove(cl) })
 }
 
 func (k *kip951move) doMove(cl *Client) {
@@ -1050,6 +1046,8 @@ func (k *kip951move) doMove(cl *Client) {
 		}
 		return lr, true
 	}
+
+	var ensured bool
 
 	// modifyP returns the old topicPartition and a new one that will be
 	// used in migrate<Fn>To. The new topicPartition only contains the sink
@@ -1090,6 +1088,18 @@ func (k *kip951move) doMove(cl *Client) {
 		}
 		if old.leaderEpoch >= td.leaderEpoch {
 			return nil, nil, false
+		}
+
+		// We add the hint's brokers, sinks, and sources once the first
+		// move passes the checks above, as Kafka's client does. Between
+		// staging and now, a metadata update can advance every staged
+		// partition past the hint's epoch; the hint's endpoints are then
+		// older than that metadata, and replacing a broker from them
+		// would close its connections and reopen them at the old address.
+		if !ensured {
+			ensured = true
+			k.ensureBrokers(cl)
+			k.ensureSinksAndSources(cl)
 		}
 
 		cl.sinksAndSourcesMu.Lock()
