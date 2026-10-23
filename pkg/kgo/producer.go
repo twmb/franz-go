@@ -938,22 +938,36 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 		// with the partition's actual load error. The Java client
 		// falls back identically when no partition is available.
 		mapping = partsData.partitions
-	} else if cl.cfg.rackAwarePartitioning && cl.cfg.rack != "" {
-		// KIP-1123: prefer partitions whose leader is in our rack. We
-		// filter once per metadata update, which always stores a new
-		// partsData. If no leader is in our rack we use every writable
-		// partition, as the Java client does.
-		if parts.rackData != partsData {
-			racks := cl.brokerRacks()
-			parts.rackData, parts.rackParts = partsData, nil
-			for _, p := range mapping {
-				if racks[p.leader] == cl.cfg.rack {
-					parts.rackParts = append(parts.rackParts, p)
+	} else {
+		// A metadata response can name a partition leader that is not
+		// in its own broker list: the cluster still has the broker
+		// leading partitions but no longer advertises it, e.g. while it
+		// considers the broker dead after a network partition. We
+		// cannot reach that leader, so a record partitioned there waits
+		// until the delivery timeout fails it. Like the Java client,
+		// which gives such a partition a null leader and leaves it out
+		// of the available partitions, we prefer the partitions whose
+		// leader we know, filtered once per metadata update. If no
+		// leader is known we use every writable partition.
+		mapping = parts.knownLeaderPartitions(cl, partsData)
+
+		if cl.cfg.rackAwarePartitioning && cl.cfg.rack != "" {
+			// KIP-1123: prefer partitions whose leader is in our
+			// rack. We filter once per metadata update, which always
+			// stores a new partsData. If no leader is in our rack we
+			// use every partition above, as the Java client does.
+			if parts.rackData != partsData {
+				racks := cl.brokerRacks()
+				parts.rackData, parts.rackParts = partsData, nil
+				for _, p := range mapping {
+					if racks[p.leader] == cl.cfg.rack {
+						parts.rackParts = append(parts.rackParts, p)
+					}
 				}
 			}
-		}
-		if len(parts.rackParts) > 0 {
-			mapping = parts.rackParts
+			if len(parts.rackParts) > 0 {
+				mapping = parts.rackParts
+			}
 		}
 	}
 	if len(mapping) == 0 {
