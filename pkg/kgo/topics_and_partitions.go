@@ -298,10 +298,44 @@ type topicPartitions struct {
 	partitioner TopicPartitioner
 	lb          *leastBackupInput // for partitioning if the partitioner is a LoadTopicPartitioner
 
-	// For RackAwarePartitioning: the writable partitions of rackData
+	// The writable partitions of knownData whose leader is a broker in
+	// our broker list, filtered once per metadata update. Nil if every
+	// writable partition's leader is known, or if none is.
+	knownData  *topicPartitionsData
+	knownParts []*topicPartition
+
+	// For RackAwarePartitioning: the known-leader partitions of rackData
 	// whose leader is in our rack, filtered once per metadata update.
 	rackData  *topicPartitionsData
 	rackParts []*topicPartition
+}
+
+// knownLeaderPartitions returns the writable partitions of d whose leader is
+// in our broker list. If every leader is known, or none is, this returns all
+// writable partitions. Must be called with partsMu held.
+func (t *topicPartitions) knownLeaderPartitions(cl *Client, d *topicPartitionsData) []*topicPartition {
+	if t.knownData != d {
+		t.knownData, t.knownParts = d, nil
+		ids := cl.brokerIDs()
+		for i, p := range d.writablePartitions {
+			if ids[p.leader] {
+				continue
+			}
+			// First unknown leader: keep the known partitions
+			// before it and filter the rest.
+			t.knownParts = append(make([]*topicPartition, 0, len(d.writablePartitions)), d.writablePartitions[:i]...)
+			for _, p := range d.writablePartitions[i+1:] {
+				if ids[p.leader] {
+					t.knownParts = append(t.knownParts, p)
+				}
+			}
+			break
+		}
+	}
+	if len(t.knownParts) > 0 {
+		return t.knownParts
+	}
+	return d.writablePartitions
 }
 
 func (t *topicPartitions) load() *topicPartitionsData { return t.v.Load().(*topicPartitionsData) }
