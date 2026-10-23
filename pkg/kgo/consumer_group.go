@@ -2479,6 +2479,11 @@ func (g *groupConsumer) findNewAssignments() {
 // uncommit tracks the latest offset polled (+1) and the latest commit.
 // The reason head is just past the latest offset is because we want
 // to commit TO an offset, not BEFORE an offset.
+//
+// A partition the group has no commit for starts with committed at the
+// offset we began consuming at: an absolute ConsumeResetOffset, or the first
+// record we polled. CommittedOffsets reports it, and a transaction abort
+// rewinds to it.
 type uncommit struct {
 	dirty     EpochOffset // if autocommitting, what will move to head on next Poll
 	head      EpochOffset // ready to commit
@@ -2572,10 +2577,11 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 				}
 				prior, ok := topicOffsets[partition.Partition]
 				// Records under a new ID come from a recreated topic
-				// that was purged and added back; the entry starts over.
+				// that was purged and added back; the entry starts over
+				// at the first record, see uncommit.
 				if !ok || prior.topicID != noID && topic.TopicID != noID && prior.topicID != topic.TopicID {
-					uninit := EpochOffset{-1, 0}
-					uncommit := uncommit{dirty: uninit, head: uninit, committed: uninit}
+					start := EpochOffset{-1, partition.Records[0].Offset}
+					uncommit := uncommit{dirty: start, head: start, committed: start}
 					prior, topicOffsets[partition.Partition] = uncommit, uncommit
 				}
 				if prior.topicID == noID {
@@ -2978,7 +2984,9 @@ func (cl *Client) MarkedOffsets() map[string]map[int32]EpochOffset {
 }
 
 // CommittedOffsets returns the latest committed offsets. Committed offsets are
-// updated from commits or from joining a group and fetching offsets.
+// updated from commits or from joining a group and fetching offsets. A
+// partition the group has no commit for reports the offset we started
+// consuming it at.
 //
 // If there are no committed offsets, this returns nil.
 func (cl *Client) CommittedOffsets() map[string]map[int32]EpochOffset {
