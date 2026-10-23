@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package example;
+
+option go_package = "schema_registry_protobuf/pb";
+
+message Widget {
+  string name = 1;
+}

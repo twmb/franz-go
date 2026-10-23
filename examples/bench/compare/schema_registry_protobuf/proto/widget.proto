@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package bench;
+
+option go_package = "srprotobench/pb";
+
+message Widget {
+  string name = 1;
+  int64 id = 2;
+  repeated string tags = 3;
+}

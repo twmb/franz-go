@@ -36,7 +36,7 @@ jobs:
       # version). kfake's *test* files legitimately exercise HEAD kgo APIs
       # (Ack, ShareGroup, FlushAcks); golangci-lint typechecks tests too,
       # so we need a workspace to resolve those.
-      - run: go work init . pkg/kadm pkg/kfake pkg/kmsg pkg/sr pkg/sasl/kerberos
+      - run: go work init . pkg/kadm pkg/kfake pkg/kmsg pkg/sr pkg/sr/serde/protobuf pkg/sasl/kerberos
       - run: ./lint.sh
 
   test-kfake:
@@ -56,6 +56,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cd pkg/sr && go work init ../.. . && go test ./... && go test -race ./...
+
+  test-sr-serde-protobuf:
+    if: github.repository == 'twmb/franz-go'
+    runs-on: ubuntu-latest
+    name: "test sr serde protobuf"
+    container: golang:latest
+    steps:
+      - uses: actions/checkout@v4
+      # The workspace supplies pkg/sr from the tree. This module requires the
+      # serde package, which first appears in pkg/sr v1.9.0; until that tag
+      # exists the required version resolves to a pkg/sr without it. Once
+      # pkg/sr/v1.9.0 is tagged and the require is bumped, drop the go work
+      # init and just run the tests.
+      - run: cd pkg/sr/serde/protobuf && go work init ../.. . && go test ./... && go test -race ./...
 
   integration-test-kfake:
     if: github.repository == 'twmb/franz-go'
