@@ -2418,7 +2418,7 @@ func TestShareGroupLeaderMoveInFlightAcks(t *testing.T) {
 
 	// Phase 2: move the partition BEFORE acking. The client's next
 	// ShareFetch will get NOT_LEADER from the old leader and migrate
-	// the cursor via applyMoves -> addShareCursor.
+	// the cursor through kip951move and migrateShareCursorTo.
 	if err := c.MoveTopicPartition(topic, 0, newLeader); err != nil {
 		t.Fatalf("move: %v", err)
 	}
