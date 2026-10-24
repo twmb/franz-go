@@ -3,6 +3,7 @@ package kgo
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"regexp/syntax"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -105,6 +107,8 @@ func (f *RecordFormatter) appendRecord(b []byte, p *FetchPartition, r *Record, c
 //	%{    left brace (required if a brace is after another format option)
 //	%}    right brace
 //
+// A % at the end of the layout is also a raw percent sign.
+//
 // # Header specification
 //
 // Specifying headers is essentially a primitive nested format option,
@@ -116,7 +120,9 @@ func (f *RecordFormatter) appendRecord(b []byte, p *FetchPartition, r *Record, c
 //	%v    header value
 //
 // For example, "%H %h{%k %v }" will print the number of headers, and then each
-// header key and value with a space after each.
+// header key and value with a space after each. %i is also accepted, and
+// prints the record's iteration number. Braces inside a header specification
+// must balance, or be written as %{ and %}.
 //
 // # Verb modifiers
 //
@@ -164,8 +170,9 @@ func (f *RecordFormatter) appendRecord(b []byte, p *FetchPartition, r *Record, c
 //
 // An arbitrary amount of pounds, braces, and brackets are understood before
 // beginning the actual timestamp formatting. For Go formatting, the format is
-// simply passed to the time package's AppendFormat function. For strftime, all
-// "man strftime" options are supported. Time is always in UTC.
+// simply passed to the time package's AppendFormat function. For strftime, we
+// format as glibc does in the C locale, including its flags and field widths,
+// plus BSD's %+ and %v. Time is always in UTC.
 //
 // # Attributes
 //
@@ -209,12 +216,20 @@ func (f *RecordFormatter) appendRecord(b []byte, p *FetchPartition, r *Record, c
 //	%v{base64}
 //	%v{base64raw}
 //
+// A %T, %K, or %V size prints the length of the topic, key, or value itself.
+// Ending the size's number format with ";encoded", as in %V{ascii;encoded}
+// (or %V{encoded} for ascii), prints the length of the text that the next %t,
+// %k, or %v prints instead, after base64, hex, or unpack formatting.
+// ";decoded" states the default. Record reading defaults to the encoded
+// length, so a layout used for both formatting and reading should say which
+// it means.
+//
 // Unpack formatting is inside of enclosing pounds, braces, or brackets, the
 // same way that timestamp formatting is understood. The syntax roughly follows
 // Python's struct packing/unpacking rules:
 //
 //	x    pad character (does not parse input)
-//	<    parse what follows as little endian
+//	<    parse what follows as little endian (the default)
 //	>    parse what follows as big endian
 //
 //	b    signed byte
@@ -236,9 +251,19 @@ func (f *RecordFormatter) appendRecord(b []byte, p *FetchPartition, r *Record, c
 // multiple times. If the parser needs more data than available, or if the more
 // input remains after '$', an error message will be appended.
 func NewRecordFormatter(layout string) (*RecordFormatter, error) {
+	return newRecordFormatter(layout, false)
+}
+
+// The spec inside %h{...} is parsed with header set.
+func newRecordFormatter(layout string, header bool) (*RecordFormatter, error) {
 	var f RecordFormatter
 
 	var literal []byte // non-formatted raw text to output
+
+	// A size with ;encoded prints the length of the text that the next
+	// text verb of its field formats. These are the sizes waiting for it,
+	// for the topic, key, and value.
+	var nextEncodedLen [3]*func(string) int
 	for len(layout) > 0 {
 		c, size := utf8.DecodeRuneInString(layout)
 		rawc := layout[:size]
@@ -260,8 +285,9 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 		case '%':
 		}
 
-		if len(layout) == 0 {
-			return nil, errors.New("invalid escape sequence at end of layout string")
+		if len(layout) == 0 { // a trailing % is a raw %
+			literal = append(literal, rawc...)
+			continue
 		}
 
 		cNext, size := utf8.DecodeRuneInString(layout)
@@ -290,6 +316,12 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 			layout = layout[1:]
 		}
 
+		// A header spec formats a record holding only the header's key
+		// and value, so other verbs would print zero values.
+		if header && strings.IndexByte("kvKVi", escaped) < 0 {
+			return nil, fmt.Errorf("header specification can only use %%k, %%v, %%K, %%V, and %%i, saw %%%s", string(escaped))
+		}
+
 		switch escaped {
 		default:
 			return nil, fmt.Errorf("unknown escape sequence %%%s", string(escaped))
@@ -299,7 +331,11 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 			// formatting options. We parse the format here, and
 			// then below is switching on which field to print.
 			var numfn func([]byte, int64) []byte
+			var mode sizeMode
 			if handledBrace = isOpenBrace; handledBrace {
+				if escaped == 'T' || escaped == 'K' || escaped == 'V' {
+					layout, mode = nomSizeMode(layout)
+				}
 				numfn2, n, err := parseNumWriteLayout(layout)
 				if err != nil {
 					return nil, err
@@ -309,18 +345,26 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 			} else {
 				numfn = writeNumASCII
 			}
+			var encodedLen *func(string) int // set by the next text verb, for ;encoded
+			if mode == sizeEncoded {
+				next := &nextEncodedLen[strings.IndexByte("TKV", escaped)]
+				if *next == nil { // sizes waiting on the same verb share its length
+					*next = new(func(string) int)
+				}
+				encodedLen = *next
+			}
 			switch escaped {
 			case 'T':
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record, _ int64) []byte {
-					return writeR(b, r, func(b []byte, r *Record) []byte { return numfn(b, int64(len(r.Topic))) })
+					return writeR(b, r, func(b []byte, r *Record) []byte { return numfn(b, sizeLen(encodedLen, r.Topic)) })
 				})
 			case 'K':
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record, _ int64) []byte {
-					return writeR(b, r, func(b []byte, r *Record) []byte { return numfn(b, int64(len(r.Key))) })
+					return writeR(b, r, func(b []byte, r *Record) []byte { return numfn(b, sizeLen(encodedLen, kbin.UnsafeString(r.Key))) })
 				})
 			case 'V':
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record, _ int64) []byte {
-					return writeR(b, r, func(b []byte, r *Record) []byte { return numfn(b, int64(len(r.Value))) })
+					return writeR(b, r, func(b []byte, r *Record) []byte { return numfn(b, sizeLen(encodedLen, kbin.UnsafeString(r.Value))) })
 				})
 			case 'H':
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record, _ int64) []byte {
@@ -370,6 +414,7 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 
 		case 't', 'k', 'v':
 			var appendFn func([]byte, []byte) []byte
+			var encodedLen func(string) int // nil for plain text
 			if handledBrace = isOpenBrace; handledBrace {
 				switch {
 				case strings.HasPrefix(layout, "}"):
@@ -377,12 +422,15 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 					appendFn = appendPlain
 				case strings.HasPrefix(layout, "base64}"):
 					appendFn = appendBase64
+					encodedLen = func(s string) int { return base64.StdEncoding.EncodedLen(len(s)) }
 					layout = layout[len("base64}"):]
 				case strings.HasPrefix(layout, "base64raw}"):
 					appendFn = appendBase64raw
+					encodedLen = func(s string) int { return base64.RawStdEncoding.EncodedLen(len(s)) }
 					layout = layout[len("base64raw}"):]
 				case strings.HasPrefix(layout, "hex}"):
 					appendFn = appendHex
+					encodedLen = func(s string) int { return hex.EncodedLen(len(s)) }
 					layout = layout[len("hex}"):]
 				case strings.HasPrefix(layout, "unpack"):
 					unpack, rem, err := nomOpenClose(layout[len("unpack"):])
@@ -397,12 +445,17 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 					if err != nil {
 						return nil, fmt.Errorf("unpack formatting parse err: %v", err)
 					}
+					encodedLen = func(s string) int { return len(appendFn(nil, []byte(s))) }
 
 				default:
 					return nil, fmt.Errorf("unknown %%%s{ escape", string(escaped))
 				}
 			} else {
 				appendFn = appendPlain
+			}
+			if next := &nextEncodedLen[strings.IndexByte("tkv", escaped)]; *next != nil { // an ;encoded size is waiting for this verb
+				**next = encodedLen
+				*next = nil
 			}
 			switch escaped {
 			case 't':
@@ -526,7 +579,7 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				return nil, err
 			}
 			layout = rem
-			inf, err := NewRecordFormatter(spec)
+			inf, err := newRecordFormatter(spec, true)
 			if err != nil {
 				return nil, fmt.Errorf("invalid header specification %q: %v", spec, err)
 			}
@@ -626,7 +679,20 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 		f.fns = append(f.fns, func(b []byte, _ *FetchPartition, _ *Record, _ int64) []byte { return append(b, literal...) })
 	}
 
+	if nextEncodedLen != [3]*func(string) int{} {
+		return nil, errors.New("a size with ;encoded must be followed by the %t, %k, or %v it sizes")
+	}
+
 	return &f, nil
+}
+
+// Returns len(s), or for a size with ;encoded, the length of the text that
+// its verb formats from s.
+func sizeLen(encodedLen *func(string) int, s string) int64 {
+	if encodedLen != nil && *encodedLen != nil {
+		return int64((*encodedLen)(s))
+	}
+	return int64(len(s))
 }
 
 func appendPlain(dst, src []byte) []byte {
@@ -1044,9 +1110,17 @@ func (c *countReader) Discard(n int) (int, error) {
 //	%{    left brace
 //	%}    right brace
 //
-// Unlike record formatting, timestamps can only be read as numbers because Go
-// or strftime formatting can both be variable length and do not play too well
-// with delimiters. Timestamps numbers are read as milliseconds.
+// A % at the end of the layout is also a raw percent sign.
+//
+// Timestamps are read as millisecond numbers, or with a Go layout enclosed as
+// in record formatting, %d{go#2006-01-02T15:04:05Z07:00#}. A Go timestamp is
+// read like text, up to the text that follows it, and parsed with the time
+// package's Parse, so that text cannot be in the timestamp: a layout with
+// spaces must be followed by something else, such as a tab. Unlike record
+// formatting, strftime timestamps cannot be read.
+//
+// A text verb with no size, json, or regular expression reads up to the text
+// that follows it, so it must be followed by text or be the last verb.
 //
 // # Numbers
 //
@@ -1055,13 +1129,15 @@ func (c *countReader) Discard(n int) (int, error) {
 //	%v{ascii}       parse numeric digits until a non-numeric
 //	%v{number}      alias for ascii
 //
-// Ascii numbers for %p, %o, %e, %d, %x, and %y can begin with '-'.
+// Ascii numbers for %p, %o, %e, %d, %x, and %y can begin with '-'. Ascii and
+// {hex} numbers must fit in the field they are read into.
 //
 //	%v{hex64}       read 16 hex characters for the number
 //	%v{hex32}       read 8 hex characters for the number
 //	%v{hex16}       read 4 hex characters for the number
 //	%v{hex8}        read 2 hex characters for the number
 //	%v{hex4}        read 1 hex characters for the number
+//	%v{hex}         read hex characters until a non-hex character
 //
 //	%v{big64}       read the number as big endian uint64 format
 //	%v{big32}       read the number as big endian uint32 format
@@ -1075,30 +1151,39 @@ func (c *countReader) Discard(n int) (int, error) {
 //
 //	%v{byte}        read the number as a byte
 //	%v{bool}        read "true" as 1, "false" as 0
-//	%v{3}           read 3 characters (any number)
+//	%v{3}           read nothing, the number is 3
+//
+// A fixed number for %T, %K, %V, or %H must be positive.
 //
 // # Header specification
 //
 // Similar to number formatting, headers are parsed using a nested primitive
-// format option, accepting the key and value escapes previously mentioned.
+// format option, accepting the key and value escapes previously mentioned
+// (%k, %v, %K, and %V). Braces inside a header specification must balance, or
+// be written as %{ and %}.
 //
 // # Text
 //
-// Topics, keys, and values can be decoded using "base64", "hex", and "json"
-// formatting options. Any size specification is the size of the encoded value
-// actually being read (i.e., size as seen, not size when decoded). JSON values
-// are compacted after being read.
+// Topics, keys, and values can be decoded using "base64", "base64raw", "hex",
+// and "json" formatting options. Any size specification is the size of the
+// encoded value actually being read (i.e., size as seen, not size when
+// decoded). Ending a %T, %K, or %V number format with ";decoded", as in
+// %V{ascii;decoded} (or %V{decoded} for ascii), makes the size the decoded
+// size instead, which is what record formatting prints by default. ";encoded"
+// states the default. JSON has no decoded size. JSON values are compacted
+// after being read.
 //
-//	%T%t{hex}     -  4abcd reads four hex characters "abcd"
-//	%V%v{base64}  -  2z9 reads two base64 characters "z9"
-//	%v{json} %k   -  {"foo" : "bar"} foo reads a JSON object and then "foo"
+//	%T %t{hex}           -  4 abcd reads four hex characters "abcd"
+//	%V %v{base64}        -  4 Zm9v reads four base64 characters "Zm9v"
+//	%V{decoded} %v{hex}  -  2 abcd reads two bytes as four hex characters "abcd"
+//	%v{json} %k          -  {"foo" : "bar"} foo reads a JSON object and then "foo"
 //
 // As well, these text options can be parsed with regular expressions:
 //
 //	%k{re[\d*]}%v{re[\s+]}
 func NewRecordReader(reader io.Reader, layout string) (*RecordReader, error) {
 	r := &RecordReader{r: &countReader{Reader: bufio.NewReader(reader)}}
-	if err := r.parseReadLayout(layout); err != nil {
+	if err := r.parseReadLayout(layout, false); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -1110,7 +1195,8 @@ func NewRecordReader(reader io.Reader, layout string) (*RecordReader, error) {
 // This will return io.EOF only if the underlying reader returns io.EOF at the
 // start of a new record. If an io.EOF is returned mid record, this returns
 // io.ErrUnexpectedEOF. It is expected for this function to be called until it
-// returns io.EOF.
+// returns io.EOF. A parsing error can leave the input where it was, in which
+// case reading again returns the same error.
 func (r *RecordReader) ReadRecord() (*Record, error) {
 	rec := new(Record)
 	return rec, r.ReadRecordInto(rec)
@@ -1122,7 +1208,8 @@ func (r *RecordReader) ReadRecord() (*Record, error) {
 // This will return io.EOF only if the underlying reader returns io.EOF at the
 // start of a new record. If an io.EOF is returned mid record, this returns
 // io.ErrUnexpectedEOF. It is expected for this function to be called until it
-// returns io.EOF.
+// returns io.EOF. A parsing error can leave the input where it was, in which
+// case reading again returns the same error.
 func (r *RecordReader) ReadRecordInto(rec *Record) error {
 	if r.done {
 		return io.EOF
@@ -1163,7 +1250,8 @@ type parseRecordBits uint8
 func (p *parseRecordBits) set(r parseRecordBits)     { *p |= r }
 func (p parseRecordBits) has(r parseRecordBits) bool { return p&r != 0 }
 
-func (r *RecordReader) parseReadLayout(layout string) error {
+// The spec inside %h{...} is parsed with header set.
+func (r *RecordReader) parseReadLayout(layout string, header bool) error {
 	if len(layout) == 0 {
 		return errors.New("RecordReader: invalid empty format")
 	}
@@ -1179,10 +1267,20 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 
 		bits parseRecordBits
 
+		decodedSizes parseRecordBits // sizes with ;decoded
+
+		goLayouts = make(map[int]string) // r.fns index => layout of a %d{go...} there
+
 		literal    []byte // raw literal we are currently working on
 		addLiteral = func() {
-			if len(r.fns) > 0 && r.fns[len(r.fns)-1].read.empty() {
-				r.fns[len(r.fns)-1].read.delim = literal
+			// The literal ends the last field that reads; fixed
+			// numbers such as %p{1} read nothing.
+			last := len(r.fns) - 1
+			for last >= 0 && r.fns[last].read.noread {
+				last--
+			}
+			if last >= 0 && r.fns[last].read.empty() {
+				r.fns[last].read.delim = literal
 			} else if len(literal) > 0 {
 				r.fns = append(r.fns, readParse{
 					read: readKind{exact: literal},
@@ -1213,7 +1311,7 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 		case '%':
 		}
 
-		if len(layout) == 0 {
+		if len(layout) == 0 { // a trailing % is a raw %
 			literal = append(literal, rawc...)
 			continue
 		}
@@ -1235,6 +1333,10 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 
 		if isOpenBrace { // opening a brace: layout continues after
 			layout = layout[1:]
+		}
+
+		if header && strings.IndexByte("kvKV", escaped) < 0 {
+			return fmt.Errorf("header specification can only use %%k, %%v, %%K, and %%V, saw %%%s", string(escaped))
 		}
 
 		switch escaped {
@@ -1265,9 +1367,16 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 				return fmt.Errorf("size specification %%%s cannot come after value specification %%%s", string(escaped), strings.ToLower(string(escaped)))
 			}
 			bits.set(bit)
-			fn, n, err := r.parseReadSize("ascii", dst, false, false)
+			fn, n, err := r.parseReadSize("ascii", dst, false, 0)
 			if handledBrace = isOpenBrace; handledBrace {
-				fn, n, err = r.parseReadSize(layout, dst, true, false)
+				var mode sizeMode
+				if escaped != 'H' {
+					layout, mode = nomSizeMode(layout)
+				}
+				if mode == sizeDecoded {
+					decodedSizes.set(bit)
+				}
+				fn, n, err = r.parseReadSize(layout, dst, true, 0)
 			}
 			if err != nil {
 				return fmt.Errorf("unable to parse %%%s: %s", string(escaped), err)
@@ -1276,10 +1385,40 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 			r.fns = append(r.fns, fn)
 
 		case 'p', 'o', 'e', 'd', 'x', 'y':
+			if escaped == 'd' && isOpenBrace && strings.HasPrefix(layout, "go") {
+				tfmt, rem, err := nomOpenClose(layout[len("go"):])
+				if err != nil {
+					return fmt.Errorf("go parse err: %v", err)
+				}
+				if len(rem) == 0 || rem[0] != '}' {
+					return fmt.Errorf("%%d{go missing closing } in %q", layout)
+				}
+				layout = rem[1:]
+				handledBrace = true
+				// Read like text, up to the text that follows.
+				goLayouts[len(r.fns)] = tfmt
+				r.fns = append(r.fns, readParse{parse: func(b []byte, rec *Record) error {
+					ts, err := time.Parse(tfmt, string(b))
+					if err != nil {
+						return err
+					}
+					rec.Timestamp = ts
+					return nil
+				}})
+				break
+			}
+
 			dst := new(uint64)
-			fn, n, err := r.parseReadSize("ascii", dst, false, true)
+			fieldBits := 64
+			switch escaped {
+			case 'p', 'e':
+				fieldBits = 32
+			case 'y':
+				fieldBits = 16
+			}
+			fn, n, err := r.parseReadSize("ascii", dst, false, fieldBits)
 			if handledBrace = isOpenBrace; handledBrace {
-				fn, n, err = r.parseReadSize(layout, dst, true, true)
+				fn, n, err = r.parseReadSize(layout, dst, true, fieldBits)
 			}
 			if err != nil {
 				return fmt.Errorf("unable to parse %%%s: %s", string(escaped), err)
@@ -1340,6 +1479,7 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 
 		case 't', 'k', 'v':
 			var decodeFn func([]byte) ([]byte, error)
+			var encodedLen func(int) int // for a size with ;decoded
 			var re *regexp.Regexp
 			var isJson bool
 			if handledBrace = isOpenBrace; handledBrace {
@@ -1347,10 +1487,13 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 				case strings.HasPrefix(layout, "}"):
 					layout = layout[len("}"):]
 				case strings.HasPrefix(layout, "base64}"):
-					decodeFn = decodeBase64
+					decodeFn, encodedLen = decodeBase64, base64.StdEncoding.EncodedLen
 					layout = layout[len("base64}"):]
+				case strings.HasPrefix(layout, "base64raw}"):
+					decodeFn, encodedLen = decodeBase64Raw, base64.RawStdEncoding.EncodedLen
+					layout = layout[len("base64raw}"):]
 				case strings.HasPrefix(layout, "hex}"):
-					decodeFn = decodeHex
+					decodeFn, encodedLen = decodeHex, hex.EncodedLen
 					layout = layout[len("hex}"):]
 				case strings.HasPrefix(layout, "json}"):
 					isJson = true
@@ -1369,10 +1512,15 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 						return fmt.Errorf("re missing closing } in %q", layout)
 					}
 					layout = rem[1:]
-					if !strings.HasPrefix(restr, "^") {
-						restr = "^" + restr
+					// The group anchors every alternative of a
+					// top-level |, not just the first. We group the
+					// parsed expression, not the raw text, which
+					// could close the group early (a)|(b) or quote
+					// its ) (an unterminated \Q).
+					p, err := syntax.Parse(restr, syntax.Perl)
+					if err == nil {
+						re, err = regexp.Compile("^(?:" + p.String() + ")")
 					}
-					re, err = regexp.Compile(restr)
 					if err != nil {
 						return fmt.Errorf("re parse err: %v", err)
 					}
@@ -1413,10 +1561,21 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 				if re != nil {
 					return errors.New("cannot specify exact size and regular expression")
 				}
-				if isJson {
-					return errors.New("cannot specify exact size and json")
+				if !decodedSizes.has(bitSize) {
+					encodedLen = nil
+				} else if isJson {
+					return errors.New("json has no decoded size to specify with ;decoded")
 				}
-				fn.read = readKind{sizefn: func() int { return int(*size) }}
+				fn.read = readKind{sizefn: func() int {
+					// An overflowing size goes negative, which
+					// readSize rejects; base64's EncodedLen can
+					// turn a small negative size into 0.
+					n := int(*size)
+					if encodedLen != nil && n >= 0 {
+						n = encodedLen(n)
+					}
+					return n
+				}}
 			} else if re != nil {
 				fn.read = readKind{re: re}
 			} else if isJson {
@@ -1441,7 +1600,7 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 
 			// We parse the header specification recursively.
 			var inr RecordReader
-			if err := inr.parseReadLayout(spec); err != nil {
+			if err := inr.parseReadLayout(spec, true); err != nil {
 				return fmt.Errorf("invalid header specification: %v", err)
 			}
 
@@ -1457,6 +1616,9 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 					rec.Key, rec.Value = nil, nil
 					n := r.r.n
 					if err := inr.next(rec); err != nil {
+						if err == io.EOF && i > 0 { // the input ended before a header %H counted
+							err = io.ErrUnexpectedEOF
+						}
 						return err
 					}
 					// Without this, a huge header count with a header
@@ -1477,6 +1639,16 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 
 	addLiteral()
 
+	// A Go timestamp is read up to the text after it, so that text must
+	// not be in the timestamp. Formatting a reference time prints the
+	// layout's own text, plus spaces such as _2 pads with.
+	ref := time.Date(2006, 1, 2, 15, 4, 5, 123456789, time.FixedZone("MST", -7*60*60))
+	for i, tfmt := range goLayouts {
+		if delim := r.fns[i].read.delim; len(delim) > 0 && strings.Contains(ref.Format(tfmt), string(delim)) {
+			return fmt.Errorf("RecordReader: %%d{go#%s#} is read up to the text after it, %q, which the timestamp can contain", tfmt, delim)
+		}
+	}
+
 	// We must sort noreads to the front, we use this guarantee when
 	// reading to handle EOF properly.
 	var noreads, reads []readParse
@@ -1494,6 +1666,18 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 	if len(reads) == 0 {
 		return errors.New("RecordReader: layout reads nothing from the input")
 	}
+	// A text verb or Go timestamp with no size and no text after it reads
+	// the rest of the input, leaving nothing for any later verb. In a
+	// header spec, the next header or the rest of the record follows.
+	unsized := reads[:len(reads)-1]
+	if header {
+		unsized = reads
+	}
+	for _, fn := range unsized {
+		if fn.read.empty() {
+			return errors.New("RecordReader: a text verb or Go timestamp without a size must be followed by text, or be last outside of %h{...}")
+		}
+	}
 	r.fns = make([]readParse, 0, len(noreads)+len(reads))
 	r.fns = append(r.fns, noreads...)
 	r.fns = append(r.fns, reads...)
@@ -1505,9 +1689,10 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 //
 // If needBrace is true, the user is specifying how to read the number,
 // otherwise we default to ascii. Reading ascii requires us to peek at bytes
-// until we get to a non-number byte. If signed is true, ascii numbers can
-// begin with '-'.
-func (*RecordReader) parseReadSize(layout string, dst *uint64, needBrace, signed bool) (readParse, int, error) {
+// until we get to a non-number byte. For a signed field, signedBits is its bit
+// size, and ascii and fixed numbers can be negative but must fit in the field;
+// signedBits is 0 for the unsigned sizes.
+func (*RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool, signedBits int) (readParse, int, error) {
 	var end int
 	if needBrace {
 		braceEnd := strings.IndexByte(layout, '}')
@@ -1520,11 +1705,11 @@ func (*RecordReader) parseReadSize(layout string, dst *uint64, needBrace, signed
 
 	switch layout {
 	default:
-		num, err := strconv.Atoi(layout)
+		num, err := strconv.ParseInt(layout, 10, cmp.Or(signedBits, 64))
 		if err != nil {
 			return readParse{}, 0, fmt.Errorf("unrecognized number reading layout %q: %v", layout, err)
 		}
-		if num <= 0 {
+		if signedBits == 0 && num <= 0 {
 			return readParse{}, 0, fmt.Errorf("invalid zero or negative number %q when parsing read size", layout)
 		}
 		return readParse{
@@ -1537,7 +1722,7 @@ func (*RecordReader) parseReadSize(layout string, dst *uint64, needBrace, signed
 			readKind{condition: func() func(byte) int8 {
 				first := true
 				return func(b byte) int8 {
-					if first && signed && b == '-' {
+					if first && signedBits > 0 && b == '-' {
 						first = false
 						return 1
 					}
@@ -1549,13 +1734,35 @@ func (*RecordReader) parseReadSize(layout string, dst *uint64, needBrace, signed
 				}
 			}},
 			func(b []byte, _ *Record) (err error) {
-				if len(b) > 0 && b[0] == '-' {
+				if signedBits > 0 {
 					var n int64
-					n, err = strconv.ParseInt(kbin.UnsafeString(b), 10, 64)
+					n, err = strconv.ParseInt(kbin.UnsafeString(b), 10, signedBits)
 					*dst = uint64(n)
 					return err
 				}
 				*dst, err = strconv.ParseUint(kbin.UnsafeString(b), 10, 64)
+				return err
+			},
+		}, end, nil
+
+	case "hex":
+		return readParse{
+			readKind{condition: func() func(byte) int8 {
+				return func(b byte) int8 {
+					if '0' <= b && b <= '9' || 'a' <= b && b <= 'f' || 'A' <= b && b <= 'F' {
+						return 2 // ignore EOF if we hit it after this
+					}
+					return -1
+				}
+			}},
+			func(b []byte, _ *Record) (err error) {
+				*dst, err = strconv.ParseUint(kbin.UnsafeString(b), 16, 64)
+				// Record formatting prints a negative number as
+				// its 64 bit two's complement, so a number fits a
+				// smaller signed field if it sign extends from it.
+				if n, shift := int64(*dst), 64-signedBits; err == nil && signedBits > 0 && n<<shift>>shift != n {
+					return fmt.Errorf("hex number %s overflows %d bits", b, signedBits)
+				}
 				return err
 			},
 		}, end, nil
@@ -1704,6 +1911,11 @@ func decodeBase64(b []byte) ([]byte, error) {
 	return b[:n], err
 }
 
+func decodeBase64Raw(b []byte) ([]byte, error) {
+	n, err := base64.RawStdEncoding.Decode(b[:base64.RawStdEncoding.DecodedLen(len(b))], b)
+	return b[:n], err
+}
+
 func decodeHex(b []byte) ([]byte, error) {
 	n, err := hex.Decode(b[:hex.DecodedLen(len(b))], b)
 	return b[:n], err
@@ -1712,7 +1924,7 @@ func decodeHex(b []byte) ([]byte, error) {
 type readKind struct {
 	noread    bool
 	exact     []byte
-	condition func() func(byte) int8 // returns a new func per read; -2: error, -1: stop, do not consume input; 0: stop, consume input; 1: keep going, consume input, 2: keep going, consume input, can EOF
+	condition func() func(byte) int8 // returns a new func per read; -2: error, -1: stop, do not consume input; 0: stop, consume input; 1: keep going, consume input, 2: keep going, consume input, can EOF, 3: keep going, consume and drop input
 	size      int
 	sizefn    func() int
 	handoff   func(*RecordReader, *Record) error
@@ -1777,11 +1989,14 @@ func (r *RecordReader) next(rec *Record) error {
 			r.done = true
 			// We guarantee that all noread parses are at
 			// the front, so if we io.EOF on the first
-			// non-noread, then we bubble it up.
-			if len(r.buf) == 0 && (i == 0 || r.fns[i-1].read.noread) {
+			// non-noread, then we bubble it up. A header
+			// handoff reads nothing into r.buf, and returns
+			// io.EOF only if its first header read nothing.
+			first := i == 0 || r.fns[i-1].read.noread
+			if first && len(r.buf) == 0 && (fn.read.handoff == nil || err == io.EOF) {
 				return io.EOF
 			}
-			if i != len(r.fns)-1 || err == io.ErrUnexpectedEOF {
+			if i != len(r.fns)-1 || err == io.ErrUnexpectedEOF || fn.read.handoff != nil {
 				return io.ErrUnexpectedEOF
 			}
 		}
@@ -1818,8 +2033,11 @@ func (r *RecordReader) readCondition(fn func(byte) int8) error {
 	for {
 		peek, err := r.r.Peek(1)
 		if err != nil {
-			if err == io.EOF && ignoreEOF {
-				err = nil
+			if err == io.EOF {
+				if ignoreEOF {
+					return nil
+				}
+				return io.ErrUnexpectedEOF // the condition needed more input
 			}
 			return err
 		}
@@ -1837,6 +2055,9 @@ func (r *RecordReader) readCondition(fn func(byte) int8) error {
 		case 1:
 		case 2:
 			ignoreEOF = true
+		case 3:
+			r.r.Discard(1)
+			continue
 		}
 		r.r.Discard(1)
 		r.buf = append(r.buf, c)
@@ -1852,9 +2073,17 @@ type reReader struct {
 
 func (re *reReader) ReadRune() (r rune, size int, err error) {
 	for re.err == nil && !utf8.FullRune(re.peek[re.pos:]) {
-		re.peek, re.err = re.r.r.Peek(len(re.peek) + 1)
+		c := re.r.r
+		re.peek, re.err = c.Peek(len(re.peek) + 1)
+		if re.err == bufio.ErrBufferFull {
+			// A match can be longer than the buffer. We wrap the
+			// reader in one twice the size, which takes what the old
+			// one buffered first; any header reader shares c.
+			c.Reader = bufio.NewReaderSize(c.Reader, 2*c.Size())
+			re.err = nil
+		}
 	}
-	if re.pos == len(re.peek) || re.err == bufio.ErrBufferFull {
+	if re.pos == len(re.peek) {
 		return 0, 0, re.err
 	}
 	// Keep the byte position separate from the peek length: an incomplete
@@ -1872,6 +2101,9 @@ func (r *RecordReader) readRe(re *regexp.Regexp) error {
 		// encounters an error, so a nil reader error is still a mismatch.
 		if reader.err == nil || reader.err == io.EOF && len(reader.peek) > 0 {
 			return fmt.Errorf("regexp text mismatch, saw %q", reader.peek)
+		}
+		if reader.err == io.EOF {
+			return io.ErrUnexpectedEOF // the input ended before the field
 		}
 		return reader.err
 	}
@@ -2027,6 +2259,11 @@ start:
 	case jrstAny:
 		switch c {
 		case ' ', '\t', '\n', '\r':
+			if len(r.nexts) == 0 {
+				// Whitespace before a top-level value is not part
+				// of it, so input ending here ends between records.
+				return 3
+			}
 			return 1 // skip whitespace, need more
 		case '{':
 			r.state = jrstObj
@@ -2054,10 +2291,10 @@ start:
 			return 1 // beginning of negative number, need more
 		case '0':
 			r.state = jrstDotOrE
-			return 1 // beginning of 0e or 0., need more
+			return r.oneOrTwo() // beginning of 0e or 0. (potentially end)
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			r.state = jrstOne
-			return 1 // beginning of number, need more
+			return r.oneOrTwo() // beginning of number (potentially end)
 		default:
 			return -2 // invalid json
 		}
@@ -2317,6 +2554,39 @@ func (r *jsonReader) oneOrTwo() int8 {
 ////////////
 // COMMON //
 ////////////
+
+// sizeMode is whether a %T, %K, or %V size counts the bytes of the text verb
+// it sizes (decoded) or the text that verb formats or reads (encoded).
+type sizeMode uint8
+
+const (
+	sizeDefault sizeMode = iota // decoded when formatting, encoded when reading
+	sizeDecoded
+	sizeEncoded
+)
+
+// nomSizeMode strips a ";decoded" or ";encoded" suffix from the number
+// format that layout starts with, which runs to the next '}'. A bare
+// "decoded" or "encoded" is the ascii format.
+func nomSizeMode(layout string) (string, sizeMode) {
+	end := strings.IndexByte(layout, '}')
+	if end < 0 {
+		return layout, sizeDefault
+	}
+	spec, rest := layout[:end], layout[end:]
+	for _, m := range []struct {
+		name string
+		mode sizeMode
+	}{{"decoded", sizeDecoded}, {"encoded", sizeEncoded}} {
+		if spec == m.name {
+			return "ascii" + rest, m.mode
+		}
+		if num, ok := strings.CutSuffix(spec, ";"+m.name); ok {
+			return num + rest, m.mode
+		}
+	}
+	return layout, sizeDefault
+}
 
 // nomHeaderSpec returns the header specification inside %h{...} and the
 // layout after its closing brace. The spec can contain its own braces, so we
