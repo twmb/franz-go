@@ -840,8 +840,7 @@ func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
 //
 // If using group consuming, it is strongly recommended to call SetOffsets
 // from the goroutine that polls, while no revoke can run: use
-// BlockRebalanceOnPoll and call SetOffsets before AllowRebalance. Do not use
-// SetOffsets concurrent with committing.
+// BlockRebalanceOnPoll and call SetOffsets before AllowRebalance.
 func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 	cl.setOffsets(setOffsets, true)
 }
@@ -888,11 +887,12 @@ func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bo
 		// (updateCommitted), a mark, or a revoke's delete of lost entries
 		// can run in between. undirtyUncommitted moves head to dirty, and
 		// applySetOffsets set both to the set offset. A commit sends head,
-		// and applySetOffsets already set head to the set offset. A mark
-		// creates the entry for a partition that had none, at the mark,
-		// and addMissingUncommitted then leaves the mark's entry alone. A
-		// revoke unset the lost cursors under c.mu before we took c.mu,
-		// so set names none of the lost partitions.
+		// and applySetOffsets already set head to the set offset. A commit
+		// response cannot move head past the set offset: numSets changed.
+		// A mark creates the entry for a partition that had none, at the
+		// mark, and addMissingUncommitted then leaves the mark's entry
+		// alone. A revoke unset the lost cursors under c.mu before we took
+		// c.mu, so set names none of the lost partitions.
 		c.g.addMissingUncommitted(setOffsets, set)
 	}
 }

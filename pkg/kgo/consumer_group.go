@@ -2510,6 +2510,11 @@ type uncommit struct {
 	// committed only once userHead is set; see getUncommittedLocked.
 	userHead bool
 
+	// numSets counts the SetOffsets calls that set the partition. A
+	// commit response moves head forward only if numSets is unchanged
+	// since the request was built; see updateCommitted.
+	numSets uint32
+
 	// topicID is the ID of the topic the offsets were fetched under, if
 	// the fetch carried one. We commit under it, and refuse the offsets
 	// once the name has a different ID; see uncommittedFrom.
@@ -2682,6 +2687,7 @@ func (g *groupConsumer) undirtyUncommitted() {
 func (g *groupConsumer) updateCommitted(
 	req *kmsg.OffsetCommitRequest,
 	resp *kmsg.OffsetCommitResponse,
+	numSets map[string]map[int32]uint32, // each partition's numSets when req was built; absent is 0
 ) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -2753,6 +2759,7 @@ func (g *groupConsumer) updateCommitted(
 		if debug {
 			fmt.Fprintf(&b, "%s[", respTopic.Topic)
 		}
+		topicNumSets := numSets[respTopic.Topic]
 		for i := range respTopic.Partitions {
 			reqPart := &reqTopic.Partitions[i]
 			respPart := &respTopic.Partitions[i]
@@ -2815,13 +2822,15 @@ func (g *groupConsumer) updateCommitted(
 			// followed by autocommit completion. We document that
 			// using marks to rewind is not recommended.
 			//
-			// The user could also muck the offsets with SetOffsets.
-			// We document that concurrent committing is not encouraged,
-			// we do not attempt to guard past that.
+			// A SetOffsets while the commit was in flight set head,
+			// and the set offset is the new truth: moving head past
+			// the set offset would make the next commit skip the set
+			// offset. We move head only if no SetOffsets set the
+			// partition since we built the request.
 			//
 			// w.r.t. leader epoch's, we document that modifying
 			// leader epoch's is not recommended.
-			if uncommit.head.Less(set) {
+			if uncommit.head.Less(set) && uncommit.numSets == topicNumSets[respPart.Partition] {
 				uncommit.head = set
 			}
 
@@ -2947,6 +2956,7 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 			if exists {
 				same := current.dirty == epochOffset
 				current.dirty, current.head = epochOffset, epochOffset
+				current.numSets++
 				current.userHead = true
 				topicUncommitted[partition] = current
 				// Already at this offset: no cursor to reassign.
@@ -2996,7 +3006,11 @@ func (g *groupConsumer) addMissingUncommitted(setOffsets map[string]map[int32]Ep
 				g.uncommitted[topic] = topicUncommitted
 			}
 			start := setTopic[partition]
-			topicUncommitted[partition] = uncommit{dirty: start, head: start, committed: start, userHead: true}
+			// numSets starts at 1: a commit built before the entry
+			// existed has no snapshot for the partition (0), and the
+			// commit's response must not move head past the set offset;
+			// see updateCommitted.
+			topicUncommitted[partition] = uncommit{dirty: start, head: start, committed: start, numSets: 1, userHead: true}
 		}
 	}
 }
@@ -3694,6 +3708,7 @@ func (g *groupConsumer) commit(
 	// broker; we answer them UNKNOWN_TOPIC_ID below.
 	groupTopics := g.tps.load()
 	var refused []kmsg.OffsetCommitRequestTopic
+	var numSets map[string]map[int32]uint32 // each set partition's numSets now; see updateCommitted
 	for topic, partitions := range uncommitted {
 		reqTopic := kmsg.NewOffsetCommitRequestTopic()
 		reqTopic.Topic = topic
@@ -3704,6 +3719,8 @@ func (g *groupConsumer) commit(
 		if from != noID {
 			reqTopic.TopicID = from
 		}
+		topicUncommitted := g.uncommitted[topic]
+		var topicNumSets map[int32]uint32
 		for partition, eo := range partitions {
 			reqPartition := kmsg.NewOffsetCommitRequestTopicPartition()
 			reqPartition.Partition = partition
@@ -3711,6 +3728,16 @@ func (g *groupConsumer) commit(
 			reqPartition.LeaderEpoch = eo.Epoch // KIP-320
 			reqPartition.Metadata = &req.MemberID
 			reqTopic.Partitions = append(reqTopic.Partitions, reqPartition)
+			if u := topicUncommitted[partition]; u.numSets != 0 {
+				if topicNumSets == nil {
+					if numSets == nil {
+						numSets = make(map[string]map[int32]uint32)
+					}
+					topicNumSets = make(map[int32]uint32, len(partitions))
+					numSets[topic] = topicNumSets
+				}
+				topicNumSets[partition] = u.numSets
+			}
 		}
 		if recreated {
 			refused = append(refused, reqTopic)
@@ -4003,7 +4030,7 @@ func (g *groupConsumer) commit(
 			}
 		}
 
-		g.updateCommitted(req, resp)
+		g.updateCommitted(req, resp, numSets)
 		onDone(g.cl, req, resp, nil)
 	}()
 }
