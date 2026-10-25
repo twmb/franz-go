@@ -2908,44 +2908,51 @@ func (g *groupConsumer) loopCommit() {
 
 // applySetOffsets applies the given offsets to g.uncommitted for partitions
 // that are currently being consumed, updating their dirty and head fields.
-// Committed is left alone so that the next commit commits the set offset
-// (GroupTransactSession.End records a transaction's commit). Partitions not in
-// g.uncommitted are skipped (per SetOffsets docs: "any extra partitions are
-// skipped"). If any partition's dirty field actually changed, the partition
-// is returned in assigns so the caller can reassign cursors. If all
-// partitions already had the same dirty offset, this returns nil and no
-// cursor reassignment is needed - this is a key optimization for
-// transactions resetting state on abort.
+// Committed is left alone so that the next commit commits the set offset. A
+// partition not in g.uncommitted is returned in assigns too if the partition
+// is assigned to us; see addMissingUncommitted. If any partition's dirty
+// field actually changed, the partition is returned in assigns so the caller
+// can reassign cursors. If all partitions already had the same dirty offset,
+// this returns nil and no cursor reassignment is needed - this is a key
+// optimization for transactions resetting state on abort.
 func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOffset) (assigns map[string]map[int32]Offset) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	groupTopics := g.tps.load()
+	assigned := g.nowAssigned.read()
 
-	if g.uncommitted == nil {
-		return nil
-	}
 	for topic, partitions := range setOffsets {
 		if !groupTopics.hasTopic(topic) {
 			continue // trying to set a topic that was not assigned...
 		}
+		assignedPartitions := assigned[topic]
 		topicUncommitted := g.uncommitted[topic]
-		if topicUncommitted == nil {
-			continue // topic was not being consumed
-		}
 		var topicAssigns map[int32]Offset
 		for partition, epochOffset := range partitions {
-			current, exists := topicUncommitted[partition]
-			if !exists || epochOffset.Offset < 0 {
-				continue // partition was not being consumed, or the input is not an offset
+			if epochOffset.Offset < 0 {
+				continue // not an offset
 			}
-			same := current.dirty == epochOffset
-			current.dirty, current.head = epochOffset, epochOffset
-			current.userHead = true
-			topicUncommitted[partition] = current
-			// Already at this offset: no cursor to reassign.
-			if same {
+			// A partition with no uncommit that is not assigned to us
+			// is not being consumed. We skip the partition here:
+			// assignPartitions would drop the partition, but only after
+			// restarting the session. We do not check nowAssigned for a
+			// partition with an uncommit: while a revoke waits on
+			// AllowRebalance, nowAssigned already holds the next
+			// assignment, and the partition still has a cursor.
+			current, exists := topicUncommitted[partition]
+			if !exists && !slices.Contains(assignedPartitions, partition) {
 				continue
+			}
+			if exists {
+				same := current.dirty == epochOffset
+				current.dirty, current.head = epochOffset, epochOffset
+				current.userHead = true
+				topicUncommitted[partition] = current
+				// Already at this offset: no cursor to reassign.
+				if same {
+					continue
+				}
 			}
 			if topicAssigns == nil {
 				topicAssigns = make(map[int32]Offset, len(partitions))
@@ -2964,6 +2971,34 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 	}
 
 	return assigns
+}
+
+// addMissingUncommitted adds an uncommit for each set partition that has
+// none: the group has no commit for the partition, and no record was polled
+// from the partition yet. The set offset is where consuming the partition
+// starts; see uncommit.
+func (g *groupConsumer) addMissingUncommitted(setOffsets map[string]map[int32]EpochOffset, set mtmps) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	for topic, partitions := range set {
+		topicUncommitted := g.uncommitted[topic]
+		setTopic := setOffsets[topic]
+		for partition := range partitions {
+			if _, exists := topicUncommitted[partition]; exists {
+				continue
+			}
+			if topicUncommitted == nil {
+				if g.uncommitted == nil {
+					g.uncommitted = make(uncommitted)
+				}
+				topicUncommitted = make(map[int32]uncommit)
+				g.uncommitted[topic] = topicUncommitted
+			}
+			start := setTopic[partition]
+			topicUncommitted[partition] = uncommit{dirty: start, head: start, committed: start, userHead: true}
+		}
+	}
 }
 
 // UncommittedOffsets returns the latest uncommitted offsets. Uncommitted
