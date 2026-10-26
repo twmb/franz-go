@@ -269,6 +269,7 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	var hasAbortableCommitErr bool
 	var commitErr error
 	var g *groupConsumer
+	var sent mtmps // the partitions the TxnOffsetCommit carried; a PreTxnCommitFnContext fn can drop some
 
 	kip447 := false
 	// The transaction cannot commit if a topic it produced to was
@@ -331,7 +332,7 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 
 		committed := make(chan struct{})
 		g = s.cl.commitTransactionOffsets(ctx, postcommit,
-			func(_ *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
+			func(req *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
 				defer close(committed)
 				if err != nil {
 					if isAbortableCommitErr(err) {
@@ -342,6 +343,11 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 					return
 				}
 				kip447 = resp.Version >= 3
+				for _, t := range req.Topics {
+					for _, p := range t.Partitions {
+						sent.add(t.Topic, p.Partition)
+					}
+				}
 
 				for _, t := range resp.Topics {
 					for _, p := range t.Partitions {
@@ -520,7 +526,7 @@ retry:
 	}
 
 	if !willTryCommit || endTxnErr != nil {
-		currentCommit := s.cl.CommittedOffsets()
+		currentCommit := s.cl.consumer.g.getCommitted()
 		s.cl.cfg.logger.Log(LogLevelInfo, "transact session resetting to current committed state (potentially after a rejoin)",
 			"tried_commit", willTryCommit,
 			"commit_err", endTxnErr,
@@ -534,6 +540,24 @@ retry:
 			"postcommit", postcommit,
 		)
 		s.cl.setOffsets(postcommit, false)
+		// commitTxn skips updateCommitted: a TxnOffsetCommit is
+		// committed only once EndTxn commits, so we record the commit
+		// here.
+		g.mu.Lock()
+		for topic, partitions := range postcommit {
+			topicUncommitted := g.uncommitted[topic]
+			sentPartitions := sent[topic]
+			for partition, epochOffset := range partitions {
+				if _, ok := sentPartitions[partition]; !ok {
+					continue // dropped from the request: not committed
+				}
+				if current, exists := topicUncommitted[partition]; exists {
+					current.committed, current.hasCommit = epochOffset, true
+					topicUncommitted[partition] = current
+				}
+			}
+		}
+		g.mu.Unlock()
 	}
 
 	switch {
@@ -1165,7 +1189,7 @@ start:
 //
 // Unlike CommitOffsets, we do not update the group's uncommitted map. We leave
 // that to the calling code to do properly with SetOffsets depending on whether
-// an eventual abort happens or not.
+// an eventual abort happens or not; End records a successful commit.
 func (cl *Client) commitTransactionOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
@@ -1292,7 +1316,7 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 
 // commitTxn is ALMOST EXACTLY THE SAME as commit, but changed for txn types
 // and we avoid updateCommitted. We avoid updating because we manually
-// SetOffsets when ending the transaction.
+// SetOffsets and record the commit when ending the transaction.
 func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.TxnOffsetCommitRequest, onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error)) {
 	if onDone == nil { // note we must always call onDone
 		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
