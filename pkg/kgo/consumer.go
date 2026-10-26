@@ -1273,7 +1273,11 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 							// MaxDecompressBatchBytes is re-enabled
 							// the same way: the set offset is how the
 							// user skips the batch.
-							if loadOffsets.removeLoad(usedCursor.topic, usedCursor.partition) || usedCursor.fatal.Swap(false) {
+							//
+							// We clear fatal even when we dropped a load.
+							removed := loadOffsets.removeLoad(usedCursor.topic, usedCursor.partition)
+							wasFatal := usedCursor.fatal.Swap(false)
+							if removed || wasFatal {
 								usedCursor.allowUsable()
 							}
 						}
