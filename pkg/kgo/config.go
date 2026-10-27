@@ -1283,9 +1283,7 @@ func MaxProduceRequestsInflightPerBroker(n int) ProducerOpt {
 // least 2.1 and all consumers must be upgraded to support decoding zstd records.
 //
 // A batch is only sent compressed if compressing makes it smaller, so small or
-// incompressible batches go out uncompressed even with a codec configured. A
-// consumer that cannot decode the codec may therefore work in testing and only
-// fail once batches grow large enough to compress.
+// incompressible batches go out uncompressed even with a codec configured.
 //
 // Alternatively, if you want finer control over compression you can use
 // [WithCompressor] for complete control.
