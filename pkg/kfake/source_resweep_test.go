@@ -254,6 +254,100 @@ func TestEpochBumpKeepsCursor(t *testing.T) {
 	}
 }
 
+// TestEpochValidationPastControlBatch requires no data loss when the cursor
+// sits past a transaction marker written in a later epoch than the last record
+// returned. A read_committed fetch returns the committed record and steps past
+// the marker (and, for an abort, past the aborted record too), so the cursor
+// is past the marker. The epoch the cursor carries must be the marker's: the
+// record's epoch ends at the marker, below the cursor, and validating with it
+// reports a loss that never happened.
+func TestEpochValidationPastControlBatch(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		// next is the cursor once the consumer has stepped past the marker.
+		next   int64
+		commit bool
+	}{
+		// 0: record (epoch 0), 1: commit marker (epoch 1).
+		{name: "commit", next: 2, commit: true},
+		// 0: record (epoch 0), 1: commit marker (epoch 0),
+		// 2: aborted record (epoch 0), 3: abort marker (epoch 1).
+		{name: "abort", next: 4},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			topic := "epoch-past-marker-" + test.name
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			txn := newPlainClient(t, c,
+				kgo.TransactionalID(topic),
+				kgo.DefaultProduceTopic(topic),
+			)
+			// runTxn writes one record in a transaction; bump moves the
+			// partition to a new epoch before the transaction ends, so
+			// its marker lands in that epoch.
+			runTxn := func(commit, bump bool) {
+				t.Helper()
+				if err := txn.BeginTransaction(); err != nil {
+					t.Fatal(err)
+				}
+				produceSync(t, txn, &kgo.Record{Value: []byte("txn")})
+				if bump {
+					if err := c.MoveTopicPartition(topic, 0, 0); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := txn.EndTransaction(context.Background(), kgo.TransactionEndTry(commit)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.commit {
+				runTxn(true, true)
+			} else {
+				runTxn(true, false)
+				runTxn(false, true)
+			}
+
+			cl := newPlainClient(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumeStartOffset(kgo.NewOffset().AtStart()),
+				kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+				kgo.DisableFetchSessions(),
+				kgo.FetchMaxWait(100*time.Millisecond),
+			)
+			consumeThenPause(t, cl, topic, 1)
+
+			// Bump the epoch again so the resumed fetch is fenced and
+			// the cursor is validated.
+			validations := c.Fault(Fault{Keys: []kmsg.Key{kmsg.OffsetForLeaderEpoch}, Observe: true, Count: -1})
+			if err := c.MoveTopicPartition(topic, 0, 0); err != nil {
+				t.Fatal(err)
+			}
+			cl.ResumeFetchTopics(topic)
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
+			if err := validations.Wait(ctx, 1); err != nil {
+				t.Fatal("the epoch validation was never issued")
+			}
+
+			produceSync(t, newPlainClient(t, c), &kgo.Record{Topic: topic, Value: []byte("after")})
+			dl, got := pollDataLoss(cl, 4*time.Second)
+			if dl != nil {
+				t.Errorf("reported data loss: %v", dl)
+			}
+			if len(got) != 1 || got[0].Offset != test.next {
+				var offsets []int64
+				for _, r := range got {
+					offsets = append(offsets, r.Offset)
+				}
+				t.Fatalf("consumed offsets %v after the validation, want [%d]", offsets, test.next)
+			}
+		})
+	}
+}
+
 // TestAuditFetchTopLevelErrorBackoff returns an unexpected top-level error from
 // every classic Fetch (the persistent shape: a non-conformant or future broker
 // answering a code kgo's fetch-session arms do not recognize) and asserts the
