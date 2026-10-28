@@ -63,6 +63,10 @@ var (
 	// KGO_TEST_SCRAM_SEEDS: separate broker address for SCRAM testing
 	scramSeeds string
 
+	// KGO_TEST_OAUTH_SEEDS: broker address for OAUTHBEARER testing, using
+	// Kafka's default validator, which accepts unsecured tokens
+	oauthSeeds string
+
 	// We create topics with a different number of partitions to exercise
 	// a few extra code paths; we index into npartitions with npartitionsAt,
 	// an atomic that we modulo after load.
@@ -191,6 +195,7 @@ func init() {
 		}
 	}
 	scramSeeds = os.Getenv("KGO_TEST_SCRAM_SEEDS")
+	oauthSeeds = os.Getenv("KGO_TEST_OAUTH_SEEDS")
 	if maxTParts, exists := os.LookupEnv("KGO_TEST_MAX_TOPIC_PARTS"); exists {
 		n, err := strconv.Atoi(maxTParts)
 		if err != nil {
