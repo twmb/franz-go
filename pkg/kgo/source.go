@@ -1659,9 +1659,9 @@ type ProcessFetchPartitionOpts struct {
 	// slab is injected into each record's context via shareAckKey.
 	shareAckSlab func(numRecords int, firstRecord *Record) *shareAckSlab
 
-	// lastEpoch, if non-nil, is set to the leader epoch of whatever last
-	// moved Offset forward, including control records and aborted batches
-	// that are not returned.
+	// lastEpoch, if non-nil, is set to the leader epoch of each decoded
+	// record or batch that moves Offset forward, including control records
+	// and aborted batches that are not returned.
 	lastEpoch *int32
 }
 
