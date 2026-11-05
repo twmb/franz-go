@@ -228,6 +228,103 @@ func TestAuditTxnV1AddPartitionsRetriableStripControl(t *testing.T) {
 	}
 }
 
+// Pre-KIP-890p2, while the coordinator is still completing the prior
+// transaction (PREPARE_COMMIT), AddPartitionsToTxn answers every partition
+// with CONCURRENT_TRANSACTIONS and adds nothing; the client re-sends the add
+// until the completion finishes. An abort in that window must not send
+// EndTxn: the broker never began this transaction, and below EndTxn v5 a real
+// broker answers that abort with INVALID_TXN_STATE, failing the producer ID.
+// Once an add is re-sent, the partition counts as added again, so the
+// transaction it then joins is still ended.
+func TestTxnV1AbortWhileAddPartitionsConcurrent(t *testing.T) {
+	t.Parallel()
+	const topic = "txn-v1-abort-concurrent"
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	downgradeToTxnV0(t, c)
+
+	cl := newPlainClient(t, c,
+		kgo.TransactionalID("txn-v1-abort-concurrent"),
+		// Long enough that the abort below runs while the client backs
+		// off between adds, not while an add is on the wire.
+		kgo.ConcurrentTransactionsBackoff(time.Second),
+	)
+	ctx := context.Background()
+
+	// The prior transaction commits, so an EndTxn abort with no
+	// transaction ongoing gets INVALID_TXN_STATE, as from a real broker
+	// once the prior commit completes.
+	warmTxnTopics(t, cl, topic)
+
+	var (
+		concurrent atomic.Int32
+		release    atomic.Bool
+	)
+	c.ControlKey(int16(kmsg.AddPartitionsToTxn), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		if release.Load() {
+			c.DropControl()
+			return nil, nil, false
+		}
+		c.KeepControl()
+		areq := req.(*kmsg.AddPartitionsToTxnRequest)
+		resp := areq.ResponseKind().(*kmsg.AddPartitionsToTxnResponse)
+		for _, rt := range areq.Topics {
+			st := kmsg.NewAddPartitionsToTxnResponseTopic()
+			st.Topic = rt.Topic
+			for _, p := range rt.Partitions {
+				sp := kmsg.NewAddPartitionsToTxnResponseTopicPartition()
+				sp.Partition = p
+				sp.ErrorCode = kerr.ConcurrentTransactions.Code
+				st.Partitions = append(st.Partitions, sp)
+			}
+			resp.Topics = append(resp.Topics, st)
+		}
+		concurrent.Add(1)
+		return resp, nil, true
+	})
+	endTxns := observeEndTxns(c)
+
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	r := produceCh(ctx, cl, topic, "v")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for concurrent.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no AddPartitionsToTxn was answered with CONCURRENT_TRANSACTIONS")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond) // let the client handle the response and back off
+
+	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("BUG REPRODUCED: EndTransaction(TryAbort) = %v; the broker rejected every add with CONCURRENT_TRANSACTIONS, so nothing began and no EndTxn should be sent (EndTxns issued: %d)", err, endTxns.Hits())
+	}
+	if n := endTxns.Hits(); n != 0 {
+		t.Fatalf("BUG REPRODUCED: EndTransaction(TryAbort) issued %d EndTxn for a transaction the broker never began", n)
+	}
+
+	// The prior transaction finishes completing: the next add succeeds
+	// and the record lands in the transaction that add begins, which
+	// must be ended with an EndTxn.
+	release.Store(true)
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if err := cl.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if err := <-r; err != nil {
+		t.Fatalf("produce after the add succeeded: %v", err)
+	}
+	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatalf("EndTransaction(TryAbort): %v", err)
+	}
+	if n := endTxns.Hits(); n != 1 {
+		t.Fatalf("EndTxns issued = %d; want 1 to end the transaction the re-sent add began", n)
+	}
+}
+
 // EndTransaction documents that a commit attempted while the producer ID has
 // an error returns OperationNotAttempted and the caller should retry with
 // TryAbort (GroupTransactSession.End does this retry internally). The retry

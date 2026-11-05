@@ -653,12 +653,20 @@ func (s *sink) doTxnReq(
 	// difference there is the user knows explicitly at the function call
 	// that canceling the context will opt them into invalid state.
 	//
-	// Note that the concurrent-transactions wrapper is defensive only:
-	// AddPartitionsToTxn is pinned at most v3 (no top-level error code)
-	// and a per-partition CONCURRENT_TRANSACTIONS is retriable, so it is
-	// stripped in issueTxnReq and healed by requeue+backoff rather than
-	// ever surfacing to the wrapper.
+	// A per-partition CONCURRENT_TRANSACTIONS is not retryable in kerr, so
+	// issueTxnReq returns it and the wrapper re-sends the same request
+	// until the prior transaction finishes completing on the broker.
+	//
+	// issueTxnReq un-marks the partitions the broker rejected, so that an
+	// EndTransaction while we back off does not send EndTxn for a
+	// transaction that never began. A re-send may add them, and once it
+	// is on the wire we cannot know whether it did, so we mark them
+	// added again before each re-send.
+	var tries int
 	err = s.cl.doWithConcurrentTransactions(s.cl.ctx, fmt.Sprintf("AddPartitionsToTxn-sink%d", s.nodeID), func() error {
+		if tries++; tries > 1 {
+			req.remarkAddedToTxn(txnReq)
+		}
 		stripped, err = s.issueTxnReq(req, txnReq)
 		return err
 	})
@@ -712,6 +720,20 @@ func (p *produceRequest) undoStagedBatches(txnReq *kmsg.AddPartitionsToTxnReques
 	})
 }
 
+// remarkAddedToTxn marks every partition that is in both this request and
+// txnReq as added to the transaction, for when doTxnReq re-sends txnReq.
+// Partitions issueTxnReq stripped are no longer in the request; a later
+// drain adds them again.
+func (p *produceRequest) remarkAddedToTxn(txnReq *kmsg.AddPartitionsToTxnRequest) {
+	for topic, partitions := range p.batches.bs {
+		for partition, batch := range partitions {
+			if txnReqContains(txnReq, topic, partition) {
+				batch.owner.addedToTxn.Store(true)
+			}
+		}
+	}
+}
+
 // Removing a batch from the transaction means we will not be issuing it
 // inflight, and that it was not added to the txn and that we need to reset the
 // drain index.
@@ -759,7 +781,21 @@ func (s *sink) issueTxnReq(
 				// if any partition is unauthorized _or_ does not exist. We simply remove
 				// unattempted partitions and treat them as retryable.
 				if !kerr.IsRetriable(err) && !errors.Is(err, kerr.OperationNotAttempted) {
-					fatalErr = err // auth err, etc
+					fatalErr = err // auth err, CONCURRENT_TRANSACTIONS, etc
+					// The broker answered for this partition, and an
+					// errored add adds nothing, so the partition is
+					// definitively not in the transaction. We un-mark
+					// it now rather than when doTxnReq gives up,
+					// because doTxnReq retries CONCURRENT_TRANSACTIONS
+					// for as long as the prior transaction is still
+					// completing: if the user aborts in that window,
+					// EndTransaction would see the partition as added
+					// and send EndTxn for a transaction the broker
+					// never began, which a pre-KIP-890p2 broker
+					// rejects with INVALID_TXN_STATE.
+					if batch, ok := topicBatches[partition.Partition]; ok {
+						batch.owner.addedToTxn.Store(false)
+					}
 					continue
 				}
 
