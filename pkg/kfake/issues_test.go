@@ -5565,3 +5565,101 @@ func TestIssue1500(t *testing.T) {
 		t.Fatalf("member did not leave the group: %+v", g)
 	}
 }
+
+// TestIssue1531 fails every fetch from a partition's leader, as when the
+// leader dies, so each fetch backs off and triggers a metadata update. With
+// the backoff shorter than MetadataMinAge, every other trigger lands inside
+// the min age. Such a trigger must still be served once the min age passes;
+// if it is dropped, the client refreshes at twice the backoff instead of
+// every MetadataMinAge and finds a new leader that much later.
+func TestIssue1531(t *testing.T) {
+	t.Run("classic", func(t *testing.T) {
+		t.Parallel()
+		testIssue1531(t, kmsg.Fetch, func(c *Cluster, topic string, opts ...kgo.Opt) *kgo.Client {
+			return newPlainClient(t, c, append(opts, kgo.ConsumeTopics(topic))...)
+		})
+	})
+	t.Run("share", func(t *testing.T) {
+		t.Parallel()
+		testIssue1531(t, kmsg.ShareFetch, func(c *Cluster, topic string, opts ...kgo.Opt) *kgo.Client {
+			return newShareConsumer(t, c, topic, "issue-1531", opts...)
+		})
+	})
+}
+
+func testIssue1531(t *testing.T, fetch kmsg.Key, consumer func(*Cluster, string, ...kgo.Opt) *kgo.Client) {
+	const (
+		topic   = "issue-1531"
+		minAge  = time.Second
+		backoff = 800 * time.Millisecond
+		outage  = 5*minAge + minAge/2
+	)
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic))
+	if err := c.MoveTopicPartition(topic, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		mu    sync.Mutex
+		down  bool
+		metas []time.Time
+	)
+	c.ControlKey(int16(fetch), func(kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		mu.Lock()
+		defer mu.Unlock()
+		if down && c.CurrentNode() == 0 {
+			return nil, errors.New("leader down"), true // closes the connection
+		}
+		return nil, nil, false
+	})
+	c.ControlKey(int16(kmsg.Metadata), func(kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		mu.Lock()
+		defer mu.Unlock()
+		if down {
+			metas = append(metas, time.Now())
+		}
+		return nil, nil, false
+	})
+
+	p := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	cl := consumer(c, topic,
+		kgo.MetadataMinAge(minAge),
+		kgo.RetryBackoffFn(func(int) time.Duration { return backoff }),
+	)
+	// Consume one record so the consumer is fetching from the leader. A
+	// share group starts at the latest offset, so produce until one lands.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for consumed := false; !consumed; {
+		if err := p.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+		pctx, pcancel := context.WithTimeout(ctx, 300*time.Millisecond)
+		consumed = cl.PollRecords(pctx, 1).NumRecords() > 0
+		pcancel()
+	}
+
+	mu.Lock()
+	down = true
+	mu.Unlock()
+	time.Sleep(outage)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(metas) < 3 {
+		t.Fatalf("only %d metadata requests during a %v outage", len(metas), outage)
+	}
+	var gaps []time.Duration
+	for i := 1; i < len(metas); i++ {
+		gaps = append(gaps, metas[i].Sub(metas[i-1]).Round(time.Millisecond))
+	}
+	t.Logf("gaps between metadata requests while the leader is down: %v", gaps)
+	// Dropped triggers give gaps of 2*backoff (1.6s); served ones give
+	// minAge (1s). The median ignores one gap stretched by a slow machine.
+	sorted := slices.Sorted(slices.Values(gaps))
+	if median := sorted[len(sorted)/2]; median > minAge+3*minAge/10 {
+		t.Errorf("metadata refreshed every %v with MetadataMinAge %v: backoff triggers inside the min age were dropped", median, minAge)
+	}
+}
