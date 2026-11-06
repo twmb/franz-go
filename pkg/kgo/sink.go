@@ -175,9 +175,12 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		recBuf.lockedStopLinger()
 		recBuf.seq = incrementSequence(recBuf.seq, int32(len(batch.records)))
 		moreToDrain = recBuf.checkIfShouldDrainOrStartLinger() || moreToDrain
-		recBuf.mu.Unlock()
 
+		// A metadata update running at the same time can fail this batch
+		// once we unlock. If we unlocked before adding, Flush could see
+		// nothing buffered and return before addingToTxn counts this add.
 		txnBuilder.add(recBuf)
+		recBuf.mu.Unlock()
 	}
 
 	// We could have lost our only record buffer just before we grabbed the
@@ -222,6 +225,7 @@ func (t *txnReqBuilder) add(rb *recBuf) {
 		return
 	}
 	if t.req == nil {
+		rb.cl.producer.addingToTxn.Add(1) // sink.produce decrements once this request finishes
 		req := kmsg.NewPtrAddPartitionsToTxnRequest()
 		req.TransactionalID = *t.txnID
 		req.ProducerID = t.id
@@ -477,6 +481,15 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// sequence numbers using our new producer ID, which will then again
 	// fail with OOOSN.
 	req, txnReq, moreToDrain := s.createReq(id, epoch)
+	if txnReq != nil {
+		p := &s.cl.producer
+		defer func() {
+			p.mu.Lock()
+			p.addingToTxn.Add(-1)
+			p.mu.Unlock()
+			p.c.Broadcast()
+		}()
+	}
 	if len(req.batches.bs) == 0 { // every recBuf is failing, has nothing new buffered, or is waiting on what is in flight
 		return moreToDrain
 	}
@@ -513,6 +526,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		// - TransactionAbortable
 		// - retry failure
 		// - auth failure
+		// - an abort while retrying CONCURRENT_TRANSACTIONS
 		// - producer id mapping / epoch errors
 		// The latter case can potentially recover with the kip logic
 		// we have defined in EndTransaction. Regardless, on failure
@@ -520,6 +534,8 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		batchesStripped, err := s.doTxnReq(req, txnReq)
 		if err != nil {
 			switch {
+			case errors.Is(err, ErrAborting):
+				return true // doTxnReq requeued the batches for the next drain
 			case isRetryableBrokerErr(err) || isDialNonTimeoutErr(err):
 				s.cl.bumpRepeatedLoadErr(err)
 				s.cl.cfg.logger.Log(LogLevelWarn, "unable to AddPartitionsToTxn due to retryable broker err, bumping client's buffered record load errors by 1 and retrying", "err", err)
@@ -654,18 +670,12 @@ func (s *sink) doTxnReq(
 	// that canceling the context will opt them into invalid state.
 	//
 	// A per-partition CONCURRENT_TRANSACTIONS is not retryable in kerr, so
-	// issueTxnReq returns it and the wrapper re-sends the same request
-	// until the prior transaction finishes completing on the broker.
-	//
-	// issueTxnReq un-marks the partitions the broker rejected, so that an
-	// EndTransaction while we back off does not send EndTxn for a
-	// transaction that never began. A re-send may add them, and once it
-	// is on the wire we cannot know whether it did, so we mark them
-	// added again before each re-send.
-	var tries int
+	// issueTxnReq returns it and the wrapper re-sends the request. While
+	// aborting, we stop: the broker accepted no attempt of this request,
+	// so the abort does not need these partitions added.
 	err = s.cl.doWithConcurrentTransactions(s.cl.ctx, fmt.Sprintf("AddPartitionsToTxn-sink%d", s.nodeID), func() error {
-		if tries++; tries > 1 {
-			req.remarkAddedToTxn(txnReq)
+		if s.cl.producer.isAborting() {
+			return ErrAborting
 		}
 		stripped, err = s.issueTxnReq(req, txnReq)
 		return err
@@ -720,20 +730,6 @@ func (p *produceRequest) undoStagedBatches(txnReq *kmsg.AddPartitionsToTxnReques
 	})
 }
 
-// remarkAddedToTxn marks every partition that is in both this request and
-// txnReq as added to the transaction, for when doTxnReq re-sends txnReq.
-// Partitions issueTxnReq stripped are no longer in the request; a later
-// drain adds them again.
-func (p *produceRequest) remarkAddedToTxn(txnReq *kmsg.AddPartitionsToTxnRequest) {
-	for topic, partitions := range p.batches.bs {
-		for partition, batch := range partitions {
-			if txnReqContains(txnReq, topic, partition) {
-				batch.owner.addedToTxn.Store(true)
-			}
-		}
-	}
-}
-
 // Removing a batch from the transaction means we will not be issuing it
 // inflight, and that it was not added to the txn and that we need to reset the
 // drain index.
@@ -781,21 +777,7 @@ func (s *sink) issueTxnReq(
 				// if any partition is unauthorized _or_ does not exist. We simply remove
 				// unattempted partitions and treat them as retryable.
 				if !kerr.IsRetriable(err) && !errors.Is(err, kerr.OperationNotAttempted) {
-					fatalErr = err // auth err, CONCURRENT_TRANSACTIONS, etc
-					// The broker answered for this partition, and an
-					// errored add adds nothing, so the partition is
-					// definitively not in the transaction. We un-mark
-					// it now rather than when doTxnReq gives up,
-					// because doTxnReq retries CONCURRENT_TRANSACTIONS
-					// for as long as the prior transaction is still
-					// completing: if the user aborts in that window,
-					// EndTransaction would see the partition as added
-					// and send EndTxn for a transaction the broker
-					// never began, which a pre-KIP-890p2 broker
-					// rejects with INVALID_TXN_STATE.
-					if batch, ok := topicBatches[partition.Partition]; ok {
-						batch.owner.addedToTxn.Store(false)
-					}
+					fatalErr = err // auth err, etc
 					continue
 				}
 
