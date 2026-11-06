@@ -74,8 +74,8 @@ func TestRetiredBrokerConnectionClassifiedAsDead(t *testing.T) {
 	<-cxn.conn.(*readSignalConn).readStarted
 	b.stopForever()
 
-	if err := <-errCh; !errors.Is(err, errChosenBrokerDead) {
-		t.Fatalf("retired broker request error = %v, want %v", err, errChosenBrokerDead)
+	if err := <-errCh; !errors.Is(err, ErrBrokerConnectionDead) {
+		t.Fatalf("retired broker request error = %v, want %v", err, ErrBrokerConnectionDead)
 	}
 	for _, entry := range logger.buf {
 		if entry.level == LogLevelWarn {
@@ -476,8 +476,8 @@ func TestIssue1377(t *testing.T) {
 
 	// Produce (key 0) is what makes this the produce connection, and acks=0
 	// is what makes init spawn discard on it.
-	if _, err := b.waitResp(ctx, kmsg.NewPtrProduceRequest()); !errors.Is(err, errChosenBrokerDead) {
-		t.Fatalf("produce on a retired broker: error = %v, want %v", err, errChosenBrokerDead)
+	if _, err := b.waitResp(ctx, kmsg.NewPtrProduceRequest()); !errors.Is(err, ErrBrokerConnectionDead) {
+		t.Fatalf("produce on a retired broker: error = %v, want %v", err, ErrBrokerConnectionDead)
 	}
 
 	// handleReq retries a retryable connection error once, so both attempts
