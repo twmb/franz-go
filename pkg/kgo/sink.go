@@ -671,10 +671,14 @@ func (s *sink) doTxnReq(
 	//
 	// A per-partition CONCURRENT_TRANSACTIONS is not retryable in kerr, so
 	// issueTxnReq returns it and the wrapper re-sends the request. While
-	// aborting, we stop: the broker accepted no attempt of this request,
-	// so the abort does not need these partitions added.
+	// aborting, we stop re-sending: the broker accepted no attempt of this
+	// request, so the abort does not need these partitions added. We
+	// always send the first attempt: a batch with an unknown produce
+	// outcome cannot fail, and only a finished add lets it send again.
+	var tries int
 	err = s.cl.doWithConcurrentTransactions(s.cl.ctx, fmt.Sprintf("AddPartitionsToTxn-sink%d", s.nodeID), func() error {
-		if s.cl.producer.isAborting() {
+		tries++
+		if tries > 1 && s.cl.producer.isAborting() {
 			return ErrAborting
 		}
 		stripped, err = s.issueTxnReq(req, txnReq)
