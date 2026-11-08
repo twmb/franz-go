@@ -2,6 +2,9 @@ package kgo
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -9,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/sasl/oauth"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
@@ -348,6 +353,43 @@ func TestSCRAMAuthBadCredentials(t *testing.T) {
 	}
 	// The error should indicate authentication failure
 	t.Logf("got expected error with bad credentials: %v", err)
+}
+
+// Ensure OAUTHBEARER authenticates, and that a rejected token fails with the
+// broker's reason.
+func TestOAuthAuth(t *testing.T) {
+	t.Parallel()
+
+	if oauthSeeds == "" {
+		t.Skip("KGO_TEST_OAUTH_SEEDS not set, skipping OAUTHBEARER test")
+	}
+
+	ping := func(exp time.Time) error {
+		// An unsecured JWS: a {"alg":"none"} header, the claims, and
+		// an empty signature.
+		enc := base64.RawURLEncoding.EncodeToString
+		claims := fmt.Sprintf(`{"sub":"admin","exp":%d}`, exp.Unix())
+		auth := oauth.Auth{Token: enc([]byte(`{"alg":"none"}`)) + "." + enc([]byte(claims)) + "."}
+		cl, err := NewClient(
+			SeedBrokers(strings.Split(oauthSeeds, ",")...),
+			SASL(auth.AsMechanism()),
+		)
+		if err != nil {
+			t.Fatalf("unable to create client: %v", err)
+		}
+		defer cl.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return cl.Ping(ctx)
+	}
+
+	if err := ping(time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("unable to ping: %v", err)
+	}
+	err := ping(time.Now().Add(-time.Minute))
+	if !errors.Is(err, kerr.SaslAuthenticationFailed) || !strings.Contains(err.Error(), "invalid_token") {
+		t.Fatalf("expired token: got %v, expected SASL_AUTHENTICATION_FAILED with invalid_token", err)
+	}
 }
 
 func TestShareGroup(t *testing.T) {
