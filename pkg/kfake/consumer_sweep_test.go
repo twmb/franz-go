@@ -301,6 +301,120 @@ func TestAuditPendingReloadSurvivesPartitionRevoke(t *testing.T) {
 	}
 }
 
+// TestAuditSetOffsetsWhileCommitInFlight verifies that a SetOffsets below a
+// commit that is in flight, or below a commit that has read its offsets and
+// not yet built its request, is committed by the next commit. The commit
+// response moves head forward to the committed offset; pre-fix, the
+// response also moved the seek's head forward, and the next commit saw
+// nothing to commit. AutoCommitMarks keeps head where the response left
+// head (default autocommit moves head to dirty on the next poll), so the
+// test uses AutoCommitMarks. The test holds a commit at the broker; the
+// SetOffsets table test above is about pending offset loads and did not fit.
+func TestAuditSetOffsetsWhileCommitInFlight(t *testing.T) {
+	t.Parallel()
+
+	const (
+		topic = "setoffsets-inflight"
+		group = "setoffsets-inflight-g"
+		msgs  = 10
+		seek  = int64(5)
+	)
+
+	for _, tt := range []struct {
+		name string
+		// commit starts the commits the seek must survive and returns a
+		// wait for them, once the first commit is held at the broker.
+		// seen receives once per commit that has read its offsets and
+		// entered CommitOffsetsSync.
+		commit func(t *testing.T, cl *kgo.Client, ctx context.Context, held, seen <-chan struct{}) func() error
+	}{
+		{"in flight", func(t *testing.T, cl *kgo.Client, ctx context.Context, held, _ <-chan struct{}) func() error {
+			// The commit of msgs is at the broker when the seek runs.
+			wait := commitAsync(ctx, t, cl, map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: msgs}}})
+			waitCh(t, held, "the commit never reached the broker")
+			return wait
+		}},
+
+		{"read, not yet built", func(t *testing.T, cl *kgo.Client, ctx context.Context, held, seen <-chan struct{}) func() error {
+			// A sync commit of 3 is at the broker. CommitMarkedOffsets
+			// then reads head, msgs, and waits behind the sync commit
+			// to build its request: the seek runs between its read
+			// and its build.
+			cl.MarkCommitOffsets(map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: msgs}}})
+			syncDone := make(chan struct{})
+			go func() {
+				defer close(syncDone)
+				cl.CommitOffsetsSync(ctx, map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: 3}}}, nil)
+			}()
+			waitCh(t, held, "the sync commit never reached the broker")
+			waitCh(t, seen, "the sync commit never read its offsets")
+			errs := make(chan error, 1)
+			go func() { errs <- cl.CommitMarkedOffsets(ctx) }()
+			waitCh(t, seen, "CommitMarkedOffsets never read its offsets")
+			return func() error { <-syncDone; return <-errs }
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			produceN(t, c, topic, msgs)
+			held, release := hold(c, kmsg.OffsetCommit, 0) // the first commit, until the seek is in
+			defer release()
+
+			logger := &msgLogger{msg: "in CommitOffsetsSync", seen: make(chan struct{}, 8)}
+			cl := newPlainClient(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.AutoCommitMarks(),
+				kgo.AutoCommitInterval(time.Hour), // only the manual commits below
+				kgo.FetchMaxWait(100*time.Millisecond),
+				kgo.WithLogger(logger),
+			)
+			consumeN(t, cl, msgs, 8*time.Second)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			wait := tt.commit(t, cl, ctx, held, logger.seen)
+
+			cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: seek}}})
+			release()
+			if err := wait(); err != nil {
+				t.Fatalf("commit failed: %v", err)
+			}
+
+			if got := cl.MarkedOffsets()[topic][0].Offset; got != seek {
+				t.Fatalf("BUG REPRODUCED: marked offset after the commit response is %d, want the seek %d", got, seek)
+			}
+			if err := cl.CommitMarkedOffsets(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if got := groupCommits(c, group)[topic][0].Offset; got != seek {
+				t.Fatalf("BUG REPRODUCED: the group's offset after the next commit is %d; the seek to %d was not committed", got, seek)
+			}
+		})
+	}
+}
+
+// msgLogger sends on seen each time kgo logs msg.
+type msgLogger struct {
+	msg  string
+	seen chan struct{}
+}
+
+func (*msgLogger) Level() kgo.LogLevel { return kgo.LogLevelDebug }
+
+func (l *msgLogger) Log(_ kgo.LogLevel, msg string, _ ...any) {
+	if msg == l.msg {
+		select {
+		case l.seen <- struct{}{}:
+		default:
+		}
+	}
+}
+
 // commitOffset commits offset at leader epoch 0 for partition 0 of topic in
 // the group through kadm, as a prior member would have.
 func commitOffset(t *testing.T, c *Cluster, group, topic string, offset int64) {

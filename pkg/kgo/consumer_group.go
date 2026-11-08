@@ -2360,14 +2360,19 @@ start:
 		fetchingTopic := g.fetching[topic]
 		for partition, offset := range partitions {
 			commit, hasCommit := topicCommits[partition]
-			var u uncommit
+			u := topicUncommitted[partition]
 			// AdjustFetchOffsetsFn can add a partition we did not
 			// fetch, which is not in g.fetching.
 			if seek, ok := fetchingTopic[partition]; ok && seek.Offset >= 0 {
 				// SetOffsets during an OffsetFetch or during
 				// AdjustFetchOffsetsFn takes highest preference.
+				// The offsets start over from the seek; numSets is
+				// kept, and is at least 1 for that SetOffsets, so
+				// that a commit that read its offsets during the
+				// fetch can still tell whether a SetOffsets came
+				// after its read.
 				partitions[partition] = Offset{at: seek.Offset, epoch: seek.Epoch}
-				u = uncommit{dirty: seek, head: seek, committed: seek, marked: true}
+				u = uncommit{dirty: seek, head: seek, committed: seek, marked: true, numSets: max(u.numSets, 1)}
 				if hasCommit {
 					u.committed, u.hasCommit = commit, true
 				}
@@ -2526,6 +2531,11 @@ type uncommit struct {
 	// the start has nothing to commit, while a start set by SetOffsets
 	// must be committed.
 	marked bool
+
+	// numSets counts the SetOffsets calls that set the partition. A
+	// commit response moves `head` forward only if numSets is unchanged
+	// since the commit read its offsets.
+	numSets uint32
 
 	// topicID is the ID of the topic the offsets were fetched under, if
 	// the fetch carried one. We commit under it, and refuse the offsets
@@ -2699,6 +2709,7 @@ func (g *groupConsumer) undirtyUncommitted() {
 func (g *groupConsumer) updateCommitted(
 	req *kmsg.OffsetCommitRequest,
 	resp *kmsg.OffsetCommitResponse,
+	numSets map[string]map[int32]uint32, // each set partition's numSets when the commit read its offsets; absent is 0
 ) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -2770,6 +2781,7 @@ func (g *groupConsumer) updateCommitted(
 		if debug {
 			fmt.Fprintf(&b, "%s[", respTopic.Topic)
 		}
+		topicNumSets := numSets[respTopic.Topic]
 		for i := range respTopic.Partitions {
 			reqPart := &reqTopic.Partitions[i]
 			respPart := &respTopic.Partitions[i]
@@ -2833,13 +2845,15 @@ func (g *groupConsumer) updateCommitted(
 			// followed by autocommit completion. We document that
 			// using marks to rewind is not recommended.
 			//
-			// The user could also muck the offsets with SetOffsets.
-			// We document that concurrent committing is not encouraged,
-			// we do not attempt to guard past that.
+			// A SetOffsets while the commit was in flight set head,
+			// and the set offset is the new truth: moving head past
+			// the set offset would make the next commit skip the set
+			// offset. We move head only if no SetOffsets set the
+			// partition since the commit read its offsets.
 			//
 			// w.r.t. leader epoch's, we document that modifying
 			// leader epoch's is not recommended.
-			if uncommit.head.Less(set) {
+			if uncommit.head.Less(set) && uncommit.numSets == topicNumSets[respPart.Partition] {
 				uncommit.head = set
 			}
 
@@ -2906,13 +2920,13 @@ func (g *groupConsumer) loopCommit() {
 		g.noCommitDuringJoinAndSync.RLock()
 		g.mu.Lock()
 		if g.blockAuto == 0 {
-			uncommitted := g.getUncommittedLocked(true, false)
-			if len(uncommitted) == 0 {
+			tc := g.toCommitLocked(g.getUncommittedLocked(true, false))
+			if len(tc.offsets) == 0 {
 				g.cfg.logger.Log(LogLevelDebug, "skipping autocommit due to no offsets to commit", "group", g.cfg.group)
 				g.noCommitDuringJoinAndSync.RUnlock()
 			} else {
 				g.cfg.logger.Log(LogLevelDebug, "autocommitting", "group", g.cfg.group)
-				g.commit(g.ctx, uncommitted, func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+				g.commit(g.ctx, tc, func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 					g.noCommitDuringJoinAndSync.RUnlock()
 					g.cfg.commitCallback(cl, req, resp, err)
 				})
@@ -2979,10 +2993,15 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 					topicUncommitted = make(map[int32]uncommit)
 					g.uncommitted[topic] = topicUncommitted
 				}
+				// numSets becomes 1 below: a commit that read its
+				// offsets before now has no count for the partition,
+				// and its response must not move head past the set
+				// offset.
 				current = uncommit{committed: epochOffset}
 			}
 			same := exists && current.dirty == epochOffset
 			current.dirty, current.head = epochOffset, epochOffset
+			current.numSets++
 			current.marked = current.marked || user
 			topicUncommitted[partition] = current
 			if _, fetching := fetchingTopic[partition]; fetching {
@@ -3016,10 +3035,13 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 //
 // If there are no uncommitted offsets, this returns nil.
 func (cl *Client) UncommittedOffsets() map[string]map[int32]EpochOffset {
-	if g := cl.consumer.g; g != nil {
-		return g.getUncommitted(true)
+	g := cl.consumer.g
+	if g == nil {
+		return nil
 	}
-	return nil
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.getUncommittedLocked(true, true)
 }
 
 // MarkedOffsets returns the latest marked offsets. When autocommitting, a
@@ -3031,7 +3053,9 @@ func (cl *Client) MarkedOffsets() map[string]map[int32]EpochOffset {
 	if g == nil || !cl.cfg.autocommitMarks {
 		return nil
 	}
-	return g.getUncommitted(false)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.getUncommittedLocked(true, false)
 }
 
 // CommittedOffsets returns the latest committed offsets. Committed offsets are
@@ -3096,10 +3120,49 @@ func (g *groupConsumer) uncommittedFrom(tps topicsPartitionsData, topic string) 
 	return from, td != nil && td.id != noID && td.id != from
 }
 
-func (g *groupConsumer) getUncommitted(dirty bool) map[string]map[int32]EpochOffset {
+// toCommit holds offsets to commit and, for each partition a SetOffsets set,
+// the partition's numSets when the offsets were read. Both are read in one
+// g.mu hold, so a SetOffsets after the read is kept by the response.
+type toCommit struct {
+	offsets map[string]map[int32]EpochOffset
+	numSets numSetsMap
+}
+
+// numSetsMap holds each set partition's numSets when its offset was read;
+// absent is 0.
+type numSetsMap map[string]map[int32]uint32
+
+func (m *numSetsMap) add(t string, p int32, n uint32) {
+	if *m == nil {
+		*m = make(numSetsMap)
+	}
+	mps := (*m)[t]
+	if mps == nil {
+		mps = make(map[int32]uint32)
+		(*m)[t] = mps
+	}
+	mps[p] = n
+}
+
+// toCommitLocked pairs offsets to commit with each set partition's numSets
+// now. g.mu must be held.
+func (g *groupConsumer) toCommitLocked(offsets map[string]map[int32]EpochOffset) toCommit {
+	tc := toCommit{offsets: offsets}
+	for topic, partitions := range offsets {
+		topicUncommitted := g.uncommitted[topic]
+		for partition := range partitions {
+			if n := topicUncommitted[partition].numSets; n != 0 {
+				tc.numSets.add(topic, partition, n)
+			}
+		}
+	}
+	return tc
+}
+
+func (g *groupConsumer) getUncommitted(dirty bool) toCommit {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.getUncommittedLocked(true, dirty)
+	return g.toCommitLocked(g.getUncommittedLocked(true, dirty))
 }
 
 func (g *groupConsumer) getUncommittedLocked(head, dirty bool) map[string]map[int32]EpochOffset {
@@ -3330,7 +3393,11 @@ func (cl *Client) MarkCommitOffsets(unmarked map[string]map[int32]EpochOffset) {
 // As an alternative if you want to commit specific records, see CommitRecords.
 func (cl *Client) CommitUncommittedOffsets(ctx context.Context) error {
 	// This function is just the tail end of CommitRecords just above.
-	return cl.commitOffsets(ctx, cl.UncommittedOffsets())
+	g := cl.consumer.g
+	if g == nil {
+		return errNotGroup
+	}
+	return g.commitOffsets(ctx, g.getUncommitted(true))
 }
 
 // CommitMarkedOffsets issues a synchronous offset commit for any partition
@@ -3349,16 +3416,21 @@ func (cl *Client) CommitUncommittedOffsets(ctx context.Context) error {
 // As an alternative if you want to commit specific records, see CommitRecords.
 func (cl *Client) CommitMarkedOffsets(ctx context.Context) error {
 	// This function is just the tail end of CommitRecords just above.
-	marked := cl.MarkedOffsets()
-	if len(marked) == 0 {
+	g := cl.consumer.g
+	if g == nil || !cl.cfg.autocommitMarks {
 		return nil
 	}
-	return cl.commitOffsets(ctx, marked)
+	return g.commitOffsets(ctx, g.getUncommitted(false))
 }
 
-func (cl *Client) commitOffsets(ctx context.Context, offsets map[string]map[int32]EpochOffset) error {
+// commitOffsets commits tc synchronously, as CommitOffsetsSync does for a
+// caller-built map, and returns the first error in the response.
+func (g *groupConsumer) commitOffsets(ctx context.Context, tc toCommit) error {
+	if len(tc.offsets) == 0 {
+		return nil
+	}
 	var rerr error
-	cl.CommitOffsetsSync(ctx, offsets, func(_ *Client, _ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+	g.commitOffsetsSync(ctx, tc, func(_ *Client, _ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		if err != nil {
 			rerr = err
 			return
@@ -3409,7 +3481,10 @@ func (cl *Client) CommitOffsetsSync(
 		onDone(cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), nil)
 		return
 	}
-	g.commitOffsetsSync(ctx, uncommitted, onDone)
+	g.mu.Lock()
+	tc := g.toCommitLocked(uncommitted)
+	g.mu.Unlock()
+	g.commitOffsetsSync(ctx, tc, onDone)
 }
 
 // waitJoinSyncMu is a rather insane way to try to grab a lock, but also return
@@ -3453,10 +3528,10 @@ func (g *groupConsumer) waitJoinSyncMu(ctx context.Context) error {
 
 func (g *groupConsumer) commitOffsetsSync(
 	ctx context.Context,
-	uncommitted map[string]map[int32]EpochOffset,
+	tc toCommit,
 	onDone func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
-	g.cfg.logger.Log(LogLevelDebug, "in CommitOffsetsSync", "group", g.cfg.group, "with", uncommitted)
+	g.cfg.logger.Log(LogLevelDebug, "in CommitOffsetsSync", "group", g.cfg.group, "with", tc.offsets)
 	defer g.cfg.logger.Log(LogLevelDebug, "left CommitOffsetsSync", "group", g.cfg.group)
 
 	done := make(chan struct{})
@@ -3491,7 +3566,7 @@ func (g *groupConsumer) commitOffsetsSync(
 		g.blockAuto--
 	}
 
-	g.commit(ctx, uncommitted, unblockAuto)
+	g.commit(ctx, tc, unblockAuto)
 }
 
 // CommitOffsets commits the given offsets for a group, calling onDone with the
@@ -3581,7 +3656,7 @@ func (cl *Client) CommitOffsets(
 		g.blockAuto--
 	}
 
-	g.commit(ctx, uncommitted, unblockAuto)
+	g.commit(ctx, g.toCommitLocked(uncommitted), unblockAuto)
 }
 
 // defaultRevoke commits the last fetched offsets and waits for the commit to
@@ -3619,9 +3694,10 @@ func (g *groupConsumer) defaultRevoke(context.Context, *Client, map[string][]int
 // to occur.
 func (g *groupConsumer) commit(
 	ctx context.Context,
-	uncommitted map[string]map[int32]EpochOffset,
+	tc toCommit,
 	onDone func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
+	uncommitted := tc.offsets
 	// The user could theoretically give us topics that have no partitions
 	// to commit. We strip those: Kafka does not reply to them, and we
 	// expect all partitions in our request to be replied to in
@@ -3987,7 +4063,7 @@ func (g *groupConsumer) commit(
 			}
 		}
 
-		g.updateCommitted(req, resp)
+		g.updateCommitted(req, resp, tc.numSets)
 		onDone(g.cl, req, resp, nil)
 	}()
 }

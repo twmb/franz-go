@@ -837,8 +837,7 @@ func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
 //
 // If using group consuming, it is strongly recommended to call SetOffsets
 // from the goroutine that polls, while no revoke can run: use
-// BlockRebalanceOnPoll and call SetOffsets before AllowRebalance. Do not use
-// SetOffsets concurrent with committing.
+// BlockRebalanceOnPoll and call SetOffsets before AllowRebalance.
 func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 	cl.setOffsets(setOffsets, true)
 }
