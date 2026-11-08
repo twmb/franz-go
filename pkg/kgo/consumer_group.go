@@ -81,14 +81,11 @@ type groupConsumer struct {
 	// again. leave reads it only after manage returns.
 	rejoinOwed bool
 
-	// Fetching ensures we continue fetching offsets across cooperative
-	// rebalance if an offset fetch returns early due to an immediate
-	// rebalance. See the large comment on adjustCooperativeFetchOffsets
-	// for more details.
-	//
-	// This is modified only in that function, or in the manage loop on a
-	// hard error once the heartbeat/fetch has returned.
-	fetching map[string]map[int32]struct{}
+	// fetching holds the partitions whose offset fetch is in flight, each
+	// with the seek a SetOffsets made during the fetch, or Offset -1 for
+	// none, guarded by mu. A cooperative consumer resumes the fetch of what
+	// a canceled fetch did not finish.
+	fetching map[string]map[int32]EpochOffset
 
 	// leader is whether we are the leader right now. This is set to false
 	//
@@ -470,12 +467,16 @@ func (g *groupConsumer) manageFailWait(consecutiveErrors int, err error) (ctxCan
 		g.c.assignPartitions(nil, assignInvalidateAll, nil, "clearing assignment at end of group management session")
 		g.mu.Lock()     // before allowing poll to touch uncommitted, lock the group
 		g.c.mu.Unlock() // now part of poll can continue
+		// A SetOffsets running at the same time reads nowAssigned under
+		// g.mu. We store nil before unlocking: a SetOffsets that ran
+		// between our unlock and a later store would add a partition we
+		// no longer own to the map we just cleared.
+		g.nowAssigned.store(nil)
 		g.uncommitted = nil
+		g.fetching = nil
 		g.mu.Unlock()
 
-		g.nowAssigned.store(nil)
 		g.lastAssigned = nil
-		g.fetching = nil
 
 		g.leader.Store(false)
 		g.resetExternal()
@@ -529,12 +530,13 @@ func (g *groupConsumer) abandonAssignment(why string) {
 	g.c.assignPartitions(nil, assignInvalidateAll, nil, why)
 	g.mu.Lock()     // before allowing poll to touch uncommitted, lock the group
 	g.c.mu.Unlock() // now part of poll can continue
+	// We store nil before unlocking, as in manageFailWait.
+	g.nowAssigned.store(nil)
 	g.uncommitted = nil
+	g.fetching = nil
 	g.mu.Unlock()
 
-	g.nowAssigned.store(nil)
 	g.lastAssigned = nil
-	g.fetching = nil
 
 	g.c.unaddRebalance()
 }
@@ -781,13 +783,12 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		g.nowAssigned.store(nil)
 		g.lastAssigned = nil
 
-		// After nilling uncommitted here, nothing should recreate
-		// uncommitted until a future fetch after the group is
-		// rejoined. This _can_ be broken with a manual SetOffsets or
-		// with CommitOffsets{,Sync} but we explicitly document not
-		// to do that outside the context of a live group session.
+		// After nilling uncommitted here, only a SetOffsets on a
+		// partition in the next assignment recreates uncommitted
+		// before the next session's offset fetch.
 		g.mu.Lock()
 		g.uncommitted = nil
+		g.fetching = nil // a later cooperative session must not resume this session's fetch
 		g.mu.Unlock()
 		return
 	}
@@ -1071,8 +1072,8 @@ func (g *groupConsumer) setupAssignedAndHeartbeat(initialHb time.Duration, hbfn 
 		}
 		g.mu.Lock()
 		g.uncommitted = nil
-		g.mu.Unlock()
 		g.fetching = nil
+		g.mu.Unlock()
 		g.c.unaddRebalance()
 	}
 
@@ -1112,6 +1113,19 @@ func (g *groupConsumer) setupAssignedAndHeartbeat(initialHb time.Duration, hbfn 
 	// is specifically used for this function's return.
 	defer func() { <-s.fetchDone }()
 
+	// adjustCooperativeFetchOffsets records what we fetch in g.fetching,
+	// and runs before the user's callback so that a SetOffsets in
+	// OnPartitionsAssigned is recorded against the fetch and applied once
+	// the fetch returns. The callback receives `added`, not `fetch`: a
+	// partition resumed from a canceled fetch was passed to the callback
+	// already. See #705.
+	g.mu.Lock()
+	if !g.cooperative.Load() {
+		g.fetching = nil // an eager session fetches everything anew
+	}
+	fetch := g.adjustCooperativeFetchOffsets(added, lost)
+	g.mu.Unlock()
+
 	// Before we fetch offsets, we wait for the user's onAssign callback to
 	// be done. This ensures a few things:
 	//
@@ -1128,25 +1142,13 @@ func (g *groupConsumer) setupAssignedAndHeartbeat(initialHb time.Duration, hbfn 
 	// necessarily run onRevoke before returning (because of a fatal
 	// error).
 	s.assign(g, added)
-
-	// If cooperative consuming, we may have to resume fetches. See the
-	// comment on adjustCooperativeFetchOffsets.
-	//
-	// We do this AFTER the user's callback. If we add more partitions
-	// to `added` that are from a previously canceled fetch, we do NOT
-	// want to pass those fetch-resumed partitions to the user callback
-	// again. See #705.
-	if g.cooperative.Load() {
-		added = g.adjustCooperativeFetchOffsets(added, lost)
-	}
-
 	<-s.assignDone
 
-	if len(added) > 0 {
+	if len(fetch) > 0 {
 		go func() {
 			defer close(s.fetchDone)
 			defer close(fetchErrCh)
-			fetchErrCh <- g.fetchOffsets(ctx, added)
+			fetchErrCh <- g.fetchOffsets(ctx, fetch)
 		}()
 	} else {
 		close(s.fetchDone)
@@ -1903,7 +1905,10 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 //
 // Any time a group is completely lost, the manage loop clears fetching. When
 // cooperative consuming, a hard error is basically losing the entire state and
-// rejoining from scratch.
+// rejoining from scratch. An eager session clears g.fetching before calling
+// this, so nothing carries over and the result is the new assignment.
+//
+// This must be called with g.mu held.
 func (g *groupConsumer) adjustCooperativeFetchOffsets(added, lost map[string][]int32) map[string][]int32 {
 	if g.fetching != nil {
 		// We were fetching previously: remove anything lost.
@@ -1922,18 +1927,21 @@ func (g *groupConsumer) adjustCooperativeFetchOffsets(added, lost map[string][]i
 	} else {
 		// We were not fetching previously: start a new map for what we
 		// are adding.
-		g.fetching = make(map[string]map[int32]struct{})
+		g.fetching = make(map[string]map[int32]EpochOffset)
 	}
 
-	// Merge everything we are newly fetching to our fetching map.
+	// Merge everything we are newly fetching to our fetching map, keeping
+	// the seek a partition already has.
 	for topic, partitions := range added {
 		ft := g.fetching[topic]
 		if ft == nil {
-			ft = make(map[int32]struct{}, len(partitions))
+			ft = make(map[int32]EpochOffset, len(partitions))
 			g.fetching[topic] = ft
 		}
 		for _, partition := range partitions {
-			ft[partition] = struct{}{}
+			if _, ok := ft[partition]; !ok {
+				ft[partition] = EpochOffset{Epoch: -1, Offset: -1}
+			}
 		}
 	}
 
@@ -1952,15 +1960,7 @@ func (g *groupConsumer) adjustCooperativeFetchOffsets(added, lost map[string][]i
 
 // fetchOffsets is issued once we join a group to see what the prior commits
 // were for the partitions we were assigned.
-func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int32) (rerr error) { // we must use "rerr"! see introducing commit
-	// If we fetch successfully, we can clear the cross-group-cycle
-	// fetching tracking.
-	defer func() {
-		if rerr == nil {
-			g.fetching = nil
-		}
-	}()
-
+func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int32) error {
 	// Our client maps the v0 to v7 format to v8+ when sharding this
 	// request, if we are only requesting one group. We iterate the v8+
 	// Groups format in the response rather than the v0-v7 resp.Topics
@@ -2342,12 +2342,11 @@ start:
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	// Eager: we already invalidated everything; nothing to re-invalidate.
-	// Cooperative: assign without invalidating what we are consuming.
-	g.c.assignPartitions(offsets, assignWithoutInvalidating, g.tps, fmt.Sprintf("newly fetched offsets for group %s", g.cfg.group))
-
-	// We need to update the uncommitted map so that SetOffsets(Committed)
-	// does not rewind before the committed offsets we just fetched.
+	// We update the uncommitted map so that SetOffsets(Committed) does not
+	// rewind before the committed offsets we just fetched. A fetched
+	// partition already in g.uncommitted is there from a prior assignment
+	// or from a seek during the fetch; either way the partition starts
+	// over here.
 	if g.uncommitted == nil {
 		g.uncommitted = make(uncommitted, 10)
 	}
@@ -2358,21 +2357,41 @@ start:
 			g.uncommitted[topic] = topicUncommitted
 		}
 		topicCommits := commits[topic]
+		fetchingTopic := g.fetching[topic]
 		for partition, offset := range partitions {
 			commit, hasCommit := topicCommits[partition]
-			if !hasCommit || offset.at != commit.Offset || offset.relative != 0 || offset.afterMilli {
+			var u uncommit
+			// AdjustFetchOffsetsFn can add a partition we did not
+			// fetch, which is not in g.fetching.
+			if seek, ok := fetchingTopic[partition]; ok && seek.Offset >= 0 {
+				// SetOffsets during an OffsetFetch or during
+				// AdjustFetchOffsetsFn takes highest preference.
+				partitions[partition] = Offset{at: seek.Offset, epoch: seek.Epoch}
+				u = uncommit{dirty: seek, head: seek, committed: seek, marked: true}
+				if hasCommit {
+					u.committed, u.hasCommit = commit, true
+				}
+			} else if !hasCommit || offset.at != commit.Offset || offset.relative != 0 || offset.afterMilli {
 				// No commit, or AdjustFetchOffsetsFn replaced the commit
 				// with another offset: the first poll records where
 				// consuming starts, and the partition has no commit
 				// until the next commit succeeds.
+				delete(topicUncommitted, partition)
 				continue
+			} else {
+				// Consuming starts at the fetched commit. Changing only
+				// the epoch, WithEpoch(-1) to skip validation for
+				// example, keeps the commit.
+				u = uncommit{dirty: commit, head: commit, committed: commit, hasCommit: true}
 			}
-			// Consuming starts at the fetched commit. Changing only the
-			// epoch, WithEpoch(-1) to skip validation for example, keeps
-			// the commit.
-			topicUncommitted[partition] = uncommit{dirty: commit, head: commit, committed: commit, hasCommit: true}
+			topicUncommitted[partition] = u
 		}
 	}
+	g.fetching = nil
+
+	// Eager: we already invalidated everything; nothing to re-invalidate.
+	// Cooperative: assign without invalidating what we are consuming.
+	g.c.assignPartitions(offsets, assignWithoutInvalidating, g.tps, fmt.Sprintf("newly fetched offsets for group %s", g.cfg.group))
 	return nil
 }
 
@@ -2493,8 +2512,8 @@ type uncommit struct {
 	// hasCommit is whether the group has a commit for the partition: the
 	// OffsetFetch returned one, or a commit of ours succeeded. Without a
 	// commit, `committed` holds where consuming started, the first polled
-	// record; CommittedOffsets omits the partition, and a transaction
-	// abort rewinds to `committed`.
+	// record or the offset SetOffsets set; CommittedOffsets omits the
+	// partition, and a transaction abort rewinds to `committed`.
 	//
 	// AdjustFetchOffsetsFn can replace a fetched commit with another
 	// offset. The partition then has no commit until the next commit
@@ -2905,46 +2924,71 @@ func (g *groupConsumer) loopCommit() {
 	}
 }
 
-// applySetOffsets applies the given offsets to g.uncommitted for partitions
-// that are currently being consumed, updating their dirty and head fields.
-// `committed` is left alone so that the next commit commits the set offset.
-// Partitions not in g.uncommitted are skipped (per SetOffsets docs: "any extra
-// partitions are skipped"). If any partition's dirty field actually changed,
-// the partition is returned in assigns so the caller can reassign cursors. If
-// all partitions already had the same dirty offset, this returns nil and no
-// cursor reassignment is needed - this is a key optimization for transactions
-// resetting state on abort.
+// applySetOffsets applies the given offsets to g.uncommitted and returns
+// the partitions whose cursor the caller must reassign. `user` is false for
+// a transaction abort's rewind, which does not mark the partition.
 //
-// `user` is false for a transaction abort's rewind, which does not mark the
-// partition.
+// A partition not in g.uncommitted and not assigned to us is not being
+// consumed and is skipped. A partition not in g.uncommitted but assigned to
+// us has no commit and no polled record, so the set offset is where
+// consuming starts. `committed` is otherwise left alone so that the next
+// commit commits the set offset.
+//
+// A partition already at the set offset needs no cursor reassign, which
+// matters for a transaction abort setting every partition to its committed
+// offset. A partition whose offset fetch is in flight has no cursor yet:
+// the seek is recorded in g.fetching and applied once the fetch returns.
 func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOffset, user bool) (assigns map[string]map[int32]Offset) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	groupTopics := g.tps.load()
+	assigned := g.nowAssigned.read()
 
-	if g.uncommitted == nil {
-		return nil
-	}
 	for topic, partitions := range setOffsets {
 		if !groupTopics.hasTopic(topic) {
 			continue // trying to set a topic that was not assigned...
 		}
 		topicUncommitted := g.uncommitted[topic]
-		if topicUncommitted == nil {
-			continue // topic was not being consumed
-		}
+		fetchingTopic := g.fetching[topic]
+		var assignedPartitions map[int32]struct{} // built on the first partition not in g.uncommitted
 		var topicAssigns map[int32]Offset
 		for partition, epochOffset := range partitions {
-			current, exists := topicUncommitted[partition]
-			if !exists || epochOffset.Offset < 0 {
-				continue // partition was not being consumed, or the input is not an offset
+			if epochOffset.Offset < 0 {
+				continue // not an offset
 			}
-			same := current.dirty == epochOffset
+			current, exists := topicUncommitted[partition]
+			if !exists {
+				// We do not check nowAssigned for a partition in
+				// g.uncommitted: while a revoke waits on
+				// AllowRebalance, nowAssigned already holds the next
+				// assignment, and the partition still has a cursor.
+				if assignedPartitions == nil {
+					assignedPartitions = make(map[int32]struct{}, len(assigned[topic]))
+					for _, p := range assigned[topic] {
+						assignedPartitions[p] = struct{}{}
+					}
+				}
+				if _, ok := assignedPartitions[partition]; !ok {
+					continue // partition is not being consumed
+				}
+				if topicUncommitted == nil {
+					if g.uncommitted == nil {
+						g.uncommitted = make(uncommitted)
+					}
+					topicUncommitted = make(map[int32]uncommit)
+					g.uncommitted[topic] = topicUncommitted
+				}
+				current = uncommit{committed: epochOffset}
+			}
+			same := exists && current.dirty == epochOffset
 			current.dirty, current.head = epochOffset, epochOffset
 			current.marked = current.marked || user
 			topicUncommitted[partition] = current
-			// Already at this offset: no cursor to reassign.
+			if _, fetching := fetchingTopic[partition]; fetching {
+				fetchingTopic[partition] = epochOffset
+				continue
+			}
 			if same {
 				continue
 			}

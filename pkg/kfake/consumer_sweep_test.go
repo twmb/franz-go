@@ -72,7 +72,9 @@ func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		direct bool // no group: UncommittedOffsets has nothing to report
-		// load is the request key of partition 0's pending offset load.
+		// load is the request key of partition 0's pending offset load,
+		// or OffsetFetch for the group's own offset fetch, which the test
+		// holds at the broker rather than failing.
 		load kmsg.Key
 		// pend returns a consumer with partition 0's offset load pending.
 		pend func(*testing.T, *Cluster) *kgo.Client
@@ -104,6 +106,20 @@ func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 			commitOffset(t, c, group, topic, 3)
 			return newConsumer(t, c)
 		}},
+
+		{"no commit", false, kmsg.ListOffsets, func(t *testing.T, c *Cluster) *kgo.Client {
+			// No commit and a non-absolute reset: the first load lists
+			// the start offset, and the group tracks nothing for the
+			// partition until the seek.
+			return newConsumer(t, c)
+		}},
+
+		{"during the offset fetch", false, kmsg.OffsetFetch, func(t *testing.T, c *Cluster) *kgo.Client {
+			// The group's offset fetch is pending: the partition has
+			// no cursor and no load, and the seek is kept for the
+			// fetch to start the partition at.
+			return newConsumer(t, c)
+		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -112,19 +128,36 @@ func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 			produceN(t, c, topic, msgs)
 
 			// Fail every load retryably until the seek is in, so the
-			// load is still pending when SetOffsets runs.
-			load := c.Fault(Fault{
-				Keys:  []kmsg.Key{tt.load},
-				Err:   kerr.NotLeaderForPartition,
-				Count: -1,
-			})
-			cl := tt.pend(t, c)
-			waitHits(t, load, 1, "the offset load was never issued")
+			// load is still pending when SetOffsets runs. The group's
+			// offset fetch is held at the broker instead.
+			var (
+				cl      *kgo.Client
+				release func()
+			)
+			if tt.load == kmsg.OffsetFetch {
+				var held <-chan struct{}
+				held, release = hold(c, kmsg.OffsetFetch, 0)
+				cl = tt.pend(t, c)
+				select {
+				case <-held:
+				case <-time.After(15 * time.Second):
+					t.Fatal("the offset fetch was never issued")
+				}
+			} else {
+				load := c.Fault(Fault{
+					Keys:  []kmsg.Key{tt.load},
+					Err:   kerr.NotLeaderForPartition,
+					Count: -1,
+				})
+				cl = tt.pend(t, c)
+				waitHits(t, load, 1, "the offset load was never issued")
+				release = load.Remove
+			}
 
 			cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{
 				topic: {0: {Epoch: -1, Offset: seek}},
 			})
-			load.Remove()
+			release()
 			// A negative offset is not an offset: skipped.
 			cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{
 				topic: {0: {Epoch: -1, Offset: -1}},
@@ -320,63 +353,99 @@ func TestAuditUncommitOrigins(t *testing.T) {
 		// load is the request key the partition first needs records
 		// through. The test fails the request retryably so that the
 		// partition is never polled; 0 polls every record instead.
-		load   kmsg.Key
-		before func(*testing.T, *Cluster) // before the consumer starts
-		adjust func(context.Context, map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error)
-		after  func(*testing.T, *kgo.Client) // once the offset fetch is done
+		load     kmsg.Key
+		before   func(*testing.T, *Cluster) // before the consumer starts
+		assigned func(*kgo.Client)          // in OnPartitionsAssigned, before the offset fetch
+		adjust   func(context.Context, map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error)
+		after    func(*testing.T, *kgo.Client) // once the offset fetch is done
 
 		uncommitted, marked, committed int64 // before any commit
 		afterMarked, afterUncommitted  int64 // the broker's offset after each commit, in that order
 	}{
-		{"nothing tracked", kgo.NewOffset().AfterMilli(time.Now().UnixMilli()), kmsg.ListOffsets, nil, nil, nil,
+		{"nothing tracked", kgo.NewOffset().AfterMilli(time.Now().UnixMilli()), kmsg.ListOffsets, nil, nil, nil, nil,
 			none, none, none, none, none},
 
 		{"fetched commit", start, kmsg.OffsetForLeaderEpoch, func(t *testing.T, c *Cluster) {
 			commitOffset(t, c, group, topic, 3)
-		}, nil, nil, none, none, 3, 3, 3},
+		}, nil, nil, nil, none, none, 3, 3, 3},
 
 		{"fetched commit, adjusted relative", start, 0, func(t *testing.T, c *Cluster) {
 			commitOffset(t, c, group, topic, 3)
-		}, adjust(func(o kgo.Offset) kgo.Offset { return o.Relative(-2) }), func(t *testing.T, cl *kgo.Client) {
+		}, nil, adjust(func(o kgo.Offset) kgo.Offset { return o.Relative(-2) }), func(t *testing.T, cl *kgo.Client) {
 			consumeN(t, cl, msgs-1, 8*time.Second) // from 1
 		}, msgs, none, none, 3, msgs},
 
+		{"a partition the fn added", start, kmsg.OffsetForLeaderEpoch, func(t *testing.T, c *Cluster) {
+			commitOffset(t, c, group, topic, 3)
+		}, nil, func(_ context.Context, fetched map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error) {
+			fetched[topic][1] = kgo.NewOffset().At(7)
+			return fetched, nil
+		}, func(t *testing.T, cl *kgo.Client) {
+			if o, ok := cl.UncommittedOffsets()[topic][1]; ok {
+				t.Errorf("BUG REPRODUCED: a partition the fn added reads as a seek to %d", o.Offset)
+			}
+		}, none, none, 3, 3, 3},
+
 		{"fetched commit, adjusted to the start", start, 0, func(t *testing.T, c *Cluster) {
 			commitOffset(t, c, group, topic, 3)
-		}, adjust(func(o kgo.Offset) kgo.Offset { return o.AtStart() }), func(t *testing.T, cl *kgo.Client) {
+		}, nil, adjust(func(o kgo.Offset) kgo.Offset { return o.AtStart() }), func(t *testing.T, cl *kgo.Client) {
 			consumeN(t, cl, msgs, 8*time.Second)
 		}, msgs, none, none, 3, msgs},
 
 		{"fetched commit, adjusted AfterMilli", start, 0, func(t *testing.T, c *Cluster) {
 			commitOffset(t, c, group, topic, 3)
-		}, adjust(func(o kgo.Offset) kgo.Offset { return o.AfterMilli(3) }), func(t *testing.T, cl *kgo.Client) {
+		}, nil, adjust(func(o kgo.Offset) kgo.Offset { return o.AfterMilli(3) }), func(t *testing.T, cl *kgo.Client) {
 			consumeN(t, cl, msgs, 8*time.Second)
 		}, msgs, none, none, 3, msgs},
 
 		{"fetched commit, adjusted epoch", start, kmsg.Fetch, func(t *testing.T, c *Cluster) {
 			commitOffset(t, c, group, topic, 3)
-		}, adjust(func(o kgo.Offset) kgo.Offset { return o.WithEpoch(-1) }), nil,
+		}, nil, adjust(func(o kgo.Offset) kgo.Offset { return o.WithEpoch(-1) }), nil,
 			none, none, 3, 3, 3},
 
 		{"fetched commit, adjusted exact", start, 0, func(t *testing.T, c *Cluster) {
 			commitOffset(t, c, group, topic, 3)
-		}, adjust(func(o kgo.Offset) kgo.Offset { return o.At(5) }), func(t *testing.T, cl *kgo.Client) {
+		}, nil, adjust(func(o kgo.Offset) kgo.Offset { return o.At(5) }), func(t *testing.T, cl *kgo.Client) {
 			consumeN(t, cl, msgs-5, 8*time.Second) // from 5
 		}, msgs, none, none, 3, msgs},
 
-		{"first poll", start, 0, nil, nil, func(t *testing.T, cl *kgo.Client) {
+		{"first poll", start, 0, nil, nil, nil, func(t *testing.T, cl *kgo.Client) {
 			consumeN(t, cl, msgs, 8*time.Second)
 		}, msgs, none, none, none, msgs},
 
-		{"first poll, then a mark", start, 0, nil, nil, func(t *testing.T, cl *kgo.Client) {
+		{"first poll, then a mark", start, 0, nil, nil, nil, func(t *testing.T, cl *kgo.Client) {
 			consumeN(t, cl, msgs, 8*time.Second)
 			cl.MarkCommitOffsets(map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: 4}}})
 		}, msgs, 4, none, 4, msgs},
 
-		{"a mark before the first poll", start, kmsg.ListOffsets, nil, nil, func(t *testing.T, cl *kgo.Client) {
+		{"SetOffsets before the first poll", start, kmsg.ListOffsets, nil, nil, nil, func(t *testing.T, cl *kgo.Client) {
+			cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: 5}}})
+		}, 5, 5, none, 5, 5},
+
+		{"SetOffsets in OnPartitionsAssigned", start, 0, nil, func(cl *kgo.Client) {
+			cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: 7}}})
+		}, nil, func(t *testing.T, cl *kgo.Client) {
+			consumeN(t, cl, msgs-7, 8*time.Second) // from 7, the seek, not the start
+		}, msgs, 7, none, 7, msgs},
+
+		{"SetOffsets in OnPartitionsAssigned, over a commit", start, 0, func(t *testing.T, c *Cluster) {
+			commitOffset(t, c, group, topic, 3)
+		}, func(cl *kgo.Client) {
+			cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: 7}}})
+		}, nil, func(t *testing.T, cl *kgo.Client) {
+			consumeN(t, cl, msgs-7, 8*time.Second) // from 7, the seek, not the commit
+		}, msgs, 7, 3, 7, msgs},
+
+		{"a mark before the first poll", start, kmsg.ListOffsets, nil, nil, nil, func(t *testing.T, cl *kgo.Client) {
 			// The partition is not being consumed yet: the mark is dropped.
 			cl.MarkCommitOffsets(map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: 7}}})
 		}, none, none, none, none, none},
+
+		{"a mark, then SetOffsets, before the first poll", start, kmsg.ListOffsets, nil, nil, nil, func(t *testing.T, cl *kgo.Client) {
+			seek := map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: 7}}}
+			cl.MarkCommitOffsets(seek)
+			cl.SetOffsets(seek)
+		}, 7, 7, none, 7, 7},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -390,7 +459,7 @@ func TestAuditUncommitOrigins(t *testing.T) {
 			if tt.load != 0 {
 				load = c.Fault(Fault{Keys: []kmsg.Key{tt.load}, Err: kerr.NotLeaderForPartition, Count: -1})
 			}
-			cl := newPlainClient(t, c,
+			opts := []kgo.Opt{
 				kgo.ConsumeTopics(topic),
 				kgo.ConsumerGroup(group),
 				kgo.ConsumeResetOffset(tt.reset),
@@ -398,8 +467,12 @@ func TestAuditUncommitOrigins(t *testing.T) {
 				kgo.AutoCommitMarks(),
 				kgo.AutoCommitInterval(time.Hour), // only the manual commits below
 				kgo.DisableFetchSessions(),
-				kgo.FetchMaxWait(100*time.Millisecond),
-			)
+				kgo.FetchMaxWait(100 * time.Millisecond),
+			}
+			if tt.assigned != nil {
+				opts = append(opts, kgo.OnPartitionsAssigned(func(_ context.Context, cl *kgo.Client, _ map[string][]int32) { tt.assigned(cl) }))
+			}
+			cl := newPlainClient(t, c, opts...)
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			if load != nil {
