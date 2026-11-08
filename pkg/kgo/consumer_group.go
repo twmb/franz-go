@@ -847,6 +847,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 					lost[topic] = partitions
 					delete(nowAssigned, topic)
 					delete(g.lastAssigned, topic)
+					delete(g.fetching, topic) // or the next OffsetFetch asks for a topic we no longer consume
 				}
 			}
 		})
