@@ -99,6 +99,12 @@ type producer struct {
 	// partition was marked addedToTxn client-side (marking happens only
 	// on produce success).
 	producedInTxn atomic.Bool
+
+	// addingToTxn counts built AddPartitionsToTxn requests that have not
+	// finished. Flush waits for it: a metadata load error can fail the
+	// batches of an add that is still retrying. We increment under the
+	// batch's recBuf.mu and decrement under mu.
+	addingToTxn atomic.Int32
 }
 
 // BufferedProduceRecords returns the number of records currently buffered for
@@ -1480,7 +1486,7 @@ func (cl *Client) Flush(ctx context.Context) error {
 		defer p.mu.Unlock()
 		defer close(done)
 
-		for !quit && p.bufferedRecords+int64(p.blocked.Load()) > 0 {
+		for !quit && p.bufferedRecords+int64(p.blocked.Load())+int64(p.addingToTxn.Load()) > 0 {
 			p.c.Wait()
 		}
 	}()
