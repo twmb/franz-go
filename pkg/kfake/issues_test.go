@@ -1520,6 +1520,45 @@ func TestFirstMetadataPartitionErrors(t *testing.T) {
 	}
 }
 
+// TestMetadataLeaderNotInBrokers serves metadata that leads partition 0 with
+// a broker it does not list, as #1526 reports Redpanda doing. fetchTopicMetadata must
+// report the partition as LEADER_NOT_AVAILABLE so unkeyed records avoid it.
+func TestMetadataLeaderNotInBrokers(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(2), SeedTopics(2, "t"))
+	for p := range int32(2) {
+		if err := c.MoveTopicPartition("t", p, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cl := newPlainClient(t, c,
+		kgo.DefaultProduceTopic("t"),
+		kgo.RecordPartitioner(kgo.RoundRobinPartitioner()),
+	)
+
+	// Serve metadata that leads partition 0 with broker 0 but lists only
+	// broker 1.
+	canned := captureMetadata(t, cl, "t")
+	canned.Brokers = slices.DeleteFunc(canned.Brokers, func(b kmsg.MetadataResponseBroker) bool { return b.NodeID == 0 })
+	serveStaleMetadata(c, canned)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for i := range 4 {
+		r := kgo.StringRecord("v")
+		if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+			t.Fatalf("record %d on partition %d: %v", i, r.Partition, err)
+		}
+		if r.Partition != 1 {
+			t.Fatalf("record %d went to partition %d, want 1: broker 0 is not in the broker list", i, r.Partition)
+		}
+	}
+	if _, _, err := cl.PartitionLeader("t", 0); !errors.Is(err, kerr.LeaderNotAvailable) {
+		t.Fatalf("partition 0 load error = %v, want LEADER_NOT_AVAILABLE", err)
+	}
+}
+
 // TestIssue1331 verifies that the leaderEpoch=-1 "no leader" sentinel is never
 // accepted as a partition's leader epoch, even when the leaderless window spans
 // more than maxEpochRewinds (5) metadata refreshes.

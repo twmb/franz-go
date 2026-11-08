@@ -683,6 +683,11 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string, prune bool) (
 	// odd set of support.
 	useLeaderEpoch := cl.supportsOffsetForLeaderEpoch()
 
+	brokers := make(map[int32]struct{}, len(meta.Brokers))
+	for i := range meta.Brokers {
+		brokers[meta.Brokers[i].NodeID] = struct{}{}
+	}
+
 	for i := range meta.Topics {
 		topicMeta := &meta.Topics[i]
 		if topicMeta.Topic == nil {
@@ -741,6 +746,18 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string, prune bool) (
 				loadErr:     partMeta.ErrorCode,
 				leader:      partMeta.Leader,
 				leaderEpoch: leaderEpoch,
+			}
+			// Kafka only names a partition leader that is in Brokers:
+			// a leader that is not an alive broker is reported as
+			// LEADER_NOT_AVAILABLE with leader -1. #1526 reports
+			// Redpanda naming a leader it did not list for minutes
+			// after a network partition healed. We have no address
+			// for such a leader, so we report the partition as Kafka
+			// would.
+			if mp.loadErr == 0 {
+				if _, ok := brokers[mp.leader]; !ok {
+					mp.loadErr = kerr.LeaderNotAvailable.Code
+				}
 			}
 			if mp.loadErr != 0 {
 				mp.leader = unknownSeedID(0) // ensure every records & cursor can use a sink or source
