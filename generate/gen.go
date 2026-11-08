@@ -35,85 +35,89 @@ func (s Struct) TypeName() string {
 }
 
 func (e Enum) TypeName() string { return e.Name }
-func (e Enum) WriteAppend(l *LineWriter) {
-	l.Write("{")
-	l.Write("v := %s(v)", e.Type.TypeName())
-	e.Type.WriteAppend(l)
-	l.Write("}")
+
+// writeAppendValue appends val, a value of t, for any t but a struct or an
+// array: every other type is appended with one call, mostly to a function in
+// codec.go.
+func writeAppendValue(l *LineWriter, t Type, val string) {
+	switch t := t.(type) {
+	case Bool:
+		l.Write("dst = appendBool(dst, %s)", val)
+	case Int8:
+		l.Write("dst = appendInt8(dst, %s)", val)
+	case Int16:
+		l.Write("dst = appendInt16(dst, %s)", val)
+	case Uint16:
+		l.Write("dst = appendUint16(dst, %s)", val)
+	case Int32, Throttle, Timeout:
+		l.Write("dst = appendInt32(dst, %s)", val)
+	case Uint32:
+		l.Write("dst = kbin.AppendUint32(dst, %s)", val)
+	case Int64:
+		l.Write("dst = appendInt64(dst, %s)", val)
+	case Uuid:
+		l.Write("dst = appendUuid(dst, %s)", val)
+	case Float64:
+		l.Write("dst = kbin.AppendFloat64(dst, %s)", val)
+	case Varint:
+		l.Write("dst = kbin.AppendVarint(dst, %s)", val)
+	case Varlong:
+		l.Write("dst = kbin.AppendVarlong(dst, %s)", val)
+	case VarintString:
+		l.Write("dst = kbin.AppendVarintString(dst, %s)", val)
+	case VarintBytes:
+		l.Write("dst = kbin.AppendVarintBytes(dst, %s)", val)
+	case String:
+		compactAppend(t.FromFlexible, "String", val, l)
+	case Bytes:
+		compactAppend(t.FromFlexible, "Bytes", val, l)
+	case NullableBytes:
+		compactAppend(t.FromFlexible, "NullableBytes", val, l)
+	case NullableString:
+		if t.NullableVersion > 0 {
+			l.Write("if version < %d {", t.NullableVersion)
+			l.Write("var vv string")
+			l.Write("if %s != nil {", val)
+			l.Write("vv = *%s", val)
+			l.Write("}")
+			compactAppend(t.FromFlexible, "String", "vv", l)
+			l.Write("} else {")
+			defer l.Write("}")
+		}
+		compactAppend(t.FromFlexible, "NullableString", val, l)
+	case FieldLengthMinusBytes:
+		l.Write("dst = append(dst, %s...)", val)
+	case Enum:
+		writeAppendValue(l, t.Type, t.Type.TypeName()+"("+val+")")
+	default:
+		die("no append for %T", t)
+	}
 }
 
-func (e Enum) WriteDecode(l *LineWriter) {
-	l.Write("var t %s", e.Name)
-	l.Write("{")
-	e.Type.WriteDecode(l)
-	l.Write("t = %s(v)", e.Name)
-	l.Write("}")
-	l.Write("v := t")
-}
-
-// primAppend corresponds to the primitive append functions in
-// kmsg/primitives.go.
-func primAppend(name string, l *LineWriter) {
-	l.Write("dst = kbin.Append%s(dst, v)", name)
-}
-
-func compactAppend(fromFlexible bool, name string, l *LineWriter) {
+func compactAppend(fromFlexible bool, name, val string, l *LineWriter) {
 	if fromFlexible {
-		l.Write("if isFlexible {")
-		primAppend("Compact"+name, l)
-		l.Write("} else {")
-		defer l.Write("}")
+		l.Write("dst = append%s(dst, %s, isFlexible)", name, val) // see codec.go
+		return
 	}
-	primAppend(name, l)
+	l.Write("dst = kbin.Append%s(dst, %s)", name, val)
 }
 
-func (Bool) WriteAppend(l *LineWriter)         { primAppend("Bool", l) }
-func (Int8) WriteAppend(l *LineWriter)         { primAppend("Int8", l) }
-func (Int16) WriteAppend(l *LineWriter)        { primAppend("Int16", l) }
-func (Uint16) WriteAppend(l *LineWriter)       { primAppend("Uint16", l) }
-func (Int32) WriteAppend(l *LineWriter)        { primAppend("Int32", l) }
-func (Int64) WriteAppend(l *LineWriter)        { primAppend("Int64", l) }
-func (Float64) WriteAppend(l *LineWriter)      { primAppend("Float64", l) }
-func (Uint32) WriteAppend(l *LineWriter)       { primAppend("Uint32", l) }
-func (Varint) WriteAppend(l *LineWriter)       { primAppend("Varint", l) }
-func (Varlong) WriteAppend(l *LineWriter)      { primAppend("Varlong", l) }
-func (Uuid) WriteAppend(l *LineWriter)         { primAppend("Uuid", l) }
-func (VarintString) WriteAppend(l *LineWriter) { primAppend("VarintString", l) }
-func (VarintBytes) WriteAppend(l *LineWriter)  { primAppend("VarintBytes", l) }
-func (Throttle) WriteAppend(l *LineWriter)     { primAppend("Int32", l) }
-
-func (v String) WriteAppend(l *LineWriter) { compactAppend(v.FromFlexible, "String", l) }
-func (v NullableString) WriteAppend(l *LineWriter) {
-	if v.NullableVersion > 0 {
-		l.Write("if version < %d {", v.NullableVersion)
-		l.Write("var vv string")
-		l.Write("if v != nil {")
-		l.Write("vv = *v")
-		l.Write("}")
-		l.Write("{")
-		l.Write("v := vv")
-		compactAppend(v.FromFlexible, "String", l)
-		l.Write("}")
-		l.Write("} else {")
-		defer l.Write("}")
+// writeAppendV appends v, a value of t that the caller declared.
+func writeAppendV(l *LineWriter, t Type) {
+	switch t := t.(type) {
+	case Struct:
+		t.WriteAppend(l)
+	case Array:
+		t.WriteAppend(l)
+	default:
+		writeAppendValue(l, t, "v")
 	}
-	compactAppend(v.FromFlexible, "NullableString", l)
-}
-func (v Bytes) WriteAppend(l *LineWriter)         { compactAppend(v.FromFlexible, "Bytes", l) }
-func (v NullableBytes) WriteAppend(l *LineWriter) { compactAppend(v.FromFlexible, "NullableBytes", l) }
-
-func (FieldLengthMinusBytes) WriteAppend(l *LineWriter) {
-	l.Write("dst = append(dst, v...)")
 }
 
 func (a Array) WriteAppend(l *LineWriter) {
 	writeNullable := func() {
 		if a.FromFlexible {
-			l.Write("if isFlexible {")
-			l.Write("dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)")
-			l.Write("} else {")
-			l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
-			l.Write("}")
+			l.Write("dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)") // see codec.go
 		} else {
 			l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
 		}
@@ -121,11 +125,7 @@ func (a Array) WriteAppend(l *LineWriter) {
 
 	writeNormal := func() {
 		if a.FromFlexible {
-			l.Write("if isFlexible {")
-			l.Write("dst = kbin.AppendCompactArrayLen(dst, len(v))")
-			l.Write("} else {")
-			l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
-			l.Write("}")
+			l.Write("dst = appendArrayLen(dst, len(v), isFlexible)") // see codec.go
 		} else {
 			l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
 		}
@@ -148,14 +148,22 @@ func (a Array) WriteAppend(l *LineWriter) {
 		writeNormal()
 	}
 	l.Write("for i := range v {")
-	if s, isStruct := a.Inner.(Struct); isStruct && !s.Nullable {
+	switch t := a.Inner.(type) {
+	case Struct:
 		// If the array elements are structs, we avoid copying the
 		// struct out and instead grab a pointer to the element.
-		l.Write("v := &v[i]")
-	} else {
+		if t.Nullable {
+			l.Write("v := v[i]")
+		} else {
+			l.Write("v := &v[i]")
+		}
+		t.WriteAppend(l)
+	case Array:
 		l.Write("v := v[i]")
+		t.WriteAppend(l)
+	default:
+		writeAppendValue(l, t, "v[i]")
 	}
-	a.Inner.WriteAppend(l)
 	l.Write("}")
 }
 
@@ -172,14 +180,22 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		if onlyTag := f.writeBeginAndTag(l, tags); onlyTag {
 			continue
 		}
-		// If the struct field is a struct itself, we avoid copying it
-		// and instead grab a pointer.
-		if s, isStruct := f.Type.(Struct); isStruct && !s.Nullable {
-			l.Write("v := &v.%s", f.FieldName)
-		} else {
+		switch t := f.Type.(type) {
+		case Struct:
+			// If the struct field is a struct itself, we avoid copying it
+			// and instead grab a pointer.
+			if t.Nullable {
+				l.Write("v := v.%s", f.FieldName)
+			} else {
+				l.Write("v := &v.%s", f.FieldName)
+			}
+			t.WriteAppend(l)
+		case Array:
 			l.Write("v := v.%s", f.FieldName)
+			t.WriteAppend(l)
+		default:
+			writeAppendValue(l, t, "v."+f.FieldName)
 		}
-		f.Type.WriteAppend(l)
 		l.Write("}")
 	}
 
@@ -190,9 +206,9 @@ func (s Struct) WriteAppend(l *LineWriter) {
 	l.Write("if isFlexible {")
 	defer l.Write("}")
 
-	defer l.Write("dst = v.UnknownTags.AppendEach(dst)")
-
 	if len(tags) > 0 {
+		defer l.Write("dst = v.UnknownTags.AppendEach(dst)")
+
 		l.Write("var toEncode []uint32")
 		for i := range len(tags) {
 			f := tags[i]
@@ -205,7 +221,7 @@ func (s Struct) WriteAppend(l *LineWriter) {
 				}
 				switch t := f.Type.(type) {
 				case Struct:
-					l.Write("if !reflect.DeepEqual(v.%s, %v) {", f.FieldName, def)
+					l.Write("if %s {", strings.Join(notDefault("v."+f.FieldName, t), " || "))
 
 				case Array:
 					if t.IsNullableArray {
@@ -231,12 +247,7 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		defer l.Write("}")
 	} else {
 		// No defined tags, we add unknown only.
-		//
-		// We keep a 0+ at the beginning for now to not cause a large
-		// delta on the generated code (previous versions of the
-		// generator did something slightly different here). This can
-		// be removed someday.
-		l.Write("dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))")
+		l.Write("dst = v.UnknownTags.appendWithCount(dst)")
 	}
 
 	for i := range len(tags) {
@@ -249,30 +260,30 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		switch f.Type.(type) {
 		case Bool, Int8:
 			l.Write("dst = kbin.AppendUvarint(dst, 1)") // size
-			f.Type.WriteAppend(l)
+			writeAppendV(l, f.Type)
 		case Int16, Uint16:
 			l.Write("dst = kbin.AppendUvarint(dst, 2)")
-			f.Type.WriteAppend(l)
+			writeAppendV(l, f.Type)
 		case Int32, Uint32:
 			l.Write("dst = kbin.AppendUvarint(dst, 4)")
-			f.Type.WriteAppend(l)
+			writeAppendV(l, f.Type)
 		case Int64, Float64:
 			l.Write("dst = kbin.AppendUvarint(dst, 8)")
-			f.Type.WriteAppend(l)
+			writeAppendV(l, f.Type)
 		case Varint:
 			l.Write("dst = kbin.AppendUvarint(dst, kbin.VarintLen(v))")
-			f.Type.WriteAppend(l)
+			writeAppendV(l, f.Type)
 		case Varlong:
 			l.Write("dst = kbin.AppendUvarint(dst, kbin.VarlongLen(v))")
-			f.Type.WriteAppend(l)
+			writeAppendV(l, f.Type)
 		case Uuid:
 			l.Write("dst = kbin.AppendUvarint(dst, 16)")
-			f.Type.WriteAppend(l)
+			writeAppendV(l, f.Type)
 		case Array, Struct, String, NullableString, Bytes, NullableBytes:
 			l.Write("sized := false")
 			l.Write("lenAt := len(dst)")
 			l.Write("f%s:", f.FieldName)
-			f.Type.WriteAppend(l)
+			writeAppendV(l, f.Type)
 			l.Write("if !sized {")
 			l.Write("dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))")
 			l.Write("sized = true")
@@ -283,6 +294,42 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		}
 		l.Write("}")
 	}
+}
+
+// notDefault returns the conditions under which expr, a value of type t,
+// differs from its default; a tagged field is encoded if any is true.
+func notDefault(expr string, t Type) []string {
+	switch t := t.(type) {
+	case Struct:
+		if t.Nullable {
+			return []string{expr + " != nil"}
+		}
+		var conds []string
+		for _, f := range t.Fields {
+			conds = append(conds, notDefault(expr+"."+f.FieldName, f.Type)...)
+		}
+		if t.FromFlexible {
+			conds = append(conds, expr+".UnknownTags.Len() > 0")
+		}
+		return conds
+	case Array:
+		if t.IsNullableArray {
+			return []string{expr + " != nil"}
+		}
+		return []string{"len(" + expr + ") > 0"}
+	case Bytes, VarintBytes:
+		return []string{"len(" + expr + ") > 0"}
+	case String, VarintString:
+		return []string{expr + ` != ""`}
+	case Defaulter:
+		def, has := t.GetDefault()
+		if !has {
+			def = t.GetTypeDefault()
+		}
+		return []string{fmt.Sprintf("%s != %v", expr, def)}
+	}
+	die("no default comparison for %T", t)
+	return nil
 }
 
 // writeBeginAndTag begins a struct field encode/decode and adds the field to
@@ -305,114 +352,77 @@ func (f StructField) writeBeginAndTag(l *LineWriter, tags map[int]StructField) (
 	return false
 }
 
-// primDecode corresponds to the binreader primitive decoding functions in
-// kmsg/primitives.go.
-func primDecode(name string, l *LineWriter) {
-	l.Write("v := b.%s()", name)
-}
-
-func unsafeDecode(l *LineWriter, fn func(string)) {
-	l.Write("if unsafe {")
-	fn("Unsafe")
-	l.Write("} else {")
-	fn("")
-	l.Write("}")
-}
-
-func flexDecode(supports bool, l *LineWriter, fn func(string)) {
-	if supports {
-		l.Write("if isFlexible {")
-		fn("Compact")
-		l.Write("} else {")
-		defer l.Write("}")
+// writeDecodeInto decodes into dst for any t but a struct or an array: every
+// other type is decoded with one call, mostly to a function in codec.go. The
+// functions for strings and bytes store into dst themselves, so that the store
+// and its write barrier are not repeated at every field.
+func writeDecodeInto(l *LineWriter, t Type, dst string) {
+	flex := func(fromFlexible bool) string {
+		if fromFlexible {
+			return "isFlexible"
+		}
+		return "false"
 	}
-	fn("")
-}
-
-func primUnsafeDecode(name string, l *LineWriter) {
-	l.Write("var v string")
-	unsafeDecode(l, func(u string) {
-		l.Write("v = b.%s%s()", u, name)
-	})
-}
-
-func compactDecode(fromFlexible, hasUnsafe bool, name, typ string, l *LineWriter) {
-	if fromFlexible {
-		l.Write("var v %s", typ)
-		fn := func(u string) {
-			l.Write("if isFlexible {")
-			l.Write("v = b.%sCompact%s()", u, name)
+	switch t := t.(type) {
+	case String:
+		l.Write("readString(&b, &%s, %s, unsafe)", dst, flex(t.FromFlexible))
+	case Bytes:
+		l.Write("readBytes(&b, &%s, %s)", dst, flex(t.FromFlexible))
+	case NullableBytes:
+		l.Write("readNullableBytes(&b, &%s, %s)", dst, flex(t.FromFlexible))
+	case VarintString:
+		l.Write("readVarintString(&b, &%s, unsafe)", dst)
+	case VarintBytes:
+		l.Write("readVarintBytes(&b, &%s)", dst)
+	case NullableString:
+		// If there is a nullable version, we write a "read string, then
+		// set pointer" block.
+		if t.NullableVersion > 0 {
+			l.Write("if version < %d {", t.NullableVersion)
+			l.Write("v := new(string)")
+			l.Write("readString(&b, v, %s, unsafe)", flex(t.FromFlexible))
+			l.Write("%s = v", dst)
 			l.Write("} else {")
-			l.Write("v = b.%s%s()", u, name)
-			l.Write("}")
+			defer l.Write("}")
 		}
-		if hasUnsafe {
-			unsafeDecode(l, fn)
-		} else {
-			fn("")
-		}
-	} else {
-		if hasUnsafe {
-			primUnsafeDecode(name, l)
-		} else {
-			primDecode(name, l)
-		}
+		l.Write("readNullableString(&b, &%s, %s, unsafe)", dst, flex(t.FromFlexible))
+	case FieldLengthMinusBytes:
+		l.Write("%s = b.Span(int(s.%s) - %d)", dst, t.Field, t.LengthMinus)
+	default:
+		l.Write("%s = %s", dst, readExpr(t))
 	}
 }
 
-func (Bool) WriteDecode(l *LineWriter)         { primDecode("Bool", l) }
-func (Int8) WriteDecode(l *LineWriter)         { primDecode("Int8", l) }
-func (Int16) WriteDecode(l *LineWriter)        { primDecode("Int16", l) }
-func (Uint16) WriteDecode(l *LineWriter)       { primDecode("Uint16", l) }
-func (Int32) WriteDecode(l *LineWriter)        { primDecode("Int32", l) }
-func (Int64) WriteDecode(l *LineWriter)        { primDecode("Int64", l) }
-func (Float64) WriteDecode(l *LineWriter)      { primDecode("Float64", l) }
-func (Uint32) WriteDecode(l *LineWriter)       { primDecode("Uint32", l) }
-func (Varint) WriteDecode(l *LineWriter)       { primDecode("Varint", l) }
-func (Varlong) WriteDecode(l *LineWriter)      { primDecode("Varlong", l) }
-func (Uuid) WriteDecode(l *LineWriter)         { primDecode("Uuid", l) }
-func (VarintString) WriteDecode(l *LineWriter) { primUnsafeDecode("VarintString", l) }
-func (VarintBytes) WriteDecode(l *LineWriter)  { primDecode("VarintBytes", l) }
-func (Throttle) WriteDecode(l *LineWriter)     { primDecode("Int32", l) }
-
-func (v String) WriteDecode(l *LineWriter) {
-	compactDecode(v.FromFlexible, true, "String", "string", l)
-}
-
-func (v Bytes) WriteDecode(l *LineWriter) {
-	compactDecode(v.FromFlexible, false, "Bytes", "[]byte", l)
-}
-
-func (v NullableBytes) WriteDecode(l *LineWriter) {
-	compactDecode(v.FromFlexible, false, "NullableBytes", "[]byte", l)
-}
-
-func (v NullableString) WriteDecode(l *LineWriter) {
-	// If there is a nullable version, we write a "read string, then set
-	// pointer" block.
-	l.Write("var v *string")
-	if v.NullableVersion > 0 {
-		l.Write("if version < %d {", v.NullableVersion)
-		l.Write("var vv string")
-		flexDecode(v.FromFlexible, l, func(compact string) {
-			unsafeDecode(l, func(u string) {
-				l.Write("vv = b.%s%sString()", u, compact)
-			})
-		})
-		l.Write("v = &vv")
-		l.Write("} else {")
-		defer l.Write("}")
+// readExpr returns the expression reading a fixed size or varint t.
+func readExpr(t Type) string {
+	switch t := t.(type) {
+	case Bool:
+		return "readBool(&b)"
+	case Int8:
+		return "readInt8(&b)"
+	case Int16:
+		return "readInt16(&b)"
+	case Uint16:
+		return "readUint16(&b)"
+	case Int32, Throttle, Timeout:
+		return "readInt32(&b)"
+	case Uint32:
+		return "b.Uint32()"
+	case Int64:
+		return "readInt64(&b)"
+	case Uuid:
+		return "readUuid(&b)"
+	case Float64:
+		return "b.Float64()"
+	case Varint:
+		return "b.Varint()"
+	case Varlong:
+		return "b.Varlong()"
+	case Enum:
+		return t.Name + "(" + readExpr(t.Type) + ")"
 	}
-
-	flexDecode(v.FromFlexible, l, func(compact string) {
-		unsafeDecode(l, func(u string) {
-			l.Write("v = b.%s%sNullableString()", u, compact)
-		})
-	})
-}
-
-func (f FieldLengthMinusBytes) WriteDecode(l *LineWriter) {
-	l.Write("v := b.Span(int(s.%s) - %d)", f.Field, f.LengthMinus)
+	die("no read for %T", t)
+	return ""
 }
 
 func (a Array) WriteDecode(l *LineWriter) {
@@ -425,9 +435,11 @@ func (a Array) WriteDecode(l *LineWriter) {
 	if a.IsVarintArray {
 		l.Write("l = b.VarintArrayLen()")
 	} else {
-		flexDecode(a.FromFlexible, l, func(compact string) {
-			l.Write("l = b.%sArrayLen()", compact)
-		})
+		if a.FromFlexible {
+			l.Write("l = readArrayLen(&b, isFlexible)") // see codec.go
+		} else {
+			l.Write("l = b.ArrayLen()")
+		}
 		if a.IsNullableArray {
 			l.Write("if version < %d || l == 0 {", a.NullableVersion)
 			l.Write("a = %s{}", a.TypeName())
@@ -435,9 +447,7 @@ func (a Array) WriteDecode(l *LineWriter) {
 		}
 	}
 
-	l.Write("if !b.Ok() {")
-	l.Write("return b.Complete()")
-	l.Write("}")
+	a.writeLenBound(l)
 
 	l.Write("a = a[:0]")
 
@@ -445,7 +455,7 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("a = append(a, make(%s, l)...)", a.TypeName())
 	l.Write("}")
 
-	l.Write("for i := int32(0); i < l; i++ {")
+	l.Write("for i := range a {")
 	switch t := a.Inner.(type) {
 	case Struct:
 		if t.Nullable {
@@ -454,27 +464,145 @@ func (a Array) WriteDecode(l *LineWriter) {
 		}
 		l.Write("v := &a[i]")
 		l.Write("v.Default()") // set defaults first
+		t.WriteDecode(l)
 	case Array:
 		// With nested arrays, we declare a new v and introduce scope
 		// so that the next level will not collide with our current "a".
 		l.Write("v := a[i]")
 		l.Write("{")
-	}
-
-	a.Inner.WriteDecode(l)
-
-	if _, isArray := a.Inner.(Array); isArray {
-		// With nested arrays, now we release our scope.
+		t.WriteDecode(l)
 		l.Write("}")
-	}
-
-	if _, isStruct := a.Inner.(Struct); !isStruct {
 		l.Write("a[i] = v")
+	default:
+		writeDecodeInto(l, t, "a[i]")
 	}
 
 	l.Write("}") // close the for loop
 
 	l.Write("v = a")
+}
+
+// writeLenBound fails a decode if reading l failed, or if l elements, each at
+// least its fewest encoded bytes, cannot fit in the bytes left. The ArrayLen
+// functions allow a byte per element, but we allocate every element before
+// reading any, and an element can take hundreds of bytes in memory.
+//
+// The fewest bytes can change with version; we check the size of the latest
+// versions, and the smallest size of every version before them. We do not
+// know here which versions are flexible, so a size is the smaller of the
+// flexible and non-flexible sizes.
+func (a Array) writeLenBound(l *LineWriter) {
+	size := func(v int) int {
+		return min(minSize(a.Inner, v, false), minSize(a.Inner, v, true))
+	}
+	last := lastVersionChange(a.Inner)
+	latest := size(last)
+	since, least := last, latest
+	for v := last - 1; v >= -1; v-- { // -1 is every negative version
+		n := size(v)
+		if n == latest && since == v+1 {
+			since = v
+		}
+		least = min(least, n)
+	}
+	conds := []string{"!b.Ok()"}
+	if least > 1 {
+		conds = append(conds, fmt.Sprintf("int64(l)*%d > int64(len(b.Src))", least))
+	}
+	if latest > least {
+		conds = append(conds, fmt.Sprintf("version >= %d && int64(l)*%d > int64(len(b.Src))", since, latest))
+	}
+	l.Write("if %s {", strings.Join(conds, " || "))
+	l.Write("return kbin.ErrNotEnoughData")
+	l.Write("}")
+}
+
+// minSize returns the fewest bytes t can be encoded in at version, if the
+// version is flexible or not.
+func minSize(t Type, version int, flexible bool) int {
+	switch t := t.(type) {
+	case Bool, Int8, Varint, Varlong, VarintString, VarintBytes:
+		return 1
+	case Int16, Uint16:
+		return 2
+	case Int32, Uint32, Throttle, Timeout:
+		return 4
+	case Int64, Float64:
+		return 8
+	case Uuid:
+		return 16
+	case FieldLengthMinusBytes:
+		return 0
+	case Enum:
+		return minSize(t.Type, version, flexible)
+	case String:
+		return lenSize(t.FromFlexible && flexible, 2)
+	case NullableString:
+		return lenSize(t.FromFlexible && flexible, 2)
+	case Bytes:
+		return lenSize(t.FromFlexible && flexible, 4)
+	case NullableBytes:
+		return lenSize(t.FromFlexible && flexible, 4)
+	case Array:
+		return lenSize(t.FromFlexible && flexible || t.IsVarintArray, 4)
+	case Struct:
+		if t.Nullable {
+			return 1
+		}
+		fields := t.Fields
+		if t.WithVersionField {
+			fields = fields[1:] // see Struct.WriteDecode
+		}
+		var n int
+		for _, f := range fields {
+			if f.inBody(version) {
+				n += minSize(f.Type, version, flexible)
+			}
+		}
+		if t.FromFlexible && flexible {
+			n++ // the tag count
+		}
+		return n
+	}
+	die("unknown type %T for minSize", t)
+	return 0
+}
+
+// lenSize returns the fewest bytes of a length: a one byte uvarint if compact,
+// or the classic size.
+func lenSize(compact bool, classic int) int {
+	if compact {
+		return 1
+	}
+	return classic
+}
+
+// inBody returns whether f is decoded outside of tags at version, matching
+// writeBeginAndTag.
+func (f StructField) inBody(version int) bool {
+	switch {
+	case f.MaxVersion > -1:
+		return version >= f.MinVersion && version <= f.MaxVersion
+	case f.MinVersion > 0:
+		return version >= f.MinVersion
+	case f.MinVersion == -1:
+		return false
+	default:
+		return true
+	}
+}
+
+// lastVersionChange returns the version from which minSize(t) stops changing.
+func lastVersionChange(t Type) int {
+	s, ok := t.(Struct)
+	if !ok || s.Nullable {
+		return 0
+	}
+	var last int
+	for _, f := range s.Fields {
+		last = max(last, f.MinVersion, f.MaxVersion+1, lastVersionChange(f.Type))
+	}
+	return last
 }
 
 func (f StructField) WriteDecode(l *LineWriter) {
@@ -491,20 +619,16 @@ func (f StructField) WriteDecode(l *LineWriter) {
 			l.Write("v := &s.%s", f.FieldName)
 		}
 		l.Write("v.Default()")
+		t.WriteDecode(l)
 	case Array:
 		// For arrays, we need to copy the array into a v
-		// field so that the array function can use it.
+		// field so that the array function can use it, and then
+		// copy the changes back.
 		l.Write("v := s.%s", f.FieldName)
-	default:
-		// All other types use primDecode, which does a `v :=`.
-	}
-	f.Type.WriteDecode(l)
-
-	_, isStruct := f.Type.(Struct)
-	if !isStruct {
-		// If the field was not a struct or it was a nullable struct,
-		// we need to copy the changes back.
+		t.WriteDecode(l)
 		l.Write("s.%s = v", f.FieldName)
+	default:
+		writeDecodeInto(l, t, "s."+f.FieldName)
 	}
 }
 
@@ -541,13 +665,13 @@ func (s Struct) WriteDecode(l *LineWriter) {
 
 	l.Write("if isFlexible {")
 	if len(tags) == 0 {
-		l.Write("s.UnknownTags = internalReadTags(&b)")
+		l.Write("internalReadTags(&b, &s.UnknownTags)")
 		l.Write("}")
 		return
 	}
 	defer l.Write("}")
 
-	l.Write("for i := b.Uvarint(); i > 0; i-- {")
+	l.Write("for i := b.Uvarint(); i > 0 && b.Ok(); i-- {")
 	defer l.Write("}")
 
 	l.Write("switch key := b.Uvarint(); key {")
