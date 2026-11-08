@@ -23,6 +23,18 @@ var myKey = func() *string { s := "my_key"; return &s }()
 
 The string body is for debugging; the pointer's identity is what makes the key unique. Keep the trailing `()`: without it the key is a func value, and `context.WithValue` panics because a func is not comparable. Examples in this package: `ctxPinReq` (broker.go), `noShardRetryCtx` (client.go), `commitContextFn` / `txnCommitContextFn` (consumer_group.go), `ctxRecRecycle` (pools.go).
 
+## cfg fields are public through OptValues: never change their types
+
+`Client.OptValues` (client.go) returns most `cfg` fields as they are
+stored: `cfg.topics` comes back as its `map[string]*regexp.Regexp`,
+`cfg.seedBrokers` as its `[]string`, and so on. Callers type-assert
+those results. Changing the type of a `cfg` field, or what the field
+holds, changes what `OptValue` returns and is a breaking change to the
+public API, the same as changing an exported function's signature. Do
+not change a `cfg` field's type, and do not change what a `case` in
+`OptValues` returns, without the maintainer's explicit go. A new option
+gets a new `case` in `OptValues` (the NOTE block in config.go).
+
 ## Commit Style
 
 - Format: `kgo: <description>` (lowercase, no period)

@@ -19,11 +19,14 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl"
 )
 
-////////////////////////////////////////////////////////
-// NOTE:                                              //
-// NOTE: Make sure new configs are added to OptValues //
-// NOTE:                                              //
-////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+// NOTE:                                                                //
+// NOTE: Make sure new configs are added to OptValues.                  //
+// NOTE:                                                                //
+// NOTE: OptValues returns cfg fields as stored, so changing a field's  //
+// NOTE: type changes what OptValue returns: that is a breaking change. //
+// NOTE:                                                                //
+//////////////////////////////////////////////////////////////////////////
 
 // Opt is an option to configure a client.
 type Opt interface {
