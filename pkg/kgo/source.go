@@ -3130,7 +3130,7 @@ func (s *source) addShareCursor(add *shareCursor) {
 	//   - addShareCursor reads pending under c.ackMu before
 	//     appendAck appends: hasPending may be false here, but
 	//     appendAck's later c.source.Load() returns this new
-	//     source (applyMoves stored it before calling
+	//     source (migrateShareCursorTo stored it before calling
 	//     addShareCursor) and signals us directly.
 	//   - addShareCursor reads pending after appendAck appends:
 	//     hasPending is true and we signal here. appendAck's

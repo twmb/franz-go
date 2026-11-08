@@ -11,11 +11,11 @@ import (
 //
 // migrateShareCursorTo relocates a share cursor between sources when a metadata
 // refresh observes a leader change for a share partition (mergeTopicPartitions,
-// the partitionKindShare case). It does the same removeShareCursor /
-// addShareCursor as the CurrentLeader-hint sibling applyMovesBlocking. The
-// share consumer's leave waits for every share worker to exit (sc.workers == 0)
-// and then drains each source's cursors (closeShareSession) over a snapshot of
-// the source list. applyMovesBlocking registers its migration as a worker so
+// the partitionKindShare case), and for a CurrentLeader hint, from
+// applyMovesBlocking through kip951move.doMove. The share consumer's leave
+// waits for every share worker to exit (sc.workers == 0) and then drains each
+// source's cursors (closeShareSession) over a snapshot of the source list.
+// applyMovesBlocking registers its migration as a worker so
 // leave's barrier waits for it; migrateShareCursorTo did NOT -- it ran on the
 // metadata loop with no incWorker -- so a metadata-driven migration racing
 // leave/Close could strand a cursor's pending acks on a source that

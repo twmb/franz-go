@@ -3963,9 +3963,16 @@ func TestShareGroupFencedLeaderEpochMove(t *testing.T) {
 	pcl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 
 	// Share consumer.
+	// MetadataMinAge delays only debounced metadata updates, such as the
+	// one a share source's backoff asks for. Keep it short so that one of
+	// those reaches the broker and the hook below counts it: after the
+	// move, the count must stay at zero.
+	var metas metadataCounter
 	scl := newPlainClient(t, c,
 		kgo.ConsumeTopics(topic),
 		kgo.ShareGroup("share-fenced-epoch-test"),
+		kgo.MetadataMinAge(10*time.Millisecond),
+		kgo.WithHooks(&metas),
 	)
 
 	// Empty poll to establish the group (SPSO defaults to "latest").
@@ -3982,49 +3989,58 @@ func TestShareGroupFencedLeaderEpochMove(t *testing.T) {
 	}
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel1()
-	for ctx1.Err() == nil {
-		fetches := scl.PollFetches(ctx1)
-		recs := fetches.Records()
-		if len(recs) == 0 {
-			continue
-		}
+	// Consume every initial record: a source with buffered records sends
+	// no fetch until they are polled, and the pause below needs one.
+	var initial int
+	for initial < 5 && ctx1.Err() == nil {
+		recs := scl.PollFetches(ctx1).Records()
 		for _, r := range recs {
 			r.Ack(kgo.AckAccept)
 		}
-		if err := scl.FlushAcks(ctx1); err != nil {
-			t.Fatalf("commit acks: %v", err)
-		}
-		break
+		initial += len(recs)
 	}
-	if ctx1.Err() != nil {
+	if initial < 5 {
 		t.Fatal("timed out consuming initial records")
 	}
-
-	// Move the partition to the other broker so the original broker
-	// will return partition errors on the next ShareFetch.
-	if err := c.MoveTopicPartition(topic, 0, newLeader); err != nil {
-		t.Fatalf("move: %v", err)
+	if err := scl.FlushAcks(ctx1); err != nil {
+		t.Fatalf("commit acks: %v", err)
 	}
 
-	// Intercept the first ShareFetch to the OLD leader after the move
-	// and replace its partition error with FENCED_LEADER_EPOCH +
-	// CurrentLeader. Without the fix, the client wouldn't recognize
-	// this error as a leader hint and would surface it instead of
-	// moving.
+	// Answer the old leader's first ShareFetch for the partition after the
+	// move with FENCED_LEADER_EPOCH and a hint to the new leader. A fetch
+	// parked at the old leader when the move happens gets kfake's own
+	// NOT_LEADER hint instead, so pause the topic first: the client
+	// forgets the partition from the old leader's session and parks
+	// nothing there, and the first fetch after the resume re-adds it.
+	metasBefore := metas.n.Load()
 	ti := c.TopicInfo(topic)
-	var injected atomic.Bool
+	var forgot, injected atomic.Bool
 	c.ControlKey(78, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		if c.CurrentNode() != origLeader {
+			return nil, nil, false
+		}
 		req := kreq.(*kmsg.ShareFetchRequest)
+		for _, ft := range req.ForgottenTopicsData {
+			if ft.TopicID == ti.TopicID && slices.Contains(ft.Partitions, 0) {
+				forgot.Store(true)
+			}
+		}
 		for _, rt := range req.Topics {
 			if rt.TopicID != ti.TopicID {
 				continue
 			}
 			for _, rp := range rt.Partitions {
-				if rp.Partition != 0 {
+				if rp.Partition != 0 || !injected.CompareAndSwap(false, true) {
 					continue
 				}
-				if !injected.CompareAndSwap(false, true) {
-					return nil, nil, false
+				// Apply the request to kfake's session as its handler
+				// would have, so the client's next request here carries
+				// the epoch kfake expects. Otherwise that request fails
+				// with INVALID_SHARE_SESSION_EPOCH, and the metadata
+				// count below would measure that failure's path too.
+				key := shareSessionKey{group: *req.GroupID, memberID: *req.MemberID, broker: origLeader}
+				if _, ec := c.shareGroups.updateSession(key, req.ShareSessionEpoch, req.Topics, req.ForgottenTopicsData); ec != 0 {
+					t.Errorf("update share session: %v", kerr.ErrorForCode(ec))
 				}
 				resp := req.ResponseKind().(*kmsg.ShareFetchResponse)
 				st := kmsg.NewShareFetchResponseTopic()
@@ -4036,11 +4052,23 @@ func TestShareGroupFencedLeaderEpochMove(t *testing.T) {
 				sp.CurrentLeader.LeaderEpoch = 1
 				st.Partitions = append(st.Partitions, sp)
 				resp.Topics = append(resp.Topics, st)
+				// The client uses the hint only with the leader's endpoint.
+				ne := kmsg.NewShareFetchResponseNodeEndpoint()
+				ne.NodeID = newLeader
+				ne.Host, ne.Port = c.bs[newLeader].hostport()
+				ne.Rack = &brokerRack
+				resp.NodeEndpoints = append(resp.NodeEndpoints, ne)
 				return resp, nil, true
 			}
 		}
 		return nil, nil, false
 	})
+	scl.PauseFetchTopics(topic)
+	waitFor(t, 5*time.Second, "partition never forgotten after pause", forgot.Load)
+	if err := c.MoveTopicPartition(topic, 0, newLeader); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	scl.ResumeFetchTopics(topic)
 
 	// Start a concurrent producer that feeds records while the
 	// consumer is dealing with the fenced leader epoch and cursor
@@ -4083,6 +4111,9 @@ func TestShareGroupFencedLeaderEpochMove(t *testing.T) {
 	}
 	if !injected.Load() {
 		t.Fatal("FENCED_LEADER_EPOCH was never injected")
+	}
+	if n := metas.n.Load() - metasBefore; n > 0 {
+		t.Errorf("the client sent %d metadata requests after the move; the hint alone should move the cursor", n)
 	}
 }
 

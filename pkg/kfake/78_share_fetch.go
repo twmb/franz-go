@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"slices"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -123,16 +124,18 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			partIdx[tpKey{tid, p}] = i
 			sp := kmsg.NewShareFetchResponseTopicPartition()
 			sp.Partition = p
-			// Real brokers serialize the Java schema default -1/-1 when
-			// they do not populate a leader hint; the Go zero value 0/0
-			// would be read by clients as a valid hint to node 0.
-			sp.CurrentLeader.LeaderID = -1
-			sp.CurrentLeader.LeaderEpoch = -1
 			*ps = append(*ps, sp)
 		}
 		sp := &(*ps)[i]
 		if errCode != 0 {
 			sp.ErrorCode = errCode
+			// Kafka fills CurrentLeader only for leader errors, with
+			// -1/-1 when it does not know the leader. Every other
+			// partition gets 0/0.
+			if errCode == kerr.NotLeaderForPartition.Code || errCode == kerr.FencedLeaderEpoch.Code {
+				sp.CurrentLeader.LeaderID = -1
+				sp.CurrentLeader.LeaderEpoch = -1
+			}
 		}
 		return sp
 	}
@@ -271,7 +274,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		totalRecords   int32
 		targets        []fetchTarget
 		acquiredParts  []acquiredPart
-		includeBrokers bool
 		toFire         []*partData
 		maxRecordLocks = c.shareMaxRecordLocks(groupID)
 	)
@@ -326,7 +328,14 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 				sp := donep(topicID, p, kerr.NotLeaderForPartition.Code)
 				sp.CurrentLeader.LeaderID = pd.leader.node
 				sp.CurrentLeader.LeaderEpoch = pd.epoch
-				includeBrokers = true
+				// Kafka sends the endpoint of each leader it names.
+				if !slices.ContainsFunc(resp.NodeEndpoints, func(ne kmsg.ShareFetchResponseNodeEndpoint) bool { return ne.NodeID == pd.leader.node }) {
+					ne := kmsg.NewShareFetchResponseNodeEndpoint()
+					ne.NodeID = pd.leader.node
+					ne.Host, ne.Port = pd.leader.hostport()
+					ne.Rack = &brokerRack
+					resp.NodeEndpoints = append(resp.NodeEndpoints, ne)
+				}
 				continue
 			}
 			targets = append(targets, fetchTarget{topicID, topicName, p, pd})
@@ -486,16 +495,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			}
 			wsf.t = time.AfterFunc(remaining, wsf.cb)
 			return nil, nil
-		}
-	}
-
-	if includeBrokers {
-		for _, b := range c.bs {
-			ne := kmsg.NewShareFetchResponseNodeEndpoint()
-			ne.NodeID = b.node
-			ne.Host, ne.Port = b.hostport()
-			ne.Rack = &brokerRack
-			resp.NodeEndpoints = append(resp.NodeEndpoints, ne)
 		}
 	}
 

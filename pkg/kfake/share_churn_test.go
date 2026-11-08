@@ -24,6 +24,8 @@ import (
 //   - TestShareFetchLeaderMoveHintHeals: control - the existing
 //     CurrentLeader hint path migrates without metadata; passes pre-fix
 //     and post-fix.
+//   - TestShareErrorDefaultLeaderNoMove: a partition error other than a
+//     leader error carries CurrentLeader 0/0 and must not move the cursor.
 //   - TestShareFetchTransportErrorTriggersMetadata:
 //     a dead broker (connection killed on every ShareFetch) must trigger
 //     a metadata refresh from the fetch backoff path, like the classic
@@ -143,7 +145,7 @@ func TestShareFetchLeaderMoveNoHintHeals(t *testing.T) {
 // TestShareFetchLeaderMoveNoHintHeals: when the old leader's NOT_LEADER
 // response carries a CurrentLeader hint (kfake fills it whenever it knows
 // the leader, like a settled real broker), the client migrates the cursor
-// via applyMoves with no metadata round trip and surfaces nothing. This
+// through kip951move with no metadata round trip and surfaces nothing. This
 // passes pre-fix and post-fix; it pins the moves arm staying first.
 func TestShareFetchLeaderMoveHintHeals(t *testing.T) {
 	t.Parallel()
@@ -164,10 +166,14 @@ func TestShareFetchLeaderMoveHintHeals(t *testing.T) {
 	)
 	produceShareN(t, c, topic, group, pre)
 
-	cl := shareChurnConsumer(t, c, topic, group)
+	// A minute of MetadataMinAge keeps the fetch backoff from refreshing
+	// metadata, so only the hint can move the cursor in time.
+	var metas metadataCounter
+	cl := shareChurnConsumer(t, c, topic, group, kgo.MetadataMinAge(time.Minute), kgo.WithHooks(&metas))
 	if got, _ := pollShareUntil(t, cl, pre, 10*time.Second, nil); got < pre {
 		t.Fatalf("pre-move: consumed %d of %d records", got, pre)
 	}
+	metasBefore := metas.n.Load()
 
 	oldLeader := c.LeaderFor(topic, 0)
 	if err := c.MoveTopicPartition(topic, 0, (oldLeader+1)%2); err != nil {
@@ -181,6 +187,107 @@ func TestShareFetchLeaderMoveHintHeals(t *testing.T) {
 	}
 	if got < post {
 		t.Errorf("consumed %d of %d post-move records; CurrentLeader hint migration failed", got, post)
+	}
+	if n := metas.n.Load() - metasBefore; n > 0 {
+		t.Errorf("the client sent %d metadata requests after the move; the hint alone should move the cursor", n)
+	}
+}
+
+// metadataCounter counts the metadata requests a client sends.
+type metadataCounter struct{ n atomic.Int32 }
+
+func (m *metadataCounter) OnBrokerWrite(_ kgo.BrokerMetadata, key int16, _ int, _, _ time.Duration, _ error) {
+	if key == int16(kmsg.Metadata) {
+		m.n.Add(1)
+	}
+}
+
+// TestShareErrorDefaultLeaderNoMove fails one ShareFetch and one renew
+// ShareAcknowledge on the leader, broker 1, with an error that is not a
+// leader error, and one renew ShareAcknowledge with a leader error that
+// names no leader. Kafka leaves CurrentLeader at 0/0 for the first two and
+// sends -1/-1 for the last; the client must not move the cursor to broker
+// 0. The ack's leader error must refresh metadata itself: a standalone ack
+// can be the cursor's last request.
+func TestShareErrorDefaultLeaderNoMove(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		key      kmsg.Key
+		err      *kerr.Error
+		wantMeta bool // the ack error must refresh metadata
+	}{
+		{kmsg.ShareFetch, kerr.KafkaStorageError, false},
+		{kmsg.ShareAcknowledge, kerr.InvalidRecordState, false},
+		{kmsg.ShareAcknowledge, kerr.NotLeaderForPartition, true},
+	} {
+		t.Run(tt.key.Name()+"-"+tt.err.Message, func(t *testing.T) {
+			t.Parallel()
+
+			topic := "share-default-leader-" + tt.key.Name() + "-" + tt.err.Message
+			group := topic + "-g"
+			c := newCluster(t,
+				NumBrokers(2),
+				SeedTopics(1, topic),
+				BrokerConfigs(map[string]string{
+					"group.share.heartbeat.interval.ms": "100",
+				}),
+			)
+			if err := c.MoveTopicPartition(topic, 0, 1); err != nil {
+				t.Fatal(err)
+			}
+			produceShareN(t, c, topic, group, 1)
+
+			ti := c.TopicInfo(topic)
+			broker0 := c.Fault(Fault{
+				Keys:    []kmsg.Key{kmsg.ShareFetch, kmsg.ShareAcknowledge},
+				Nodes:   []int32{0},
+				TopicID: ti.TopicID,
+				Observe: true,
+				Count:   -1,
+			})
+			injected := c.Fault(Fault{
+				Keys:       []kmsg.Key{tt.key},
+				Nodes:      []int32{1},
+				TopicID:    ti.TopicID,
+				Partitions: []int32{0},
+				Err:        tt.err,
+			})
+
+			var metas metadataCounter
+			cl := shareChurnConsumer(t, c, topic, group, kgo.WithHooks(&metas))
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var recs []*kgo.Record
+			for len(recs) == 0 && ctx.Err() == nil {
+				recs = cl.PollFetches(ctx).Records()
+			}
+			if len(recs) == 0 {
+				t.Fatal("no record consumed")
+			}
+			// Renew acks are always sent in a standalone ShareAcknowledge.
+			metasBefore := metas.n.Load()
+			recs[0].Ack(kgo.AckRenew)
+			if err := cl.FlushAcks(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantMeta {
+				waitFor(t, 5*time.Second, "the ack's leader error did not refresh metadata", func() bool {
+					return metas.n.Load() > metasBefore
+				})
+			}
+
+			produceN(t, c, topic, 1)
+			if got, _ := pollShareUntil(t, cl, 1, 10*time.Second, nil); got < 1 {
+				t.Fatal("consumption did not continue after the error")
+			}
+			if injected.Hits() == 0 {
+				t.Fatal("the partition error was never injected")
+			}
+			if n := broker0.Hits(); n > 0 {
+				t.Errorf("broker 0 received %d share requests for a partition it does not lead", n)
+			}
+		})
 	}
 }
 

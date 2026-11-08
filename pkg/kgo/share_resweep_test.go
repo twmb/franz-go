@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"net"
+	"slices"
 	"testing"
 	"time"
 )
@@ -34,6 +35,11 @@ func TestAuditShareLeaveWaitsForInflightMigration(t *testing.T) {
 	// dial failures) without a real broker, and no assignment ever resolves,
 	// so manage and the source loops never start -- sc.workers has a stable 0
 	// baseline and the only worker that can appear is the migration itself.
+	//
+	// The loop runs no queued function while a metadata request is in
+	// flight, and a request against the dead seed retries three times with
+	// the default backoff, close to two seconds in all. With a millisecond
+	// backoff the request fails within a few milliseconds.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -45,6 +51,7 @@ func TestAuditShareLeaveWaitsForInflightMigration(t *testing.T) {
 		SeedBrokers(deadAddr),
 		ShareGroup("audit-share-resweep"),
 		ConsumeTopics("audit-share-resweep-topic"),
+		RetryBackoffFn(func(int) time.Duration { return time.Millisecond }),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -77,13 +84,14 @@ func TestAuditShareLeaveWaitsForInflightMigration(t *testing.T) {
 	sc.mu.Unlock()
 
 	// Fire an in-flight migration. The move target is irrelevant -- the fn
-	// resolves no cursor (empty id2t) -- we only need applyMoves to spawn its
-	// goroutine. It does carry a cursor: applyMoves marks each move's cursor
-	// unusable before spawning (the collapse), and applyMovesBlocking
-	// re-signals cursor.source on the way out, so both must be non-nil.
+	// resolves no cursor (topic "t" is not consumed) -- we only need
+	// applyMoves to spawn its goroutine. It does carry a cursor: applyMoves
+	// marks each move's cursor unusable before spawning (the collapse), and
+	// applyMovesBlocking re-signals cursor.source on the way out, so both
+	// must be non-nil.
 	mc := &shareCursor{topic: "t", topicID: [16]byte{9}, partition: 0}
 	mc.source.Store(cl.newSource(1))
-	sc.applyMoves([]shareMove{{topicID: mc.topicID, partition: 0, leaderID: 1, cursor: mc}}, nil)
+	sc.applyMoves(kip951move{shareCursors: map[*shareCursor]topicPartitionData{mc: {leader: 1, leaderEpoch: 1}}})
 
 	// With the fix the goroutine incWorkers, then blocks on its
 	// blockingMetadataFn send (queued behind us), so sc.workers stays
@@ -149,12 +157,16 @@ func TestAuditShareMoveCollapseMarksCursorUnusable(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadAddr := ln.Addr().String()
+	deadPort := int32(ln.Addr().(*net.TCPAddr).Port)
 	ln.Close()
 
 	cl, err := NewClient(
 		SeedBrokers(deadAddr),
 		ShareGroup("audit-share-collapse"),
 		ConsumeTopics("audit-share-collapse-topic"),
+		// A dead seed's metadata retries must not hold the queued move
+		// past the deadline below.
+		RetryBackoffFn(func(int) time.Duration { return time.Millisecond }),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -217,10 +229,26 @@ func TestAuditShareMoveCollapseMarksCursorUnusable(t *testing.T) {
 	}
 
 	// Queue a move. applyMoves marks the cursor moving synchronously before
-	// spawning, so the next createShareReq skips it. The topic id is not in
-	// id2t, so the migration itself is a no-op -- but the re-enable still
+	// spawning, so the next createShareReq skips it. Topic "t" is not
+	// consumed, so the migration itself is a no-op -- but the re-enable still
 	// runs, which is what we verify after release.
-	sc.applyMoves([]shareMove{{topicID: c.topicID, partition: c.partition, leaderID: 1, cursor: c}}, nil)
+	//
+	// The hint also names its leader, in a rack that differs from the
+	// broker we know. A move that is skipped at apply time must leave the
+	// broker alone: the hint can be older than the metadata that arrived
+	// while the move was queued. The broker is at the dead loopback
+	// address: the metadata loop dials it, and a hostname would hang the
+	// loop in a DNS lookup with our queued move behind it.
+	known := cl.newBroker(1, "127.0.0.1", deadPort, nil)
+	cl.brokersMu.Lock()
+	cl.brokers = append(cl.brokers, known)
+	cl.reinitAnyBrokerOrd()
+	cl.brokersMu.Unlock()
+	rack := "hint-rack"
+	sc.applyMoves(kip951move{
+		shareCursors: map[*shareCursor]topicPartitionData{c: {leader: 1, leaderEpoch: 1}},
+		brokers:      []BrokerMetadata{{NodeID: 1, Host: "127.0.0.1", Port: deadPort, Rack: &rack}},
+	})
 
 	if !c.moving.Load() {
 		close(release)
@@ -243,5 +271,11 @@ func TestAuditShareMoveCollapseMarksCursorUnusable(t *testing.T) {
 	}
 	if !hasPartition() {
 		t.Fatal("after the migration ran, the re-enabled cursor should be back in the fetch request")
+	}
+	cl.brokersMu.RLock()
+	kept := slices.Contains(cl.brokers, known)
+	cl.brokersMu.RUnlock()
+	if !kept {
+		t.Fatal("a skipped move replaced a known broker with the hint's endpoint")
 	}
 }
