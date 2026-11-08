@@ -218,7 +218,10 @@ func namefn(fn any) string {
 // Variadic option inputs are returned as a single slice.  Options that are
 // internally stored as a pointer (ClientID, TransactionalID, and InstanceID)
 // are returned as their string input; you can see if the option is internally
-// nil by looking at the second value returned from OptValues.
+// nil by looking at the second value returned from OptValues. Options that
+// take an int, or a type that wraps an int, may be returned at a different
+// width or as the inner value (e.g. RequestRetries returns an int64;
+// FetchIsolationLevel returns an int8). A time.Duration may be truncated.
 //
 //	var (
 //		cl, _ := NewClient(
