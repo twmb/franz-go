@@ -295,8 +295,8 @@ func TestShareErrorDefaultLeaderNoMove(t *testing.T) {
 // every ShareFetch sent to the old leader after a leadership move - the
 // observable shape of a dead broker process. No response means no
 // CurrentLeader hint is possible; the only heal is a metadata refresh.
-// The classic consumer's fetch backoff opportunistically triggers one
-// (source.go backoff); the share fetch backoff must do the same.
+// The classic consumer's fetch backoff triggers one (source.go backoff);
+// the share fetch backoff must do the same.
 // Pre-fix the cursor is stranded until the periodic refresh (2m here).
 func TestShareFetchTransportErrorTriggersMetadata(t *testing.T) {
 	t.Parallel()
