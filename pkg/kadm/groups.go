@@ -246,6 +246,7 @@ func (ds DescribedGroups) Names() []string {
 type ListedGroup struct {
 	Coordinator  int32  // Coordinator is the node ID of the coordinator for this group.
 	Group        string // Group is the name of this group.
+	GroupType    string // GroupType is the type of the group, such as "classic", "consumer", or "share"; empty if not provided by the broker/API version.
 	ProtocolType string // ProtocolType is the type of protocol the group is using, "consumer" for normal consumers, "connect" for Kafka connect.
 	State        string // State is the state this group is in (Empty, Dead, Stable, etc.; only if talking to Kafka 2.6+).
 }
@@ -306,6 +307,7 @@ func (cl *Client) ListGroupsByType(ctx context.Context, types []string, filterSt
 			list[g.Group] = ListedGroup{ // group only lives on one broker, no need to exist-check
 				Coordinator:  b.NodeID,
 				Group:        g.Group,
+				GroupType:    g.GroupType,
 				ProtocolType: g.ProtocolType,
 				State:        g.GroupState,
 			}
