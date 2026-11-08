@@ -209,7 +209,10 @@ func namefn(fn any) string {
 // Variadic option inputs are returned as a single slice.  Options that are
 // internally stored as a pointer (ClientID, TransactionalID, and InstanceID)
 // are returned as their string input; you can see if the option is internally
-// nil by looking at the second value returned from OptValues.
+// nil by looking at the second value returned from OptValues. Options that
+// take an int, or a type that wraps an int, may be returned at a different
+// width or as the inner value (e.g. RequestRetries returns an int64;
+// FetchIsolationLevel returns an int8). A time.Duration may be truncated.
 //
 //	var (
 //		cl, _ := NewClient(
@@ -248,7 +251,7 @@ func (cl *Client) OptValue(opt any) any {
 //		)
 //		idValues = cl.OptValues(InstanceID)           // idValues is []any{"foo", true}
 //		tValues  = cl.OptValues(SessionTimeout)       // tValues is []any{45 * time.Second}
-//		topics   = cl.OptValues(ConsumeTopics)        // topics is []any{[]string{"foo", "bar"}
+//		topics   = cl.OptValues(ConsumeTopics)        // topics is []any{[]string{"foo", "bar"}}
 //		bpoll    = cl.OptValues(BlockRebalanceOnPoll) // bpoll is []any{false}
 //		unknown  = cl.OptValues("Unknown")            // unknown is nil
 //	)
@@ -313,9 +316,9 @@ func (cl *Client) OptValues(opt any) []any {
 	case namefn(SASL):
 		return []any{cfg.sasls}
 	case namefn(WithHooks):
-		return []any{cfg.hooks}
+		return []any{[]Hook(cfg.hooks)}
 	case namefn(WithPools):
-		return []any{cfg.pools}
+		return []any{[]Pool(cfg.pools)}
 	case namefn(ConcurrentTransactionsBackoff):
 		return []any{cfg.txnBackoff}
 	case namefn(ConsiderMissingTopicDeletedAfter):
@@ -394,13 +397,13 @@ func (cl *Client) OptValues(opt any) []any {
 	case namefn(ConsumeRegex):
 		return []any{cfg.regex}
 	case namefn(ConsumeExcludeTopics):
-		return []any{slices.Collect(maps.Keys(cfg.excludeTopics))}
+		return []any{slices.Sorted(maps.Keys(cfg.excludeTopics))}
 	case namefn(ConsumeStartOffset):
 		return []any{cfg.startOffset}
 	case namefn(ConsumeResetOffset):
 		return []any{cfg.resetOffset}
 	case namefn(ConsumeTopics):
-		return []any{cfg.topics}
+		return []any{slices.Sorted(maps.Keys(cfg.topics))}
 	case namefn(DisableFetchSessions):
 		return []any{cfg.disableFetchSessions}
 	case namefn(FetchIsolationLevel):
