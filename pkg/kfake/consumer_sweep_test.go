@@ -279,6 +279,193 @@ func commitOffset(t *testing.T, c *Cluster, group, topic string, offset int64) {
 	}
 }
 
+// TestAuditUncommitOrigins checks every way the group starts tracking a
+// partition's offsets against every reader of those offsets. The origins:
+// nothing tracked, a fetched commit, a fetched commit AdjustFetchOffsetsFn
+// adjusted, the first poll, a SetOffsets before the first poll, and a mark
+// before the first poll. The readers: UncommittedOffsets, MarkedOffsets,
+// CommittedOffsets, then the group's offset at the broker after
+// CommitMarkedOffsets and after CommitUncommittedOffsets. Pre-fix,
+// CommittedOffsets reported an absolute ConsumeResetOffset (AfterMilli's
+// millisecond included) before the first poll and 0 after the first poll,
+// a mark before the first poll recorded the partition with dirty and committed
+// at 0, and an exact adjusted offset was recorded as the group's commit.
+// The pending-load table test above polls every partition, and the abort
+// table test below polls before the rewind, so neither fit.
+func TestAuditUncommitOrigins(t *testing.T) {
+	t.Parallel()
+
+	const (
+		topic = "uncommit-origins"
+		group = "uncommit-origins-g"
+		msgs  = 10
+		none  = int64(-1) // the reader omits the partition, or the group has no commit
+	)
+
+	start := kgo.NewOffset().AtStart()
+	// adjust returns an AdjustFetchOffsetsFn applying fn to every fetched offset.
+	adjust := func(fn func(kgo.Offset) kgo.Offset) func(context.Context, map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error) {
+		return func(_ context.Context, fetched map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error) {
+			for _, ps := range fetched {
+				for p, o := range ps {
+					ps[p] = fn(o)
+				}
+			}
+			return fetched, nil
+		}
+	}
+	for _, tt := range []struct {
+		name  string
+		reset kgo.Offset
+		// load is the request key the partition first needs records
+		// through. The test fails the request retryably so that the
+		// partition is never polled; 0 polls every record instead.
+		load   kmsg.Key
+		before func(*testing.T, *Cluster) // before the consumer starts
+		adjust func(context.Context, map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error)
+		after  func(*testing.T, *kgo.Client) // once the offset fetch is done
+
+		uncommitted, marked, committed int64 // before any commit
+		afterMarked, afterUncommitted  int64 // the broker's offset after each commit, in that order
+	}{
+		{"nothing tracked", kgo.NewOffset().AfterMilli(time.Now().UnixMilli()), kmsg.ListOffsets, nil, nil, nil,
+			none, none, none, none, none},
+
+		{"fetched commit", start, kmsg.OffsetForLeaderEpoch, func(t *testing.T, c *Cluster) {
+			commitOffset(t, c, group, topic, 3)
+		}, nil, nil, none, none, 3, 3, 3},
+
+		{"fetched commit, adjusted relative", start, 0, func(t *testing.T, c *Cluster) {
+			commitOffset(t, c, group, topic, 3)
+		}, adjust(func(o kgo.Offset) kgo.Offset { return o.Relative(-2) }), func(t *testing.T, cl *kgo.Client) {
+			consumeN(t, cl, msgs-1, 8*time.Second) // from 1
+		}, msgs, none, none, 3, msgs},
+
+		{"fetched commit, adjusted to the start", start, 0, func(t *testing.T, c *Cluster) {
+			commitOffset(t, c, group, topic, 3)
+		}, adjust(func(o kgo.Offset) kgo.Offset { return o.AtStart() }), func(t *testing.T, cl *kgo.Client) {
+			consumeN(t, cl, msgs, 8*time.Second)
+		}, msgs, none, none, 3, msgs},
+
+		{"fetched commit, adjusted AfterMilli", start, 0, func(t *testing.T, c *Cluster) {
+			commitOffset(t, c, group, topic, 3)
+		}, adjust(func(o kgo.Offset) kgo.Offset { return o.AfterMilli(3) }), func(t *testing.T, cl *kgo.Client) {
+			consumeN(t, cl, msgs, 8*time.Second)
+		}, msgs, none, none, 3, msgs},
+
+		{"fetched commit, adjusted epoch", start, kmsg.Fetch, func(t *testing.T, c *Cluster) {
+			commitOffset(t, c, group, topic, 3)
+		}, adjust(func(o kgo.Offset) kgo.Offset { return o.WithEpoch(-1) }), nil,
+			none, none, 3, 3, 3},
+
+		{"fetched commit, adjusted exact", start, 0, func(t *testing.T, c *Cluster) {
+			commitOffset(t, c, group, topic, 3)
+		}, adjust(func(o kgo.Offset) kgo.Offset { return o.At(5) }), func(t *testing.T, cl *kgo.Client) {
+			consumeN(t, cl, msgs-5, 8*time.Second) // from 5
+		}, msgs, none, none, 3, msgs},
+
+		{"first poll", start, 0, nil, nil, func(t *testing.T, cl *kgo.Client) {
+			consumeN(t, cl, msgs, 8*time.Second)
+		}, msgs, none, none, none, msgs},
+
+		{"first poll, then a mark", start, 0, nil, nil, func(t *testing.T, cl *kgo.Client) {
+			consumeN(t, cl, msgs, 8*time.Second)
+			cl.MarkCommitOffsets(map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: 4}}})
+		}, msgs, 4, none, 4, msgs},
+
+		{"a mark before the first poll", start, kmsg.ListOffsets, nil, nil, func(t *testing.T, cl *kgo.Client) {
+			// The partition is not being consumed yet: the mark is dropped.
+			cl.MarkCommitOffsets(map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: 7}}})
+		}, none, none, none, none, none},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			produceN(t, c, topic, msgs)
+			if tt.before != nil {
+				tt.before(t, c)
+			}
+			var load *FaultHandle
+			if tt.load != 0 {
+				load = c.Fault(Fault{Keys: []kmsg.Key{tt.load}, Err: kerr.NotLeaderForPartition, Count: -1})
+			}
+			cl := newPlainClient(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.ConsumeResetOffset(tt.reset),
+				kgo.AdjustFetchOffsetsFn(tt.adjust),
+				kgo.AutoCommitMarks(),
+				kgo.AutoCommitInterval(time.Hour), // only the manual commits below
+				kgo.DisableFetchSessions(),
+				kgo.FetchMaxWait(100*time.Millisecond),
+			)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if load != nil {
+				// A poll joins the group. Once the load is issued, the
+				// group's offset fetch is done, and the poll is stopped
+				// so that nothing drains records a SetOffsets fetches.
+				pollCtx, pollCancel := context.WithCancel(ctx)
+				pollDone := make(chan struct{})
+				go func() {
+					defer close(pollDone)
+					cl.PollFetches(pollCtx)
+				}()
+				waitHits(t, load, 1, "the offset load was never issued")
+				pollCancel()
+				<-pollDone
+			}
+			if tt.after != nil {
+				tt.after(t, cl)
+			}
+
+			// value returns the partition's offset in a reader's map, or none.
+			value := func(m map[string]map[int32]kgo.EpochOffset) int64 {
+				if o, ok := m[topic][0]; ok {
+					return o.Offset
+				}
+				return none
+			}
+			if got := value(cl.UncommittedOffsets()); got != tt.uncommitted {
+				t.Errorf("UncommittedOffsets reports %d, want %d", got, tt.uncommitted)
+			}
+			if got := value(cl.MarkedOffsets()); got != tt.marked {
+				t.Errorf("MarkedOffsets reports %d, want %d", got, tt.marked)
+			}
+			if got := value(cl.CommittedOffsets()); got != tt.committed {
+				t.Errorf("CommittedOffsets reports %d, want %d", got, tt.committed)
+			}
+			if tt.committed == none && cl.CommittedOffsets() != nil {
+				t.Errorf("CommittedOffsets with no commit is non-nil")
+			}
+
+			// broker returns the group's offset for the partition at the broker, or none.
+			broker := func() int64 {
+				if gc, ok := groupCommits(c, group)[topic][0]; ok {
+					return gc.Offset
+				}
+				return none
+			}
+			if err := cl.CommitMarkedOffsets(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if got := broker(); got != tt.afterMarked {
+				t.Errorf("BUG REPRODUCED: the group's offset after CommitMarkedOffsets is %d, want %d", got, tt.afterMarked)
+			}
+			if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if got := broker(); got != tt.afterUncommitted {
+				t.Errorf("BUG REPRODUCED: the group's offset after CommitUncommittedOffsets is %d, want %d", got, tt.afterUncommitted)
+			}
+			if got := value(cl.CommittedOffsets()); got != tt.afterUncommitted {
+				t.Errorf("CommittedOffsets after the commits reports %d, want %d", got, tt.afterUncommitted)
+			}
+		})
+	}
+}
+
 // TestAuditTxnAbortRewindNotClobberedByPendingLoad verifies the
 // GroupTransactSession abort path: End(TryAbort) rewinds consumption to the
 // committed offsets via setOffsets so the aborted records are re-consumed.
@@ -288,9 +475,13 @@ func commitOffset(t *testing.T, c *Cluster, group, topic string, offset int64) {
 // the aborted records were never re-consumed and the next transaction
 // committed past them - an exactly-once violation.
 //
-// The "commit changed by the fn" row verifies that End records what the
-// TxnOffsetCommit carried after a PreTxnCommitFnContext fn changed it, so the
-// abort rewinds to the offset the broker holds.
+// The "no commit" row verifies that a partition the group has no commit for
+// rewinds to where the transaction started reading, and that CommittedOffsets
+// omits the partition before the abort. Pre-fix, the first poll recorded
+// offset 0 as committed, and the abort rewound to 0. The "commit changed by
+// the fn" row verifies that End records what the TxnOffsetCommit carried
+// after a PreTxnCommitFnContext fn changed it, so the abort rewinds to the
+// offset the broker holds.
 func TestAuditTxnAbortRewindNotClobberedByPendingLoad(t *testing.T) {
 	t.Parallel()
 
@@ -300,16 +491,18 @@ func TestAuditTxnAbortRewindNotClobberedByPendingLoad(t *testing.T) {
 		msgs  = 10
 	)
 
+	const none = int64(-1)
 	for _, tt := range []struct {
 		name      string
 		reset     kgo.Offset
 		precommit int   // records consumed and committed in a first transaction; 0 for none
 		fnOffset  int64 // when non-zero, the first transaction's fn rewrites its commit to this offset
-		committed int64 // CommittedOffsets before the abort
+		committed int64 // CommittedOffsets before the abort, or none
 		from      int64 // where the aborted transaction starts reading
 		rewind    int64 // where the abort rewinds to
 	}{
 		{"after a commit", kgo.NewOffset().AtStart(), 2, 0, 2, 2, 2},
+		{"no commit", kgo.NewOffset().AtEnd().Relative(-5), 0, 0, none, 5, 5},
 		{"commit changed by the fn", kgo.NewOffset().AtStart(), 2, 1, 1, 2, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -379,8 +572,8 @@ func TestAuditTxnAbortRewindNotClobberedByPendingLoad(t *testing.T) {
 			}
 			pollN(msgs - int(tt.from))
 			got, ok := s.Client().CommittedOffsets()[topic][0]
-			if !ok || got.Offset != tt.committed {
-				t.Fatalf("committed offset before the abort is %v (present %v), want %d", got, ok, tt.committed)
+			if want := tt.committed != none; ok != want || ok && got.Offset != tt.committed {
+				t.Fatalf("committed offset before the abort is %v (present %v), want %d (present %v)", got, ok, tt.committed, want)
 			}
 
 			ofle := failNextOFLE(c)

@@ -522,7 +522,7 @@ retry:
 	}
 
 	if !willTryCommit || endTxnErr != nil {
-		currentCommit := s.cl.CommittedOffsets()
+		currentCommit := s.cl.consumer.g.getAllCommitted()
 		s.cl.cfg.logger.Log(LogLevelInfo, "transact session resetting to current committed state (potentially after a rejoin)",
 			"tried_commit", willTryCommit,
 			"commit_err", endTxnErr,
@@ -550,7 +550,7 @@ retry:
 			topicUncommitted := g.uncommitted[t.Topic]
 			for _, p := range t.Partitions {
 				if current, exists := topicUncommitted[p.Partition]; exists {
-					current.committed = EpochOffset{p.LeaderEpoch, p.Offset}
+					current.committed, current.hasCommit = EpochOffset{p.LeaderEpoch, p.Offset}, true
 					topicUncommitted[p.Partition] = current
 				}
 			}

@@ -847,7 +847,7 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 	cl.setOffsets(setOffsets, true)
 }
 
-func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bool) {
+func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, user bool) {
 	if len(setOffsets) == 0 {
 		return
 	}
@@ -866,13 +866,13 @@ func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bo
 		assigns = c.d.applySetOffsets(setOffsets)
 		tps = c.d.tps
 	case c.g != nil:
-		assigns = c.g.applySetOffsets(setOffsets)
+		assigns = c.g.applySetOffsets(setOffsets, user)
 		tps = c.g.tps
 	}
 	if len(assigns) == 0 {
 		return
 	}
-	if log {
+	if user {
 		c.assignPartitions(assigns, assignSetMatching, tps, "from manual SetOffsets")
 	} else {
 		c.assignPartitions(assigns, assignSetMatching, tps, "")
