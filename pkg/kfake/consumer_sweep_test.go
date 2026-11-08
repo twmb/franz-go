@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -412,6 +413,80 @@ func (l *msgLogger) Log(_ kgo.LogLevel, msg string, _ ...any) {
 		case l.seen <- struct{}{}:
 		default:
 		}
+	}
+}
+
+// TestAuditSetOffsetsReenablesFatalCursorWithPendingLoad verifies that
+// SetOffsets re-enables a cursor stopped by a batch over
+// MaxDecompressBatchBytes when the cursor also has a pending offset load,
+// here an epoch validation from a leader move. Pre-fix, assignPartitions
+// dropped the load and skipped clearing the fatal flag, so allowUsable did
+// nothing and the partition was never fetched again. The pending-load table
+// test above has no stopped cursor, and a stopped cursor fetches nothing, so
+// a fence cannot queue its load; neither fit.
+func TestAuditSetOffsetsReenablesFatalCursorWithPendingLoad(t *testing.T) {
+	t.Parallel()
+
+	const (
+		topic = "setoffsets-fatal-load"
+		small = 3 // records before the batch over the limit
+	)
+
+	c := newCluster(t, NumBrokers(2), SeedTopics(1, topic))
+	producer := newPlainClient(t, c,
+		kgo.DefaultProduceTopic(topic),
+		kgo.ProducerBatchCompression(kgo.GzipCompression()),
+	)
+	for range small {
+		produceSync(t, producer, kgo.StringRecord("v"))
+	}
+
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.MaxDecompressBatchBytes(1<<10),
+		kgo.MetadataMinAge(50*time.Millisecond), // the leader move below is seen by a refresh
+		kgo.MetadataMaxAge(100*time.Millisecond),
+		kgo.DisableFetchSessions(),
+		kgo.FetchMaxWait(100*time.Millisecond),
+	)
+	consumeN(t, cl, small, 8*time.Second) // the cursor now has an epoch to validate
+
+	// A record over the limit stops the cursor; a poll returns the error.
+	produceSync(t, producer, &kgo.Record{Value: make([]byte, 4<<10)})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var tooLarge *kgo.ErrDecompressTooLarge
+	for ctx.Err() == nil && tooLarge == nil {
+		for _, e := range cl.PollFetches(ctx).Errors() {
+			var ok bool
+			if tooLarge, ok = errors.AsType[*kgo.ErrDecompressTooLarge](e.Err); !ok {
+				t.Fatalf("poll error: %v", e.Err)
+			}
+		}
+	}
+	if tooLarge == nil {
+		t.Fatal("the batch over MaxDecompressBatchBytes never surfaced")
+	}
+	produceSync(t, producer, kgo.StringRecord("after"))
+
+	// Move the leader: the metadata refresh queues an epoch validation
+	// for the stopped cursor, and the fault keeps the validation pending.
+	ofle := c.Fault(Fault{
+		Keys:  []kmsg.Key{kmsg.OffsetForLeaderEpoch},
+		Err:   kerr.NotLeaderForPartition,
+		Count: -1,
+	})
+	if err := c.MoveTopicPartition(topic, 0, 1-c.LeaderFor(topic, 0)); err != nil {
+		t.Fatal(err)
+	}
+	waitHits(t, ofle, 1, "the epoch validation was never issued")
+
+	cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{topic: {0: {Epoch: -1, Offset: tooLarge.NextOffset}}})
+	ofle.Remove()
+	got := consumeN(t, cl, 1, 8*time.Second)
+	if got[0].Offset != tooLarge.NextOffset {
+		t.Fatalf("BUG REPRODUCED: first record after SetOffsets(%d) has offset %d", tooLarge.NextOffset, got[0].Offset)
 	}
 }
 

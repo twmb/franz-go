@@ -1244,8 +1244,13 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 							// A cursor stopped by a batch over
 							// MaxDecompressBatchBytes is re-enabled
 							// the same way: the set offset is how the
-							// user skips the batch.
-							if loadOffsets.removeLoad(usedCursor.topic, usedCursor.partition) || usedCursor.fatal.Swap(false) {
+							// user skips the batch. The stopped cursor
+							// can have a pending load too, so we clear
+							// `fatal` whether or not we dropped a load:
+							// allowUsable does nothing while `fatal` is
+							// set.
+							wasFatal := usedCursor.fatal.Swap(false)
+							if loadOffsets.removeLoad(usedCursor.topic, usedCursor.partition) || wasFatal {
 								usedCursor.allowUsable()
 							}
 						}
