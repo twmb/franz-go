@@ -2760,7 +2760,7 @@ func (g *groupConsumer) updateCommitted(
 			}
 			uncommit.committed = set
 
-			// head is set in four places:
+			// After the offset fetch, head is set in five places:
 			//  (1) if manually committing or greedily autocommitting,
 			//      then head is bumped on poll
 			//  (2) if autocommitting normally, then head is bumped
@@ -2768,6 +2768,7 @@ func (g *groupConsumer) updateCommitted(
 			//  (3) if using marks, head is bumped on mark
 			//  (4) here, and we can be here on autocommit or on
 			//      manual commit (usually manual in an onRevoke)
+			//  (5) in SetOffsets
 			//
 			// head is usually at or past the commit: usually, head
 			// is used to build the commit itself. However, in case 4
@@ -2880,13 +2881,14 @@ func (g *groupConsumer) loopCommit() {
 }
 
 // applySetOffsets applies the given offsets to g.uncommitted for partitions
-// that are currently being consumed, updating their dirty, head, and committed
-// fields. Partitions not in g.uncommitted are skipped (per SetOffsets docs:
-// "any extra partitions are skipped"). If any partition's dirty field actually
-// changed, the partition is returned in assigns so the caller can reassign
-// cursors. If all partitions already had the same dirty offset, this returns
-// nil and no cursor reassignment is needed - this is a key optimization for
-// transactions resetting state on abort.
+// that are currently being consumed, updating their dirty and head fields.
+// `committed` is left alone so that the next commit commits the set offset.
+// Partitions not in g.uncommitted are skipped (per SetOffsets docs: "any extra
+// partitions are skipped"). If any partition's dirty field actually changed,
+// the partition is returned in assigns so the caller can reassign cursors. If
+// all partitions already had the same dirty offset, this returns nil and no
+// cursor reassignment is needed - this is a key optimization for transactions
+// resetting state on abort.
 func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOffset) (assigns map[string]map[int32]Offset) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -2910,15 +2912,14 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 			if !exists {
 				continue // partition was not being consumed
 			}
-			topicUncommitted[partition] = uncommit{
-				dirty:     epochOffset,
-				head:      epochOffset,
-				committed: epochOffset,
-				topicID:   current.topicID,
-			}
-			if current.dirty == epochOffset {
+			same := current.dirty == epochOffset
+			current.dirty, current.head = epochOffset, epochOffset
+			topicUncommitted[partition] = current
+			// Already at this offset: no cursor to reassign.
+			if same {
 				continue
-			} else if topicAssigns == nil {
+			}
+			if topicAssigns == nil {
 				topicAssigns = make(map[int32]Offset, len(partitions))
 			}
 			topicAssigns[partition] = Offset{
@@ -3412,9 +3413,11 @@ func (g *groupConsumer) commitOffsetsSync(
 
 // CommitOffsets commits the given offsets for a group, calling onDone with the
 // commit request and either the response or an error if the response was not
-// issued. If uncommitted is empty or the client is not consuming as a group,
-// onDone is called with (nil, nil, nil) and this function returns immediately.
-// It is OK if onDone is nil, but you will not know if your commit succeeded.
+// issued. If uncommitted is empty, onDone is called with an empty request, an
+// empty response, and a nil error, and this function returns immediately. If
+// the client is not consuming as a group, onDone is called the same way with a
+// non-nil error. It is OK if onDone is nil, but you will not know if your
+// commit succeeded.
 //
 // This is an advanced function and is difficult to use correctly. For simpler,
 // more easily understandable committing, see CommitRecords and
