@@ -1587,6 +1587,8 @@ func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchRespon
 		Topic:                o.from.topic,
 		Partition:            o.from.partition,
 		Pools:                br.cl.cfg.pools,
+
+		lastEpoch: &o.lastConsumedEpoch,
 	}
 	fp, o.offset = ProcessFetchPartition(opts, rp, decompressor, func(m FetchBatchMetrics) {
 		hooks.each(func(h Hook) {
@@ -1596,9 +1598,7 @@ func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchRespon
 		})
 	})
 	if len(fp.Records) > 0 {
-		lastRecord := fp.Records[len(fp.Records)-1]
-		o.lastConsumedEpoch = lastRecord.LeaderEpoch
-		o.lastConsumedTime = lastRecord.Timestamp
+		o.lastConsumedTime = fp.Records[len(fp.Records)-1].Timestamp
 	}
 
 	return fp
@@ -1640,6 +1640,11 @@ type ProcessFetchPartitionOpts struct {
 	// to allocate a slab for share group ack state tracking. The
 	// slab is injected into each record's context via shareAckKey.
 	shareAckSlab func(numRecords int, firstRecord *Record) *shareAckSlab
+
+	// lastEpoch, if non-nil, is set to the leader epoch of each decoded
+	// record or batch that moves Offset forward, including control records
+	// and aborted batches that are not returned.
+	lastEpoch *int32
 }
 
 // ProcessFetchPartition processes all records in all batches or message sets
@@ -2001,6 +2006,9 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	defer func() {
 		if numRecords == ndecoded && o.Offset < nextAskOffset {
 			o.Offset = nextAskOffset
+			if o.lastEpoch != nil {
+				*o.lastEpoch = batch.PartitionLeaderEpoch
+			}
 		}
 	}()
 
@@ -2410,6 +2418,9 @@ func (o *ProcessFetchPartitionOpts) maybeKeepRecord(fp *FetchPartition, record *
 	// The record offset may be much larger than our expected offset if the
 	// topic is compacted.
 	o.Offset = record.Offset + 1
+	if o.lastEpoch != nil {
+		*o.lastEpoch = record.LeaderEpoch
+	}
 	return kept
 }
 
