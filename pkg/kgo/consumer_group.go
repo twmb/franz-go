@@ -2909,8 +2909,8 @@ func (g *groupConsumer) applySetOffsets(setOffsets map[string]map[int32]EpochOff
 		var topicAssigns map[int32]Offset
 		for partition, epochOffset := range partitions {
 			current, exists := topicUncommitted[partition]
-			if !exists {
-				continue // partition was not being consumed
+			if !exists || epochOffset.Offset < 0 {
+				continue // partition was not being consumed, or the input is not an offset
 			}
 			same := current.dirty == epochOffset
 			current.dirty, current.head = epochOffset, epochOffset

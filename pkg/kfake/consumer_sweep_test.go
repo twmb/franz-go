@@ -47,7 +47,7 @@ func failNextOFLE(c *Cluster) *FaultHandle {
 // partition had no cursor in use yet; the load completed in the new session
 // and the consumer silently started at the load's offset.
 // The test also verifies that UncommittedOffsets reports the set offset, so
-// the next commit commits the seek.
+// the next commit commits the seek, and that a negative offset is skipped.
 func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 	t.Parallel()
 
@@ -125,6 +125,10 @@ func TestAuditSetOffsetsNotClobberedByPendingLoad(t *testing.T) {
 				topic: {0: {Epoch: -1, Offset: seek}},
 			})
 			load.Remove()
+			// A negative offset is not an offset: skipped.
+			cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{
+				topic: {0: {Epoch: -1, Offset: -1}},
+			})
 			if got := cl.UncommittedOffsets()[topic][0].Offset; !tt.direct && got != seek {
 				t.Fatalf("BUG REPRODUCED: uncommitted offset after SetOffsets(%d) is %d; the next commit would not commit the seek", seek, got)
 			}
