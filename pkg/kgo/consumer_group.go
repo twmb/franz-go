@@ -239,9 +239,9 @@ func (cl *Client) LeaveGroup() {
 // background to keep client state consistent.
 //
 // For classic consumer groups: if a rebalance is in progress, this
-// function waits for the rebalance to complete before the group can
-// be left. This is necessary to allow you to safely issue one final
-// offset commit in OnPartitionsRevoked. If you have overridden the
+// function waits for the in-flight join and sync to finish before the
+// group can be left. This is necessary to allow you to safely issue one
+// final offset commit in OnPartitionsRevoked. If you have overridden the
 // default revoke, you must manually commit offsets before leaving the
 // group. If you have configured the group with an InstanceID, this does
 // not leave the group, except for one specific case noted in the
@@ -1481,6 +1481,13 @@ func (g *groupConsumer) joinAndSync(joinWhy string) error {
 	}()
 
 start:
+	// Leaving does not interrupt a join or sync in flight (see the NOTE
+	// below), but we do need to prevent another join/sync from starting.
+	// Otherwise, a group that keeps rebalancing (rolling restarts or
+	// something) would keep us rejoining repeatedly and prevent shutdown.
+	if err := g.ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case <-g.rejoinCh: // drain to avoid unnecessary rejoins
 	default:

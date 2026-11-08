@@ -5465,3 +5465,41 @@ func (l *canceledLogWatch) Log(_ kgo.LogLevel, msg string, keyvals ...any) {
 		}
 	}
 }
+
+// Ensure Close returns while every SyncGroup fails with
+// REBALANCE_IN_PROGRESS: a member that is leaving must stop rejoining and
+// leave.
+func TestIssue1500(t *testing.T) {
+	t.Parallel()
+	const (
+		topic = "issue-1500"
+		group = "issue-1500-group"
+	)
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+
+	// Every SyncGroup answers that the group began another rebalance, so
+	// the member rejoins after each sync and never gets an assignment.
+	h := c.Fault(Fault{
+		Keys:  []kmsg.Key{kmsg.SyncGroup},
+		Group: group,
+		Err:   kerr.RebalanceInProgress,
+		Count: -1,
+	})
+	defer h.Remove() // let a hung Close finish during cleanup
+
+	cl := newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+	)
+	waitHits(t, h, 3, "the member never rejoined after a failed sync")
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		cl.Close()
+	}()
+	waitCh(t, closed, "Close never returned while every sync failed")
+	if g := c.GroupInfo(group); g == nil || len(g.Members) != 0 {
+		t.Fatalf("member did not leave the group: %+v", g)
+	}
+}
