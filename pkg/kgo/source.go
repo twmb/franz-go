@@ -1032,7 +1032,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		s.session.reset()
 		didBackoff = true
 
-		s.cl.triggerUpdateMetadata(false, fmt.Sprintf("opportunistic load during source backoff: %v", why)) // as good a time as any
+		s.cl.triggerUpdateMetadata(true, fmt.Sprintf("load during source backoff: %v", why))
 		s.consecutiveFailures++
 		after := time.NewTimer(s.cl.cfg.retryBackoff(s.consecutiveFailures))
 		defer after.Stop()

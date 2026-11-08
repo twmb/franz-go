@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -5563,5 +5564,92 @@ func TestIssue1500(t *testing.T) {
 	waitCh(t, closed, "Close never returned while every sync failed")
 	if g := c.GroupInfo(group); g == nil || len(g.Members) != 0 {
 		t.Fatalf("member did not leave the group: %+v", g)
+	}
+}
+
+// TestIssue1531 fails every request of one key to a partition's leader, as
+// when the leader dies, so the client backs off and triggers a metadata
+// update after each failure. With the backoff shorter than MetadataMinAge,
+// every other trigger arrives inside the min age. The client must hold such
+// a trigger until the min age passes: if it drops the trigger, metadata
+// refreshes at twice the backoff instead of every MetadataMinAge, and the
+// client finds a new leader that much later.
+func TestIssue1531(t *testing.T) {
+	const (
+		topic   = "issue-1531"
+		minAge  = time.Second
+		backoff = 800 * time.Millisecond
+	)
+	for _, test := range []struct {
+		key    kmsg.Key
+		client func(*testing.T, *Cluster, ...kgo.Opt) *kgo.Client
+	}{
+		{kmsg.Fetch, func(t *testing.T, c *Cluster, opts ...kgo.Opt) *kgo.Client {
+			return newPlainClient(t, c, append(opts, kgo.ConsumeTopics(topic))...)
+		}},
+		{kmsg.ShareFetch, func(t *testing.T, c *Cluster, opts ...kgo.Opt) *kgo.Client {
+			c.SetGroupConfigs(topic, map[string]string{"share.auto.offset.reset": "earliest"})
+			return newShareConsumer(t, c, topic, topic, opts...)
+		}},
+	} {
+		t.Run(kmsg.NameForKey(int16(test.key)), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var stack VirtualNetwork
+				c := newCluster(t, NumBrokers(2), Ports(19531, 19532), ListenFn(stack.Listen), SeedTopics(1, topic))
+				if err := c.MoveTopicPartition(topic, 0, 0); err != nil {
+					t.Fatal(err)
+				}
+
+				var (
+					mu    sync.Mutex
+					down  bool
+					metas []time.Time
+				)
+				c.Control(func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+					c.KeepControl()
+					mu.Lock()
+					defer mu.Unlock()
+					switch {
+					case !down:
+					case kreq.Key() == int16(kmsg.Metadata):
+						metas = append(metas, time.Now())
+					case kreq.Key() == int16(test.key) && c.CurrentNode() == 0:
+						return nil, errors.New("leader down"), true // closes the connection
+					}
+					return nil, nil, false
+				})
+
+				cl := test.client(t, c,
+					kgo.Dialer(stack.DialContext),
+					kgo.DefaultProduceTopic(topic),
+					kgo.MetadataMinAge(minAge),
+					kgo.RetryBackoffFn(func(int) time.Duration { return backoff }),
+				)
+				if err := cl.ProduceSync(context.Background(), kgo.StringRecord("v")).FirstErr(); err != nil {
+					t.Fatal(err)
+				}
+				// A consumer that has consumed a record keeps fetching
+				// from the leader.
+				consumeN(t, cl, 1, 5*time.Second)
+
+				mu.Lock()
+				down = true
+				mu.Unlock()
+				time.Sleep(10 * minAge)
+
+				mu.Lock()
+				defer mu.Unlock()
+				var gaps []time.Duration
+				for i := 1; i < len(metas); i++ {
+					gaps = append(gaps, metas[i].Sub(metas[i-1]))
+				}
+				// A dropped trigger leaves a gap of 2*backoff, and an
+				// update that does not wait out the min age leaves a gap
+				// of backoff.
+				if len(gaps) < 3 || slices.ContainsFunc(gaps, func(gap time.Duration) bool { return gap < minAge || gap >= 2*backoff }) {
+					t.Errorf("metadata requests %v apart while the leader is down, want every %v (MetadataMinAge)", gaps, minAge)
+				}
+			})
+		})
 	}
 }

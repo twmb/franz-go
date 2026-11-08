@@ -171,6 +171,12 @@ func (cl *Client) dowaitmeta(ctx context.Context, wait time.Duration, force bool
 	cl.metawait.c.Broadcast()
 }
 
+// triggerUpdateMetadata queues a metadata update, which the metadata loop runs
+// once MetadataMinAge has passed since the last update. If must is false and
+// metadata was updated within MetadataMinAge, we drop the trigger and return
+// false. A caller retrying a failure that the last update may not have fixed,
+// such as a dead leader, passes true: a dropped trigger leaves metadata stale
+// until the next failure triggers again.
 func (cl *Client) triggerUpdateMetadata(must bool, why string) bool {
 	if !must {
 		cl.metawait.mu.Lock()

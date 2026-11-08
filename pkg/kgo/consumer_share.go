@@ -2466,9 +2466,9 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 
 		// Like the classic source backoff: a fetch failure is the
 		// only signal we get when a broker dies (no response means no
-		// CurrentLeader hint), so opportunistically refresh metadata
-		// to migrate our cursors to the new leader.
-		s.cl.triggerUpdateMetadata(false, fmt.Sprintf("opportunistic load during share source backoff: %v", why))
+		// CurrentLeader hint), so we refresh metadata to migrate our
+		// cursors to the new leader.
+		s.cl.triggerUpdateMetadata(true, fmt.Sprintf("load during share source backoff: %v", why))
 		s.consecutiveFailures++
 		after := time.NewTimer(sc.cfg.retryBackoff(s.consecutiveFailures))
 		defer after.Stop()
