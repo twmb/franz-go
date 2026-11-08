@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"slices"
 	"testing"
 	"time"
 
@@ -44,7 +45,8 @@ func TestStoreCachedMetaTopicIDChange(t *testing.T) {
 
 // OptValue(TransactionalID) must return the string input (like ClientID and
 // InstanceID, and as documented), not the internal *string; the Share group
-// options must be present in the switch at all.
+// options must be present in the switch at all; ConsumeTopics, WithHooks, and
+// WithPools must come back as plain slices, not internal types.
 func TestOptValuesTxnIDAndShare(t *testing.T) {
 	t.Parallel()
 
@@ -66,9 +68,11 @@ func TestOptValuesTxnIDAndShare(t *testing.T) {
 	shcl, err := NewClient(
 		SeedBrokers("127.0.0.1:1"),
 		ShareGroup("sg"),
-		ConsumeTopics("t"),
+		ConsumeTopics("t", "a"),
 		ShareMaxRecords(10),
 		ShareMaxRecordsStrict(),
+		WithHooks(&someHook{}),
+		WithPools(&decompressPool{}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +89,15 @@ func TestOptValuesTxnIDAndShare(t *testing.T) {
 	}
 	if vs := shcl.OptValues(ShareAckCallback); vs == nil {
 		t.Errorf("OptValues(ShareAckCallback) = nil; the option exists and must be returned")
+	}
+	if v, ok := shcl.OptValue(ConsumeTopics).([]string); !ok || !slices.Equal(v, []string{"a", "t"}) {
+		t.Errorf("OptValue(ConsumeTopics) = %v (%T), want the sorted []string{a t}", v, shcl.OptValue(ConsumeTopics))
+	}
+	if v, ok := shcl.OptValue(WithHooks).([]Hook); !ok || len(v) != 1 {
+		t.Errorf("OptValue(WithHooks) = %v (%T), want a one-element []Hook", v, shcl.OptValue(WithHooks))
+	}
+	if v, ok := shcl.OptValue(WithPools).([]Pool); !ok || len(v) != 1 {
+		t.Errorf("OptValue(WithPools) = %v (%T), want a one-element []Pool", v, shcl.OptValue(WithPools))
 	}
 }
 
