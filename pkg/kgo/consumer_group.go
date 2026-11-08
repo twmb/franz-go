@@ -321,8 +321,16 @@ func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 	}
 }
 
-// GroupMetadata returns the current group member ID and generation, or an
-// empty string and -1 if not in the group.
+// GroupMetadata returns the member ID and generation we currently have for
+// the group, or an empty string and -1 if the client is not consuming in a
+// group or has no member ID yet. For a KIP-848 group, the generation is the
+// member epoch.
+//
+// Note that these values do not mean the client is in the group. A KIP-848
+// member creates its own member ID and uses epoch 0 until a heartbeat gives
+// it an epoch, and returns to epoch 0 when it rejoins. A classic member can
+// receive its member ID before its join completes (KIP-394). Leaving the
+// group clears neither value.
 func (cl *Client) GroupMetadata() (string, int32) {
 	g := cl.consumer.g
 	if g == nil {
