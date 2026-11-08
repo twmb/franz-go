@@ -28,7 +28,7 @@ import (
 var (
 	seedBrokers = flag.String("brokers", "localhost:9092", "comma delimited list of seed brokers")
 	topic       = flag.String("topic", "formatter-example", "topic to produce to and consume from")
-	layout      = flag.String("format", "%t [p%p o%o] %d{UnixMilli}: key=%k value=%v headers=%H%h{ %k=%v}\n",
+	layout      = flag.String("format", "%t [p%p o%o] %d: key=%k value=%v headers=%H%h{ %k=%v}\n",
 		"record format layout (see RecordFormatter docs)")
 )
 
