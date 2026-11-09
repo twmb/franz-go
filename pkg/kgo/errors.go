@@ -273,6 +273,11 @@ var (
 	// EXTERNAL //
 	//////////////
 
+	// ErrBrokerConnectionDead is returned when a broker is replaced by metadata
+	// or its connection dies while a request is in flight. It is retryable.
+	// Broker.Request can return this error; Broker.RetriableRequest retries it.
+	ErrBrokerConnectionDead = errChosenBrokerDead
+
 	// ErrRecordTimeout is passed to produce promises when records are
 	// unable to be produced within the RecordDeliveryTimeout.
 	ErrRecordTimeout = errors.New("records have timed out before they were able to be produced")
