@@ -3,7 +3,7 @@ v1.22.3
 
 This patch release contains a myriad of improvements.
 
-* **BREAKING BUG FIX** `OptValue(ConsumeTopics)` now returns a `[]string`
+* **BEHAVIOR CHANGING BUG FIX** `OptValue(ConsumeTopics)` now returns a `[]string`
   (sorted) as it has always been documented to do. Previously, it returned a
   `map[string]*regexp.Regexp`, which was a bug and exposed internal client
   details. An ecosystem audit shows that this specific usage of `OptValue`
