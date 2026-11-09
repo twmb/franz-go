@@ -1,3 +1,90 @@
+v1.22.3
+===
+
+This patch release contains a myriad of improvements.
+
+* **BREAKING BUG FIX** `OptValue(ConsumeTopics)` now returns a `[]string`
+  (sorted) as it has always been documented to do. Previously, it returned a
+  `map[string]*regexp.Regexp`, which was a bug and exposed internal client
+  details. An ecosystem audit shows that this specific usage of `OptValue`
+  only exists in tests (although this may be different for private repos);
+  if your test relies on type asserting to the map, please switch to a `[]string`.
+
+* `Close` and `LeaveGroup` on a classic group member no longer hang while
+  a group is rebalancing. Thanks [@abdymazhit](https://github.com/abdymazhit)
+  for the report and initial fix, see [#1500](https://github.com/twmb/franz-go/issues/1500).
+
+* If two requests are being written to the same connection, the second request
+  no longer needs to wait for the first if the second request's context is
+  canceled. A request that fails because the client is closing now returns
+  `ErrClientClosed` rather than `context.Canceled`. See [#1505](https://github.com/twmb/franz-go/issues/1505).
+  More generally: a request waiting for anything can now be canceled at any time.
+
+* `SetOffsets` now works more as you would expect, and some behavior improvements with this ([#1513](https://github.com/twmb/franz-go/issues/1513)):
+    * If you use it while `OffsetFetch` is still running, your set is kept rather than being overwritten
+    * Using `SetOffsets` in `OnPartitionsAssigned` now works
+    * `SetOffsets` partitions are now eligible to be committed, even if they have not yet been consumed
+    * `CommittedOffsets` now avoids returning partitions that were set that actually have no commit
+    * Other changes and improvements around commits and setting offsets and which wins where; see the PR
+
+* A partition who says "my leader is broker 3" in a metadata response
+  that does not actually include broker 3 now receives error
+  `LEADER_NOT_AVAILABLE`, rather than retrying (this works around a Redpanda issue).
+
+* While a partition's leader is down, metadata now refreshes every
+  `MetadataMinAge` rather than up to 2x every min age.
+
+* A `read_committed` consumer no longer reports `ErrDataLoss` when a
+  transaction marker is written under a later leader epoch than its records.
+  Thanks [@WillemKauf](https://github.com/WillemKauf), see
+  [#1530](https://github.com/twmb/franz-go/pull/1530).
+
+* Aborting a transaction while the coordinator is still completing the prior
+  one no longer fails the producer ID with INVALID_TXN_STATE. Thanks
+  [@WillemKauf](https://github.com/WillemKauf), see
+  [#1534](https://github.com/twmb/franz-go/pull/1534).
+
+* Share consumers now handle `CurrentLeader` hints like the classic consumer;
+  an ordinary partition error no longer moves the cursor to broker 0 and
+  stalls the partition. Thanks [@tsailin-bit](https://github.com/tsailin-bit)
+  for the report and fixes, see [#1519](https://github.com/twmb/franz-go/issues/1519).
+
+* `RecordFormatter` and `RecordReader` strftime support / formatting support in
+  general has been improved.
+
+* `OptValue(WithHooks)` and `OptValue(WithPools)` now properly return `[]Hook` and `[]Pool`
+  rather than an unusable value.
+
+* sasl: a rejected OAuth token now fails with the broker's reason, SCRAM
+  sends the real gs2 header when `Zid` is set, and AWS finds the region for
+  dual-stack and newer partition hostnames.
+
+* kmsg is bumped to v1.15.1, which bounds decoding of malformed input.
+
+## Relevant issues / PR fixes
+
+* [#1532](https://github.com/twmb/franz-go/pull/1532) - kadm: `ListedGroup` gains `GroupType` (thanks [@dylanmei](https://github.com/dylanmei))
+* [#1538](https://github.com/twmb/franz-go/pull/1538) - `OptValue` returns `[]string`, `[]Hook`, and `[]Pool` for `ConsumeTopics`, `WithHooks`, and `WithPools`
+* [#1537](https://github.com/twmb/franz-go/pull/1537) - metadata refreshes every `MetadataMinAge` while a partition's leader is down (fixes [#1531](https://github.com/twmb/franz-go/issues/1531), thanks [@omkar619-dev](https://github.com/omkar619-dev) and [@triswell](https://github.com/triswell))
+* [#1534](https://github.com/twmb/franz-go/pull/1534) - aborting while the coordinator is completing the prior transaction no longer fails the producer ID (thanks [@WillemKauf](https://github.com/WillemKauf))
+* [#1524](https://github.com/twmb/franz-go/pull/1524) - `SetOffsets` works during a pending offset load and in `OnPartitionsAssigned`, and set offsets are committed (fixes [#1513](https://github.com/twmb/franz-go/issues/1513), thanks [@Abdullah1738](https://github.com/Abdullah1738) for the report)
+* [#1527](https://github.com/twmb/franz-go/pull/1527) - a partition whose leader is missing from the metadata broker list is `LEADER_NOT_AVAILABLE` (replaces [#1526](https://github.com/twmb/franz-go/pull/1526), thanks [@sloory](https://github.com/sloory) for the report)
+* [#1525](https://github.com/twmb/franz-go/pull/1525) - strftime flags, widths, and modifiers, and `RecordReader` fixes (fixes [#1521](https://github.com/twmb/franz-go/issues/1521))
+* [#1530](https://github.com/twmb/franz-go/pull/1530) - `read_committed` no longer reports `ErrDataLoss` after a transaction marker in a later leader epoch (thanks [@WillemKauf](https://github.com/WillemKauf))
+* [#1517](https://github.com/twmb/franz-go/pull/1517) - kmsg v1.15.1: decoding fails on malformed lengths rather than looping or over-allocating, and the generated code is smaller (thanks [@slayerjain](https://github.com/slayerjain))
+* [#1523](https://github.com/twmb/franz-go/pull/1523) - `GroupMetadata` docs for KIP-848 (fixes [#1503](https://github.com/twmb/franz-go/issues/1503), thanks [@EricTsuii](https://github.com/EricTsuii))
+* [#1528](https://github.com/twmb/franz-go/pull/1528) - `ProducerBatchCompression` docs on default compression caveats (thanks [@daffaromero](https://github.com/daffaromero))
+* [#1506](https://github.com/twmb/franz-go/pull/1506) - a request returns when its context ends rather than waiting behind other requests to the same broker, and returns `ErrClientClosed` at close (fixes [#1505](https://github.com/twmb/franz-go/issues/1505), thanks [@omkar619-dev](https://github.com/omkar619-dev) for the report)
+* [#1522](https://github.com/twmb/franz-go/pull/1522) - share consumers handle `CurrentLeader` hints like the classic consumer (fixes [#1519](https://github.com/twmb/franz-go/issues/1519), thanks [@tsailin-bit](https://github.com/tsailin-bit) for the report and fixes)
+* [#1502](https://github.com/twmb/franz-go/pull/1502) - sasl: OAuth error reply, SCRAM gs2 header and iteration cap, AWS region detection (ref [#482](https://github.com/twmb/franz-go/issues/482))
+* [#1501](https://github.com/twmb/franz-go/pull/1501) - `Close` no longer hangs while a classic group keeps rebalancing (fixes [#1500](https://github.com/twmb/franz-go/issues/1500), thanks [@abdymazhit](https://github.com/abdymazhit))
+* [#1520](https://github.com/twmb/franz-go/pull/1520) - kfake: failed piggybacked share acks are answered as Kafka does (from [#1519](https://github.com/twmb/franz-go/issues/1519))
+* [#1518](https://github.com/twmb/franz-go/pull/1518) - strftime `%I`, `%l`, and `%r` print 12 at midnight and noon
+* [#1507](https://github.com/twmb/franz-go/pull/1507) - kadm: `Lag` no longer rewrites the caller's groups slice
+* [#1514](https://github.com/twmb/franz-go/pull/1514) - kfake: control function, `SleepControl`, and `Close` fixes
+* [#1510](https://github.com/twmb/franz-go/pull/1510) - docs: resuming does not interrupt an in-flight fetch
+* [#1509](https://github.com/twmb/franz-go/pull/1509) - kfake: `Close` no longer leaves the cluster's `run` goroutine blocked after a slept control function wakes (fixes [#1508](https://github.com/twmb/franz-go/issues/1508), thanks [@Rajvira10](https://github.com/Rajvira10))
+
 v1.22.2
 ===
 
