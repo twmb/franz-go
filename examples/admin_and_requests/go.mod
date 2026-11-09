@@ -3,9 +3,9 @@ module admin_and_requests
 go 1.27.0
 
 require (
-	github.com/twmb/franz-go v1.22.1
+	github.com/twmb/franz-go v1.22.3
 	github.com/twmb/franz-go/pkg/kadm v1.19.0
-	github.com/twmb/franz-go/pkg/kmsg v1.15.0
+	github.com/twmb/franz-go/pkg/kmsg v1.15.1
 )
 
 require (

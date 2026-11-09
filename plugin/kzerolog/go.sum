@@ -8,9 +8,9 @@ github.com/pierrec/lz4/v4 v4.1.33 h1:GjG1TJ1V4IzKP8L96muuuDNpTwd7D+l2ccXrjAbe014
 github.com/pierrec/lz4/v4 v4.1.33/go.mod h1:7SE9MC2STkNtL4PIwGhjmyVwvILaGI9/COYQNBhKM/c=
 github.com/rs/zerolog v1.35.1 h1:m7xQeoiLIiV0BCEY4Hs+j2NG4Gp2o2KPKmhnnLiazKI=
 github.com/rs/zerolog v1.35.1/go.mod h1:EjML9kdfa/RMA7h/6z6pYmq1ykOuA8/mjWaEvGI+jcw=
-github.com/twmb/franz-go v1.22.1 h1:J7Xixbb7k0Itl39eaBot5PIblZh9IL3ZKYgo2yzlf40=
-github.com/twmb/franz-go v1.22.1/go.mod h1:b2qISbZgMTJRcIsltVqPz4+Bb2Lw/9bN+/Gd0C07kYw=
-github.com/twmb/franz-go/pkg/kmsg v1.15.0 h1:mILdOQm4JkWojbSYVQ7KJNJ1qMdYNsLrdNOBUVKM6IA=
-github.com/twmb/franz-go/pkg/kmsg v1.15.0/go.mod h1:sGkGxKexpRLBThFHJLjjywcyfkK09qB/g+X+wFWZQ/A=
+github.com/twmb/franz-go v1.22.3 h1:RHe35s34pKefMLyL+ZYJ6mQVtfFZz4zHDHVkTyACur0=
+github.com/twmb/franz-go v1.22.3/go.mod h1:OhbFLkvp6GLcN5daC7I4Q2z0W/rFP16HG+gTbe9CDC4=
+github.com/twmb/franz-go/pkg/kmsg v1.15.1 h1:3sj7ekbH33t73nsBcHS0wtp/PyMIViHLNItZrE8V9zM=
+github.com/twmb/franz-go/pkg/kmsg v1.15.1/go.mod h1:sGkGxKexpRLBThFHJLjjywcyfkK09qB/g+X+wFWZQ/A=
 golang.org/x/sys v0.49.0 h1:XbzkgYJHdqh/8m2Uu0W/dQv8nktxx4BFHp1M0gROTXA=
 golang.org/x/sys v0.49.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
