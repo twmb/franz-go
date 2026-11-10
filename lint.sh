@@ -11,6 +11,7 @@ all_modules=(
 	pkg/kfake
 	pkg/kmsg
 	pkg/sr
+	pkg/sr/serde/protobuf
 	pkg/sasl/kerberos
 )
 

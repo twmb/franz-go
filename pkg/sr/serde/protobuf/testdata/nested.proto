@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package testpb;
+
+option go_package = "github.com/twmb/franz-go/pkg/sr/serde/protobuf/testpb";
+
+message Outer {
+  message Inner {
+    string value = 1;
+  }
+  Inner inner = 1;
+}

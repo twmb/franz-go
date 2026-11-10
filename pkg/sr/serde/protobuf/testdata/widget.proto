@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package testpb;
+
+option go_package = "github.com/twmb/franz-go/pkg/sr/serde/protobuf/testpb";
+
+message Widget {
+  string name = 1;
+}
+
+message Pizza {
+  int32 slices = 1;
+}

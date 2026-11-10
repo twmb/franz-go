@@ -30,6 +30,13 @@ as a general example of TLS, SASL, compression, and other client tuning.
 The `compare/` subdirectory contains equivalent benchmarks for other Go Kafka
 clients (confluent-kafka-go, sarama, segment).
 
+`compare/schema_registry_protobuf` is a different sort of comparison: it
+benchmarks this repo's protobuf schema registry serde against
+confluent-kafka-go's over a shared in-memory registry, with no broker
+involved, and asserts that each client can decode the other's output. It needs
+`CGO_ENABLED=1`, because confluent-kafka-go's schemaregistry package does not
+build without cgo.
+
 ## consumer_group_lag
 
 Monitors consumer group lag using `kadm.Lag`. Periodically prints per-topic,
@@ -142,6 +149,14 @@ Demonstrates SASL authentication with TLS using different mechanisms.
 Demonstrates using the `sr` (schema registry) client with Avro serialization.
 Registers a schema, produces encoded records, and decodes them on consume using
 `sr.Serde`.
+
+- `-topic` - topic to produce to and consume from
+- `-registry` - schema registry URL (default localhost:8081)
+
+## schema_registry_protobuf
+
+Like `schema_registry`, but uses `pkg/sr/serde/protobuf` for automatic protobuf
+schema registration and Confluent wire-format encoding.
 
 - `-topic` - topic to produce to and consume from
 - `-registry` - schema registry URL (default localhost:8081)

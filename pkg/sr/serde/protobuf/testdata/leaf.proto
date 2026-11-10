@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package testpb;
+
+option go_package = "github.com/twmb/franz-go/pkg/sr/serde/protobuf/testpb";
+
+message Leaf {
+  string id = 1;
+}
