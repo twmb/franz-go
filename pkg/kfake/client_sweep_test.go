@@ -1,8 +1,10 @@
 package kfake
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -126,7 +128,7 @@ func TestAuditCloseSendsTerminatingTelemetryPush(t *testing.T) {
 		resp.PushIntervalMillis = 60_000          // no periodic push interferes
 		resp.TelemetryMaxBytes = 1 << 20
 		resp.DeltaTemporality = true
-		resp.RequestedMetrics = []string{""} // all metrics
+		resp.RequestedMetrics = []string{"*"} // all metrics, as Kafka sends
 		select {
 		case subscribed <- struct{}{}:
 		default:
@@ -134,12 +136,17 @@ func TestAuditCloseSendsTerminatingTelemetryPush(t *testing.T) {
 		return resp, nil, true
 	})
 
+	var withMetrics atomic.Bool
 	termPushes := c.Fault(Fault{
 		Keys:    []kmsg.Key{kmsg.PushTelemetry},
 		Observe: true,
 		Count:   -1,
 		When: func(kreq kmsg.Request) bool {
-			return kreq.(*kmsg.PushTelemetryRequest).Terminating
+			req := kreq.(*kmsg.PushTelemetryRequest)
+			if req.Terminating && bytes.Contains(req.Metrics, []byte("org.apache.kafka.producer.")) {
+				withMetrics.Store(true)
+			}
+			return req.Terminating
 		},
 	})
 
@@ -166,6 +173,9 @@ func TestAuditCloseSendsTerminatingTelemetryPush(t *testing.T) {
 	waitHits(t, termPushes, 1, "no terminating telemetry push was delivered during Close")
 	if n := termPushes.Hits(); n != 1 {
 		t.Errorf("got %d terminating pushes, want exactly 1", n)
+	}
+	if !withMetrics.Load() {
+		t.Error("the terminating push carried no producer metrics")
 	}
 }
 

@@ -2903,7 +2903,7 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 		lastSub = resp.SubscriptionID
 		return subscription{resp.RequestedMetrics, resp.PushIntervalMillis}
 	}
-	all := []string{""} // our marker for every metric
+	all := []string{"*"} // every metric
 
 	type config struct {
 		value  string
