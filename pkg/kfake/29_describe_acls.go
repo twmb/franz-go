@@ -10,6 +10,7 @@ import (
 // Behavior:
 // * Returns ACLs matching the filter
 // * Requires DESCRIBE on CLUSTER
+// * SECURITY_DISABLED without EnableACLs, as a broker with no authorizer
 //
 // Version notes:
 // * v1: PatternType field added
@@ -31,6 +32,12 @@ func (c *Cluster) handleDescribeACLs(creq *clientReq) (kmsg.Response, error) {
 	}
 	if e := c.denyCluster(creq, kmsg.ACLOperationDescribe, k); e != nil {
 		resp.ErrorCode = e.Code
+		resp.ErrorMessage = kmsg.StringPtr(e.Message)
+		return resp, nil
+	}
+	if !c.cfg.enableACLs {
+		resp.ErrorCode = kerr.SecurityDisabled.Code
+		resp.ErrorMessage = kmsg.StringPtr("No Authorizer is configured on the broker")
 		return resp, nil
 	}
 

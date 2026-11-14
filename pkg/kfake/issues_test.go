@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"hash/crc32"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -5651,5 +5652,33 @@ func TestIssue1531(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+// A request with a key kmsg does not know closes the connection, as Kafka
+// does, rather than crashing the process. No other test writes raw frames.
+func TestUnknownRequestKeyClosesConnection(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1))
+
+	conn, err := net.DialTimeout("tcp", c.ListenAddrs()[0], 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// size, key 9999, version 0, correlation ID 1, null client ID
+	frame := []byte{0, 0, 0, 10, 0x27, 0x0f, 0, 0, 0, 0, 0, 1, 0xff, 0xff}
+	if _, err := conn.Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("read after an unknown key: got %v, want EOF", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := newPlainClient(t, c).Ping(ctx); err != nil {
+		t.Fatalf("cluster stopped serving: %v", err)
 	}
 }

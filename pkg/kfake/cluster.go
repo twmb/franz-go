@@ -65,9 +65,10 @@ type (
 		acls               clusterACLs
 		bcfgs              map[string]*string
 		quotas             map[string]quotaEntry
-		telem              map[[16]byte]int32
-		telemNextID        int32
-		features           map[string]int16 // finalized levels changed by UpdateFeatures; a feature not here is at the kversion table's default, see 18_api_versions.go
+		telem              map[[16]byte]telemClient // client instance ID -> the client, see telemClientFor
+		telemVersion       int                      // bumped when a client metrics subscription changes, see telemClientFor
+		features           map[string]int16         // finalized levels changed by UpdateFeatures; a feature not here is at the kversion table's default, see 18_api_versions.go
+		featuresEpoch      int64                    // bumped when UpdateFeatures changes a level; ApiVersions answers it
 		fetchSessions      fetchSessions
 		groupConfigs       map[string]map[string]*string // group -> config key -> config value
 		clientMetrics      map[string]map[string]*string // subscription -> config key -> config value, see data.go
@@ -186,7 +187,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		},
 		bcfgs:    make(map[string]*string, len(cfg.brokerConfigs)),
 		quotas:   make(map[string]quotaEntry),
-		telem:    make(map[[16]byte]int32),
+		telem:    make(map[[16]byte]telemClient),
 		features: make(map[string]int16),
 
 		die: make(chan struct{}),
@@ -454,14 +455,17 @@ func (c *Cluster) run() {
 		}
 		c.offsetExpireTicker.Stop()
 		c.shareGroups.stopSweepTicker()
-		// An unfired timer holds its group, and the group holds the
-		// cluster: without this a closed cluster and all its data stay
-		// reachable until the last session timeout expires.
+		// An unfired timer holds the cluster: without this a closed
+		// cluster and all its data stay reachable until the last session
+		// or telemetry client timeout expires.
 		for _, g := range c.groups.gs {
 			g.stopTimers()
 		}
 		for _, g := range c.shareGroups.gs {
 			g.stopTimers()
+		}
+		for _, tc := range c.telem {
+			tc.t.Stop()
 		}
 	}()
 	c.offsetExpireTicker = time.NewTicker(time.Duration(c.offsetsRetentionCheckIntervalMs()) * time.Millisecond)
@@ -817,7 +821,7 @@ outer:
 		}
 
 		select {
-		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err, seq: creq.seq, unmuted: creq.unmuted}:
+		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err, seq: creq.seq, unmuted: creq.unmuted, closeAfter: creq.closeAfter}:
 		case <-creq.cc.done:
 		case <-c.die:
 			return

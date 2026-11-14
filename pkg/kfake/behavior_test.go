@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"math/rand"
 	"slices"
 	"strconv"
@@ -3519,6 +3520,210 @@ func TestApiVersionsSupportedFeatures(t *testing.T) {
 	if resp.FinalizedFeaturesEpoch < 0 {
 		t.Fatalf("expected a finalized features epoch, got %d", resp.FinalizedFeaturesEpoch)
 	}
+
+	// Below v4, a supported feature with min 0 is left out, because
+	// clients before 3.8 fail to parse it (KAFKA-17011).
+	cl37 := newPlainClient(t, c, kgo.MaxVersions(kversion.V3_7_0()))
+	resp, err = req.RequestWith(ctx, cl37)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Version != 3 {
+		t.Fatalf("ApiVersions went out at v%d, want v3", resp.Version)
+	}
+	if len(resp.SupportedFeatures) == 0 {
+		t.Fatal("v3 lists no supported features")
+	}
+	for _, f := range resp.SupportedFeatures {
+		if f.MinVersion == 0 {
+			t.Errorf("v3 lists %s with min 0", f.Name)
+		}
+	}
+}
+
+// DescribeCluster answers only a request for brokers, and authorized
+// operations list what Kafka supports for the resource type, only for a
+// resource answered without an error.
+func TestAuthorizedOperationsAndEndpointType(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t"))
+	cl := newPlainClient(t, c)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	offsets := kadm.Offsets{}
+	offsets.Add(kadm.Offset{Topic: "t", Partition: 0, At: 1})
+	if _, err := kadm.NewClient(cl).CommitOffsets(ctx, "g", offsets); err != nil {
+		t.Fatal(err)
+	}
+
+	ops := func(os ...kmsg.ACLOperation) (n int32) {
+		for _, o := range os {
+			n |= 1 << o
+		}
+		return n
+	}
+	for _, tc := range []struct {
+		endpoint int8
+		code     int16
+		ops      int32
+	}{
+		{1, 0, ops(kmsg.ACLOperationCreate, kmsg.ACLOperationAlter, kmsg.ACLOperationDescribe, kmsg.ACLOperationClusterAction,
+			kmsg.ACLOperationDescribeConfigs, kmsg.ACLOperationAlterConfigs, kmsg.ACLOperationIdempotentWrite)},
+		{2, kerr.MismatchedEndpointType.Code, math.MinInt32},
+		{0, kerr.UnsupportedEndpointType.Code, math.MinInt32},
+	} {
+		req := kmsg.NewPtrDescribeClusterRequest()
+		req.EndpointType, req.IncludeClusterAuthorizedOperations = tc.endpoint, true
+		if r := faultReq(t, cl, 0, req).(*kmsg.DescribeClusterResponse); r.ErrorCode != tc.code || r.ClusterAuthorizedOperations != tc.ops {
+			t.Errorf("endpoint %d: got error %d with operations %b, want error %d with %b", tc.endpoint, r.ErrorCode, r.ClusterAuthorizedOperations, tc.code, tc.ops)
+		}
+	}
+	for _, tc := range []struct {
+		group string
+		code  int16
+		ops   int32
+	}{
+		{"g", 0, ops(kmsg.ACLOperationRead, kmsg.ACLOperationDelete, kmsg.ACLOperationDescribe, kmsg.ACLOperationDescribeConfigs, kmsg.ACLOperationAlterConfigs)},
+		{"missing", kerr.GroupIDNotFound.Code, math.MinInt32},
+	} {
+		req := kmsg.NewPtrDescribeGroupsRequest()
+		req.Groups, req.IncludeAuthorizedOperations = []string{tc.group}, true
+		if dg := faultReq(t, cl, 0, req).(*kmsg.DescribeGroupsResponse).Groups[0]; dg.ErrorCode != tc.code || dg.AuthorizedOperations != tc.ops {
+			t.Errorf("group %s: got error %d with operations %b, want error %d with %b", tc.group, dg.ErrorCode, dg.AuthorizedOperations, tc.code, tc.ops)
+		}
+	}
+	req := kmsg.NewPtrConsumerGroupDescribeRequest()
+	req.Groups, req.IncludeAuthorizedOperations = []string{"missing"}, true
+	if dg := faultReq(t, cl, 0, req).(*kmsg.ConsumerGroupDescribeResponse).Groups[0]; dg.ErrorCode != kerr.GroupIDNotFound.Code || dg.AuthorizedOperations != math.MinInt32 {
+		t.Errorf("missing consumer group: got error %d with operations %b", dg.ErrorCode, dg.AuthorizedOperations)
+	}
+}
+
+// AlterClientQuotas validates entities, keys, and values as Kafka does, and
+// DescribeClientQuotas filters as Kafka does.
+func TestClientQuotas(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1))
+	cl := newPlainClient(t, c)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	alice := "alice"
+	entity := func(kvs ...any) []kmsg.AlterClientQuotasRequestEntryEntity {
+		var es []kmsg.AlterClientQuotasRequestEntryEntity
+		for i := 0; i < len(kvs); i += 2 {
+			e := kmsg.NewAlterClientQuotasRequestEntryEntity()
+			e.Type = kvs[i].(string)
+			e.Name, _ = kvs[i+1].(*string)
+			es = append(es, e)
+		}
+		return es
+	}
+	specified := func(typ string) kmsg.DescribeClientQuotasRequestComponent {
+		comp := kmsg.NewDescribeClientQuotasRequestComponent()
+		comp.EntityType = typ
+		comp.MatchType = 2
+		return comp
+	}
+
+	// The cases run in order against one cluster.
+	for _, tc := range []struct {
+		name string
+
+		entity    []kmsg.AlterClientQuotasRequestEntryEntity // nil skips the alter
+		key       string
+		value     float64
+		twice     bool // the request repeats the entity with value+1
+		wantAlter *kerr.Error
+
+		describe     bool
+		strict       bool
+		faulted      bool // a fault fails alice's entity
+		comps        []kmsg.DescribeClientQuotasRequestComponent
+		wantEntries  int
+		wantDescribe *kerr.Error
+	}{
+		{name: "nothing to describe answers an empty list", describe: true},
+		{name: "set a default user quota", entity: entity("user", nil), key: "producer_byte_rate", value: 1000},
+		{name: "set a user quota", entity: entity("user", &alice), key: "producer_byte_rate", value: 2000},
+		{name: "specified includes the default", describe: true, comps: []kmsg.DescribeClientQuotasRequestComponent{specified("user")}, wantEntries: 2},
+		{name: "strict with no components matches nothing", describe: true, strict: true},
+		{name: "not strict with no components matches everything", describe: true, wantEntries: 2},
+		{name: "a faulted entity fails the describe", describe: true, faulted: true, wantDescribe: kerr.InvalidRequest},
+		{name: "zero", entity: entity("user", &alice), key: "producer_byte_rate", value: 0, wantAlter: kerr.InvalidRequest},
+		{name: "fraction of an integral key", entity: entity("user", &alice), key: "producer_byte_rate", value: 1.5, wantAlter: kerr.InvalidRequest},
+		{name: "not a number", entity: entity("user", &alice), key: "request_percentage", value: math.NaN(), wantAlter: kerr.InvalidRequest},
+		{name: "unknown key", entity: entity("user", &alice), key: "producer_rate", value: 1, wantAlter: kerr.InvalidRequest},
+		{name: "ip key on a user", entity: entity("user", &alice), key: "connection_creation_rate", value: 1, wantAlter: kerr.InvalidRequest},
+		{name: "empty user", entity: entity("user", new("")), key: "producer_byte_rate", value: 1, wantAlter: kerr.InvalidRequest},
+		{name: "ip with a user", entity: entity("ip", nil, "user", &alice), key: "connection_creation_rate", value: 1, wantAlter: kerr.InvalidRequest},
+		{name: "unknown entity type", entity: entity("group", &alice), key: "producer_byte_rate", value: 1, wantAlter: kerr.InvalidRequest},
+		{name: "an entity twice keeps the first entry", entity: entity("user", &alice), key: "producer_byte_rate", value: 3000, twice: true, wantAlter: kerr.InvalidRequest},
+		{name: "an entity type twice keeps the last component", entity: entity("user", new(""), "user", &alice), key: "producer_byte_rate", value: 3500},
+		{name: "invalid alters stored nothing", describe: true, wantEntries: 2},
+		{name: "exact match without a name", describe: true, comps: []kmsg.DescribeClientQuotasRequestComponent{{EntityType: "user"}}, wantDescribe: kerr.InvalidRequest},
+		{name: "unknown entity type in a filter", describe: true, comps: []kmsg.DescribeClientQuotasRequestComponent{specified("group")}, wantDescribe: kerr.UnsupportedVersion},
+		{name: "set a quota for a user named <default>", entity: entity("user", new("<default>")), key: "producer_byte_rate", value: 1500},
+		{name: "a user named <default> is not the default user", describe: true, wantEntries: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.entity != nil {
+				req := kmsg.NewPtrAlterClientQuotasRequest()
+				entry := kmsg.NewAlterClientQuotasRequestEntry()
+				entry.Entity = tc.entity
+				op := kmsg.NewAlterClientQuotasRequestEntryOp()
+				op.Key, op.Value = tc.key, tc.value
+				entry.Ops = append(entry.Ops, op)
+				req.Entries = append(req.Entries, entry)
+				if tc.twice {
+					entry.Ops = []kmsg.AlterClientQuotasRequestEntryOp{{Key: tc.key, Value: tc.value + 1}}
+					req.Entries = append(req.Entries, entry)
+				}
+				resp, err := req.RequestWith(ctx, cl)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var want int16
+				if tc.wantAlter != nil {
+					want = tc.wantAlter.Code
+				}
+				if got := resp.Entries[0].ErrorCode; got != want || len(resp.Entries) != 1 {
+					t.Fatalf("alter: got error %d in %d entries, want %d in one", got, len(resp.Entries), want)
+				}
+				if tc.twice {
+					var got float64
+					c.admin(func() { got = c.quotas[makeQuotaEntity(tc.entity).key()].values[tc.key] })
+					if got != tc.value {
+						t.Errorf("alter twice stored %v, want the first entry's %v", got, tc.value)
+					}
+				}
+			}
+			if tc.describe {
+				if tc.faulted {
+					c.Fault(Fault{Keys: []kmsg.Key{kmsg.DescribeClientQuotas}, Resource: alice, Err: kerr.InvalidRequest})
+				}
+				req := kmsg.NewPtrDescribeClientQuotasRequest()
+				req.Strict = tc.strict
+				req.Components = tc.comps
+				resp, err := req.RequestWith(ctx, cl)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.wantDescribe != nil {
+					if resp.ErrorCode != tc.wantDescribe.Code || resp.Entries != nil {
+						t.Errorf("describe: got error %d with %d entries, want %s and none", resp.ErrorCode, len(resp.Entries), tc.wantDescribe.Message)
+					}
+					return
+				}
+				if resp.Entries == nil {
+					t.Fatal("describe answered null entries")
+				}
+				if len(resp.Entries) != tc.wantEntries {
+					t.Errorf("describe: got %d entries, want %d", len(resp.Entries), tc.wantEntries)
+				}
+			}
+		})
+	}
 }
 
 // featureString renders a response's features one per line, "name min-max
@@ -3588,51 +3793,80 @@ func TestApiVersionsFeatureTable(t *testing.T) {
 				return
 			}
 
-			// updateFeature sends one update and returns its error
-			// code, from Results below v2 and the top level at v2.
-			updateFeature := func(name string, level int16) int16 {
+			// updateFeatures sends the updates, each name=level with
+			// one upgrade type, and returns the error code: the top
+			// level answers a failure, and Results list a success
+			// below v2.
+			type fu struct {
+				name  string
+				level int16
+			}
+			updateFeatures := func(upgradeType int8, updates ...fu) int16 {
 				ureq := kmsg.NewPtrUpdateFeaturesRequest()
-				fu := kmsg.NewUpdateFeaturesRequestFeatureUpdate()
-				fu.Feature = name
-				fu.MaxVersionLevel = level
-				fu.AllowDowngrade = true
-				fu.UpgradeType = 2 // safe downgrade
-				ureq.FeatureUpdates = append(ureq.FeatureUpdates, fu)
+				for _, u := range updates {
+					f := kmsg.NewUpdateFeaturesRequestFeatureUpdate()
+					f.Feature = u.name
+					f.MaxVersionLevel = u.level
+					f.UpgradeType = upgradeType
+					ureq.FeatureUpdates = append(ureq.FeatureUpdates, f)
+				}
 				uresp, err := ureq.RequestWith(ctx, cl)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if uresp.Version >= 2 {
-					return uresp.ErrorCode
+				if uresp.ErrorCode == 0 && uresp.Version < 2 && len(uresp.Results) != len(updates) {
+					t.Fatalf("got %d results for %d updates", len(uresp.Results), len(updates))
 				}
-				for _, r := range uresp.Results {
-					if r.Feature == name {
-						return r.ErrorCode
-					}
-				}
-				t.Fatalf("no result for %s", name)
-				return 0
+				return uresp.ErrorCode
 			}
+			const safeDowngrade = 2
+			invalid := kerr.InvalidUpdateVersion.Code
 
-			// metadata.version below the supported min is refused.
-			if code := updateFeature("metadata.version", 0); code != kerr.FeatureUpdateFailed.Code {
-				t.Errorf("metadata.version 0: got error %d, exp FEATURE_UPDATE_FAILED", code)
+			// metadata.version below the supported min is refused, as
+			// are an unset upgrade type and an upgrade typed as a
+			// downgrade.
+			if code := updateFeatures(safeDowngrade, fu{"metadata.version", 0}); code != invalid {
+				t.Errorf("metadata.version 0: got error %d, exp INVALID_UPDATE_VERSION", code)
+			}
+			if code := updateFeatures(0, fu{"metadata.version", 1}); code != invalid {
+				t.Errorf("upgrade type 0: got error %d, exp INVALID_UPDATE_VERSION", code)
+			}
+			// A timed-out update keeps its answer, even when an update
+			// is invalid.
+			c.Fault(Fault{Keys: []kmsg.Key{kmsg.UpdateFeatures}, Err: kerr.RequestTimedOut})
+			if code := updateFeatures(0, fu{"metadata.version", 1}); code != kerr.RequestTimedOut.Code {
+				t.Errorf("timed-out invalid update: got error %d, exp REQUEST_TIMED_OUT", code)
 			}
 
 			// transaction.version downgraded to 0 drops out of the
 			// finalized list; a version without the feature refuses.
 			exp := kversionFeatureString(vs)
 			hasTxn := strings.Contains(exp, "transaction.version ")
-			code := updateFeature("transaction.version", 0)
+			code := updateFeatures(safeDowngrade, fu{"transaction.version", 0})
 			if hasTxn && code != 0 {
 				t.Errorf("transaction.version 0: got error %d, exp none", code)
-			} else if !hasTxn && code != kerr.FeatureUpdateFailed.Code {
-				t.Errorf("transaction.version 0: got error %d, exp FEATURE_UPDATE_FAILED", code)
+			} else if !hasTxn && code != invalid {
+				t.Errorf("transaction.version 0: got error %d, exp INVALID_UPDATE_VERSION", code)
+			}
+			if code := updateFeatures(safeDowngrade, fu{"transaction.version", 1}); hasTxn && code != invalid {
+				t.Errorf("upgrade typed as a downgrade: got error %d, exp INVALID_UPDATE_VERSION", code)
+			}
+			// One invalid update in the request fails it whole: the
+			// valid upgrade beside it does not apply.
+			if hasTxn {
+				if code := updateFeatures(1, fu{"transaction.version", 1}, fu{"nope", 1}); code != invalid {
+					t.Errorf("one bad update: got error %d, exp INVALID_UPDATE_VERSION", code)
+				}
 			}
 
 			resp, err = req.RequestWith(ctx, cl)
 			if err != nil {
 				t.Fatal(err)
+			}
+			// A change bumps the epoch, which is how a Java client
+			// notices it.
+			if wantEpoch := test.epoch + 1; hasTxn && resp.FinalizedFeaturesEpoch != wantEpoch {
+				t.Errorf("epoch after the downgrade: got %d, exp %d", resp.FinalizedFeaturesEpoch, wantEpoch)
 			}
 			for _, f := range resp.FinalizedFeatures {
 				if f.Name == "transaction.version" {

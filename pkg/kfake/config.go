@@ -223,7 +223,9 @@ func MaxVersions(v *kversion.Versions) Opt {
 // EnableACLs enables ACL checking. When enabled, all requests are checked
 // against ACLs. By default, no ACLs exist, so all requests will be denied
 // unless you configure superusers (via Superuser option) and then add ACLs
-// via CreateACLs as that user.
+// via CreateACLs as that user. Without this option, DescribeACLs, CreateACLs,
+// and DeleteACLs answer SECURITY_DISABLED, as a broker with no authorizer
+// does.
 func EnableACLs() Opt {
 	return opt{func(cfg *cfg) { cfg.enableACLs = true }}
 }
@@ -235,9 +237,11 @@ type ACL struct {
 	Principal string
 	// Resource type: kmsg.ACLResourceTypeTopic, Group, Cluster, TransactionalId
 	Resource kmsg.ACLResourceType
-	// Name of the resource (topic name, group name, "*" for cluster, etc.)
+	// Name of the resource (topic name, group name, "kafka-cluster" for
+	// the cluster, etc.)
 	Name string
-	// Pattern type: kmsg.ACLResourcePatternTypeLiteral or Prefixed
+	// Pattern type: kmsg.ACLResourcePatternTypeLiteral (the default) or
+	// Prefixed
 	Pattern kmsg.ACLResourcePatternType
 	// Operation: kmsg.ACLOperationRead, Write, Create, Delete, Alter, Describe, etc.
 	Operation kmsg.ACLOperation
@@ -317,12 +321,16 @@ func User(method, user, pass string, acls ...ACL) Opt {
 			if a.Allow {
 				perm = kmsg.ACLPermissionTypeAllow
 			}
+			pattern := a.Pattern
+			if pattern == kmsg.ACLResourcePatternTypeUnknown {
+				pattern = kmsg.ACLResourcePatternTypeLiteral
+			}
 			cfg.seedACLs = append(cfg.seedACLs, acl{
 				principal:    "User:" + user,
 				host:         host,
 				resourceType: a.Resource,
 				resourceName: a.Name,
-				pattern:      a.Pattern,
+				pattern:      pattern,
 				operation:    a.Operation,
 				permission:   perm,
 			})

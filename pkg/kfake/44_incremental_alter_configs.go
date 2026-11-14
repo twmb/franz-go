@@ -201,6 +201,9 @@ outer:
 			if req.ValidateOnly {
 				continue
 			}
+			if _, ok := c.clientMetrics[rr.ResourceName]; ok || len(dup) > 0 {
+				c.telemVersion++
+			}
 			if len(dup) == 0 {
 				delete(c.clientMetrics, rr.ResourceName)
 				continue

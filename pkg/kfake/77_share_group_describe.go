@@ -57,7 +57,7 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 
 		rg = c.fillShareGroupDescribe(creq, sg, rg)
 
-		if req.IncludeAuthorizedOperations {
+		if req.IncludeAuthorizedOperations && rg.ErrorCode == 0 {
 			rg.AuthorizedOperations = c.groupAuthorizedOps(creq, groupID)
 		}
 		resp.Groups = append(resp.Groups, rg)

@@ -26,9 +26,6 @@
 ## 03_metadata
 - Top-level ErrorCode (v13+): Rebootstrapping signal not needed (KIP-1102)
 
-## 10_find_coordinator
-- Share groups (coordinator type 2): Not implemented (KIP-932)
-
 ## 11_join_group, 12_heartbeat, 13_leave_group, 14_sync_group
 - Initial rebalance delay: Skipped - optimization for reducing rebalance churn
   during rolling restarts, not needed for correctness in tests
@@ -38,7 +35,6 @@
 
 ## 18_api_versions
 - ZkMigrationReady: Not implementing ZK migration flag
-- ClientSoftwareName/ClientSoftwareVersion: Parsed but not validated/stored
 
 ## 22_init_producer_id
 - prevProducerId/lastProducerEpoch: Only matters for epoch exhaustion at 32K+
@@ -56,12 +52,8 @@
 - IncludeDocumentation: Request field ignored (no docs to return)
 
 ## 35_describe_log_dirs
-- ErrorCode (v3+): Top-level error code not implemented
 - OffsetLag: Always returns 0 (no replication delay tracking)
 - IsFuture: Always returns false (no async replica moves)
-
-## 36_sasl_authenticate
-- SessionLifetimeMillis (v1+): Session re-auth not implemented
 
 ## 38-41 Delegation Tokens
 - Not implemented: CreateDelegationToken, RenewDelegationToken, ExpireDelegationToken, DescribeDelegationToken
@@ -77,8 +69,10 @@
 - Group downgrade (consumer -> classic): not supported. Once a group
   upgrades to "consumer" type, it stays that way.
 
+## 71_get_telemetry_subscriptions, 72_push_telemetry
+- With no matching CLIENT_METRICS subscription, every metric every 30s;
+  Kafka asks for none every 5 minutes. Telemetry tests need no setup.
+- THROTTLING_QUOTA_EXCEEDED for an early Get or Push: not implemented
+
 ## General
 - Tiered storage: Not implemented (KIP-405, KIP-1005)
-- Share groups: Not implemented (KIP-932)
-- WriteTxnMarkers (key 27): Not implemented. Only useful for recovering from
-  broker bugs with stuck transactions, not needed for testing client behavior.

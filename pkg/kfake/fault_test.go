@@ -942,7 +942,9 @@ func TestFaultResourceACLs(t *testing.T) {
 	if resp.Results[0].ErrorCode != kerr.InvalidRequest.Code {
 		t.Errorf("faulted creation answered %d", resp.Results[0].ErrorCode)
 	}
-	if resp.Results[1].ErrorCode != 0 {
+	// Without EnableACLs, an unfaulted creation answers as a broker with
+	// no authorizer does.
+	if resp.Results[1].ErrorCode != kerr.SecurityDisabled.Code {
 		t.Errorf("other creation answered %d", resp.Results[1].ErrorCode)
 	}
 }

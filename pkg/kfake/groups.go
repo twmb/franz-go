@@ -424,7 +424,8 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 			if req.Version >= 6 {
 				sg.ErrorCode = kerr.GroupIDNotFound.Code
 			}
-			if req.IncludeAuthorizedOperations {
+			// Kafka fills operations only for a group with no error.
+			if req.IncludeAuthorizedOperations && sg.ErrorCode == 0 {
 				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
 			}
 			continue
@@ -1882,18 +1883,8 @@ func (gs *groups) handleConsumerGroupDescribe(creq *clientReq) *kmsg.ConsumerGro
 			continue
 		}
 		g, ok := gs.gs[rg]
-		if !ok {
+		if !ok || g.typ != "consumer" {
 			sg.ErrorCode = kerr.GroupIDNotFound.Code
-			if req.IncludeAuthorizedOperations {
-				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
-			}
-			continue
-		}
-		if g.typ != "consumer" {
-			sg.ErrorCode = kerr.GroupIDNotFound.Code
-			if req.IncludeAuthorizedOperations {
-				sg.AuthorizedOperations = gs.c.groupAuthorizedOps(creq, rg)
-			}
 			continue
 		}
 		sg.State = g.state.String()

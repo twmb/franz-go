@@ -10,7 +10,9 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
+	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
 func TestACLsDisabled(t *testing.T) {
@@ -26,6 +28,20 @@ func TestACLsDisabled(t *testing.T) {
 
 	if err := cl.ProduceSync(ctx, kgo.StringRecord("test")).FirstErr(); err != nil {
 		t.Fatalf("produce should work without ACLs: %v", err)
+	}
+
+	// The ACL requests answer as a broker with no authorizer does.
+	req := kmsg.NewPtrDescribeACLsRequest()
+	req.ResourceType = kmsg.ACLResourceTypeAny
+	req.ResourcePatternType = kmsg.ACLResourcePatternTypeAny
+	req.Operation = kmsg.ACLOperationAny
+	req.PermissionType = kmsg.ACLPermissionTypeAny
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != kerr.SecurityDisabled.Code {
+		t.Fatalf("DescribeACLs without ACLs: got error %d, want SECURITY_DISABLED", resp.ErrorCode)
 	}
 }
 
@@ -138,8 +154,10 @@ func TestACLsWithPermission(t *testing.T) {
 		EnableACLs(),
 		EnableSASL(),
 		User("PLAIN", "testuser", "testpass",
-			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-topic", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationWrite, Allow: true},
+			// A CIDR host matches the client's address (Kafka 4.4).
+			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-topic", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationWrite, Allow: true, Host: "127.0.0.0/8"},
 			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-topic", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationDescribe, Allow: true},
+			ACL{Resource: kmsg.ACLResourceTypeCluster, Name: "kafka-cluster", Operation: kmsg.ACLOperationIdempotentWrite, Allow: true},
 		),
 	)
 
@@ -155,6 +173,18 @@ func TestACLsWithPermission(t *testing.T) {
 
 	if err := cl.ProduceSync(ctx, kgo.StringRecord("test")).FirstErr(); err != nil {
 		t.Fatalf("produce should work with WRITE ACL: %v", err)
+	}
+
+	// A principal that cannot describe the cluster sees no cluster
+	// operations, even ones it is allowed.
+	req := kmsg.NewPtrDescribeClusterRequest()
+	req.IncludeClusterAuthorizedOperations = true
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ClusterAuthorizedOperations != 0 {
+		t.Errorf("cluster authorized operations: got %b, want 0", resp.ClusterAuthorizedOperations)
 	}
 }
 
@@ -233,6 +263,110 @@ func TestACLCreateDescribeDelete(t *testing.T) {
 	}
 	if countACLs(described) != 1 {
 		t.Fatalf("expected 1 ACL, got %d", countACLs(described))
+	}
+
+	// MATCH describes every ACL that applies to a name: the literal name,
+	// the literal wildcard, and every prefix of the name.
+	for _, b := range []*kadm.ACLBuilder{
+		kadm.NewACLs().ResourcePatternType(kadm.ACLPatternLiteral).Topics("*"),
+		kadm.NewACLs().ResourcePatternType(kadm.ACLPatternPrefixed).Topics("my-"),
+	} {
+		results, err := adm.CreateACLs(ctx, b.Allow("User:alice").AllowHosts("*").Operations(kadm.OpRead))
+		if err == nil {
+			err = results[0].Err
+		}
+		if err != nil {
+			t.Fatalf("CreateACLs failed: %v", err)
+		}
+	}
+	described, err = adm.DescribeACLs(ctx, kadm.NewACLs().
+		ResourcePatternType(kadm.ACLPatternMatch).
+		Topics("my-topic").
+		Allow("User:alice").
+		AllowHosts("*").
+		Operations(kadm.OpRead),
+	)
+	if err != nil {
+		t.Fatalf("DescribeACLs failed: %v", err)
+	}
+	if n := countACLs(described); n != 3 {
+		t.Fatalf("MATCH my-topic: expected 3 ACLs, got %d", n)
+	}
+
+	// Every filter in one delete sees the ACLs from before the request,
+	// so an ACL two filters match is listed under both.
+	dreq := kmsg.NewPtrDeleteACLsRequest()
+	for _, pattern := range []kmsg.ACLResourcePatternType{kmsg.ACLResourcePatternTypeLiteral, kmsg.ACLResourcePatternTypeAny} {
+		f := kmsg.NewDeleteACLsRequestFilter()
+		f.ResourceType = kmsg.ACLResourceTypeTopic
+		f.ResourceName = kmsg.StringPtr("*")
+		f.ResourcePatternType = pattern
+		f.Operation = kmsg.ACLOperationAny
+		f.PermissionType = kmsg.ACLPermissionTypeAny
+		dreq.Filters = append(dreq.Filters, f)
+	}
+	dresp, err := dreq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range dresp.Results {
+		if r.ErrorCode != 0 || len(r.MatchingACLs) != 1 {
+			t.Errorf("delete filter %d: got error %d with %d ACLs, want 1 ACL", i, r.ErrorCode, len(r.MatchingACLs))
+		}
+	}
+
+	// Kafka refuses an ACL it cannot hold and accepts every concrete
+	// resource type and operation.
+	for _, tc := range []struct {
+		name    string
+		modify  func(*kmsg.CreateACLsRequestCreation)
+		wantErr *kerr.Error
+	}{
+		{"empty name", func(cr *kmsg.CreateACLsRequestCreation) { cr.ResourceName = "" }, kerr.InvalidRequest},
+		{"principal without a type", func(cr *kmsg.CreateACLsRequestCreation) { cr.Principal = "alice" }, kerr.InvalidRequest},
+		{"empty host", func(cr *kmsg.CreateACLsRequestCreation) { cr.Host = "" }, kerr.InvalidRequest},
+		{"bad CIDR", func(cr *kmsg.CreateACLsRequestCreation) { cr.Host = "10.0.0.0/33" }, kerr.InvalidRequest},
+		{"cluster not named kafka-cluster", func(cr *kmsg.CreateACLsRequestCreation) {
+			cr.ResourceType, cr.ResourceName = kmsg.ACLResourceTypeCluster, "*"
+		}, kerr.InvalidRequest},
+		{"user resource", func(cr *kmsg.CreateACLsRequestCreation) {
+			cr.ResourceType, cr.ResourceName, cr.Operation = kmsg.ACLResourceTypeUser, "User:bob", kmsg.ACLOperationCreateTokens
+		}, nil},
+	} {
+		creq := kmsg.NewPtrCreateACLsRequest()
+		cr := kmsg.NewCreateACLsRequestCreation()
+		cr.ResourceType = kmsg.ACLResourceTypeTopic
+		cr.ResourceName = "v"
+		cr.ResourcePatternType = kmsg.ACLResourcePatternTypeLiteral
+		cr.Principal = "User:alice"
+		cr.Host = "*"
+		cr.Operation = kmsg.ACLOperationRead
+		cr.PermissionType = kmsg.ACLPermissionTypeAllow
+		tc.modify(&cr)
+		creq.Creations = append(creq.Creations, cr)
+		cresp, err := creq.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want int16
+		if tc.wantErr != nil {
+			want = tc.wantErr.Code
+		}
+		if got := cresp.Results[0].ErrorCode; got != want {
+			t.Errorf("%s: got error %d, want %d", tc.name, got, want)
+		}
+	}
+
+	// A timed-out creation or deletion keeps its answer, even for an
+	// entry that is invalid.
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.CreateACLs, kmsg.DeleteACLs}, Err: kerr.RequestTimedOut, Count: 2})
+	unnamed := kmsg.NewPtrCreateACLsRequest()
+	unnamed.Creations = []kmsg.CreateACLsRequestCreation{{ResourceType: kmsg.ACLResourceTypeTopic, ResourcePatternType: kmsg.ACLResourcePatternTypeLiteral, Principal: "User:alice", Host: "*", Operation: kmsg.ACLOperationRead, PermissionType: kmsg.ACLPermissionTypeAllow}}
+	unknown := kmsg.NewPtrDeleteACLsRequest()
+	unknown.Filters = []kmsg.DeleteACLsRequestFilter{{}}
+	cr, dr := faultReq(t, cl, 0, unnamed).(*kmsg.CreateACLsResponse), faultReq(t, cl, 0, unknown).(*kmsg.DeleteACLsResponse)
+	if cr.Results[0].ErrorCode != kerr.RequestTimedOut.Code || dr.Results[0].ErrorCode != kerr.RequestTimedOut.Code {
+		t.Errorf("timed-out invalid creation answered %d, deletion %d; want REQUEST_TIMED_OUT", cr.Results[0].ErrorCode, dr.Results[0].ErrorCode)
 	}
 
 	// Delete ACL
@@ -352,3 +486,75 @@ func isAuthzError(err error) bool {
 	}
 	return false
 }
+
+// A failed authentication answers SASL_AUTHENTICATION_FAILED before the
+// broker closes the connection, so the client fails at once instead of
+// retrying a closed connection.
+func TestSASLAuthenticateFailure(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t,
+		NumBrokers(1),
+		EnableSASL(),
+		User("PLAIN", "testuser", "testpass"),
+		Superuser("PLAIN", "admin", "adminpass"),
+		BrokerConfigs(map[string]string{"connections.max.reauth.ms": "60000"}),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// A credential upserted with more than the default 4096 iterations.
+	admin := newPlainClient(t, c, kgo.SASL(plain.Auth{User: "admin", Pass: "adminpass"}.AsMechanism()))
+	altered, err := kadm.NewClient(admin).AlterUserSCRAMs(ctx, nil, []kadm.UpsertSCRAM{{
+		User: "sc", Mechanism: kadm.ScramSha256, Iterations: 8192, Password: "scpass",
+	}})
+	if err == nil {
+		err = altered["sc"].Err
+	}
+	if err != nil {
+		t.Fatalf("upserting the SCRAM user: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		mech    sasl.Mechanism
+		wantErr error
+	}{
+		{"wrong PLAIN password", plain.Auth{User: "testuser", Pass: "wrong"}.AsMechanism(), kerr.SaslAuthenticationFailed},
+		{"unknown PLAIN user with an empty password", emptyPlainPassword("ghost"), kerr.SaslAuthenticationFailed},
+		{"unknown SCRAM user", scram.Auth{User: "ghost", Pass: "x"}.AsSha256Mechanism(), kerr.SaslAuthenticationFailed},
+		{"SCRAM user with 8192 iterations", scram.Auth{User: "sc", Pass: "scpass"}.AsSha256Mechanism(), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cl := newPlainClient(t, c, kgo.SASL(tc.mech))
+			if err := cl.Ping(ctx); !errors.Is(err, tc.wantErr) {
+				t.Errorf("got %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+
+	// Kafka answers a re-authentication that changes the mechanism as if
+	// it took it, then closes the connection on the next request.
+	cc := &clientConn{c: c}
+	var codes [3]int16
+	c.admin(func() {
+		r0, _ := c.handleSASLHandshake(&clientReq{cc: cc, kreq: &kmsg.SASLHandshakeRequest{Version: 1, Mechanism: "PLAIN"}})
+		r1, _ := c.handleSASLAuthenticate(&clientReq{cc: cc, kreq: &kmsg.SASLAuthenticateRequest{Version: 2, SASLAuthBytes: []byte("\x00testuser\x00testpass")}})
+		r2, _ := c.handleSASLHandshake(&clientReq{cc: cc, kreq: &kmsg.SASLHandshakeRequest{Version: 1, Mechanism: "SCRAM-SHA-256"}})
+		codes = [3]int16{r0.(*kmsg.SASLHandshakeResponse).ErrorCode, r1.(*kmsg.SASLAuthenticateResponse).ErrorCode, r2.(*kmsg.SASLHandshakeResponse).ErrorCode}
+	})
+	if codes != [3]int16{} || c.handleSASL(&clientReq{cc: cc, kreq: kmsg.NewPtrSASLAuthenticateRequest()}) {
+		t.Errorf("re-authenticating with another mechanism answered %v and let the next request through", codes)
+	}
+}
+
+// emptyPlainPassword sends PLAIN with an empty password, which the plain
+// package refuses to send.
+type emptyPlainPassword string
+
+func (emptyPlainPassword) Name() string { return "PLAIN" }
+
+func (u emptyPlainPassword) Authenticate(context.Context, string) (sasl.Session, []byte, error) {
+	return emptyPlainPassword(""), []byte("\x00" + string(u) + "\x00"), nil
+}
+
+func (emptyPlainPassword) Challenge([]byte) (bool, []byte, error) { return true, nil, nil }

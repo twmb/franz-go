@@ -14,6 +14,8 @@ import (
 // * Creates, updates, or deletes SCRAM credentials for users
 // * Supports SCRAM-SHA-256 (mechanism 1) and SCRAM-SHA-512 (mechanism 2)
 // * Iterations must be between 4096 and 16384
+// * One answer per user: a second change to a user fails the user with
+//   DUPLICATE_RESOURCE and changes nothing for it
 
 func init() { regKey(51, 0, 0) }
 
@@ -28,24 +30,59 @@ func (c *Cluster) handleAlterUserSCRAMCredentials(creq *clientReq) (kmsg.Respons
 		return nil, err
 	}
 
-	// Faults fire only on the controller; elsewhere we answer
-	// NOT_CONTROLLER below. A timed-out change still changes the
-	// credentials, and every user is answered with the fault.
-	clusterFault := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{misrouted: b != c.controller})
-	if e := clusterFault; e != nil && creq.skipsWork(e) {
-		for _, d := range req.Deletions {
-			sr := kmsg.NewAlterUserSCRAMCredentialsResponseResult()
-			sr.User = d.Name
-			sr.ErrorCode = e.Code
-			resp.Results = append(resp.Results, sr)
+	// We validate as Kafka does: a user's first failure sticks and skips
+	// the user's later entries, and a second entry for a user with a
+	// valid pending change is DUPLICATE_RESOURCE and drops that change.
+	var (
+		order []string // users in request order
+		codes = map[string]int16{}
+		dels  = map[string]kmsg.AlterUserSCRAMCredentialsRequestDeletion{}
+		ups   = map[string]kmsg.AlterUserSCRAMCredentialsRequestUpsertion{}
+	)
+	seen := func(u string) bool {
+		code, ok := codes[u]
+		switch {
+		case !ok:
+			order = append(order, u)
+			return false
+		case code == 0:
+			codes[u] = kerr.DuplicateResource.Code
 		}
-		for _, u := range req.Upsertions {
-			sr := kmsg.NewAlterUserSCRAMCredentialsResponseResult()
-			sr.User = u.Name
-			sr.ErrorCode = e.Code
-			resp.Results = append(resp.Results, sr)
+		return true
+	}
+	for _, d := range req.Deletions {
+		if seen(d.Name) {
+			continue
 		}
-		return resp, nil
+		switch {
+		case d.Name == "":
+			codes[d.Name] = kerr.UnacceptableCredential.Code
+		case d.Mechanism != 1 && d.Mechanism != 2:
+			codes[d.Name] = kerr.UnsupportedSaslMechanism.Code
+		default:
+			if _, ok := c.sasls.scramMap(d.Mechanism)[d.Name]; !ok {
+				codes[d.Name] = kerr.ResourceNotFound.Code
+			} else {
+				codes[d.Name] = 0
+				dels[d.Name] = d
+			}
+		}
+	}
+	for _, u := range req.Upsertions {
+		if seen(u.Name) {
+			continue
+		}
+		switch {
+		case u.Name == "":
+			codes[u.Name] = kerr.UnacceptableCredential.Code
+		case u.Mechanism != 1 && u.Mechanism != 2:
+			codes[u.Name] = kerr.UnsupportedSaslMechanism.Code
+		case u.Iterations < 4096 || u.Iterations > 16384: // Kafka min/max
+			codes[u.Name] = kerr.UnacceptableCredential.Code
+		default:
+			codes[u.Name] = 0
+			ups[u.Name] = u
+		}
 	}
 
 	addr := func(u string) *kmsg.AlterUserSCRAMCredentialsResponseResult {
@@ -61,43 +98,21 @@ func (c *Cluster) handleAlterUserSCRAMCredentials(creq *clientReq) (kmsg.Respons
 		if answered[u] {
 			return
 		}
-		sr := addr(u)
-		sr.ErrorCode = code
+		answered[u] = true
+		addr(u).ErrorCode = code
 	}
 
-	users := make(map[string]int16)
-
-	// Validate everything up front, keeping track of all (and duplicate)
-	// users. If we are not controller, we fail with our users map.
-	for _, d := range req.Deletions {
-		if d.Name == "" {
-			users[d.Name] = kerr.UnacceptableCredential.Code
-			continue
+	// Faults fire only on the controller; elsewhere we answer
+	// NOT_CONTROLLER below.
+	clusterFault := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{misrouted: b != c.controller})
+	if e := clusterFault; e != nil && creq.skipsWork(e) {
+		for _, u := range order {
+			doneu(u, e.Code)
 		}
-		if d.Mechanism != 1 && d.Mechanism != 2 {
-			users[d.Name] = kerr.UnsupportedSaslMechanism.Code
-			continue
-		}
-		users[d.Name] = 0
+		return resp, nil
 	}
-	for _, u := range req.Upsertions {
-		if u.Name == "" || u.Iterations < 4096 || u.Iterations > 16384 { // Kafka min/max
-			users[u.Name] = kerr.UnacceptableCredential.Code
-			continue
-		}
-		if u.Mechanism != 1 && u.Mechanism != 2 {
-			users[u.Name] = kerr.UnsupportedSaslMechanism.Code
-			continue
-		}
-		if code, deleting := users[u.Name]; deleting && code == 0 {
-			users[u.Name] = kerr.DuplicateResource.Code
-			continue
-		}
-		users[u.Name] = 0
-	}
-
 	if b != c.controller {
-		for u := range users {
+		for _, u := range order {
 			doneu(u, kerr.NotController.Code)
 		}
 		return resp, nil
@@ -105,72 +120,58 @@ func (c *Cluster) handleAlterUserSCRAMCredentials(creq *clientReq) (kmsg.Respons
 
 	// A timed-out change still changes the credential, and its user is
 	// answered with the fault.
-	fault := func(u string, e *kerr.Error) {
+	for _, u := range order {
+		e := clusterFault
+		if e == nil {
+			e = creq.faults.check(faultKey{resource: u})
+		}
+		if e == nil {
+			continue
+		}
 		doneu(u, e.Code)
-		answered[u] = true
 		if creq.skipsWork(e) {
-			users[u] = e.Code
-		}
-	}
-	for u := range users {
-		if clusterFault != nil {
-			fault(u, clusterFault)
-		} else if e := creq.faults.check(faultKey{resource: u}); e != nil {
-			fault(u, e)
+			codes[u] = e.Code
 		}
 	}
 
-	// Add anything that failed validation.
-	for u, code := range users {
-		if code != 0 {
-			doneu(u, code)
-		}
-	}
-
-	// Process all deletions, adding ResourceNotFound as necessary.
-	for _, d := range req.Deletions {
-		if users[d.Name] != 0 {
+	for _, u := range order {
+		if codes[u] != 0 {
+			doneu(u, codes[u])
 			continue
 		}
-		m := c.sasls.scram256
-		if d.Mechanism == 2 {
-			m = c.sasls.scram512
-		}
-		if m == nil {
-			doneu(d.Name, kerr.ResourceNotFound.Code)
+		if d, ok := dels[u]; ok {
+			delete(c.sasls.scramMap(d.Mechanism), u)
+			doneu(u, 0)
 			continue
 		}
-		if _, ok := m[d.Name]; !ok {
-			doneu(d.Name, kerr.ResourceNotFound.Code)
-			continue
-		}
-		delete(m, d.Name)
-		doneu(d.Name, 0)
-	}
-
-	// Process all upsertions.
-	for _, u := range req.Upsertions {
-		if users[u.Name] != 0 {
-			continue
-		}
+		up := ups[u]
 		m := &c.sasls.scram256
 		mech := saslScram256
-		if u.Mechanism == 2 {
+		if up.Mechanism == 2 {
 			m = &c.sasls.scram512
 			mech = saslScram512
 		}
 		if *m == nil {
 			*m = make(map[string]scramAuth)
 		}
-		(*m)[u.Name] = scramAuth{
+		(*m)[u] = scramAuth{
 			mechanism:  mech,
-			iterations: int(u.Iterations),
-			saltedPass: bytes.Clone(u.SaltedPassword),
-			salt:       bytes.Clone(u.Salt),
+			iterations: int(up.Iterations),
+			saltedPass: bytes.Clone(up.SaltedPassword),
+			salt:       bytes.Clone(up.Salt),
 		}
-		doneu(u.Name, 0)
+		doneu(u, 0)
 	}
 
 	c.persistSASLState()
 	return resp, nil
+}
+
+// scramMap returns the credentials for a SCRAM mechanism, 1 for SHA-256 and
+// 2 for SHA-512.
+func (s *sasls) scramMap(mechanism int8) map[string]scramAuth {
+	if mechanism == 2 {
+		return s.scram512
+	}
+	return s.scram256
 }

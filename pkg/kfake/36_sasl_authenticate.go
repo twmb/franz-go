@@ -1,8 +1,6 @@
 package kfake
 
 import (
-	"errors"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -13,6 +11,10 @@ import (
 // * PLAIN
 // * SCRAM-SHA-256
 // * SCRAM-SHA-512
+//
+// Behavior:
+// * A failed authentication answers SASL_AUTHENTICATION_FAILED, then we
+//   close the connection
 //
 // Version notes:
 // * v1: SessionLifetimeMs in response
@@ -28,80 +30,90 @@ func (c *Cluster) handleSASLAuthenticate(creq *clientReq) (kmsg.Response, error)
 		return nil, err
 	}
 
+	// Kafka sends the failure, then closes the connection. A SCRAM
+	// failure gets a generic message that does not say whether the user
+	// exists. During re-authentication, the connection carries the
+	// session expiry of its previous authentication.
+	fail := func(msg string) (kmsg.Response, error) {
+		resp.ErrorCode = kerr.SaslAuthenticationFailed.Code
+		resp.ErrorMessage = &msg
+		creq.closeAfter = true
+		return resp, nil
+	}
+	failScram := func(mechanism string) (kmsg.Response, error) {
+		what := "authentication"
+		if creq.cc.hasSessionExpiry {
+			what = "re-authentication"
+		}
+		return fail("Authentication failed during " + what + " due to invalid credentials with SASL mechanism " + mechanism)
+	}
+	// On re-authentication, the principal must not change.
+	changesUser := func(u string) bool {
+		return creq.cc.user != "" && creq.cc.user != u
+	}
+	changedUserMsg := func(u string) string {
+		return "Cannot change principals during re-authentication from User:" + creq.cc.user + ": User:" + u
+	}
+
 	switch creq.cc.saslStage {
 	default:
 		resp.ErrorCode = kerr.IllegalSaslState.Code
+		if creq.cc.saslStage == saslStageComplete {
+			resp.ErrorMessage = kmsg.StringPtr("SaslAuthenticate request received after successful authentication")
+		}
 		return resp, nil
 
 	case saslStageAuthPlain:
-		u, p, err := saslSplitPlain(req.SASLAuthBytes)
-		if err != nil {
-			return nil, err
+		u, p, failure := saslSplitPlain(req.SASLAuthBytes)
+		if failure != "" {
+			return fail(failure)
 		}
-		if c.sasls.plain == nil {
-			return nil, errors.New("invalid sasl")
-		}
-		if p != c.sasls.plain[u] {
-			return nil, errors.New("invalid sasl")
-		}
-		// On re-authentication, the principal must not change
-		// (SaslServerAuthenticator ensurePrincipalUnchanged).
-		if creq.cc.user != "" && creq.cc.user != u {
-			return nil, errors.New("sasl reauthentication changed the authenticated user")
+		pass, ok := c.sasls.plain[u]
+		switch {
+		case u == "":
+			return fail("Authentication failed: username not specified")
+		case p == "":
+			return fail("Authentication failed: password not specified")
+		case !ok || p != pass:
+			return fail("Authentication failed: Invalid username or password")
+		case changesUser(u):
+			return fail(changedUserMsg(u))
 		}
 		creq.cc.saslStage = saslStageComplete
 		creq.cc.user = u
+		creq.cc.mechanism = saslPlain
 		c.maybeFillSessionLifetime(creq.cc, resp)
 
-	case saslStageAuthScram0_256:
+	case saslStageAuthScram0_256, saslStageAuthScram0_512:
+		mechanism, creds := saslScram256, c.sasls.scram256
+		if creq.cc.saslStage == saslStageAuthScram0_512 {
+			mechanism, creds = saslScram512, c.sasls.scram512
+		}
 		c0, err := scramParseClient0(req.SASLAuthBytes)
 		if err != nil {
-			return nil, err
+			return failScram(mechanism)
 		}
-		if c.sasls.scram256 == nil {
-			return nil, errors.New("invalid sasl")
-		}
-		a, ok := c.sasls.scram256[c0.user]
+		a, ok := creds[c0.user]
 		if !ok {
-			return nil, errors.New("invalid sasl")
+			return failScram(mechanism)
 		}
-		if creq.cc.user != "" && creq.cc.user != c0.user {
-			return nil, errors.New("sasl reauthentication changed the authenticated user")
+		if changesUser(c0.user) {
+			return fail(changedUserMsg(c0.user))
 		}
 		s0, serverFirst := scramServerFirst(c0, a)
 		resp.SASLAuthBytes = serverFirst
 		creq.cc.saslStage = saslStageAuthScram1
 		creq.cc.s0 = &s0
-		creq.cc.user = c0.user // store user for later; cleared if auth fails
-
-	case saslStageAuthScram0_512:
-		c0, err := scramParseClient0(req.SASLAuthBytes)
-		if err != nil {
-			return nil, err
-		}
-		if c.sasls.scram512 == nil {
-			return nil, errors.New("invalid sasl")
-		}
-		a, ok := c.sasls.scram512[c0.user]
-		if !ok {
-			return nil, errors.New("invalid sasl")
-		}
-		if creq.cc.user != "" && creq.cc.user != c0.user {
-			return nil, errors.New("sasl reauthentication changed the authenticated user")
-		}
-		s0, serverFirst := scramServerFirst(c0, a)
-		resp.SASLAuthBytes = serverFirst
-		creq.cc.saslStage = saslStageAuthScram1
-		creq.cc.s0 = &s0
-		creq.cc.user = c0.user // store user for later; cleared if auth fails
+		creq.cc.user = c0.user
 
 	case saslStageAuthScram1:
 		serverFinal, err := creq.cc.s0.serverFinal(req.SASLAuthBytes)
 		if err != nil {
-			return nil, err
+			return failScram(creq.cc.s0.a.mechanism)
 		}
 		resp.SASLAuthBytes = serverFinal
 		creq.cc.saslStage = saslStageComplete
+		creq.cc.mechanism = creq.cc.s0.a.mechanism
 		creq.cc.s0 = nil
 		c.maybeFillSessionLifetime(creq.cc, resp)
 	}

@@ -637,6 +637,17 @@ func TestSCRAMCredentialLifecycle(t *testing.T) {
 	if len(respAll.Results) < 2 {
 		t.Errorf("describe-all: expected >=2 results, got %d", len(respAll.Results))
 	}
+	// An empty non-null list also describes everyone, which is what the
+	// Java client sends.
+	emptyReq := kmsg.NewDescribeUserSCRAMCredentialsRequest()
+	emptyReq.Users = []kmsg.DescribeUserSCRAMCredentialsRequestUser{}
+	respEmpty, err := emptyReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(respEmpty.Results) < 2 {
+		t.Errorf("describe with an empty list: expected >=2 results, got %d", len(respEmpty.Results))
+	}
 
 	// Update alice's iterations.
 	upsert("alice", 1, 8192)
@@ -668,7 +679,9 @@ func TestSCRAMCredentialLifecycle(t *testing.T) {
 }
 
 // TestSCRAMValidationErrors verifies that invalid SCRAM operations are rejected
-// with appropriate error codes.
+// with appropriate error codes, with one answer per user: a user's first
+// failure sticks, and a second change to a user is DUPLICATE_RESOURCE and
+// changes nothing for that user.
 func TestSCRAMValidationErrors(t *testing.T) {
 	t.Parallel()
 	c := newCoverCluster(t, NumBrokers(1))
@@ -676,116 +689,137 @@ func TestSCRAMValidationErrors(t *testing.T) {
 	defer cancel()
 	cl := newPlainClient(t, c)
 
-	upsertAndExpect := func(name string, mech int8, iter int32, wantErr int16) {
+	type del struct {
+		name string
+		mech int8
+	}
+	type up struct {
+		name string
+		mech int8
+		iter int32
+	}
+	// credentials returns the mechanisms a user has.
+	credentials := func(user string) []int8 {
 		t.Helper()
-		req := kmsg.NewAlterUserSCRAMCredentialsRequest()
-		u := kmsg.NewAlterUserSCRAMCredentialsRequestUpsertion()
-		u.Name = name
-		u.Mechanism = mech
-		u.Iterations = iter
-		u.Salt = []byte("s")
-		u.SaltedPassword = []byte("p")
-		req.Upsertions = append(req.Upsertions, u)
+		req := kmsg.NewDescribeUserSCRAMCredentialsRequest()
+		u := kmsg.NewDescribeUserSCRAMCredentialsRequestUser()
+		u.Name = user
+		req.Users = append(req.Users, u)
 		resp, err := req.RequestWith(ctx, cl)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.Results[0].ErrorCode != wantErr {
-			t.Errorf("upsert(name=%q,mech=%d,iter=%d): got %v, want %v",
-				name, mech, iter,
-				kerr.ErrorForCode(resp.Results[0].ErrorCode),
-				kerr.ErrorForCode(wantErr))
+		var mechs []int8
+		for _, ci := range resp.Results[0].CredentialInfos {
+			mechs = append(mechs, ci.Mechanism)
 		}
+		return mechs
 	}
 
-	upsertAndExpect("", 1, 4096, kerr.UnacceptableCredential.Code)     // empty name
-	upsertAndExpect("u", 99, 4096, kerr.UnsupportedSaslMechanism.Code) // bad mechanism
-	upsertAndExpect("u", 1, 100, kerr.UnacceptableCredential.Code)     // iterations too low
-	upsertAndExpect("u", 1, 20000, kerr.UnacceptableCredential.Code)   // iterations too high
+	// The cases run in order against one cluster.
+	for _, tc := range []struct {
+		name  string
+		dels  []del
+		ups   []up
+		want  map[string]*kerr.Error // nil is success
+		after map[string][]int8      // mechanisms each user has afterwards
+	}{
+		{name: "create sha256", ups: []up{{"u1", 1, 4096}}, want: map[string]*kerr.Error{"u1": nil}},
+		{name: "create sha512", ups: []up{{"u1", 2, 4096}}, want: map[string]*kerr.Error{"u1": nil}, after: map[string][]int8{"u1": {1, 2}}},
+		{name: "empty name", ups: []up{{"", 1, 4096}}, want: map[string]*kerr.Error{"": kerr.UnacceptableCredential}},
+		{name: "bad mechanism", ups: []up{{"u", 99, 4096}}, want: map[string]*kerr.Error{"u": kerr.UnsupportedSaslMechanism}},
+		{name: "iterations too low", ups: []up{{"u", 1, 100}}, want: map[string]*kerr.Error{"u": kerr.UnacceptableCredential}},
+		{name: "iterations too high", ups: []up{{"u", 1, 20000}}, want: map[string]*kerr.Error{"u": kerr.UnacceptableCredential}},
+		{name: "delete nonexistent", dels: []del{{"ghost", 1}}, want: map[string]*kerr.Error{"ghost": kerr.ResourceNotFound}},
+		{name: "delete bad mechanism", dels: []del{{"ghost", 99}}, want: map[string]*kerr.Error{"ghost": kerr.UnsupportedSaslMechanism}},
+		{name: "delete empty name", dels: []del{{"", 1}}, want: map[string]*kerr.Error{"": kerr.UnacceptableCredential}},
+		{
+			name:  "two deletions of one user delete nothing",
+			dels:  []del{{"u1", 1}, {"u1", 2}},
+			want:  map[string]*kerr.Error{"u1": kerr.DuplicateResource},
+			after: map[string][]int8{"u1": {1, 2}},
+		},
+		{
+			name:  "an invalid upsert fails a valid one after it",
+			ups:   []up{{"u2", 1, 1000}, {"u2", 2, 4096}},
+			want:  map[string]*kerr.Error{"u2": kerr.UnacceptableCredential},
+			after: map[string][]int8{"u2": nil},
+		},
+		{
+			name:  "three upserts of one user store nothing",
+			ups:   []up{{"u3", 1, 4096}, {"u3", 2, 4096}, {"u3", 1, 8192}},
+			want:  map[string]*kerr.Error{"u3": kerr.DuplicateResource},
+			after: map[string][]int8{"u3": nil},
+		},
+		{
+			name: "deleting a missing credential fails the user before its upsert",
+			dels: []del{{"u4", 1}},
+			ups:  []up{{"u4", 1, 4096}},
+			want: map[string]*kerr.Error{"u4": kerr.ResourceNotFound},
+		},
+		{
+			name:  "delete and upsert of one user",
+			dels:  []del{{"u1", 1}},
+			ups:   []up{{"u1", 2, 8192}},
+			want:  map[string]*kerr.Error{"u1": kerr.DuplicateResource},
+			after: map[string][]int8{"u1": {1, 2}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := kmsg.NewAlterUserSCRAMCredentialsRequest()
+			for _, d := range tc.dels {
+				rd := kmsg.NewAlterUserSCRAMCredentialsRequestDeletion()
+				rd.Name, rd.Mechanism = d.name, d.mech
+				req.Deletions = append(req.Deletions, rd)
+			}
+			for _, u := range tc.ups {
+				ru := kmsg.NewAlterUserSCRAMCredentialsRequestUpsertion()
+				ru.Name, ru.Mechanism, ru.Iterations = u.name, u.mech, u.iter
+				ru.Salt = []byte("s")
+				ru.SaltedPassword = []byte("p")
+				req.Upsertions = append(req.Upsertions, ru)
+			}
+			resp, err := req.RequestWith(ctx, cl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(resp.Results) != len(tc.want) {
+				t.Fatalf("got %d results, want one per user, %d", len(resp.Results), len(tc.want))
+			}
+			for _, r := range resp.Results {
+				want, ok := tc.want[r.User]
+				if !ok {
+					t.Fatalf("unexpected result for user %q", r.User)
+				}
+				var wantCode int16
+				if want != nil {
+					wantCode = want.Code
+				}
+				if r.ErrorCode != wantCode {
+					t.Errorf("user %q: got %v, want %v", r.User, kerr.ErrorForCode(r.ErrorCode), want)
+				}
+			}
+			for user, want := range tc.after {
+				if got := credentials(user); !slices.Equal(got, want) {
+					t.Errorf("user %q has mechanisms %v, want %v", user, got, want)
+				}
+			}
+		})
+	}
 
-	// Delete non-existent credential.
-	req := kmsg.NewAlterUserSCRAMCredentialsRequest()
-	d := kmsg.NewAlterUserSCRAMCredentialsRequestDeletion()
-	d.Name = "ghost"
-	d.Mechanism = 1
-	req.Deletions = append(req.Deletions, d)
+	// Describe with duplicate user name.
+	req := kmsg.NewDescribeUserSCRAMCredentialsRequest()
+	for range 2 {
+		u := kmsg.NewDescribeUserSCRAMCredentialsRequestUser()
+		u.Name = "someone"
+		req.Users = append(req.Users, u)
+	}
 	resp, err := req.RequestWith(ctx, cl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Results[0].ErrorCode != kerr.ResourceNotFound.Code {
-		t.Errorf("delete nonexistent: got %v, want ResourceNotFound",
-			kerr.ErrorForCode(resp.Results[0].ErrorCode))
-	}
-
-	// Delete with invalid mechanism.
-	req2 := kmsg.NewAlterUserSCRAMCredentialsRequest()
-	d2 := kmsg.NewAlterUserSCRAMCredentialsRequestDeletion()
-	d2.Name = "ghost"
-	d2.Mechanism = 99
-	req2.Deletions = append(req2.Deletions, d2)
-	resp2, err := req2.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp2.Results[0].ErrorCode != kerr.UnsupportedSaslMechanism.Code {
-		t.Errorf("delete bad mech: got %v", kerr.ErrorForCode(resp2.Results[0].ErrorCode))
-	}
-
-	// Delete with empty name.
-	req3 := kmsg.NewAlterUserSCRAMCredentialsRequest()
-	d3 := kmsg.NewAlterUserSCRAMCredentialsRequestDeletion()
-	d3.Name = ""
-	d3.Mechanism = 1
-	req3.Deletions = append(req3.Deletions, d3)
-	resp3, err := req3.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp3.Results[0].ErrorCode != kerr.UnacceptableCredential.Code {
-		t.Errorf("delete empty name: got %v", kerr.ErrorForCode(resp3.Results[0].ErrorCode))
-	}
-
-	// Duplicate user in same request (delete + upsert same user).
-	req4 := kmsg.NewAlterUserSCRAMCredentialsRequest()
-	d4 := kmsg.NewAlterUserSCRAMCredentialsRequestDeletion()
-	d4.Name = "dupuser"
-	d4.Mechanism = 1
-	req4.Deletions = append(req4.Deletions, d4)
-	u4 := kmsg.NewAlterUserSCRAMCredentialsRequestUpsertion()
-	u4.Name = "dupuser"
-	u4.Mechanism = 1
-	u4.Iterations = 4096
-	u4.Salt = []byte("s")
-	u4.SaltedPassword = []byte("p")
-	req4.Upsertions = append(req4.Upsertions, u4)
-	resp4, err := req4.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
 	foundDup := false
-	for _, r := range resp4.Results {
-		if r.ErrorCode == kerr.DuplicateResource.Code {
-			foundDup = true
-		}
-	}
-	if !foundDup {
-		t.Error("expected DuplicateResource for delete+upsert same user")
-	}
-
-	// Describe with duplicate user name.
-	req5 := kmsg.NewDescribeUserSCRAMCredentialsRequest()
-	for range 2 {
-		u := kmsg.NewDescribeUserSCRAMCredentialsRequestUser()
-		u.Name = "someone"
-		req5.Users = append(req5.Users, u)
-	}
-	resp5, err := req5.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	foundDup = false
-	for _, r := range resp5.Results {
+	for _, r := range resp.Results {
 		if r.ErrorCode == kerr.DuplicateResource.Code {
 			foundDup = true
 		}
@@ -2298,6 +2332,46 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 		return names
 	}
 
+	// telemetry gets this client's subscription. A push with the ID the
+	// previous get answered fails once the subscription changes.
+	type subscription struct {
+		metrics  []string
+		interval int32
+	}
+	instance := [16]byte{1, 2, 3}
+	var lastSub int32
+	push := func(t *testing.T, sub int32) int16 {
+		t.Helper()
+		req := kmsg.NewPtrPushTelemetryRequest()
+		req.ClientInstanceID = instance
+		req.SubscriptionID = sub
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.ErrorCode
+	}
+	telemetry := func(t *testing.T) subscription {
+		t.Helper()
+		req := kmsg.NewPtrGetTelemetrySubscriptionsRequest()
+		req.ClientInstanceID = instance
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lastSub != 0 && lastSub != resp.SubscriptionID {
+			if code := push(t, lastSub); code != kerr.UnknownSubscriptionID.Code {
+				t.Errorf("push with the old subscription ID: got error %d, want UNKNOWN_SUBSCRIPTION_ID", code)
+			}
+		}
+		if code := push(t, resp.SubscriptionID); code != 0 {
+			t.Errorf("push with the current subscription ID: got error %d", code)
+		}
+		lastSub = resp.SubscriptionID
+		return subscription{resp.RequestedMetrics, resp.PushIntervalMillis}
+	}
+	all := []string{""} // our marker for every metric
+
 	type config struct {
 		value  string
 		source kmsg.ConfigSource
@@ -2319,6 +2393,8 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 		want     map[string]config
 
 		list []string // nil skips the check
+
+		telemetry *subscription // nil skips the check
 	}{
 		{
 			name:  "create with every key",
@@ -2335,6 +2411,8 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 				"match":       {"client_id=kcl.*,client_software_name=franz-go", dynamic},
 			},
 			list: []string{"s1"},
+			// s1 does not match the client: every metric every 30s.
+			telemetry: &subscription{all, 30000},
 		},
 		{
 			name:     "create with one key describes the defaults",
@@ -2346,7 +2424,8 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 				"interval.ms": {"300000", def},
 				"match":       {"", def},
 			},
-			list: []string{"s1", "s2"},
+			list:      []string{"s1", "s2"},
+			telemetry: &subscription{all, 300000},
 		},
 		{
 			name:     "update one key keeps the others",
@@ -2463,6 +2542,30 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 			},
 			list: []string{"s2"},
 		},
+		{
+			name:      "a matching subscription answers its metrics",
+			alter:     "s2",
+			cfgs:      []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("metrics", "b.,a.")},
+			telemetry: &subscription{[]string{"a.", "b."}, 300000},
+		},
+		{
+			name:      "the smallest matching interval wins",
+			alter:     "s3",
+			cfgs:      []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("interval.ms", "1000"), set("match", "client_id=k.o")},
+			telemetry: &subscription{[]string{"a.", "b."}, 1000},
+		},
+		{
+			name:      "a matching subscription without metrics asks for none",
+			alter:     "s2",
+			cfgs:      []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("match", "client_id=nope")},
+			telemetry: &subscription{nil, 1000},
+		},
+		{
+			name:      "no subscription matches",
+			alter:     "s3",
+			cfgs:      []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("match", "client_id=nope")},
+			telemetry: &subscription{all, 30000},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.alter != "" || tc.cfgs != nil {
@@ -2497,6 +2600,33 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 					t.Errorf("list: got %v, want %v", got, tc.list)
 				}
 			}
+			if tc.telemetry != nil {
+				if got := telemetry(t); !slices.Equal(got.metrics, tc.telemetry.metrics) || got.interval != tc.telemetry.interval {
+					t.Errorf("telemetry: got %v every %dms, want %v every %dms", got.metrics, got.interval, tc.telemetry.metrics, tc.telemetry.interval)
+				}
+			}
 		})
+	}
+
+	// Like Kafka, a client that pushed as terminating may push nothing
+	// more, until we forget it once it stops asking.
+	term := kmsg.NewPtrPushTelemetryRequest()
+	term.ClientInstanceID, term.SubscriptionID, term.Terminating = instance, lastSub, true
+	if resp, err := term.RequestWith(ctx, cl); err != nil || resp.ErrorCode != 0 {
+		t.Fatalf("terminating push: %v %v", err, resp)
+	}
+	if code := push(t, lastSub); code != kerr.InvalidRequest.Code {
+		t.Errorf("push after a terminating push: got error %d, want INVALID_REQUEST", code)
+	}
+	c.admin(func() { c.telem[instance].t.Reset(0) })
+	gone := func() (forgot bool) {
+		c.admin(func() { _, known := c.telem[instance]; forgot = !known })
+		return forgot
+	}
+	for deadline := time.Now().Add(5 * time.Second); !gone() && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	if code := push(t, lastSub); code != 0 {
+		t.Errorf("push after we forgot the terminated client: got error %d", code)
 	}
 }

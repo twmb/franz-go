@@ -11,6 +11,7 @@ import (
 // * Deletes ACLs matching filters
 // * Returns deleted ACLs
 // * Requires ALTER on CLUSTER
+// * SECURITY_DISABLED without EnableACLs, as a broker with no authorizer
 //
 // Version notes:
 // * v1: PatternType field added
@@ -26,6 +27,9 @@ func (c *Cluster) handleDeleteACLs(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
+	// Every filter sees the ACLs from before the request, so an ACL that
+	// two filters match is listed under both. We delete after the loop.
+	var deleted []acl
 	for _, rf := range req.Filters {
 		result := kmsg.DeleteACLsResponseResult{}
 		var name string
@@ -41,6 +45,14 @@ func (c *Cluster) handleDeleteACLs(creq *clientReq) (kmsg.Response, error) {
 				continue
 			}
 		}
+		if !c.cfg.enableACLs {
+			if fe == nil {
+				result.ErrorCode = kerr.SecurityDisabled.Code
+				result.ErrorMessage = kmsg.StringPtr("No Authorizer is configured.")
+			}
+			resp.Results = append(resp.Results, result)
+			continue
+		}
 
 		filter := aclFilter{
 			resourceType: rf.ResourceType,
@@ -53,13 +65,20 @@ func (c *Cluster) handleDeleteACLs(creq *clientReq) (kmsg.Response, error) {
 		}
 
 		if !filter.validate() {
-			result.ErrorCode = kerr.InvalidRequest.Code
-			result.ErrorMessage = kmsg.StringPtr("DeleteAclsRequest contains UNKNOWN elements")
+			if fe == nil { // a timed-out deletion keeps its answer
+				result.ErrorCode = kerr.InvalidRequest.Code
+				result.ErrorMessage = kmsg.StringPtr("DeleteAclsRequest contains UNKNOWN elements")
+			}
 			resp.Results = append(resp.Results, result)
 			continue
 		}
 
-		for _, a := range c.acls.delete(filter) {
+		matched := c.acls.describe(filter)
+		deleted = append(deleted, matched...)
+		if fe != nil { // a timed-out answer lists nothing
+			matched = nil
+		}
+		for _, a := range matched {
 			result.MatchingACLs = append(result.MatchingACLs, kmsg.DeleteACLsResponseResultMatchingACL{
 				ResourceType:        a.resourceType,
 				ResourceName:        a.resourceName,
@@ -72,6 +91,7 @@ func (c *Cluster) handleDeleteACLs(creq *clientReq) (kmsg.Response, error) {
 		}
 		resp.Results = append(resp.Results, result)
 	}
+	c.acls.remove(deleted)
 
 	c.persistACLsState()
 	return resp, nil
