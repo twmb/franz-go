@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,7 +35,7 @@ type (
 		t2id      map[string]uuid               // topic name => topic IDs
 		treplicas map[string]int                // topic name => # replicas
 		tcfgs     map[string]map[string]*string // topic name => config name => config value
-		tnorms    map[string]string             // normalized name (. replaced with _) => topic name
+		tnorms    map[string][]string           // normalized name (. replaced with _) => topic names
 	}
 
 	abortedTxnEntry struct {
@@ -201,6 +202,14 @@ func normalizeTopicName(t string) string {
 	return strings.ReplaceAll(t, ".", "_")
 }
 
+func (d *data) dropNorm(t string) {
+	norm := normalizeTopicName(t)
+	d.tnorms[norm] = slices.DeleteFunc(d.tnorms[norm], func(n string) bool { return n == t })
+	if len(d.tnorms[norm]) == 0 {
+		delete(d.tnorms, norm)
+	}
+}
+
 func (d *data) mkt(t string, nparts, nreplicas int, configs map[string]*string) {
 	if d.tps != nil {
 		if _, exists := d.tps[t]; exists {
@@ -224,7 +233,8 @@ func (d *data) mkt(t string, nparts, nreplicas int, configs map[string]*string) 
 	d.id2t[id] = t
 	d.t2id[t] = id
 	d.treplicas[t] = nreplicas
-	d.tnorms[normalizeTopicName(t)] = t
+	norm := normalizeTopicName(t)
+	d.tnorms[norm] = append(d.tnorms[norm], t)
 	if configs != nil {
 		d.tcfgs[t] = configs
 	}
@@ -674,14 +684,9 @@ func (pd *partData) recalculateLSO() {
 //   - default configs
 //   - dynamic broker configs
 func (c *Cluster) brokerConfigs(node int32, fn func(k string, v *string, src kmsg.ConfigSource, sensitive bool)) {
-	if node >= 0 {
-		for _, b := range c.bs {
-			if b.node == node {
-				id := strconv.Itoa(int(node))
-				fn("broker.id", &id, kmsg.ConfigSourceStaticBrokerConfig, false)
-				break
-			}
-		}
+	if node >= 0 && c.nodeBroker(node) != nil {
+		id := strconv.Itoa(int(node))
+		fn("broker.id", &id, kmsg.ConfigSourceStaticBrokerConfig, false)
 	}
 	for _, c := range []struct {
 		k    string

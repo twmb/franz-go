@@ -3151,6 +3151,24 @@ func TestElectLeaders(t *testing.T) {
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
+	// expectAll checks that resp answers nparts partitions, each with
+	// code.
+	expectAll := func(name string, resp *kmsg.ElectLeadersResponse, code int16, nparts int) {
+		t.Helper()
+		var n int
+		for _, rt := range resp.Topics {
+			for _, rp := range rt.Partitions {
+				n++
+				if rp.ErrorCode != code {
+					t.Errorf("%s: partition %d: expected %v, got %v", name, rp.Partition, kerr.ErrorForCode(code), kerr.ErrorForCode(rp.ErrorCode))
+				}
+			}
+		}
+		if n != nparts {
+			t.Errorf("%s: expected %d partitions, got %d", name, nparts, n)
+		}
+	}
+
 	// Record original leaders.
 	meta, err := kmsg.NewPtrMetadataRequest().RequestWith(ctx, cl)
 	if err != nil {
@@ -3183,13 +3201,7 @@ func TestElectLeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rt := range electResp.Topics {
-		for _, rp := range rt.Partitions {
-			if rp.ErrorCode != 0 {
-				t.Fatalf("partition %d error: %v", rp.Partition, kerr.ErrorForCode(rp.ErrorCode))
-			}
-		}
-	}
+	expectAll("elect 0 and 1", electResp, 0, 2)
 
 	// Verify leaders rotated and epochs bumped for 0 and 1.
 	meta2, err := kmsg.NewPtrMetadataRequest().RequestWith(ctx, cl)
@@ -3217,21 +3229,23 @@ func TestElectLeaders(t *testing.T) {
 		}
 	}
 
-	// Elect with unknown partition.
+	// Elect with an unknown partition and an unknown topic; Kafka's
+	// message names which one is missing.
 	electReq2 := kmsg.NewPtrElectLeadersRequest()
 	et2 := kmsg.NewElectLeadersRequestTopic()
 	et2.Topic = topic
 	et2.Partitions = []int32{99}
 	electReq2.Topics = append(electReq2.Topics, et2)
+	et2.Topic = "t-elect-missing"
+	electReq2.Topics = append(electReq2.Topics, et2)
 	electResp2, err := electReq2.RequestWith(ctx, cl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rt := range electResp2.Topics {
-		for _, rp := range rt.Partitions {
-			if rp.ErrorCode != kerr.UnknownTopicOrPartition.Code {
-				t.Fatalf("expected UnknownTopicOrPartition for p99, got %v", kerr.ErrorForCode(rp.ErrorCode))
-			}
+	expectAll("unknown partition", electResp2, kerr.UnknownTopicOrPartition.Code, 2)
+	for i, want := range []string{"No such partition as t-elect-leaders-99", "No such topic as t-elect-missing"} {
+		if got := electResp2.Topics[i].Partitions[0].ErrorMessage; got == nil || *got != want {
+			t.Errorf("unknown partition: topic %d: expected message %q, got %v", i, want, got)
 		}
 	}
 
@@ -3253,6 +3267,66 @@ func TestElectLeaders(t *testing.T) {
 	if totalElected < 3 {
 		t.Fatalf("expected at least 3 partitions elected, got %d", totalElected)
 	}
+
+	// UNCLEAN never needs an election, since every partition has a
+	// leader. Electing all partitions leaves them out but lists each topic.
+	before := c.LeaderFor(topic, 0)
+	unclean := kmsg.NewPtrElectLeadersRequest()
+	unclean.ElectionType = 1
+	unclean.Topics = append(unclean.Topics, et)
+	uresp, err := unclean.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectAll("unclean", uresp, kerr.ElectionNotNeeded.Code, 2)
+	if got := uresp.Topics[0].Partitions[0].ErrorMessage; got == nil || *got != "Leader election not needed for topic partition." {
+		t.Errorf("unclean: expected Kafka's message, got %v", got)
+	}
+	if after := c.LeaderFor(topic, 0); after != before {
+		t.Errorf("unclean: leader moved from %d to %d", before, after)
+	}
+	unclean.Topics = nil
+	if uresp, err = unclean.RequestWith(ctx, cl); err != nil {
+		t.Fatal(err)
+	}
+	if len(uresp.Topics) != 1 || len(uresp.Topics[0].Partitions) != 0 {
+		t.Errorf("unclean all: expected one topic with no partitions, got %+v", uresp.Topics)
+	}
+
+	// An unknown type, and a request-level fault, fail the request and
+	// every named partition; asking for all partitions answers none.
+	bad := kmsg.NewPtrElectLeadersRequest()
+	bad.ElectionType = 2
+	bad.Topics = append(bad.Topics, et)
+	bresp, err := bad.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bresp.ErrorCode != kerr.InvalidRequest.Code {
+		t.Errorf("unknown type: expected INVALID_REQUEST, got %v", kerr.ErrorForCode(bresp.ErrorCode))
+	}
+	expectAll("unknown type", bresp, kerr.InvalidRequest.Code, 2)
+	if m := bresp.Topics[0].Partitions[0].ErrorMessage; m == nil || *m != "Unknown election type 2" {
+		t.Errorf("unknown type: got message %v, want Kafka's", m)
+	}
+
+	// A timed-out election of all partitions still elects, and answers
+	// no partitions.
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.ElectLeaders}, Err: kerr.RequestTimedOut})
+	before = c.LeaderFor(topic, 0)
+	tresp, err := kmsg.NewPtrElectLeadersRequest().RequestWith(ctx, cl)
+	if err != nil || tresp.ErrorCode != kerr.RequestTimedOut.Code || c.LeaderFor(topic, 0) == before {
+		t.Errorf("timed out all: err %v, code %v, leader %d before and after; want REQUEST_TIMED_OUT and a new leader", err, kerr.ErrorForCode(tresp.ErrorCode), before)
+	}
+	expectAll("timed out all", tresp, 0, 0)
+
+	h := c.Fault(Fault{Keys: []kmsg.Key{kmsg.ElectLeaders}, Count: -1, Err: kerr.ClusterAuthorizationFailed})
+	defer h.Remove()
+	fresp, err := electReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectAll("fault named", fresp, kerr.ClusterAuthorizationFailed.Code, 2)
 }
 
 func TestIncrementalAlterConfigAppendSubtract(t *testing.T) {

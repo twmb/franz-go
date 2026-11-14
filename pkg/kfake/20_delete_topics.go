@@ -10,6 +10,9 @@ import (
 // Behavior:
 // * Must be sent to the controller
 // * Deletes topics by name (v0-5) or by name/ID (v6+)
+// * A duplicated name or ID, or an entry with both or neither, answers
+//   INVALID_REQUEST and is not deleted
+// * ACL: DELETE on CLUSTER, or DESCRIBE and DELETE on the topic
 // * Wakes any watching fetchers on deletion
 //
 // Version notes:
@@ -31,33 +34,22 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	// A fault can answer a topic before the work runs. The work's own
-	// answer for that topic must not add an entry or replace the code.
-	type answerKey struct {
-		t  string
-		id uuid
-	}
-	answered := make(map[answerKey]int)
-	donet := func(t *string, id uuid, errCode int16) *kmsg.DeleteTopicsResponseTopic {
-		k := answerKey{id: id}
-		if t != nil {
-			k.t = *t
+	// A topic gets one answer. A fault can answer a topic before the
+	// work runs, and a request can name a topic twice; a later answer
+	// adds no entry and keeps the first code. We key an answer by what
+	// the request named the topic with: its name (a string) or its ID (a
+	// uuid). An entry with both or neither is keyed by its index.
+	answered := make(map[any]bool)
+	answer := func(k any, t *string, id uuid, errCode int16) {
+		if answered[k] {
+			return
 		}
-		if i, ok := answered[k]; ok {
-			return &resp.Topics[i]
-		}
-		answered[k] = len(resp.Topics)
+		answered[k] = true
 		st := kmsg.NewDeleteTopicsResponseTopic()
 		st.Topic = t
 		st.TopicID = id
 		st.ErrorCode = errCode
 		resp.Topics = append(resp.Topics, st)
-		return &resp.Topics[len(resp.Topics)-1]
-	}
-	donets := func(errCode int16) {
-		for _, rt := range req.Topics {
-			donet(rt.Topic, rt.TopicID, errCode)
-		}
 	}
 
 	if req.Version <= 5 {
@@ -68,66 +60,141 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 		}
 	}
 
-	if b != c.controller {
-		donets(kerr.NotController.Code)
-		return resp, nil
+	misrouted := b != c.controller
+
+	// DELETE on CLUSTER allows deleting (and so describing) any topic.
+	clusterDelete := c.allowedClusterACL(creq, kmsg.ACLOperationDelete)
+	allowed := func(topic string, op kmsg.ACLOperation) bool {
+		return clusterDelete || c.allowedACL(creq, topic, kmsg.ACLResourceTypeTopic, op)
 	}
+
+	// Kafka answers INVALID_REQUEST for an entry with both a name and
+	// an ID or with neither, and once for a name or ID the request
+	// lists more than once; it deletes none of those.
+	nnames := make(map[string]int)
+	nids := make(map[uuid]int)
 	for _, rt := range req.Topics {
-		if rt.TopicID != noID && rt.Topic != nil {
-			donets(kerr.InvalidRequest.Code)
-			return resp, nil
+		switch {
+		case rt.Topic != nil && rt.TopicID == noID:
+			nnames[*rt.Topic]++
+		case rt.Topic == nil && rt.TopicID != noID:
+			nids[rt.TopicID]++
 		}
 	}
 
-	type toDelete struct {
-		topic string
-		id    uuid
+	// Kafka fails the whole request if its deadline passed before the
+	// controller looked up a topic. It looks up only the names and IDs
+	// the request lists once.
+	var lookup bool
+	for _, n := range nnames {
+		lookup = lookup || n == 1
 	}
-	var toDeletes []toDelete
-	defer func() {
-		for _, td := range toDeletes {
-			c.deleteTopic(td.topic, td.id)
+	for _, n := range nids {
+		lookup = lookup || n == 1
+	}
+	if !misrouted && req.TimeoutMillis <= 0 && lookup {
+		for i, rt := range req.Topics {
+			answer(i, rt.Topic, rt.TopicID, kerr.RequestTimedOut.Code)
 		}
-		if len(toDeletes) > 0 {
-			c.notifyTopicChange()
-			c.refreshCompactTicker()
-			c.persistTopicsState()
+		return resp, nil
+	}
+
+	// We resolve IDs before names, as Kafka does, so a name that maps to
+	// an ID the request also lists is caught below.
+	var (
+		byID       = make(map[uuid]string) // topics to delete, named by ID
+		names      []string                // names to resolve
+		nameDelete []string                // topics to delete, named by name
+	)
+	for i, rt := range req.Topics {
+		switch {
+		case (rt.Topic != nil) == (rt.TopicID != noID):
+			answer(i, rt.Topic, rt.TopicID, kerr.InvalidRequest.Code)
+		case rt.Topic != nil && nnames[*rt.Topic] > 1:
+			answer(*rt.Topic, rt.Topic, noID, kerr.InvalidRequest.Code)
+		case rt.TopicID != noID && nids[rt.TopicID] > 1:
+			answer(rt.TopicID, nil, rt.TopicID, kerr.InvalidRequest.Code)
+		case rt.Topic != nil:
+			names = append(names, *rt.Topic)
+		default:
+			id := rt.TopicID
+			topic, ok := c.data.id2t[id]
+			if !ok {
+				if misrouted {
+					answer(id, nil, id, kerr.NotController.Code)
+					continue
+				}
+				if e := creq.faults.check(faultKey{topicID: id}); e != nil {
+					answer(id, nil, id, e.Code)
+				}
+				answer(id, nil, id, kerr.UnknownTopicID.Code)
+				continue
+			}
+			// The name is returned only if you may describe it.
+			if !allowed(topic, kmsg.ACLOperationDelete) {
+				var name *string
+				if allowed(topic, kmsg.ACLOperationDescribe) {
+					name = &topic
+				}
+				answer(id, name, id, kerr.TopicAuthorizationFailed.Code)
+				continue
+			}
+			if misrouted {
+				answer(id, nil, id, kerr.NotController.Code)
+				continue
+			}
+			if e := creq.faults.check(faultKey{topic: topic, topicID: id}); e != nil {
+				answer(id, nil, id, e.Code)
+				if creq.skipsWork(e) { // a timed-out delete still deletes the topic
+					continue
+				}
+			}
+			byID[id] = topic
 		}
-	}()
-	for _, rt := range req.Topics {
-		var topic string
-		var id uuid
-		if rt.Topic != nil {
-			topic = *rt.Topic
-			id = c.data.t2id[topic]
-		} else {
-			topic = c.data.id2t[rt.TopicID]
-			id = rt.TopicID
+	}
+	for _, topic := range names {
+		id, ok := c.data.t2id[topic]
+		// A topic you may describe but not delete answers whether it
+		// exists; one you may not describe never does.
+		if !allowed(topic, kmsg.ACLOperationDescribe) || ok && !allowed(topic, kmsg.ACLOperationDelete) {
+			answer(topic, &topic, noID, kerr.TopicAuthorizationFailed.Code)
+			continue
 		}
-		// ACL check: DESCRIBE first (to identify topic), then DELETE
-		e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic, topicID: id})
-		if e == nil {
-			e = c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDelete, faultKey{topic: topic, topicID: id})
+		if misrouted {
+			answer(topic, &topic, noID, kerr.NotController.Code)
+			continue
 		}
-		if e != nil {
-			donet(&topic, id, e.Code)
-			if creq.skipsWork(e) { // a timed-out delete still deletes the topic
+		if e := creq.faults.check(faultKey{topic: topic}); e != nil {
+			answer(topic, &topic, noID, e.Code)
+			if creq.skipsWork(e) {
 				continue
 			}
 		}
-		if _, ok := c.data.tps.gett(topic); !ok {
-			if rt.Topic != nil {
-				donet(&topic, id, kerr.UnknownTopicOrPartition.Code)
-			} else {
-				donet(&topic, id, kerr.UnknownTopicID.Code)
-			}
+		if !ok {
+			answer(topic, &topic, noID, kerr.UnknownTopicOrPartition.Code)
 			continue
 		}
-
-		donet(&topic, id, 0)
-		toDeletes = append(toDeletes, toDelete{topic, id})
+		if _, dup := byID[id]; dup || nids[id] > 1 {
+			delete(byID, id)
+			answer(topic, &topic, id, kerr.InvalidRequest.Code)
+			continue
+		}
+		answer(topic, &topic, id, 0)
+		nameDelete = append(nameDelete, topic)
 	}
 
+	for id, topic := range byID {
+		answer(id, &topic, id, 0)
+		c.deleteTopic(topic, id)
+	}
+	for _, topic := range nameDelete {
+		c.deleteTopic(topic, c.data.t2id[topic])
+	}
+	if len(byID)+len(nameDelete) > 0 {
+		c.notifyTopicChange()
+		c.refreshCompactTicker()
+		c.persistTopicsState()
+	}
 	return resp, nil
 }
 
@@ -158,7 +225,7 @@ func (c *Cluster) deleteTopic(topic string, id uuid) {
 	delete(c.data.t2id, topic)
 	delete(c.data.treplicas, topic)
 	delete(c.data.tcfgs, topic)
-	delete(c.data.tnorms, normalizeTopicName(topic))
+	c.data.dropNorm(topic)
 	// Producer state is per-log and dies with the topic: a recreated topic
 	// rehydrates empty state, and handleProduce decides what each version
 	// accepts from a producer it has no state for. Transactional

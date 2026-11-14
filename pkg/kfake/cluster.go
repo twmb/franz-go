@@ -182,7 +182,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			t2id:      make(map[string]uuid),
 			treplicas: make(map[string]int),
 			tcfgs:     make(map[string]map[string]*string),
-			tnorms:    make(map[string]string),
+			tnorms:    make(map[string][]string),
 		},
 		bcfgs:    make(map[string]*string, len(cfg.brokerConfigs)),
 		quotas:   make(map[string]quotaEntry),
@@ -1386,13 +1386,7 @@ func (c *Cluster) admin(fn func()) {
 func (c *Cluster) MoveTopicPartition(topic string, partition, nodeID int32) error {
 	var err error
 	c.admin(func() {
-		var br *broker
-		for _, b := range c.bs {
-			if b.node == nodeID {
-				br = b
-				break
-			}
-		}
+		br := c.nodeBroker(nodeID)
 		if br == nil {
 			err = fmt.Errorf("node %d not found", nodeID)
 			return
@@ -1468,11 +1462,9 @@ func (c *Cluster) AddNode(nodeID int32, port int) (int32, int, error) {
 	var err error
 	c.admin(func() {
 		if nodeID >= 0 {
-			for _, b := range c.bs {
-				if b.node == nodeID {
-					err = fmt.Errorf("node %d already exists", nodeID)
-					return
-				}
+			if c.nodeBroker(nodeID) != nil {
+				err = fmt.Errorf("node %d already exists", nodeID)
+				return
 			}
 		} else if len(c.bs) > 0 {
 			// We go one higher than the max current node ID. We
@@ -1529,6 +1521,9 @@ func (c *Cluster) RemoveNode(nodeID int32) error {
 			c.bs[i] = c.bs[len(c.bs)-1]
 			c.bs[i].bsIdx = i
 			c.bs = c.bs[:len(c.bs)-1]
+			if c.controller == b {
+				c.controller = c.bs[len(c.bs)-1]
+			}
 			c.shufflePartitions()
 			return
 		}

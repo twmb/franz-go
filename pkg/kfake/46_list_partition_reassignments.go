@@ -25,8 +25,19 @@ func (c *Cluster) handleListPartitionReassignments(creq *clientReq) (kmsg.Respon
 		return nil, err
 	}
 
+	// A denial echoes each requested partition, as Kafka does.
 	if e := c.denyCluster(creq, kmsg.ACLOperationDescribe, faultKey{}); e != nil {
 		resp.ErrorCode = e.Code
+		for _, rt := range req.Topics {
+			st := kmsg.NewListPartitionReassignmentsResponseTopic()
+			st.Topic = rt.Topic
+			for _, p := range rt.Partitions {
+				sp := kmsg.NewListPartitionReassignmentsResponseTopicPartition()
+				sp.Partition = p
+				st.Partitions = append(st.Partitions, sp)
+			}
+			resp.Topics = append(resp.Topics, st)
+		}
 		return resp, nil
 	}
 

@@ -574,7 +574,7 @@ func TestChaosTopicCreateDeleteRestart(t *testing.T) {
 			delete(c.data.t2id, topic)
 			delete(c.data.treplicas, topic)
 			delete(c.data.tcfgs, topic)
-			delete(c.data.tnorms, normalizeTopicName(topic))
+			c.data.dropNorm(topic)
 			c.persistTopicsState()
 			delete(existing, topic)
 		} else {

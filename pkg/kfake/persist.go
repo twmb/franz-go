@@ -1137,7 +1137,8 @@ func (c *Cluster) loadTopics(fsys fs, dir string) error {
 		c.data.id2t[t.ID] = t.Name
 		c.data.t2id[t.Name] = t.ID
 		c.data.treplicas[t.Name] = t.Replicas
-		c.data.tnorms[normalizeTopicName(t.Name)] = t.Name
+		norm := normalizeTopicName(t.Name)
+		c.data.tnorms[norm] = append(c.data.tnorms[norm], t.Name)
 
 		if len(t.Configs) > 0 {
 			cfgs := make(map[string]*string, len(t.Configs))

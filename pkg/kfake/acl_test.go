@@ -32,11 +32,15 @@ func TestACLsDisabled(t *testing.T) {
 func TestACLsEnabled(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t,
-		NumBrokers(1),
+		NumBrokers(2),
 		SeedTopics(1, "test-topic"),
 		EnableACLs(),
 		EnableSASL(),
 		User("PLAIN", "testuser", "testpass"), // no ACLs
+		User("PLAIN", "topicadmin", "pass",
+			ACL{Resource: kmsg.ACLResourceTypeCluster, Name: "kafka-cluster", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationCreate, Allow: true},
+			ACL{Resource: kmsg.ACLResourceTypeCluster, Name: "kafka-cluster", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationDelete, Allow: true},
+		),
 	)
 
 	cl := newPlainClient(t, c,
@@ -55,6 +59,74 @@ func TestACLsEnabled(t *testing.T) {
 	}
 	if !isAuthzError(err) {
 		t.Fatalf("expected authorization error, got: %v", err)
+	}
+
+	// A cluster denial on a reassignment answers every partition too.
+	apa := kmsg.NewPtrAlterPartitionAssignmentsRequest()
+	apaT := kmsg.NewAlterPartitionAssignmentsRequestTopic()
+	apaT.Topic = "test-topic"
+	apaP := kmsg.NewAlterPartitionAssignmentsRequestTopicPartition()
+	apaP.Replicas = []int32{0}
+	apaT.Partitions = append(apaT.Partitions, apaP)
+	apa.Topics = append(apa.Topics, apaT)
+	apaResp, err := apa.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := kerr.ClusterAuthorizationFailed.Code; apaResp.ErrorCode != code || len(apaResp.Topics) != 1 || apaResp.Topics[0].Partitions[0].ErrorCode != code {
+		t.Errorf("reassignment denial: expected CLUSTER_AUTHORIZATION_FAILED everywhere, got %+v", apaResp)
+	}
+
+	// A topic you may not describe is denied without its ID.
+	del := kmsg.NewPtrDeleteTopicsRequest()
+	delT := kmsg.NewDeleteTopicsRequestTopic()
+	delT.Topic = kmsg.StringPtr("test-topic")
+	del.Topics = append(del.Topics, delT)
+	delResp, err := del.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := delResp.Topics[0]; st.ErrorCode != kerr.TopicAuthorizationFailed.Code || st.TopicID != [16]byte{} {
+		t.Errorf("delete denial: expected TOPIC_AUTHORIZATION_FAILED with no ID, got %v %x", kerr.ErrorForCode(st.ErrorCode), st.TopicID)
+	}
+
+	// Kafka checks the ACL before routing: a broker that is not the
+	// controller answers a denied topic TOPIC_AUTHORIZATION_FAILED.
+	var other int32
+	c.admin(func() { other = 1 - c.controller.node })
+	create := kmsg.NewPtrCreateTopicsRequest()
+	create.Topics = []kmsg.CreateTopicsRequestTopic{{Topic: "denied", NumPartitions: 1, ReplicationFactor: 1}}
+	grow := kmsg.NewPtrCreatePartitionsRequest()
+	grow.Topics = []kmsg.CreatePartitionsRequestTopic{{Topic: "test-topic", Count: 2}}
+	for _, req := range []kmsg.Request{create, grow, del} {
+		if resp := faultReq(t, cl, other, req); !hasErrorCode(resp, kerr.TopicAuthorizationFailed.Code) {
+			t.Errorf("%s to a broker that is not the controller: got %+v, want TOPIC_AUTHORIZATION_FAILED", kmsg.NameForKey(req.Key()), resp)
+		}
+	}
+
+	// CREATE and DELETE on the cluster create and delete any topic.
+	// Without DESCRIBE_CONFIGS on the topic, the create answers no
+	// counts or configs.
+	admin := newPlainClient(t, c, kgo.SASL(plain.Plain(func(_ context.Context) (plain.Auth, error) {
+		return plain.Auth{User: "topicadmin", Pass: "pass"}, nil
+	})))
+	ct := kmsg.NewPtrCreateTopicsRequest()
+	ctT := kmsg.NewCreateTopicsRequestTopic()
+	ctT.Topic = "admin-created"
+	ctT.NumPartitions, ctT.ReplicationFactor = 1, 1
+	ct.Topics = append(ct.Topics, ctT)
+	ctResp, err := ct.RequestWith(ctx, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := ctResp.Topics[0]; st.ErrorCode != 0 || st.ConfigErrorCode != kerr.TopicAuthorizationFailed.Code || st.NumPartitions != -1 || len(st.Configs) != 0 {
+		t.Errorf("create: got code %v, config code %v, %d partitions, %d configs", kerr.ErrorForCode(st.ErrorCode), kerr.ErrorForCode(st.ConfigErrorCode), st.NumPartitions, len(st.Configs))
+	}
+	if delResp, err = del.RequestWith(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	if code := delResp.Topics[0].ErrorCode; code != 0 {
+		t.Errorf("delete with cluster DELETE: %v", kerr.ErrorForCode(code))
 	}
 }
 

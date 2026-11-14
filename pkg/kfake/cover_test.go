@@ -3,6 +3,7 @@ package kfake
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,110 +103,67 @@ func TestCreatePartitionsWithExplicitAssignment(t *testing.T) {
 func TestCreatePartitionsErrorCases(t *testing.T) {
 	t.Parallel()
 	topic := "create-parts-errors"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(5, topic))
+	c := newCoverCluster(t, NumBrokers(2), SeedTopics(5, topic))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	cl := newPlainClient(t, c)
 
-	cases := []struct {
-		name    string
-		build   func() kmsg.CreatePartitionsRequest
-		wantErr int16
+	for _, tc := range []struct {
+		name     string
+		topics   []string // nil is just topic
+		count    int32
+		assign   [][]int32 // nil sends no assignment list
+		timedOut bool
+		wantErr  int16
 	}{
-		{
-			name: "decrease partition count",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				rt := kmsg.NewCreatePartitionsRequestTopic()
-				rt.Topic = topic
-				rt.Count = 2 // less than current 5
-				req.Topics = append(req.Topics, rt)
-				return req
-			},
-			wantErr: kerr.InvalidPartitions.Code,
-		},
-		{
-			name: "unknown topic",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				rt := kmsg.NewCreatePartitionsRequestTopic()
-				rt.Topic = "nonexistent"
-				rt.Count = 3
-				req.Topics = append(req.Topics, rt)
-				return req
-			},
-			wantErr: kerr.UnknownTopicOrPartition.Code,
-		},
-		{
-			name: "wrong number of assignments",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				rt := kmsg.NewCreatePartitionsRequestTopic()
-				rt.Topic = topic
-				rt.Count = 7 // need 2 assignments
-				a := kmsg.NewCreatePartitionsRequestTopicAssignment()
-				a.Replicas = []int32{0}
-				rt.Assignment = append(rt.Assignment, a) // only 1
-				req.Topics = append(req.Topics, rt)
-				return req
-			},
-			wantErr: kerr.InvalidReplicaAssignment.Code,
-		},
-		{
-			name: "assignment with unknown broker",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				rt := kmsg.NewCreatePartitionsRequestTopic()
-				rt.Topic = topic
-				rt.Count = 6
-				a := kmsg.NewCreatePartitionsRequestTopicAssignment()
-				a.Replicas = []int32{999}
-				rt.Assignment = append(rt.Assignment, a)
-				req.Topics = append(req.Topics, rt)
-				return req
-			},
-			wantErr: kerr.InvalidReplicaAssignment.Code,
-		},
-		{
-			name: "assignment with empty replicas",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				rt := kmsg.NewCreatePartitionsRequestTopic()
-				rt.Topic = topic
-				rt.Count = 6
-				a := kmsg.NewCreatePartitionsRequestTopicAssignment()
-				rt.Assignment = append(rt.Assignment, a)
-				req.Topics = append(req.Topics, rt)
-				return req
-			},
-			wantErr: kerr.InvalidReplicaAssignment.Code,
-		},
-		{
-			name: "duplicate topics in request",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				for range 2 {
-					rt := kmsg.NewCreatePartitionsRequestTopic()
-					rt.Topic = topic
-					rt.Count = 6
-					req.Topics = append(req.Topics, rt)
-				}
-				return req
-			},
-			wantErr: kerr.InvalidRequest.Code,
-		},
-	}
-
-	for _, tc := range cases {
-		req := tc.build()
+		{name: "decrease partition count", count: 2, wantErr: kerr.InvalidPartitions.Code},
+		{name: "unknown topic", topics: []string{"nonexistent"}, count: 3, wantErr: kerr.UnknownTopicOrPartition.Code},
+		{name: "wrong number of assignments", count: 7, assign: [][]int32{{0}}, wantErr: kerr.InvalidReplicaAssignment.Code},
+		{name: "assignment with unknown broker", count: 6, assign: [][]int32{{999}}, wantErr: kerr.InvalidReplicaAssignment.Code},
+		{name: "assignment with empty replicas", count: 6, assign: [][]int32{nil}, wantErr: kerr.InvalidReplicaAssignment.Code},
+		{name: "duplicate topics in request", topics: []string{topic, topic}, count: 6, wantErr: kerr.InvalidRequest.Code},
+		{name: "duplicate topics fail only themselves", topics: []string{"nonexistent", topic, topic}, count: 6, wantErr: kerr.UnknownTopicOrPartition.Code},
+		{name: "same partition count", count: 5, wantErr: kerr.InvalidPartitions.Code},
+		{name: "too many new partitions", count: 5 + 10001, wantErr: kerr.PolicyViolation.Code},
+		{name: "timeout already passed", count: 6, timedOut: true, wantErr: kerr.RequestTimedOut.Code},
+		{name: "assignment with a different replication factor", count: 6, assign: [][]int32{{0}}, wantErr: kerr.InvalidReplicaAssignment.Code},
+		{name: "assignment with a broker twice", count: 6, assign: [][]int32{{0, 0}}, wantErr: kerr.InvalidReplicaAssignment.Code},
+		{name: "empty non-null assignment list", count: 6, assign: [][]int32{}, wantErr: kerr.InvalidReplicaAssignment.Code},
+	} {
+		req := kmsg.NewPtrCreatePartitionsRequest()
+		if tc.timedOut {
+			req.TimeoutMillis = 0
+		}
+		if tc.topics == nil {
+			tc.topics = []string{topic}
+		}
+		for _, name := range tc.topics {
+			rt := kmsg.NewCreatePartitionsRequestTopic()
+			rt.Topic, rt.Count = name, tc.count
+			if tc.assign != nil {
+				rt.Assignment = []kmsg.CreatePartitionsRequestTopicAssignment{}
+			}
+			for _, replicas := range tc.assign {
+				rt.Assignment = append(rt.Assignment, kmsg.CreatePartitionsRequestTopicAssignment{Replicas: replicas})
+			}
+			req.Topics = append(req.Topics, rt)
+		}
 		resp, err := req.RequestWith(ctx, cl)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
-		if resp.Topics[0].ErrorCode != tc.wantErr {
+		// We check the answer for the first topic in the request.
+		got := int16(-1)
+		for _, st := range resp.Topics {
+			if st.Topic == req.Topics[0].Topic {
+				got = st.ErrorCode
+				break
+			}
+		}
+		if got != tc.wantErr {
 			t.Errorf("%s: got error %d (%v), want %d (%v)",
-				tc.name, resp.Topics[0].ErrorCode, kerr.ErrorForCode(resp.Topics[0].ErrorCode),
+				tc.name, got, kerr.ErrorForCode(got),
 				tc.wantErr, kerr.ErrorForCode(tc.wantErr))
 		}
 	}
@@ -378,30 +336,41 @@ func TestAlterReplicaLogDirsMovesPartition(t *testing.T) {
 }
 
 // TestAlterPartitionAssignments verifies that reassignment accepts valid
-// requests and properly rejects null-replicas (cancel) and unknown topics.
+// requests and properly rejects null-replicas (cancel), invalid replicas, and
+// unknown topics.
 func TestAlterPartitionAssignments(t *testing.T) {
 	t.Parallel()
 	topic := "alter-assign"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(2, topic))
+	c := newCoverCluster(t, NumBrokers(2), SeedTopics(5, topic))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	cl := newPlainClient(t, c)
+	if err := c.MoveTopicPartition(topic, 0, 1); err != nil {
+		t.Fatal(err)
+	}
 
-	// Successful reassignment (non-nil replicas accepted).
+	// Partition => replicas and the code we expect. A nil list cancels,
+	// and kfake has no reassignment in progress.
+	cases := map[int32]struct {
+		replicas []int32
+		want     int16
+	}{
+		0: {[]int32{0}, 0},
+		1: {nil, kerr.NoReassignmentInProgress.Code},
+		2: {[]int32{0, 0}, kerr.InvalidReplicaAssignment.Code},
+		3: {[]int32{7}, kerr.InvalidReplicaAssignment.Code},
+		4: {[]int32{}, kerr.InvalidReplicaAssignment.Code},
+	}
 	req := kmsg.NewAlterPartitionAssignmentsRequest()
 	rt := kmsg.NewAlterPartitionAssignmentsRequestTopic()
 	rt.Topic = topic
-	rp := kmsg.NewAlterPartitionAssignmentsRequestTopicPartition()
-	rp.Partition = 0
-	rp.Replicas = []int32{0}
-	rt.Partitions = append(rt.Partitions, rp)
-
-	// Cancel reassignment (nil replicas): kfake has none in progress.
-	rpCancel := kmsg.NewAlterPartitionAssignmentsRequestTopicPartition()
-	rpCancel.Partition = 1
-	rpCancel.Replicas = nil
-	rt.Partitions = append(rt.Partitions, rpCancel)
+	for p, tc := range cases {
+		rp := kmsg.NewAlterPartitionAssignmentsRequestTopicPartition()
+		rp.Partition = p
+		rp.Replicas = tc.replicas
+		rt.Partitions = append(rt.Partitions, rp)
+	}
 	req.Topics = append(req.Topics, rt)
 
 	// Unknown topic.
@@ -417,25 +386,37 @@ func TestAlterPartitionAssignments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Check per-partition results.
 	for _, st := range resp.Topics {
 		for _, sp := range st.Partitions {
-			switch {
-			case st.Topic == topic && sp.Partition == 0:
-				if sp.ErrorCode != 0 {
-					t.Errorf("partition 0 should succeed, got %v", kerr.ErrorForCode(sp.ErrorCode))
-				}
-			case st.Topic == topic && sp.Partition == 1:
-				if sp.ErrorCode != kerr.NoReassignmentInProgress.Code {
-					t.Errorf("cancel should return NoReassignmentInProgress, got %v", kerr.ErrorForCode(sp.ErrorCode))
-				}
-			case st.Topic == "no-such-topic":
-				if sp.ErrorCode != kerr.UnknownTopicOrPartition.Code {
-					t.Errorf("unknown topic should return UnknownTopicOrPartition, got %v", kerr.ErrorForCode(sp.ErrorCode))
-				}
+			want := cases[sp.Partition].want
+			if st.Topic == "no-such-topic" {
+				want = kerr.UnknownTopicOrPartition.Code
+			}
+			if sp.ErrorCode != want {
+				t.Errorf("%s %d: expected %v, got %v", st.Topic, sp.Partition, kerr.ErrorForCode(want), kerr.ErrorForCode(sp.ErrorCode))
 			}
 		}
+	}
+	// The old leader is not in the new replicas, so the first new one leads.
+	if got := c.LeaderFor(topic, 0); got != 0 {
+		t.Errorf("partition 0: expected leader 0 after reassignment, got %d", got)
+	}
+
+	// Without AllowReplicationFactorChange, the replica count must stay.
+	req.AllowReplicationFactorChange = false
+	req.Topics = req.Topics[:1]
+	req.Topics[0].Partitions = req.Topics[0].Partitions[:0]
+	rp := kmsg.NewAlterPartitionAssignmentsRequestTopicPartition()
+	rp.Replicas = []int32{1}
+	req.Topics[0].Partitions = append(req.Topics[0].Partitions, rp)
+	if resp, err = req.RequestWith(ctx, cl); err != nil {
+		t.Fatal(err)
+	}
+	if code := resp.Topics[0].Partitions[0].ErrorCode; code != kerr.InvalidReplicationFactor.Code {
+		t.Errorf("replication factor change: expected INVALID_REPLICATION_FACTOR, got %v", kerr.ErrorForCode(code))
+	}
+	if resp.AllowReplicationFactorChange {
+		t.Error("response did not echo AllowReplicationFactorChange")
 	}
 }
 
@@ -482,15 +463,30 @@ func TestAddRemoveNodeUpdatesCluster(t *testing.T) {
 		t.Fatal("expected error adding duplicate node")
 	}
 
-	// Remove both added nodes.
-	if err := c.RemoveNode(nodeID); err != nil {
+	// Remove the controller (node 0) and one added node: another node
+	// takes over as controller and topic admin still works.
+	if err := c.RemoveNode(0); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.RemoveNode(42); err != nil {
+	if err := c.RemoveNode(nodeID); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.ListenAddrs()) != 1 {
 		t.Fatalf("expected 1 broker after removals, got %d", len(c.ListenAddrs()))
+	}
+	adm = kadm.NewClient(newPlainClient(t, c))
+	if meta, err = adm.Metadata(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if meta.Controller != 42 {
+		t.Errorf("expected controller 42 after removing the controller, got %d", meta.Controller)
+	}
+	created, err := adm.CreateTopics(ctx, 1, 1, nil, "after-controller-removed")
+	if err == nil {
+		err = created["after-controller-removed"].Err
+	}
+	if err != nil {
+		t.Errorf("create after removing the controller: %v", err)
 	}
 
 	// Can't remove nonexistent node.
@@ -1090,11 +1086,12 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 	cl := newPlainClient(t, c)
 	adm := kadm.NewClient(cl)
 
-	// Duplicate topic names in request.
+	// Duplicate topic names in request: only the duplicate fails. Of two
+	// names that differ only in . and _, the later one fails.
 	req := kmsg.NewCreateTopicsRequest()
-	for range 2 {
+	for _, name := range []string{"dup_x", "dup.x", "dup.x", "dup-other", "y.z", "y_z"} {
 		rt := kmsg.NewCreateTopicsRequestTopic()
-		rt.Topic = "dup"
+		rt.Topic = name
 		rt.NumPartitions = 1
 		rt.ReplicationFactor = 1
 		req.Topics = append(req.Topics, rt)
@@ -1104,9 +1101,22 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, st := range resp.Topics {
-		if st.ErrorCode != kerr.InvalidRequest.Code {
-			t.Errorf("dup: expected InvalidRequest, got %v", kerr.ErrorForCode(st.ErrorCode))
+		var want int16
+		switch st.Topic {
+		case "dup.x":
+			want = kerr.InvalidRequest.Code
+		case "y_z":
+			want = kerr.InvalidTopicException.Code
+			if st.ErrorMessage == nil || *st.ErrorMessage != "Topic 'y_z' collides with existing topic: y.z" {
+				t.Errorf("dup: y_z: got message %v, want Kafka's collision message", st.ErrorMessage)
+			}
 		}
+		if st.ErrorCode != want {
+			t.Errorf("dup: %s: expected %v, got %v", st.Topic, kerr.ErrorForCode(want), kerr.ErrorForCode(st.ErrorCode))
+		}
+	}
+	if len(resp.Topics) != 5 {
+		t.Errorf("dup: expected one answer per name, got %d", len(resp.Topics))
 	}
 
 	// Already exists.
@@ -1115,34 +1125,69 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Replication factor too high.
-	req2 := kmsg.NewCreateTopicsRequest()
-	rt2 := kmsg.NewCreateTopicsRequestTopic()
-	rt2.Topic = "high-repl"
-	rt2.NumPartitions = 1
-	rt2.ReplicationFactor = 10
-	req2.Topics = append(req2.Topics, rt2)
-	resp2, err := req2.RequestWith(ctx, cl)
-	if err != nil {
+	// Requests that fail and create nothing.
+	assign := func(replicas ...[]int32) func(*kmsg.CreateTopicsRequest, *kmsg.CreateTopicsRequestTopic) {
+		return func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) {
+			rt.NumPartitions, rt.ReplicationFactor = -1, -1
+			for i, rs := range replicas {
+				ra := kmsg.NewCreateTopicsRequestTopicReplicaAssignment()
+				ra.Partition = int32(i)
+				ra.Replicas = rs
+				rt.ReplicaAssignment = append(rt.ReplicaAssignment, ra)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		mod  func(*kmsg.CreateTopicsRequest, *kmsg.CreateTopicsRequestTopic)
+		want int16
+	}{
+		{"replication factor too high", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.ReplicationFactor = 10 }, kerr.InvalidReplicationFactor.Code},
+		{"replication factor zero", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.ReplicationFactor = 0 }, kerr.InvalidReplicationFactor.Code},
+		{"zero partitions", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.NumPartitions = 0 }, kerr.InvalidPartitions.Code},
+		{"negative partitions", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.NumPartitions = -2 }, kerr.InvalidPartitions.Code},
+		{"too many partitions", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.NumPartitions = 10001 }, kerr.PolicyViolation.Code},
+		{"metadata log name", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.Topic = "__cluster_metadata" }, kerr.InvalidRequest.Code},
+		{"timeout already passed", func(req *kmsg.CreateTopicsRequest, _ *kmsg.CreateTopicsRequestTopic) { req.TimeoutMillis = 0 }, kerr.RequestTimedOut.Code},
+		{"assignment with a broker twice", assign([]int32{0, 0}), kerr.InvalidReplicaAssignment.Code},
+		{"assignment with an unknown broker", assign([]int32{9}), kerr.InvalidReplicaAssignment.Code},
+		{"assignment with uneven replica counts", assign([]int32{0}, []int32{0, 1}), kerr.InvalidReplicaAssignment.Code},
+		{"ReplicaAssignment with NumPartitions != -1", func(req *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) {
+			assign([]int32{0})(req, rt)
+			rt.NumPartitions = 3
+		}, kerr.InvalidRequest.Code},
+	} {
+		req := kmsg.NewCreateTopicsRequest()
+		rt := kmsg.NewCreateTopicsRequestTopic()
+		rt.Topic = "bad-topic"
+		rt.NumPartitions = 1
+		rt.ReplicationFactor = 1
+		tc.mod(&req, &rt)
+		req.Topics = append(req.Topics, rt)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resp.Topics[0].ErrorCode; got != tc.want {
+			t.Errorf("%s: expected %v, got %v", tc.name, kerr.ErrorForCode(tc.want), kerr.ErrorForCode(got))
+		}
+		if ti := c.TopicInfo(rt.Topic); ti != nil {
+			t.Errorf("%s: topic was created", tc.name)
+		}
+	}
+	// Cluster.CreateTopic, which Metadata's auto-creation shares, refuses
+	// the metadata log's name and more than 10000 partitions too.
+	if c.CreateTopic("__cluster_metadata", 1, nil) == nil || c.CreateTopic("huge", 10001, nil) == nil {
+		t.Error("CreateTopic created the metadata log or a topic with 10001 partitions")
+	}
+	// Seeded a.b and a_b collide, and a_b still refuses a new a.b after
+	// a.b is deleted.
+	seeded := newCoverCluster(t, NumBrokers(1), SeedTopics(1, "a.b", "a_b"))
+	if err := seeded.DeleteTopic("a.b"); err != nil {
 		t.Fatal(err)
 	}
-	if resp2.Topics[0].ErrorCode != kerr.InvalidReplicationFactor.Code {
-		t.Errorf("expected InvalidReplicationFactor, got %v", kerr.ErrorForCode(resp2.Topics[0].ErrorCode))
-	}
-
-	// Zero partitions.
-	req3 := kmsg.NewCreateTopicsRequest()
-	rt3 := kmsg.NewCreateTopicsRequestTopic()
-	rt3.Topic = "zero"
-	rt3.NumPartitions = 0
-	rt3.ReplicationFactor = 1
-	req3.Topics = append(req3.Topics, rt3)
-	resp3, err := req3.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp3.Topics[0].ErrorCode != kerr.InvalidPartitions.Code {
-		t.Errorf("expected InvalidPartitions, got %v", kerr.ErrorForCode(resp3.Topics[0].ErrorCode))
+	if err := seeded.CreateTopic("a.b", 1, nil); err == nil {
+		t.Error("CreateTopic created a.b next to a_b")
 	}
 
 	// Default partitions (-1 = use DefaultNumPartitions).
@@ -1163,18 +1208,11 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		t.Errorf("expected 7 default partitions, got %d", resp4.Topics[0].NumPartitions)
 	}
 
-	// With ReplicaAssignment.
+	// With ReplicaAssignment: the first replica leads.
 	req5 := kmsg.NewCreateTopicsRequest()
 	rt5 := kmsg.NewCreateTopicsRequestTopic()
 	rt5.Topic = "assigned"
-	rt5.NumPartitions = -1
-	rt5.ReplicationFactor = -1
-	for i := range int32(2) {
-		ra := kmsg.NewCreateTopicsRequestTopicReplicaAssignment()
-		ra.Partition = i
-		ra.Replicas = []int32{i % 2}
-		rt5.ReplicaAssignment = append(rt5.ReplicaAssignment, ra)
-	}
+	assign([]int32{1}, []int32{0})(&req5, &rt5)
 	req5.Topics = append(req5.Topics, rt5)
 	resp5, err := req5.RequestWith(ctx, cl)
 	if err != nil {
@@ -1183,24 +1221,10 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 	if resp5.Topics[0].ErrorCode != 0 {
 		t.Fatal(kerr.ErrorForCode(resp5.Topics[0].ErrorCode))
 	}
-
-	// ReplicaAssignment with NumPartitions != -1 -> InvalidRequest.
-	req6 := kmsg.NewCreateTopicsRequest()
-	rt6 := kmsg.NewCreateTopicsRequestTopic()
-	rt6.Topic = "bad-assign"
-	rt6.NumPartitions = 3
-	rt6.ReplicationFactor = 1
-	ra6 := kmsg.NewCreateTopicsRequestTopicReplicaAssignment()
-	ra6.Partition = 0
-	ra6.Replicas = []int32{0}
-	rt6.ReplicaAssignment = append(rt6.ReplicaAssignment, ra6)
-	req6.Topics = append(req6.Topics, rt6)
-	resp6, err := req6.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp6.Topics[0].ErrorCode != kerr.InvalidRequest.Code {
-		t.Errorf("expected InvalidRequest, got %v", kerr.ErrorForCode(resp6.Topics[0].ErrorCode))
+	for p, want := range []int32{1, 0} {
+		if got := c.LeaderFor("assigned", int32(p)); got != want {
+			t.Errorf("assigned partition %d: expected leader %d, got %d", p, want, got)
+		}
 	}
 
 	// ValidateOnly: the topic should not be created.
@@ -1239,6 +1263,18 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 	}
 	if resp8.Topics[0].ErrorCode != 0 {
 		t.Fatal(kerr.ErrorForCode(resp8.Topics[0].ErrorCode))
+	}
+	// The response has every config, sorted, not only the ones we set.
+	rcfgs := resp8.Topics[0].Configs
+	if !slices.IsSortedFunc(rcfgs, func(l, r kmsg.CreateTopicsResponseTopicConfig) int { return strings.Compare(l.Name, r.Name) }) {
+		t.Error("response configs are not sorted")
+	}
+	srcs := make(map[string]kmsg.ConfigSource)
+	for _, rc := range rcfgs {
+		srcs[rc.Name] = kmsg.ConfigSource(rc.Source)
+	}
+	if srcs["retention.ms"] != kmsg.ConfigSourceDynamicTopicConfig || srcs["cleanup.policy"] != kmsg.ConfigSourceDefaultConfig {
+		t.Errorf("response config sources: retention.ms %v, cleanup.policy %v", srcs["retention.ms"], srcs["cleanup.policy"])
 	}
 	// Verify the config was applied.
 	tcfgs, err := adm.DescribeTopicConfigs(ctx, "with-config")
@@ -1283,6 +1319,50 @@ func TestDeleteTopicsByID(t *testing.T) {
 	}
 	if topicID == [16]byte{} {
 		t.Fatal("topic ID not found")
+	}
+
+	// Entries Kafka rejects one by one, deleting nothing: a duplicated
+	// name or ID, both or neither, an unknown ID, and a name that maps to
+	// an ID the request also lists.
+	entry := func(name *string, id [16]byte) kmsg.DeleteTopicsRequestTopic {
+		dt := kmsg.NewDeleteTopicsRequestTopic()
+		dt.Topic, dt.TopicID = name, id
+		return dt
+	}
+	unknownID := [16]byte{1}
+	for _, entries := range [][]kmsg.DeleteTopicsRequestTopic{
+		{entry(&topic, [16]byte{}), entry(&topic, [16]byte{}), entry(nil, topicID), entry(nil, topicID), entry(&topic, topicID), entry(nil, [16]byte{}), entry(nil, unknownID)},
+		{entry(&topic, [16]byte{}), entry(nil, topicID)},
+	} {
+		req := kmsg.NewDeleteTopicsRequest()
+		req.Topics = entries
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, st := range resp.Topics {
+			want := kerr.InvalidRequest.Code
+			if st.TopicID == unknownID {
+				want = kerr.UnknownTopicID.Code
+				if st.Topic != nil {
+					t.Errorf("unknown ID answered with name %q", *st.Topic)
+				}
+			}
+			if st.ErrorCode != want {
+				t.Errorf("entry %v %x: expected %v, got %v", st.Topic, st.TopicID, kerr.ErrorForCode(want), kerr.ErrorForCode(st.ErrorCode))
+			}
+		}
+		if c.TopicInfo(topic) == nil {
+			t.Fatal("rejected entries deleted the topic")
+		}
+	}
+	// With no name or ID to look up, a request past its deadline is
+	// answered entry by entry.
+	dup := kmsg.NewPtrDeleteTopicsRequest()
+	dup.TimeoutMillis = 0
+	dup.Topics = []kmsg.DeleteTopicsRequestTopic{entry(&topic, [16]byte{}), entry(&topic, [16]byte{})}
+	if dr := faultReq(t, cl, 0, dup).(*kmsg.DeleteTopicsResponse); len(dr.Topics) != 1 || dr.Topics[0].ErrorCode != kerr.InvalidRequest.Code {
+		t.Errorf("duplicates past the deadline: got %+v, want one INVALID_REQUEST", dr.Topics)
 	}
 
 	// Delete by ID.

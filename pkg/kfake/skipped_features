@@ -3,8 +3,11 @@
 # This file tracks features that were intentionally skipped during the
 # kfake feature gap analysis. These can be revisited in future sessions.
 #
-# ThrottleMillis and TimeoutMillis are omitted globally - kfake does not
-# implement throttling, and writes are immediate (no replication).
+# ThrottleMillis is omitted globally - kfake does not implement throttling.
+# Writes are immediate (no replication), so TimeoutMillis matters only in
+# CreateTopics, DeleteTopics, CreatePartitions, ElectLeaders, and
+# AlterPartitionAssignments, where a timeout of zero or less answers
+# REQUEST_TIMED_OUT.
 
 ## 00_produce
 - ErrorRecords (v8+): Per-record errors not implemented; kfake validates at batch level only
