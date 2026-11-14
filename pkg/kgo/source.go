@@ -177,6 +177,13 @@ type cursor struct {
 	// partition is unassigned.
 	fatal atomic.Bool
 
+	// moving parks the cursor while a KIP-951 CurrentLeader hint for it
+	// is pending: building a fetch request skips it, so we do not refetch
+	// the old leader at round-trip pace. The fetch response that stages
+	// the move sets it, and kip951move.doMove clears it when it returns,
+	// whether or not it moved the cursor.
+	moving atomic.Bool
+
 	topicPartitionData // updated in metadata when session is stopped
 
 	// cursorOffset is our epoch/offset that we are consuming. When a fetch
@@ -243,6 +250,7 @@ func (c *cursor) use() *cursorOffsetNext {
 func (c *cursor) unset() {
 	c.useState.Store(false)
 	c.fatal.Store(false)
+	c.moving.Store(false)
 	c.setOffset(cursorOffset{
 		offset:            -1,
 		lastConsumedEpoch: -1,
@@ -829,7 +837,7 @@ func (s *source) createReq() *fetchRequest {
 	for range s.cursors {
 		c := s.cursors[cursorIdx]
 		cursorIdx = (cursorIdx + 1) % len(s.cursors)
-		if !c.usable() {
+		if !c.usable() || c.moving.Load() {
 			continue
 		}
 		if s.nodeID != c.leader && c.moveAt > 0 && time.Since(time.Unix(0, c.moveAt)) > s.cl.cfg.recheckPreferredReplicaInterval {
@@ -1328,6 +1336,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			fp := partOffset.processRespPartition(br, rp, s.cl.cfg.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
 				if moving := kmove.maybeAddFetchPartition(resp, rp, c); moving {
+					c.moving.Store(true)
 					strip(topic, partition, fp.Err)
 					continue
 				}

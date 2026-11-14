@@ -107,4 +107,25 @@ func TestKip951MoveAfterPurgeReAddNoPanic(t *testing.T) {
 				stranger.sink, stranger.leader, stranger.leaderEpoch)
 		}
 	}
+
+	// Case 3: a fetch parks a cursor while its move is pending. A move
+	// that skips the cursor (here its topic is gone) must still unpark it,
+	// or the partition is never fetched again.
+	{
+		cl := newCl()
+		src := &source{cl: cl}
+		src.fetchState.state.Store(stateContinueWorking) // no new fetch loop
+		staged := &cursor{topic: "gone", source: src}
+		staged.moving.Store(true)
+		k := &kip951move{
+			cursors: map[*cursor]topicPartitionData{
+				staged: {leader: 1, leaderEpoch: 3},
+			},
+			brokers: []BrokerMetadata{{NodeID: 1}},
+		}
+		k.doMove(cl)
+		if staged.moving.Load() {
+			t.Error("kip-951 move left a skipped cursor parked")
+		}
+	}
 }

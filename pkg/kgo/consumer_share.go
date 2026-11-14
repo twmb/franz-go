@@ -133,17 +133,11 @@ type (
 		// a similar flow actually makes the code worse.
 		assigned atomic.Bool
 
-		// moving is true while a leader-move (applyMoves) is queued and
-		// in flight for this cursor. createShareReq skips a moving cursor
-		// (it then falls into the forget set, dropping it from the old
-		// broker's session like the classic strip), so the old source does
-		// not keep re-fetching the partition - getting NOT_LEADER and
-		// re-queuing the move - until the async migration lands. This is
-		// the share analog of the classic cursor going unusable for the
-		// duration of a move (source.go use() + strip, never re-enabled
-		// until the move replaces the cursor). applyMoves sets it before
-		// spawning the migration; applyMovesBlocking clears it and
-		// re-signals the cursor's source once the move has run.
+		// moving is cursor.moving for a share cursor: createShareReq
+		// skips a moving cursor, which forgets it from the old broker's
+		// session, so we do not refetch the old leader until the move
+		// runs. applyMoves sets it before spawning the migration, and
+		// doMove clears it.
 		moving atomic.Bool
 
 		ackMu       xsync.Mutex
@@ -1359,8 +1353,8 @@ func (sc *shareConsumer) applyMoves(k kip951move) {
 	// fetch) goroutine, so the very next createShareReq already skips it.
 	// Setting it inside the spawned goroutine would race the next fetch,
 	// which could rebuild a request that re-fetches the partition (getting
-	// NOT_LEADER again) before the goroutine runs. applyMovesBlocking clears
-	// the flag once the migration has run. See shareCursor.moving.
+	// NOT_LEADER again) before the goroutine runs. doMove clears the flag
+	// once the migration has run. See shareCursor.moving.
 	for c := range k.shareCursors {
 		c.moving.Store(true)
 	}
@@ -1379,24 +1373,14 @@ func (sc *shareConsumer) applyMovesBlocking(k kip951move) {
 		return
 	}
 	defer sc.decWorker()
-	sc.cl.blockingMetadataFn(func() {
-		k.doMove(sc.cl)
-
-		// Re-enable each cursor for fetching now that its move has run, and
-		// re-signal its (current) source. migrateShareCursorTo woke the new
-		// source's loop while moving was still set, so that loop may have
-		// skipped this cursor and exited via maybeFinish before we got here;
-		// maybeShareConsume re-fetches it. Cursors whose move was skipped
-		// (topic purged, or metadata already at the hint's epoch) are
-		// re-enabled on their current source so they retry. This clear runs
-		// before decWorker, so it cannot race leave's barrier; the dying
-		// bail and the cl.ctx escape skip it, but those are shutdown paths
-		// where closeShareSession drains the cursor regardless of moving.
-		for c := range k.shareCursors {
-			c.moving.Store(false)
-			c.source.Load().maybeShareConsume()
-		}
-	})
+	// doMove unparks each cursor and re-signals its source on every
+	// return. migrateShareCursorTo woke the new source's loop while the
+	// cursor was still parked, so that loop may have skipped the cursor;
+	// the re-signal fetches it. The unpark runs before decWorker, so it
+	// cannot race leave's barrier; the dying bail and the cl.ctx escape
+	// skip it, but those are shutdown paths where closeShareSession
+	// drains the cursor regardless.
+	sc.cl.blockingMetadataFn(func() { k.doMove(sc.cl) })
 }
 
 ////////////
@@ -3009,7 +2993,7 @@ func (s *source) createShareReq(skipAckDrain bool) (
 		// getting NOT_LEADER and re-queuing the move until the migration
 		// lands. Skipping drops it into the forget set below, releasing it
 		// from the old broker's session (the share analog of the classic
-		// strip). applyMovesBlocking re-enables it once the move has run.
+		// strip). doMove re-enables it once the move has run.
 		if !c.assigned.Load() || c.moving.Load() || paused.has(c.topic, c.partition) {
 			continue
 		}

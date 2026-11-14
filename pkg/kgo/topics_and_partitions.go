@@ -1012,6 +1012,24 @@ func (k *kip951move) maybeBeginMove(cl *Client) {
 }
 
 func (k *kip951move) doMove(cl *Client) {
+	// The fetch that staged each cursor's move parked the cursor, so its
+	// source's loop skipped it and may have stopped. Every return below
+	// unparks the cursor and wakes its source, which is the new leader's
+	// source if the cursor moved. For a classic cursor, we read the source
+	// before unparking: once unparked, a fetch can move the cursor to a
+	// preferred replica (see allowUsable).
+	defer func() {
+		for c := range k.cursors {
+			s := c.source
+			c.moving.Store(false)
+			s.maybeConsume()
+		}
+		for c := range k.shareCursors {
+			c.moving.Store(false)
+			c.source.Load().maybeShareConsume()
+		}
+	}()
+
 	// Moving partitions is theoretically simple, but the client is written
 	// in a confusing way around concurrency.
 	//
