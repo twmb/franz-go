@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -163,6 +164,11 @@ type broker struct {
 	// capability checks (supportsKeyVersion, supportsFeature) without
 	// opening a connection.
 	versions atomic.Value // *brokerVersions
+
+	// saslIdx is the index into cfg.sasls of the mechanism each
+	// connection handshakes with. A broker that rejects the mechanism
+	// moves saslIdx to one the broker lists.
+	saslIdx atomic.Int32
 
 	// The cxn fields each manage a single tcp connection to one broker.
 	// Each field is managed serially in handleReqs. This means that only
@@ -507,11 +513,12 @@ start:
 		// Some implementations (AWS) occasionally fail for
 		// unclear reasons (principals change, somehow). If
 		// we receive SASL_AUTHENTICATION_FAILED, we retry
-		// once on a new connection. See #249.
+		// once on a new connection. See #249. We do the same
+		// if the broker stopped supporting our mechanism.
 		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
 		if err := cxn.sasl(); err != nil {
 			cxn.die()
-			if errors.Is(err, kerr.SaslAuthenticationFailed) && !retriedOnNewConnection {
+			if (errors.Is(err, kerr.SaslAuthenticationFailed) || errors.Is(err, errSASLFallback)) && !retriedOnNewConnection {
 				cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
 				retriedOnNewConnection = true
 				goto start
@@ -838,6 +845,7 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 	}
 
 	var tries int
+	var saslRedialed bool
 doConnect:
 	tries++
 	// start, conn, and err are declared per attempt so that each attempt's
@@ -876,6 +884,11 @@ doConnect:
 		// version possible (as should be allowed). On the third try,
 		// we downgrade to v0 (see requestAPIVersions).
 		if _, ok := errors.AsType[*errApiVersionsReset](err); ok && tries < 3 {
+			cxn.die()
+			goto doConnect
+		}
+		if errors.Is(err, errSASLFallback) && !saslRedialed {
+			saslRedialed = true
 			cxn.die()
 			goto doConnect
 		}
@@ -1151,7 +1164,7 @@ func (cxn *brokerCxn) init(isProduceCxn bool, tries int) error {
 	}
 
 	if err := cxn.sasl(); err != nil {
-		if !errors.Is(err, ErrClientClosed) && !isRetryableBrokerErr(err) {
+		if !errors.Is(err, ErrClientClosed) && !errors.Is(err, errSASLFallback) && !isRetryableBrokerErr(err) {
 			cxn.cl.cfg.logger.Log(LogLevelError, "unable to initialize sasl", "broker", logID(cxn.b.meta.NodeID), "err", err)
 		}
 		return err
@@ -1309,17 +1322,17 @@ start:
 }
 
 func (cxn *brokerCxn) sasl() error {
-	if len(cxn.cl.cfg.sasls) == 0 {
+	sasls := cxn.cl.cfg.sasls
+	if len(sasls) == 0 {
 		return nil
 	}
-	mechanism := cxn.cl.cfg.sasls[0]
-	retried := false
+	idx := int(cxn.b.saslIdx.Load())
+	mechanism := sasls[idx]
 	authenticate := false
 
 	v := cxn.b.loadVersions()
 	req := kmsg.NewPtrSASLHandshakeRequest()
 
-start:
 	// KIP-152 establishes the modern SASL flow: ApiVersions, then
 	// SaslHandshake, then SaslAuthenticate for all mechanisms. The
 	// legacy raw GSSAPI flow (where GSSAPI clients could skip the
@@ -1349,14 +1362,16 @@ start:
 
 		err = kerr.ErrorForCode(resp.ErrorCode)
 		if err != nil {
-			if !retried && err == kerr.UnsupportedSaslMechanism {
-				for _, ours := range cxn.cl.cfg.sasls[1:] {
-					for _, supported := range resp.SupportedMechanisms {
-						if supported == ours.Name() {
-							mechanism = ours
-							retried = true
-							goto start
-						}
+			if err == kerr.UnsupportedSaslMechanism {
+				for i, ours := range sasls {
+					if i != idx && slices.Contains(resp.SupportedMechanisms, ours.Name()) {
+						cxn.cl.cfg.logger.Log(LogLevelInfo, "broker does not support our SASL mechanism, retrying with another on a new connection",
+							"broker", logID(cxn.b.meta.NodeID),
+							"rejected", mechanism.Name(),
+							"next", ours.Name(),
+						)
+						cxn.b.saslIdx.Store(int32(i))
+						return errSASLFallback
 					}
 				}
 			}

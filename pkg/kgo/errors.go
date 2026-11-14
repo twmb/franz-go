@@ -212,6 +212,11 @@ var (
 	// If this error happens, the client closes the broker connection.
 	errCorrelationIDMismatch = errors.New("correlation ID mismatch")
 
+	// Returned when a broker rejects our SASL mechanism and lists another
+	// of ours. The broker closes the connection after rejecting, so we
+	// dial again and handshake with the listed mechanism.
+	errSASLFallback = errors.New("broker rejected our SASL mechanism and listed another of ours")
+
 	// Returned when using a kmsg.Request with a key larger than kmsg.MaxKey.
 	errUnknownRequestKey = errors.New("request key is unknown")
 
