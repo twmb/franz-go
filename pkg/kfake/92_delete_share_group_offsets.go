@@ -10,8 +10,7 @@ import (
 // Behavior:
 // * Removes all share partition state for specified topics
 // * Only works on empty groups (no active members)
-// * Drops the group if it becomes truly empty
-//   (no members and no partition state)
+// * The group stays, as in Kafka
 
 func init() { regKey(92, 0, 0) }
 
@@ -25,17 +24,16 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 		return nil, err
 	}
 
-	if c.coordinator(req.GroupID).node != creq.cc.b.node {
-		resp.ErrorCode = kerr.NotCoordinator.Code
-		return resp, nil
-	}
-
 	// ACL: require GROUP DELETE.
-	if e := c.deny(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: req.GroupID}); e != nil {
+	if e := c.deny(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: req.GroupID, misrouted: !c.isCoordinator(creq, req.GroupID)}); e != nil {
 		resp.ErrorCode = e.Code
 		if creq.skipsWork(e) { // a timed-out delete still deletes
 			return resp, nil
 		}
+	}
+	if ke := c.validateGroup(creq, req.GroupID); ke != nil {
+		resp.ErrorCode = ke.Code
+		return resp, nil
 	}
 
 	sg := c.shareGroups.get(req.GroupID)
@@ -60,21 +58,24 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 		if e != nil {
 			rst.ErrorCode = e.Code
 			if creq.skipsWork(e) { // a timed-out delete still deletes
+				rst.TopicID = uuid{} // Kafka names no ID for a topic it refuses
 				resp.Topics = append(resp.Topics, rst)
 				continue
 			}
 		}
-		if _, ok := c.data.tps[rt.Topic]; !ok {
-			if e == nil {
-				rst.ErrorCode = kerr.UnknownTopicOrPartition.Code
-			}
-		} else {
-			delete(sg.partitions, rt.Topic)
+		_, exists := c.data.tps[rt.Topic]
+		_, hasState := sg.partitions[rt.Topic]
+		switch {
+		case e != nil:
+		case !exists:
+			rst.ErrorCode = kerr.UnknownTopicOrPartition.Code
+		case !hasState:
+			rst.ErrorCode = kerr.UnknownTopicOrPartition.Code
+			rst.ErrorMessage = kmsg.StringPtr("There is no offset information to delete.")
 		}
+		delete(sg.partitions, rt.Topic)
 		resp.Topics = append(resp.Topics, rst)
 	}
-
-	sg.maybeQuit()
 
 	return resp, nil
 }

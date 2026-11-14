@@ -211,6 +211,7 @@ func (c *Cluster) deleteTopic(topic string, id uuid) {
 		for watch := range pd.watch {
 			watch.deleted()
 		}
+		pd.fireShareWatchers()
 	}
 	// Close active segment files before removing partition directories.
 	for p, pd := range t {

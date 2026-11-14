@@ -2361,20 +2361,19 @@ func (c *Cluster) saveSessionState() error {
 				SubscribedTopics: slices.Clone(m.subscribedTopics),
 				LastHeartbeat:    m.last,
 			}
-			if len(m.assignment) > 0 {
-				sm.Assignment = make(map[uuid][]int32, len(m.assignment))
-				for tid, parts := range m.assignment {
+			if len(m.target) > 0 {
+				sm.Assignment = make(map[uuid][]int32, len(m.target))
+				for tid, parts := range m.target {
 					sm.Assignment[tid] = slices.Clone(parts)
 				}
 			}
 			ssg.Members = append(ssg.Members, sm)
 		}
-		if len(ssg.Partitions) > 0 || len(ssg.Members) > 0 {
-			if ss.ShareGroups == nil {
-				ss.ShareGroups = make(map[string]sessionShareGroup)
-			}
-			ss.ShareGroups[name] = ssg
+		// Like Kafka, an empty share group lives until DeleteGroups.
+		if ss.ShareGroups == nil {
+			ss.ShareGroups = make(map[string]sessionShareGroup)
 		}
+		ss.ShareGroups[name] = ssg
 	}
 
 	if len(c.groupConfigs) > 0 {
@@ -2540,22 +2539,18 @@ func (c *Cluster) loadSessionState() error {
 	// is created on demand (getOrCreate), so we create it here to
 	// restore state into.
 	//
-	// If the member set is restored, acquisitions are preserved as
-	// "acquired" against their original memberID. When the client's
-	// ShareGroupHeartbeat arrives post-restart, handleJoin finds the
-	// existing member and fast-paths the rejoin with the prior
-	// assignment instead of triggering a full group rebalance, which is
-	// what otherwise starves net-forward consumption progress per
-	// --restart cycle. Members whose last heartbeat is older than the
-	// configured share session timeout are skipped -- same pattern as
-	// restoreClassicMembers and the in-progress-txn auto-abort: a
-	// long-enough outage should let fresh members claim the group.
-	// Acquisitions whose save-time is older than the configured record
-	// lock duration are released too, so fresh members can re-acquire
-	// records the prior owner never got to ack/release.
-	restoreMembers := func(sg *shareGroup, members []sessionShareMember) map[string]struct{} {
+	// When the client's ShareGroupHeartbeat arrives post-restart,
+	// handleJoin finds the existing member and fast-paths the rejoin with
+	// the prior assignment instead of triggering a full group rebalance,
+	// which is what otherwise starves net-forward consumption progress
+	// per --restart cycle. Members whose last heartbeat is older than the
+	// configured share session timeout are fenced, as their session
+	// timeout would have done: a long-enough outage should let fresh
+	// members claim the group. Acquisitions are dropped, as on a Kafka
+	// restart: Kafka persists no acquisitions, so it loads the state of
+	// the last ack or release.
+	restoreMembers := func(sg *shareGroup, members []sessionShareMember) (fenced bool) {
 		shareSessionTimeout := time.Duration(c.shareSessionTimeoutMs(sg.name)) * time.Millisecond
-		restored := make(map[string]struct{}, len(members))
 		now := time.Now()
 		for _, sm := range members {
 			lastHB := sm.LastHeartbeat
@@ -2563,7 +2558,8 @@ func (c *Cluster) loadSessionState() error {
 				lastHB = ss.ShutdownAt
 			}
 			if time.Since(lastHB) >= shareSessionTimeout {
-				continue // matches restoreClassicMembers: silently drop expired
+				fenced = true
+				continue
 			}
 			m := &shareMember{
 				memberID:            sm.ID,
@@ -2573,66 +2569,47 @@ func (c *Cluster) loadSessionState() error {
 				memberEpoch:         sm.Epoch,
 				previousMemberEpoch: sm.PrevEpoch,
 				subscribedTopics:    slices.Clone(sm.SubscribedTopics),
-				assignment:          make(map[uuid][]int32, len(sm.Assignment)),
+				target:              make(map[uuid][]int32, len(sm.Assignment)),
 				last:                lastHB,
 			}
 			if m.last.IsZero() {
 				m.last = now
 			}
 			for tid, parts := range sm.Assignment {
-				m.assignment[tid] = slices.Clone(parts)
+				m.target[tid] = slices.Clone(parts)
 			}
+			m.assignment = m.target
 			sg.members[sm.ID] = m
 			sg.resetSessionTimeout(m)
-			restored[sm.ID] = struct{}{}
 		}
-		return restored
+		return fenced
 	}
 	for name, ssg := range ss.ShareGroups {
 		sg := c.shareGroups.getOrCreate(name)
-		acquisitionStale := time.Since(ss.ShutdownAt) >= time.Duration(c.shareRecordLockDurationMs(name))*time.Millisecond
-		maxDelivery := c.shareMaxDeliveryAttempts(name)
 		sg.groupEpoch = ssg.GroupEpoch
-		restoredMembers := restoreMembers(sg, ssg.Members)
+		fenced := restoreMembers(sg, ssg.Members)
 		for topic, parts := range ssg.Partitions {
 			for partition, ssp := range parts {
 				sp := sg.partitions.mkp(topic, partition, func() *sharePartition {
-					return &sharePartition{
-						spso:    ssp.SPSO,
-						records: make(map[int64]shareRecord),
-					}
+					return &sharePartition{records: make(map[int64]shareRecord)}
 				})
-				sp.spso = ssp.SPSO
-				sp.scanOffset = ssp.SPSO
+				sp.spso, sp.scanOffset, sp.acquireEnd = ssp.SPSO, ssp.SPSO, ssp.SPSO
 				for offset, ssr := range ssp.Records {
-					state := shareRecordState(ssr.State)
-					acquiredBy := ssr.AcquiredBy
-					// Release the acquisition if the member that
-					// held it did not survive the save-to-load
-					// window, or if we have sat past the lock
-					// duration already. Either case lets a fresh
-					// owner re-acquire on the next fetch.
-					_, memberSurvived := restoredMembers[acquiredBy]
-					if state == shareRecordAcquired && (!memberSurvived || acquisitionStale) {
-						if ssr.DeliveryCount >= maxDelivery {
-							state = shareRecordArchived
-						} else {
-							state = shareRecordAvailable
-						}
-						acquiredBy = ""
-					}
 					sp.records[offset] = shareRecord{
-						state:         state,
+						state:         shareRecordState(ssr.State),
 						deliveryCount: ssr.DeliveryCount,
-						acquiredBy:    acquiredBy,
+						acquiredBy:    ssr.AcquiredBy,
 					}
 					// Track acquireEnd as one past the highest restored offset.
-					if offset+1 > sp.acquireEnd {
-						sp.acquireEnd = offset + 1
-					}
+					sp.acquireEnd = max(sp.acquireEnd, offset+1)
 				}
+				sp.dropAcquired()
 				sp.advanceSPSO()
 			}
+		}
+		if fenced {
+			sg.groupEpoch++
+			sg.recomputeAssignments()
 		}
 		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored share group=%s epoch=%d members=%d",
 			name, sg.groupEpoch, len(sg.members))

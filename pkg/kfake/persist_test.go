@@ -3213,6 +3213,34 @@ func TestPersistShareGroupRestart(t *testing.T) {
 			want: 5,
 		},
 		{
+			// Acquired on the last delivery attempt and never acked.
+			// Like Kafka, the restart forgets the acquisition and the
+			// delivery it counted, so the records go out once more.
+			name: "acquired-last-try",
+			opts: []Opt{BrokerConfigs(map[string]string{
+				"group.share.delivery.count.limit": strconv.Itoa(maxDelivery),
+			})},
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				const total = 5
+				produceShareN(t, c, topic, group, total)
+				cl := newPlainClient(t, c)
+				memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+				if _, n := rawShareFetch(t, cl, group, memberID, topicID, 0); n != total {
+					t.Fatalf("phase 1: expected %d acquired, got %d", total, n)
+				}
+				if code := rawShareAck(t, cl, group, memberID, topicID, 1, 0, total-1, int8(kgo.AckRelease)); code != 0 {
+					t.Fatalf("phase 1 release: %v", kerr.ErrorForCode(code))
+				}
+				// We leave cl open: its disconnect would close the
+				// session, and that archives records on their last
+				// attempt, as in Kafka.
+				if _, n := rawShareFetch(t, cl, group, memberID, topicID, 2); n != total {
+					t.Fatalf("phase 1: expected %d acquired again, got %d", total, n)
+				}
+			},
+			want: 5,
+		},
+		{
 			// Nothing consumed at all: this one is about the group
 			// config surviving, so the fresh consumer starts at 0.
 			name: "config-only",

@@ -33,17 +33,14 @@ func (c *Cluster) handleShareGroupDescribe(creq *clientReq) (kmsg.Response, erro
 		rg := kmsg.NewShareGroupDescribeResponseGroup()
 		rg.GroupID = groupID
 
-		// Coordinator check: ShareGroupDescribe is routed to the
-		// group coordinator (matching Java's GroupCoordinatorService).
-		if c.coordinator(groupID).node != creq.cc.b.node {
-			rg.ErrorCode = kerr.NotCoordinator.Code
+		// ACL: require GROUP DESCRIBE.
+		if e := c.deny(creq, groupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: groupID, misrouted: !c.isCoordinator(creq, groupID)}); e != nil {
+			rg.ErrorCode = e.Code
 			resp.Groups = append(resp.Groups, rg)
 			continue
 		}
-
-		// ACL: require GROUP DESCRIBE.
-		if e := c.deny(creq, groupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: groupID}); e != nil {
-			rg.ErrorCode = e.Code
+		if ke := c.validateGroup(creq, groupID); ke != nil {
+			rg.ErrorCode = ke.Code
 			resp.Groups = append(resp.Groups, rg)
 			continue
 		}
@@ -96,10 +93,11 @@ func (c *Cluster) fillShareGroupDescribe(creq *clientReq, sg *shareGroup, rg kms
 	// containing only the error (no state/epoch/assignor
 	// metadata leaked).
 	for topic := range allTopics {
-		if e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic}); e != nil {
+		if e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{group: rg.GroupID, topic: topic}); e != nil {
 			redacted := kmsg.NewShareGroupDescribeResponseGroup()
 			redacted.GroupID = rg.GroupID
 			redacted.ErrorCode = e.Code
+			redacted.ErrorMessage = kmsg.StringPtr("The group has described topic(s) that the client is not authorized to describe.")
 			return redacted
 		}
 	}

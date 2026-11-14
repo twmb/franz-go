@@ -5971,6 +5971,9 @@ func TestShareGroupDescribe(t *testing.T) {
 	if len(m.Assignment.TopicPartitions) == 0 {
 		t.Error("no assignment")
 	}
+	if m.ClientHost != "/127.0.0.1" { // Kafka's format: no port
+		t.Errorf("client host %q, want /127.0.0.1", m.ClientHost)
+	}
 }
 
 // TestShareGroupDescribeEmpty verifies describe on a group with no active
@@ -6153,6 +6156,18 @@ func TestShareGroupOffsetsAdmin(t *testing.T) {
 				}
 				if err := kerr.ErrorForCode(dresp.ErrorCode); err != nil {
 					t.Fatalf("delete error: %v", err)
+				}
+
+				// Like Kafka, the group stays, and a second delete
+				// finds nothing to delete.
+				if c.GroupInfo(group) == nil {
+					t.Error("deleting the group's offsets dropped the group")
+				}
+				if dresp, err = dreq.RequestWith(ctx, admin); err != nil {
+					t.Fatalf("delete offsets again: %v", err)
+				}
+				if dresp.ErrorCode != 0 || len(dresp.Topics) != 1 || dresp.Topics[0].ErrorCode != kerr.UnknownTopicOrPartition.Code {
+					t.Errorf("deleting again: got %+v, want the topic with UNKNOWN_TOPIC_OR_PARTITION", dresp)
 				}
 
 				p := describeShareOffsets(t, admin, group, topic).Groups[0].Topics[0].Partitions[0]

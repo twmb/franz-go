@@ -2300,9 +2300,11 @@ func TestShareFetchAckedPartitionAnsweredOnce(t *testing.T) {
 	}
 }
 
-// TestShareFetchWaitKeepsAckErrors verifies that a ShareFetch that waits for
-// records still answers its failed piggybacked acks.
-func TestShareFetchWaitKeepsAckErrors(t *testing.T) {
+// TestShareFetchWait verifies how a ShareFetch that waits for records ends,
+// as in Kafka: one short of MinBytes takes what there is at MaxWait, it still
+// answers its failed piggybacked acks, a wake that frees nothing for it leaves
+// it waiting, and deleting its topic ends it.
+func TestShareFetchWait(t *testing.T) {
 	t.Parallel()
 
 	const topic, group = "share-wait-ack-err", "share-wait-ack-err-g"
@@ -2310,8 +2312,33 @@ func TestShareFetchWaitKeepsAckErrors(t *testing.T) {
 	produceShareN(t, c, topic, group, 1)
 	cl := newPlainClient(t, c)
 	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
-	if _, n := rawShareFetch(t, cl, group, memberID, topicID, 0); n != 1 {
-		t.Fatalf("acquired %d records, wanted 1", n)
+
+	// Like Kafka, a MinBytes above MaxBytes waits only for MaxBytes.
+	// Closing the session releases the record.
+	capped := kmsg.NewPtrShareFetchRequest()
+	capped.GroupID, capped.MemberID, capped.MaxRecords = kmsg.StringPtr(group), kmsg.StringPtr("capped"), 500
+	capped.MinBytes, capped.MaxBytes, capped.MaxWaitMillis = 1<<20, 1, 5000
+	capped.Topics = []kmsg.ShareFetchRequestTopic{{TopicID: topicID, Partitions: []kmsg.ShareFetchRequestTopicPartition{{PartitionMaxBytes: 1 << 20}}}}
+	begin := time.Now()
+	if cresp, err := capped.RequestWith(context.Background(), cl); err != nil || time.Since(begin) > time.Second || len(cresp.Topics) != 1 || len(cresp.Topics[0].Partitions[0].AcquiredRecords) != 1 {
+		t.Fatalf("fetch with MinBytes above MaxBytes: took %v, err %v; want the record at once", time.Since(begin), err)
+	}
+	capped.ShareSessionEpoch, capped.Topics = -1, nil
+	if _, err := capped.RequestWith(context.Background(), cl); err != nil {
+		t.Fatal(err)
+	}
+
+	first := kmsg.NewPtrShareFetchRequest()
+	first.GroupID, first.MemberID, first.MaxRecords = kmsg.StringPtr(group), &memberID, 500
+	first.MinBytes, first.MaxWaitMillis = 1<<20, 100
+	first.Topics = []kmsg.ShareFetchRequestTopic{{TopicID: topicID, Partitions: []kmsg.ShareFetchRequestTopicPartition{{PartitionMaxBytes: 1 << 20}}}}
+	begin = time.Now()
+	fresp, err := first.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(begin); took < 100*time.Millisecond || len(fresp.Topics) != 1 || len(fresp.Topics[0].Partitions[0].AcquiredRecords) != 1 {
+		t.Fatalf("fetch short of MinBytes: took %v, got %+v; want the one record after MaxWait", took, fresp.Topics)
 	}
 
 	// Another member acks the record we hold. The ack fails, and with
@@ -2353,6 +2380,64 @@ func TestShareFetchWaitKeepsAckErrors(t *testing.T) {
 	}
 	if !answered {
 		t.Error("the ShareFetch did not answer the acked partition")
+	}
+
+	// fetch sends the other member's next fetch from a goroutine and
+	// returns once we have the request, which we park before we handle
+	// any later request. The channel gets the response, or nil once ctx
+	// is done.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fetches := c.Fault(Fault{Keys: []kmsg.Key{kmsg.ShareFetch}, Observe: true, Count: -1})
+	epoch := int32(2)
+	fetch := func(wait int32) <-chan *kmsg.ShareFetchResponse {
+		req := kmsg.NewPtrShareFetchRequest()
+		req.GroupID = kmsg.StringPtr(group)
+		req.MemberID = &other
+		req.ShareSessionEpoch = epoch
+		req.MaxWaitMillis = wait
+		req.MaxRecords = 500
+		epoch++
+		hits := fetches.Hits()
+		ch := make(chan *kmsg.ShareFetchResponse, 1)
+		go func() {
+			resp, _ := req.RequestWith(ctx, cl)
+			ch <- resp
+		}()
+		if err := fetches.Wait(ctx, hits+1); err != nil {
+			t.Fatal("the fetch never reached us")
+		}
+		return ch
+	}
+	cl2 := newPlainClient(t, c)
+
+	// We accept the record while the other member waits: the accept wakes
+	// its fetch, which still has nothing to acquire.
+	start = time.Now()
+	waiting := fetch(300)
+	if code := rawShareAck(t, cl2, group, memberID, topicID, 1, 0, 0, 1); code != 0 {
+		t.Fatalf("accept: %v", kerr.ErrorForCode(code))
+	}
+	<-waiting
+	if took := time.Since(start); took < 300*time.Millisecond {
+		t.Errorf("a wake that freed nothing ended the wait after %v", took)
+	}
+
+	// The fetch waits longer than ctx, so only the delete can end it.
+	waiting = fetch(60000)
+	del := kmsg.NewPtrDeleteTopicsRequest()
+	dt := kmsg.NewDeleteTopicsRequestTopic()
+	dt.Topic = kmsg.StringPtr(topic)
+	del.Topics = append(del.Topics, dt)
+	if resp, err := del.RequestWith(ctx, cl2); err != nil || resp.Topics[0].ErrorCode != 0 {
+		t.Fatalf("delete topic: %v %+v", err, resp)
+	}
+	resp = <-waiting
+	if resp == nil {
+		t.Fatal("deleting the topic did not end the wait")
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 || resp.Topics[0].Partitions[0].ErrorCode != kerr.UnknownTopicOrPartition.Code {
+		t.Errorf("after the delete got %+v, want partition 0 with UNKNOWN_TOPIC_OR_PARTITION", resp.Topics)
 	}
 }
 
@@ -2511,90 +2596,214 @@ func TestShareGroupBatchOptimizedAcquiresWholeBatch(t *testing.T) {
 	}
 }
 
-// TestShareGroupBatchSizeSplitsOnBatchBoundaries verifies that BatchSize
-// splits acquired records only at log batch boundaries, as Kafka does.
-func TestShareGroupBatchSizeSplitsOnBatchBoundaries(t *testing.T) {
+// TestShareFetchAcquiredRanges verifies which records one ShareFetch
+// acquires from three log batches, 0-2, 3-5, and 6-8, as Kafka does.
+func TestShareFetchAcquiredRanges(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		limit    string // share.delivery.count.limit, if set
+		releases int    // fetch and release every record this many times first
+		req      func(*kmsg.ShareFetchRequest)
+		wantErr  int16
+		want     [][2]int64
+	}{
+		// The first split point at least 4 past 0 is the batch at 6.
+		{name: "batch size splits on batch boundaries", req: func(r *kmsg.ShareFetchRequest) { r.BatchSize = 4 }, want: [][2]int64{{0, 5}, {6, 8}}},
+		{name: "zero records", req: func(r *kmsg.ShareFetchRequest) { r.MaxRecords = 0 }},
+		{name: "negative records", req: func(r *kmsg.ShareFetchRequest) { r.MaxRecords = -1 }, wantErr: kerr.InvalidRequest.Code},
+		{name: "zero bytes", req: func(r *kmsg.ShareFetchRequest) { r.MaxBytes = 0 }},
+		// The first batch goes out even though it alone is larger.
+		{name: "bytes stop at a batch", req: func(r *kmsg.ShareFetchRequest) { r.MaxBytes = 1 }, want: [][2]int64{{0, 2}}},
+		{name: "last try goes alone", limit: "3", releases: 2, want: [][2]int64{{0, 0}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const topic = "share-ranges"
+			const group = "share-ranges-g"
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			configs := map[string]string{"share.auto.offset.reset": "earliest"}
+			if tc.limit != "" {
+				configs["share.delivery.count.limit"] = tc.limit
+			}
+			c.SetGroupConfigs(group, configs)
 
-	const topic = "share-batch-split"
-	const group = "share-batch-split-g"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
+			cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+			for range 3 {
+				if err := cl.ProduceSync(context.Background(), kgo.StringRecord("a"), kgo.StringRecord("b"), kgo.StringRecord("c")).FirstErr(); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	// Three log batches: 0-2, 3-5, 6-8.
-	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
-	for range 3 {
-		if err := cl.ProduceSync(context.Background(), kgo.StringRecord("a"), kgo.StringRecord("b"), kgo.StringRecord("c")).FirstErr(); err != nil {
-			t.Fatal(err)
-		}
-	}
+			memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+			var epoch int32
+			for range tc.releases {
+				if _, n := rawShareFetch(t, cl, group, memberID, topicID, epoch); n != 9 {
+					t.Fatalf("acquired %d, want 9", n)
+				}
+				if code := rawShareAck(t, cl, group, memberID, topicID, epoch+1, 0, 8, int8(kgo.AckRelease)); code != 0 {
+					t.Fatalf("release: %v", kerr.ErrorForCode(code))
+				}
+				epoch += 2
+			}
 
-	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
-	req := kmsg.NewPtrShareFetchRequest()
-	req.GroupID = kmsg.StringPtr(group)
-	req.MemberID = &memberID
-	req.MaxRecords = 9
-	req.BatchSize = 4
-	rt := kmsg.NewShareFetchRequestTopic()
-	rt.TopicID = topicID
-	rp := kmsg.NewShareFetchRequestTopicPartition()
-	rp.PartitionMaxBytes = 1 << 20
-	rt.Partitions = append(rt.Partitions, rp)
-	req.Topics = append(req.Topics, rt)
-	resp, err := req.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// The first split point at least 4 past 0 is the batch at 6.
-	var got [][2]int64
-	for _, ar := range resp.Topics[0].Partitions[0].AcquiredRecords {
-		got = append(got, [2]int64{ar.FirstOffset, ar.LastOffset})
-	}
-	if want := [][2]int64{{0, 5}, {6, 8}}; !slices.Equal(got, want) {
-		t.Errorf("acquired ranges %v, want %v", got, want)
+			req := kmsg.NewPtrShareFetchRequest()
+			req.GroupID = kmsg.StringPtr(group)
+			req.MemberID = &memberID
+			req.ShareSessionEpoch = epoch
+			req.MaxRecords = 9
+			rt := kmsg.NewShareFetchRequestTopic()
+			rt.TopicID = topicID
+			rp := kmsg.NewShareFetchRequestTopicPartition()
+			rp.PartitionMaxBytes = 1 << 20
+			rt.Partitions = append(rt.Partitions, rp)
+			req.Topics = append(req.Topics, rt)
+			if tc.req != nil {
+				tc.req(req)
+			}
+			resp, err := req.RequestWith(context.Background(), cl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.ErrorCode != tc.wantErr {
+				t.Fatalf("error %v, want %v", kerr.ErrorForCode(resp.ErrorCode), kerr.ErrorForCode(tc.wantErr))
+			}
+			var got [][2]int64
+			for _, rt := range resp.Topics {
+				for _, rp := range rt.Partitions {
+					for _, ar := range rp.AcquiredRecords {
+						got = append(got, [2]int64{ar.FirstOffset, ar.LastOffset})
+					}
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("acquired ranges %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
-// TestShareGroupAlterOffsetsUninitialized verifies that altering a share
-// group's start offset to -1 leaves the partition uninitialized, so the next
-// fetch starts from share.auto.offset.reset (latest by default).
-func TestShareGroupAlterOffsetsUninitialized(t *testing.T) {
+// TestShareGroupStartOffset verifies where a share partition starts, as in
+// Kafka. The group's member joins after two records are produced, and
+// share.auto.offset.reset is latest. Describing every offset right after the
+// join lists the partition with the start offset it has so far, -1 for none.
+func TestShareGroupStartOffset(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		deleteTo  int64 // DeleteRecords up to this offset first, if positive
+		alter     *int64
+		addPart   bool // add partition 1 after the join, produce one record to it, and fetch it
+		described int64
+		want      [][2]int64
+	}{
+		// Altering to -1 leaves the partition without a start offset.
+		{name: "altered to -1", alter: new(int64(-1)), described: -1},
+		// A start offset below the log start moves up to it at the
+		// first fetch.
+		{name: "altered below log start", deleteTo: 1, alter: new(int64(0)), described: 0, want: [][2]int64{{1, 1}}},
+		{name: "never set", described: -1},
+		// A new partition of a topic the group knows starts at 0, so
+		// a record produced to it before its first fetch is kept.
+		{name: "new partition of a known topic", addPart: true, described: -1, want: [][2]int64{{0, 0}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const topic = "share-start"
+			const group = "share-start-g"
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+			if err := producer.ProduceSync(ctx, kgo.StringRecord("old"), kgo.StringRecord("old")).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+			if tc.deleteTo > 0 {
+				if err := c.DeleteRecords(topic, 0, tc.deleteTo); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.alter != nil {
+				req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
+				req.GroupID = group
+				rt := kmsg.NewAlterShareGroupOffsetsRequestTopic()
+				rt.Topic = topic
+				rp := kmsg.NewAlterShareGroupOffsetsRequestTopicPartition()
+				rp.StartOffset = *tc.alter
+				rt.Partitions = append(rt.Partitions, rp)
+				req.Topics = append(req.Topics, rt)
+				resp, err := req.RequestWith(ctx, producer)
+				if err == nil {
+					err = kerr.ErrorForCode(resp.ErrorCode)
+				}
+				if err == nil {
+					err = kerr.ErrorForCode(resp.Topics[0].Partitions[0].ErrorCode)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	const topic = "share-alter-uninit"
-	const group = "share-alter-uninit-g"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
-	if err := producer.ProduceSync(ctx, kgo.StringRecord("old"), kgo.StringRecord("old")).FirstErr(); err != nil {
-		t.Fatal(err)
-	}
+			cl := newPlainClient(t, c)
+			memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
 
-	req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
-	req.GroupID = group
-	rt := kmsg.NewAlterShareGroupOffsetsRequestTopic()
-	rt.Topic = topic
-	rp := kmsg.NewAlterShareGroupOffsetsRequestTopicPartition()
-	rp.StartOffset = -1
-	rt.Partitions = append(rt.Partitions, rp)
-	req.Topics = append(req.Topics, rt)
-	resp, err := req.RequestWith(ctx, producer)
-	if err == nil {
-		err = kerr.ErrorForCode(resp.ErrorCode)
-	}
-	if err == nil {
-		err = kerr.ErrorForCode(resp.Topics[0].Partitions[0].ErrorCode)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
+			dreq := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+			drg := kmsg.NewDescribeShareGroupOffsetsRequestGroup()
+			drg.GroupID = group
+			dreq.Groups = append(dreq.Groups, drg)
+			dresp, err := dreq.RequestWith(ctx, cl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if g := dresp.Groups[0]; len(g.Topics) != 1 || len(g.Topics[0].Partitions) != 1 || g.Topics[0].Partitions[0].StartOffset != tc.described {
+				t.Errorf("describe-all listed %+v, want partition 0 at %d", g.Topics, tc.described)
+			}
 
-	cl := newPlainClient(t, c)
-	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
-	if _, acquired := rawShareFetch(t, cl, group, memberID, topicID, 0); acquired != 0 {
-		t.Errorf("acquired %d records, want 0: the reset is latest", acquired)
+			fetchPart := int32(0)
+			if tc.addPart {
+				fetchPart = 1
+				cp := kmsg.NewPtrCreatePartitionsRequest()
+				ct := kmsg.NewCreatePartitionsRequestTopic()
+				ct.Topic, ct.Count = topic, 2
+				cp.Topics = append(cp.Topics, ct)
+				if resp, err := cp.RequestWith(ctx, cl); err != nil || resp.Topics[0].ErrorCode != 0 {
+					t.Fatalf("create partitions: %v %+v", err, resp)
+				}
+				producer := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+				if err := producer.ProduceSync(ctx, &kgo.Record{Partition: 1, Value: []byte("new")}).FirstErr(); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			req := kmsg.NewPtrShareFetchRequest()
+			req.GroupID = kmsg.StringPtr(group)
+			req.MemberID = &memberID
+			req.MaxRecords = 500
+			rt := kmsg.NewShareFetchRequestTopic()
+			rt.TopicID = topicID
+			rp := kmsg.NewShareFetchRequestTopicPartition()
+			rp.Partition = fetchPart
+			rt.Partitions = append(rt.Partitions, rp)
+			req.Topics = append(req.Topics, rt)
+			resp, err := req.RequestWith(ctx, cl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got [][2]int64
+			for _, rt := range resp.Topics {
+				for _, rp := range rt.Partitions {
+					if len(rp.AcquiredRecords) > 0 && len(rp.Records) == 0 {
+						t.Errorf("partition %d acquired %v with no records", rp.Partition, rp.AcquiredRecords)
+					}
+					for _, ar := range rp.AcquiredRecords {
+						got = append(got, [2]int64{ar.FirstOffset, ar.LastOffset})
+					}
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("acquired %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -2638,57 +2847,80 @@ func TestShareGroupLeaderMoveDropsAcquisitions(t *testing.T) {
 	}
 }
 
-// TestShareGroupLogStartRaisesStartOffset verifies that moving the log start
-// offset past released share records keeps them from being acquired again,
-// as Kafka does: records below the log start have no data.
-func TestShareGroupLogStartRaisesStartOffset(t *testing.T) {
+// TestShareGroupPrunedRecords verifies that released share records whose
+// data is gone are not acquired again and do not hold the start offset back,
+// as in Kafka. The topic has four records, each in its own batch, keyed a, b,
+// b, and c.
+func TestShareGroupPrunedRecords(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		policy  string
+		acks    []int8 // per offset
+		prune   func(t *testing.T, c *Cluster, cl *kgo.Client, topic string)
+		want    [][2]int64
+		wantSPO int64
+	}{
+		{
+			name:   "delete records",
+			policy: "delete",
+			acks:   []int8{int8(kgo.AckRelease), int8(kgo.AckRelease), int8(kgo.AckRelease), int8(kgo.AckRelease)},
+			prune: func(t *testing.T, c *Cluster, _ *kgo.Client, topic string) {
+				if err := c.DeleteRecords(topic, 0, 2); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want:    [][2]int64{{2, 3}},
+			wantSPO: 2,
+		},
+		{
+			// Compaction drops the batch of the released record at 1.
+			name:    "compaction",
+			policy:  "compact",
+			acks:    []int8{int8(kgo.AckAccept), int8(kgo.AckRelease), int8(kgo.AckAccept), int8(kgo.AckAccept)},
+			prune:   func(_ *testing.T, c *Cluster, _ *kgo.Client, _ string) { c.Compact() },
+			wantSPO: 4,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const topic = "share-pruned"
+			const group = "share-pruned-g"
+			c := newCluster(t, NumBrokers(1))
+			if err := c.CreateTopic(topic, 1, map[string]string{"cleanup.policy": tc.policy}); err != nil {
+				t.Fatal(err)
+			}
+			c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
+			cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+			for _, k := range []string{"a", "b", "b", "c"} {
+				produceSync(t, cl, &kgo.Record{Key: []byte(k)})
+			}
 
-	const topic = "share-lso"
-	const group = "share-lso-g"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	produceShareN(t, c, topic, group, 3)
+			memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+			if _, n := rawShareFetch(t, cl, group, memberID, topicID, 0); n != 4 {
+				t.Fatalf("acquired %d, want 4", n)
+			}
+			if code := rawShareAck(t, cl, group, memberID, topicID, 1, 0, 3, tc.acks...); code != 0 {
+				t.Fatalf("ack: %v", kerr.ErrorForCode(code))
+			}
+			tc.prune(t, c, cl, topic)
 
-	cl := newPlainClient(t, c)
-	memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
-	if _, n := rawShareFetch(t, cl, group, memberID, topicID, 0); n != 3 {
-		t.Fatalf("acquired %d, want 3", n)
-	}
-
-	// Release all three, then delete the first two.
-	ack := kmsg.NewPtrShareAcknowledgeRequest()
-	ack.GroupID = kmsg.StringPtr(group)
-	ack.MemberID = &memberID
-	ack.ShareSessionEpoch = 1
-	at := kmsg.NewShareAcknowledgeRequestTopic()
-	at.TopicID = topicID
-	ap := kmsg.NewShareAcknowledgeRequestTopicPartition()
-	ab := kmsg.NewShareAcknowledgeRequestTopicPartitionAcknowledgementBatch()
-	ab.FirstOffset, ab.LastOffset, ab.AcknowledgeTypes = 0, 2, []int8{int8(kgo.AckRelease)}
-	ap.AcknowledgementBatches = append(ap.AcknowledgementBatches, ab)
-	at.Partitions = append(at.Partitions, ap)
-	ack.Topics = append(ack.Topics, at)
-	if resp, err := ack.RequestWith(context.Background(), cl); err != nil || resp.ErrorCode != 0 || resp.Topics[0].Partitions[0].ErrorCode != 0 {
-		t.Fatalf("release: %v %+v", err, resp)
-	}
-	del := kmsg.NewPtrDeleteRecordsRequest()
-	dt := kmsg.NewDeleteRecordsRequestTopic()
-	dt.Topic = topic
-	dp := kmsg.NewDeleteRecordsRequestTopicPartition()
-	dp.Offset = 2
-	dt.Partitions = append(dt.Partitions, dp)
-	del.Topics = append(del.Topics, dt)
-	if resp, err := del.RequestWith(context.Background(), cl); err != nil || resp.Topics[0].Partitions[0].ErrorCode != 0 {
-		t.Fatalf("delete records: %v %+v", err, resp)
-	}
-
-	resp, _ := rawShareFetch(t, cl, group, memberID, topicID, 2)
-	var got [][2]int64
-	for _, ar := range resp.Topics[0].Partitions[0].AcquiredRecords {
-		got = append(got, [2]int64{ar.FirstOffset, ar.LastOffset})
-	}
-	if want := [][2]int64{{2, 2}}; !slices.Equal(got, want) {
-		t.Errorf("acquired %v, want %v", got, want)
+			resp, _ := rawShareFetch(t, cl, group, memberID, topicID, 2)
+			var got [][2]int64
+			for _, rt := range resp.Topics {
+				for _, rp := range rt.Partitions {
+					for _, ar := range rp.AcquiredRecords {
+						got = append(got, [2]int64{ar.FirstOffset, ar.LastOffset})
+					}
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("acquired %v, want %v", got, tc.want)
+			}
+			if spo := describeShareOffsets(t, cl, group, topic).Groups[0].Topics[0].Partitions[0].StartOffset; spo != tc.wantSPO {
+				t.Errorf("start offset %d, want %d", spo, tc.wantSPO)
+			}
+		})
 	}
 }
 

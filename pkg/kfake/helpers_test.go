@@ -288,6 +288,30 @@ func rawShareFetch(t *testing.T, cl *kgo.Client, group, memberID string, topicID
 	return sfResp, acquired
 }
 
+// rawShareAck acknowledges offsets first through last of partition 0 and
+// returns the top-level error, or else the partition's.
+func rawShareAck(t *testing.T, cl *kgo.Client, group, memberID string, topicID [16]byte, epoch int32, first, last int64, types ...int8) int16 {
+	t.Helper()
+	req := kmsg.NewPtrShareAcknowledgeRequest()
+	req.GroupID, req.MemberID, req.ShareSessionEpoch = &group, &memberID, epoch
+	at := kmsg.NewShareAcknowledgeRequestTopic()
+	at.TopicID = topicID
+	ap := kmsg.NewShareAcknowledgeRequestTopicPartition()
+	ab := kmsg.NewShareAcknowledgeRequestTopicPartitionAcknowledgementBatch()
+	ab.FirstOffset, ab.LastOffset, ab.AcknowledgeTypes = first, last, types
+	ap.AcknowledgementBatches = append(ap.AcknowledgementBatches, ab)
+	at.Partitions = append(at.Partitions, ap)
+	req.Topics = append(req.Topics, at)
+	resp, err := req.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("ShareAcknowledge: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		return resp.ErrorCode
+	}
+	return resp.Topics[0].Partitions[0].ErrorCode
+}
+
 // newClient848 creates a kgo client that opts into KIP-848.
 func newClient848(t *testing.T, c *Cluster, opts ...kgo.Opt) *kgo.Client {
 	t.Helper()

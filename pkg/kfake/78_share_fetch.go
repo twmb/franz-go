@@ -16,6 +16,8 @@ import (
 // * Piggybacked acknowledgements can be included in any ShareFetch request
 // * Record acquisition locks are tracked per-member with configurable timeout
 // * MaxWait long-poll: if no records available, waits up to MaxWaitMillis
+// * MaxRecords and MaxBytes cap what one fetch acquires; zero of either
+//   acquires nothing
 //
 // Session management:
 // * epoch 0: Create new session, populate from request Topics
@@ -25,8 +27,9 @@ import (
 //
 // Version notes:
 // * v0: Initial share fetch (KIP-932)
-// * v1: BatchSize, ShareAcquireMode for BATCH_OPTIMIZED (KIP-1206)
-// * v2: IsRenewAck for lock renewal without fetching (KIP-1222)
+// * v1: MaxRecords, BatchSize
+// * v2: ShareAcquireMode for BATCH_OPTIMIZED (KIP-1206), IsRenewAck for
+//   lock renewal without fetching (KIP-1222)
 
 func init() { regKey(78, 0, 2) }
 
@@ -40,10 +43,12 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		return nil, err
 	}
 
-	var groupID, memberID string
-	if req.GroupID != nil {
-		groupID = *req.GroupID
+	if req.GroupID == nil {
+		resp.ErrorCode = kerr.InvalidRequest.Code
+		return resp, nil
 	}
+	groupID := *req.GroupID
+	var memberID string
 	if req.MemberID != nil {
 		memberID = *req.MemberID
 	}
@@ -64,6 +69,13 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		return resp, nil
 	}
 
+	// MaxRecords exists from v1 and cannot be negative. Zero is valid:
+	// the fetch acquires nothing.
+	if req.Version >= 1 && req.MaxRecords < 0 {
+		resp.ErrorCode = kerr.InvalidRequest.Code
+		return resp, nil
+	}
+
 	// KIP-1222: when isRenewAck is set, all fetch params must be zero.
 	if req.Version >= 2 && req.IsRenewAck {
 		if req.MaxBytes != 0 || req.MinBytes != 0 || req.MaxRecords != 0 || req.MaxWaitMillis != 0 {
@@ -72,18 +84,17 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 	}
 
-	// Group type exclusivity: a consumer group under this id means
-	// there is no share group to fetch from, and neither createSession
-	// nor the recreate fallback below may make one. Kafka never asks the
-	// group coordinator here; its share coordinator refuses the
-	// uninitialized partitions one by one instead. We answer the same
-	// top-level GROUP_ID_NOT_FOUND that ShareGroupHeartbeat does.
-	if _, isConsumer := c.groups.gs[groupID]; isConsumer {
+	// No share group under this id (none yet, a deleted one, or a
+	// consumer group) means there is nothing to fetch from, and we do
+	// not make one here. Kafka never asks the group coordinator here; its
+	// share coordinator refuses the uninitialized partitions one by one
+	// instead. We answer the same top-level GROUP_ID_NOT_FOUND that
+	// ShareGroupHeartbeat does.
+	sg := c.shareGroups.get(groupID)
+	if sg == nil {
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
 		return resp, nil
 	}
-
-	sg := c.shareGroups.get(groupID)
 	id2t := c.data.id2t
 	maxDelivery := c.shareMaxDeliveryAttempts(groupID)
 
@@ -152,18 +163,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 		ackErrs[tpKey{tid, p}] = ec
 	}
-	// onAckNotLeader routes a leader-mismatch on a piggybacked ack to
-	// the AcknowledgeErrorCode field. The ShareFetch response has no
-	// per-partition CurrentLeader hint specifically for acks (the
-	// top-level CurrentLeader is tied to rp.ErrorCode, the fetch-side
-	// leader check at the bottom of this file); the client surfaces
-	// the non-retryable ack error via its share-ack callback and
-	// migrates the cursor via the fetch-side NOT_LEADER path if the
-	// same partition was also being fetched.
-	onAckNotLeader := func(tid uuid, p int32, _ *partData) {
-		onAck(tid, p, kerr.NotLeaderForPartition.Code)
-	}
-
 	// Session management.
 	sgs := &c.shareGroups
 	var session *shareSession
@@ -185,26 +184,24 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			resp.ErrorCode = kerr.ShareSessionNotFound.Code
 			return resp, nil
 		}
-		if sg != nil {
-			ackTs := ackTopicsFromFetch(req.Topics)
-			toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, onAck, onAckNotLeader)
-			released := sg.releaseRecordsForSession(memberID, session)
-			ensureAckedParts(resp, ackTs, addTopic)
-			// fireAllShareWatchers fires every partition in the
-			// group, which is a superset of the partitions in
-			// toFire. When released is false, we only wake the
-			// specific partitions that were ack-released.
-			if released {
-				sg.fireAllShareWatchers()
-			} else {
-				fireAll(toFire)
-			}
+		ackTs := ackTopicsFromFetch(req.Topics)
+		toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, onAck)
+		released := sg.releaseRecordsForSession(memberID, session)
+		ensureAckedParts(resp, ackTs, addTopic)
+		// fireAllShareWatchers fires every partition in the
+		// group, which is a superset of the partitions in
+		// toFire. When released is false, we only wake the
+		// specific partitions that were ack-released.
+		if released {
+			sg.fireAllShareWatchers()
+		} else {
+			fireAll(toFire)
 		}
 		delete(sgs.sessions, sessionKey)
 		return resp, nil
 	} else if req.ShareSessionEpoch == 0 {
 		var ec int16
-		session, sg, ec = sgs.createSession(sessionKey, req, creq.cc)
+		session, ec = sgs.createSession(sessionKey, req, creq.cc)
 		if ec != 0 {
 			resp.ErrorCode = ec
 			return resp, nil
@@ -218,37 +215,27 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 	}
 
-	// Ensure sg is non-nil: epoch 0 creates it via createSession, but
-	// epoch > 0 and watcher paths only looked it up via get() at the
-	// top of handleShareFetch. That get() returns nil if the group went
-	// away between session creation and this request (e.g.,
-	// DeleteShareGroupOffsets emptied the group). We recreate the group
-	// so that ack processing and record acquisition below have a valid
-	// shareGroup to operate on.
-	if sg == nil {
-		sg = c.shareGroups.getOrCreate(groupID)
-	}
-
 	// KIP-1222: when isRenewAck is set, skip fetch entirely -- only
 	// process acks. Time spent fetching might exceed the renewed lock.
 	if req.Version >= 2 && req.IsRenewAck {
 		var toFire []*partData
 		if w == nil {
 			ackTs := ackTopicsFromFetch(req.Topics)
-			toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, onAck, onAckNotLeader)
+			toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, onAck)
 			ensureAckedParts(resp, ackTs, addTopic)
 		}
 		fireAll(toFire)
 		return resp, nil
 	}
 
-	// Kafka's SharePartition.acquire treats maxFetchRecords <= 0 as
-	// "nothing to acquire" (see SharePartition.java). We default to
-	// defShareMaxRecords so zero behaves like the client's default.
+	// Like Kafka, a fetch for zero records or zero bytes acquires
+	// nothing and does not wait. v0 has no MaxRecords; we use the
+	// client default.
 	maxRecords := req.MaxRecords
-	if maxRecords <= 0 {
+	if req.Version == 0 {
 		maxRecords = defShareMaxRecords
 	}
+	fetchNothing := maxRecords == 0 || req.MaxBytes == 0
 
 	// BATCH_OPTIMIZED mode (ShareAcquireMode=0, KIP-1206): BatchSize
 	// controls response splitting, not acquisition limit.
@@ -272,6 +259,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 
 	var (
 		totalRecords   int32
+		totalBytes     int64
 		targets        []fetchTarget
 		acquiredParts  []acquiredPart
 		toFire         []*partData
@@ -287,7 +275,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	// since acks were already processed in the initial call). The
 	// re-invocation answers the failed acks the initial call kept.
 	if len(ackTs) > 0 {
-		toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, onAck, onAckNotLeader)
+		toFire = sg.processShareAcks(creq, memberID, ackTs, maxAckType, onAck)
 	} else if w != nil {
 		for k, ec := range w.ackErrs {
 			onAck(k.tid, k.p, ec)
@@ -297,6 +285,12 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	// Build target list from session partitions.
 	for topicID, parts := range session.partitions {
 		topicName := id2t[topicID]
+		if name := session.names[topicID]; topicName == "" && name != "" && c.data.t2id[name] == (uuid{}) {
+			// Deleted since it joined the session, and not
+			// recreated: like Kafka, we know it by the name and
+			// answer UNKNOWN_TOPIC_OR_PARTITION below.
+			topicName = name
+		}
 		if topicName == "" {
 			for p := range parts {
 				code := kerr.UnknownTopicID.Code
@@ -342,6 +336,74 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 	}
 
+	// Fire watchers for ack-released records. They run after we return.
+	fireAll(toFire)
+
+	// park waits for records until MaxWait (the MinBytes/MaxWait
+	// long-poll), if time and a partition to wait on are left, and
+	// returns whether it parked. Like Kafka, a wake that frees nothing
+	// for us waits again. Even when piggybacked acks were present, the
+	// fetch may delay up to MaxWait (ack results are held until the
+	// fetch completes or times out). When blocked by maxRecordLocks, we
+	// still create a watcher -- fireShareWatchers fires when acks free
+	// the window, so the watcher wakes up promptly instead of the client
+	// busy-looping with empty fetches. We decide before building the
+	// response, so the session's requiresUpdate flags are left for the
+	// response that completes the fetch.
+	remainingWait := time.Until(creq.at.Add(time.Duration(req.MaxWaitMillis) * time.Millisecond))
+	canPark := !fetchNothing && !fc.anyHit() && remainingWait > 0 && len(targets) > 0 // a faulted partition completes the fetch at once
+	park := func() bool {
+		if !canPark {
+			return false
+		}
+		wsf := &watchShareFetch{
+			creq:    creq,
+			session: session,
+			ackTs:   ackTs,
+			ackErrs: ackErrs,
+		}
+		if w != nil {
+			wsf.ackTs = w.ackTs
+		}
+		wsf.cb = func() {
+			select {
+			case c.shareGroups.watchFetchCh <- wsf:
+			case <-c.die:
+			}
+		}
+		for _, tgt := range targets {
+			tgt.pd.shareWatch[wsf] = struct{}{}
+			wsf.in = append(wsf.in, tgt.pd)
+		}
+		wsf.t = time.AfterFunc(remainingWait, wsf.cb)
+		return true
+	}
+
+	// Like Kafka, we acquire nothing while the targets hold fewer than
+	// MinBytes, at most MaxBytes, from where each next acquires, counting
+	// at most an even share of MaxBytes for each. The first target also
+	// counts the bytes the even split leaves over.
+	if minBytes := int64(min(req.MinBytes, req.MaxBytes)); canPark && minBytes > 0 {
+		var avail int64
+		share, extra := int64(req.MaxBytes)/int64(len(targets)), int64(req.MaxBytes)%int64(len(targets))
+		for _, tgt := range targets {
+			if avail >= minBytes {
+				break
+			}
+			shp := sg.getSharePartition(tgt.topic, tgt.partition, tgt.pd)
+			end := tgt.pd.highWatermark
+			if readCommitted {
+				end = tgt.pd.lastStableOffset
+			}
+			avail += bytesFrom(tgt.pd, max(shp.scanOffset, shp.spso), end, min(share+extra, minBytes-avail))
+			extra = 0
+		}
+		if avail < minBytes {
+			park()
+			return nil, nil
+		}
+	}
+
 	// Rotate targets for fairness using session epoch as the
 	// round-robin start index, avoiding a copy.
 	startIdx := 0
@@ -353,7 +415,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	for i := range targets {
 		tgt := &targets[(startIdx+i)%len(targets)]
 		remaining := maxRecords - totalRecords
-		if remaining <= 0 {
+		if remaining <= 0 || fetchNothing {
 			continue
 		}
 		shp := sg.getSharePartition(tgt.topic, tgt.partition, tgt.pd)
@@ -361,16 +423,19 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		if readCommitted {
 			hwm = tgt.pd.lastStableOffset
 		}
-		acquiredRanges := shp.acquireRecords(
+		acquiredRanges, nbytes := shp.acquireRecords(
 			tgt.pd,
 			hwm,
 			remaining,
+			int64(req.MaxBytes)-totalBytes,
+			totalBytes == 0,
 			memberID,
 			maxDelivery,
 			maxRecordLocks,
 			readCommitted,
 			req.ShareAcquireMode == 0,
 		)
+		totalBytes += nbytes
 		if len(acquiredRanges) == 0 {
 			continue
 		}
@@ -388,8 +453,10 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		})
 	}
 
-	// Fire watchers for ack-released records.
-	fireAll(toFire)
+	// With nothing acquired, wait for records.
+	if totalRecords == 0 && park() {
+		return nil, nil
+	}
 
 	for _, ap := range acquiredParts {
 		firstAcq := ap.ranges[0].FirstOffset
@@ -464,40 +531,6 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		ensureAckedParts(resp, ensureAcks, addTopic)
 	}
 
-	// If no records acquired and this is the initial invocation, consider
-	// waiting for new data (MinBytes/MaxWait long-poll). Even when
-	// piggybacked acks were present, the fetch may delay up to MaxWait
-	// (ack results are held until the fetch completes or times out).
-	// When blocked by maxRecordLocks, we still create a watcher --
-	// fireShareWatchers fires when acks free the window, so the watcher
-	// wakes up promptly instead of the client busy-looping with empty
-	// fetches.
-	if totalRecords == 0 && w == nil && !fc.anyHit() { // a faulted partition completes the fetch at once
-		wait := time.Duration(req.MaxWaitMillis) * time.Millisecond
-		deadline := creq.at.Add(wait)
-		remaining := time.Until(deadline)
-		if remaining > 0 && len(targets) > 0 {
-			wsf := &watchShareFetch{
-				creq:    creq,
-				session: session,
-				ackTs:   ackTs,
-				ackErrs: ackErrs,
-			}
-			wsf.cb = func() {
-				select {
-				case c.shareGroups.watchFetchCh <- wsf:
-				case <-c.die:
-				}
-			}
-			for _, tgt := range targets {
-				tgt.pd.shareWatch[wsf] = struct{}{}
-				wsf.in = append(wsf.in, tgt.pd)
-			}
-			wsf.t = time.AfterFunc(remaining, wsf.cb)
-			return nil, nil
-		}
-	}
-
 	return resp, nil
 }
 
@@ -563,4 +596,25 @@ func splitAcquiredRanges(pd *partData, ranges []kmsg.ShareFetchResponseTopicPart
 		add(cur, r.LastOffset, r.DeliveryCount)
 	}
 	return out
+}
+
+// bytesFrom returns the bytes of the batches that hold offsets from from up
+// to end, at most limit.
+func bytesFrom(pd *partData, from, end, limit int64) int64 {
+	segIdx, metaIdx, ok, atEnd := pd.searchOffset(max(from, pd.logStartOffset))
+	if !ok || atEnd {
+		return 0
+	}
+	var n int64
+	for si := segIdx; si < len(pd.segments); si++ {
+		seg := &pd.segments[si]
+		for bi := metaIdx; bi < len(seg.index); bi++ {
+			if n >= limit || seg.index[bi].firstOffset >= end {
+				return min(n, limit)
+			}
+			n += int64(seg.index[bi].nbytes)
+		}
+		metaIdx = 0
+	}
+	return min(n, limit)
 }

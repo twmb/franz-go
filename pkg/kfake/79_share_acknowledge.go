@@ -1,8 +1,6 @@
 package kfake
 
 import (
-	"slices"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -31,10 +29,12 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		return nil, err
 	}
 
-	var groupID, memberID string
-	if req.GroupID != nil {
-		groupID = *req.GroupID
+	if req.GroupID == nil {
+		resp.ErrorCode = kerr.InvalidRequest.Code
+		return resp, nil
 	}
+	groupID := *req.GroupID
+	var memberID string
 	if req.MemberID != nil {
 		memberID = *req.MemberID
 	}
@@ -68,10 +68,8 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 	}
 
 	// Response-building closure (matching produce handler style).
-	// Returns the appended partition pointer so callers can populate
-	// optional fields (CurrentLeader on NotLeaderForPartition).
 	topicIdx := make(map[uuid]int)
-	donep := func(tid uuid, p int32, ec int16) *kmsg.ShareAcknowledgeResponseTopicPartition {
+	onPartition := func(tid uuid, p int32, ec int16) {
 		i, ok := topicIdx[tid]
 		if !ok {
 			i = len(resp.Topics)
@@ -91,23 +89,6 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 			sp.CurrentLeader.LeaderEpoch = -1
 		}
 		resp.Topics[i].Partitions = append(resp.Topics[i].Partitions, sp)
-		return &resp.Topics[i].Partitions[len(resp.Topics[i].Partitions)-1]
-	}
-	onPartition := func(tid uuid, p int32, ec int16) {
-		donep(tid, p, ec)
-	}
-	onNotLeader := func(tid uuid, p int32, pd *partData) {
-		sp := donep(tid, p, kerr.NotLeaderForPartition.Code)
-		sp.CurrentLeader.LeaderID = pd.leader.node
-		sp.CurrentLeader.LeaderEpoch = pd.epoch
-		// Kafka sends the endpoint of each leader it names.
-		if !slices.ContainsFunc(resp.NodeEndpoints, func(ne kmsg.ShareAcknowledgeResponseNodeEndpoint) bool { return ne.NodeID == pd.leader.node }) {
-			ne := kmsg.NewShareAcknowledgeResponseNodeEndpoint()
-			ne.NodeID = pd.leader.node
-			ne.Host, ne.Port = pd.leader.hostport()
-			ne.Rack = &brokerRack
-			resp.NodeEndpoints = append(resp.NodeEndpoints, ne)
-		}
 	}
 
 	// Session close: process acks, release remaining acquired records,
@@ -119,9 +100,9 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 			resp.ErrorCode = kerr.ShareSessionNotFound.Code
 			return resp, nil
 		}
-		sg := sgs.getOrCreate(groupID)
+		sg := sgs.get(groupID) // non-nil: DeleteGroups drops a group's sessions with it
 		ackTs := ackTopicsFromAcknowledge(req.Topics)
-		toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, onPartition, onNotLeader)
+		toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, onPartition)
 		released := sg.releaseRecordsForSession(memberID, session)
 		fireAll(toFire)
 		if released {
@@ -147,11 +128,12 @@ func (c *Cluster) handleShareAcknowledge(creq *clientReq) (kmsg.Response, error)
 		return resp, nil
 	}
 
-	// Like Kafka, we check only the session: its group may have been
-	// emptied and dropped since the session opened.
-	sg := sgs.getOrCreate(groupID)
+	// Like Kafka, we check only the session. Its group exists: only
+	// DeleteGroups drops a share group, and it drops the group's sessions
+	// with it.
+	sg := sgs.get(groupID)
 	ackTs := ackTopicsFromAcknowledge(req.Topics)
-	toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, onPartition, onNotLeader)
+	toFire := sg.processShareAcks(creq, memberID, ackTs, maxAckType, onPartition)
 	fireAll(toFire)
 
 	session.bumpEpoch()

@@ -240,10 +240,11 @@ func (c *Cluster) notifyTopicChange() {
 		g.updateConsumerStateField()
 		g.persistMeta848()
 	}
+	// Like Kafka, a share group's epoch moves only if the change touches
+	// a topic it subscribes to, which always changes its assignment.
 	for _, sg := range c.shareGroups.gs {
-		if len(sg.members) > 0 {
+		if sg.recomputeAssignments() {
 			sg.groupEpoch++
-			sg.recomputeAssignments()
 		}
 	}
 }
