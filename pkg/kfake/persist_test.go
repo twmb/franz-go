@@ -2022,8 +2022,10 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 	dir := t.TempDir()
 
 	const topic = "nbytes-topic"
+	const movedDir = "/mem/kfake-moved"
 
-	// Phase 1: produce records, clean shutdown (creates snapshot).
+	// Phase 1: produce records, move the log dir, clean shutdown (creates
+	// snapshot).
 	var savedNbytes int64
 	{
 		c := newCluster(t,
@@ -2057,6 +2059,7 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 		if savedNbytes <= 0 {
 			t.Fatalf("expected positive nbytes before shutdown, got %d", savedNbytes)
 		}
+		c.admin(func() { c.data.tps[topic][0].dirs = map[int32]string{0: movedDir} })
 		c.Close()
 	}
 
@@ -2074,6 +2077,13 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 		if pi.NumBytes != savedNbytes {
 			t.Fatalf("nbytes mismatch after snapshot reopen: got %d, want %d", pi.NumBytes, savedNbytes)
 		}
+
+		// The replica is still in the dir it moved to.
+		c.admin(func() {
+			if d := c.data.tps[topic][0].dirs[0]; d != movedDir {
+				t.Errorf("partition in dir %q after reopen, want %s", d, movedDir)
+			}
+		})
 
 		// Verify retention actually works after restart by setting a
 		// tight retention.bytes via topic config and producing a record

@@ -55,9 +55,6 @@
 - ConfigDocumentation (v3+): Not returning documentation
 - IncludeDocumentation: Request field ignored (no docs to return)
 
-## 34_alter_replica_log_dirs
-- Log directory validation: No validation that directory exists in broker config
-
 ## 35_describe_log_dirs
 - ErrorCode (v3+): Top-level error code not implemented
 - OffsetLag: Always returns 0 (no replication delay tracking)

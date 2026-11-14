@@ -1,8 +1,6 @@
 package kfake
 
 import (
-	"time"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -144,30 +142,11 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 		if !req.ValidateOnly {
 			for i := range numNewPartitions {
 				partNum := int32(existingPartitions) + int32(i)
+				pd := c.data.tps.mkp(rt.Topic, partNum, c.newPartData(partNum))
+				pd.t = rt.Topic
+				// An explicit assignment's first replica is the leader.
 				if len(rt.Assignment) > 0 {
-					// Use explicit assignment: first replica is leader
-					a := rt.Assignment[i]
-					leader := c.nodeBroker(a.Replicas[0])
-					var followers []int32
-					if len(a.Replicas) > 1 {
-						followers = a.Replicas[1:]
-					}
-					pd := c.data.tps.mkp(rt.Topic, partNum, func() *partData {
-						return &partData{
-							p:          partNum,
-							dir:        defLogDir,
-							leader:     leader,
-							followers:  followers,
-							watch:      make(map[*watchFetch]struct{}),
-							shareWatch: make(map[*watchShareFetch]struct{}),
-							createdAt:  time.Now(),
-							rolledAt:   time.Now(),
-						}
-					})
-					pd.t = rt.Topic
-				} else {
-					pd := c.data.tps.mkp(rt.Topic, partNum, c.newPartData(partNum))
-					pd.t = rt.Topic
+					pd.leader = c.nodeBroker(rt.Assignment[i].Replicas[0])
 				}
 			}
 		}

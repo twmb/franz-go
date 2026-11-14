@@ -207,7 +207,8 @@ func TestCreatePartitionsValidateOnly(t *testing.T) {
 }
 
 // TestDescribeLogDirsReportsStorageSize verifies that DescribeLogDirs returns
-// non-zero sizes after producing data, and that it can filter by partition.
+// non-zero sizes and the usable space after producing data, that it can
+// filter by partition, and that it lists a dir with no requested partition.
 func TestDescribeLogDirsReportsStorageSize(t *testing.T) {
 	t.Parallel()
 	topic := "describe-log-dirs-size"
@@ -250,6 +251,15 @@ func TestDescribeLogDirsReportsStorageSize(t *testing.T) {
 	if totalSize == 0 {
 		t.Error("expected non-zero total size after producing")
 	}
+	// The volume total is fixed; usable space is what the data leaves.
+	// kgo's merge of a sharded request drops both, so we ask the broker.
+	direct, err := req.RequestWith(ctx, cl.Broker(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := direct.Dirs[0]; d.UsableBytes != d.TotalBytes-totalSize {
+		t.Errorf("expected usable %d = total %d - used %d", d.UsableBytes, d.TotalBytes, totalSize)
+	}
 
 	// Describe only partition 0.
 	req2 := kmsg.NewDescribeLogDirsRequest()
@@ -273,65 +283,86 @@ func TestDescribeLogDirsReportsStorageSize(t *testing.T) {
 	if partCount != 1 {
 		t.Errorf("expected 1 partition with filter, got %d", partCount)
 	}
+
+	// A dir is listed even when no requested partition is in it. kgo
+	// fails a partition it does not know, so we ask the broker.
+	req2.Topics[0].Partitions = []int32{99}
+	resp2, err = req2.RequestWith(ctx, cl.Broker(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp2.Dirs) != 1 || len(resp2.Dirs[0].Topics) != 0 {
+		t.Errorf("expected one empty dir for a missing partition, got %+v", resp2.Dirs)
+	}
 }
 
 // TestAlterReplicaLogDirsMovesPartition verifies that AlterReplicaLogDirs
-// changes the directory for a partition, confirmed via DescribeLogDirs.
+// moves a broker's own replica between its configured dirs, confirmed via
+// DescribeLogDirs, and that each broker reports only its own replicas.
 func TestAlterReplicaLogDirsMovesPartition(t *testing.T) {
 	t.Parallel()
 	topic := "alter-log-dirs-move"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	newDir := "/data/kafka-logs-moved"
+	c := newCoverCluster(t, NumBrokers(2), BrokerConfigs(map[string]string{"log.dirs": defLogDir + ", " + newDir}))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	cl := newPlainClient(t, c)
-	newDir := "/data/kafka-logs-moved"
-
-	// Move partition 0 to a new directory.
-	req := kmsg.NewAlterReplicaLogDirsRequest()
-	rd := kmsg.NewAlterReplicaLogDirsRequestDir()
-	rd.Dir = newDir
-	rt := kmsg.NewAlterReplicaLogDirsRequestDirTopic()
-	rt.Topic = topic
-	rt.Partitions = []int32{0}
-	rd.Topics = append(rd.Topics, rt)
-	req.Dirs = append(req.Dirs, rd)
-
-	resp, err := req.RequestWith(ctx, cl)
-	if err != nil {
+	if _, err := kadm.NewClient(cl).CreateTopics(ctx, 1, 1, nil, topic); err != nil {
 		t.Fatal(err)
 	}
-	for _, st := range resp.Topics {
-		for _, sp := range st.Partitions {
-			if sp.ErrorCode != 0 {
-				t.Fatalf("alter error: %v", kerr.ErrorForCode(sp.ErrorCode))
-			}
+	leader := c.LeaderFor(topic, 0)
+	other := 1 - leader
+
+	alter := func(node int32, dir string) int16 {
+		t.Helper()
+		req := kmsg.NewPtrAlterReplicaLogDirsRequest()
+		rd := kmsg.NewAlterReplicaLogDirsRequestDir()
+		rd.Dir = dir
+		rt := kmsg.NewAlterReplicaLogDirsRequestDirTopic()
+		rt.Topic = topic
+		rt.Partitions = []int32{0}
+		rd.Topics = append(rd.Topics, rt)
+		req.Dirs = append(req.Dirs, rd)
+		resp, err := req.RequestWith(ctx, cl.Broker(int(node)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Topics[0].Partitions[0].ErrorCode
+	}
+	if code := alter(other, newDir); code != kerr.ReplicaNotAvailable.Code {
+		t.Errorf("non-replica broker: expected REPLICA_NOT_AVAILABLE, got %v", kerr.ErrorForCode(code))
+	}
+	for _, dir := range []string{"/data/elsewhere", newDir + "/.."} {
+		if code := alter(leader, dir); code != kerr.LogDirNotFound.Code {
+			t.Errorf("dir %q: expected LOG_DIR_NOT_FOUND, got %v", dir, kerr.ErrorForCode(code))
 		}
 	}
-
-	// Verify via DescribeLogDirs that the partition is now in the new dir.
-	dlReq := kmsg.NewDescribeLogDirsRequest()
-	dlrt := kmsg.NewDescribeLogDirsRequestTopic()
-	dlrt.Topic = topic
-	dlrt.Partitions = []int32{0}
-	dlReq.Topics = append(dlReq.Topics, dlrt)
-
-	dlResp, err := dlReq.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
+	if code := alter(leader, newDir); code != 0 {
+		t.Fatalf("alter error: %v", kerr.ErrorForCode(code))
 	}
-	foundInNewDir := false
-	for _, dir := range dlResp.Dirs {
-		if dir.Dir == newDir {
+
+	// Every broker lists both dirs; only the leader holds the partition,
+	// now in the new dir.
+	for _, node := range []int32{leader, other} {
+		dlResp, err := kmsg.NewPtrDescribeLogDirsRequest().RequestWith(ctx, cl.Broker(int(node)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(dlResp.Dirs) != 2 {
+			t.Errorf("node %d: expected 2 dirs, got %d", node, len(dlResp.Dirs))
+		}
+		var in []string
+		for _, dir := range dlResp.Dirs {
 			for _, dt := range dir.Topics {
 				if dt.Topic == topic {
-					foundInNewDir = true
+					in = append(in, dir.Dir)
 				}
 			}
 		}
-	}
-	if !foundInNewDir {
-		t.Error("partition not found in new directory after AlterReplicaLogDirs")
+		if want := []string{newDir}; node == leader && !slices.Equal(in, want) || node == other && len(in) != 0 {
+			t.Errorf("node %d: partition in dirs %v", node, in)
+		}
 	}
 }
 

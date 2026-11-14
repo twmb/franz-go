@@ -1,6 +1,9 @@
 package kfake
 
 import (
+	"slices"
+	"strconv"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -8,7 +11,8 @@ import (
 // AlterReplicaLogDirs: v0-2
 //
 // Behavior:
-// * Sets the log directory for partitions
+// * Moves this broker's replica of each partition to one of its log dirs
+//   (log.dirs, else log.dir); other brokers keep theirs where they are
 // * kfake stores the directory but doesn't actually move data
 //
 // Version notes:
@@ -19,6 +23,7 @@ func init() { regKey(34, 0, 2) }
 
 func (c *Cluster) handleAlterReplicaLogDirs(creq *clientReq) (kmsg.Response, error) {
 	var (
+		b    = creq.cc.b
 		req  = creq.kreq.(*kmsg.AlterReplicaLogDirsRequest)
 		resp = req.ResponseKind().(*kmsg.AlterReplicaLogDirsResponse)
 	)
@@ -64,21 +69,48 @@ func (c *Cluster) handleAlterReplicaLogDirs(creq *clientReq) (kmsg.Response, err
 		st.Partitions = append(st.Partitions, sp)
 	}
 
+	// Kafka answers a partition named more than once with one entry,
+	// moving it to the last dir named.
+	var order []tp
+	dests := make(map[tp]string)
 	for _, rd := range req.Dirs {
 		for _, t := range rd.Topics {
 			for _, p := range t.Partitions {
-				if e := creq.faults.check(faultKey{topic: t.Topic, resource: rd.Dir}.part(p)); e != nil {
-					donep(t.Topic, p, e.Code)
-					continue
+				k := tp{t.Topic, p}
+				if _, ok := dests[k]; !ok {
+					order = append(order, k)
 				}
-				d, ok := c.data.tps.getp(t.Topic, p)
-				if !ok {
-					donep(t.Topic, p, kerr.UnknownTopicOrPartition.Code)
-					continue
-				}
-				d.dir = rd.Dir
-				donep(t.Topic, p, 0)
+				dests[k] = rd.Dir
 			}
+		}
+	}
+
+	dirs := c.logDirs()
+	for _, k := range order {
+		dir := dests[k]
+		pd, ok := c.data.tps.getp(k.t, k.p)
+		misrouted := ok && !c.hostsReplica(b, k.t, pd)
+		if e := creq.faults.check(faultKey{topic: k.t, resource: dir, misrouted: misrouted}.part(k.p)); e != nil {
+			donep(k.t, k.p, e.Code)
+			continue
+		}
+		switch {
+		case len(k.t)+len(strconv.Itoa(int(k.p))) > 214:
+			// Kafka's name for the moved log, the topic and
+			// partition plus 41 characters, must fit in 255.
+			donep(k.t, k.p, kerr.InvalidTopicException.Code)
+		case !slices.Contains(dirs, dir):
+			donep(k.t, k.p, kerr.LogDirNotFound.Code)
+		case !ok:
+			donep(k.t, k.p, kerr.UnknownTopicOrPartition.Code)
+		case misrouted:
+			donep(k.t, k.p, kerr.ReplicaNotAvailable.Code)
+		default:
+			if pd.dirs == nil {
+				pd.dirs = make(map[int32]string)
+			}
+			pd.dirs[b.node] = dir
+			donep(k.t, k.p, 0)
 		}
 	}
 

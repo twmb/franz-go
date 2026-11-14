@@ -234,6 +234,7 @@ type (
 		LogStartOffset   int64                `json:"log_start_offset"`
 		Epoch            int32                `json:"epoch"`
 		LeaderNode       int32                `json:"leader_node,omitempty"`
+		Dirs             map[int32]string     `json:"dirs,omitempty"`
 		MaxTimestamp     int64                `json:"max_timestamp"`
 		CreatedAt        time.Time            `json:"created_at"`
 		AbortedTxns      []persistAbortedTxn  `json:"aborted_txns,omitempty"`
@@ -788,6 +789,7 @@ func (c *Cluster) savePartition(fsys fs, dir, topic string, part int32, pd *part
 		LogStartOffset:   pd.logStartOffset,
 		Epoch:            pd.epoch,
 		LeaderNode:       pd.leader.node,
+		Dirs:             pd.dirs,
 		MaxTimestamp:     pd.maxTimestampSeen,
 		CreatedAt:        pd.createdAt,
 		AbortedTxns:      abortedTxns,
@@ -1231,6 +1233,7 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	if snap.LeaderNode >= 0 && int(snap.LeaderNode) < len(c.bs) {
 		pd.leader = c.bs[snap.LeaderNode]
 	}
+	pd.dirs = snap.Dirs
 	pd.createdAt = snap.CreatedAt
 	pd.rolledAt = snap.CreatedAt
 	for i, base := range segFiles {

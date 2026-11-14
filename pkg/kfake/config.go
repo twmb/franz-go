@@ -261,6 +261,8 @@ type ACL struct {
 //   - message.max.bytes - max produce batch size (default 1048588)
 //   - transaction.max.timeout.ms - max transaction timeout (default 900000)
 //   - max.incremental.fetch.session.cache.slots - max fetch sessions per broker (default 1000)
+//   - log.dirs - comma separated log dirs every broker has, which
+//     AlterReplicaLogDirs moves replicas between (default log.dir, /mem/kfake)
 //
 // Other accepted configs include compression.type, default.replication.factor,
 // min.insync.replicas, log.retention.bytes, log.retention.ms, and

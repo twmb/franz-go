@@ -107,7 +107,6 @@ type (
 		abortedTxns []abortedTxnEntry // sorted by lastOffset, for read_committed fetch
 		t           string
 		p           int32
-		dir         string
 
 		highWatermark    int64
 		lastStableOffset int64
@@ -121,6 +120,11 @@ type (
 		// uncommitted offset on this partition. LSO = min of all
 		// values, or HWM if empty. Replaces per-batch inTx scanning.
 		uncommittedPIDs map[int64]int64
+
+		// dirs is the log dir each broker, by node ID, keeps its
+		// replica in, which the log dir requests report and move; a
+		// broker not here uses the first configured dir.
+		dirs map[int32]string
 
 		leader    *broker
 		followers followers
@@ -256,7 +260,6 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 	return func() *partData {
 		return &partData{
 			p:          p,
-			dir:        defLogDir,
 			leader:     c.bs[rand.Intn(len(c.bs))],
 			watch:      make(map[*watchFetch]struct{}),
 			shareWatch: make(map[*watchShareFetch]struct{}),
