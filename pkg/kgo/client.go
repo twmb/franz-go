@@ -2866,7 +2866,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 	case *kmsg.ListOffsetsRequest:
 		sharder = &listOffsetsSharder{cl}
 	case *kmsg.OffsetFetchRequest:
-		sharder = &offsetFetchSharder{cl}
+		sharder = &offsetFetchSharder{cl, ctx}
 	case *kmsg.FindCoordinatorRequest:
 		sharder = &findCoordinatorSharder{cl}
 	case *kmsg.DescribeGroupsRequest:
@@ -3647,7 +3647,10 @@ func (*listOffsetsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) 
 }
 
 // handles sharding OffsetFetchRequest
-type offsetFetchSharder struct{ *Client }
+type offsetFetchSharder struct {
+	*Client
+	reqCtx context.Context // the request's context, for resolving topics in onResp
+}
 
 func offsetFetchReqToGroup(req *kmsg.OffsetFetchRequest) kmsg.OffsetFetchRequestGroup {
 	g := kmsg.NewOffsetFetchRequestGroup()
@@ -3921,12 +3924,17 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 
 	// If anything is unresolved, resolve both, then do the walk again.
 	if len(unresolvedIDs) > 0 {
-		cl.resolveTopicMetaByID(cl.ctx, unresolvedIDs)
+		cl.resolveTopicMetaByID(cl.reqCtx, unresolvedIDs)
 	}
 	if len(unresolvedNames) > 0 {
-		cl.resolveTopicMeta(cl.ctx, unresolvedNames, false, 0)
+		cl.resolveTopicMeta(cl.reqCtx, unresolvedNames, false, 0)
 	}
 	if len(unresolvedIDs) > 0 || len(unresolvedNames) > 0 {
+		// If the request's context ended while we resolved, we return
+		// its error rather than inject unknown topic errors below.
+		if err := cl.reqCtx.Err(); err != nil {
+			return err
+		}
 		// Use metaCache which was just populated by the resolve
 		// calls above. If we cannot map topic ID or topic name,
 		// we inject an error - but only at v10+, where TopicID is
