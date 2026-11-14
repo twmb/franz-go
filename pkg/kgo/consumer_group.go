@@ -72,6 +72,11 @@ type groupConsumer struct {
 	lastAssigned map[string][]int32
 	nowAssigned  amtps
 
+	// revokes counts each time we drop partitions we lost. An 848 commit
+	// that gets STALE_MEMBER_EPOCH retries under our new epoch only if
+	// this has not changed since the commit was built.
+	revokes atomic.Uint64
+
 	// Set when a join downgrades the group from cooperative to eager;
 	// the next session revokes everything before consuming.
 	protocolDowngraded bool
@@ -487,6 +492,7 @@ func (g *groupConsumer) manageFailWait(consecutiveErrors int, err error) (ctxCan
 		// between our unlock and a later store would add a partition we
 		// no longer own to the map we just cleared.
 		g.nowAssigned.store(nil)
+		g.revokes.Add(1)
 		g.uncommitted = nil
 		g.fetching = nil
 		g.mu.Unlock()
@@ -547,6 +553,7 @@ func (g *groupConsumer) abandonAssignment(why string) {
 	g.c.mu.Unlock() // now part of poll can continue
 	// We store nil before unlocking, as in manageFailWait.
 	g.nowAssigned.store(nil)
+	g.revokes.Add(1)
 	g.uncommitted = nil
 	g.fetching = nil
 	g.mu.Unlock()
@@ -933,6 +940,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 	// commit.
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.revokes.Add(1)
 	if g.uncommitted == nil {
 		return
 	}
@@ -3753,6 +3761,7 @@ func (g *groupConsumer) commit(
 	req.MemberID = memberID
 	req.InstanceID = g.cfg.instanceID
 	is848 := g.is848 // g.mu is held, per the function comment above
+	revokesAtBuild := g.revokes.Load()
 
 	// Build the request under g.mu: a purge, which also holds g.mu,
 	// removes the topic from tps, and a request built after it would
@@ -3867,13 +3876,14 @@ func (g *groupConsumer) commit(
 		// the STALE.
 		//
 		// On gen change, filter req.Topics down to partitions we
-		// still own before retrying so we do not race the new owner's
-		// commits for revoked partitions. The filtered-out partitions
-		// get synthesized REBALANCE_IN_PROGRESS responses after the
-		// loop so the caller still sees a per-partition result for
-		// everything they asked us to commit. We restore the original
-		// req.Topics before invoking onDone so the callback sees the
-		// caller's full request.
+		// own before retrying: a caller can commit any partition, and
+		// we must not commit one we were not assigned under our new
+		// epoch. The filtered-out partitions get synthesized
+		// REBALANCE_IN_PROGRESS responses after the loop so the
+		// caller still sees a per-partition result for everything
+		// they asked us to commit. We restore the original req.Topics
+		// before invoking onDone so the callback sees the caller's
+		// full request.
 		origReqTopics := req.Topics
 		// dropped tracks (topic name, topic id) -> partitions that
 		// were filtered out of req.Topics during retries.
@@ -3941,6 +3951,21 @@ func (g *groupConsumer) commit(
 				}
 				_, newGen := g.memberGen.load()
 				if newGen != req.Generation {
+					// A partition left our assignment after we built
+					// this commit. It may have moved to another member
+					// and back to us, so its offset can be from the
+					// earlier ownership, and resending it under our new
+					// epoch could rewind the other member's commit. We
+					// return the STALE instead; Kafka 4.3+ also rejects
+					// such a commit at its original epoch (KIP-1251).
+					if g.revokes.Load() != revokesAtBuild {
+						g.cfg.logger.Log(LogLevelInfo, "offset commit got stale member epoch after a partition left our assignment, not retrying",
+							"group", g.cfg.group,
+							"old_epoch", req.Generation,
+							"new_epoch", newGen,
+						)
+						break
+					}
 					owned := g.nowAssigned.read()
 					keptTopics := make([]kmsg.OffsetCommitRequestTopic, 0, len(req.Topics))
 					droppedParts := 0

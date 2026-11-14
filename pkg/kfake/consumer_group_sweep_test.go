@@ -10,14 +10,6 @@ package kfake
 //     after it (commits are strictly ordered, snapshots are not re-taken),
 //     silently rewinding the broker's committed offset.
 //
-// B2: the 848 stale-retry dropped-partition synthesis matched response
-//     topics by name AND id together; v10+ OffsetCommitResponses carry only
-//     the TopicID (Topic is v0-v9), so kept topics never matched, the topic
-//     was duplicated in the response handed to the commit callback, and the
-//     request/response length mismatch made updateCommitted skip the whole
-//     response - client-side committed state went stale for partitions the
-//     broker had actually committed.
-//
 // B3: an OffsetFetch response omitting a requested partition must not be
 //     silently accepted: the partition is never assigned a cursor and a
 //     successful fetchOffsets clears g.fetching, so nothing inside a live
@@ -40,6 +32,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -203,145 +196,128 @@ func TestAuditOverlappingCommits(t *testing.T) {
 	}
 }
 
-// TestAuditCommit848StaleDroppedSynthesis reproduces B2. A manual commit of
-// both owned partitions is forced to retry with STALE_MEMBER_EPOCH until a
-// second member's join moves one partition away; the retry then drops the
-// revoked partition from the wire request and synthesizes a
-// REBALANCE_IN_PROGRESS result for it. Pre-fix, the synthesis matched
-// response topics by name+id together, which never matches a v10 response
-// (TopicID only): the topic appeared twice in the callback's response and
-// updateCommitted skipped the whole response, leaving CommittedOffsets
-// stale for the partition the broker had committed.
-func TestAuditCommit848StaleDroppedSynthesis(t *testing.T) {
+// TestAuditCommit848StaleRetry: a manual commit of both owned partitions is
+// answered STALE_MEMBER_EPOCH until the member moves to a new epoch. If a
+// partition left the assignment after the commit was built, the commit must
+// not be retried under the new epoch: the partition could have moved away and
+// back, and its offset would rewind the other member's commit (#1544). If
+// nothing left, the retry under the new epoch succeeds.
+func TestAuditCommit848StaleRetry(t *testing.T) {
 	t.Parallel()
-	const (
-		topic = "audit-848-stale-commit"
-		group = "audit-848-stale-commit-g"
-	)
+	for _, test := range []struct {
+		name string
+		bump func(context.Context, *testing.T, *Cluster, *kgo.Client, string, string)
+		want int16 // every partition's error code
+	}{
+		{"revoke", func(_ context.Context, t *testing.T, c *Cluster, _ *kgo.Client, topic, group string) {
+			newGroupConsumer(t, c, topic, group) // takes a partition from m1
+		}, kerr.StaleMemberEpoch.Code},
+		{"no-revoke", func(ctx context.Context, t *testing.T, _ *Cluster, cl *kgo.Client, topic, _ string) {
+			if _, err := kadm.NewClient(cl).CreatePartitions(ctx, 1, topic); err != nil {
+				t.Fatal(err) // m1 gains a partition and loses none
+			}
+		}, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "audit-848-stale-commit-" + test.name
+			group := topic + "-g"
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
+			c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
 
-	producer := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
-	for p := int32(0); p < 2; p++ {
-		for i := range 2 {
-			produceSync(t, producer, &kgo.Record{
-				Topic:     topic,
-				Partition: p,
-				Value:     []byte("v-" + strconv.Itoa(i)),
+			producer := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+			for p := int32(0); p < 2; p++ {
+				for i := range 2 {
+					produceSync(t, producer, &kgo.Record{
+						Topic:     topic,
+						Partition: p,
+						Value:     []byte("v-" + strconv.Itoa(i)),
+					})
+				}
+			}
+
+			m1 := newGroupConsumer(t, c, topic, group, kgo.DisableAutoCommit())
+			consumeN(t, m1, 4, 10*time.Second)
+
+			_, origGen := m1.GroupMetadata()
+			if origGen < 0 {
+				t.Fatal("m1 has no member epoch after consuming")
+			}
+
+			// Answer any commit at the original epoch with
+			// STALE_MEMBER_EPOCH; kfake would accept the first
+			// attempt. A retry at the new epoch passes through to
+			// kfake, which accepts it.
+			commitStaled := make(chan struct{})
+			var closedOnce atomic.Bool
+			c.ControlKey(int16(kmsg.OffsetCommit), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+				c.KeepControl()
+				req := kreq.(*kmsg.OffsetCommitRequest)
+				if req.Group != group || req.Generation != origGen {
+					return nil, nil, false
+				}
+				resp := req.ResponseKind().(*kmsg.OffsetCommitResponse)
+				for _, rt := range req.Topics {
+					st := kmsg.NewOffsetCommitResponseTopic()
+					st.Topic = rt.Topic
+					st.TopicID = rt.TopicID
+					for _, rp := range rt.Partitions {
+						sp := kmsg.NewOffsetCommitResponseTopicPartition()
+						sp.Partition = rp.Partition
+						sp.ErrorCode = kerr.StaleMemberEpoch.Code
+						st.Partitions = append(st.Partitions, sp)
+					}
+					resp.Topics = append(resp.Topics, st)
+				}
+				if closedOnce.CompareAndSwap(false, true) {
+					close(commitStaled)
+				}
+				return resp, nil, true
 			})
-		}
-	}
 
-	m1 := newGroupConsumer(t, c, topic, group, kgo.DisableAutoCommit())
-	consumeN(t, m1, 4, 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
 
-	_, origGen := m1.GroupMetadata()
-	if origGen < 0 {
-		t.Fatal("m1 has no member epoch after consuming")
-	}
-
-	// Answer any commit at the original epoch with STALE_MEMBER_EPOCH.
-	// The first attempt (before the rebalance) would otherwise be accepted
-	// by kfake; subsequent retries keep getting STALE until m1 observes
-	// the new epoch, at which point the retry filters the revoked
-	// partition and goes out at the new epoch - passing through to kfake.
-	commitStaled := make(chan struct{})
-	var closedOnce atomic.Bool
-	c.ControlKey(int16(kmsg.OffsetCommit), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
-		c.KeepControl()
-		req := kreq.(*kmsg.OffsetCommitRequest)
-		if req.Group != group || req.Generation != origGen {
-			return nil, nil, false
-		}
-		resp := req.ResponseKind().(*kmsg.OffsetCommitResponse)
-		for _, rt := range req.Topics {
-			st := kmsg.NewOffsetCommitResponseTopic()
-			st.Topic = rt.Topic
-			st.TopicID = rt.TopicID
-			for _, rp := range rt.Partitions {
-				sp := kmsg.NewOffsetCommitResponseTopicPartition()
-				sp.Partition = rp.Partition
-				sp.ErrorCode = kerr.StaleMemberEpoch.Code
-				st.Partitions = append(st.Partitions, sp)
+			offsets := map[string]map[int32]kgo.EpochOffset{topic: {
+				0: {Epoch: -1, Offset: 1},
+				1: {Epoch: -1, Offset: 1},
+			}}
+			type result struct {
+				resp *kmsg.OffsetCommitResponse
+				err  error
 			}
-			resp.Topics = append(resp.Topics, st)
-		}
-		if closedOnce.CompareAndSwap(false, true) {
-			close(commitStaled)
-		}
-		return resp, nil, true
-	})
+			commitDone := make(chan result, 1)
+			m1.CommitOffsets(ctx, offsets, func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+				commitDone <- result{resp, err}
+			})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	offsets := map[string]map[int32]kgo.EpochOffset{topic: {
-		0: {Epoch: -1, Offset: 1},
-		1: {Epoch: -1, Offset: 1},
-	}}
-	type result struct {
-		resp *kmsg.OffsetCommitResponse
-		err  error
-	}
-	commitDone := make(chan result, 1)
-	m1.CommitOffsets(ctx, offsets, func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
-		commitDone <- result{resp, err}
-	})
-
-	select {
-	case <-commitStaled:
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for the first commit attempt")
-	}
-
-	// Join a second member; the server revokes one partition from m1,
-	// bumping m1's epoch once m1 acks the revocation. The 848 heartbeat
-	// loop joins and reconciles without needing a poll.
-	newGroupConsumer(t, c, topic, group)
-
-	var res result
-	select {
-	case res = <-commitDone:
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for the commit to complete")
-	}
-	if res.err != nil {
-		t.Fatalf("commit failed: %v", res.err)
-	}
-	if res.resp.Version < 10 {
-		t.Fatalf("test premise requires OffsetCommit v10+ (TopicID-only responses), got v%d", res.resp.Version)
-	}
-
-	var entries int
-	var keptPartition int32 = -1
-	var droppedSawRebalance bool
-	for i := range res.resp.Topics {
-		rt := &res.resp.Topics[i]
-		entries++
-		for _, rp := range rt.Partitions {
-			switch rp.ErrorCode {
-			case 0:
-				keptPartition = rp.Partition
-			case kerr.RebalanceInProgress.Code:
-				droppedSawRebalance = true
+			select {
+			case <-commitStaled:
+			case <-ctx.Done():
+				t.Fatal("timed out waiting for the first commit attempt")
 			}
-		}
-	}
-	if entries != 1 {
-		t.Errorf("BUG REPRODUCED: commit response has %d entries for one topic; the v10 dropped-partition synthesis failed to match the kept topic by TopicID and appended a duplicate", entries)
-	}
-	if keptPartition == -1 || !droppedSawRebalance {
-		t.Errorf("expected one successful partition and one synthesized REBALANCE_IN_PROGRESS partition, got kept=%d droppedSawRebalance=%v (resp: %+v)", keptPartition, droppedSawRebalance, res.resp.Topics)
-	}
 
-	// updateCommitted must have applied the successful partition; pre-fix
-	// the duplicated topic tripped the request/response length check and
-	// the whole response was skipped.
-	if keptPartition >= 0 {
-		committed := m1.CommittedOffsets()
-		if committed[topic] == nil || committed[topic][keptPartition].Offset != 1 {
-			t.Errorf("BUG REPRODUCED: client-side committed offsets not updated for successfully committed partition %d: %+v", keptPartition, committed)
-		}
+			// The 848 heartbeat loop moves m1 to the new epoch
+			// without needing a poll.
+			test.bump(ctx, t, c, producer, topic, group)
+
+			var res result
+			select {
+			case res = <-commitDone:
+			case <-ctx.Done():
+				t.Fatal("timed out waiting for the commit to complete")
+			}
+			if res.err != nil {
+				t.Fatalf("commit failed: %v", res.err)
+			}
+			for _, rt := range res.resp.Topics {
+				for _, rp := range rt.Partitions {
+					if rp.ErrorCode != test.want {
+						t.Errorf("partition %d: got %v, want %v", rp.Partition, kerr.ErrorForCode(rp.ErrorCode), kerr.ErrorForCode(test.want))
+					}
+				}
+			}
+		})
 	}
 }
 
