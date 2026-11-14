@@ -1063,6 +1063,7 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 		}
 		return nil
 	case groupStable: // member saw join and is now finally calling sync
+		delete(g.pendingSyncIDs, req.MemberID)
 		resp.ProtocolType = kmsg.StringPtr(g.protocolType)
 		resp.Protocol = kmsg.StringPtr(g.protocol)
 		resp.MemberAssignment = m.assignment
@@ -1557,8 +1558,9 @@ func (g *group) completeLeaderSync(req *kmsg.SyncGroupRequest) {
 		resp.MemberAssignment = m.assignment
 		g.reply(m.waitingReply, resp, m)
 	}
+	// Members that have not synced stay pending: as Kafka does, the
+	// pending sync timer removes them in Stable too.
 	g.state = groupStable
-	g.clearPendingSync()
 }
 
 func (g *group) clearPendingSync() {

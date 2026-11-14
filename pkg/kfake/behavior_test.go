@@ -2018,19 +2018,35 @@ func TestClassicIncompatibleProtocolRejected(t *testing.T) {
 
 // TestClassicPendingSyncTimeout verifies that members who receive
 // JoinGroup responses but don't send SyncGroup within the rebalance
-// timeout are removed and a new rebalance is triggered.
+// timeout are removed and a new rebalance is triggered, also after the
+// leader's sync has made the group Stable.
 func TestClassicPendingSyncTimeout(t *testing.T) {
 	t.Parallel()
 	topic := "t-pending-sync"
-	group := "g-pending-sync"
+	groupID := "g-pending-sync"
 
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
+	// waitGone waits until member is not in groupID. Members have a 30s
+	// session timeout, so only the pending sync timer removes one in
+	// time.
+	waitGone := func(groupID, member string) {
+		for start := time.Now(); ; time.Sleep(10 * time.Millisecond) {
+			dg := c.GroupInfo(groupID)
+			if dg == nil || !slices.ContainsFunc(dg.Members, func(m GroupMember) bool { return m.MemberID == member }) {
+				return
+			}
+			if time.Since(start) > 5*time.Second {
+				t.Fatalf("member %s is still in group %s: %+v", member, groupID, dg)
+			}
+		}
+	}
+
 	// Member A joins with a short rebalance timeout.
 	joinA := kmsg.NewJoinGroupRequest()
-	joinA.Group = group
+	joinA.Group = groupID
 	joinA.SessionTimeoutMillis = 30000
 	joinA.RebalanceTimeoutMillis = 500 // short
 	joinA.ProtocolType = "consumer"
@@ -2055,12 +2071,41 @@ func TestClassicPendingSyncTimeout(t *testing.T) {
 	}
 
 	// Don't send SyncGroup. Wait for the pending sync timeout to fire.
-	time.Sleep(800 * time.Millisecond)
+	waitGone(groupID, respA2.MemberID)
 
-	// The member should have been removed: the group is empty or gone.
-	if dg := c.GroupInfo(group); dg != nil && len(dg.Members) > 0 {
-		t.Fatalf("expected 0 members after pending sync timeout, got %d (state=%s)", len(dg.Members), dg.State)
+	// A and B join group2, and only A, the leader, syncs.
+	group2 := groupID + "-stable"
+	joinReq := func(memberID string) *kmsg.JoinGroupRequest {
+		req := classicJoinReq(group2, memberID)
+		req.RebalanceTimeoutMillis = 500
+		return req
 	}
+	a := faultReq(t, cl, 0, joinReq("")).(*kmsg.JoinGroupResponse)
+	a = faultReq(t, cl, 0, joinReq(a.MemberID)).(*kmsg.JoinGroupResponse)
+	clB := newPlainClient(t, c)
+	b := faultReq(t, clB, 0, joinReq("")).(*kmsg.JoinGroupResponse)
+	bJoined := make(chan *kmsg.JoinGroupResponse, 1)
+	go func() {
+		r, _ := joinReq(b.MemberID).RequestWith(ctx, clB)
+		bJoined <- r
+	}()
+	for start, parked := time.Now(), false; !parked; time.Sleep(5 * time.Millisecond) {
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("B never waited in its join")
+		}
+		onGroup(t, c, group2, func(g *group) { parked = g.members[b.MemberID] != nil && !g.members[b.MemberID].waitingReply.empty() })
+	}
+	a = faultReq(t, cl, 0, joinReq(a.MemberID)).(*kmsg.JoinGroupResponse)
+	if r := <-bJoined; a.ErrorCode != 0 || r == nil || r.ErrorCode != 0 {
+		t.Fatalf("rejoin of A: %v, join of B: %+v", kerr.ErrorForCode(a.ErrorCode), r)
+	}
+	sync := kmsg.NewPtrSyncGroupRequest()
+	sync.Group, sync.MemberID, sync.Generation = group2, a.MemberID, a.Generation
+	sync.ProtocolType, sync.Protocol = kmsg.StringPtr("consumer"), kmsg.StringPtr("range")
+	if r := faultReq(t, cl, 0, sync).(*kmsg.SyncGroupResponse); r.ErrorCode != 0 {
+		t.Fatalf("leader sync: %v", kerr.ErrorForCode(r.ErrorCode))
+	}
+	waitGone(group2, b.MemberID)
 }
 
 // TestClassicProtocolVoting verifies that protocol selection uses
