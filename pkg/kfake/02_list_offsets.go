@@ -7,7 +7,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// ListOffsets: v0-10
+// ListOffsets: v0-11
 //
 // Timestamp special values, answered as a broker without tiered storage
 // answers them:
@@ -35,8 +35,9 @@ import (
 // * v8: Timestamp -4 for local log start (KIP-405)
 // * v9: Timestamp -5 for remote storage offset (KIP-1005)
 // * v10: TimeoutMillis for remote storage lookups - not implemented
+// * v11: Timestamp -6 for the earliest pending upload offset (KIP-1023)
 
-func init() { regKey(2, 0, 10) }
+func init() { regKey(2, 0, 11) }
 
 // listOffsetsMinVersion is the request version each special timestamp
 // needs (ReplicaManager.timestampMinSupportedVersion).
@@ -223,7 +224,7 @@ func (c *Cluster) offsetOfMaxTimestamp(pd *partData) (offset, timestamp int64, e
 		return 0, 0, 0, false, err
 	}
 	err = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) bool {
-		if batch.FirstTimestamp+rec.TimestampDelta64 == seg.maxTimestamp {
+		if recordTimestamp(&batch.RecordBatch, rec) == seg.maxTimestamp {
 			offset, found = batch.FirstOffset+int64(rec.OffsetDelta), true
 		}
 		return !found
@@ -235,53 +236,60 @@ func (c *Cluster) offsetOfMaxTimestamp(pd *partData) (offset, timestamp int64, e
 }
 
 // offsetForTimestamp answers a ListOffsets timestamp query the way a real
-// broker does. The broker commits to the first segment whose largest
-// timestamp reaches ts (UnifiedLog.searchOffsetInLocalLog), then within
-// it takes the first batch whose max timestamp reaches ts and the first
-// record in that batch at or after ts and at or after the log start
-// offset (FileRecords.searchForTimestamp). If that batch's qualifying
-// records were all deleted from below, the scan moves on to the next
-// batch, but never to the next segment: the broker answers that nothing
-// was found. Returns found == false in that case, and if no segment
-// reaches ts.
+// broker does. The broker searches, in order, each segment whose largest
+// timestamp reaches ts: within it, the first batch whose max timestamp
+// reaches ts, and the first record in that batch at or after ts and at or
+// after the log start offset. A segment whose qualifying records were all
+// deleted from below has no answer, and the search moves on to the next
+// segment (KAFKA-21317, after Kafka 4.4). Returns found == false if no segment
+// has an answer.
 func (c *Cluster) offsetForTimestamp(pd *partData, ts int64) (offset, timestamp int64, epoch int32, found bool, err error) {
 	// Both running maxes are monotonic: the first binary search lands
 	// on the first segment whose max reaches ts, the second on the
-	// first batch in it that can hold a record at or after ts. The loop
-	// then passes over a batch that cannot: one whose own max is below
-	// ts, or one deleted from below (a snapshot load keeps such batches
-	// in the index; the broker likewise starts its scan no earlier than
-	// the log start offset).
+	// first batch in it that can hold a record at or after ts. The
+	// loops then pass over a segment or batch that cannot: one whose
+	// own max is below ts, or a batch deleted from below.
 	si := sort.Search(len(pd.segments), func(i int) bool {
 		return pd.segments[i].maxEarlierTimestamp >= ts
 	})
-	if si == len(pd.segments) {
-		return 0, 0, 0, false, nil
-	}
-	seg := &pd.segments[si]
-	mi := sort.Search(len(seg.index), func(i int) bool {
-		return seg.index[i].maxEarlierTimestamp >= ts
-	})
-	for ; mi < len(seg.index); mi++ {
-		m := &seg.index[mi]
-		if m.maxTimestamp < ts || m.firstOffset+int64(m.lastOffsetDelta) < pd.logStartOffset {
+	for ; si < len(pd.segments); si++ {
+		seg := &pd.segments[si]
+		if seg.largestTimestamp() < ts {
 			continue
 		}
-		var batch *partBatch
-		if batch, err = c.readBatchFull(pd, si, m); err != nil {
-			return 0, 0, 0, false, err
-		}
-		err = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) bool {
-			recTimestamp := batch.FirstTimestamp + rec.TimestampDelta64
-			recOffset := batch.FirstOffset + int64(rec.OffsetDelta)
-			if recTimestamp >= ts && recOffset >= pd.logStartOffset {
-				offset, timestamp, epoch, found = recOffset, recTimestamp, m.epoch, true
-			}
-			return !found
+		mi := sort.Search(len(seg.index), func(i int) bool {
+			return seg.index[i].maxEarlierTimestamp >= ts
 		})
-		if err != nil || found {
-			return offset, timestamp, epoch, found, err
+		for ; mi < len(seg.index); mi++ {
+			m := &seg.index[mi]
+			if m.maxTimestamp < ts || m.firstOffset+int64(m.lastOffsetDelta) < pd.logStartOffset {
+				continue
+			}
+			var batch *partBatch
+			if batch, err = c.readBatchFull(pd, si, m); err != nil {
+				return 0, 0, 0, false, err
+			}
+			err = forEachBatchRecord(batch.RecordBatch, func(rec kmsg.Record) bool {
+				recTimestamp := recordTimestamp(&batch.RecordBatch, rec)
+				recOffset := batch.FirstOffset + int64(rec.OffsetDelta)
+				if recTimestamp >= ts && recOffset >= pd.logStartOffset {
+					offset, timestamp, epoch, found = recOffset, recTimestamp, m.epoch, true
+				}
+				return !found
+			})
+			if err != nil || found {
+				return offset, timestamp, epoch, found, err
+			}
 		}
 	}
 	return 0, 0, 0, false, nil
+}
+
+// recordTimestamp returns rec's timestamp. Like Kafka, we give every record
+// in a LogAppendTime batch the batch's max timestamp.
+func recordTimestamp(b *kmsg.RecordBatch, rec kmsg.Record) int64 {
+	if b.Attributes&0x0008 != 0 {
+		return b.MaxTimestamp
+	}
+	return b.FirstTimestamp + rec.TimestampDelta64
 }

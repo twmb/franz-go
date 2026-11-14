@@ -109,11 +109,14 @@ func (cc *clientConn) read() {
 	defer cc.closeDone()
 	defer cc.conn.Close()
 
-	// The cluster dying closes the connection, which is what returns us
-	// from a blocked read (and write from a blocked write).
+	// The cluster dying, or RemoveNode removing our broker, closes the
+	// connection, which is what returns us from a blocked read (and write
+	// from a blocked write).
 	go func() {
 		select {
 		case <-cc.c.die:
+			cc.conn.Close()
+		case <-cc.b.gone:
 			cc.conn.Close()
 		case <-cc.done:
 		}

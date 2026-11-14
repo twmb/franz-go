@@ -3,6 +3,7 @@ package kfake
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"math/rand"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -1371,6 +1373,18 @@ func (d *data) maxMessageBytes(t string) int {
 	return defMaxMessageBytes
 }
 
+// logAppendTime returns whether the topic's message.timestamp.type is
+// LogAppendTime, falling back to the broker's log.message.timestamp.type.
+func (d *data) logAppendTime(t string) bool {
+	if v, ok := d.tcfgs[t]["message.timestamp.type"]; ok && v != nil {
+		return *v == "LogAppendTime"
+	}
+	if v, ok := d.c.bcfgs["log.message.timestamp.type"]; ok && v != nil {
+		return *v == "LogAppendTime"
+	}
+	return false
+}
+
 // retentionMs returns the retention.ms for a topic, falling back to
 // broker config then defaults.
 func (d *data) retentionMs(t string) int64 {
@@ -1414,21 +1428,54 @@ func forEachBatchRecord(batch kmsg.RecordBatch, fn func(kmsg.Record) bool) error
 		return err
 	}
 	for range batch.NumRecords {
+		length, amt := binary.Varint(records)
+		if amt <= 0 || length < 0 || length > int64(len(records)-amt) {
+			return fmt.Errorf("%w: record length %d with %d bytes left", errCorruptRecord, length, len(records)-amt)
+		}
+		end := amt + int(length)
+		if !recordBodyExact(records[amt:end]) {
+			return fmt.Errorf("%w: record fields do not take its length of %d bytes", errCorruptRecord, length)
+		}
 		rec := kmsg.NewRecord()
-		err := rec.ReadFrom(records)
-		if err != nil {
-			return fmt.Errorf("corrupt batch: %w", err)
+		if err := rec.ReadFrom(records[:end]); err != nil {
+			return fmt.Errorf("%w: %v", errCorruptRecord, err)
 		}
 		if !fn(rec) {
 			return nil
 		}
-		length, amt := binary.Varint(records)
-		records = records[length+int64(amt):]
+		records = records[end:]
 	}
 	if len(records) > 0 {
-		return fmt.Errorf("corrupt batch, extra left over bytes after parsing batch: %v", len(records))
+		return fmt.Errorf("%w: extra left over bytes after parsing batch: %v", errCorruptRecord, len(records))
 	}
 	return nil
+}
+
+// errCorruptRecord is a record that does not parse as its batch and its
+// length say, which Kafka answers INVALID_RECORD.
+var errCorruptRecord = errors.New("corrupt record")
+
+// recordBodyExact reports whether a record body's fields take exactly its
+// bytes. Like Kafka, we refuse a record with a negative header count or a
+// null header key.
+func recordBodyExact(body []byte) bool {
+	b := kbin.Reader{Src: body}
+	b.Int8()        // attributes
+	b.Varlong()     // timestamp delta
+	b.Varint()      // offset delta
+	b.VarintBytes() // key
+	b.VarintBytes() // value
+	n := b.Varint()
+	if n < 0 {
+		return false
+	}
+	for ; n > 0 && b.Ok(); n-- {
+		if b.VarintBytes() == nil && b.Ok() {
+			return false // a null header key
+		}
+		b.VarintBytes()
+	}
+	return b.Ok() && len(b.Src) == 0
 }
 
 // BatchRecords returns the raw kmsg.Record's within a record batch, or an error
@@ -1748,6 +1795,9 @@ func rebuildBatch(orig *partBatch, kept []kmsg.Record) *partBatch {
 		if ts > b.MaxTimestamp {
 			b.MaxTimestamp = ts
 		}
+	}
+	if orig.Attributes&0x0008 != 0 { // LogAppendTime: clients stamp every record with it
+		b.MaxTimestamp = orig.MaxTimestamp
 	}
 
 	benc := b.AppendTo(nil)

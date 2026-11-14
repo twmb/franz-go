@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"math"
 	"math/rand"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1265,7 +1268,12 @@ func TestProduceDuplicateReturnsOriginalOffset(t *testing.T) {
 	epoch := initResp.ProducerEpoch
 
 	// First produce: sequence 0, should succeed.
-	p1 := produceRawV11(t, cl, topic, rawBatch(0, pid, epoch, 0, kvRecord()))
+	b1 := rawBatch(0, pid, epoch, 0, kvRecord())
+	var orig kmsg.RecordBatch
+	if err := orig.ReadFrom(b1); err != nil {
+		t.Fatal(err)
+	}
+	p1 := produceRawV11(t, cl, topic, b1)
 	if p1.ErrorCode != 0 {
 		t.Fatalf("produce 1 error: %v", kerr.ErrorForCode(p1.ErrorCode))
 	}
@@ -1281,6 +1289,11 @@ func TestProduceDuplicateReturnsOriginalOffset(t *testing.T) {
 	}
 	if p2.BaseOffset != origOffset {
 		t.Fatalf("dup produce should return original offset %d, got %d", origOffset, p2.BaseOffset)
+	}
+	// Like Kafka, the duplicate answers the original batch's max
+	// timestamp as its LogAppendTime, even on a CreateTime topic.
+	if p2.LogAppendTime != orig.MaxTimestamp {
+		t.Errorf("dup produce LogAppendTime %d, want the original batch's %d", p2.LogAppendTime, orig.MaxTimestamp)
 	}
 }
 
@@ -1624,22 +1637,196 @@ func TestTxnInitProducerIDMaxTimeout(t *testing.T) {
 	}
 }
 
-// TestProduceControlBatchRejected verifies that client-sent control batches
-// are rejected with INVALID_RECORD.
-func TestProduceControlBatchRejected(t *testing.T) {
+// TestProduceBatch verifies how the broker validates and
+// stamps a batch: client-sent control batches and records without a key on a
+// compacted topic are INVALID_RECORD, and the topic's timestamp type, not the
+// client's, decides the batch's type and the LogAppendTime we answer. Like
+// Kafka, we answer a corrupt batch or a failed append with no log start
+// offset.
+func TestProduceBatch(t *testing.T) {
 	t.Parallel()
-	topic := "t-control-batch"
+	for _, tc := range []struct {
+		name           string
+		configs        map[string]string
+		attrs          int16
+		rec            kmsg.Record
+		mod            func([]byte) []byte // changes the sealed batch
+		want           error
+		wantRecErrs    int
+		wantAppendTime bool
+		failWrite      bool // the append fails
+	}{
+		// Attributes 0x0030 is transactional plus the control bit.
+		{name: "control", attrs: 0x0030, rec: kmsg.Record{Key: []byte{0, 0, 0, 1}, Value: []byte{}}, want: kerr.InvalidRecord},
+		{name: "keyless-compacted", configs: map[string]string{"cleanup.policy": "compact"}, rec: kmsg.Record{Value: []byte("v")}, want: kerr.InvalidRecord, wantRecErrs: 1},
+		{name: "keyed-compacted", configs: map[string]string{"cleanup.policy": "compact,delete"}, rec: kvRecord()},
+		{name: "log-append-time", configs: map[string]string{"message.timestamp.type": "LogAppendTime"}, rec: kmsg.Record{Key: []byte("k"), Value: []byte("v"), TimestampDelta: 5}, wantAppendTime: true},
+		// 0x0008 is the client asking for LogAppendTime on a
+		// CreateTime topic.
+		{name: "client-append-time", attrs: 0x0008, rec: kvRecord()},
+		{name: "crc", rec: kvRecord(), mod: func(b []byte) []byte { b[len(b)-1] ^= 1; return b }, want: kerr.CorruptMessage},
+		{name: "first-offset", rec: kvRecord(), mod: func(b []byte) []byte { b[7] = 1; return b }, want: kerr.InvalidRecord},
+		{name: "last-offset-delta", rec: kvRecord(), mod: func(b []byte) []byte { b[26] = 1; return sealBatch(b) }, want: kerr.InvalidRecord},
+		{name: "append-fails", rec: kvRecord(), want: kerr.KafkaStorageError, failWrite: true},
+		// Byte 61 starts the record: a length varint of 63 runs past
+		// the batch, and one byte more than its fields take pads it.
+		{name: "record-length", configs: map[string]string{"cleanup.policy": "compact"}, rec: kvRecord(), mod: func(b []byte) []byte { b[61] = 0x7e; return sealBatch(b) }, want: kerr.InvalidRecord},
+		{name: "record-padding", configs: map[string]string{"cleanup.policy": "compact"}, rec: kvRecord(), mod: func(b []byte) []byte { b[61] += 2; return sealBatch(append(b, 0)) }, want: kerr.InvalidRecord},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "t-produce-validate-" + tc.name
+			c := newCluster(t, NumBrokers(1))
+			if err := c.CreateTopic(topic, 1, tc.configs); err != nil {
+				t.Fatal(err)
+			}
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(0, 11)
+			cl := newPlainClient(t, c, kgo.MaxVersions(v))
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	v := kversion.Stable()
-	v.SetMaxKeyVersion(0, 11)
-	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+			// A transactional batch needs a transactional ID.
+			pid := int64(-1)
+			var txid []string
+			if tc.attrs&0x0010 != 0 {
+				pid, txid = 1, []string{"txid-" + tc.name}
+			}
+			if tc.failWrite {
+				c.admin(func() { c.fs.(*memFS).failNextWrite = &testError{"injected"} })
+			}
+			before := time.Now().UnixMilli()
+			batch := rawBatch(tc.attrs, pid, 0, -1, tc.rec)
+			if tc.mod != nil {
+				batch = tc.mod(batch)
+			}
+			p := produceRawV11(t, cl, topic, batch, txid...)
+			if err := kerr.ErrorForCode(p.ErrorCode); err != tc.want {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+			wantStart := int64(0)
+			if tc.want == kerr.CorruptMessage || tc.want == kerr.KafkaStorageError {
+				wantStart = -1
+			}
+			if p.LogStartOffset != wantStart {
+				t.Errorf("got log start offset %d, want %d", p.LogStartOffset, wantStart)
+			}
+			if len(p.ErrorRecords) != tc.wantRecErrs {
+				t.Errorf("got %d record errors, want %d", len(p.ErrorRecords), tc.wantRecErrs)
+			}
+			if tc.want != nil {
+				return
+			}
+			if tc.wantAppendTime && p.LogAppendTime < before || !tc.wantAppendTime && p.LogAppendTime != -1 {
+				t.Errorf("got LogAppendTime %d, want it set %v", p.LogAppendTime, tc.wantAppendTime)
+			}
 
-	// Attributes 0x0030 is transactional plus the control bit.
-	rec := kmsg.Record{Key: []byte{0, 0, 0, 1}, Value: []byte{}}
-	errCode := produceRawV11(t, cl, topic, rawBatch(0x0030, 1, 0, -1, rec), "txid-control").ErrorCode
-	if errCode != kerr.InvalidRecord.Code {
-		t.Fatalf("expected INVALID_RECORD for control batch, got: %v", kerr.ErrorForCode(errCode))
+			// The stored batch must still pass its CRC, and carry
+			// the topic's timestamp type.
+			var (
+				stored *partBatch
+				err    error
+			)
+			c.admin(func() {
+				pd, _ := c.data.tps.getp(topic, 0)
+				stored, err = c.readBatchFull(pd, 0, &pd.segments[0].index[0])
+			})
+			if err != nil {
+				t.Fatalf("reading the stored batch: %v", err)
+			}
+			if got := stored.Attributes&0x0008 != 0; got != tc.wantAppendTime {
+				t.Errorf("stored batch has the LogAppendTime bit %v, want %v", got, tc.wantAppendTime)
+			}
+			// Compaction keeps a LogAppendTime batch's max timestamp.
+			if got := rebuildBatch(stored, []kmsg.Record{{TimestampDelta: 5}}).MaxTimestamp; tc.wantAppendTime && got != stored.MaxTimestamp {
+				t.Errorf("compacted batch's max timestamp: got %d, want the append time %d", got, stored.MaxTimestamp)
+			}
+			// Every record of a LogAppendTime batch lists at the
+			// batch's time.
+			lo := listOffsetsReq(topic, 0)
+			lo.Topics[0].Partitions[0].Timestamp = -3 // the max timestamp
+			if lp := faultReq(t, cl, 0, lo).(*kmsg.ListOffsetsResponse).Topics[0].Partitions[0]; lp.Offset != 0 || lp.Timestamp != stored.MaxTimestamp {
+				t.Errorf("listing the max timestamp: got offset %d at %d, want 0 at %d", lp.Offset, lp.Timestamp, stored.MaxTimestamp)
+			}
+		})
+	}
+}
+
+// TestConnectionClose verifies that we close a connection as Kafka does: on
+// a request key we do not know, and on an acks=0 produce with a partition
+// error. An acks=0 client reads no response, so the close is how it learns
+// to refresh its metadata.
+func TestConnectionClose(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t"))
+	produce := func(topic string, attrs int16) []byte {
+		req := kmsg.NewPtrProduceRequest()
+		req.Version = 9 // by name
+		req.Acks = 0
+		rt := kmsg.NewProduceRequestTopic()
+		rt.Topic = topic
+		rp := kmsg.NewProduceRequestTopicPartition()
+		rp.Records = rawBatch(attrs, -1, -1, -1, kvRecord())
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		return kmsg.NewRequestFormatter().AppendRequest(nil, req, 1)
+	}
+	for _, tc := range []struct {
+		name      string
+		frame     []byte
+		wantClose bool
+	}{
+		// size, key 9999, version 0, correlation ID 1, null client ID
+		{"unknown key", []byte{0, 0, 0, 10, 0x27, 0x0f, 0, 0, 0, 0, 0, 1, 0xff, 0xff}, true},
+		{"acks=0 to a missing topic", produce("missing", 0), true},
+		{"acks=0 transactional without a transactional ID", produce("t", 0x0010), true},
+		{"acks=0", produce("t", 0), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, err := net.DialTimeout("tcp", c.ListenAddrs()[0], 5*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			// We handle one request at a time per connection, so the
+			// ApiVersions after the frame is answered only if the
+			// frame left the connection open.
+			frames := append(tc.frame, kmsg.NewRequestFormatter().AppendRequest(nil, kmsg.NewPtrApiVersionsRequest(), 2)...)
+			if _, err := conn.Write(frames); err != nil {
+				t.Fatal(err)
+			}
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			_, err = conn.Read(make([]byte, 1))
+			if closed := errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET); closed != tc.wantClose || !closed && err != nil {
+				t.Errorf("read after the frame: %v, want the connection closed %v", err, tc.wantClose)
+			}
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := newPlainClient(t, c).Ping(ctx); err != nil {
+		t.Fatalf("cluster stopped serving: %v", err)
+	}
+
+	// RemoveNode closes the removed broker's connections, as a broker
+	// shutdown does. An answer shows the broker took this connection.
+	c2 := newCluster(t, NumBrokers(2))
+	conn, err := net.DialTimeout("tcp", c2.ListenAddrs()[0], 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write(kmsg.NewRequestFormatter().AppendRequest(nil, kmsg.NewPtrApiVersionsRequest(), 1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Read(make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c2.RemoveNode(0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, conn); err != nil && !errors.Is(err, syscall.ECONNRESET) {
+		t.Errorf("reading the removed broker's connection: %v, want it closed", err)
 	}
 }
 
@@ -1667,9 +1854,15 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	epoch := resp.ProducerEpoch
 
 	// Before the partition is in the transaction, a v11 transactional
-	// produce is TRANSACTION_ABORTABLE.
-	if errCode := produceRawV11(t, cl, topic, rawBatch(0x0010, pid, epoch, 0, kvRecord()), "txid-non-txn-during").ErrorCode; errCode != kerr.TransactionAbortable.Code {
-		t.Fatalf("transactional produce before AddPartitionsToTxn: got %v, want TRANSACTION_ABORTABLE", kerr.ErrorForCode(errCode))
+	// produce is TRANSACTION_ABORTABLE, with no log start offset.
+	if p := produceRawV11(t, cl, topic, rawBatch(0x0010, pid, epoch, 0, kvRecord()), "txid-non-txn-during"); p.ErrorCode != kerr.TransactionAbortable.Code || p.LogStartOffset != -1 {
+		t.Fatalf("transactional produce before AddPartitionsToTxn: got %v with log start offset %d, want TRANSACTION_ABORTABLE with -1", kerr.ErrorForCode(p.ErrorCode), p.LogStartOffset)
+	}
+	// Below v11, it is INVALID_TXN_STATE with Kafka's message.
+	v10 := kversion.Stable()
+	v10.SetMaxKeyVersion(0, 10)
+	if p := produceRawV11(t, newPlainClient(t, c, kgo.MaxVersions(v10)), topic, rawBatch(0x0010, pid, epoch, 0, kvRecord()), "txid-non-txn-during"); p.ErrorCode != kerr.InvalidTxnState.Code || p.ErrorMessage == nil || *p.ErrorMessage != "Partition was not added to the transaction" {
+		t.Fatalf("v10 transactional produce before AddPartitionsToTxn: got %v with message %v, want INVALID_TXN_STATE with Kafka's message", kerr.ErrorForCode(p.ErrorCode), p.ErrorMessage)
 	}
 
 	// Start a transaction by adding a partition.
@@ -5523,9 +5716,9 @@ func TestCompact(t *testing.T) {
 		wantFirst string // key=value of the first record read, for a case that pins the order
 	}{
 		{
-			// Superseded keys and the null key drop; the active segment stays.
+			// Superseded keys drop; the active segment stays.
 			name:    "dedup",
-			batches: [][]compactRec{{{"a", "1"}}, {{"", "no-key"}}, {{"b", "2"}}, {{"a", "3"}}, {{"c", "4"}}, {{"b", "5"}}},
+			batches: [][]compactRec{{{"a", "1"}}, {{"b", "2"}}, {{"a", "3"}}, {{"c", "4"}}, {{"b", "5"}}},
 			at:      kgo.NewOffset().AtStart(),
 			want:    map[string]string{"a": "3", "b": "5", "c": "4"},
 		},
@@ -5740,12 +5933,13 @@ func TestRetention(t *testing.T) {
 				}
 			}
 
+			// A compacted topic rejects records without a key.
 			for _, v := range tc.first {
-				produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte(v)})
+				produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte(v), Value: []byte(v)})
 			}
 			time.Sleep(tc.sleep)
 			for _, v := range tc.rest {
-				produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte(v)})
+				produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte(v), Value: []byte(v)})
 			}
 			if tc.apply {
 				c.ApplyRetention()
@@ -6278,15 +6472,19 @@ func TestShareGroupOffsetsAdminNonEmpty(t *testing.T) {
 // MetadataMaxAge row keeps a periodic metadata refresh from racing the
 // heartbeat: the heartbeat then always delivers the assignment before the
 // client learns of the topic itself, so the server has to keep including
-// the assignment until the client confirms it.
+// the assignment until the client confirms it. In the auto-create row, the
+// producer creates the topic with a Metadata request, which must tell the
+// group about the topic as CreateTopics does.
 func Test848TopicCreatedAfterJoin(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		metaMaxAge time.Duration
+		autoCreate bool // the producer creates the topic through Metadata
 	}{
-		{"periodic-meta", 100 * time.Millisecond},
-		{"no-periodic-meta", time.Minute},
+		{"periodic-meta", 100 * time.Millisecond, false},
+		{"no-periodic-meta", time.Minute, false},
+		{"auto-create", time.Minute, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -6296,8 +6494,14 @@ func Test848TopicCreatedAfterJoin(t *testing.T) {
 			group := "g848-" + tc.name
 			nRecords := 10
 
-			c := newCluster(t, NumBrokers(1), SeedTopics(1, existingTopic))
-			producer := newClient848(t, c)
+			opts := []Opt{NumBrokers(1), SeedTopics(1, existingTopic)}
+			var producerOpts []kgo.Opt
+			if tc.autoCreate {
+				opts = append(opts, AllowAutoTopicCreation())
+				producerOpts = append(producerOpts, kgo.AllowAutoTopicCreation())
+			}
+			c := newCluster(t, opts...)
+			producer := newClient848(t, c, producerOpts...)
 			produceNStrings(t, producer, existingTopic, nRecords)
 
 			consumer := newClient848(t, c,
@@ -6315,8 +6519,10 @@ func Test848TopicCreatedAfterJoin(t *testing.T) {
 				t.Fatalf("expected %d records from existing topic, got %d", nRecords, len(records))
 			}
 
-			if err := c.CreateTopic(newTopic, 1, nil); err != nil {
-				t.Fatalf("create topic failed: %v", err)
+			if !tc.autoCreate {
+				if err := c.CreateTopic(newTopic, 1, nil); err != nil {
+					t.Fatalf("create topic failed: %v", err)
+				}
 			}
 			for i := range nRecords {
 				r := kgo.StringRecord("new-" + strconv.Itoa(i))

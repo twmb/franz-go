@@ -137,6 +137,8 @@ type (
 		in      []*partData
 		ackTs   []ackTopic      // piggybacked ack topics from the initial request
 		ackErrs map[tpKey]int16 // failed piggybacked acks from the initial request
+		parked  time.Time       // when we first handled the request, which MaxWait counts from
+		waitsOn map[tpKey]bool  // the partitions the request has waited on since it first parked
 		cb      func()
 		t       *time.Timer
 

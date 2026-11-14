@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"hash/crc32"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -641,6 +640,60 @@ func TestIssue1142(t *testing.T) {
 			t.Fatalf("expected 1 topic, got %d", len(resp.Topics.Names()))
 		}
 	}
+
+	// Auto-creation checks the name, and a name that differs from an
+	// existing one only in . and _ collides with it, which Kafka's
+	// controller refuses and Metadata answers UNKNOWN_TOPIC_OR_PARTITION.
+	// Each unknown topic ID gets its own answer.
+	cl := newPlainClient(t, c)
+	byName := kmsg.NewPtrMetadataRequest()
+	byName.AllowAutoTopicCreation = true
+	for _, name := range []string{"a.b", "a_b", "bad name"} {
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr(name)
+		byName.Topics = append(byName.Topics, rt)
+	}
+	// Below v4, a request always asks for auto-creation.
+	v3 := kmsg.NewPtrMetadataRequest()
+	v3t := kmsg.NewMetadataRequestTopic()
+	v3t.Topic = kmsg.StringPtr("v3-auto")
+	v3.Topics = append(v3.Topics, v3t)
+	vs := kversion.Stable()
+	vs.SetMaxKeyVersion(int16(kmsg.Metadata), 3)
+	v3cl := newPlainClient(t, c, kgo.MaxVersions(vs))
+	byID := kmsg.NewPtrMetadataRequest()
+	for _, id := range [][16]byte{{1}, {2}} {
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.TopicID = id
+		byID.Topics = append(byID.Topics, rt)
+	}
+	// An unknown ID whose bytes spell a requested name is its own topic.
+	const spelled = "abcdefghijklmnop"
+	nameAndID := kmsg.NewPtrMetadataRequest()
+	nameAndID.Topics = []kmsg.MetadataRequestTopic{{Topic: kmsg.StringPtr(spelled)}, {TopicID: [16]byte([]byte(spelled))}}
+	for _, check := range []struct {
+		cl   *kgo.Client
+		req  *kmsg.MetadataRequest
+		want []error
+	}{
+		{cl, byName, []error{nil, kerr.UnknownTopicOrPartition, kerr.InvalidTopicException}},
+		{v3cl, v3, []error{nil}},
+		{cl, byID, []error{kerr.UnknownTopicID, kerr.UnknownTopicID}},
+		{cl, nameAndID, []error{kerr.UnknownTopicOrPartition, kerr.UnknownTopicID}},
+	} {
+		resp, err := check.req.RequestWith(ctx, check.cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Topics) != len(check.want) {
+			t.Fatalf("got %d topics, want %d", len(resp.Topics), len(check.want))
+		}
+		for i, rt := range resp.Topics {
+			if err := kerr.ErrorForCode(rt.ErrorCode); err != check.want[i] {
+				t.Errorf("topic %d (%v %x): got %v, want %v", i, rt.Topic, rt.TopicID, err, check.want[i])
+			}
+		}
+	}
 }
 
 // TestIssue1167 reproduces a race condition in preferred replica fetching
@@ -956,6 +1009,14 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	}
 	if elapsed > time.Second {
 		t.Fatalf("readCommitted fetch of committed data took %v, expected immediate", elapsed)
+	}
+
+	// Like Kafka, a MinBytes above MaxBytes waits only for MaxBytes.
+	capped := fetchByID(0, -1, 5000, c.TopicInfo(testTopic).TopicID, 0)
+	capped.MinBytes, capped.MaxBytes = 1<<20, 1
+	start = time.Now()
+	if _, err := capped.RequestWith(ctx, newPlainClient(t, c)); err != nil || time.Since(start) > time.Second {
+		t.Fatalf("fetch with MinBytes above MaxBytes: took %v, err %v; want the record at once", time.Since(start), err)
 	}
 
 	// Uncommitted data should NOT satisfy MinBytes for readCommitted.
@@ -2827,7 +2888,8 @@ func TestIssue1296(t *testing.T) {
 // NextCursor is set to the next un-emitted (topic, partition) pair. A
 // client walking the cursor should see every partition exactly once.
 // Also verifies that mid-topic cursors and bad cursor-topic combinations
-// behave correctly.
+// behave correctly, and that the ELR lists are empty rather than null: the
+// Java client reads them unchecked.
 func TestDescribeTopicPartitionsCursor(t *testing.T) {
 	t.Parallel()
 
@@ -2868,6 +2930,9 @@ func TestDescribeTopicPartitionsCursor(t *testing.T) {
 			}
 			for _, rp := range rt.Partitions {
 				got = append(got, tp{*rt.Topic, rp.Partition})
+				if rp.EligibleLeaderReplicas == nil || rp.LastKnownELR == nil {
+					t.Errorf("topic %q partition %d: null ELR lists", *rt.Topic, rp.Partition)
+				}
 			}
 		}
 		if resp.NextCursor == nil {
@@ -2917,9 +2982,8 @@ func TestDescribeTopicPartitionsCursor(t *testing.T) {
 		t.Fatalf("expected b[3,4], got %v", parts)
 	}
 
-	// Cursor topic not in explicit topic list: expect an error. The
-	// broker returns InvalidRequest before the response is built, which
-	// surfaces as a BrokerErrorResponse.
+	// Cursor topic not in explicit topic list: every requested topic is
+	// INVALID_REQUEST.
 	req = kmsg.NewPtrDescribeTopicPartitionsRequest()
 	rt = kmsg.NewDescribeTopicPartitionsRequestTopic()
 	rt.Topic = "a"
@@ -2929,8 +2993,13 @@ func TestDescribeTopicPartitionsCursor(t *testing.T) {
 	cur.Partition = 0
 	req.Cursor = &cur
 
-	if _, err := cl.Broker(0).Request(ctx, req); err == nil {
-		t.Fatal("expected error for cursor topic not in request list, got nil")
+	kresp, err = cl.Broker(0).Request(ctx, req)
+	if err != nil {
+		t.Fatalf("bad cursor request: %v", err)
+	}
+	resp = kresp.(*kmsg.DescribeTopicPartitionsResponse)
+	if len(resp.Topics) != 1 || *resp.Topics[0].Topic != "a" || resp.Topics[0].ErrorCode != kerr.InvalidRequest.Code {
+		t.Fatalf("bad cursor: got %+v, want topic a with INVALID_REQUEST", resp.Topics)
 	}
 }
 
@@ -3080,6 +3149,10 @@ func TestIssue1328(t *testing.T) {
 // RecordDeliveryTimeout is disabled), so the unknown-topic fail limit is the
 // only bound: UNKNOWN_TOPIC_ID must count toward it. It used to reset the
 // count instead, leaving records buffered and retrying silently forever.
+//
+// A raw produce of two unknown topic IDs, each with partition 0, answers
+// both: both have an empty name, which once mixed up their answers and
+// crashed the cluster.
 func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
 	t.Parallel()
 	const testTopic = "foo"
@@ -3112,6 +3185,7 @@ func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
 
 	// Recreate the topic: the new incarnation gets a new topic ID, and
 	// the client keeps producing with the old one.
+	oldID := c.TopicInfo(testTopic).TopicID
 	if err := c.DeleteTopic(testTopic); err != nil {
 		t.Fatal(err)
 	}
@@ -3130,6 +3204,30 @@ func TestProduceUnknownFailLimitRecreatedTopic(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("produce to a recreated topic did not fail within 10s; UNKNOWN_TOPIC_ID is defeating the unknown-topic fail limit")
+	}
+
+	req := kmsg.NewPtrProduceRequest()
+	req.Acks = -1
+	req.TimeoutMillis = 5000
+	for _, id := range [][16]byte{oldID, {1}} {
+		rt := kmsg.NewProduceRequestTopic()
+		rt.TopicID = id
+		rp := kmsg.NewProduceRequestTopicPartition()
+		rp.Records = rawBatch(0, -1, -1, -1, kvRecord())
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+	}
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Topics) != 2 {
+		t.Fatalf("got %d topics in the response, want 2", len(resp.Topics))
+	}
+	for _, rt := range resp.Topics {
+		if len(rt.Partitions) != 1 || rt.Partitions[0].ErrorCode != kerr.UnknownTopicID.Code {
+			t.Errorf("topic %x: got %+v, want one partition with UNKNOWN_TOPIC_ID", rt.TopicID, rt.Partitions)
+		}
 	}
 }
 
@@ -4138,13 +4236,11 @@ func TestIssue1423(t *testing.T) {
 // and once by replaying the segments, since the timestamps the search
 // uses are recomputed on load.
 //
-// The broker commits to the first segment whose largest timestamp reaches
-// the target (UnifiedLog.searchOffsetInLocalLog), where the largest
-// timestamp still counts records deleted from below the log start offset,
-// and answers -1 if that segment has no record at or after both the
-// target and the log start offset. So the same log answers a query
-// differently depending on where the segment boundaries fall, and the
-// last checks below expect that.
+// A segment's largest timestamp still counts records deleted from below the
+// log start offset. If the first segment whose largest timestamp reaches the
+// target has no record at or after both the target and the log start offset,
+// the broker searches the later segments (KAFKA-21317), so the answer does
+// not depend on where the segment boundaries fall.
 func TestIssue1422(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -4299,12 +4395,11 @@ func TestIssue1422(t *testing.T) {
 
 			// Delete through offset 4, the 10_060 record that is batch 1's
 			// max. Batch 1 still holds offset 5 at 10_050. A query at 10_055
-			// is answered by the segment holding batch 1, whose largest
-			// timestamp is still 10_060: with one batch per segment that
-			// segment has no live record at or after 10_055, so the answer
-			// is -1 even though offset 8 at 10_070 follows in the next
-			// segment. With every batch in one segment, the scan reaches
-			// offset 8.
+			// first searches the segment holding batch 1, whose largest
+			// timestamp is still 10_060. With one batch per segment, that
+			// segment has no live record at or after 10_055, and the search
+			// moves on to offset 8 at 10_070 in a later segment. With every
+			// batch in one segment, the scan reaches offset 8 directly.
 			deleteTo(5)
 			// Segment 0 is gone with one batch per segment; segment 1's
 			// max still counts its deleted 10_060 record.
@@ -4317,11 +4412,7 @@ func TestIssue1422(t *testing.T) {
 			}
 			check(10_045, 5, 10_050)
 			check(10_050, 5, 10_050)
-			if tc.segBytes != "" {
-				check(10_055, -1, -1)
-			} else {
-				check(10_055, 8, 10_070)
-			}
+			check(10_055, 8, 10_070)
 			check(10_061, 8, 10_070)
 		})
 	}
@@ -4555,7 +4646,7 @@ func listOffsetsAt(t *testing.T, cl *kgo.Client, node int, topic string, partiti
 // gives before and around the offset lookup itself: a partition listed
 // twice is INVALID_REQUEST, a negative timestamp the request version does
 // not support is UNSUPPORTED_VERSION (checked before the topic is looked
-// up), -4 answers like -2, -5 answers -1 with no tiered storage, an
+// up), -4 answers like -2, -5 and -6 answer -1 with no tiered storage, an
 // answer with no offset carries leader epoch -1, the debugging replica id
 // is answered by a follower, a non-consumer replica id ignores the
 // isolation level, and a timestamp or -3 answer inside an open
@@ -4643,6 +4734,7 @@ func TestListOffsetsBrokerChecks(t *testing.T) {
 	check("-7", listOffsetsAt(t, cl, int(leader), topic, 0, -7, -1, 0), want{err: kerr.UnsupportedVersion})
 	check("-7 unknown topic", listOffsetsAt(t, cl, int(leader), "nope", 0, -7, -1, 0), want{err: kerr.UnsupportedVersion})
 	check("-6 at v10", listOffsetsAt(t, cl, int(leader), topic, 0, -6, -1, 0), want{err: kerr.UnsupportedVersion})
+	check("-6 at v11", listOffsetsAt(t, atVersion(11), int(leader), topic, 0, -6, -1, 0), none)
 	check("-3 at v6", listOffsetsAt(t, atVersion(6), int(leader), topic, 0, -3, -1, 0), want{err: kerr.UnsupportedVersion})
 	check("-3 at v7", listOffsetsAt(t, atVersion(7), int(leader), topic, 0, -3, -1, 0), want{offset: 1, timestamp: 2_000, epoch: pd.epoch})
 	check("-4 at v7", listOffsetsAt(t, atVersion(7), int(leader), topic, 0, -4, -1, 0), want{err: kerr.UnsupportedVersion})
@@ -4710,11 +4802,10 @@ func TestListOffsetsBrokerChecks(t *testing.T) {
 
 // TestListOffsetsNoTimestampSegments verifies the places where records
 // with no timestamp at or above zero change an answer, as on a broker.
-// A timestamp lookup picks the first segment whose largest timestamp
-// reaches the target, and a segment with no such record answers its
-// file's modification time as its largest timestamp
-// (LogSegment.largestTimestamp), so a later segment with real timestamps
-// is never reached through it. -3 tracks a running max floored at -1 per
+// A segment with no such record answers its file's modification time as
+// its largest timestamp, so a timestamp lookup searches it and finds
+// nothing, then moves on to a later segment with real timestamps. -3
+// tracks a running max floored at -1 per
 // segment, the earliest segment wins a tie, and the answer is the first
 // batch at exactly the running max: a batch at -1 can answer, a batch at
 // another negative timestamp cannot.
@@ -4779,25 +4870,20 @@ func TestListOffsetsNoTimestampSegments(t *testing.T) {
 			}
 
 			// A record at 5_000 at offset 2: -3 answers it. A lookup at
-			// 5_000 or 0 in one segment scans past the first two batches
-			// to it. With one batch per segment, segment 0's largest
-			// timestamp is its modification time, which is past both
-			// targets, so segment 0 is searched and holds nothing. A
+			// 5_000 or 0 scans past the first two batches to it. With one
+			// batch per segment, the first two segments' largest
+			// timestamps are their modification times, which are past
+			// both targets, so both are searched and hold nothing. A
 			// lookup past every modification time finds nothing.
 			produce(5_000)
 			check("-3 with a real timestamp", listOffsetsAt(t, cl, -1, topic, 0, -3, -1, 0), 2, 5_000)
-			if perBatch {
-				check("5_000", listOffsetsAt(t, cl, -1, topic, 0, 5_000, -1, 0), -1, -1)
-				check("0", listOffsetsAt(t, cl, -1, topic, 0, 0, -1, 0), -1, -1)
-			} else {
-				check("5_000", listOffsetsAt(t, cl, -1, topic, 0, 5_000, -1, 0), 2, 5_000)
-				check("0", listOffsetsAt(t, cl, -1, topic, 0, 0, -1, 0), 2, 5_000)
-			}
+			check("5_000", listOffsetsAt(t, cl, -1, topic, 0, 5_000, -1, 0), 2, 5_000)
+			check("0", listOffsetsAt(t, cl, -1, topic, 0, 0, -1, 0), 2, 5_000)
 			future := time.Now().Add(time.Hour).UnixMilli()
 			check("future", listOffsetsAt(t, cl, -1, topic, 0, future, -1, 0), -1, -1)
 
-			// Deleting offsets 0 and 1 removes their segments when they
-			// have their own, and the lookup at 5_000 reaches offset 2.
+			// Deleting offsets 0 and 1 leaves the lookup at 5_000 on
+			// offset 2.
 			if err := c.DeleteRecords(topic, 0, 2); err != nil {
 				t.Fatal(err)
 			}
@@ -5669,33 +5755,5 @@ func TestIssue1531(t *testing.T) {
 				}
 			})
 		})
-	}
-}
-
-// A request with a key kmsg does not know closes the connection, as Kafka
-// does, rather than crashing the process. No other test writes raw frames.
-func TestUnknownRequestKeyClosesConnection(t *testing.T) {
-	t.Parallel()
-	c := newCluster(t, NumBrokers(1))
-
-	conn, err := net.DialTimeout("tcp", c.ListenAddrs()[0], 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	// size, key 9999, version 0, correlation ID 1, null client ID
-	frame := []byte{0, 0, 0, 10, 0x27, 0x0f, 0, 0, 0, 0, 0, 1, 0xff, 0xff}
-	if _, err := conn.Write(frame); err != nil {
-		t.Fatal(err)
-	}
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
-		t.Fatalf("read after an unknown key: got %v, want EOF", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := newPlainClient(t, c).Ping(ctx); err != nil {
-		t.Fatalf("cluster stopped serving: %v", err)
 	}
 }

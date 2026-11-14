@@ -12,6 +12,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 // newCoverCluster is newCluster with a heartbeat interval short enough that
@@ -528,14 +529,47 @@ func TestAddRemoveNodeUpdatesCluster(t *testing.T) {
 }
 
 // TestMoveTopicPartitionChangesLeader verifies MoveTopicPartition actually
-// changes the leader, verified through both the API and produce routing.
+// changes the leader, verified through both the API and produce routing. A
+// fetch parked on the old leader answers NOT_LEADER_OR_FOLLOWER at the move
+// rather than at its MaxWait.
 func TestMoveTopicPartitionChangesLeader(t *testing.T) {
 	t.Parallel()
 	topic := "move-partition"
 	c := newCoverCluster(t, NumBrokers(2), SeedTopics(1, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	origLeader := c.LeaderFor(topic, 0)
 	target := 1 - origLeader // the other node
+
+	fcl := newPlainClient(t, c)
+	fetch := fetchByID(0, -1, 10_000, c.TopicInfo(topic).TopicID, 0)
+	parked := make(chan kmsg.Response, 1)
+	go func() {
+		resp, _ := fcl.Broker(int(origLeader)).Request(ctx, fetch)
+		parked <- resp
+	}()
+	// A share fetch parked there waits out its MaxWait, as in Kafka,
+	// and answers nothing for the moved partition.
+	scl := newPlainClient(t, c) // the parked fetch holds fcl's connection
+	group := "move-partition-g"
+	memberID, topicID := joinShareGroupRaw(t, scl, group, topic)
+	sf := kmsg.NewPtrShareFetchRequest()
+	sf.GroupID, sf.MemberID, sf.MaxWaitMillis, sf.MaxRecords = &group, &memberID, 500, 500
+	sf.Topics = []kmsg.ShareFetchRequestTopic{{TopicID: topicID, Partitions: []kmsg.ShareFetchRequestTopicPartition{{Partition: 0}}}}
+	shareParked := make(chan kmsg.Response, 1)
+	go func() {
+		resp, _ := scl.Broker(int(origLeader)).Request(ctx, sf)
+		shareParked <- resp
+	}()
+	waitFor(t, 5*time.Second, "the fetches never parked", func() bool {
+		var n int
+		c.admin(func() {
+			pd, _ := c.data.tps.getp(topic, 0)
+			n = min(len(pd.watch), len(pd.shareWatch))
+		})
+		return n > 0
+	})
 
 	if err := c.MoveTopicPartition(topic, 0, target); err != nil {
 		t.Fatal(err)
@@ -543,10 +577,18 @@ func TestMoveTopicPartitionChangesLeader(t *testing.T) {
 	if got := c.LeaderFor(topic, 0); got != target {
 		t.Errorf("leader should be %d, got %d", target, got)
 	}
+	resp, _ := (<-parked).(*kmsg.FetchResponse)
+	if resp == nil || len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatalf("parked fetch: got %+v, want one partition", resp)
+	}
+	if err := kerr.ErrorForCode(resp.Topics[0].Partitions[0].ErrorCode); err != kerr.NotLeaderForPartition {
+		t.Errorf("parked fetch: got %v, want NOT_LEADER_OR_FOLLOWER", err)
+	}
+	if sresp, _ := (<-shareParked).(*kmsg.ShareFetchResponse); sresp == nil || len(sresp.Topics) != 0 {
+		t.Errorf("parked share fetch: got %+v, want no partitions", sresp)
+	}
 
 	// Verify it's usable: produce to the partition.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	if err := cl.ProduceSync(ctx, kgo.StringRecord("after-move")).FirstErr(); err != nil {
 		t.Fatalf("failed to produce after leader move: %v", err)
@@ -1015,6 +1057,20 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	if resp3.Resources[0].ErrorCode != kerr.UnknownTopicOrPartition.Code {
 		t.Errorf("unknown topic: got %v", kerr.ErrorForCode(resp3.Resources[0].ErrorCode))
 	}
+	// Describing an invalid topic name is INVALID_TOPIC_EXCEPTION.
+	dreq := kmsg.NewPtrDescribeConfigsRequest()
+	for _, name := range []string{"", "bad/name", "nonexistent"} {
+		dreq.Resources = append(dreq.Resources, kmsg.DescribeConfigsRequestResource{ResourceType: kmsg.ConfigResourceTypeTopic, ResourceName: name})
+	}
+	dresp, err := dreq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int16{kerr.InvalidTopicException.Code, kerr.InvalidTopicException.Code, kerr.UnknownTopicOrPartition.Code} {
+		if got := dresp.Resources[i].ErrorCode; got != want {
+			t.Errorf("describe %q: got %v, want %v", dresp.Resources[i].ResourceName, kerr.ErrorForCode(got), kerr.ErrorForCode(want))
+		}
+	}
 
 	// A known topic config must parse as its type, and a null value or a
 	// resource listed twice is refused before anything applies.
@@ -1453,6 +1509,7 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		{"negative partitions", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.NumPartitions = -2 }, kerr.InvalidPartitions.Code},
 		{"too many partitions", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.NumPartitions = 10001 }, kerr.PolicyViolation.Code},
 		{"metadata log name", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.Topic = "__cluster_metadata" }, kerr.InvalidRequest.Code},
+		{"invalid name", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.Topic = "bad name" }, kerr.InvalidTopicException.Code},
 		{"timeout already passed", func(req *kmsg.CreateTopicsRequest, _ *kmsg.CreateTopicsRequestTopic) { req.TimeoutMillis = 0 }, kerr.RequestTimedOut.Code},
 		{"assignment with a broker twice", assign([]int32{0, 0}), kerr.InvalidReplicaAssignment.Code},
 		{"assignment with an unknown broker", assign([]int32{9}), kerr.InvalidReplicaAssignment.Code},
@@ -2052,7 +2109,9 @@ func TestOffsetForLeaderEpochLogEnd(t *testing.T) {
 
 // TestOffsetForLeaderEpochAfterLeaderChange verifies that after a leader
 // change (epoch bump), querying for the old epoch returns the offset boundary
-// where the epoch changed.
+// where the epoch changed, at v2 as well, the oldest version Kafka 4
+// serves. The old leader answers a stale current epoch FENCED_LEADER_EPOCH:
+// the epoch is checked before leadership.
 func TestOffsetForLeaderEpochAfterLeaderChange(t *testing.T) {
 	t.Parallel()
 	topic := "ofle-leader-change"
@@ -2098,19 +2157,32 @@ func TestOffsetForLeaderEpochAfterLeaderChange(t *testing.T) {
 	rt.Partitions = append(rt.Partitions, rp)
 	req.Topics = append(req.Topics, rt)
 
-	resp, err := req.RequestWith(ctx, cl2)
+	v2 := kversion.Stable()
+	v2.SetMaxKeyVersion(int16(kmsg.OffsetForLeaderEpoch), 2)
+	for _, cl := range []*kgo.Client{cl2, newPlainClient(t, c, kgo.MaxVersions(v2))} {
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sp := resp.Topics[0].Partitions[0]
+		if sp.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(sp.ErrorCode))
+		}
+		if sp.EndOffset != 3 {
+			t.Errorf("v%d: expected EndOffset=3 (boundary), got %d", resp.Version, sp.EndOffset)
+		}
+		if sp.LeaderEpoch != 0 {
+			t.Errorf("v%d: expected LeaderEpoch=0, got %d", resp.Version, sp.LeaderEpoch)
+		}
+	}
+
+	req.Topics[0].Partitions[0].CurrentLeaderEpoch = 0
+	kresp, err := cl2.Broker(int(origLeader)).Request(ctx, &req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp := resp.Topics[0].Partitions[0]
-	if sp.ErrorCode != 0 {
-		t.Fatal(kerr.ErrorForCode(sp.ErrorCode))
-	}
-	if sp.EndOffset != 3 {
-		t.Errorf("expected EndOffset=3 (boundary), got %d", sp.EndOffset)
-	}
-	if sp.LeaderEpoch != 0 {
-		t.Errorf("expected LeaderEpoch=0, got %d", sp.LeaderEpoch)
+	if err := kerr.ErrorForCode(kresp.(*kmsg.OffsetForLeaderEpochResponse).Topics[0].Partitions[0].ErrorCode); err != kerr.FencedLeaderEpoch {
+		t.Errorf("stale epoch at the old leader: got %v, want FENCED_LEADER_EPOCH", err)
 	}
 }
 
@@ -2571,7 +2643,9 @@ func TestTxnReinitAbortsOpenTxn(t *testing.T) {
 }
 
 // TestDeleteRecordsAdvancesStartOffset verifies that after DeleteRecords,
-// ListStartOffsets reflects the new log start offset.
+// ListStartOffsets reflects the new log start offset. Deleting below the log
+// start offset succeeds and changes nothing, and a compacted topic without
+// delete in its cleanup.policy answers POLICY_VIOLATION.
 func TestDeleteRecordsAdvancesStartOffset(t *testing.T) {
 	t.Parallel()
 	topic := "delete-records-start"
@@ -2615,6 +2689,31 @@ func TestDeleteRecordsAdvancesStartOffset(t *testing.T) {
 	}
 	if o := start2[topic][0].Offset; o != 7 {
 		t.Errorf("expected start=7 after delete, got %d", o)
+	}
+
+	compacted := "delete-records-compacted"
+	if err := c.CreateTopic(compacted, 1, map[string]string{"cleanup.policy": "compact"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		topic   string
+		at      int64
+		wantErr error
+		wantLow int64
+	}{
+		{topic, 3, nil, 7},
+		{compacted, -1, kerr.PolicyViolation, -1},
+	} {
+		offsets := kadm.Offsets{}
+		offsets.Add(kadm.Offset{Topic: check.topic, Partition: 0, At: check.at})
+		dresp, err := adm.DeleteRecords(ctx, offsets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, _ := dresp.Lookup(check.topic, 0)
+		if r.Err != check.wantErr || r.LowWatermark != check.wantLow {
+			t.Errorf("%s at %d: got %v low watermark %d, want %v %d", check.topic, check.at, r.Err, r.LowWatermark, check.wantErr, check.wantLow)
+		}
 	}
 
 	// End should still be 10.

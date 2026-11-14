@@ -10,7 +10,7 @@
 # REQUEST_TIMED_OUT.
 
 ## 00_produce
-- ErrorRecords (v8+): Per-record errors not implemented; kfake validates at batch level only
+- ErrorRecords (v8+): Set only for keyless records on a compacted topic; every other check fails the whole batch
 - Timestamp range validation: No client sends unreasonable timestamps in tests
 
 ## 01_fetch
@@ -18,10 +18,6 @@
 - Rack: Rack-aware reading not implemented (KIP-392)
 - LastFetchedEpoch/DivergingEpoch: Log truncation detection not implemented
 - SnapshotID: Snapshot fetching not implemented (KIP-630)
-
-## 02_list_offsets
-- Timestamp -4: Local log start offset not implemented - tiered storage (KIP-405)
-- Timestamp -5: Remote storage offset not implemented - tiered storage (KIP-1005)
 
 ## 03_metadata
 - Top-level ErrorCode (v13+): Rebootstrapping signal not needed (KIP-1102)

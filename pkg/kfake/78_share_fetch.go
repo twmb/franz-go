@@ -283,6 +283,22 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	}
 
 	// Build target list from session partitions.
+	//
+	// Like Kafka, a partition the fetch has waited on since it parked
+	// that is gone (its topic deleted, or its leader moved) gets no
+	// answer, and the fetch waits out MaxWait.
+	var faulted bool          // a fault that ends the wait fired
+	var gonePs map[tpKey]bool // partitions we wait on that are gone
+	gone := func(tid uuid, p int32) bool {
+		if w == nil || !w.waitsOn[tpKey{tid, p}] {
+			return false
+		}
+		if gonePs == nil {
+			gonePs = make(map[tpKey]bool)
+		}
+		gonePs[tpKey{tid, p}] = true
+		return true
+	}
 	for topicID, parts := range session.partitions {
 		topicName := id2t[topicID]
 		if name := session.names[topicID]; topicName == "" && name != "" && c.data.t2id[name] == (uuid{}) {
@@ -296,6 +312,9 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 				code := kerr.UnknownTopicID.Code
 				if e := fc.check(faultKey{group: groupID, topicID: topicID}.part(p)); e != nil {
 					code = e.Code
+					faulted = faulted || faultEndsWait(e)
+				} else if gone(topicID, p) {
+					continue
 				}
 				donep(topicID, p, code)
 			}
@@ -303,6 +322,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 		tk := faultKey{group: groupID, topic: topicName, topicID: topicID}
 		if e := c.deny(creq, topicName, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, tk); e != nil {
+			faulted = faulted || faultEndsWait(e)
 			for p := range parts {
 				donep(topicID, p, e.Code)
 			}
@@ -310,15 +330,21 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 		}
 		for p := range parts {
 			if e := fc.check(tk.part(p)); e != nil {
+				faulted = faulted || faultEndsWait(e)
 				donep(topicID, p, e.Code)
 				continue
 			}
 			pd, ok := c.data.tps.getp(topicName, p)
 			if !ok {
-				donep(topicID, p, kerr.UnknownTopicOrPartition.Code)
+				if !gone(topicID, p) {
+					donep(topicID, p, kerr.UnknownTopicOrPartition.Code)
+				}
 				continue
 			}
 			if pd.leader.node != creq.cc.b.node {
+				if gone(topicID, p) {
+					continue
+				}
 				sp := donep(topicID, p, kerr.NotLeaderForPartition.Code)
 				sp.CurrentLeader.LeaderID = pd.leader.node
 				sp.CurrentLeader.LeaderEpoch = pd.epoch
@@ -350,8 +376,12 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	// busy-looping with empty fetches. We decide before building the
 	// response, so the session's requiresUpdate flags are left for the
 	// response that completes the fetch.
-	remainingWait := time.Until(creq.at.Add(time.Duration(req.MaxWaitMillis) * time.Millisecond))
-	canPark := !fetchNothing && !fc.anyHit() && remainingWait > 0 && len(targets) > 0 // a faulted partition completes the fetch at once
+	parked := time.Now() // like Kafka, the wait starts when we first handle the fetch
+	if w != nil {
+		parked = w.parked
+	}
+	remainingWait := time.Until(parked.Add(time.Duration(req.MaxWaitMillis) * time.Millisecond))
+	canPark := !fetchNothing && !faulted && remainingWait > 0 && (len(targets) > 0 || len(gonePs) > 0)
 	park := func() bool {
 		if !canPark {
 			return false
@@ -361,9 +391,15 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			session: session,
 			ackTs:   ackTs,
 			ackErrs: ackErrs,
+			parked:  parked,
 		}
 		if w != nil {
-			wsf.ackTs = w.ackTs
+			wsf.ackTs, wsf.waitsOn = w.ackTs, w.waitsOn
+		} else {
+			wsf.waitsOn = make(map[tpKey]bool, len(targets))
+			for _, tgt := range targets {
+				wsf.waitsOn[tpKey{tgt.topicID, tgt.partition}] = true
+			}
 		}
 		wsf.cb = func() {
 			select {
@@ -383,7 +419,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 	// MinBytes, at most MaxBytes, from where each next acquires, counting
 	// at most an even share of MaxBytes for each. The first target also
 	// counts the bytes the even split leaves over.
-	if minBytes := int64(min(req.MinBytes, req.MaxBytes)); canPark && minBytes > 0 {
+	if minBytes := int64(min(req.MinBytes, req.MaxBytes)); canPark && minBytes > 0 && len(targets) > 0 {
 		var avail int64
 		share, extra := int64(req.MaxBytes)/int64(len(targets)), int64(req.MaxBytes)%int64(len(targets))
 		for _, tgt := range targets {
@@ -511,7 +547,7 @@ func (c *Cluster) handleShareFetch(creq *clientReq, w *watchShareFetch) (kmsg.Re
 			if !needsUpdate {
 				continue
 			}
-			if _, ok := responded[tpKey{tid, p}]; ok {
+			if _, ok := responded[tpKey{tid, p}]; ok || gonePs[tpKey{tid, p}] {
 				continue
 			}
 			donep(tid, p, 0)

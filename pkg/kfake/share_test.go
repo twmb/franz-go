@@ -2303,7 +2303,8 @@ func TestShareFetchAckedPartitionAnsweredOnce(t *testing.T) {
 // TestShareFetchWait verifies how a ShareFetch that waits for records ends,
 // as in Kafka: one short of MinBytes takes what there is at MaxWait, it still
 // answers its failed piggybacked acks, a wake that frees nothing for it leaves
-// it waiting, and deleting its topic ends it.
+// it waiting, and deleting its topic leaves it waiting out MaxWait with
+// nothing to answer for the topic.
 func TestShareFetchWait(t *testing.T) {
 	t.Parallel()
 
@@ -2423,8 +2424,10 @@ func TestShareFetchWait(t *testing.T) {
 		t.Errorf("a wake that freed nothing ended the wait after %v", took)
 	}
 
-	// The fetch waits longer than ctx, so only the delete can end it.
-	waiting = fetch(60000)
+	// Deleting the topic leaves the fetch waiting out MaxWait, and it
+	// answers nothing for the deleted partition.
+	start = time.Now()
+	waiting = fetch(300)
 	del := kmsg.NewPtrDeleteTopicsRequest()
 	dt := kmsg.NewDeleteTopicsRequestTopic()
 	dt.Topic = kmsg.StringPtr(topic)
@@ -2434,10 +2437,10 @@ func TestShareFetchWait(t *testing.T) {
 	}
 	resp = <-waiting
 	if resp == nil {
-		t.Fatal("deleting the topic did not end the wait")
+		t.Fatal("the fetch never ended")
 	}
-	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 || resp.Topics[0].Partitions[0].ErrorCode != kerr.UnknownTopicOrPartition.Code {
-		t.Errorf("after the delete got %+v, want partition 0 with UNKNOWN_TOPIC_OR_PARTITION", resp.Topics)
+	if took := time.Since(start); took < 300*time.Millisecond || len(resp.Topics) != 0 {
+		t.Errorf("after the delete: took %v and got %+v, want the 300ms MaxWait and no partitions", took, resp.Topics)
 	}
 }
 

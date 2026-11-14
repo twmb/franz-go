@@ -98,6 +98,7 @@ type (
 		ln    net.Listener
 		node  int32
 		bsIdx int
+		gone  chan struct{} // closed by RemoveNode, which closes the broker's connections
 	}
 
 	controlFn func(kmsg.Request) (kmsg.Response, error, bool)
@@ -287,6 +288,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			ln:    ln,
 			node:  int32(i),
 			bsIdx: len(c.bs),
+			gone:  make(chan struct{}),
 		}
 		c.bs = append(c.bs, b)
 		defer func() { go b.listen() }() //nolint:gocritic,revive // intentional - each broker's listener starts after loop iter
@@ -1421,6 +1423,11 @@ func (c *Cluster) setLeader(t string, p int32, pd *partData, leader *broker) {
 	if !moved {
 		return
 	}
+	// Kafka answers a fetch parked on the old leader once it is not the
+	// leader, rather than at MaxWait.
+	for w := range pd.watch {
+		w.do()
+	}
 	for _, g := range c.shareGroups.gs {
 		if sp, ok := g.partitions.getp(t, p); ok && sp.dropAcquired() {
 			g.fireAllShareWatchers()
@@ -1504,6 +1511,7 @@ func (c *Cluster) AddNode(nodeID int32, port int) (int32, int, error) {
 			ln:    ln,
 			node:  nodeID,
 			bsIdx: len(c.bs),
+			gone:  make(chan struct{}),
 		}
 		c.bs = append(c.bs, b)
 		c.cfg.nbrokers++
@@ -1527,6 +1535,7 @@ func (c *Cluster) RemoveNode(nodeID int32) error {
 				return
 			}
 			b.ln.Close()
+			close(b.gone)
 			c.cfg.nbrokers--
 			c.bs[i] = c.bs[len(c.bs)-1]
 			c.bs[i].bsIdx = i

@@ -484,6 +484,7 @@ func TestACLPrefixPattern(t *testing.T) {
 		SeedTopics(1, "other-topic"),
 		EnableACLs(),
 		EnableSASL(),
+		AllowAutoTopicCreation(),
 		User("PLAIN", "testuser", "testpass",
 			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-", Pattern: kmsg.ACLResourcePatternTypePrefixed, Operation: kmsg.ACLOperationWrite, Allow: true},
 			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-", Pattern: kmsg.ACLResourcePatternTypePrefixed, Operation: kmsg.ACLOperationDescribe, Allow: true},
@@ -512,6 +513,33 @@ func TestACLPrefixPattern(t *testing.T) {
 	// other-topic should fail (doesn't match prefix)
 	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: "other-topic", Value: []byte("test")}).FirstErr(); err == nil {
 		t.Fatal("produce to other-topic should fail without ACL")
+	}
+
+	// Metadata auto-creation needs CREATE, not only DESCRIBE.
+	meta := kmsg.NewPtrMetadataRequest()
+	meta.AllowAutoTopicCreation = true
+	mt := kmsg.NewMetadataRequestTopic()
+	mt.Topic = kmsg.StringPtr("test-auto")
+	meta.Topics = append(meta.Topics, mt)
+	metaResp, err := meta.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metaResp.Topics) != 1 || metaResp.Topics[0].ErrorCode != kerr.TopicAuthorizationFailed.Code {
+		t.Errorf("auto-creating without CREATE: got %+v, want TOPIC_AUTHORIZATION_FAILED", metaResp.Topics)
+	}
+	if c.TopicInfo("test-auto") != nil {
+		t.Error("auto-creating without CREATE created the topic")
+	}
+
+	// An unknown topic ID has no name to authorize.
+	unknown := [16]byte{1}
+	fetchResp, err := fetchByID(0, -1, 0, unknown, 0).RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fetchPartitionErr(t, fetchResp, unknown); err != kerr.UnknownTopicID {
+		t.Errorf("fetching an unknown topic ID: got %v, want UNKNOWN_TOPIC_ID", err)
 	}
 }
 

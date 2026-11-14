@@ -5,7 +5,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// OffsetForLeaderEpoch: v3-4
+// OffsetForLeaderEpoch: v2-4
 //
 // Behavior:
 // * Returns the end offset for a given leader epoch
@@ -13,10 +13,11 @@ import (
 // * Only supports consumer replica ID (-1)
 //
 // Version notes:
-// * v3: CurrentLeaderEpoch for fencing
+// * v2: CurrentLeaderEpoch for fencing
+// * v3: ReplicaID
 // * v4: Flexible versions
 
-func init() { regKey(23, 3, 4) }
+func init() { regKey(23, 2, 4) }
 
 func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, error) {
 	var (
@@ -71,10 +72,7 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 				donep(rt.Topic, rp.Partition, kerr.UnknownTopicOrPartition.Code)
 				continue
 			}
-			if pd.leader != b {
-				donep(rt.Topic, rp.Partition, kerr.NotLeaderForPartition.Code)
-				continue
-			}
+			// Kafka checks the epoch before leadership.
 			if le := rp.CurrentLeaderEpoch; le != -1 {
 				if le < pd.epoch {
 					donep(rt.Topic, rp.Partition, kerr.FencedLeaderEpoch.Code)
@@ -83,6 +81,10 @@ func (c *Cluster) handleOffsetForLeaderEpoch(creq *clientReq) (kmsg.Response, er
 					donep(rt.Topic, rp.Partition, kerr.UnknownLeaderEpoch.Code)
 					continue
 				}
+			}
+			if pd.leader != b {
+				donep(rt.Topic, rp.Partition, kerr.NotLeaderForPartition.Code)
+				continue
 			}
 
 			sp := donep(rt.Topic, rp.Partition, 0)

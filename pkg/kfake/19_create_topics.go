@@ -216,6 +216,9 @@ func (c *Cluster) createTopic(rt *kmsg.CreateTopicsRequestTopic, inReq map[strin
 	if rt.Topic == clusterMetadataTopic {
 		return 0, 0, nil, kerr.InvalidRequest
 	}
+	if !validTopicName(rt.Topic) {
+		return 0, 0, nil, kerr.InvalidTopicException
+	}
 	if _, ok := c.data.tps.gett(rt.Topic); ok {
 		return 0, 0, nil, kerr.TopicAlreadyExists
 	}

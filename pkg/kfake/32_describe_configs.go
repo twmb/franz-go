@@ -143,6 +143,10 @@ outer:
 				doner(rr.ResourceName, rr.ResourceType, e.Code)
 				continue
 			}
+			if !validTopicName(rr.ResourceName) {
+				doner(rr.ResourceName, rr.ResourceType, kerr.InvalidTopicException.Code)
+				continue
+			}
 			if _, ok := c.data.tps.gett(rr.ResourceName); !ok {
 				doner(rr.ResourceName, rr.ResourceType, kerr.UnknownTopicOrPartition.Code)
 				continue
