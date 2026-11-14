@@ -119,6 +119,11 @@ type (
 		// was recreated and we surface it forever (stall loudly).
 		unknownIDFails atomic.Int32
 
+		// fetchFails is cursor.fetchFails for a share cursor: Kafka
+		// answers a share fetch at once when reading any partition
+		// errors.
+		fetchFails atomic.Int32
+
 		cursorsIdx int
 
 		// assigned is true when the cursor's partition is currently
@@ -257,12 +262,13 @@ type (
 	// shareFetchResult is returned by handleShareReqResp for
 	// shareFetch to act on at the request level.
 	shareFetchResult struct {
-		fetch           Fetch
-		kmove           kip951move
-		ackResults      ShareAckResults
-		ackRequeued     int64
-		discardErr      error // non-nil: response thrown away, error all pending acks
-		allErrsStripped bool  // every partition had errors, nothing buffered
+		fetch       Fetch
+		kmove       kip951move
+		ackResults  ShareAckResults
+		ackRequeued int64
+		discardErr  error          // non-nil: response thrown away, error all pending acks
+		errored     []*shareCursor // partitions that errored and are not moving
+		succeeded   []*shareCursor // partitions fetched without an error
 	}
 
 	// cursorAckDrain is a cursor + the entries/gaps drained from it.
@@ -1331,6 +1337,7 @@ func (sc *shareConsumer) assignPartitions(assignments map[string][]int32) {
 			if cursor.assigned.Swap(true) {
 				continue // already active from a prior pass
 			}
+			cursor.fetchFails.Store(0) // errors from a prior assignment are stale
 			sourcesToWake[cursor.source.Load()] = struct{}{}
 		}
 	}
@@ -1342,10 +1349,10 @@ func (sc *shareConsumer) assignPartitions(assignments map[string][]int32) {
 }
 
 // applyMoves moves share cursors to the leaders staged from CurrentLeader
-// hints, through the same kip951move as the classic consumer. The move runs
-// asynchronously inside blockingMetadataFn so it serializes with metadata
-// updates and purge.
-func (sc *shareConsumer) applyMoves(k kip951move) {
+// hints in s's response, through the same kip951move as the classic
+// consumer. The move runs asynchronously inside blockingMetadataFn so it
+// serializes with metadata updates and purge.
+func (sc *shareConsumer) applyMoves(s *source, k kip951move) {
 	if len(k.shareCursors) == 0 {
 		return
 	}
@@ -1355,8 +1362,21 @@ func (sc *shareConsumer) applyMoves(k kip951move) {
 	// which could rebuild a request that re-fetches the partition (getting
 	// NOT_LEADER again) before the goroutine runs. doMove clears the flag
 	// once the migration has run. See shareCursor.moving.
+	//
+	// A cursor that moved to another source while we handled the response
+	// is not ours to park or unpark, so we drop its staged move. A move
+	// removes the cursor under s.share.mu.
+	s.share.mu.Lock()
 	for c := range k.shareCursors {
+		if c.source.Load() != s {
+			delete(k.shareCursors, c)
+			continue
+		}
 		c.moving.Store(true)
+	}
+	s.share.mu.Unlock()
+	if len(k.shareCursors) == 0 {
+		return
 	}
 	go sc.applyMovesBlocking(k)
 }
@@ -1373,13 +1393,10 @@ func (sc *shareConsumer) applyMovesBlocking(k kip951move) {
 		return
 	}
 	defer sc.decWorker()
-	// doMove unparks each cursor and re-signals its source on every
-	// return. migrateShareCursorTo woke the new source's loop while the
-	// cursor was still parked, so that loop may have skipped the cursor;
-	// the re-signal fetches it. The unpark runs before decWorker, so it
-	// cannot race leave's barrier; the dying bail and the cl.ctx escape
-	// skip it, but those are shutdown paths where closeShareSession
-	// drains the cursor regardless.
+	// doMove clears moving before we decWorker, so the clear cannot race
+	// leave's barrier. If incWorker fails above, or blockingMetadataFn
+	// returns on cl.ctx, doMove never runs; both happen only at shutdown,
+	// where closeShareSession drains each cursor regardless of moving.
 	sc.cl.blockingMetadataFn(func() { k.doMove(sc.cl) })
 }
 
@@ -1885,7 +1902,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 	if leaderErr {
 		sc.cl.triggerUpdateMetadataNow("share ack leader error without a usable CurrentLeader hint")
 	}
-	sc.applyMoves(kmove)
+	sc.applyMoves(s, kmove)
 	sc.enqueueCallback(results, nAcks-requeued)
 }
 
@@ -2458,7 +2475,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 		defer after.Stop()
 		select {
 		case <-after.C:
-		case <-ctx.Done():
+		case <-sc.fm.ctx.Done(): // not ctx, whose MaxWait+5s deadline can cut the backoff short
 		}
 	}
 	defer func() {
@@ -2482,14 +2499,36 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 		// Top-level errors are not necessarily transient (e.g. group
 		// auth revoked mid-run answers GROUP_AUTHORIZATION_FAILED
 		// top-level on every fetch); without a backoff this loops at
-		// round-trip pace. Transport errors and all-errors-stripped
-		// responses already back off; treat top-level errors the same.
+		// round-trip pace. Transport errors already back off; treat
+		// top-level errors the same.
 		sc.enqueueAckErrors(piggybackAcks, res.discardErr, nAcks)
 		backoff(res.discardErr)
 		return fetched, false
 	}
 
-	sc.applyMoves(res.kmove)
+	sc.applyMoves(s, res.kmove)
+
+	// A leader move can take a cursor to another source while our request
+	// is in flight, and our response must not change a cursor we no
+	// longer own. The move removes the cursor under our share.mu, so we
+	// change counts under share.mu and only for cursors still ours.
+	var fails int32
+	s.share.mu.Lock()
+	for _, c := range res.errored {
+		if c.source.Load() == s {
+			fails = max(fails, c.fetchFails.Add(1))
+		}
+	}
+	for _, c := range res.succeeded {
+		if c.source.Load() == s {
+			c.unknownIDFails.Store(0)
+			c.fetchFails.Store(0)
+		}
+	}
+	s.share.mu.Unlock()
+	if fails > 0 {
+		s.setRetryAt(sc.cfg.retryBackoff(int(fails)))
+	}
 
 	sc.enqueueCallback(res.ackResults, nAcks-res.ackRequeued)
 
@@ -2502,8 +2541,6 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 		s.sem = make(chan struct{})
 		s.hookBuffered(&res.fetch)
 		sc.c.addSourceReadyForDraining(s)
-	} else if res.allErrsStripped {
-		backoff("empty share fetch response due to all partitions having retryable errors")
 	}
 	return fetched, false
 }
@@ -2576,23 +2613,28 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 
 	// cursorMap includes both usable and piggyback-only cursors so
 	// ack-only partitions in the response are not treated as unknown.
+	// Kafka answers an ack-only partition with no error and without
+	// reading it, so only a usable cursor's error counts change.
 	cursorMap := make(map[tidp]*shareCursor, len(usable)+len(piggybackAcks))
+	fetching := make(map[*shareCursor]struct{}, len(usable))
 	for _, c := range usable {
 		cursorMap[tidp{c.topicID, c.partition}] = c
+		fetching[c] = struct{}{}
 	}
 	for _, d := range piggybackAcks {
 		cursorMap[tidp{d.cursor.topicID, d.cursor.partition}] = d.cursor
 	}
 
 	var (
-		fetch              Fetch
-		ackResults         ShareAckResults
-		kmove              kip951move
-		brokers            []BrokerMetadata
-		ackRequeued        int64
-		partitionsWithErrs int
-		seen               = make(map[tidp]struct{}, len(usable)+len(piggybackAcks))
-		updateWhy          multiUpdateWhy
+		fetch       Fetch
+		ackResults  ShareAckResults
+		kmove       kip951move
+		brokers     []BrokerMetadata
+		ackRequeued int64
+		errored     []*shareCursor
+		succeeded   []*shareCursor
+		seen        = make(map[tidp]struct{}, len(usable)+len(piggybackAcks))
+		updateWhy   multiUpdateWhy
 	)
 	for _, ep := range resp.NodeEndpoints {
 		brokers = append(brokers, BrokerMetadata{
@@ -2659,11 +2701,14 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 			}
 
 			// then records.
+			_, fetched := fetching[cursor]
 			if rp.ErrorCode != 0 {
 				if kmove.maybeAddSharePartition(sc, cursor, rp.ErrorCode, rp.CurrentLeader.LeaderID, rp.CurrentLeader.LeaderEpoch, brokers) {
 					continue // handled: the move needs no backoff
 				}
-				partitionsWithErrs++
+				if fetched {
+					errored = append(errored, cursor)
+				}
 				// No hint we can act on: classify like the classic
 				// fetch path (source.go handleReqResp). Retryable errors
 				// are stripped and heal via the metadata update
@@ -2701,7 +2746,9 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 				}
 				continue
 			}
-			cursor.unknownIDFails.Store(0)
+			if fetched {
+				succeeded = append(succeeded, cursor)
+			}
 
 			if len(rp.Records) == 0 && len(rp.AcquiredRecords) == 0 {
 				continue
@@ -2771,11 +2818,12 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 	}
 
 	return shareFetchResult{
-		fetch:           fetch,
-		kmove:           kmove,
-		ackResults:      ackResults,
-		ackRequeued:     ackRequeued,
-		allErrsStripped: partitionsWithErrs > 0 && !fetch.hasErrorsOrRecords(),
+		fetch:       fetch,
+		kmove:       kmove,
+		ackResults:  ackResults,
+		ackRequeued: ackRequeued,
+		errored:     errored,
+		succeeded:   succeeded,
 	}
 }
 
@@ -2977,10 +3025,13 @@ func (s *source) createShareReq(skipAckDrain bool) (
 	s.share.mu.Lock()
 	defer s.share.mu.Unlock()
 
-	// Build the WANT set: cursors with assigned=true and not paused.
-	// usable (the returned slice) preserves round-robin fairness for
-	// req.Topics ordering. wantSet is the set form for the diff
-	// against sessionParts below.
+	retryWait := s.retryWait()
+	var backedOff []*shareCursor
+
+	// Build the WANT set: assigned cursors that are not paused, moving,
+	// or backed off after an error. usable (the returned slice)
+	// preserves round-robin fairness for req.Topics ordering. wantSet is
+	// the set form for the diff against sessionParts below.
 	wantSet := make(map[tidp]struct{}, len(s.share.cursors))
 	usable = make([]*shareCursor, 0, len(s.share.cursors))
 	nShareCursors := len(s.share.cursors)
@@ -2997,11 +3048,25 @@ func (s *source) createShareReq(skipAckDrain bool) (
 		if !c.assigned.Load() || c.moving.Load() || paused.has(c.topic, c.partition) {
 			continue
 		}
+		// Skipping a backed off cursor also forgets it from the session:
+		// the broker reads every partition in the session.
+		if retryWait > 0 && c.fetchFails.Load() > 0 {
+			backedOff = append(backedOff, c)
+			continue
+		}
 		wantSet[tidp{c.topicID, c.partition}] = struct{}{}
 		usable = append(usable, c)
 	}
 	if nShareCursors > 0 {
 		s.share.cursorsStart = (s.share.cursorsStart + 1) % nShareCursors
+	}
+	// With nothing else to fetch, we keep backed off partitions in the
+	// session: we send no request until retryAt, and a request only to
+	// forget them would cost one request per backoff.
+	if len(usable) == 0 {
+		for _, c := range backedOff {
+			wantSet[tidp{c.topicID, c.partition}] = struct{}{}
+		}
 	}
 
 	// Compute toForget = sessionParts - wantSet. Anything currently
@@ -3022,6 +3087,12 @@ func (s *source) createShareReq(skipAckDrain bool) (
 	// Nothing to fetch AND nothing to forget: hand off to shareAck.
 	if len(usable) == 0 && len(toForget) == 0 {
 		return
+	}
+	// A request we send anyway, to forget a partition, fetches the backed
+	// off partitions too: the broker reads the ones left in the session,
+	// and we take its answer for them like any fetch.
+	if len(usable) == 0 {
+		usable = backedOff
 	}
 
 	// Drain acks from all cursors on this source (not just usable

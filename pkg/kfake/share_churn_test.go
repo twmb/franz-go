@@ -30,9 +30,12 @@ import (
 //     a dead broker (connection killed on every ShareFetch) must trigger
 //     a metadata refresh from the fetch backoff path, like the classic
 //     consumer's source backoff does.
-//   - TestShareFetchTopLevelErrorBackoff: persistent
-//     top-level ShareFetch errors must back off rather than hot-loop at
-//     round-trip pace.
+//   - TestShareFetchErrorBackoff: persistent top-level ShareFetch
+//     errors, or an error on one or every partition, must back off
+//     rather than hot-loop at round-trip pace.
+//   - TestShareFetchForgetReadsBackedOffPartition: a share fetch sent
+//     to forget a partition reads the backed off partitions left in the
+//     session, and their records must reach poll.
 //   - TestShareAssignmentNegativePartitionNoPanic:
 //     a negative partition number in a heartbeat assignment must be
 //     skipped, not panic the manage goroutine.
@@ -348,67 +351,127 @@ func TestShareFetchTransportErrorTriggersMetadata(t *testing.T) {
 	}
 }
 
-// TestShareFetchTopLevelErrorBackoff returns a top-level error from every
-// ShareFetch (the persistent shape: e.g. group ACL revoked mid-run; kfake
-// and KafkaApis both answer GROUP_AUTHORIZATION_FAILED top-level) and
-// asserts the client backs off between attempts. Transport errors and
-// all-errors-stripped responses already back off; pre-fix the top-level
-// arm returns straight into the next fetch and hot-loops at round-trip
-// pace - in-process that is thousands of requests in the window.
-func TestShareFetchTopLevelErrorBackoff(t *testing.T) {
+// TestShareFetchErrorBackoff fails every ShareFetch, or one partition in it,
+// and asserts the client backs off between attempts rather than looping at
+// round-trip pace (in-process, thousands of requests in the window). A
+// top-level error (e.g. group ACL revoked mid-run; kfake and Kafka both answer
+// GROUP_AUTHORIZATION_FAILED top-level) discards the response. A
+// non-retryable error on every partition is handed to the user, and Kafka
+// answers such a share fetch at once. Kafka also answers at once when reading
+// one partition errors, so a share fetch that also asks for an idle healthy
+// partition looped as fast as the user polled.
+func TestShareFetchErrorBackoff(t *testing.T) {
 	t.Parallel()
-
 	const (
-		topic = "share-churn-toperr"
-		group = "share-churn-toperr-g"
+		topic = "share-churn-fetcherr"
+		group = "share-churn-fetcherr-g"
 	)
 
-	c := newCluster(t,
-		NumBrokers(1),
-		SeedTopics(1, topic),
-		BrokerConfigs(map[string]string{
-			"group.share.heartbeat.interval.ms": "100",
-		}),
-	)
-	produceShareN(t, c, topic, group, 1)
+	for _, test := range []struct {
+		name  string
+		fault Fault
+	}{
+		{"top-level", Fault{TopLevel: true, Err: kerr.GroupAuthorizationFailed}},
+		{"every-partition", Fault{Topic: topic, Err: kerr.TopicAuthorizationFailed}},
+		{"one-partition", Fault{Topic: topic, Partitions: []int32{0}, Err: kerr.UnknownServerError}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 
-	// The observer goes in first: the fault below answers every share
-	// fetch, so only a fault ahead of it counts them.
-	attempts := c.Fault(Fault{Keys: []kmsg.Key{kmsg.ShareFetch}, TopLevel: true, Observe: true, Count: -1})
-	c.Fault(Fault{
-		Keys:     []kmsg.Key{kmsg.ShareFetch},
-		TopLevel: true,
-		Err:      kerr.GroupAuthorizationFailed,
-		Count:    -1,
-	})
+			c := newCluster(t,
+				NumBrokers(1),
+				SeedTopics(2, topic),
+				BrokerConfigs(map[string]string{
+					"group.share.heartbeat.interval.ms": "100",
+				}),
+			)
+			produceShareN(t, c, topic, group, 1)
 
-	cl := shareChurnConsumer(t, c, topic, group)
+			// The observer goes in first: the fault below answers
+			// every share fetch, so only a fault ahead of it counts
+			// them.
+			attempts := c.Fault(Fault{Keys: []kmsg.Key{kmsg.ShareFetch}, TopLevel: true, Observe: true, Count: -1})
+			f := test.fault
+			f.Keys = []kmsg.Key{kmsg.ShareFetch}
+			f.Count = -1
+			c.Fault(f)
 
-	// Poll in the background; nothing will ever arrive. The poll paces
-	// nothing here: discarded fetches are not buffered, so the fetch
-	// loop is self-paced (pre-fix: not at all).
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	go func() {
-		for ctx.Err() == nil {
-			cl.PollFetches(ctx)
-		}
-	}()
+			cl := shareChurnConsumer(t, c, topic, group, kgo.FetchMaxWait(time.Second))
 
-	// Wait for the first ShareFetch, then measure a 2s window.
-	if err := attempts.Wait(ctx, 1); err != nil {
-		t.Fatal("no ShareFetch arrived")
+			// Poll in the background.
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			go func() {
+				for ctx.Err() == nil {
+					cl.PollFetches(ctx)
+				}
+			}()
+
+			// Wait for the first ShareFetch, then measure a 2s window.
+			if err := attempts.Wait(ctx, 1); err != nil {
+				t.Fatal("no ShareFetch arrived")
+			}
+			first := attempts.Hits()
+			time.Sleep(2 * time.Second)
+			n := attempts.Hits() - first
+
+			// retryBackoff doubles from 250ms with +/-20% jitter, so a
+			// 2s window sees ~4-6 attempts. The healthy partition in the
+			// one-partition row adds about one fetch per MaxWait. Allow
+			// 12 for CI noise.
+			if n > 12 {
+				t.Errorf("%d ShareFetch requests within ~2s of the first; the client retries without backing off", n)
+			}
+		})
 	}
-	first := attempts.Hits()
-	time.Sleep(2 * time.Second)
-	n := attempts.Hits() - first
+}
 
-	// Post-fix pacing: retryBackoff walks 250ms, 500ms, 750ms, 1s with
-	// +/-20% jitter, so a 2s window sees ~4-6 attempts. Allow 12 for CI
-	// noise. Pre-fix the loop is round-trip paced and lands hundreds to
-	// thousands of attempts.
-	if n > 12 {
-		t.Errorf("BUG REPRODUCED: %d ShareFetch requests within ~2s of the first; top-level errors are retried with no backoff", n)
+// A share fetch sent to forget one partition, while every other partition is
+// backed off and left in the session, reads the backed off partitions. Their
+// records must reach the user, rather than wait for the backoff or stay
+// acquired until the lock expires.
+func TestShareFetchForgetReadsBackedOffPartition(t *testing.T) {
+	t.Parallel()
+	const topic, group = "share-churn-backoff-forget", "share-churn-backoff-forget-g"
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
+	c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
+	pcl := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	produceTo := func(p int32) {
+		if err := pcl.ProduceSync(context.Background(), &kgo.Record{Topic: topic, Partition: p}).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	produceTo(1)
+
+	cl := newShareConsumer(t, c, topic, group, kgo.RetryBackoffFn(func(int) time.Duration { return 10 * time.Second }))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var held []*kgo.Record // not polling again keeps it unacked
+	for ctx.Err() == nil && len(held) == 0 {
+		held = cl.PollFetches(ctx).Records()
+	}
+
+	// Both partitions fail in one fetch and back off with nothing else to
+	// fetch, so both stay in the session.
+	fault := c.Fault(Fault{Keys: []kmsg.Key{kmsg.ShareFetch}, Topic: topic, Err: kerr.KafkaStorageError, Count: -1})
+	if err := fault.Wait(ctx, 1); err != nil {
+		t.Fatal("no ShareFetch was faulted")
+	}
+	fault.Remove()
+	produceTo(0)
+
+	// Pausing partition 1 makes the next share fetch forget it, and the ack
+	// wakes the fetch loop to send it.
+	cl.PauseFetchPartitions(map[string][]int32{topic: {1}})
+	held[0].Ack(kgo.AckAccept)
+	short, shortCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer shortCancel()
+	var got []*kgo.Record
+	for short.Err() == nil && len(got) == 0 {
+		got = cl.PollFetches(short).Records()
+	}
+	if len(got) != 1 || got[0].Partition != 0 {
+		t.Fatalf("got %d records within 5s, want partition 0's record well before its 10s backoff ends", len(got))
 	}
 }
 

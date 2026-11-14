@@ -304,65 +304,73 @@ func TestEpochBumpKeepsCursor(t *testing.T) {
 	}
 }
 
-// TestAuditFetchTopLevelErrorBackoff returns an unexpected top-level error from
-// every classic Fetch (the persistent shape: a non-conformant or future broker
-// answering a code kgo's fetch-session arms do not recognize) and asserts the
-// client backs off between attempts. The session-related top-level codes all
-// self-heal in one round-trip, but the `default` arm has no such bounded heal;
-// pre-fix it reset the session and returned straight into the next fetch,
-// hot-looping at round-trip pace - in-process that is hundreds to thousands of
-// requests in the window. Transport errors and all-errors-stripped responses
-// already back off. Sibling of the share path's
-// TestShareFetchTopLevelErrorBackoff (share-churn round).
-func TestAuditFetchTopLevelErrorBackoff(t *testing.T) {
+// TestAuditFetchErrorBackoff fails every classic Fetch, or one partition in
+// it, and asserts the client backs off between attempts rather than looping
+// at round-trip pace (in-process, hundreds to thousands of requests in the
+// window). An unexpected top-level code routes to the session arms' `default`,
+// which has no bounded heal. A non-retryable error on every partition is
+// handed to the user, and Kafka answers such a fetch at once (as when the
+// client may read none of the partitions), so the next poll fetched again
+// immediately. Kafka also answers at once when reading one partition errors,
+// as with KAFKA_STORAGE_ERROR from an offline log dir, so a fetch that also
+// asks for an idle healthy partition looped as well. Sibling of the share
+// path's TestShareFetchErrorBackoff.
+func TestAuditFetchErrorBackoff(t *testing.T) {
 	t.Parallel()
 
-	const topic = "fetch-toperr"
+	for _, test := range []struct {
+		name  string
+		fault Fault
+	}{
+		{"top-level", Fault{TopLevel: true, Err: kerr.UnknownServerError}},
+		{"every-partition", Fault{Err: kerr.TopicAuthorizationFailed}},
+		{"one-partition", Fault{Partitions: []int32{0}, Err: kerr.KafkaStorageError}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			const topic = "fetch-toperr"
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	produceN(t, c, topic, 1)
+			c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
+			produceN(t, c, topic, 1)
 
-	// The observer goes in first: the fault below answers every fetch, so
-	// only a fault ahead of it counts them.
-	attempts := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Fetch}, TopLevel: true, Observe: true, Count: -1})
-	// An unexpected top-level code (not a fetch-session code) routes to the
-	// default arm.
-	c.Fault(Fault{
-		Keys:     []kmsg.Key{kmsg.Fetch},
-		TopLevel: true,
-		Err:      kerr.UnknownServerError,
-		Count:    -1,
-	})
+			// The observer goes in first: the fault below answers every
+			// fetch, so only a fault ahead of it counts them.
+			attempts := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Fetch}, TopLevel: true, Observe: true, Count: -1})
+			f := test.fault
+			f.Keys = []kmsg.Key{kmsg.Fetch}
+			f.Count = -1
+			c.Fault(f)
 
-	cl := newPlainClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.FetchMaxWait(100*time.Millisecond),
-	)
+			cl := newPlainClient(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.FetchMaxWait(time.Second),
+			)
 
-	// Poll in the background; nothing ever arrives (every fetch errors at the
-	// top level). Discarded fetches are not buffered, so the fetch loop is
-	// self-paced (pre-fix: not at all).
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	go func() {
-		for ctx.Err() == nil {
-			cl.PollFetches(ctx)
-		}
-	}()
+			// Poll in the background.
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			go func() {
+				for ctx.Err() == nil {
+					cl.PollFetches(ctx)
+				}
+			}()
 
-	// Wait for the first Fetch, then measure a 2s window.
-	if err := attempts.Wait(ctx, 1); err != nil {
-		t.Fatal("no Fetch arrived")
-	}
-	first := attempts.Hits()
-	time.Sleep(2 * time.Second)
-	n := attempts.Hits() - first
+			// Wait for the first Fetch, then measure a 2s window.
+			if err := attempts.Wait(ctx, 1); err != nil {
+				t.Fatal("no Fetch arrived")
+			}
+			first := attempts.Hits()
+			time.Sleep(2 * time.Second)
+			n := attempts.Hits() - first
 
-	// Post-fix pacing: retryBackoff walks 250ms, 500ms, 750ms, 1s with
-	// jitter, so a 2s window sees ~4-6 attempts. Allow 12 for CI noise.
-	// Pre-fix the loop is round-trip paced and lands hundreds to thousands.
-	if n > 12 {
-		t.Errorf("BUG REPRODUCED: %d Fetch requests within ~2s of the first; unexpected top-level errors are retried with no backoff", n)
+			// retryBackoff doubles from 250ms with jitter, so a 2s window
+			// sees ~4-6 attempts. The healthy partition in the
+			// one-partition row adds about one fetch per MaxWait. Allow 12
+			// for CI noise.
+			if n > 12 {
+				t.Errorf("%d Fetch requests within ~2s of the first; the client retries without backing off", n)
+			}
+		})
 	}
 }

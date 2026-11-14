@@ -1254,6 +1254,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 							// allowUsable does nothing while `fatal` is
 							// set.
 							wasFatal := usedCursor.fatal.Swap(false)
+							usedCursor.fetchFails.Store(0) // the set offset may not fail the same way
 							if loadOffsets.removeLoad(usedCursor.topic, usedCursor.partition) || wasFatal {
 								usedCursor.allowUsable()
 							}

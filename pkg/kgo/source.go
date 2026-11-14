@@ -47,6 +47,15 @@ type source struct {
 	cursors      []*cursor // contains all partitions being consumed on this source
 	cursorsStart int       // incremented every fetch req to ensure all partitions are fetched
 
+	// retryAt is when building a fetch request stops skipping cursors
+	// whose partition errored. One time for all of them makes the
+	// errored partitions rejoin in one request, rather than in a request
+	// each. retryWake calls maybeConsume at retryAt: the fetch loop stops
+	// once it builds a request with no partitions.
+	retryMu   xsync.Mutex
+	retryAt   time.Time
+	retryWake *time.Timer
+
 	share sourceShare
 }
 
@@ -184,6 +193,13 @@ type cursor struct {
 	// whether or not it moved the cursor.
 	moving atomic.Bool
 
+	// fetchFails counts the partition's errored fetches in a row. While
+	// it is non-zero, building a fetch request skips the cursor until the
+	// source's retryAt. Kafka answers a fetch at once when reading any
+	// partition errors, so refetching the partition right away would loop
+	// at round-trip pace even while the other partitions wait for data.
+	fetchFails atomic.Int32
+
 	topicPartitionData // updated in metadata when session is stopped
 
 	// cursorOffset is our epoch/offset that we are consuming. When a fetch
@@ -251,6 +267,7 @@ func (c *cursor) unset() {
 	c.useState.Store(false)
 	c.fatal.Store(false)
 	c.moving.Store(false)
+	c.fetchFails.Store(0)
 	c.setOffset(cursorOffset{
 		offset:            -1,
 		lastConsumedEpoch: -1,
@@ -833,11 +850,16 @@ func (s *source) createReq() *fetchRequest {
 	s.cursorsMu.Lock()
 	defer s.cursorsMu.Unlock()
 
+	retryWait := s.retryWait()
+
 	cursorIdx := s.cursorsStart
 	for range s.cursors {
 		c := s.cursors[cursorIdx]
 		cursorIdx = (cursorIdx + 1) % len(s.cursors)
 		if !c.usable() || c.moving.Load() {
+			continue
+		}
+		if retryWait > 0 && c.fetchFails.Load() > 0 {
 			continue
 		}
 		if s.nodeID != c.leader && c.moveAt > 0 && time.Since(time.Unix(0, c.moveAt)) > s.cl.cfg.recheckPreferredReplicaInterval {
@@ -871,6 +893,28 @@ func (s *source) maybeConsume() {
 	if s.fetchState.maybeBegin() {
 		go s.loopFetch()
 	}
+}
+
+// setRetryAt also wakes the fetch loop at retryAt: the loop stops once every
+// cursor it could fetch is skipped. A wake that finds nothing to fetch, such
+// as after the cursor was unassigned, only builds an empty request.
+func (s *source) setRetryAt(backoff time.Duration) {
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+	s.retryAt = time.Now().Add(backoff)
+	if s.retryWake == nil {
+		s.retryWake = time.AfterFunc(backoff, s.maybeConsume)
+	} else {
+		s.retryWake.Reset(backoff)
+	}
+}
+
+// retryWait returns how long building a request still skips cursors whose
+// partition errored; it is not positive once they can be fetched.
+func (s *source) retryWait() time.Duration {
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+	return time.Until(s.retryAt)
 }
 
 func (s *source) loopFetch() {
@@ -1077,7 +1121,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 	// being processed below.
 
 	resp := kresp.(*kmsg.FetchResponse)
-	fetch, reloadOffsets, preferreds, allErrsStripped, updateWhy := s.handleReqResp(br, req, resp)
+	fetch, reloadOffsets, preferreds, errored, updateWhy := s.handleReqResp(br, req, resp)
 
 	deleteReqUsedOffset := func(topic string, partition int32) {
 		t := req.usedOffsets[topic]
@@ -1107,6 +1151,19 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		})
 	}
 	reloadOffsets.each(deleteReqUsedOffset)
+
+	// A moved or reloading cursor left usedOffsets just above and is not
+	// counted: a reload paces itself, and a moved cursor is already on its
+	// new source, where we must not modify it.
+	var fails int32
+	for _, c := range errored {
+		if _, ok := req.usedOffsets[c.topic][c.partition]; ok {
+			fails = max(fails, c.fetchFails.Add(1))
+		}
+	}
+	if fails > 0 {
+		s.setRetryAt(s.cl.cfg.retryBackoff(int(fails)))
+	}
 
 	// handleReqResp only parses the body of the response, not the top
 	// level error code.
@@ -1151,9 +1208,8 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		// nothing here paces the loop. Back off rather than bumping the
 		// session epoch against a failed request; backoff also resets the
 		// session defensively so the next request re-establishes state the
-		// broker agrees with. This mirrors the transport-error and
-		// all-partitions-stripped paths, and the share fetch loop's
-		// top-level-error arm.
+		// broker agrees with. This mirrors the transport-error path and
+		// the share fetch loop's top-level-error arm.
 		s.cl.cfg.logger.Log(LogLevelWarn, "fetch response has unexpected top-level error, resetting session and backing off", "broker", logID(s.nodeID), "err", err)
 		backoff(err)
 		return fetched
@@ -1220,18 +1276,12 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		s.sem = make(chan struct{})
 		s.hookBuffered(&fetch) // buffered, not polled
 		s.cl.consumer.addSourceReadyForDraining(s)
-	} else if allErrsStripped {
-		// If we stripped all errors from the response, we are likely
-		// fetching from topics that were deleted. We want to back off
-		// a bit rather than spin-loop immediately re-requesting
-		// deleted topics.
-		backoff("empty fetch response due to all partitions having retryable errors")
 	}
 	return fetched
 }
 
-// Parses a fetch response into a Fetch, offsets to reload, and whether
-// metadata needs updating.
+// Parses a fetch response into a Fetch, offsets to reload, the cursors whose
+// partition errored, and whether metadata needs updating.
 //
 // This function reads cursor fields which may be updated outside of consumer
 // sessions, thus, we need to run this only inside a consumer session.
@@ -1239,13 +1289,12 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 	f Fetch,
 	reloadOffsets listOrEpochLoads,
 	preferreds cursorPreferreds,
-	allErrsStripped bool,
+	errored []*cursor,
 	updateWhy multiUpdateWhy,
 ) {
 	f = Fetch{Topics: make([]FetchTopic, 0, len(resp.Topics))}
 	var (
 		debugWhyStripped multiUpdateWhy
-		numErrsStripped  int
 		kip320           = s.cl.supportsOffsetForLeaderEpoch()
 		kmove            kip951move
 		// seen guards against a broker returning the same partition (or the
@@ -1261,7 +1310,6 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 	defer kmove.maybeBeginMove(s.cl)
 
 	strip := func(t string, p int32, err error) {
-		numErrsStripped++
 		if s.cl.cfg.logger.Level() < LogLevelDebug {
 			return
 		}
@@ -1341,6 +1389,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					continue
 				}
 				updateWhy.add(topic, partition, fp.Err)
+				errored = append(errored, c)
 
 				// Refetching the batch can only fail the same way.
 				// We keep the partition so the error reaches
@@ -1363,16 +1412,15 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			// containing the fetch offset"). Nothing buffers, no
 			// error is set, and the cursor re-enables at the same
 			// offset, so the next fetch re-requests immediately and
-			// the loop runs hot at round-trip pace. Strip the
-			// partition: if the whole response is such non-progress,
-			// the allErrsStripped backoff below paces us like any
-			// other all-stripped response. Legitimate empties are
-			// excluded: a caught-up partition has no batch bytes,
-			// control/aborted records advance the offset even when
-			// not kept, and a compacted empty batch advances via its
-			// preserved last offset.
+			// the loop runs hot at round-trip pace. We strip the
+			// partition and back it off as if it errored. Legitimate
+			// empties are excluded: a caught-up partition has no
+			// batch bytes, control/aborted records advance the
+			// offset even when not kept, and a compacted empty batch
+			// advances via its preserved last offset.
 			if fp.Err == nil && len(fp.Records) == 0 && partOffset.offset == priorOffset && len(rp.RecordBatches) > 0 {
 				strip(topic, partition, errFetchNoProgress)
+				errored = append(errored, c)
 				continue
 			}
 
@@ -1398,6 +1446,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 			case nil:
 				c.unknownIDFails.Store(0)
+				c.fetchFails.Store(0)
 				keep = true
 
 			case kerr.UnknownTopicID:
@@ -1581,7 +1630,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		s.cl.cfg.logger.Log(LogLevelDebug, "fetch stripped partitions", "why", debugWhyStripped.reason(""))
 	}
 
-	return f, reloadOffsets, preferreds, req.numOffsets == numErrsStripped, updateWhy
+	return f, reloadOffsets, preferreds, errored, updateWhy
 }
 
 func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchResponseTopicPartition, decompressor Decompressor, hooks hooks) (fp FetchPartition) {
