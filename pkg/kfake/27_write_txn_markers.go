@@ -138,6 +138,9 @@ func (c *Cluster) writeTxnMarker(pd *partData, pid int64, epoch int16, commit bo
 		}
 		pidinf.txPartFirstOffsets.delp(pd.t, pd.p)
 		pidinf.txPartBytes.delp(pd.t, pd.p)
+		if pw, ok := pidinf.windows.getp(pd.t, pd.p); ok {
+			pw.lastTimestamp = b.MaxTimestamp
+		}
 	}
 	return controlOffset
 }

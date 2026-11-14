@@ -403,7 +403,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 						errCode = kerr.InvalidProducerEpoch.Code
 					default:
 						var seqOk bool
-						seqOk, dup, baseOffset = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords, pd.highWatermark)
+						seqOk, dup, baseOffset = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords, pd.highWatermark, b.MaxTimestamp)
 						if !seqOk {
 							errCode = kerr.OutOfOrderSequenceNumber.Code
 						}

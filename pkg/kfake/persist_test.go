@@ -9,6 +9,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -853,46 +854,18 @@ func TestPersistSyncWritesDeleteCrash(t *testing.T) {
 // that is open at the crash is aborted: a commit after the restart fails.
 func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir, openDir := t.TempDir(), t.TempDir()
 
 	const topic = "txn-oc-topic"
 	const group = "txn-oc-group"
+	const txid = "txn-oc-txid"
 
 	var pid int64
 	var epoch int16
-	txnOffsetCommit := func(ctx context.Context, c *Cluster, cl *kgo.Client, offset int64) {
-		t.Helper()
-		tocReq := kmsg.NewTxnOffsetCommitRequest()
-		tocReq.TransactionalID = "txn-oc-txid"
-		tocReq.ProducerID = pid
-		tocReq.ProducerEpoch = epoch
-		tocReq.Group = group
-		tocReq.Generation = -1
-		tocReq.MemberID = ""
-		tocT := kmsg.NewTxnOffsetCommitRequestTopic()
-		tocT.Topic, tocT.TopicID = topic, c.TopicInfo(topic).TopicID
-		tocP := kmsg.NewTxnOffsetCommitRequestTopicPartition()
-		tocP.Partition = 0
-		tocP.Offset = offset
-		tocP.LeaderEpoch = -1
-		tocT.Partitions = append(tocT.Partitions, tocP)
-		tocReq.Topics = append(tocReq.Topics, tocT)
-		tocR, err := tocReq.RequestWith(ctx, cl)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, rt := range tocR.Topics {
-			for _, rp := range rt.Partitions {
-				if rp.ErrorCode != 0 {
-					t.Fatalf("TxnOffsetCommit %s/%d failed with code %d", rt.Topic, rp.Partition, rp.ErrorCode)
-				}
-			}
-		}
-	}
 	endTxn := func(ctx context.Context, cl *kgo.Client) *kmsg.EndTxnResponse {
 		t.Helper()
 		endReq := kmsg.NewEndTxnRequest()
-		endReq.TransactionalID = "txn-oc-txid"
+		endReq.TransactionalID = txid
 		endReq.ProducerID = pid
 		endReq.ProducerEpoch = epoch
 		endReq.Commit = true
@@ -915,69 +888,33 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 		// Produce some records
 		produceN(t, c, topic, 10)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		// Use all raw kmsg requests for the transactional flow so we
-		// control the ProducerID/Epoch explicitly.
 		cl := newPlainClient(t, c)
 
-		// InitProducerID
-		initReq := kmsg.NewInitProducerIDRequest()
-		initReq.TransactionalID = new("txn-oc-txid")
-		initReq.TransactionTimeoutMillis = 30000
-		initReq.ProducerID = -1
-		initReq.ProducerEpoch = -1
-		initResp, err := initReq.RequestWith(ctx, cl)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if initResp.ErrorCode != 0 {
-			t.Fatalf("InitProducerID failed with code %d", initResp.ErrorCode)
-		}
-		pid = initResp.ProducerID
-		epoch = initResp.ProducerEpoch
-
-		// AddOffsetsToTxn: register the group with the transaction
-		aotReq := kmsg.NewAddOffsetsToTxnRequest()
-		aotReq.TransactionalID = "txn-oc-txid"
-		aotReq.ProducerID = pid
-		aotReq.ProducerEpoch = epoch
-		aotReq.Group = group
-		aotResp, err := aotReq.RequestWith(ctx, cl)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if aotResp.ErrorCode != 0 {
-			t.Fatalf("AddOffsetsToTxn failed with code %d", aotResp.ErrorCode)
-		}
-
-		// TxnOffsetCommit: commit offset 7 for the group, which, as in
-		// Kafka, creates the group.
-		txnOffsetCommit(ctx, c, cl, 7)
+		// The transaction commits offset 7 for the group, which, as in
+		// Kafka, the TxnOffsetCommit creates.
+		commit := stageTxnOffset(t, c, cl, txid, group, topic, 7)
 		if c.GroupInfo(group) == nil {
 			t.Fatal("TxnOffsetCommit at generation -1 did not create the group")
 		}
+		commit()
 
-		// EndTxn: commit the transaction
-		endResp := endTxn(ctx, cl)
-		if endResp.ErrorCode != 0 {
-			t.Fatalf("EndTxn failed with code %d", endResp.ErrorCode)
-		}
-
-		// A second transaction stages offset 9 (TxnOffsetCommit v5+
-		// adds the group) and is open at the crash.
-		epoch = endResp.ProducerEpoch
-		txnOffsetCommit(ctx, c, cl, 9)
+		// A second transaction stages offset 9 and is open at the crash.
+		stageTxnOffset(t, c, cl, txid, group, topic, 9)
+		c.admin(func() { pid, epoch = c.pids.byTxid[txid].id, c.pids.byTxid[txid].epoch })
 
 		cl.Close()
-		// Crash: don't call c.Close()
+		// Crash: don't call c.Close(). openDir crashes with the second
+		// transaction open, dir right after its EndTxn logs a commit.
+		copyDir(t, dir, openDir)
+		c.admin(func() {
+			c.persistPIDEntry(pidLogEntry{Type: "prepare", PID: pid, Commit: new(true), Offsets: persistTxOffsets(c.pids.ids[pid].txOffsets)})
+		})
 	}
 
 	// Phase 2: reopen, verify transactional offset commit survived
 	{
 		c := newCluster(t,
-			DataDir(dir),
+			DataDir(openDir),
 			NumBrokers(1),
 		)
 
@@ -999,6 +936,96 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 		if o := groupCommits(c, group)[topic][0]; o.Offset != 7 {
 			t.Fatalf("expected committed offset 7 after the failed commit, got %d", o.Offset)
 		}
+	}
+
+	// Phase 3: the restart finishes the logged commit, and a retry of
+	// its EndTxn succeeds.
+	{
+		c := newCluster(t, DataDir(dir), NumBrokers(1))
+		o := groupCommits(c, group)[topic][0]
+		if code := endTxn(context.Background(), newPlainClient(t, c)).ErrorCode; code != 0 || o.Offset != 9 {
+			t.Fatalf("after a logged commit: got offset %d and EndTxn %v, want 9 and success", o.Offset, kerr.ErrorForCode(code))
+		}
+	}
+}
+
+// TestPersistPIDsLogReplay verifies how a restart ends the transactions
+// that pids.log leaves open: a begin after a prepare is a new transaction,
+// which aborts; a pids.log compaction while the restart ends transactions
+// keeps the prepare entries of those it has yet to end; and an EndTxn whose
+// prepare write fails leaves its transaction open.
+func TestPersistPIDsLogReplay(t *testing.T) {
+	t.Parallel()
+	commit := new(true)
+	logged := func(entries ...pidLogEntry) func(*testing.T, *Cluster) {
+		return func(_ *testing.T, c *Cluster) {
+			for _, e := range entries {
+				c.persistPIDEntry(e)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name         string
+		setup        func(*testing.T, *Cluster)
+		compactBytes string // state.log.compact.bytes at the restart
+		want         map[string]string
+	}{
+		{"begin-after-prepare", logged(
+			pidLogEntry{Type: "init", PID: 1, TxID: "a", Timeout: 60000},
+			pidLogEntry{Type: "prepare", PID: 1, Commit: commit},
+			pidLogEntry{Type: "begin", PID: 1}, // the init after the prepare failed
+		), "", map[string]string{"a": "CompleteAbort"}},
+		{"compact-while-ending", logged(append([]pidLogEntry{
+			{Type: "init", PID: 1, TxID: "a", Timeout: 60000},
+			{Type: "begin", PID: 1},
+			{Type: "prepare", PID: 1, Commit: commit},
+			{Type: "init", PID: 2, TxID: "b", Timeout: 60000},
+			{Type: "begin", PID: 2},
+			{Type: "prepare", PID: 2, Commit: commit},
+		}, slices.Repeat([]pidLogEntry{{Type: "expire", PID: 3}}, 10)...)...), "300", map[string]string{"a": "CompleteCommit", "b": "CompleteCommit"}},
+		{"failed-prepare", func(t *testing.T, c *Cluster) {
+			pidinf := c.pids.create(new("a"), 60000)
+			pidinf.persist()
+			pidinf.maybeStart()
+			c.fs.(*memFS).failNextWrite = &testError{"injected"}
+			req := &kmsg.EndTxnRequest{TransactionalID: "a", ProducerID: pidinf.id, Commit: true}
+			resp := c.pids.doEnd(&clientReq{cc: &clientConn{b: c.coordinator("a")}, kreq: req}).(*kmsg.EndTxnResponse)
+			if resp.ErrorCode != kerr.NotCoordinator.Code {
+				t.Errorf("EndTxn with a failed prepare write: got %v, want NOT_COORDINATOR", kerr.ErrorForCode(resp.ErrorCode))
+			}
+		}, "", map[string]string{"a": "CompleteAbort"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mfs := newTestMemFS()
+			c := newCluster(t, mfs.opt(), NumBrokers(1))
+			c.admin(func() { tc.setup(t, c) })
+
+			opts := []Opt{mfs.clone().opt(), NumBrokers(1)}
+			if tc.compactBytes != "" {
+				opts = append(opts, BrokerConfigs(map[string]string{"state.log.compact.bytes": tc.compactBytes}))
+			}
+			c = newCluster(t, opts...)
+			c.admin(func() {
+				for txid, state := range tc.want {
+					if got := c.pids.byTxid[txid].state(); got != state {
+						t.Errorf("%s after the restart: got %s, want %s", txid, got, state)
+					}
+				}
+				if tc.compactBytes == "" {
+					return
+				}
+				raw, _ := c.fs.ReadFile(filepath.Join(c.cfg.dataDir, "pids.log"))
+				entries, _ := readEntries(raw)
+				for _, e := range entries {
+					var entry pidLogEntry
+					json.Unmarshal(e.data, &entry)
+					if entry.Type == "begin" {
+						t.Errorf("the restart compacted pids.log with pid %d still open", entry.PID)
+					}
+				}
+			})
+		})
 	}
 }
 
@@ -1564,6 +1591,11 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 		if pi.LastStableOffset != pi.HighWatermark {
 			t.Fatalf("LSO should equal HWM after implicit abort: LSO=%d HWM=%d", pi.LastStableOffset, pi.HighWatermark)
 		}
+		// The abort is a marker in the log, after 3 records, a commit
+		// marker, and 2 records, so a later replay sees it.
+		if pi.HighWatermark != 7 {
+			t.Fatalf("expected an abort marker at offset 6, got HWM %d", pi.HighWatermark)
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1721,11 +1753,13 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 	}
 
 	// Phase 2: reopen with same memFS, verify in-progress txn is preserved.
+	var crashed *testMemFS
 	{
 		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 		)
+		crashed = mfs.clone()
 
 		// LSO should be behind HWM (in-progress transaction).
 		pi := c.PartitionInfo(topic, 0)
@@ -1807,6 +1841,13 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 			}
 			t.Fatalf("read_committed after EndTxn: expected 5 records, got %d: %v", len(all), vals)
 		}
+	}
+
+	// Phase 3: a crash right after phase 2's restart aborts the
+	// transaction rather than leaving the LSO stuck below it.
+	c := newCluster(t, crashed.opt(), NumBrokers(1))
+	if pi := c.PartitionInfo(topic, 0); pi.LastStableOffset != pi.HighWatermark {
+		t.Fatalf("after a crash: LSO=%d HWM=%d, want equal", pi.LastStableOffset, pi.HighWatermark)
 	}
 }
 
@@ -2581,7 +2622,8 @@ func TestPersistSessionStateClassicGroup(t *testing.T) {
 }
 
 // TestPersistSeqWindowDedup verifies that sequence window deduplication
-// works correctly across a clean restart. A produce retry after restart
+// works correctly across a clean restart and a crash, including for a
+// producer that skipped InitProducerID. A produce retry after restart
 // should return the original offset, not write a duplicate batch.
 func TestPersistSeqWindowDedup(t *testing.T) {
 	t.Parallel()
@@ -2625,7 +2667,7 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 
 	var pid int64
 	var epoch int16
-	var origOffset int64
+	var origOffset, seq3Offset, uninitOffset int64
 
 	// Phase 1: init PID, produce 3 batches, close cleanly
 	{
@@ -2711,6 +2753,7 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 		if p2.BaseOffset <= origOffset {
 			t.Fatalf("new produce: expected offset > %d, got %d", origOffset, p2.BaseOffset)
 		}
+		seq3Offset = p2.BaseOffset
 
 		// Verify record count: should have exactly 4 records (3 original + 1 new, no dups)
 		consumer := newPlainClient(t, c,
@@ -2728,6 +2771,66 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 			}
 			t.Fatalf("expected exactly 4 records (no dups), got %d; offsets=%v", len(records), offsets)
 		}
+
+		// A producer that skipped InitProducerID.
+		resp3, err := buildProduce(12345, 0, 0).RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		uninitOffset = resp3.Topics[0].Partitions[0].BaseOffset
+	}
+
+	// Phase 3: a crash after phase 2: the retries of seq=3 and of the
+	// uninitialized producer's batch are still dups.
+	c := newCluster(t, DataDir(dir), NumBrokers(1))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	for _, retry := range []struct {
+		pid    int64
+		epoch  int16
+		seq    int32
+		offset int64
+	}{{pid, epoch, 3, seq3Offset}, {12345, 0, 0, uninitOffset}} {
+		resp, err := buildProduce(retry.pid, retry.epoch, retry.seq).RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p := resp.Topics[0].Partitions[0]; p.ErrorCode != 0 || p.BaseOffset != retry.offset {
+			t.Fatalf("retry of pid %d after a crash: got offset %d and %v, want %d", retry.pid, p.BaseOffset, kerr.ErrorForCode(p.ErrorCode), retry.offset)
+		}
+	}
+}
+
+// TestPersistCompactedProducerDedup verifies that compaction keeps a
+// producer's last batch, empty once another producer supersedes its
+// records, so that a retry of it after a crash is still a duplicate.
+func TestPersistCompactedProducerDedup(t *testing.T) {
+	t.Parallel()
+	const topic = "compacted-dedup"
+	mfs := newTestMemFS()
+	c := newCluster(t, mfs.opt(), NumBrokers(1))
+	if err := c.CreateTopic(topic, 1, map[string]string{"cleanup.policy": "compact"}); err != nil {
+		t.Fatal(err)
+	}
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	for _, b := range []struct {
+		pid int64
+		seq int32
+		key string
+	}{{1, 0, "k"}, {2, 0, "k"}, {2, 1, "x"}} {
+		if p := produceRawV11(t, cl, topic, rawBatch(0, b.pid, 0, b.seq, kmsg.Record{Key: []byte(b.key), Value: []byte("v")})); p.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(p.ErrorCode))
+		}
+	}
+	c.Compact()
+
+	c = newCluster(t, mfs.clone().opt(), NumBrokers(1))
+	cl = newPlainClient(t, c, kgo.MaxVersions(v))
+	if p := produceRawV11(t, cl, topic, rawBatch(0, 1, 0, 0, kmsg.Record{Key: []byte("k"), Value: []byte("v")})); p.ErrorCode != 0 || p.BaseOffset != 0 {
+		t.Fatalf("retry after compaction and a crash: got offset %d and %v, want the original 0", p.BaseOffset, kerr.ErrorForCode(p.ErrorCode))
 	}
 }
 

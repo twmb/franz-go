@@ -1128,9 +1128,11 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	})
 
 	// NewCluster refuses a broker config that AlterConfigs refuses.
-	if bad, err := NewCluster(NumBrokers(1), BrokerConfigs(map[string]string{"log.retention.ms": "abc"})); err == nil {
-		bad.Close()
-		t.Error("NewCluster accepted log.retention.ms=abc")
+	for k, v := range map[string]string{"log.retention.ms": "abc", "offsets.retention.minutes": "0"} {
+		if bad, err := NewCluster(NumBrokers(1), BrokerConfigs(map[string]string{k: v})); err == nil {
+			bad.Close()
+			t.Errorf("NewCluster accepted %s=%s", k, v)
+		}
 	}
 
 	// Unsupported resource type.
@@ -1785,9 +1787,11 @@ func TestDeleteTopicsByID(t *testing.T) {
 
 // TestDescribeProducers verifies that every replica
 // answers DescribeProducers, that a producer stays listed after its
-// transaction ends, and that the transaction's start offset shows only while
-// the transaction is open on the partition: a WriteTxnMarkers marker ends it
-// there, and a marker below the producer's epoch is rejected.
+// transaction ends, that its last timestamp is its last batch's, that the
+// transaction's start offset shows only while the transaction is open on the
+// partition: a WriteTxnMarkers marker ends it there, and a marker below the
+// producer's epoch is rejected, and that an idempotent producer expires
+// producer.id.expiration.ms after its last batch.
 func TestDescribeProducers(t *testing.T) {
 	t.Parallel()
 	topic := "describe-producers"
@@ -1831,10 +1835,12 @@ func TestDescribeProducers(t *testing.T) {
 	if err := producer.BeginTransaction(); err != nil {
 		t.Fatal(err)
 	}
-	if err := producer.ProduceSync(ctx, kgo.StringRecord("txn-data")).FirstErr(); err != nil {
+	if err := producer.ProduceSync(ctx, &kgo.Record{Value: []byte("txn-data"), Timestamp: time.UnixMilli(1000)}).FirstErr(); err != nil {
 		t.Fatal(err)
 	}
-	describe(0)
+	if ap := describe(0); ap.LastTimestamp != 1000 {
+		t.Fatalf("got last timestamp %d, want the batch's 1000", ap.LastTimestamp)
+	}
 	if err := producer.EndTransaction(ctx, kgo.TryCommit); err != nil {
 		t.Fatal(err)
 	}
@@ -1875,6 +1881,18 @@ func TestDescribeProducers(t *testing.T) {
 	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
 		t.Fatal(err)
 	}
+
+	idem := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	if err := idem.ProduceSync(ctx, &kgo.Record{Value: []byte("idem"), Timestamp: time.UnixMilli(1000)}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	c.admin(func() {
+		c.bcfgs["producer.id.expiration.ms"] = new("1000")
+		c.pids.expireProducers()
+		if len(c.pids.ids) != 1 || c.pids.byTxid["desc-prod-txn"] == nil {
+			t.Errorf("after the idempotent producer expired: got %d producers, want only the transactional one", len(c.pids.ids))
+		}
+	})
 }
 
 // TestTxnProduceAndCommit verifies a basic transactional produce + commit flow.

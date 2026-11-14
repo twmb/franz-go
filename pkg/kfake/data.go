@@ -103,6 +103,7 @@ type (
 		epoch               int32
 		numRecords          int32
 		inTx                bool // in an uncommitted transaction
+		control             bool // a transaction marker
 	}
 
 	partData struct {
@@ -199,6 +200,7 @@ func (b *partBatch) meta(segPos int64) batchMeta {
 		epoch:               b.epoch,
 		numRecords:          b.NumRecords,
 		inTx:                b.inTx,
+		control:             b.Attributes&0x0020 != 0,
 	}
 }
 
@@ -840,8 +842,9 @@ func isListConfig(name string) bool {
 }
 
 // validateBrokerConfig returns whether v is a valid value for broker config k:
-// a value of the key's type, and for the two intervals we start tickers with,
-// one Kafka accepts. A key we do not know accepts any value.
+// a value of the key's type, and for the two intervals we start tickers with
+// and producer.id.expiration.ms, one Kafka accepts. A key we do not know
+// accepts any value.
 func validateBrokerConfig(k string, v *string) bool {
 	if v == nil {
 		return true
@@ -853,7 +856,7 @@ func validateBrokerConfig(k string, v *string) bool {
 	case "log.cleaner.backoff.ms": // Kafka: at least 0
 		n, _ := strconv.ParseInt(*v, 10, 64)
 		return n >= 0
-	case "offsets.retention.check.interval.ms": // Kafka: at least 1
+	case "offsets.retention.minutes", "offsets.retention.check.interval.ms", "producer.id.expiration.ms": // Kafka: at least 1
 		n, _ := strconv.ParseInt(*v, 10, 64)
 		return n >= 1
 	}
@@ -937,6 +940,7 @@ var validBrokerConfigs = map[string]string{
 	"log.message.timestamp.type":                "message.timestamp.type",
 	"transaction.max.timeout.ms":                "",
 	"transactional.id.expiration.ms":            "",
+	"producer.id.expiration.ms":                 "",
 	"log.retention.bytes":                       "retention.bytes",
 	"log.retention.ms":                          "retention.ms",
 	"log.segment.bytes":                         "segment.bytes",
@@ -1075,6 +1079,7 @@ var configDefaults = map[string]string{
 
 	"transaction.max.timeout.ms":     "900000",
 	"transactional.id.expiration.ms": "604800000",
+	"producer.id.expiration.ms":      "86400000",
 
 	"state.log.compact.bytes": "10485760",
 
@@ -1167,6 +1172,7 @@ var configTypes = map[string]kmsg.ConfigType{
 	"super.users":                               kmsg.ConfigTypeList,
 	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
 	"transactional.id.expiration.ms":            kmsg.ConfigTypeInt,
+	"producer.id.expiration.ms":                 kmsg.ConfigTypeInt,
 }
 
 var brokerRack = "krack"
@@ -1242,6 +1248,10 @@ const defTxnIDExpirationMs = 604800000 // 7 days
 
 func (c *Cluster) txnIDExpirationMs() int32 {
 	return c.brokerConfigInt("transactional.id.expiration.ms", defTxnIDExpirationMs)
+}
+
+func (c *Cluster) producerIDExpirationMs() int32 {
+	return c.brokerConfigInt("producer.id.expiration.ms", 86400000)
 }
 
 func (c *Cluster) fetchSessionCacheSlots() int32 {
@@ -1616,6 +1626,21 @@ func (c *Cluster) compact(pd *partData, topic string) {
 		return
 	}
 
+	// Like Kafka, we keep the last data batch of each producer we still
+	// have, empty if no record survives: a restart rebuilds the
+	// producer's sequences from the log.
+	lastData := make(map[int64]int64) // producer ID => first offset
+	pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
+		if m.producerID >= 0 && !m.control {
+			lastData[m.producerID] = m.firstOffset
+		}
+		return true
+	})
+	isLastData := func(b *partBatch) bool {
+		off, ok := lastData[b.ProducerID]
+		return ok && off == b.FirstOffset && c.pids.ids[b.ProducerID] != nil
+	}
+
 	// Pass 2: stream batches again, filtering and keeping survivors.
 	// Also track which PIDs still have surviving data batches.
 	survivingPIDs := make(map[int64]bool)
@@ -1667,6 +1692,9 @@ func (c *Cluster) compact(pd *partData, topic string) {
 		})
 
 		if len(surviving) == 0 {
+			if isLastData(batch) {
+				kept = append(kept, rebuildBatch(batch, nil))
+			}
 			return true
 		}
 
@@ -1808,7 +1836,7 @@ func rebuildBatch(orig *partBatch, kept []kmsg.Record) *partBatch {
 		PartitionLeaderEpoch: orig.PartitionLeaderEpoch,
 		Magic:                2,
 		Attributes:           orig.Attributes &^ 0x0007, // clear compression bits (uncompressed)
-		LastOffsetDelta:      kept[len(kept)-1].OffsetDelta,
+		LastOffsetDelta:      orig.LastOffsetDelta,      // as Kafka, so the batch keeps its producer's last sequence
 		FirstTimestamp:       orig.FirstTimestamp,
 		MaxTimestamp:         orig.FirstTimestamp,
 		ProducerID:           orig.ProducerID,
@@ -1825,7 +1853,9 @@ func rebuildBatch(orig *partBatch, kept []kmsg.Record) *partBatch {
 			b.MaxTimestamp = ts
 		}
 	}
-	if orig.Attributes&0x0008 != 0 { // LogAppendTime: clients stamp every record with it
+	// A LogAppendTime batch keeps its time, which clients stamp every
+	// record with, and so does a batch with no records left, as in Kafka.
+	if orig.Attributes&0x0008 != 0 || len(kept) == 0 {
 		b.MaxTimestamp = orig.MaxTimestamp
 	}
 

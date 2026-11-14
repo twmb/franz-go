@@ -43,10 +43,10 @@ Assignors: uniform (default, maps to kgo sticky balancer) and range.
 - All txn coordinator epoch errors use PRODUCER_FENCED, mapped to INVALID_PRODUCER_EPOCH for request versions that predate it in the handlers; the produce path and TxnOffsetCommit (group coordinator) use INVALID_PRODUCER_EPOCH.
 - Coordinator requests look the producer up by transactional ID (`txnPid`), never by producer ID alone.
 - InitProducerID accepts epoch <= server epoch, so a stale epoch from a timeout bump recovers instead of retrying forever. Idempotent (nil txid) and unknown (expired) txids get a fresh PID.
-- Persistence: pids.log `init` entries carry the full producer state; `begin` marks an open transaction, which a crash restart aborts (bump, CompleteAbort) unless session state restores it.
+- Persistence: pids.log `init` entries carry the full producer state; `begin` marks an open transaction. `prepare` records an EndTxn's decision before its markers. A crash restart ends a transaction that session state does not restore as its `prepare` entry decided, else aborts it with a bump that fences the producer.
 - KIP-447: OffsetFetch with `RequireStable=true` returns `UNSTABLE_OFFSET_COMMIT` for each partition an open transaction commits (`pids.hasUnstableOffset`).
 
-**Concurrency**: everything runs on `Cluster.run()`, nothing has a goroutine of its own, and timers hand their work back through the loop. The one exception: while the loop is paused inside a `Fault.When`, `admin` runs its function inline under `whenMu`, for the `When` and for any other caller.
+**Concurrency**: everything runs on `Cluster.run()`, nothing has a goroutine of its own, and timers hand their work back through the loop. The exceptions: while the loop is paused inside a `Fault.When`, `admin` runs its function inline under `whenMu`, for the `When` and for any other caller; and a cluster loading a data directory loads its partitions on parallel goroutines (`forEachPartition`) before the loop starts, each touching only its own partition.
 
 ## ACLs
 

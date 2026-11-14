@@ -3,6 +3,7 @@ package kfake
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"slices"
 	"strconv"
@@ -20,6 +21,19 @@ type testMemFS struct{ fs fs }
 
 func newTestMemFS() *testMemFS { return &testMemFS{fs: newMemFS()} }
 func (m *testMemFS) opt() Opt  { return withFS(m.fs) }
+
+// clone copies the files as they are now: a cluster opened on the clone
+// restarts as if we crashed now.
+func (m *testMemFS) clone() *testMemFS {
+	src, dst := m.fs.(*memFS), newMemFS()
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	for name, d := range src.files {
+		dst.files[name] = &memFileData{data: slices.Clone(d.data), modTime: d.modTime}
+	}
+	maps.Copy(dst.dirs, src.dirs)
+	return &testMemFS{fs: dst}
+}
 
 func newCluster(t *testing.T, opts ...Opt) *Cluster {
 	t.Helper()

@@ -22,9 +22,10 @@ import (
 // bumps the epoch on each commit/abort and returns the new epoch.
 // Produce v12+ implicitly adds partitions to the transaction.
 //
-// kfake completes transactions synchronously (no log writes), so
-// the PREPARE_COMMIT, PREPARE_ABORT, and pendingTransitionInProgress
-// states are not needed. Where a real broker returns
+// kfake completes transactions synchronously, so the PREPARE_COMMIT,
+// PREPARE_ABORT, and pendingTransitionInProgress states are not needed;
+// with DataDir, only a restart sees the prepare entry that pids.log
+// keeps for a crash during EndTxn. Where a real broker returns
 // CONCURRENT_TRANSACTIONS for in-progress transitions, kfake simply
 // completes the operation immediately.
 //
@@ -43,6 +44,8 @@ type (
 		txs     map[*pidinfo]struct{} // active transactions being tracked for timeout
 		txTimer *time.Timer
 		c       *Cluster
+
+		producerCheck time.Time // when expireProducers last ran
 	}
 
 	// Seq/txn info for a given individual producer ID.
@@ -106,6 +109,12 @@ type (
 		seen    bool  // true after the first batch has been accepted
 		epoch   int16 // last seen epoch; when epoch changes, seq 0 is accepted
 		nextSeq int32 // next expected firstSequence (authoritative, survives window rotation)
+
+		// lastTimestamp is what DescribeProducers reports and what
+		// producer.id.expiration.ms counts from: the max timestamp of
+		// the producer's last batch here, or the time of its last
+		// marker, as in Kafka.
+		lastTimestamp int64
 	}
 )
 
@@ -183,7 +192,8 @@ func (pids *pids) updateTimer() {
 			found = true
 		}
 	}
-	// Also schedule for the next transactional ID expiration.
+	// Also schedule for the next transactional ID expiration, and the
+	// next producer expiration check.
 	expirationMs := int64(pids.c.txnIDExpirationMs())
 	for _, pidinf := range pids.byTxid {
 		if pidinf.inTx {
@@ -194,6 +204,13 @@ func (pids *pids) updateTimer() {
 			nextExpire = expire
 			found = true
 		}
+	}
+	if pids.producerCheck.IsZero() {
+		pids.producerCheck = now
+	}
+	if check := pids.producerCheck.Add(producerExpirationCheckInterval); len(pids.ids) > 0 && (!found || check.Before(nextExpire)) {
+		nextExpire = check
+		found = true
 	}
 	if found {
 		pids.txTimer.Reset(time.Until(nextExpire))
@@ -207,7 +224,38 @@ func (pids *pids) updateTimer() {
 // under high throughput when the timer channel gets starved.
 func (pids *pids) handleTimeout() {
 	pids.expireTransactionalIDs()
+	if time.Since(pids.producerCheck) >= producerExpirationCheckInterval {
+		pids.expireProducers()
+	}
 	pids.updateTimer()
+}
+
+// producerExpirationCheckInterval is Kafka's default
+// producer.id.expiration.check.interval.ms.
+const producerExpirationCheckInterval = 10 * time.Minute
+
+// expireProducers drops a producer's state on each partition where it has
+// no open transaction and has written nothing for producer.id.expiration.ms,
+// counted from its last batch's timestamp, as Kafka does. An idempotent
+// producer left with no partition is gone; a transactional ID keeps its
+// producer until transactional.id.expiration.ms.
+func (pids *pids) expireProducers() {
+	pids.producerCheck = time.Now()
+	cutoff := pids.producerCheck.UnixMilli() - int64(pids.c.producerIDExpirationMs())
+	for id, pidinf := range pids.ids {
+		for t, ps := range pidinf.windows {
+			txParts := pidinf.txPartFirstOffsets[t]
+			for p, pw := range ps {
+				if _, inTx := txParts[p]; pw.lastTimestamp <= cutoff && !inTx {
+					pidinf.windows.delp(t, p)
+				}
+			}
+		}
+		if pidinf.txid == "" && len(pidinf.windows) == 0 {
+			delete(pids.ids, id)
+			pids.c.persistPIDEntry(pidLogEntry{Type: "expire", PID: id})
+		}
+	}
 }
 
 func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
@@ -295,7 +343,8 @@ func (pidinf *pidinfo) maybeStart() {
 	pidinf.inTx = true
 	pidinf.txStart = time.Now()
 	pidinf.pids.txs[pidinf] = struct{}{}
-	// If we crash before the transaction ends, the restart aborts it.
+	// If we crash before EndTxn logs its prepare entry, the restart
+	// aborts the transaction.
 	pidinf.pids.c.persistPIDEntry(pidLogEntry{Type: "begin", PID: pidinf.id})
 }
 
@@ -677,6 +726,15 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 		pidinf.txStart = time.Now()
 	}
 
+	// The decision goes to disk before any marker or offset: a restart
+	// finishes an end that a crash cut off, as Kafka does from its
+	// prepare record. Kafka answers a failed write NOT_COORDINATOR, and
+	// the client retries.
+	if err := pids.c.persistPIDEntry(pidLogEntry{Type: "prepare", PID: pidinf.id, Commit: &req.Commit, Offsets: persistTxOffsets(pidinf.txOffsets)}); err != nil {
+		resp.ErrorCode = kerr.NotCoordinator.Code
+		return resp
+	}
+
 	nBatches, nGroups := pidinf.txBatchCount, len(pidinf.txGroups)
 	endTxStart := time.Now()
 	pidinf.endTx(req.Commit)
@@ -724,7 +782,8 @@ func (pids *pids) get(id int64, t string, p int32, pd *partData) (*pidinfo, *pid
 // getOrCreateNonTx returns or creates producer state for a non-transactional
 // idempotent produce. Apache Kafka and Redpanda implicitly create producer
 // state on demand when the first batch arrives for an unknown (PID, epoch).
-// See twmb/franz-go#1281.
+// See twmb/franz-go#1281. We log a producer we create, so that a crash
+// restart keeps the sequence windows it rebuilds for it.
 func (pids *pids) getOrCreateNonTx(id int64, epoch int16, t string, p int32) (*pidinfo, *pidwindow) {
 	pidinf := pids.ids[id]
 	if pidinf == nil {
@@ -735,6 +794,7 @@ func (pids *pids) getOrCreateNonTx(id int64, epoch int16, t string, p int32) (*p
 			lastActive: time.Now(),
 		}
 		pids.ids[id] = pidinf
+		pidinf.persist()
 	}
 	return pidinf, pidinf.windows.mkpDefault(t, p)
 }
@@ -905,12 +965,10 @@ func (pidinf *pidinfo) endTx(commit bool) {
 		}
 	})
 
-	// Handle transactional offset commits
-	if commit && len(pidinf.txOffsets) > 0 {
-		// Apply pending offset commits to groups.
-		for _, groupID := range pidinf.txGroups {
-			groupOffsets, hasOffsets := pidinf.txOffsets[groupID]
-			if !hasOffsets || len(groupOffsets) == 0 {
+	// Apply pending offset commits to groups.
+	if commit {
+		for groupID, groupOffsets := range pidinf.txOffsets {
+			if len(groupOffsets) == 0 {
 				continue
 			}
 			g := pidinf.pids.c.groups.gs[groupID]
@@ -967,7 +1025,7 @@ func nextSeq(firstSeq, numRecs int32) int32 {
 // survives buffer rotation, so retries of committed-but-evicted
 // batches are correctly identified as dups or gaps rather than
 // false-positive OOOSN.
-func (s *pidwindow) pushAndValidate(epoch int16, firstSeq, numRecs int32, baseOffset int64) (ok, dup bool, dupOffset int64) {
+func (s *pidwindow) pushAndValidate(epoch int16, firstSeq, numRecs int32, baseOffset, maxTimestamp int64) (ok, dup bool, dupOffset int64) {
 	if s == nil {
 		return true, false, 0
 	}
@@ -977,14 +1035,7 @@ func (s *pidwindow) pushAndValidate(epoch int16, firstSeq, numRecs int32, baseOf
 		if s.seen && firstSeq != 0 {
 			return false, false, 0
 		}
-		next := nextSeq(firstSeq, numRecs)
-		s.seen = true
-		s.epoch = epoch
-		s.nextSeq = next
-		// Reset the window with the first entry.
-		s.entries = [5]pidEntry{{firstSeq, next, baseOffset}}
-		s.at = 1
-		s.count = 1
+		s.accept(epoch, firstSeq, numRecs, baseOffset, maxTimestamp)
 		return true, false, 0
 	}
 
@@ -1004,14 +1055,21 @@ func (s *pidwindow) pushAndValidate(epoch int16, firstSeq, numRecs int32, baseOf
 		return false, false, 0
 	}
 
-	// Accept: advance nextSeq and store the entry.
-	s.nextSeq = next
-	s.entries[s.at] = pidEntry{firstSeq, next, baseOffset}
-	s.at = (s.at + 1) % 5
-	if s.count < 5 {
-		s.count++
-	}
+	s.accept(epoch, firstSeq, numRecs, baseOffset, maxTimestamp)
 	return true, false, 0
+}
+
+// accept stores a batch in the window and advances nextSeq. A new epoch
+// starts the window over.
+func (s *pidwindow) accept(epoch int16, firstSeq, numRecs int32, offset, maxTimestamp int64) {
+	if !s.seen || epoch != s.epoch {
+		*s = pidwindow{seen: true, epoch: epoch}
+	}
+	s.lastTimestamp = maxTimestamp
+	s.nextSeq = nextSeq(firstSeq, numRecs)
+	s.entries[s.at] = pidEntry{firstSeq, s.nextSeq, offset}
+	s.at = (s.at + 1) % 5
+	s.count = min(s.count+1, 5)
 }
 
 func (pids *pids) doDescribeTransactions(creq *clientReq) kmsg.Response {
@@ -1245,12 +1303,11 @@ func (pids *pids) txnProducers(topic string, partition int32) []kmsg.DescribePro
 		ap.ProducerID = pidinf.id
 		ap.ProducerEpoch = int32(pw.epoch)
 		ap.LastSequence = (pw.nextSeq - 1) & math.MaxInt32
-		ap.LastTimestamp = pidinf.lastActive.UnixMilli()
+		ap.LastTimestamp = pw.lastTimestamp
 		ap.CoordinatorEpoch = 0
 		ap.CurrentTxnStartOffset = -1
 		if firstOffset, ok := pidinf.txPartFirstOffsets.getp(topic, partition); ok && *firstOffset >= 0 {
 			ap.CurrentTxnStartOffset = *firstOffset
-			ap.LastTimestamp = pidinf.txStart.UnixMilli()
 		}
 		producers = append(producers, ap)
 	}

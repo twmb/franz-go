@@ -636,126 +636,49 @@ func TestPersistTopicURLEscaping(t *testing.T) {
 	}
 }
 
-// TestPersistPIDEndTxAndTimeout verifies that PID state survives a
-// shutdown/restart cycle, testing init, endtx, and timeout log entries.
-func TestPersistPIDEndTxAndTimeout(t *testing.T) {
+// TestPersistPIDState verifies that a producer's epoch, timeout, and last
+// transaction outcome survive a restart.
+func TestPersistPIDState(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	c := newCluster(t, DataDir(dir), NumBrokers(1),
-		SeedTopics(1, "t"))
-
-	// PID 100: init, then endtx commit (epoch bump to 2).
-	p100 := &pidinfo{
-		pids:       &c.pids,
-		id:         100,
-		epoch:      1,
-		txid:       "tx-a",
-		txTimeout:  60000,
-		lastActive: time.Now(),
+	c := newCluster(t, DataDir(dir), NumBrokers(1))
+	rows := []struct {
+		id      int64
+		txid    string
+		timeout int32
+		commit  bool
+		state   string
+	}{
+		{100, "tx-a", 60000, true, "CompleteCommit"},
+		{200, "tx-b", 30000, false, "CompleteAbort"},
 	}
-	c.pids.ids[100] = p100
-	c.pids.byTxid["tx-a"] = p100
-	c.persistPIDEntry(pidLogEntry{Type: "init", PID: 100, Epoch: 1, TxID: "tx-a", Timeout: 60000})
-	c.persistPIDEntry(pidLogEntry{Type: "endtx", PID: 100, Epoch: 2, Commit: new(true)})
-	p100.epoch = 2
-	p100.ended = true
-	p100.lastWasCommit = true
-
-	// PID 200: init, then timeout (epoch bump to 2).
-	p200 := &pidinfo{
-		pids:       &c.pids,
-		id:         200,
-		epoch:      1,
-		txid:       "tx-b",
-		txTimeout:  30000,
-		lastActive: time.Now(),
+	for _, r := range rows {
+		pidinf := &pidinfo{
+			pids:          &c.pids,
+			id:            r.id,
+			epoch:         2,
+			txid:          r.txid,
+			txTimeout:     r.timeout,
+			ended:         true,
+			lastWasCommit: r.commit,
+			lastActive:    time.Now(),
+		}
+		c.pids.ids[r.id] = pidinf
+		c.pids.byTxid[r.txid] = pidinf
 	}
-	c.pids.ids[200] = p200
-	c.pids.byTxid["tx-b"] = p200
-	c.persistPIDEntry(pidLogEntry{Type: "init", PID: 200, Epoch: 1, TxID: "tx-b", Timeout: 30000})
-	c.persistPIDEntry(pidLogEntry{Type: "timeout", PID: 200, Epoch: 2})
-	p200.epoch = 2
-	p200.ended = true
-
-	// PID 300: init only - verifies lastWasCommit and txTimeout.
-	p300 := &pidinfo{
-		pids:          &c.pids,
-		id:            300,
-		epoch:         5,
-		txid:          "tx-c",
-		txTimeout:     90000,
-		ended:         true,
-		lastWasCommit: true,
-		lastActive:    time.Now(),
-	}
-	c.pids.ids[300] = p300
-	c.pids.byTxid["tx-c"] = p300
-
 	c.Close()
 
-	// Reopen - the pids.log has live entries (init+endtx+timeout).
-	// On shutdown, savePIDsLog rewrites as compacted "init" entries.
-	// So this tests both the live replay path AND the compacted path.
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-
-	// PID 100: endtx committed, epoch should be 2.
-	r100, ok := c2.pids.ids[100]
-	if !ok {
-		t.Fatal("PID 100 missing after restart")
-	}
-	if r100.epoch != 2 {
-		t.Fatalf("PID 100 epoch: expected 2, got %d", r100.epoch)
-	}
-	if r100.txid != "tx-a" {
-		t.Fatalf("PID 100 txid: expected tx-a, got %s", r100.txid)
-	}
-	if s := r100.state(); s != "CompleteCommit" {
-		t.Fatalf("PID 100 state: expected CompleteCommit, got %s", s)
-	}
-	if r100.txTimeout != 60000 {
-		t.Fatalf("PID 100 txTimeout: expected 60000, got %d", r100.txTimeout)
-	}
-
-	// PID 200: timeout, epoch should be 2.
-	r200, ok := c2.pids.ids[200]
-	if !ok {
-		t.Fatal("PID 200 missing after restart")
-	}
-	if r200.epoch != 2 {
-		t.Fatalf("PID 200 epoch: expected 2, got %d", r200.epoch)
-	}
-	if r200.txTimeout != 30000 {
-		t.Fatalf("PID 200 txTimeout: expected 30000, got %d", r200.txTimeout)
-	}
-	if s := r200.state(); s != "CompleteAbort" {
-		t.Fatalf("PID 200 state: expected CompleteAbort, got %s", s)
-	}
-
-	// PID 300: init only, verify lastWasCommit and txTimeout round-trip.
-	r300, ok := c2.pids.ids[300]
-	if !ok {
-		t.Fatal("PID 300 missing after restart")
-	}
-	if r300.epoch != 5 {
-		t.Fatalf("PID 300 epoch: expected 5, got %d", r300.epoch)
-	}
-	if s := r300.state(); s != "CompleteCommit" {
-		t.Fatalf("PID 300 state: expected CompleteCommit, got %s", s)
-	}
-	if r300.txTimeout != 90000 {
-		t.Fatalf("PID 300 txTimeout: expected 90000, got %d", r300.txTimeout)
-	}
-
-	// Verify byTxid lookups.
-	if c2.pids.byTxid["tx-a"] != r100 {
-		t.Fatal("byTxid[tx-a] mismatch")
-	}
-	if c2.pids.byTxid["tx-b"] != r200 {
-		t.Fatal("byTxid[tx-b] mismatch")
-	}
-	if c2.pids.byTxid["tx-c"] != r300 {
-		t.Fatal("byTxid[tx-c] mismatch")
+	for _, r := range rows {
+		p, ok := c2.pids.ids[r.id]
+		if !ok {
+			t.Fatalf("PID %d missing after restart", r.id)
+		}
+		if p.epoch != 2 || p.txTimeout != r.timeout || p.state() != r.state || c2.pids.byTxid[r.txid] != p {
+			t.Fatalf("PID %d after restart: epoch %d, timeout %d, state %s, byTxid match %v; want 2, %d, %s, true",
+				r.id, p.epoch, p.txTimeout, p.state(), c2.pids.byTxid[r.txid] == p, r.timeout, r.state)
+		}
 	}
 }
 
