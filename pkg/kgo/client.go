@@ -5252,40 +5252,21 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request, 
 
 func (*describeLogDirsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / configs: not retried
 
-// merge does not make sense for this function, but we provide one anyway.
-// We lose the error code for directories.
+// Each broker describes its own dirs, and brokers often share dir paths. We
+// keep each broker's dirs as their own entries so that one broker's sizes and
+// errors do not mix with another's. The merged response cannot say which
+// broker a dir is on; use RequestSharded for that.
 func (*describeLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDescribeLogDirsResponse()
-	dirs := make(map[string]map[string][]kmsg.DescribeLogDirsResponseDirTopicPartition)
-
-	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
+	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.DescribeLogDirsResponse)
 		merged.Version = resp.Version
 		merged.ThrottleMillis = resp.ThrottleMillis
-
-		for _, dir := range resp.Dirs {
-			mergeDir := dirs[dir.Dir]
-			if mergeDir == nil {
-				mergeDir = make(map[string][]kmsg.DescribeLogDirsResponseDirTopicPartition)
-				dirs[dir.Dir] = mergeDir
-			}
-			for _, topic := range dir.Topics {
-				mergeDir[topic.Topic] = append(mergeDir[topic.Topic], topic.Partitions...)
-			}
+		if merged.ErrorCode == 0 {
+			merged.ErrorCode = resp.ErrorCode
 		}
+		merged.Dirs = append(merged.Dirs, resp.Dirs...)
 	})
-	for dir, topics := range dirs {
-		md := kmsg.NewDescribeLogDirsResponseDir()
-		md.Dir = dir
-		for topic, partitions := range topics {
-			mdTopic := kmsg.NewDescribeLogDirsResponseDirTopic()
-			mdTopic.Topic = topic
-			mdTopic.Partitions = partitions
-			md.Topics = append(md.Topics, mdTopic)
-		}
-		merged.Dirs = append(merged.Dirs, md)
-	}
-	return merged, firstErr
 }
 
 // handles sharding DeleteGroupsRequest

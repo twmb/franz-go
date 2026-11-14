@@ -234,6 +234,11 @@ func TestDescribeLogDirsReportsStorageSize(t *testing.T) {
 	if len(resp.Dirs) == 0 {
 		t.Fatal("no dirs returned")
 	}
+	for _, dir := range resp.Dirs {
+		if dir.UsableBytes <= 0 {
+			t.Errorf("dir %s lost its usable bytes (%d) in the client's merge", dir.Dir, dir.UsableBytes)
+		}
+	}
 
 	var totalSize int64
 	var partCount int
