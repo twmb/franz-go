@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -1725,12 +1726,15 @@ func TestDeleteTopicsByID(t *testing.T) {
 	}
 }
 
-// TestDescribeProducersShowsActiveTransaction verifies that DescribeProducers
-// reports active transactional producers and clears them after commit.
-func TestDescribeProducersShowsActiveTransaction(t *testing.T) {
+// TestDescribeProducers verifies that every replica
+// answers DescribeProducers, that a producer stays listed after its
+// transaction ends, and that the transaction's start offset shows only while
+// the transaction is open on the partition: a WriteTxnMarkers marker ends it
+// there, and a marker below the producer's epoch is rejected.
+func TestDescribeProducers(t *testing.T) {
 	t.Parallel()
 	topic := "describe-producers"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c := newCoverCluster(t, NumBrokers(3), SeedTopics(1, topic))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -1738,51 +1742,81 @@ func TestDescribeProducersShowsActiveTransaction(t *testing.T) {
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID("desc-prod-txn"),
 	)
+	cl := newPlainClient(t, c)
+
+	// describe asks each of the 3 replicas and wants one producer with
+	// the given transaction start offset from each.
+	describe := func(wantStart int64) kmsg.DescribeProducersResponseTopicPartitionActiveProducer {
+		t.Helper()
+		var ap kmsg.DescribeProducersResponseTopicPartitionActiveProducer
+		for node := range 3 {
+			req := kmsg.NewPtrDescribeProducersRequest()
+			rt := kmsg.NewDescribeProducersRequestTopic()
+			rt.Topic = topic
+			rt.Partitions = []int32{0}
+			req.Topics = append(req.Topics, rt)
+			kresp, err := cl.Broker(node).Request(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sp := kresp.(*kmsg.DescribeProducersResponse).Topics[0].Partitions[0]
+			if err := kerr.ErrorForCode(sp.ErrorCode); err != nil {
+				t.Fatalf("broker %d: %v", node, err)
+			}
+			if len(sp.ActiveProducers) != 1 || sp.ActiveProducers[0].CurrentTxnStartOffset != wantStart {
+				t.Fatalf("broker %d: got producers %+v, want one with transaction start %d", node, sp.ActiveProducers, wantStart)
+			}
+			ap = sp.ActiveProducers[0]
+		}
+		return ap
+	}
+
 	if err := producer.BeginTransaction(); err != nil {
 		t.Fatal(err)
 	}
 	if err := producer.ProduceSync(ctx, kgo.StringRecord("txn-data")).FirstErr(); err != nil {
 		t.Fatal(err)
 	}
-
-	// Describe: we should see the active producer.
-	cl := newPlainClient(t, c)
-	req := kmsg.NewDescribeProducersRequest()
-	rt := kmsg.NewDescribeProducersRequestTopic()
-	rt.Topic = topic
-	rt.Partitions = []int32{0}
-	req.Topics = append(req.Topics, rt)
-
-	resp, err := req.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var activeCount int
-	for _, st := range resp.Topics {
-		for _, sp := range st.Partitions {
-			activeCount += len(sp.ActiveProducers)
-		}
-	}
-	if activeCount == 0 {
-		t.Error("expected active producer during open transaction")
-	}
-
-	// Commit transaction.
+	describe(0)
 	if err := producer.EndTransaction(ctx, kgo.TryCommit); err != nil {
 		t.Fatal(err)
 	}
+	describe(-1)
 
-	// Describe again: no active producers.
-	resp2, err := req.RequestWith(ctx, cl)
-	if err != nil {
+	// The second transaction is at a bumped epoch (KIP-890). Its records
+	// start after the first record and its commit marker.
+	if err := producer.BeginTransaction(); err != nil {
 		t.Fatal(err)
 	}
-	for _, st := range resp2.Topics {
-		for _, sp := range st.Partitions {
-			if len(sp.ActiveProducers) > 0 {
-				t.Errorf("expected no active producers after commit, got %d", len(sp.ActiveProducers))
-			}
+	if err := producer.ProduceSync(ctx, kgo.StringRecord("txn-data")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	ap := describe(2)
+	adm := kadm.NewClient(cl)
+	for _, m := range []struct {
+		epoch   int16
+		wantErr error
+	}{
+		{int16(ap.ProducerEpoch) - 1, kerr.InvalidProducerEpoch},
+		{int16(ap.ProducerEpoch), nil},
+	} {
+		written, err := adm.WriteTxnMarkers(ctx, kadm.TxnMarkers{
+			ProducerID:    ap.ProducerID,
+			ProducerEpoch: m.epoch,
+			Topics:        kadm.TopicsSet{topic: {0: {}}},
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
+		written.EachPartition(func(p kadm.TxnMarkersPartitionResponse) {
+			if !errors.Is(p.Err, m.wantErr) {
+				t.Fatalf("marker at epoch %d: got %v, want %v", m.epoch, p.Err, m.wantErr)
+			}
+		})
+	}
+	describe(-1)
+	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1833,11 +1867,12 @@ func TestTxnProduceAndCommit(t *testing.T) {
 }
 
 // TestListTransactionsFindsOngoing verifies that ListTransactions finds
-// ongoing transactions by state filter.
+// ongoing transactions by state filter, that only the coordinator lists a
+// transactional ID, and that a pattern matches the whole ID.
 func TestListTransactionsFindsOngoing(t *testing.T) {
 	t.Parallel()
 	topic := "list-txn-ongoing"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c := newCoverCluster(t, NumBrokers(3), SeedTopics(1, topic))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -1853,15 +1888,37 @@ func TestListTransactionsFindsOngoing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	adm := kadm.NewClient(newPlainClient(t, c))
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
 
 	// Unfiltered list.
 	listed, err := adm.ListTransactions(ctx, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := listed[txnID]; !ok {
+	if tx, ok := listed[txnID]; !ok {
 		t.Error("transaction not found in unfiltered list")
+	} else if want := c.CoordinatorFor(txnID); tx.Coordinator != want {
+		t.Errorf("listed by broker %d, want the coordinator %d", tx.Coordinator, want)
+	}
+
+	// Each broker lists only what it coordinates. An unknown state name
+	// matches nothing and comes back.
+	var n int
+	for node := range 3 {
+		req := kmsg.NewPtrListTransactionsRequest()
+		req.StateFilters = []string{"Ongoing", "ongoing"}
+		resp, err := req.RequestWith(ctx, cl.Broker(node))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n += len(resp.TransactionStates)
+		if !slices.Equal(resp.UnknownStateFilters, []string{"ongoing"}) {
+			t.Errorf("broker %d: unknown state filters %v, want [ongoing]", node, resp.UnknownStateFilters)
+		}
+	}
+	if n != 1 {
+		t.Errorf("brokers listed the transaction %d times, want 1", n)
 	}
 
 	// Filtered by state.
@@ -1869,11 +1926,19 @@ func TestListTransactionsFindsOngoing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, ok := listed2[txnID]
-	if !ok {
-		t.Error("transaction not found with Ongoing filter")
-	} else if tx.State != "Ongoing" {
-		t.Errorf("expected Ongoing state, got %q", tx.State)
+	if tx := listed2[txnID]; tx.State != "Ongoing" {
+		t.Errorf("Ongoing filter: got %+v for the transaction, want it listed as Ongoing", tx)
+	}
+
+	// A pattern matches the whole ID.
+	for pattern, want := range map[string]bool{"list-txn": false, "list-txn.*": true} {
+		listed, err := adm.ListTransactionsByTxPattern(ctx, nil, nil, pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := listed[txnID]; ok != want {
+			t.Errorf("pattern %q: listed %v, want %v", pattern, ok, want)
+		}
 	}
 
 	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
@@ -2205,7 +2270,9 @@ func TestListOffsetsReadCommittedDuringTxn(t *testing.T) {
 }
 
 // TestTxnAbortDiscardsOffsets verifies that offset commits staged in a
-// transaction are discarded when the transaction is aborted.
+// transaction are discarded when the transaction is aborted, and that a
+// regular commit after a staged one keeps its offset when the transaction
+// commits.
 func TestTxnAbortDiscardsOffsets(t *testing.T) {
 	t.Parallel()
 	topic := "txn-abort-offsets"
@@ -2295,6 +2362,34 @@ func TestTxnAbortDiscardsOffsets(t *testing.T) {
 	// created, because the abort discarded the staged offsets.
 	if o, ok := groupCommits(c, group)[topic][0]; ok {
 		t.Errorf("expected no committed offset after abort, got %d", o.Offset)
+	}
+
+	// The next transaction stages offset 3 (TxnOffsetCommit v5+ adds
+	// the group), then a regular commit sets 4, then the transaction
+	// commits: the newer regular commit stays.
+	commitReq.ProducerEpoch = endResp.ProducerEpoch
+	commitReq.Topics[0].Partitions[0].Offset = 3
+	if commitResp, err = commitReq.RequestWith(ctx, rawCl); err != nil {
+		t.Fatal(err)
+	}
+	if code := commitResp.Topics[0].Partitions[0].ErrorCode; code != 0 {
+		t.Fatal(kerr.ErrorForCode(code))
+	}
+	var regular kadm.Offsets
+	regular.Add(kadm.Offset{Topic: topic, Partition: 0, At: 4, LeaderEpoch: -1})
+	if err := kadm.NewClient(rawCl).CommitAllOffsets(ctx, group, regular); err != nil {
+		t.Fatal(err)
+	}
+	endReq.ProducerEpoch = endResp.ProducerEpoch
+	endReq.Commit = true
+	if endResp, err = endReq.RequestWith(ctx, rawCl); err != nil {
+		t.Fatal(err)
+	}
+	if endResp.ErrorCode != 0 {
+		t.Fatal(kerr.ErrorForCode(endResp.ErrorCode))
+	}
+	if o := groupCommits(c, group)[topic][0]; o.Offset != 4 {
+		t.Errorf("expected the regular commit's offset 4 after the transaction commits, got %d", o.Offset)
 	}
 }
 

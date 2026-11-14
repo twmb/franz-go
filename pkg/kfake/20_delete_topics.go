@@ -234,6 +234,8 @@ func (c *Cluster) deleteTopic(topic string, id uuid) {
 	// markers.
 	for _, pidinf := range c.pids.ids {
 		delete(pidinf.windows, topic)
+		delete(pidinf.txPartFirstOffsets, topic)
+		delete(pidinf.txPartBytes, topic)
 	}
 	// Share-partition state is topic-ID-keyed on a real broker and dies
 	// with the topic; kfake keys by name, so clear it explicitly: a

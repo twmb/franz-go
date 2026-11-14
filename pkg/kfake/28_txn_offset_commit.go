@@ -5,7 +5,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TxnOffsetCommit: v0-5
+// TxnOffsetCommit: v0-6
 //
 // Behavior:
 // * Stages offset commits as part of a transaction
@@ -14,7 +14,8 @@ import (
 // * v5+: Implicit group addition to transaction (KIP-890)
 //
 // Version notes:
-// * v2: ThrottleMillis
+// * v1: ThrottleMillis
+// * v2: LeaderEpoch (KIP-320)
 // * v3: Flexible versions, GenerationID and MemberID for zombie fencing (KIP-447)
 // * v4-5: No field changes; v5 enables implicit group addition (KIP-890)
 // * v6: TopicID replaces Topic (KIP-1319)
@@ -88,12 +89,26 @@ func (c *Cluster) handleTxnOffsetCommit(creq *clientReq) (kmsg.Response, error) 
 		return errResp(e.Code), nil
 	}
 
-	// ACL check: READ on each Topic
+	// ACL check: READ on each Topic. A topic we deny fails alone.
+	var denied []kmsg.TxnOffsetCommitResponseTopic
+	allowed := req.Topics[:0]
 	for _, rt := range req.Topics {
 		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, faultKey{txnID: req.TransactionalID, group: req.Group, topic: rt.Topic, misrouted: misrouted}); e != nil && creq.skipsWork(e) {
-			return errResp(e.Code), nil
+			st := kmsg.NewTxnOffsetCommitResponseTopic()
+			st.Topic = rt.Topic
+			st.TopicID = rt.TopicID
+			for _, rp := range rt.Partitions {
+				sp := kmsg.NewTxnOffsetCommitResponseTopicPartition()
+				sp.Partition = rp.Partition
+				sp.ErrorCode = e.Code
+				st.Partitions = append(st.Partitions, sp)
+			}
+			denied = append(denied, st)
+			continue
 		}
+		allowed = append(allowed, rt)
 	}
+	req.Topics = allowed
 
 	// A topic ID we do not know has no name to authorize, but a fault can
 	// still fail it.
@@ -105,14 +120,15 @@ func (c *Cluster) handleTxnOffsetCommit(creq *clientReq) (kmsg.Response, error) 
 			}
 		}
 	}
+	errTopics = append(errTopics, denied...)
 	if len(req.Topics) == 0 && len(errTopics) > 0 {
 		return errResp(0), nil
 	}
 
 	resp := c.pids.doTxnOffsetCommit(creq).(*kmsg.TxnOffsetCommitResponse)
 
-	// v6: echo TopicIDs on the response (the name is not on the wire) and
-	// merge in any unknown-id error topics from the resolution above.
+	// v6: echo TopicIDs on the response (the name is not on the wire).
+	// Merge in the unknown-id and denied topics from above.
 	if req.Version >= 6 {
 		t2id := make(map[string][16]byte, len(req.Topics))
 		for i := range req.Topics {
@@ -121,7 +137,7 @@ func (c *Cluster) handleTxnOffsetCommit(creq *clientReq) (kmsg.Response, error) 
 		for i := range resp.Topics {
 			resp.Topics[i].TopicID = t2id[resp.Topics[i].Topic]
 		}
-		resp.Topics = append(resp.Topics, errTopics...)
 	}
+	resp.Topics = append(resp.Topics, errTopics...)
 	return resp, nil
 }

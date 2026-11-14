@@ -12,10 +12,10 @@ import (
 // * Handles transaction ID registration for transactional producers
 //
 // Version notes:
-// * v2: ThrottleMillis
-// * v3: ProducerID and ProducerEpoch in request for existing producers
-// * v4: Flexible versions
-// * v5: ProducerEpoch in response for KIP-890 epoch bumping
+// * v2: Flexible versions
+// * v3: ProducerID and ProducerEpoch in request for existing producers (KIP-360)
+// * v4: PRODUCER_FENCED; older versions get INVALID_PRODUCER_EPOCH instead
+// * v5: TRANSACTION_ABORTABLE (KIP-890)
 
 func init() { regKey(22, 0, 5) }
 
@@ -40,10 +40,18 @@ func (c *Cluster) handleInitProducerID(creq *clientReq) (kmsg.Response, error) {
 			e = creq.faults.check(faultKey{})
 		}
 	}
+	var resp *kmsg.InitProducerIDResponse
 	if e != nil {
-		resp := req.ResponseKind().(*kmsg.InitProducerIDResponse)
+		resp = req.ResponseKind().(*kmsg.InitProducerIDResponse)
 		resp.ErrorCode = e.Code
-		return resp, nil
+	} else {
+		resp = c.pids.doInitProducerID(creq).(*kmsg.InitProducerIDResponse)
 	}
-	return c.pids.doInitProducerID(creq), nil
+	if resp.ErrorCode != 0 {
+		resp.ProducerEpoch = -1
+	}
+	if req.Version < 4 && resp.ErrorCode == kerr.ProducerFenced.Code {
+		resp.ErrorCode = kerr.InvalidProducerEpoch.Code
+	}
+	return resp, nil
 }

@@ -37,8 +37,6 @@
 - ZkMigrationReady: Not implementing ZK migration flag
 
 ## 22_init_producer_id
-- prevProducerId/lastProducerEpoch: Only matters for epoch exhaustion at 32K+
-  transactions per transactional ID, which never happens in tests
 - CONCURRENT_TRANSACTIONS error: Impossible in kfake's synchronous model
 
 ## 23_offset_for_leader_epoch

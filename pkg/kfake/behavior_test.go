@@ -962,11 +962,12 @@ func initProducerID(t *testing.T, cl *kgo.Client, txid string, pid int64, epoch 
 	return resp
 }
 
-// TestTxnInitProducerIDStaleEpochRecovery verifies that a client can
+// TestTxnInitProducerID verifies that a client can
 // recover after a transaction timeout bumps the epoch. The client
 // sends InitProducerID with its stale epoch and should get a new
-// valid epoch back - not INVALID_PRODUCER_EPOCH.
-func TestTxnInitProducerIDStaleEpochRecovery(t *testing.T) {
+// valid epoch back - not INVALID_PRODUCER_EPOCH. It also checks how
+// InitProducerID matches the request's producer ID to the transactional ID.
+func TestTxnInitProducerID(t *testing.T) {
 	t.Parallel()
 
 	c := newCluster(t, NumBrokers(1))
@@ -997,12 +998,45 @@ func TestTxnInitProducerIDStaleEpochRecovery(t *testing.T) {
 
 	// Now try to recover with the STALE epoch (the original one).
 	// This is the scenario that used to cause an infinite retry loop.
-	resp3 := initProducerID(t, cl, "txid-stale", pid, epoch, 60000)
+	// The re-init also sets the new transaction timeout.
+	resp3 := initProducerID(t, cl, "txid-stale", pid, epoch, 30000)
 	if resp3.ErrorCode != 0 {
 		t.Fatalf("stale recovery should succeed, got: %v", kerr.ErrorForCode(resp3.ErrorCode))
 	}
 	if resp3.ProducerEpoch <= serverEpoch {
 		t.Fatalf("expected epoch > %d after stale recovery, got %d", serverEpoch, resp3.ProducerEpoch)
+	}
+	var timeout int32
+	c.admin(func() { timeout = c.pids.byTxid["txid-stale"].txTimeout })
+	if timeout != 30000 {
+		t.Fatalf("expected timeout 30000 after re-init, got %d", timeout)
+	}
+
+	// The producer ID of another transactional ID is fenced:
+	// PRODUCER_FENCED from v4, INVALID_PRODUCER_EPOCH below.
+	if code := initProducerID(t, cl, "txid-stale-other", -1, -1, 60000).ErrorCode; code != 0 {
+		t.Fatalf("init other: %v", kerr.ErrorForCode(code))
+	}
+	if code := initProducerID(t, cl, "txid-stale-other", pid, 0, 60000).ErrorCode; code != kerr.ProducerFenced.Code {
+		t.Fatalf("another ID's producer: got %v, want PRODUCER_FENCED", kerr.ErrorForCode(code))
+	}
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(22, 3) // InitProducerID key = 22
+	if code := initProducerID(t, newPlainClient(t, c, kgo.MaxVersions(v)), "txid-stale-other", pid, 0, 60000).ErrorCode; code != kerr.InvalidProducerEpoch.Code {
+		t.Fatalf("another ID's producer at v3: got %v, want INVALID_PRODUCER_EPOCH", kerr.ErrorForCode(code))
+	}
+
+	// A transactional ID we do not know (here, as if it expired) gets a
+	// fresh producer ID, whatever the request carries.
+	resp4 := initProducerID(t, cl, "txid-stale-expired", pid, resp3.ProducerEpoch, 60000)
+	if resp4.ErrorCode != 0 || resp4.ProducerID == pid || resp4.ProducerEpoch != 0 {
+		t.Fatalf("unknown ID: got %v, producer ID %d epoch %d, want a fresh producer ID at epoch 0",
+			kerr.ErrorForCode(resp4.ErrorCode), resp4.ProducerID, resp4.ProducerEpoch)
+	}
+
+	// A producer ID without an epoch is an invalid request.
+	if code := initProducerID(t, cl, "txid-stale", pid, -1, 60000).ErrorCode; code != kerr.InvalidRequest.Code {
+		t.Fatalf("producer ID without epoch: got %v, want INVALID_REQUEST", kerr.ErrorForCode(code))
 	}
 }
 
@@ -1254,8 +1288,7 @@ func TestTxnAddOffsetsWithoutGroup(t *testing.T) {
 }
 
 // TestTxnDescribeTransactions verifies that DescribeTransactions
-// returns correct state for both ongoing and empty (completed)
-// transactions.
+// returns correct state for empty, ongoing, and completed transactions.
 func TestTxnDescribeTransactions(t *testing.T) {
 	t.Parallel()
 	topic := "t-describe-txn"
@@ -1291,6 +1324,9 @@ func TestTxnDescribeTransactions(t *testing.T) {
 	}
 	if st.ProducerID != pid {
 		t.Fatalf("expected pid %d, got %d", pid, st.ProducerID)
+	}
+	if st.StartTimestamp != -1 {
+		t.Fatalf("expected start -1 before transaction, got %d", st.StartTimestamp)
 	}
 
 	// Start a transaction by adding a partition.
@@ -1339,6 +1375,7 @@ func TestTxnDescribeTransactions(t *testing.T) {
 	if st.State != "Ongoing" {
 		t.Fatalf("expected Ongoing state during transaction, got %q", st.State)
 	}
+	start := st.StartTimestamp
 	if len(st.Topics) == 0 {
 		t.Fatal("expected at least one topic in ongoing transaction")
 	}
@@ -1370,7 +1407,8 @@ func TestTxnDescribeTransactions(t *testing.T) {
 		t.Fatalf("end txn error: %v", kerr.ErrorForCode(endResp.ErrorCode))
 	}
 
-	// After commit: state should be Empty again, no partitions.
+	// After commit: CompleteCommit, no partitions, and the start of the
+	// finished transaction.
 	descResp, err = descReq.RequestWith(ctx, cl)
 	if err != nil {
 		t.Fatalf("describe after commit: %v", err)
@@ -1379,11 +1417,23 @@ func TestTxnDescribeTransactions(t *testing.T) {
 	if st.ErrorCode != 0 {
 		t.Fatalf("describe error: %v", kerr.ErrorForCode(st.ErrorCode))
 	}
-	if st.State != "Empty" {
-		t.Fatalf("expected Empty state after commit, got %q", st.State)
+	if st.State != "CompleteCommit" {
+		t.Fatalf("expected CompleteCommit state after commit, got %q", st.State)
 	}
 	if len(st.Topics) != 0 {
 		t.Fatalf("expected no topics after commit, got %d", len(st.Topics))
+	}
+	if st.StartTimestamp != start {
+		t.Fatalf("expected start %d after commit, got %d", start, st.StartTimestamp)
+	}
+
+	// An empty transactional ID is an invalid request.
+	descReq.TransactionalIDs = []string{""}
+	if descResp, err = descReq.RequestWith(ctx, cl); err != nil {
+		t.Fatalf("describe empty ID: %v", err)
+	}
+	if code := descResp.TransactionStates[0].ErrorCode; code != kerr.InvalidRequest.Code {
+		t.Fatalf("describe empty ID: got %v, want INVALID_REQUEST", kerr.ErrorForCode(code))
 	}
 }
 
@@ -1476,7 +1526,7 @@ func TestProduceControlBatchRejected(t *testing.T) {
 
 	// Attributes 0x0030 is transactional plus the control bit.
 	rec := kmsg.Record{Key: []byte{0, 0, 0, 1}, Value: []byte{}}
-	errCode := produceRawV11(t, cl, topic, rawBatch(0x0030, 1, 0, -1, rec)).ErrorCode
+	errCode := produceRawV11(t, cl, topic, rawBatch(0x0030, 1, 0, -1, rec), "txid-control").ErrorCode
 	if errCode != kerr.InvalidRecord.Code {
 		t.Fatalf("expected INVALID_RECORD for control batch, got: %v", kerr.ErrorForCode(errCode))
 	}
@@ -1505,6 +1555,12 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	pid := resp.ProducerID
 	epoch := resp.ProducerEpoch
 
+	// Before the partition is in the transaction, a v11 transactional
+	// produce is TRANSACTION_ABORTABLE.
+	if errCode := produceRawV11(t, cl, topic, rawBatch(0x0010, pid, epoch, 0, kvRecord()), "txid-non-txn-during").ErrorCode; errCode != kerr.TransactionAbortable.Code {
+		t.Fatalf("transactional produce before AddPartitionsToTxn: got %v, want TRANSACTION_ABORTABLE", kerr.ErrorForCode(errCode))
+	}
+
 	// Start a transaction by adding a partition.
 	addReq := kmsg.NewAddPartitionsToTxnRequest()
 	addReq.TransactionalID = "txid-non-txn-during"
@@ -1523,7 +1579,7 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	if errCode := produceRawV11(t, cl, added, rawBatch(0, pid, epoch, 0, kvRecord())).ErrorCode; errCode != 0 {
 		t.Fatalf("non-txn produce to a partition with no txn records: %v", kerr.ErrorForCode(errCode))
 	}
-	if errCode := produceRawV11(t, cl, topic, rawBatch(0x0010, pid, epoch, 0, kvRecord())).ErrorCode; errCode != 0 {
+	if errCode := produceRawV11(t, cl, topic, rawBatch(0x0010, pid, epoch, 0, kvRecord()), "txid-non-txn-during").ErrorCode; errCode != 0 {
 		t.Fatalf("transactional produce: %v", kerr.ErrorForCode(errCode))
 	}
 
@@ -1535,38 +1591,56 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	}
 }
 
-// TestTxnFencedEpochProduce verifies that a transactional batch from a fenced
-// epoch is rejected before its partition is added, so it does not open a
-// transaction for the producer that fenced it.
+// TestTxnFencedEpochProduce verifies that a transactional batch the
+// coordinator rejects (a fenced epoch, a producer ID that is not the
+// request's transactional ID's) is rejected before its partition is added,
+// so it does not open a transaction for the producer that fenced it.
 func TestTxnFencedEpochProduce(t *testing.T) {
 	t.Parallel()
-	const topic, txid = "t-txn-fenced-epoch", "txid-fenced-epoch"
+	const topic, txid, otherTxid = "t-txn-fenced-epoch", "txid-fenced-epoch", "txid-fenced-epoch-other"
 
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	old := initProducerID(t, cl, txid, -1, -1, 60000)
-	initProducerID(t, cl, txid, -1, -1, 60000)
+	cur := initProducerID(t, cl, txid, -1, -1, 60000)
+	other := initProducerID(t, cl, otherTxid, -1, -1, 60000)
 
-	req := kmsg.NewPtrProduceRequest()
-	req.Acks = -1
-	req.TimeoutMillis = 5000
-	rt := kmsg.NewProduceRequestTopic()
-	rt.TopicID = c.TopicInfo(topic).TopicID
-	rp := kmsg.NewProduceRequestTopicPartition()
-	rp.Records = rawBatch(0x0010, old.ProducerID, old.ProducerEpoch, 0, kvRecord())
-	rt.Partitions = append(rt.Partitions, rp)
-	req.Topics = append(req.Topics, rt)
-	resp, err := req.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("produce: %v", err)
-	}
-	if code := resp.Topics[0].Partitions[0].ErrorCode; code != kerr.InvalidProducerEpoch.Code {
-		t.Fatalf("got %v, want INVALID_PRODUCER_EPOCH", kerr.ErrorForCode(code))
+	for _, tc := range []struct {
+		name  string
+		txid  *string
+		pid   int64
+		epoch int16
+		want  int16
+	}{
+		{"fenced-epoch", new(txid), old.ProducerID, old.ProducerEpoch, kerr.InvalidProducerEpoch.Code},
+		{"no-transactional-id", nil, cur.ProducerID, cur.ProducerEpoch, kerr.TransactionalIDAuthorizationFailed.Code},
+		{"other-ids-producer", new(txid), other.ProducerID, other.ProducerEpoch, kerr.InvalidProducerIDMapping.Code},
+		// An expired transactional ID: kgo recovers through
+		// InitProducerID with this producer ID.
+		{"unknown-producer", new(txid), cur.ProducerID ^ 1, 0, kerr.InvalidProducerIDMapping.Code},
+	} {
+		req := kmsg.NewPtrProduceRequest()
+		req.TransactionID = tc.txid
+		req.Acks = -1
+		req.TimeoutMillis = 5000
+		rt := kmsg.NewProduceRequestTopic()
+		rt.TopicID = c.TopicInfo(topic).TopicID
+		rp := kmsg.NewProduceRequestTopicPartition()
+		rp.Records = rawBatch(0x0010, tc.pid, tc.epoch, 0, kvRecord())
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		resp, err := req.RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatalf("%s: produce: %v", tc.name, err)
+		}
+		if code := resp.Topics[0].Partitions[0].ErrorCode; code != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, kerr.ErrorForCode(code), kerr.ErrorForCode(tc.want))
+		}
 	}
 	var open bool
-	c.admin(func() { open = c.pids.byTxid[txid].inTx })
+	c.admin(func() { open = c.pids.byTxid[txid].inTx || c.pids.byTxid[otherTxid].inTx })
 	if open {
-		t.Fatal("the fenced batch opened a transaction")
+		t.Fatal("a rejected batch opened a transaction")
 	}
 }
 
@@ -1637,7 +1711,7 @@ func TestProduceUnknownProducerIDPre360(t *testing.T) {
 			// seen this producer, as a producer whose topic was
 			// deleted and recreated under it does.
 			batch := rawBatch(attrs, initResp.ProducerID, initResp.ProducerEpoch, 7, kvRecord())
-			if got := produceRawV11(t, cl, topic, batch).ErrorCode; got != test.want {
+			if got := produceRawV11(t, cl, topic, batch, txid).ErrorCode; got != test.want {
 				t.Fatalf("got %v, want %v", kerr.ErrorForCode(got), kerr.ErrorForCode(test.want))
 			}
 		})
@@ -1745,7 +1819,8 @@ func TestProduceNeverWrittenPartitionFirstSeq(t *testing.T) {
 // TestProduceEpochPerPartition verifies that producer epochs are checked per
 // partition, as Kafka keeps producer state per partition: after an idempotent
 // producer bumps its epoch on one partition, another accepts the old epoch
-// until it sees the new one.
+// until it sees the new one. The last steps check that sequences wrap from
+// math.MaxInt32 to 0.
 func TestProduceEpochPerPartition(t *testing.T) {
 	t.Parallel()
 	const a, b = "t-epoch-per-partition-a", "t-epoch-per-partition-b"
@@ -1753,19 +1828,28 @@ func TestProduceEpochPerPartition(t *testing.T) {
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, a, b))
 	cl := newPlainClient(t, c)
 	pid, epoch := initIdempotentPID(t, cl)
+	otherPID, otherEpoch := initIdempotentPID(t, cl)
 	for i, s := range []struct {
 		topic string
+		other bool // from a second producer
 		epoch int16
 		seq   int32
 		want  int16
 	}{
-		{a, epoch, 0, 0},
-		{b, epoch, 0, 0},
-		{a, epoch + 1, 0, 0},
-		{b, epoch, 1, 0},
-		{a, epoch, 1, kerr.InvalidProducerEpoch.Code},
+		{a, false, epoch, 0, 0},
+		{b, false, epoch, 0, 0},
+		{a, false, epoch + 1, 0, 0},
+		{b, false, epoch, 1, 0},
+		{a, false, epoch, 1, kerr.InvalidProducerEpoch.Code},
+		{a, true, otherEpoch, math.MaxInt32 - 1, 0},
+		{a, true, otherEpoch, math.MaxInt32, 0},
+		{a, true, otherEpoch, 0, 0},
 	} {
-		if got := idempotentProduceRaw(t, c, cl, s.topic, pid, s.epoch, s.seq); got != s.want {
+		p := pid
+		if s.other {
+			p = otherPID
+		}
+		if got := idempotentProduceRaw(t, c, cl, s.topic, p, s.epoch, s.seq); got != s.want {
 			t.Fatalf("step %d: got %v, want %v", i, kerr.ErrorForCode(got), kerr.ErrorForCode(s.want))
 		}
 	}
@@ -5998,7 +6082,8 @@ type endTxnStep struct {
 	commit   bool
 	wantCode int16
 	// wantEpochUp asserts the response carries an epoch above the one we
-	// sent; wantEpochSame asserts it matches what the first step got back.
+	// sent; wantEpochSame asserts it matches the producer ID and epoch the
+	// first step got back.
 	wantEpochUp   bool
 	wantEpochSame bool
 }
@@ -6012,7 +6097,15 @@ func TestTxnEndTxnRetry(t *testing.T) {
 		name  string
 		tv1   bool // pin EndTxn to v4
 		topic string
-		steps []endTxnStep
+		// epoch, if nonzero, is the producer's epoch before the steps.
+		epoch int16
+		// timeoutMs, if nonzero, is the transaction timeout, and the
+		// steps run after it aborts the transaction.
+		timeoutMs int32
+		// reinit has another producer init the transactional ID
+		// before the steps, which then come from a zombie.
+		reinit bool
+		steps  []endTxnStep
 	}{
 		{
 			// TV1 is idempotent in the same direction and rejects the
@@ -6044,6 +6137,58 @@ func TestTxnEndTxnRetry(t *testing.T) {
 			name:  "tv2-empty-abort",
 			steps: []endTxnStep{{commit: false, wantEpochUp: true}},
 		},
+		{
+			// As is committing one.
+			name:  "tv2-empty-commit",
+			steps: []endTxnStep{{commit: true, wantEpochUp: true}},
+		},
+		{
+			// TV1 has no transaction to end after InitProducerID.
+			name:  "tv1-empty",
+			tv1:   true,
+			steps: []endTxnStep{{commit: false, wantCode: kerr.InvalidTxnState.Code}},
+		},
+		{
+			// A commit at the epoch an abort ended did not happen.
+			name:  "tv2-commit-after-abort",
+			topic: "t-endtxn-v5-commit-after-abort",
+			steps: []endTxnStep{
+				{commit: false},
+				{commit: true, wantCode: kerr.ProducerFenced.Code},
+			},
+		},
+		{
+			// The new producer's InitProducerID aborted the zombie's
+			// transaction; the zombie's end is fenced, not a retry.
+			name:   "tv2-zombie-after-reinit",
+			topic:  "t-endtxn-v5-zombie",
+			reinit: true,
+			steps:  []endTxnStep{{commit: false, wantCode: kerr.ProducerFenced.Code}},
+		},
+		{
+			// A commit at the last epoch moves to a new producer ID,
+			// and a retry from the old one replays it.
+			name:  "tv2-retry-after-overflow",
+			topic: "t-endtxn-v5-overflow",
+			epoch: math.MaxInt16 - 1,
+			steps: []endTxnStep{
+				{commit: true},
+				{commit: true, wantEpochSame: true},
+			},
+		},
+		{
+			// A timeout at the last epoch aborts and moves to a new
+			// producer ID, and a commit then did not happen.
+			name:      "tv2-timeout-at-overflow",
+			topic:     "t-endtxn-v5-timeout-overflow",
+			epoch:     math.MaxInt16 - 1,
+			timeoutMs: 1,
+			steps: []endTxnStep{
+				{commit: false},
+				{commit: true, wantCode: kerr.ProducerFenced.Code},
+				{commit: false, wantEpochSame: true},
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -6066,11 +6211,19 @@ func TestTxnEndTxnRetry(t *testing.T) {
 			cl := newPlainClient(t, c, clOpts...)
 			ctx := context.Background()
 
-			initResp := initProducerID(t, cl, txid, -1, -1, 60000)
+			timeoutMs := int32(60000)
+			if tc.timeoutMs != 0 {
+				timeoutMs = tc.timeoutMs
+			}
+			initResp := initProducerID(t, cl, txid, -1, -1, timeoutMs)
 			if initResp.ErrorCode != 0 {
 				t.Fatalf("init: %v", kerr.ErrorForCode(initResp.ErrorCode))
 			}
 			pid, epoch := initResp.ProducerID, initResp.ProducerEpoch
+			if tc.epoch != 0 {
+				epoch = tc.epoch
+				c.admin(func() { c.pids.byTxid[txid].epoch = epoch })
+			}
 
 			if tc.topic != "" {
 				addReq := kmsg.NewAddPartitionsToTxnRequest()
@@ -6085,7 +6238,29 @@ func TestTxnEndTxnRetry(t *testing.T) {
 					t.Fatalf("add partitions: %v", err)
 				}
 			}
+			if tc.reinit {
+				initProducerID(t, cl, txid, -1, -1, 60000)
+			}
+			for start := time.Now(); tc.timeoutMs != 0; {
+				if time.Since(start) > 5*time.Second {
+					t.Fatal("the transaction timeout never aborted the transaction")
+				}
+				// The request fails rather than hangs if the abort
+				// wedges the cluster.
+				descCtx, descCancel := context.WithTimeout(ctx, 5*time.Second)
+				desc := kmsg.NewPtrDescribeTransactionsRequest()
+				desc.TransactionalIDs = []string{txid}
+				resp, err := desc.RequestWith(descCtx, cl)
+				descCancel()
+				if err != nil {
+					t.Fatalf("describe while waiting for the timeout: %v", err)
+				}
+				if resp.TransactionStates[0].State != "Ongoing" {
+					break
+				}
+			}
 
+			var firstPID int64
 			var firstEpoch int16
 			for i, step := range tc.steps {
 				endReq := kmsg.NewEndTxnRequest()
@@ -6102,13 +6277,13 @@ func TestTxnEndTxnRetry(t *testing.T) {
 						kerr.ErrorForCode(step.wantCode), kerr.ErrorForCode(resp.ErrorCode))
 				}
 				if i == 0 {
-					firstEpoch = resp.ProducerEpoch
+					firstPID, firstEpoch = resp.ProducerID, resp.ProducerEpoch
 				}
 				if step.wantEpochUp && resp.ProducerEpoch <= epoch {
 					t.Fatalf("step %d: expected epoch > %d, got %d", i, epoch, resp.ProducerEpoch)
 				}
-				if step.wantEpochSame && resp.ProducerEpoch != firstEpoch {
-					t.Fatalf("step %d: expected epoch %d, got %d", i, firstEpoch, resp.ProducerEpoch)
+				if step.wantEpochSame && (resp.ProducerID != firstPID || resp.ProducerEpoch != firstEpoch) {
+					t.Fatalf("step %d: expected producer ID %d epoch %d, got %d %d", i, firstPID, firstEpoch, resp.ProducerID, resp.ProducerEpoch)
 				}
 			}
 		})

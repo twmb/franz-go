@@ -13,9 +13,10 @@ import (
 // * KIP-890 clients (v4+) can skip this and use implicit partition addition
 //
 // Version notes:
+// * v2: PRODUCER_FENCED; older versions get INVALID_PRODUCER_EPOCH instead
 // * v3: Flexible versions
 // * v4: Batched transactions from brokers, VerifyOnly (KIP-890)
-// * v5: Epoch bumping support (KIP-890)
+// * v5: TRANSACTION_ABORTABLE (KIP-890)
 
 func init() { regKey(24, 0, 5) }
 
@@ -61,6 +62,9 @@ func (c *Cluster) handleAddPartitionsToTxn(creq *clientReq) (kmsg.Response, erro
 				rp := kmsg.NewAddPartitionsToTxnResponseTopicPartition()
 				rp.Partition = tp.Partition
 				rp.ErrorCode = tp.ErrorCode
+				if req.Version < 2 && rp.ErrorCode == kerr.ProducerFenced.Code {
+					rp.ErrorCode = kerr.InvalidProducerEpoch.Code
+				}
 				rt.Partitions = append(rt.Partitions, rp)
 			}
 			resp.Topics = append(resp.Topics, rt)

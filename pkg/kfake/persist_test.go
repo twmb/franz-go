@@ -827,13 +827,59 @@ func TestPersistSyncWritesOffsetDeleteCrash(t *testing.T) {
 
 // TestPersistSyncWritesTxnOffsetCommitCrash verifies that transactional
 // offset commits (applied at EndTxn) are durable with SyncWrites even
-// without a clean shutdown.
+// without a clean shutdown, and that a transaction with only offset commits
+// that is open at the crash is aborted: a commit after the restart fails.
 func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
 	const topic = "txn-oc-topic"
 	const group = "txn-oc-group"
+
+	var pid int64
+	var epoch int16
+	txnOffsetCommit := func(ctx context.Context, c *Cluster, cl *kgo.Client, offset int64) {
+		t.Helper()
+		tocReq := kmsg.NewTxnOffsetCommitRequest()
+		tocReq.TransactionalID = "txn-oc-txid"
+		tocReq.ProducerID = pid
+		tocReq.ProducerEpoch = epoch
+		tocReq.Group = group
+		tocReq.Generation = -1
+		tocReq.MemberID = ""
+		tocT := kmsg.NewTxnOffsetCommitRequestTopic()
+		tocT.Topic, tocT.TopicID = topic, c.TopicInfo(topic).TopicID
+		tocP := kmsg.NewTxnOffsetCommitRequestTopicPartition()
+		tocP.Partition = 0
+		tocP.Offset = offset
+		tocP.LeaderEpoch = -1
+		tocT.Partitions = append(tocT.Partitions, tocP)
+		tocReq.Topics = append(tocReq.Topics, tocT)
+		tocR, err := tocReq.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rt := range tocR.Topics {
+			for _, rp := range rt.Partitions {
+				if rp.ErrorCode != 0 {
+					t.Fatalf("TxnOffsetCommit %s/%d failed with code %d", rt.Topic, rp.Partition, rp.ErrorCode)
+				}
+			}
+		}
+	}
+	endTxn := func(ctx context.Context, cl *kgo.Client) *kmsg.EndTxnResponse {
+		t.Helper()
+		endReq := kmsg.NewEndTxnRequest()
+		endReq.TransactionalID = "txn-oc-txid"
+		endReq.ProducerID = pid
+		endReq.ProducerEpoch = epoch
+		endReq.Commit = true
+		endResp, err := endReq.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return endResp
+	}
 
 	// Phase 1: produce, then use transactional offset commit, crash
 	{
@@ -867,8 +913,8 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 		if initResp.ErrorCode != 0 {
 			t.Fatalf("InitProducerID failed with code %d", initResp.ErrorCode)
 		}
-		pid := initResp.ProducerID
-		epoch := initResp.ProducerEpoch
+		pid = initResp.ProducerID
+		epoch = initResp.ProducerEpoch
 
 		// AddOffsetsToTxn: register the group with the transaction
 		aotReq := kmsg.NewAddOffsetsToTxnRequest()
@@ -884,47 +930,23 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 			t.Fatalf("AddOffsetsToTxn failed with code %d", aotResp.ErrorCode)
 		}
 
-		// TxnOffsetCommit: commit offset 7 for the group
-		tocReq := kmsg.NewTxnOffsetCommitRequest()
-		tocReq.TransactionalID = "txn-oc-txid"
-		tocReq.ProducerID = pid
-		tocReq.ProducerEpoch = epoch
-		tocReq.Group = group
-		tocReq.Generation = -1
-		tocReq.MemberID = ""
-		tocT := kmsg.NewTxnOffsetCommitRequestTopic()
-		tocT.Topic, tocT.TopicID = topic, c.TopicInfo(topic).TopicID
-		tocP := kmsg.NewTxnOffsetCommitRequestTopicPartition()
-		tocP.Partition = 0
-		tocP.Offset = 7
-		tocP.LeaderEpoch = -1
-		tocT.Partitions = append(tocT.Partitions, tocP)
-		tocReq.Topics = append(tocReq.Topics, tocT)
-		tocR, err := tocReq.RequestWith(ctx, cl)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, rt := range tocR.Topics {
-			for _, rp := range rt.Partitions {
-				if rp.ErrorCode != 0 {
-					t.Fatalf("TxnOffsetCommit %s/%d failed with code %d", rt.Topic, rp.Partition, rp.ErrorCode)
-				}
-			}
+		// TxnOffsetCommit: commit offset 7 for the group, which, as in
+		// Kafka, creates the group.
+		txnOffsetCommit(ctx, c, cl, 7)
+		if c.GroupInfo(group) == nil {
+			t.Fatal("TxnOffsetCommit at generation -1 did not create the group")
 		}
 
 		// EndTxn: commit the transaction
-		endReq := kmsg.NewEndTxnRequest()
-		endReq.TransactionalID = "txn-oc-txid"
-		endReq.ProducerID = pid
-		endReq.ProducerEpoch = epoch
-		endReq.Commit = true
-		endResp, err := endReq.RequestWith(ctx, cl)
-		if err != nil {
-			t.Fatal(err)
-		}
+		endResp := endTxn(ctx, cl)
 		if endResp.ErrorCode != 0 {
 			t.Fatalf("EndTxn failed with code %d", endResp.ErrorCode)
 		}
+
+		// A second transaction stages offset 9 (TxnOffsetCommit v5+
+		// adds the group) and is open at the crash.
+		epoch = endResp.ProducerEpoch
+		txnOffsetCommit(ctx, c, cl, 9)
 
 		cl.Close()
 		// Crash: don't call c.Close()
@@ -943,6 +965,17 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 		}
 		if o.Offset != 7 {
 			t.Fatalf("expected transactional committed offset 7, got %d", o.Offset)
+		}
+
+		// The restart aborted the open transaction, so its commit is
+		// fenced rather than a success that applies nothing.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if code := endTxn(ctx, newPlainClient(t, c)).ErrorCode; code != kerr.ProducerFenced.Code {
+			t.Fatalf("EndTxn of the transaction open at the crash: got %v, want PRODUCER_FENCED", kerr.ErrorForCode(code))
+		}
+		if o := groupCommits(c, group)[topic][0]; o.Offset != 7 {
+			t.Fatalf("expected committed offset 7 after the failed commit, got %d", o.Offset)
 		}
 	}
 }
@@ -1602,7 +1635,7 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
-			SeedTopics(1, topic),
+			SeedTopics(2, topic),
 		)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1648,6 +1681,19 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 			savedPID, savedEpoch = pidinf.id, pidinf.epoch
 		})
 
+		// Partition 1 is added to the transaction but not written to.
+		addReq := kmsg.NewAddPartitionsToTxnRequest()
+		addReq.TransactionalID = "txn-clean-restart"
+		addReq.ProducerID = savedPID
+		addReq.ProducerEpoch = savedEpoch
+		addT := kmsg.NewAddPartitionsToTxnRequestTopic()
+		addT.Topic = topic
+		addT.Partitions = []int32{1}
+		addReq.Topics = append(addReq.Topics, addT)
+		if _, err := addReq.RequestWith(ctx, cl); err != nil {
+			t.Fatal(err)
+		}
+
 		cl.Close()
 		c.Close()
 	}
@@ -1686,9 +1732,20 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 			t.Fatalf("read_committed before EndTxn: expected 3 records, got %d", len(committed))
 		}
 
+		// Both partitions are still in the transaction.
+		plainCl := newPlainClient(t, c)
+		desc := kmsg.NewPtrDescribeTransactionsRequest()
+		desc.TransactionalIDs = []string{"txn-clean-restart"}
+		descResp, err := desc.RequestWith(ctx, plainCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st := descResp.TransactionStates[0]; len(st.Topics) != 1 || len(st.Topics[0].Partitions) != 2 {
+			t.Fatalf("expected partitions 0 and 1 in the transaction after restart, got %+v", st.Topics)
+		}
+
 		// Commit the in-progress transaction using a raw EndTxn
 		// with the saved PID/epoch.
-		plainCl := newPlainClient(t, c)
 
 		endReq := kmsg.NewEndTxnRequest()
 		endReq.TransactionalID = "txn-clean-restart"
@@ -1740,6 +1797,8 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 
 	const topic = "txn-auto-abort"
 
+	var savedEpoch int16
+
 	// Phase 1: produce in a transaction, close without committing.
 	{
 		c := newCluster(t,
@@ -1766,6 +1825,7 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		c.admin(func() { savedEpoch = c.pids.byTxid["txn-expire"].epoch })
 
 		cl.Close()
 		c.Close()
@@ -1789,6 +1849,18 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 		if pi.LastStableOffset != pi.HighWatermark {
 			t.Fatalf("expired txn should be auto-aborted: LSO=%d HWM=%d (should be equal)",
 				pi.LastStableOffset, pi.HighWatermark)
+		}
+
+		// The abort is a timeout, which fences the old epoch so that a
+		// produce at it cannot reopen the transaction.
+		var epoch int16
+		var state string
+		c.admin(func() {
+			pidinf := c.pids.byTxid["txn-expire"]
+			epoch, state = pidinf.epoch, pidinf.state()
+		})
+		if epoch != savedEpoch+1 || state != "CompleteAbort" {
+			t.Fatalf("after the auto-abort: epoch %d state %s, want epoch %d CompleteAbort", epoch, state, savedEpoch+1)
 		}
 
 		// read_committed should see 0 records (all aborted).

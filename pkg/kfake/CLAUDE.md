@@ -38,10 +38,12 @@ Assignors: uniform (default, maps to kgo sticky balancer) and range.
 
 ## Transactions
 
-- KIP-890: Produce v12+ implicitly adds partitions via `pids.get()` with a non-nil `pd`. EndTxn v5+ bumps the epoch after each transaction; an EndTxn retry with `epoch == serverEpoch-1` and `!inTx` returns success with the current epoch.
-- State is `inTx` + `lastWasCommit`, not a state machine: completion is synchronous, so there are no PREPARE/COMPLETE states.
-- All txn coordinator epoch errors use PRODUCER_FENCED; only the produce path uses INVALID_PRODUCER_EPOCH.
-- InitProducerID accepts epoch <= server epoch, so a stale epoch from a timeout bump recovers instead of retrying forever. Idempotent (nil txid) always gets a fresh PID.
+- KIP-890: Produce v12+ implicitly adds partitions via `pids.get()` with a non-nil `pd`. EndTxn v5+ bumps the epoch after each transaction, even an empty one; an EndTxn retry with `epoch == serverEpoch-1` (or the old PID's last epoch after an overflow, via `prevID`) succeeds only after an end in the same direction (Kafka trunk's TV2 table).
+- State is `inTx` + `ended` + `lastWasCommit` (Ongoing; Empty; CompleteCommit or CompleteAbort), not a state machine: completion is synchronous, so there are no PREPARE states.
+- All txn coordinator epoch errors use PRODUCER_FENCED, mapped to INVALID_PRODUCER_EPOCH for request versions that predate it in the handlers; the produce path and TxnOffsetCommit (group coordinator) use INVALID_PRODUCER_EPOCH.
+- Coordinator requests look the producer up by transactional ID (`txnPid`), never by producer ID alone.
+- InitProducerID accepts epoch <= server epoch, so a stale epoch from a timeout bump recovers instead of retrying forever. Idempotent (nil txid) and unknown (expired) txids get a fresh PID.
+- Persistence: pids.log `init` entries carry the full producer state; `begin` marks an open transaction, which a crash restart aborts (bump, CompleteAbort) unless session state restores it.
 - KIP-447: OffsetFetch with `RequireStable=true` returns `UNSTABLE_OFFSET_COMMIT` when `pids.hasUnstableOffsets(group)`.
 
 **Concurrency**: everything runs on `Cluster.run()`, nothing has a goroutine of its own, and timers hand their work back through the loop. The one exception: while the loop is paused inside a `Fault.When`, `admin` runs its function inline under `whenMu`, for the `When` and for any other caller.

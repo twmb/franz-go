@@ -31,9 +31,10 @@ import (
 // State tracking: instead of the full transaction state machine
 // (Empty, Ongoing, PrepareCommit, PrepareAbort, CompleteCommit,
 // CompleteAbort, Dead, PrepareEpochFence), kfake uses:
-//   - inTx (bool): true = Ongoing, false = Empty/Complete
-//   - lastWasCommit (bool): whether the last completed transaction
-//     was commit or abort, for EndTxn retry detection
+//   - inTx (bool): true = Ongoing
+//   - ended (bool): false = Empty (no transaction ended since the
+//     last InitProducerID), true = CompleteCommit or CompleteAbort
+//   - lastWasCommit (bool): which of the two Complete states
 
 type (
 	pids struct {
@@ -52,6 +53,11 @@ type (
 		epoch   int16
 		windows tps[pidwindow] // topic/partition 5-window pid sequences
 
+		// The producer ID before an epoch overflow rotated to id, so
+		// that we accept a retry from a client that missed the
+		// rotation.
+		prevID int64
+
 		txid         string
 		txTimeout    int32                        // millis
 		txParts      tps[partData]                // partitions in the transaction, if transactional
@@ -67,15 +73,16 @@ type (
 		// Used to count committed bytes for readCommitted watchers.
 		txPartBytes tps[int]
 
-		txStart    time.Time
+		txStart    time.Time // start of the current or last transaction, zero after InitProducerID
 		lastActive time.Time // last time this transactional ID was used
 		inTx       bool
 
-		// Whether the last completed transaction was a commit (true)
-		// or abort (false). Used for EndTxn retry detection: if the
-		// client retries an EndTxn after the transaction already
-		// completed, we return success only if the retry matches
-		// (commit after commit, abort after abort).
+		// Whether a transaction ended since the last InitProducerID,
+		// and if so, whether it was a commit. EndTxn accepts a retry
+		// of the end only in the same direction (commit after commit,
+		// abort after abort); with no end to retry, an EndTxn at an
+		// old epoch is fenced.
+		ended         bool
 		lastWasCommit bool
 	}
 
@@ -148,9 +155,11 @@ func (pids *pids) updateTimer() {
 		pids.c.cfg.logger.Logf(LogLevelWarn,
 			"txn timeout abort: txn_id=%s producer_id=%d epoch=%d timeout=%dms elapsed=%v",
 			minPid.txid, minPid.id, minPid.epoch, minPid.txTimeout, elapsed)
-		minPid = pids.bumpEpoch(minPid)
+		// End before bumping: a bump at an exhausted epoch returns a
+		// new pidinfo with no transaction, which would leave this one
+		// in txs forever.
 		minPid.endTx(false)
-		pids.c.persistPIDEntry(pidLogEntry{Type: "timeout", PID: minPid.id, Epoch: minPid.epoch})
+		pids.bumpEpoch(minPid).persist()
 	}
 
 	// Schedule timer for the next future expiry.
@@ -211,48 +220,60 @@ func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
 		}
 	}
 
-	// Idempotent-only: always allocate fresh.
-	if req.TransactionalID == nil {
-		id, epoch := pids.create(nil, 0)
-		resp.ProducerID = id
-		resp.ProducerEpoch = epoch
-		pids.c.persistPIDEntry(pidLogEntry{Type: "init", PID: id, Epoch: epoch})
+	// A producer ID and epoch come together or not at all.
+	if (req.ProducerID == -1) != (req.ProducerEpoch == -1) {
+		resp.ErrorCode = kerr.InvalidRequest.Code
 		return resp
 	}
 
-	// KIP-360 (v3+): validate existing producer ID and epoch, bump for recovery.
-	if req.ProducerID >= 0 && req.ProducerEpoch >= 0 {
-		pidinf := pids.getpid(req.ProducerID)
-		if pidinf == nil {
-			resp.ErrorCode = kerr.InvalidProducerIDMapping.Code
-			return resp
-		}
-		// Accept current or stale epoch (recovery after timeout
-		// bump). Only reject epochs above the server's.
-		if req.ProducerEpoch > pidinf.epoch {
+	// Idempotent-only, or a transactional ID we do not know (new or
+	// expired): a fresh producer ID at epoch 0, whatever producer ID
+	// the request carries.
+	var pidinf *pidinfo
+	if req.TransactionalID != nil {
+		pidinf = pids.byTxid[*req.TransactionalID]
+	}
+	if pidinf == nil {
+		pidinf = pids.create(req.TransactionalID, req.TransactionTimeoutMillis)
+		pidinf.persist()
+		resp.ProducerID = pidinf.id
+		resp.ProducerEpoch = pidinf.epoch
+		return resp
+	}
+
+	// KIP-360 (v3+): the request's producer ID must be the transactional
+	// ID's, or the one an epoch overflow rotated away from. We accept
+	// the current or a stale epoch (recovery after a timeout bump) and
+	// reject only epochs above ours.
+	if req.ProducerID != -1 {
+		switch {
+		case req.ProducerID == pidinf.id:
+			if req.ProducerEpoch > pidinf.epoch {
+				resp.ErrorCode = kerr.ProducerFenced.Code
+				return resp
+			}
+		case req.ProducerID == pidinf.prevID && req.ProducerEpoch >= math.MaxInt16-1:
+		default:
 			resp.ErrorCode = kerr.ProducerFenced.Code
 			return resp
 		}
-		// Abort any in-flight transaction before bumping. A real
-		// broker returns CONCURRENT_TRANSACTIONS and aborts async,
-		// but kfake is synchronous so we abort inline.
-		if pidinf.inTx {
-			pidinf.endTx(false)
-		}
-		pidinf = pids.bumpEpoch(pidinf)
-		pidinf.lastActive = time.Now()
-		resp.ProducerID = pidinf.id
-		resp.ProducerEpoch = pidinf.epoch
-		pids.c.persistPIDEntry(pidLogEntry{Type: "init", PID: pidinf.id, Epoch: pidinf.epoch, TxID: pidinf.txid, Timeout: pidinf.txTimeout})
-		return resp
 	}
 
-	// New transactional ID or first init. Check if an expired txid is
-	// being re-used - the create path handles this via byTxid.
-	id, epoch := pids.create(req.TransactionalID, req.TransactionTimeoutMillis)
-	resp.ProducerID = id
-	resp.ProducerEpoch = epoch
-	pids.c.persistPIDEntry(pidLogEntry{Type: "init", PID: id, Epoch: epoch, TxID: *req.TransactionalID, Timeout: req.TransactionTimeoutMillis})
+	// Abort any in-flight transaction before bumping. A real broker
+	// returns CONCURRENT_TRANSACTIONS and aborts async, but kfake is
+	// synchronous so we abort inline. Leaving the old epoch's writes
+	// pending lets the next commit swallow them into its own range.
+	if pidinf.inTx {
+		pidinf.endTx(false)
+	}
+	pidinf = pids.bumpEpoch(pidinf)
+	pidinf.txTimeout = req.TransactionTimeoutMillis
+	pidinf.txStart = time.Time{}
+	pidinf.ended = false
+	pidinf.lastActive = time.Now()
+	pidinf.persist()
+	resp.ProducerID = pidinf.id
+	resp.ProducerEpoch = pidinf.epoch
 	return resp
 }
 
@@ -263,6 +284,42 @@ func (pidinf *pidinfo) maybeStart() {
 	pidinf.inTx = true
 	pidinf.txStart = time.Now()
 	pidinf.pids.txs[pidinf] = struct{}{}
+	// If we crash before the transaction ends, the restart aborts it.
+	pidinf.pids.c.persistPIDEntry(pidLogEntry{Type: "begin", PID: pidinf.id})
+}
+
+// logEntry returns the pids.log entry that restores the producer as it
+// is now, replacing everything logged before for its producer ID.
+func (pidinf *pidinfo) logEntry() pidLogEntry {
+	e := pidLogEntry{
+		Type:    "init",
+		PID:     pidinf.id,
+		Epoch:   pidinf.epoch,
+		TxID:    pidinf.txid,
+		Timeout: pidinf.txTimeout,
+		PrevID:  pidinf.prevID,
+	}
+	if pidinf.ended {
+		e.Commit = &pidinf.lastWasCommit
+	}
+	return e
+}
+
+func (pidinf *pidinfo) persist() {
+	pidinf.pids.c.persistPIDEntry(pidinf.logEntry())
+}
+
+// txnPid returns the transactional ID's producer if it has the producer
+// ID, or the error a transaction coordinator answers otherwise.
+func (pids *pids) txnPid(txid string, id int64) (*pidinfo, int16) {
+	if txid == "" {
+		return nil, kerr.InvalidRequest.Code
+	}
+	pidinf := pids.byTxid[txid]
+	if pidinf == nil || pidinf.id != id {
+		return nil, kerr.InvalidProducerIDMapping.Code
+	}
+	return pidinf, 0
 }
 
 // doAddPartitions adds, or with VerifyOnly checks, one transaction's
@@ -356,38 +413,27 @@ func (pids *pids) doAddPartitions(creq *clientReq, t *kmsg.AddPartitionsToTxnReq
 		return st
 	}
 
-	if t.VerifyOnly {
-		// We commit and abort synchronously, so a transaction is never
-		// mid-prepare and we never answer CONCURRENT_TRANSACTIONS.
-		pidinf := pids.getpid(t.ProducerID)
-		switch {
-		case txnID == "":
-			doneall(kerr.InvalidRequest.Code)
-		case pidinf == nil || pidinf.txid != txnID:
-			doneall(kerr.InvalidProducerIDMapping.Code)
-		case pidinf.epoch != t.ProducerEpoch:
-			doneall(kerr.ProducerFenced.Code)
-		default:
-			for _, rt := range t.Topics {
-				for _, p := range rt.Partitions {
-					code := kerr.TransactionAbortable.Code
-					if _, ok := pidinf.txParts.getp(rt.Topic, p); ok && pidinf.inTx {
-						code = 0
-					}
-					donep(rt.Topic, p, code)
-				}
-			}
-		}
+	pidinf, code := pids.txnPid(txnID, t.ProducerID)
+	if code == 0 && pidinf.epoch != t.ProducerEpoch {
+		code = kerr.ProducerFenced.Code
+	}
+	if code != 0 {
+		doneall(code)
 		return st
 	}
 
-	pidinf := pids.getpid(t.ProducerID)
-	if pidinf == nil {
-		doneall(kerr.InvalidProducerIDMapping.Code)
-		return st
-	}
-	if pidinf.epoch != t.ProducerEpoch {
-		doneall(kerr.ProducerFenced.Code)
+	if t.VerifyOnly {
+		// We commit and abort synchronously, so a transaction is never
+		// mid-prepare and we never answer CONCURRENT_TRANSACTIONS.
+		for _, rt := range t.Topics {
+			for _, p := range rt.Partitions {
+				code := kerr.TransactionAbortable.Code
+				if _, ok := pidinf.txParts.getp(rt.Topic, p); ok && pidinf.inTx {
+					code = 0
+				}
+				donep(rt.Topic, p, code)
+			}
+		}
 		return st
 	}
 
@@ -412,18 +458,19 @@ func (pids *pids) doAddOffsets(creq *clientReq) kmsg.Response {
 		return resp
 	}
 
-	pidinf := pids.getpid(req.ProducerID)
-	if pidinf == nil {
-		resp.ErrorCode = kerr.InvalidProducerIDMapping.Code
-		return resp
+	pidinf, code := pids.txnPid(req.TransactionalID, req.ProducerID)
+	if code == 0 && pidinf.epoch != req.ProducerEpoch {
+		code = kerr.ProducerFenced.Code
 	}
-	if pidinf.epoch != req.ProducerEpoch {
-		resp.ErrorCode = kerr.ProducerFenced.Code
+	if code != 0 {
+		resp.ErrorCode = code
 		return resp
 	}
 
 	pidinf.maybeStart()
-	pidinf.txGroups = append(pidinf.txGroups, req.Group)
+	if !slices.Contains(pidinf.txGroups, req.Group) {
+		pidinf.txGroups = append(pidinf.txGroups, req.Group)
+	}
 	return resp
 }
 
@@ -445,6 +492,10 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 		}
 	}
 
+	if req.Group == "" {
+		doneall(kerr.InvalidGroupID.Code)
+		return resp
+	}
 	coordinator := pids.c.coordinator(req.Group)
 	if creq.cc.b != coordinator {
 		doneall(kerr.NotCoordinator.Code)
@@ -452,16 +503,14 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 	}
 
 	pidinf := pids.getpid(req.ProducerID)
-	if pidinf == nil {
+	if pidinf == nil || pidinf.txid == "" || pidinf.txid != req.TransactionalID {
 		doneall(kerr.InvalidProducerIDMapping.Code)
 		return resp
 	}
+	// The group coordinator, not the transaction coordinator, answers
+	// a stale epoch, with the produce path's code.
 	if pidinf.epoch != req.ProducerEpoch {
-		doneall(kerr.ProducerFenced.Code)
-		return resp
-	}
-	if pidinf.txid == "" || pidinf.txid != req.TransactionalID {
-		doneall(kerr.InvalidProducerIDMapping.Code)
+		doneall(kerr.InvalidProducerEpoch.Code)
 		return resp
 	}
 
@@ -477,10 +526,12 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 
 	// Check if group exists. For generation >= 0, return
 	// ILLEGAL_GENERATION if the group doesn't exist. For
-	// generation < 0 (admin commits), allow it through.
-	var g *group
-	if pids.c.groups.gs != nil {
-		g = pids.c.groups.gs[req.Group]
+	// generation < 0 (admin commits), Kafka creates a simple group.
+	g := pids.c.groups.gs[req.Group]
+	_, isShare := pids.c.shareGroups.gs[req.Group]
+	if g == nil && req.Generation < 0 && !isShare {
+		g = pids.c.groups.newGroup(req.Group)
+		pids.c.groups.gs[req.Group] = g
 	}
 	if g != nil {
 		if req.Version >= 3 && (req.MemberID != "" || req.Generation != -1) {
@@ -549,6 +600,7 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 					offset:      rp.Offset,
 					leaderEpoch: rp.LeaderEpoch,
 					metadata:    rp.Metadata,
+					lastCommit:  time.Now(),
 				})
 			}
 			st.Partitions = append(st.Partitions, sp)
@@ -569,45 +621,48 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 		return resp
 	}
 
-	pidinf := pids.getpid(req.ProducerID)
-	if pidinf == nil {
-		resp.ErrorCode = kerr.InvalidProducerIDMapping.Code
-		return resp
-	}
-	if pidinf.epoch != req.ProducerEpoch {
-		// KIP-890 retry detection: if the epoch is exactly one
-		// ahead and the producer is not in a transaction, the
-		// previous EndTxn already completed and bumped the epoch.
-		if req.Version >= 5 && pidinf.epoch == req.ProducerEpoch+1 && !pidinf.inTx {
-			if req.Commit != pidinf.lastWasCommit {
-				resp.ErrorCode = kerr.InvalidTxnState.Code
-				return resp
-			}
-			resp.ProducerID = pidinf.id
-			resp.ProducerEpoch = pidinf.epoch
+	// v5 (KIP-890) bumps the epoch at each end, so a retry of an end
+	// that went through carries the epoch below ours, or the last epoch
+	// of the producer ID an overflow rotated away from.
+	pidinf := pids.byTxid[req.TransactionalID]
+	retryOnOverflow := req.Version >= 5 && pidinf != nil && pidinf.prevID == req.ProducerID &&
+		req.ProducerEpoch == math.MaxInt16-1 && pidinf.epoch == 0
+	if !retryOnOverflow {
+		var code int16
+		if pidinf, code = pids.txnPid(req.TransactionalID, req.ProducerID); code != 0 {
+			resp.ErrorCode = code
 			return resp
 		}
+	}
+	retry := req.Version >= 5 && pidinf.ended && !pidinf.inTx &&
+		(retryOnOverflow || pidinf.epoch == req.ProducerEpoch+1)
+
+	switch {
+	case retry && req.Commit == pidinf.lastWasCommit:
+		resp.ProducerID = pidinf.id
+		resp.ProducerEpoch = pidinf.epoch
+		return resp
+	case retry && req.Commit:
+		// Our own abort (a timeout) raced the commit, which did not
+		// take effect.
 		resp.ErrorCode = kerr.ProducerFenced.Code
 		return resp
-	}
-	if !pidinf.inTx {
-		// v5+: allow aborting an empty transaction. Bump epoch
-		// so the client uses a fresh epoch for the next transaction.
-		if req.Version >= 5 && !req.Commit {
-			pidinf = pids.bumpEpoch(pidinf)
-			pidinf.lastWasCommit = false
-			resp.ProducerID = pidinf.id
-			resp.ProducerEpoch = pidinf.epoch
-			pids.c.persistPIDEntry(pidLogEntry{Type: "init", PID: pidinf.id, Epoch: pidinf.epoch, TxID: pidinf.txid, Timeout: pidinf.txTimeout})
-			return resp
-		}
-		// Retry detection: return success if the retry matches the
-		// completed action (commit retries commit, abort retries abort).
-		if req.Commit == pidinf.lastWasCommit {
-			return resp
-		}
+	case retry:
 		resp.ErrorCode = kerr.InvalidTxnState.Code
 		return resp
+	case pidinf.epoch != req.ProducerEpoch:
+		resp.ErrorCode = kerr.ProducerFenced.Code
+		return resp
+	case !pidinf.inTx && req.Version < 5:
+		// Before KIP-890, only a retry of the last end succeeds.
+		if !pidinf.ended || req.Commit != pidinf.lastWasCommit {
+			resp.ErrorCode = kerr.InvalidTxnState.Code
+		}
+		return resp
+	case !pidinf.inTx:
+		// v5 ends a transaction that added nothing, as an empty
+		// commit or abort that bumps the epoch.
+		pidinf.txStart = time.Now()
 	}
 
 	nBatches, nGroups := pidinf.txBatchCount, len(pidinf.txGroups)
@@ -618,17 +673,13 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 			req.ProducerID, req.ProducerEpoch, elapsed.Milliseconds(), nBatches, nGroups)
 	}
 
-	commit := req.Commit
-	pids.c.persistPIDEntry(pidLogEntry{Type: "endtx", PID: pidinf.id, Epoch: pidinf.epoch, Commit: &commit})
-
 	// KIP-890: For v5+ clients, bump epoch and return new ID/epoch.
 	if req.Version >= 5 {
 		pidinf = pids.bumpEpoch(pidinf)
 		resp.ProducerID = pidinf.id
 		resp.ProducerEpoch = pidinf.epoch
-		pids.c.persistPIDEntry(pidLogEntry{Type: "init", PID: pidinf.id, Epoch: pidinf.epoch, TxID: pidinf.txid, Timeout: pidinf.txTimeout})
 	}
-
+	pidinf.persist()
 	return resp
 }
 
@@ -686,17 +737,22 @@ func (pids *pids) randomID() int64 {
 }
 
 // bumpEpoch increments the epoch. If the epoch reaches the exhaustion
-// threshold (math.MaxInt16 - 1), a new producer ID is allocated.
+// threshold (math.MaxInt16 - 1), a new producer ID is allocated, and the
+// caller must have ended any transaction.
 func (pids *pids) bumpEpoch(pidinf *pidinfo) *pidinfo {
 	if pidinf.epoch >= math.MaxInt16-1 {
 		newID := pids.randomID()
 		newPidinf := &pidinfo{
-			pids:       pids,
-			id:         newID,
-			epoch:      0,
-			txid:       pidinf.txid,
-			txTimeout:  pidinf.txTimeout,
-			lastActive: pidinf.lastActive,
+			pids:          pids,
+			id:            newID,
+			epoch:         0,
+			prevID:        pidinf.id,
+			txid:          pidinf.txid,
+			txTimeout:     pidinf.txTimeout,
+			txStart:       pidinf.txStart,
+			lastActive:    pidinf.lastActive,
+			ended:         pidinf.ended,
+			lastWasCommit: pidinf.lastWasCommit,
 		}
 		pids.ids[newID] = newPidinf
 		delete(pids.ids, pidinf.id)
@@ -709,46 +765,26 @@ func (pids *pids) bumpEpoch(pidinf *pidinfo) *pidinfo {
 	return pidinf
 }
 
-func (pids *pids) create(txidp *string, txTimeout int32) (int64, int16) {
-	// Re-init of an existing transactional ID: look up by txid first
-	// to avoid FNV-64 hash collisions between different txids.
-	if txidp != nil {
-		if pidinf, ok := pids.byTxid[*txidp]; ok {
-			// Abort any in-flight transaction before bumping, same
-			// as the KIP-360 path above. Leaving the old epoch's
-			// writes pending lets the next commit swallow them into
-			// its own range.
-			if pidinf.inTx {
-				pidinf.endTx(false)
-			}
-			pidinf = pids.bumpEpoch(pidinf)
-			pidinf.lastActive = time.Now()
-			return pidinf.id, pidinf.epoch
-		}
-	}
-	var id int64
-	if txidp != nil {
-		hasher := fnv.New64()
-		hasher.Write([]byte(*txidp))
-		id = int64(hasher.Sum64()) & math.MaxInt64
-		if _, exists := pids.ids[id]; exists {
-			id = pids.randomID() // hash collision, use random
-		}
-	} else {
-		id = pids.randomID()
-	}
+// create allocates a producer ID at epoch 0, for the transactional ID if
+// one is given.
+func (pids *pids) create(txidp *string, txTimeout int32) *pidinfo {
 	pidinf := &pidinfo{
 		pids:       pids,
-		id:         id,
-		txTimeout:  txTimeout,
+		id:         pids.randomID(),
 		lastActive: time.Now(),
 	}
 	if txidp != nil {
+		hasher := fnv.New64()
+		hasher.Write([]byte(*txidp))
+		if id := int64(hasher.Sum64()) & math.MaxInt64; pids.ids[id] == nil {
+			pidinf.id = id // otherwise a hash collision, keep the random ID
+		}
 		pidinf.txid = *txidp
+		pidinf.txTimeout = txTimeout
 		pids.byTxid[*txidp] = pidinf
 	}
-	pids.ids[id] = pidinf
-	return id, 0
+	pids.ids[pidinf.id] = pidinf
+	return pidinf
 }
 
 // expireTransactionalIDs removes idle transactional IDs that haven't been
@@ -764,6 +800,7 @@ func (pids *pids) expireTransactionalIDs() {
 		if now.Sub(pidinf.lastActive).Milliseconds() >= expirationMs {
 			delete(pids.ids, pidinf.id)
 			delete(pids.byTxid, txid)
+			pids.c.persistPIDEntry(pidLogEntry{Type: "expire", PID: pidinf.id})
 		}
 	}
 }
@@ -870,7 +907,15 @@ func (pidinf *pidinfo) endTx(commit bool) {
 				pidinf.pids.c.groups.gs[groupID] = g
 			}
 			groupOffsets.each(func(t string, p int32, oc *offsetCommit) {
-				g.commitAndPersist(t, p, *oc)
+				// The newest commit wins by when we received it, so
+				// a regular commit after this TxnOffsetCommit keeps
+				// its offset. The commit keeps its TxnOffsetCommit
+				// time.
+				if prev, ok := g.commits.getp(t, p); ok && prev.lastCommit.After(oc.lastCommit) {
+					return
+				}
+				g.commits.set(t, p, *oc)
+				g.c.persistGroupEntry(g.commitEntry(t, p, *oc))
 			})
 		}
 	}
@@ -885,11 +930,17 @@ func (pidinf *pidinfo) resetTx(wasCommit bool) {
 	pidinf.txOffsets = nil
 	pidinf.txPartFirstOffsets = nil
 	pidinf.txPartBytes = nil
-	pidinf.txStart = time.Time{}
 	pidinf.inTx = false
+	pidinf.ended = true
 	pidinf.lastWasCommit = wasCommit
 	pidinf.lastActive = time.Now()
 	delete(pidinf.pids.txs, pidinf)
+}
+
+// nextSeq returns the sequence after a batch. Sequences wrap from
+// math.MaxInt32 to 0.
+func nextSeq(firstSeq, numRecs int32) int32 {
+	return int32((int64(firstSeq) + int64(numRecs)) & math.MaxInt32)
 }
 
 // pushAndValidate checks the sequence number against the window and
@@ -900,7 +951,7 @@ func (pidinf *pidinfo) resetTx(wasCommit bool) {
 //
 // Sequence validation uses s.nextSeq (the authoritative next-expected
 // sequence), not a position in the 5-entry circular buffer. This
-// matches the real broker's ProducerStateEntry.lastSeq -- nextSeq
+// matches the last sequence Kafka keeps per producer -- nextSeq
 // survives buffer rotation, so retries of committed-but-evicted
 // batches are correctly identified as dups or gaps rather than
 // false-positive OOOSN.
@@ -914,7 +965,7 @@ func (s *pidwindow) pushAndValidate(epoch int16, firstSeq, numRecs int32, baseOf
 		if s.seen && firstSeq != 0 {
 			return false, false, 0
 		}
-		next := int32((int64(firstSeq) + int64(numRecs)) % math.MaxInt32)
+		next := nextSeq(firstSeq, numRecs)
 		s.seen = true
 		s.epoch = epoch
 		s.nextSeq = next
@@ -926,7 +977,7 @@ func (s *pidwindow) pushAndValidate(epoch int16, firstSeq, numRecs int32, baseOf
 	}
 
 	// Dup check: scan valid entries for a matching (firstSeq, nextSeq) pair.
-	next := int32((int64(firstSeq) + int64(numRecs)) % math.MaxInt32)
+	next := nextSeq(firstSeq, numRecs)
 	for i := range s.count {
 		e := s.entries[i]
 		if e.firstSeq == firstSeq && e.nextSeq == next {
@@ -971,9 +1022,12 @@ func (pids *pids) doDescribeTransactions(creq *clientReq) kmsg.Response {
 			continue
 		}
 
-		pidinf := pids.findTxnID(txnID)
+		pidinf := pids.byTxid[txnID]
 		if pidinf == nil {
 			st.ErrorCode = kerr.TransactionalIDNotFound.Code
+			if txnID == "" {
+				st.ErrorCode = kerr.InvalidRequest.Code
+			}
 			resp.TransactionStates = append(resp.TransactionStates, st)
 			continue
 		}
@@ -981,10 +1035,9 @@ func (pids *pids) doDescribeTransactions(creq *clientReq) kmsg.Response {
 		st.ProducerID = pidinf.id
 		st.ProducerEpoch = pidinf.epoch
 		st.TimeoutMillis = pidinf.txTimeout
-
+		st.State = pidinf.state()
+		st.StartTimestamp = pidinf.startTimestamp()
 		if pidinf.inTx {
-			st.State = "Ongoing"
-			st.StartTimestamp = pidinf.txStart.UnixMilli()
 			pidinf.txParts.each(func(topic string, partition int32, _ *partData) {
 				if e := pids.c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{txnID: txnID, topic: topic}.part(partition)); e != nil {
 					return
@@ -1003,9 +1056,6 @@ func (pids *pids) doDescribeTransactions(creq *clientReq) kmsg.Response {
 				}
 				topicEntry.Partitions = append(topicEntry.Partitions, partition)
 			})
-		} else {
-			st.State = "Empty"
-			st.StartTimestamp = -1
 		}
 
 		resp.TransactionStates = append(resp.TransactionStates, st)
@@ -1014,13 +1064,42 @@ func (pids *pids) doDescribeTransactions(creq *clientReq) kmsg.Response {
 	return resp
 }
 
+// state returns the Kafka name of the transaction state.
+func (pidinf *pidinfo) state() string {
+	switch {
+	case pidinf.inTx:
+		return "Ongoing"
+	case !pidinf.ended:
+		return "Empty"
+	case pidinf.lastWasCommit:
+		return "CompleteCommit"
+	default:
+		return "CompleteAbort"
+	}
+}
+
+// startTimestamp returns the start of the current or last transaction in
+// millis, or -1 if none started since the last InitProducerID.
+func (pidinf *pidinfo) startTimestamp() int64 {
+	if pidinf.txStart.IsZero() {
+		return -1
+	}
+	return pidinf.txStart.UnixMilli()
+}
+
 func (pids *pids) doListTransactions(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.ListTransactionsRequest)
 	resp := req.ResponseKind().(*kmsg.ListTransactionsResponse)
 
-	// Build filter sets.
+	// Build filter sets. A state name Kafka does not know matches
+	// nothing, and we echo it back.
 	stateFilter := make(map[string]struct{})
 	for _, s := range req.StateFilters {
+		switch s {
+		case "Empty", "Ongoing", "PrepareCommit", "PrepareAbort", "CompleteCommit", "CompleteAbort", "Dead", "PrepareEpochFence":
+		default:
+			resp.UnknownStateFilters = append(resp.UnknownStateFilters, s)
+		}
 		stateFilter[s] = struct{}{}
 	}
 	pidFilter := make(map[int64]struct{})
@@ -1030,24 +1109,23 @@ func (pids *pids) doListTransactions(creq *clientReq) kmsg.Response {
 	var txnIDRegex *regexp.Regexp
 	if req.Version >= 2 && req.TransactionalIDPattern != nil && *req.TransactionalIDPattern != "" {
 		var err error
-		txnIDRegex, err = regexp.Compile(*req.TransactionalIDPattern)
+		// Kafka matches the whole ID.
+		txnIDRegex, err = regexp.Compile("^(?:" + *req.TransactionalIDPattern + ")$")
 		if err != nil {
 			resp.ErrorCode = kerr.InvalidRegularExpression.Code
 			return resp
 		}
 	}
 
-	for _, pidinf := range pids.ids {
-		if pidinf.txid == "" {
+	for txid, pidinf := range pids.byTxid {
+		// Each broker lists only the IDs it coordinates.
+		if !pids.c.isCoordinator(creq, txid) {
 			continue
 		}
-		if e := pids.c.deny(creq, pidinf.txid, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationDescribe, faultKey{txnID: pidinf.txid}); e != nil {
+		if e := pids.c.deny(creq, txid, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationDescribe, faultKey{txnID: txid}); e != nil {
 			continue
 		}
-		state := "Empty"
-		if pidinf.inTx {
-			state = "Ongoing"
-		}
+		state := pidinf.state()
 		if len(stateFilter) > 0 {
 			if _, ok := stateFilter[state]; !ok {
 				continue
@@ -1058,16 +1136,16 @@ func (pids *pids) doListTransactions(creq *clientReq) kmsg.Response {
 				continue
 			}
 		}
-		if req.Version >= 1 && req.DurationFilterMillis >= 0 && pidinf.inTx {
-			if creq.at.Sub(pidinf.txStart).Milliseconds() < req.DurationFilterMillis {
-				continue
-			}
+		// The duration filter keeps transactions that started more
+		// than that long ago; one with no start passes.
+		if req.Version >= 1 && req.DurationFilterMillis >= 0 && creq.at.UnixMilli()-pidinf.startTimestamp() <= req.DurationFilterMillis {
+			continue
 		}
-		if txnIDRegex != nil && !txnIDRegex.MatchString(pidinf.txid) {
+		if txnIDRegex != nil && !txnIDRegex.MatchString(txid) {
 			continue
 		}
 		ts := kmsg.NewListTransactionsResponseTransactionState()
-		ts.TransactionalID = pidinf.txid
+		ts.TransactionalID = txid
 		ts.ProducerID = pidinf.id
 		ts.TransactionState = state
 		resp.TransactionStates = append(resp.TransactionStates, ts)
@@ -1091,7 +1169,7 @@ func (pids *pids) doDescribeProducers(creq *clientReq) kmsg.Response {
 		for _, p := range rt.Partitions {
 			var code int16
 			pd, exists := ps[p]
-			k := faultKey{topic: rt.Topic, misrouted: exists && pd.leader != creq.cc.b}
+			k := faultKey{topic: rt.Topic, misrouted: exists && !pids.c.hostsReplica(creq.cc.b, rt.Topic, pd)}
 			if e := pids.c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, k.part(p)); e != nil {
 				code = e.Code
 			}
@@ -1113,7 +1191,8 @@ func (pids *pids) doDescribeProducers(creq *clientReq) kmsg.Response {
 			checks[i].errCode = kerr.UnknownTopicOrPartition.Code
 			continue
 		}
-		if pd.leader != creq.cc.b {
+		// Followers answer DescribeProducers too.
+		if !pids.c.hostsReplica(creq.cc.b, checks[i].topic, pd) {
 			checks[i].errCode = kerr.NotLeaderForPartition.Code
 		}
 	}
@@ -1141,32 +1220,27 @@ func (pids *pids) doDescribeProducers(creq *clientReq) kmsg.Response {
 	return resp
 }
 
-// txnProducers returns active transactional producers for a partition.
+// txnProducers returns the producers that wrote to a partition,
+// idempotent or transactional, with the start of any open transaction.
 func (pids *pids) txnProducers(topic string, partition int32) []kmsg.DescribeProducersResponseTopicPartitionActiveProducer {
 	var producers []kmsg.DescribeProducersResponseTopicPartitionActiveProducer
 	for _, pidinf := range pids.ids {
-		if !pidinf.inTx || !pidinf.txParts.checkp(topic, partition) {
+		pw, ok := pidinf.windows.getp(topic, partition)
+		if !ok || !pw.seen {
 			continue
 		}
 		ap := kmsg.NewDescribeProducersResponseTopicPartitionActiveProducer()
 		ap.ProducerID = pidinf.id
-		ap.ProducerEpoch = int32(pidinf.epoch)
-		ap.LastTimestamp = pidinf.txStart.UnixMilli()
+		ap.ProducerEpoch = int32(pw.epoch)
+		ap.LastSequence = (pw.nextSeq - 1) & math.MaxInt32
+		ap.LastTimestamp = pidinf.lastActive.UnixMilli()
 		ap.CoordinatorEpoch = 0
 		ap.CurrentTxnStartOffset = -1
-		ap.LastSequence = -1
-		if pw, ok := pidinf.windows.getp(topic, partition); ok && pw != nil {
-			ap.LastSequence = pw.nextSeq - 1
-		}
-		if firstOffset, ok := pidinf.txPartFirstOffsets.getp(topic, partition); ok && firstOffset != nil {
+		if firstOffset, ok := pidinf.txPartFirstOffsets.getp(topic, partition); ok && *firstOffset >= 0 {
 			ap.CurrentTxnStartOffset = *firstOffset
+			ap.LastTimestamp = pidinf.txStart.UnixMilli()
 		}
 		producers = append(producers, ap)
 	}
 	return producers
-}
-
-// findTxnID finds a producer info by transactional ID.
-func (pids *pids) findTxnID(txnID string) *pidinfo {
-	return pids.byTxid[txnID]
 }

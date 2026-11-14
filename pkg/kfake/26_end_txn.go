@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -13,9 +14,10 @@ import (
 // * Recalculates LSO for read_committed consumers
 //
 // Version notes:
-// * v2: ThrottleMillis
+// * v2: PRODUCER_FENCED; older versions get INVALID_PRODUCER_EPOCH instead
 // * v3: Flexible versions
-// * v5: Returns new ProducerEpoch for KIP-890 epoch bumping
+// * v4: TRANSACTION_ABORTABLE (KIP-890)
+// * v5: Returns new ProducerID and ProducerEpoch for KIP-890 epoch bumping
 
 func init() { regKey(26, 0, 5) }
 
@@ -34,5 +36,9 @@ func (c *Cluster) handleEndTxn(creq *clientReq) (kmsg.Response, error) {
 		return resp, nil
 	}
 
-	return c.pids.doEnd(creq), nil
+	resp := c.pids.doEnd(creq).(*kmsg.EndTxnResponse)
+	if req.Version < 2 && resp.ErrorCode == kerr.ProducerFenced.Code {
+		resp.ErrorCode = kerr.InvalidProducerEpoch.Code
+	}
+	return resp, nil
 }

@@ -659,6 +659,7 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 	c.persistPIDEntry(pidLogEntry{Type: "init", PID: 100, Epoch: 1, TxID: "tx-a", Timeout: 60000})
 	c.persistPIDEntry(pidLogEntry{Type: "endtx", PID: 100, Epoch: 2, Commit: new(true)})
 	p100.epoch = 2
+	p100.ended = true
 	p100.lastWasCommit = true
 
 	// PID 200: init, then timeout (epoch bump to 2).
@@ -675,6 +676,7 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 	c.persistPIDEntry(pidLogEntry{Type: "init", PID: 200, Epoch: 1, TxID: "tx-b", Timeout: 30000})
 	c.persistPIDEntry(pidLogEntry{Type: "timeout", PID: 200, Epoch: 2})
 	p200.epoch = 2
+	p200.ended = true
 
 	// PID 300: init only - verifies lastWasCommit and txTimeout.
 	p300 := &pidinfo{
@@ -683,6 +685,7 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 		epoch:         5,
 		txid:          "tx-c",
 		txTimeout:     90000,
+		ended:         true,
 		lastWasCommit: true,
 		lastActive:    time.Now(),
 	}
@@ -707,8 +710,8 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 	if r100.txid != "tx-a" {
 		t.Fatalf("PID 100 txid: expected tx-a, got %s", r100.txid)
 	}
-	if !r100.lastWasCommit {
-		t.Fatal("PID 100 lastWasCommit: expected true")
+	if s := r100.state(); s != "CompleteCommit" {
+		t.Fatalf("PID 100 state: expected CompleteCommit, got %s", s)
 	}
 	if r100.txTimeout != 60000 {
 		t.Fatalf("PID 100 txTimeout: expected 60000, got %d", r100.txTimeout)
@@ -725,6 +728,9 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 	if r200.txTimeout != 30000 {
 		t.Fatalf("PID 200 txTimeout: expected 30000, got %d", r200.txTimeout)
 	}
+	if s := r200.state(); s != "CompleteAbort" {
+		t.Fatalf("PID 200 state: expected CompleteAbort, got %s", s)
+	}
 
 	// PID 300: init only, verify lastWasCommit and txTimeout round-trip.
 	r300, ok := c2.pids.ids[300]
@@ -734,8 +740,8 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 	if r300.epoch != 5 {
 		t.Fatalf("PID 300 epoch: expected 5, got %d", r300.epoch)
 	}
-	if !r300.lastWasCommit {
-		t.Fatal("PID 300 lastWasCommit: expected true")
+	if s := r300.state(); s != "CompleteCommit" {
+		t.Fatalf("PID 300 state: expected CompleteCommit, got %s", s)
 	}
 	if r300.txTimeout != 90000 {
 		t.Fatalf("PID 300 txTimeout: expected 90000, got %d", r300.txTimeout)

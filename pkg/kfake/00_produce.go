@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"encoding/binary"
 	"hash/crc32"
 	"time"
 
@@ -38,7 +39,14 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 	}
 	var (
 		tdone = make(map[tpid][]kmsg.ProduceResponseTopicPartition)
-		id    = func(t kmsg.ProduceRequestTopic) tpid { return tpid{t.Topic, t.TopicID} }
+		// v13 names a topic by ID alone, whether or not we have
+		// resolved its name yet.
+		id = func(t kmsg.ProduceRequestTopic) tpid {
+			if req.Version >= 13 {
+				return tpid{id: t.TopicID}
+			}
+			return tpid{t: t.Topic}
+		}
 	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
@@ -95,6 +103,34 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 		return resp
 	}
 
+	// If any batch is transactional (a batch's attributes are at byte
+	// 21), Kafka checks the request's transactional ID before anything
+	// else, and fails the whole request if it has none, even without an
+	// authorizer.
+	var anyTxnal bool
+	for _, rt := range req.Topics {
+		for _, rp := range rt.Partitions {
+			anyTxnal = anyTxnal || len(rp.Records) > 22 && binary.BigEndian.Uint16(rp.Records[21:])&0x0010 != 0
+		}
+	}
+	var txnID string
+	if req.TransactionID != nil {
+		txnID = *req.TransactionID
+	}
+	switch {
+	case !anyTxnal:
+	case req.TransactionID == nil:
+		donets(kerr.TransactionalIDAuthorizationFailed.Code, "")
+		return toresp(), nil
+	default:
+		if e := c.deny(creq, txnID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite, faultKey{txnID: txnID}); e != nil {
+			donets(e.Code, e.Message)
+			if creq.skipsWork(e) { // a timed-out append still appends
+				return toresp(), nil
+			}
+		}
+	}
+
 	switch req.Acks {
 	case -1, 0, 1:
 	default:
@@ -108,7 +144,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 			topic, ok := c.data.id2t[rt.TopicID]
 			if !ok {
 				for _, rp := range rt.Partitions {
-					if e := creq.faults.check(faultKey{topicID: rt.TopicID}.part(rp.Partition)); e != nil {
+					if e := creq.faults.check(faultKey{topicID: rt.TopicID, txnID: txnID}.part(rp.Partition)); e != nil {
 						donep(rt, rp, e.Code, e.Message)
 						continue
 					}
@@ -121,7 +157,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 		maxMessageBytes := c.data.maxMessageBytes(rt.Topic)
 		for _, rp := range rt.Partitions {
 			pd, ok := c.data.tps.getp(rt.Topic, rp.Partition)
-			k := faultKey{topic: rt.Topic, topicID: rt.TopicID, misrouted: ok && pd.leader != b}
+			k := faultKey{topic: rt.Topic, topicID: rt.TopicID, txnID: txnID, misrouted: ok && pd.leader != b}
 			if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationWrite, k.part(rp.Partition)); e != nil {
 				donep(rt, rp, e.Code, e.Message)
 				if creq.skipsWork(e) { // a timed-out append still appends
@@ -205,10 +241,14 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 
 			if b.ProducerID >= 0 {
 				// Kafka has the coordinator check a transactional
-				// batch's epoch before it adds or verifies the
-				// partition, and answers a mismatch either way with
-				// INVALID_PRODUCER_EPOCH.
-				if p := c.pids.getpid(b.ProducerID); txnal && p != nil && p.epoch != b.ProducerEpoch {
+				// batch's producer ID against the request's
+				// transactional ID, then its epoch, before it adds or
+				// verifies the partition. It answers an epoch mismatch
+				// either way with INVALID_PRODUCER_EPOCH.
+				if p := c.pids.getpid(b.ProducerID); txnal && (p == nil || p.txid != txnID) {
+					donep(rt, rp, kerr.InvalidProducerIDMapping.Code, "")
+					continue
+				} else if txnal && p.epoch != b.ProducerEpoch {
 					donep(rt, rp, kerr.InvalidProducerEpoch.Code, "")
 					continue
 				}
@@ -238,8 +278,13 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					errCode = kerr.InvalidTxnState.Code
 				}
 
+				// A partition not in the transaction (before v12, which
+				// adds it). v11 clients understand TRANSACTION_ABORTABLE.
 				if txnal && window == nil {
 					errCode = kerr.InvalidTxnState.Code
+					if req.Version == 11 {
+						errCode = kerr.TransactionAbortable.Code
+					}
 				}
 
 				// Brokers below 2.5 (KIP-360) reject an append that

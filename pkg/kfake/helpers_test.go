@@ -502,11 +502,15 @@ func kvRecord() kmsg.Record {
 }
 
 // produceRawV11 sends one batch as a Produce v11, which names the topic
-// rather than identifying it by ID, and returns the partition response.
-func produceRawV11(t *testing.T, cl *kgo.Client, topic string, batch []byte) kmsg.ProduceResponseTopicPartition {
+// rather than identifying it by ID, and returns the partition response. A
+// transactional batch needs its transactional ID.
+func produceRawV11(t *testing.T, cl *kgo.Client, topic string, batch []byte, txid ...string) kmsg.ProduceResponseTopicPartition {
 	t.Helper()
 	req := kmsg.NewProduceRequest()
 	req.Version = 11
+	if len(txid) > 0 {
+		req.TransactionID = &txid[0]
+	}
 	req.Acks = -1
 	req.TimeoutMillis = 5000
 	rt := kmsg.NewProduceRequestTopic()

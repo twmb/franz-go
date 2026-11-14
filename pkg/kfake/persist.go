@@ -435,13 +435,20 @@ type (
 		MemberID   string `json:"member,omitempty"`
 	}
 
+	// pidLogEntry is one line of pids.log. "init" restores a producer
+	// in full, replacing any earlier state for its PID and any other PID
+	// of its transactional ID; a Commit says a transaction ended since the
+	// last InitProducerID. "begin" opens a transaction, which a restart
+	// aborts unless session state restores it. "expire" drops the PID.
+	// "endtx" and "timeout" come from older versions.
 	pidLogEntry struct {
-		Type    string `json:"type"` // init, endtx, timeout
+		Type    string `json:"type"` // init, begin, expire; endtx, timeout
 		PID     int64  `json:"pid"`
 		Epoch   int16  `json:"epoch"`
 		TxID    string `json:"txid,omitempty"`
 		Timeout int32  `json:"timeout,omitempty"`
 		Commit  *bool  `json:"commit,omitempty"`
+		PrevID  int64  `json:"prev,omitempty"`
 	}
 )
 
@@ -957,18 +964,13 @@ func (c *Cluster) savePIDsLog(fsys fs, dir string) error {
 
 	for _, pidinf := range c.pids.ids {
 		// Write the latest state for each PID
-		entry := pidLogEntry{
-			Type:  "init",
-			PID:   pidinf.id,
-			Epoch: pidinf.epoch,
-			TxID:  pidinf.txid,
-		}
-		if pidinf.txid != "" {
-			entry.Timeout = pidinf.txTimeout
-			entry.Commit = &pidinf.lastWasCommit
-		}
-		if _, err := appendLogEntry(f, entry, c.cfg.syncWrites); err != nil {
+		if _, err := appendLogEntry(f, pidinf.logEntry(), c.cfg.syncWrites); err != nil {
 			return err
+		}
+		if pidinf.inTx {
+			if _, err := appendLogEntry(f, pidLogEntry{Type: "begin", PID: pidinf.id}, c.cfg.syncWrites); err != nil {
+				return err
+			}
 		}
 	}
 	return fsys.Rename(tmpPath, path)
@@ -1079,14 +1081,15 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 		return false, err
 	}
 
-	// Load PIDs, then bump epoch for PIDs that had in-flight
-	// transactions at crash time.
+	// Load PIDs. A PID with records of an open transaction in a log
+	// had a transaction open at crash time, even if pids.log has no
+	// begin entry for it (older versions).
 	if err := c.loadPIDsLog(fsys, dir); err != nil {
 		return false, err
 	}
 	for pid := range crashAbortedPIDs {
 		if pidinf, ok := c.pids.ids[pid]; ok {
-			pidinf.epoch++
+			pidinf.inTx = true
 		}
 	}
 
@@ -1102,6 +1105,19 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 
 	if err := c.loadSessionState(); err != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "load session state: %v", err)
+	}
+
+	// A transaction open at crash time that session state did not
+	// restore is aborted, as the partition replay already aborted its
+	// records. The bump fences the producer, and the abort tells a retry
+	// of its commit that the commit did not happen.
+	for _, pidinf := range c.pids.ids {
+		if _, restored := c.pids.txs[pidinf]; !pidinf.inTx || restored {
+			continue
+		}
+		c.cfg.logger.Logf(LogLevelDebug, "load: aborting txn open at crash pid=%d epoch=%d", pidinf.id, pidinf.epoch)
+		pidinf.resetTx(false)
+		c.pids.bumpEpoch(pidinf).persist()
 	}
 
 	return true, nil
@@ -1581,22 +1597,40 @@ func (c *Cluster) loadPIDsLog(fsys fs, dir string) error {
 				pids:       &c.pids,
 				id:         entry.PID,
 				epoch:      entry.Epoch,
+				prevID:     entry.PrevID,
 				txid:       entry.TxID,
 				txTimeout:  entry.Timeout,
 				lastActive: time.Now(),
 			}
 			if entry.Commit != nil {
+				pidinf.ended = true
 				pidinf.lastWasCommit = *entry.Commit
 			}
 			c.pids.ids[entry.PID] = pidinf
 			if entry.TxID != "" {
+				// An epoch overflow moved the ID to a new PID.
+				if old := c.pids.byTxid[entry.TxID]; old != nil && old.id != entry.PID {
+					delete(c.pids.ids, old.id)
+				}
 				c.pids.byTxid[entry.TxID] = pidinf
+			}
+		case "begin":
+			if pidinf, ok := c.pids.ids[entry.PID]; ok {
+				pidinf.inTx = true
+			}
+		case "expire":
+			if pidinf, ok := c.pids.ids[entry.PID]; ok {
+				delete(c.pids.ids, entry.PID)
+				if c.pids.byTxid[pidinf.txid] == pidinf {
+					delete(c.pids.byTxid, pidinf.txid)
+				}
 			}
 		case "endtx":
 			pidinf, ok := c.pids.ids[entry.PID]
 			if ok {
 				pidinf.epoch = entry.Epoch
 				pidinf.inTx = false
+				pidinf.ended = true
 				if entry.Commit != nil {
 					pidinf.lastWasCommit = *entry.Commit
 				}
@@ -1606,6 +1640,8 @@ func (c *Cluster) loadPIDsLog(fsys fs, dir string) error {
 			if ok {
 				pidinf.epoch = entry.Epoch
 				pidinf.inTx = false
+				pidinf.ended = true
+				pidinf.lastWasCommit = false
 			}
 		}
 	}
@@ -2094,6 +2130,7 @@ type (
 		PID                int64                                                       `json:"pid"`
 		TxStart            time.Time                                                   `json:"txStart"`
 		TxPartFirstOffsets map[string]map[int32]int64                                  `json:"txPartFirstOffsets"`
+		TxParts            map[string][]int32                                          `json:"txParts,omitempty"` // added, not yet written to
 		TxGroups           []string                                                    `json:"txGroups,omitempty"`
 		TxOffsets          map[string]map[string]map[int32]sessionTxStagedOffsetCommit `json:"txOffsets,omitempty"`
 	}
@@ -2112,6 +2149,7 @@ type (
 		Offset      int64   `json:"o"`
 		LeaderEpoch int32   `json:"e,omitempty"`
 		Metadata    *string `json:"m,omitempty"`
+		At          int64   `json:"at,omitempty"` // TxnOffsetCommit time, millis
 	}
 
 	sessionClassicGroup struct {
@@ -2347,6 +2385,17 @@ func (c *Cluster) saveSessionState() error {
 			}
 			st.TxPartFirstOffsets[t][p] = *off
 		})
+		// A partition added to the transaction but not yet written to
+		// must stay in it, or a pre-KIP-890 produce to it fails.
+		pidinf.txParts.each(func(t string, p int32, _ *partData) {
+			if _, ok := st.TxPartFirstOffsets[t][p]; ok {
+				return
+			}
+			if st.TxParts == nil {
+				st.TxParts = make(map[string][]int32)
+			}
+			st.TxParts[t] = append(st.TxParts[t], p)
+		})
 		// Save staged TxnOffsetCommit offsets (pending EndTxn commit).
 		// Without this, after restart endTx has no offsets to apply,
 		// responds success to the client, and re-delivery bites on the
@@ -2366,6 +2415,7 @@ func (c *Cluster) saveSessionState() error {
 						Offset:      oc.offset,
 						LeaderEpoch: oc.leaderEpoch,
 						Metadata:    oc.metadata,
+						At:          oc.lastCommit.UnixMilli(),
 					}
 				})
 				st.TxOffsets[group] = topicMap
@@ -2581,16 +2631,6 @@ func (c *Cluster) loadSessionState() error {
 	// txPartFirstOffsets, and pd.uncommittedPIDs from the saved
 	// per-partition first offsets. This lets endTx properly commit
 	// or abort records that were produced before the restart.
-	//
-	// The "effective elapsed" time of a txn excludes broker downtime:
-	// we shift txStart forward by time.Since(ShutdownAt) so a client
-	// that started a txn pre-restart gets back the same remaining
-	// budget, not a shortened one that counts the restart gap as
-	// in-flight time. Without this, cumulative downtime across many
-	// --restart cycles can drive a live txn past its TransactionTimeout
-	// and trigger auto-abort on the NEXT restart, which fences the
-	// producer epoch and fails any subsequent Produce with
-	// INVALID_PRODUCER_EPOCH (fatal post-KIP-890).
 	outage := time.Since(ss.ShutdownAt)
 	if outage < 0 {
 		outage = 0
@@ -2600,61 +2640,28 @@ func (c *Cluster) loadSessionState() error {
 		if !ok {
 			continue
 		}
-		// Auto-abort if absolute elapsed time since the txn was opened
-		// exceeds its timeout. Unlike session timeouts (where we want to
-		// exclude broker downtime so members aren't unfairly kicked),
-		// txn timeouts are absolute: real Kafka expires a txn that has
-		// been open too long regardless of broker availability.
-		txTimeout := time.Duration(pidinf.txTimeout) * time.Millisecond
-		if !st.TxStart.IsZero() && time.Since(st.TxStart) > txTimeout {
-			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: auto-aborting expired txn pid=%d epoch=%d (start %v ago, timeout %v)",
-				pidinf.id, pidinf.epoch, time.Since(st.TxStart), txTimeout)
-			// Reconstruct just enough state for endTx to abort.
-			pidinf.inTx = true
-			c.pids.txs[pidinf] = struct{}{}
-			for topic, parts := range st.TxPartFirstOffsets {
-				for part, firstOff := range parts {
-					pd, ok := c.data.tps.getp(topic, part)
-					if !ok || pd == nil {
-						continue
-					}
-					ps := pidinf.txParts.mkt(topic)
-					ps[part] = pd
-					ptr := pidinf.txPartFirstOffsets.mkp(topic, part, func() *int64 {
-						v := int64(-1)
-						return &v
-					})
-					*ptr = firstOff
-					if pd.uncommittedPIDs == nil {
-						pd.uncommittedPIDs = make(map[int64]int64)
-					}
-					existing, exists := pd.uncommittedPIDs[pidinf.id]
-					if !exists || firstOff < existing {
-						pd.uncommittedPIDs[pidinf.id] = firstOff
-					}
-					pd.recalculateLSO()
-				}
-			}
-			pidinf.endTx(false)
-			continue
-		}
-
 		pidinf.inTx = true
-		// When restoring a non-expired txn, shift its start time
-		// forward by the outage so the txn's effective clock pauses
-		// during broker downtime. The timeout check above uses
-		// absolute elapsed time (matching real Kafka); this shift
-		// only affects the post-restart timer, giving the client a
-		// fair chance to complete the txn without the clock counting
-		// broker downtime it had no control over.
+		// A txn's clock pauses while we are down: we shift its start
+		// forward by the outage, so the client gets back the time it
+		// had left. Otherwise, repeated restarts would push a live txn
+		// past its timeout, and the abort would fence the producer. A
+		// txn open longer than its timeout keeps its start, and the
+		// updateTimer below aborts it and bumps the epoch, as Kafka
+		// expires a txn open too long whether or not the broker was up.
 		pidinf.txStart = st.TxStart
-		if !pidinf.txStart.IsZero() {
-			pidinf.txStart = pidinf.txStart.Add(outage)
-		}
 		if pidinf.txStart.IsZero() {
 			pidinf.txStart = time.Now()
+		} else if time.Since(st.TxStart) <= time.Duration(pidinf.txTimeout)*time.Millisecond {
+			pidinf.txStart = pidinf.txStart.Add(outage)
 		}
 		c.pids.txs[pidinf] = struct{}{}
+		for topic, parts := range st.TxParts {
+			for _, part := range parts {
+				if pd, ok := c.data.tps.getp(topic, part); ok {
+					pidinf.txParts.mkt(topic)[part] = pd
+				}
+			}
+		}
 		for topic, parts := range st.TxPartFirstOffsets {
 			for part, firstOff := range parts {
 				pd, ok := c.data.tps.getp(topic, part)
@@ -2694,10 +2701,15 @@ func (c *Cluster) loadSessionState() error {
 				var groupOffsets tps[offsetCommit]
 				for topic, parts := range topicMap {
 					for part, s := range parts {
+						at := ss.ShutdownAt
+						if s.At != 0 {
+							at = time.UnixMilli(s.At)
+						}
 						groupOffsets.set(topic, part, offsetCommit{
 							offset:      s.Offset,
 							leaderEpoch: s.LeaderEpoch,
 							metadata:    s.Metadata,
+							lastCommit:  at,
 						})
 					}
 				}
