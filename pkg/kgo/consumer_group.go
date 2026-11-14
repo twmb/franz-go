@@ -233,7 +233,9 @@ func (cl *Client) LeaveGroup() {
 // context cancel error. If the context is nil, this immediately
 // triggers the leave and does not wait, returning nil. In either the
 // ctx-expired or nil-ctx cases, the shutdown work continues in the
-// background to keep client state consistent.
+// background to keep client state consistent. Only the first call starts
+// the leave, under its context; a later call waits for that leave or for
+// its own context.
 //
 // For classic consumer groups: if a rebalance is in progress, this
 // function waits for the in-flight join and sync to finish before the
@@ -284,9 +286,12 @@ func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 	if immediate {
 		ctx = cl.ctx
 	}
+	start := c.leaving.CompareAndSwap(false, true)
 
 	if c.s != nil {
-		go c.s.leave(ctx)
+		if start {
+			go c.s.leave(ctx)
+		}
 		if immediate {
 			return nil
 		}
@@ -298,14 +303,16 @@ func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 		}
 	}
 
-	go func() {
-		c.waitAndAddRebalanceSilent()
-		c.mu.Lock() // lock for assign
-		c.assignPartitions(nil, assignInvalidateAll, nil, "invalidating all assignments in LeaveGroup")
-		c.g.leave(ctx)
-		c.mu.Unlock()
-		c.unaddRebalance()
-	}()
+	if start {
+		go func() {
+			c.waitAndAddRebalanceSilent()
+			c.mu.Lock() // lock for assign
+			c.assignPartitions(nil, assignInvalidateAll, nil, "invalidating all assignments in LeaveGroup")
+			c.g.leave(ctx)
+			c.mu.Unlock()
+			c.unaddRebalance()
+		}()
+	}
 
 	if immediate {
 		return nil
