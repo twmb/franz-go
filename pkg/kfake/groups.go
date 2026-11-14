@@ -192,12 +192,21 @@ func (c *Cluster) topicInfo(topic string) (id uuid, parts int32, ok bool) {
 }
 
 // dropGroupCommits removes every group's committed offsets for a deleted
-// topic, as Kafka and Redpanda do. The commits are gone when we return, so
-// the DeleteTopics response we are answering cannot beat the drop.
+// topic, as Kafka and Redpanda do, including those an open transaction
+// would commit. The commits are gone when we return, so the DeleteTopics
+// response we are answering cannot beat the drop.
 func (c *Cluster) dropGroupCommits(topic string) {
 	for _, g := range c.groups.gs {
 		for part := range g.commits[topic] {
 			g.deleteCommitAndPersist(topic, part)
+		}
+	}
+	for pidinf := range c.pids.txs {
+		for group, offsets := range pidinf.txOffsets {
+			delete(offsets, topic)
+			if len(offsets) == 0 {
+				delete(pidinf.txOffsets, group)
+			}
 		}
 	}
 }
@@ -303,18 +312,59 @@ func (gs *groups) newOrExisting(name string) (*group, bool) {
 // replied to when the rebalance completes.
 func (gs *groups) handleJoin(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.JoinGroupRequest)
+	resp := req.ResponseKind().(*kmsg.JoinGroupResponse)
 
-	// Group type exclusivity: if this group ID is already a share
-	// group, reject the classic consumer join.
-	if _, isShare := gs.c.shareGroups.gs[req.Group]; isShare {
-		resp := req.ResponseKind().(*kmsg.JoinGroupResponse)
-		resp.ErrorCode = kerr.GroupIDNotFound.Code
-		resp.MemberID = ""
-		resp.Generation = -1
+	// Kafka checks the ACL, the group ID, the session timeout, and
+	// routing, in that order, before it looks at the group.
+	coordinator := gs.c.isCoordinator(creq, req.Group)
+	if e := gs.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group, misrouted: !coordinator}); e != nil {
+		resp.ErrorCode = e.Code
 		return resp
 	}
+	if req.Group == "" {
+		resp.ErrorCode = kerr.InvalidGroupID.Code
+		return resp
+	}
+	if st := req.SessionTimeoutMillis; st < gs.c.groupMinSessionTimeoutMs() || st > gs.c.groupMaxSessionTimeoutMs() {
+		resp.ErrorCode = kerr.InvalidSessionTimeout.Code
+		return resp
+	}
+	if !coordinator {
+		resp.ErrorCode = kerr.NotCoordinator.Code
+		return resp
+	}
+	if _, isShare := gs.c.shareGroups.gs[req.Group]; isShare {
+		resp.ErrorCode = kerr.InconsistentGroupProtocol.Code
+		return resp
+	}
+	// v0 has no rebalance timeout; Kafka uses the session timeout.
+	if req.Version == 0 {
+		req.RebalanceTimeoutMillis = req.SessionTimeoutMillis
+	}
 
+	// Kafka creates a group only for a join without a member ID.
+	if gs.gs[req.Group] == nil && req.MemberID != "" {
+		resp.MemberID = req.MemberID
+		resp.ErrorCode = kerr.UnknownMemberID.Code
+		return resp
+	}
 	g, isNew := gs.newOrExisting(req.Group)
+	if g.typ == "consumer" {
+		// Kafka turns an empty consumer group into a classic group,
+		// keeping its offsets. We do not run classic members in a
+		// group with consumer members, which Kafka can.
+		if len(g.consumerMembers) > 0 {
+			resp.ErrorCode = kerr.InconsistentGroupProtocol.Code
+			return resp
+		}
+		g.typ = "classic"
+		g.state = groupEmpty
+		g.consumerMembers = nil
+		g.partitionEpochs = nil
+		g.subscribedTPs = nil
+		g.groupEpoch, g.targetAssignmentEpoch = 0, 0
+		g.persistClassicMeta()
+	}
 	kresp, ok := g.handleJoin(creq)
 	if isNew && !ok {
 		delete(gs.gs, req.Group)
@@ -322,66 +372,77 @@ func (gs *groups) handleJoin(creq *clientReq) kmsg.Response {
 	return kresp
 }
 
-// Returns the response and true if the group exists, otherwise false.
-func (gs *groups) handleHijack(group string, fn func(*group) kmsg.Response) (kmsg.Response, bool) {
-	g := gs.gs[group]
-	if g == nil {
-		return nil, false
+// memberReq checks a SyncGroup, Heartbeat, LeaveGroup, or OffsetDelete as
+// Kafka does before it looks at the group: the ACL for op, then the group
+// ID, then routing. It returns the group, or nil if there is none: Kafka
+// answers a member of a missing group UNKNOWN_MEMBER_ID.
+func (gs *groups) memberReq(creq *clientReq, group string, op kmsg.ACLOperation) (*group, *kerr.Error) {
+	if e := gs.c.deny(creq, group, kmsg.ACLResourceTypeGroup, op, faultKey{group: group, misrouted: !gs.c.isCoordinator(creq, group)}); e != nil {
+		return nil, e
 	}
-	return fn(g), true
-}
-
-func (gs *groups) handleSync(creq *clientReq) (kmsg.Response, bool) {
-	return gs.handleHijack(creq.kreq.(*kmsg.SyncGroupRequest).Group, func(g *group) kmsg.Response { return g.handleSync(creq) })
-}
-
-func (gs *groups) handleHeartbeat(creq *clientReq) (kmsg.Response, bool) {
-	return gs.handleHijack(creq.kreq.(*kmsg.HeartbeatRequest).Group, func(g *group) kmsg.Response { return g.handleHeartbeat(creq) })
-}
-
-func (gs *groups) handleLeave(creq *clientReq) (kmsg.Response, bool) {
-	return gs.handleHijack(creq.kreq.(*kmsg.LeaveGroupRequest).Group, func(g *group) kmsg.Response { return g.handleLeave(creq) })
+	if kerr := gs.c.validateGroup(creq, group); kerr != nil {
+		return nil, kerr
+	}
+	return gs.gs[group], nil
 }
 
 func (gs *groups) handleOffsetCommit(creq *clientReq) *kmsg.OffsetCommitResponse {
 	req := creq.kreq.(*kmsg.OffsetCommitRequest)
+	resp := req.ResponseKind().(*kmsg.OffsetCommitResponse)
+	defer func() { resp.Topics = append(resp.Topics, creq.offsetCommitErrTopics...) }()
+
+	if e := gs.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group, misrouted: !gs.c.isCoordinator(creq, req.Group)}); e != nil && creq.skipsWork(e) {
+		fillOffsetCommit(req, resp, e.Code)
+		return resp
+	}
+
+	// Kafka checks every topic before the group, and a commit with none
+	// left never reaches the group.
+	allowed, answers := gs.c.fillOffsetCommitWithACL(creq, req, resp)
+	if len(allowed) == 0 {
+		return resp
+	}
+	if kerr := gs.c.validateGroup(creq, req.Group); kerr != nil {
+		failOffsetCommit(answers, kerr.Code)
+		return resp
+	}
 
 	// Group type exclusivity: a share group holds no committed offsets,
 	// and creating a consumer group under its name would list the id
-	// twice. Kafka answers GROUP_ID_NOT_FOUND on every partition.
+	// twice. Kafka answers GROUP_ID_NOT_FOUND on every partition that
+	// passes the topic checks.
 	if _, isShare := gs.c.shareGroups.gs[req.Group]; isShare {
-		resp := req.ResponseKind().(*kmsg.OffsetCommitResponse)
-		fillOffsetCommit(req, resp, kerr.GroupIDNotFound.Code)
-		resp.Topics = append(resp.Topics, creq.offsetCommitErrTopics...)
+		failOffsetCommit(answers, kerr.GroupIDNotFound.Code)
 		return resp
 	}
 
 	g, isNew := gs.newOrExisting(req.Group)
-	kresp, ok := g.dispatchOffsetCommit(creq)
-	if isNew && !ok {
+	var stored bool
+	if g.typ == "consumer" {
+		stored = g.handleConsumerOffsetCommit(creq, allowed, answers)
+	} else {
+		stored = g.handleOffsetCommit(creq, allowed, answers, isNew)
+	}
+	if isNew && !stored {
 		delete(gs.gs, req.Group)
 	}
 	// Never nil: a commit is always answered, never parked. A nil
 	// pointer here becomes a non-nil kmsg.Response in the caller, which
 	// the loop would then try to write.
-	return kresp
+	return resp
 }
 
 func (gs *groups) handleOffsetDelete(creq *clientReq) *kmsg.OffsetDeleteResponse {
 	req := creq.kreq.(*kmsg.OffsetDeleteRequest)
 	resp := req.ResponseKind().(*kmsg.OffsetDeleteResponse)
 
-	if e := gs.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDelete, faultKey{group: req.Group, misrouted: !gs.c.isCoordinator(creq, req.Group)}); e != nil {
+	g, e := gs.memberReq(creq, req.Group, kmsg.ACLOperationDelete)
+	if e != nil {
 		resp.ErrorCode = e.Code
-		return resp
-	}
-	if kerr := gs.c.validateGroup(creq, req.Group); kerr != nil {
-		resp.ErrorCode = kerr.Code
 		return resp
 	}
 	// A share group holds no offsets to delete; Kafka answers
 	// GROUP_ID_NOT_FOUND for it as for a missing group.
-	g := gs.gs[req.Group]
 	if g == nil {
 		resp.ErrorCode = kerr.GroupIDNotFound.Code
 		return resp
@@ -393,23 +454,23 @@ func (gs *groups) handleList(creq *clientReq) *kmsg.ListGroupsResponse {
 	req := creq.kreq.(*kmsg.ListGroupsRequest)
 	resp := req.ResponseKind().(*kmsg.ListGroupsResponse)
 
+	clusterDescribe := gs.c.allowedClusterACL(creq, kmsg.ACLOperationDescribe)
 	for _, g := range gs.gs {
 		if g.c.coordinator(g.name).node != creq.cc.b.node {
 			continue
 		}
-		// ACL check: DESCRIBE on Group - filter out groups without permission
-		if e := g.c.deny(creq, g.name, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: g.name}); e != nil {
+		if !listFilterMatch(req, g.state.String(), g.typ) {
 			continue
 		}
-		if len(req.StatesFilter) > 0 && !slices.Contains(req.StatesFilter, g.state.String()) {
-			continue
-		}
-		if len(req.TypesFilter) > 0 && !slices.Contains(req.TypesFilter, g.typ) {
+		if gs.c.listDenied(creq, clusterDescribe, g.name) {
 			continue
 		}
 		sg := kmsg.NewListGroupsResponseGroup()
 		sg.Group = g.name
 		sg.ProtocolType = g.protocolType
+		if g.typ == "consumer" {
+			sg.ProtocolType = "consumer"
+		}
 		sg.GroupState = g.state.String()
 		sg.GroupType = g.typ
 		resp.Groups = append(resp.Groups, sg)
@@ -439,11 +500,18 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 			sg.ErrorCode = kerr.Code
 			continue
 		}
+		// Kafka describes only classic groups here; a consumer group
+		// is as missing as a group that does not exist.
 		g, ok := gs.gs[rg]
-		if !ok {
+		if !ok || g.typ == "consumer" {
 			sg.State = groupDead.String()
 			if req.Version >= 6 {
 				sg.ErrorCode = kerr.GroupIDNotFound.Code
+				msg := fmt.Sprintf("Group %s not found.", rg)
+				if ok {
+					msg = fmt.Sprintf("Group %s is not a classic group.", rg)
+				}
+				sg.ErrorMessage = &msg
 			}
 			// Kafka fills operations only for a group with no error.
 			if req.IncludeAuthorizedOperations && sg.ErrorCode == 0 {
@@ -462,6 +530,7 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 			sm.InstanceID = m.instanceID
 			sm.ClientID = m.clientID
 			sm.ClientHost = m.clientHost
+			sm.MemberAssignment = m.assignment
 			if g.state == groupStable {
 				for _, p := range m.join.Protocols {
 					if p.Name == g.protocol {
@@ -469,7 +538,6 @@ func (gs *groups) handleDescribe(creq *clientReq) *kmsg.DescribeGroupsResponse {
 						break
 					}
 				}
-				sm.MemberAssignment = m.assignment
 			}
 			sg.Members = append(sg.Members, sm)
 		}
@@ -491,7 +559,13 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 		return &resp.Groups[len(resp.Groups)-1]
 	}
 
+	seen := make(map[string]bool, len(req.Groups))
 	for _, rg := range req.Groups {
+		// Kafka answers each group once.
+		if seen[rg] {
+			continue
+		}
+		seen[rg] = true
 		sg := doneg(rg)
 		// setErr sets the code unless a fault already answered.
 		setErr := func(code int16) {
@@ -526,7 +600,9 @@ func (gs *groups) handleDelete(creq *clientReq) *kmsg.DeleteGroupsResponse {
 			continue
 		}
 		if g.typ == "consumer" {
-			if g.activeConsumerCount() == 0 {
+			// A static member that left at epoch -2 is still a
+			// member until its session ends.
+			if len(g.consumerMembers) == 0 {
 				g.kill()
 			} else {
 				setErr(kerr.NonEmptyGroup.Code)
@@ -629,21 +705,18 @@ func (gs *groups) handleOffsetFetch(creq *clientReq) *kmsg.OffsetFetchResponse {
 			}
 		}
 
-		// KIP-447: real Kafka returns UNSTABLE_OFFSET_COMMIT
-		// per-partition, not per-group.
-		unstable := req.RequireStable && gs.c.pids.hasUnstableOffsets(rg.Group)
+		// Kafka answers a group that does not exist with no offsets.
 		g, ok := gs.gs[rg.Group]
 		if !ok {
-			sg.ErrorCode = kerr.GroupIDNotFound.Code
-			continue
+			g = gs.newGroup(rg.Group)
 		}
-		g.fillOffsetFetch(creq, rg, sg, unstable)
+		g.fillOffsetFetch(creq, req, rg, sg)
 	}
 	return resp
 }
 
 // fillOffsetFetch fills one group's portion of an OffsetFetch response.
-func (g *group) fillOffsetFetch(creq *clientReq, rg kmsg.OffsetFetchRequestGroup, sg *kmsg.OffsetFetchResponseGroup, unstable bool) {
+func (g *group) fillOffsetFetch(creq *clientReq, req *kmsg.OffsetFetchRequest, rg kmsg.OffsetFetchRequestGroup, sg *kmsg.OffsetFetchResponseGroup) {
 	// KIP-848: validate MemberID/MemberEpoch for consumer
 	// groups. Admin fetches (MemberID absent with
 	// MemberEpoch < 0) skip validation. MemberID="" is a
@@ -666,15 +739,25 @@ func (g *group) fillOffsetFetch(creq *clientReq, rg kmsg.OffsetFetchRequestGroup
 			return
 		}
 	}
+	// KIP-447: an offset that an open transaction commits is unstable
+	// until the transaction ends.
+	unstable := func(t string, p int32) bool {
+		return req.RequireStable && g.c.pids.hasUnstableOffset(g.name, t, p)
+	}
 	if rg.Topics == nil {
 		for t, ps := range g.commits {
+			// Kafka leaves out the topics you may not describe.
+			id := g.c.data.t2id[t]
+			if g.c.deny(creq, t, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{group: g.name, topic: t, topicID: id}) != nil {
+				continue
+			}
 			st := kmsg.NewOffsetFetchResponseGroupTopic()
 			st.Topic = t
-			st.TopicID = g.c.data.t2id[t]
+			st.TopicID = id
 			for p, c := range ps {
 				sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
 				sp.Partition = p
-				if unstable {
+				if unstable(t, p) {
 					sp.ErrorCode = kerr.UnstableOffsetCommit.Code
 					sp.Offset = -1
 					sp.LeaderEpoch = -1
@@ -692,26 +775,33 @@ func (g *group) fillOffsetFetch(creq *clientReq, rg kmsg.OffsetFetchRequestGroup
 			st := kmsg.NewOffsetFetchResponseGroupTopic()
 			st.Topic = t.Topic
 			st.TopicID = t.TopicID
+			tk := faultKey{group: g.name, topic: t.Topic, topicID: t.TopicID}
+			// From v10, a topic is named by ID, and an ID we do not
+			// know leaves the name empty.
+			unknownID := req.Version >= 10 && t.Topic == ""
+			var terr *kerr.Error
+			if !unknownID {
+				terr = g.c.deny(creq, t.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, tk)
+			}
 			for _, p := range t.Partitions {
 				sp := kmsg.NewOffsetFetchResponseGroupTopicPartition()
 				sp.Partition = p
-				if e := creq.faults.check(faultKey{group: rg.Group, topic: t.Topic, topicID: t.TopicID}.part(p)); e != nil {
-					sp.ErrorCode = e.Code
-					sp.Offset = -1
-					sp.LeaderEpoch = -1
-					st.Partitions = append(st.Partitions, sp)
-					continue
+				sp.Offset = -1
+				sp.LeaderEpoch = -1
+				e := terr
+				if e == nil {
+					e = creq.faults.check(tk.part(p))
 				}
-				if unstable {
+				if e == nil && unknownID {
+					e = kerr.UnknownTopicID
+				}
+				switch {
+				case e != nil:
+					sp.ErrorCode = e.Code
+				case unstable(t.Topic, p):
 					sp.ErrorCode = kerr.UnstableOffsetCommit.Code
-					sp.Offset = -1
-					sp.LeaderEpoch = -1
-				} else {
-					c, ok := g.commits.getp(t.Topic, p)
-					if !ok {
-						sp.Offset = -1
-						sp.LeaderEpoch = -1
-					} else {
+				default:
+					if c, ok := g.commits.getp(t.Topic, p); ok {
 						sp.Offset = c.offset
 						sp.LeaderEpoch = c.leaderEpoch
 						sp.Metadata = c.metadata
@@ -827,23 +917,6 @@ func (g *group) dropTxnOffset(topic string, part int32) {
 // GROUP HANDLING //
 ////////////////////
 
-// dispatchOffsetCommit handles a commit for either group type. The bool
-// is whether the request was valid; a brand new group created solely to
-// hold this commit is dropped again if it was not.
-func (g *group) dispatchOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse, bool) {
-	var resp *kmsg.OffsetCommitResponse
-	var ok bool
-	if g.typ == "consumer" {
-		resp, ok = g.handleConsumerOffsetCommit(creq), true
-	} else {
-		resp, ok = g.handleOffsetCommit(creq)
-	}
-	if resp != nil && len(creq.offsetCommitErrTopics) > 0 {
-		resp.Topics = append(resp.Topics, creq.offsetCommitErrTopics...)
-	}
-	return resp, ok
-}
-
 // stopTimers stops every timer the group owns. An unstopped timer keeps
 // the group, and through it the cluster, alive in the runtime timer heap
 // until it fires.
@@ -872,8 +945,10 @@ func (g *group) stopTimers() {
 	}
 }
 
-// kill marks the group dead and drops it from the cluster. Timers that
-// fired before this see the group is gone and do nothing.
+// kill marks the group dead and drops it from the cluster, along with
+// its offsets in open transactions: as in Kafka, committing such a
+// transaction later must not bring the group back. Timers that fired
+// before this see the group is gone and do nothing.
 //
 // The group must be empty: a member with a parked JoinGroup or SyncGroup
 // is dropped here with no reply, leaving the client to time out.
@@ -881,6 +956,10 @@ func (g *group) kill() {
 	g.state = groupDead
 	g.stopTimers()
 	delete(g.c.groups.gs, g.name)
+	for pidinf := range g.c.pids.txs {
+		delete(pidinf.txOffsets, g.name)
+	}
+	g.c.persistGroupEntry(groupLogEntry{Type: "deleteGroup", Group: g.name})
 }
 
 // Handles a join. We do not do the delayed join aspects in Kafka, we just punt
@@ -891,21 +970,20 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 	req := creq.kreq.(*kmsg.JoinGroupRequest)
 	resp := req.ResponseKind().(*kmsg.JoinGroupResponse)
 
-	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
-		resp.ErrorCode = kerr.Code
-		return resp, false
+	// Like Kafka, a member we have no room for leaves the group.
+	if !g.acceptJoin(req.MemberID) {
+		if m := g.members[req.MemberID]; m != nil {
+			g.removeMember(m)
+		} else if m := g.pending[req.MemberID]; m != nil {
+			g.stopPending(m)
+		}
+		resp.ErrorCode = kerr.GroupMaxSizeReached.Code
+		return resp, true
 	}
-	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
-		resp.ErrorCode = e.Code
-		return resp, false
-	}
-	if st := req.SessionTimeoutMillis; st < g.c.groupMinSessionTimeoutMs() || st > g.c.groupMaxSessionTimeoutMs() {
-		resp.ErrorCode = kerr.InvalidSessionTimeout.Code
-		return resp, false
-	}
+
 	if !g.protocolsMatch(req.ProtocolType, req.Protocols) {
 		resp.ErrorCode = kerr.InconsistentGroupProtocol.Code
-		return resp, false
+		return resp, req.MemberID == "" // Kafka keeps a group a new member's refused join created
 	}
 
 	// Clients first join with no member ID. For join v4+, we generate
@@ -921,17 +999,13 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 				return g.replaceStaticMember(old, creq, req, resp)
 			}
 		}
-		if int32(len(g.members)+len(g.pending)) >= g.c.groupMaxSize() {
-			resp.ErrorCode = kerr.GroupMaxSizeReached.Code
-			return resp, true
-		}
 		memberID := generateMemberID(creq.cid, req.InstanceID)
 		resp.MemberID = memberID
 		m := &groupMember{
 			memberID:   memberID,
 			instanceID: req.InstanceID,
 			clientID:   creq.cid,
-			clientHost: creq.cc.conn.RemoteAddr().String(),
+			clientHost: "/" + creq.clientHost(),
 			join:       req,
 		}
 		if req.InstanceID != nil {
@@ -994,6 +1068,29 @@ func (g *group) handleJoin(creq *clientReq) (kmsg.Response, bool) {
 	return nil, true
 }
 
+// acceptJoin reports whether the group has room for a join from memberID, as
+// Kafka counts it: an empty group takes every join, a rebalancing group counts
+// the members waiting in a join, and otherwise we count every member. A join
+// without a member ID, a static member's replacement included, is a new
+// member's.
+func (g *group) acceptJoin(memberID string) bool {
+	maxSize := int(g.c.groupMaxSize())
+	m := g.members[memberID]
+	switch g.state {
+	case groupEmpty, groupDead:
+		return true
+	case groupPreparingRebalance:
+		if m != nil && !m.waitingReply.empty() {
+			if _, joining := m.waitingReply.kreq.(*kmsg.JoinGroupRequest); joining {
+				return true
+			}
+		}
+		return g.nJoining < maxSize
+	default:
+		return m != nil || len(g.members) < maxSize
+	}
+}
+
 // replaceStaticMember handles a static member rejoining with the same
 // instanceID. If the group is stable and the selected protocol would not
 // change, we skip the rebalance (KIP-345).
@@ -1006,7 +1103,7 @@ func (g *group) replaceStaticMember(old *groupMember, creq *clientReq, req *kmsg
 		memberID:   memberID,
 		instanceID: req.InstanceID,
 		clientID:   creq.cid,
-		clientHost: creq.cc.conn.RemoteAddr().String(),
+		clientHost: "/" + creq.clientHost(),
 		join:       req,
 		assignment: old.assignment,
 	}
@@ -1033,6 +1130,11 @@ func (g *group) replaceStaticMember(old *groupMember, creq *clientReq, req *kmsg
 	for _, p := range m.join.Protocols {
 		g.protocols[p.Name]++
 	}
+	// The replacement inherits leadership, in a rebalance as well.
+	oldLeader := g.leader
+	if g.leader == old.memberID {
+		g.leader = memberID
+	}
 
 	// If the group is stable and the protocol we would select is
 	// unchanged, skip the rebalance and keep the old assignment, whatever
@@ -1040,10 +1142,6 @@ func (g *group) replaceStaticMember(old *groupMember, creq *clientReq, req *kmsg
 	// so it knows to re-send the existing assignment without running the
 	// balancer (KIP-814).
 	if g.state == groupStable && g.selectProtocol() == g.protocol {
-		oldLeader := g.leader
-		if g.leader == old.memberID {
-			g.leader = memberID
-		}
 		g.updateHeartbeat(m)
 		g.fillJoinResp(memberID, resp)
 		switch {
@@ -1071,14 +1169,6 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.SyncGroupRequest)
 	resp := req.ResponseKind().(*kmsg.SyncGroupResponse)
 
-	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
-		resp.ErrorCode = kerr.Code
-		return resp
-	}
-	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
-		resp.ErrorCode = e.Code
-		return resp
-	}
 	if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
 		resp.ErrorCode = err.Code
 		return resp
@@ -1108,6 +1198,14 @@ func (g *group) handleSync(creq *clientReq) kmsg.Response {
 		resp.ErrorCode = kerr.RebalanceInProgress.Code
 	case groupCompletingRebalance:
 		delete(g.pendingSyncIDs, req.MemberID)
+		// Kafka answers the sync this one replaces NOT_COORDINATOR.
+		if !m.waitingReply.empty() {
+			oldResp := m.waitingReply.kreq.ResponseKind()
+			if r, ok := oldResp.(*kmsg.SyncGroupResponse); ok {
+				r.ErrorCode = kerr.NotCoordinator.Code
+				m.waitingReply.reply(r)
+			}
+		}
 		m.waitingReply = creq
 		if req.MemberID == g.leader {
 			g.completeLeaderSync(req)
@@ -1128,14 +1226,6 @@ func (g *group) handleHeartbeat(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.HeartbeatRequest)
 	resp := req.ResponseKind().(*kmsg.HeartbeatResponse)
 
-	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
-		resp.ErrorCode = kerr.Code
-		return resp
-	}
-	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
-		resp.ErrorCode = e.Code
-		return resp
-	}
 	if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
 		resp.ErrorCode = err.Code
 		return resp
@@ -1162,21 +1252,14 @@ func (g *group) handleHeartbeat(creq *clientReq) kmsg.Response {
 	return resp
 }
 
-// Handles a leave. We trigger a rebalance for every member leaving in a batch
-// request, but that's fine: the whole batch runs on the cluster loop before
-// anything else touches the group.
+// Handles a leave; g is nil for a group that does not exist. We trigger a
+// rebalance for every member leaving in a batch request, but that's fine:
+// the whole batch runs on the cluster loop before anything else touches the
+// group.
 func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 	req := creq.kreq.(*kmsg.LeaveGroupRequest)
 	resp := req.ResponseKind().(*kmsg.LeaveGroupResponse)
 
-	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
-		resp.ErrorCode = kerr.Code
-		return resp
-	}
-	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil {
-		resp.ErrorCode = e.Code
-		return resp
-	}
 	if req.Version < 3 {
 		req.Members = append(req.Members, kmsg.LeaveGroupRequestMember{
 			MemberID: req.MemberID,
@@ -1197,15 +1280,30 @@ func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 			continue
 		}
 
-		// Resolve memberID from instanceID for static members.
+		if g == nil {
+			// Kafka answers each member of a missing group so.
+			r.ErrorCode = kerr.UnknownMemberID.Code
+			continue
+		}
+		if g.typ == "consumer" {
+			r.ErrorCode = g.leaveConsumerMember(rm)
+			continue
+		}
+
+		// Resolve memberID from instanceID for static members. An
+		// admin names only the instance; a member that also names
+		// itself must still hold the instance.
 		if rm.InstanceID != nil {
 			memberID, ok := g.staticMembers[*rm.InstanceID]
 			if !ok {
 				r.ErrorCode = kerr.UnknownMemberID.Code
 				continue
 			}
+			if rm.MemberID != "" && rm.MemberID != memberID {
+				r.ErrorCode = kerr.FencedInstanceID.Code
+				continue
+			}
 			rm.MemberID = memberID
-			r.MemberID = memberID
 		}
 
 		if m, ok := g.members[rm.MemberID]; !ok {
@@ -1220,6 +1318,26 @@ func (g *group) handleLeave(creq *clientReq) kmsg.Response {
 	}
 
 	return resp
+}
+
+// leaveConsumerMember removes a member of a consumer group that a
+// LeaveGroup names, as Kafka does for an admin removing members, and
+// returns the member's error code.
+func (g *group) leaveConsumerMember(rm kmsg.LeaveGroupRequestMember) int16 {
+	var m *consumerMember
+	if rm.InstanceID == nil {
+		m = g.consumerMembers[rm.MemberID]
+	} else {
+		m = g.consumerMembers[g.staticMembers[*rm.InstanceID]]
+		if m != nil && rm.MemberID != "" && rm.MemberID != m.memberID {
+			return kerr.FencedInstanceID.Code
+		}
+	}
+	if m == nil {
+		return kerr.UnknownMemberID.Code
+	}
+	g.evictConsumerMember(m)
+	return 0
 }
 
 func fillOffsetCommit(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, code int16) {
@@ -1237,33 +1355,56 @@ func fillOffsetCommit(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResp
 	}
 }
 
-func setOffsetCommitPartitionErr(resp *kmsg.OffsetCommitResponse, topic string, partition int32, code int16) {
-	for i := range resp.Topics {
-		if resp.Topics[i].Topic == topic {
-			for j := range resp.Topics[i].Partitions {
-				if resp.Topics[i].Partitions[j].Partition == partition {
-					resp.Topics[i].Partitions[j].ErrorCode = code
-					return
-				}
+// failOffsetCommit answers code on every allowed partition's answer.
+func failOffsetCommit(answers []*kmsg.OffsetCommitResponseTopicPartition, code int16) {
+	for _, sp := range answers {
+		sp.ErrorCode = code
+	}
+}
+
+// commitAllowed stores each offset in allowed and returns whether it stored
+// any. Like Kafka's coordinator, it answers OFFSET_METADATA_TOO_LARGE for an
+// offset whose metadata is too large.
+func (g *group) commitAllowed(answers []*kmsg.OffsetCommitResponseTopicPartition, allowed []kmsg.OffsetCommitRequestTopic) bool {
+	var stored bool
+	var i int
+	for _, t := range allowed {
+		for _, p := range t.Partitions {
+			sp := answers[i]
+			i++
+			if offsetMetadataTooLarge(p.Metadata) {
+				sp.ErrorCode = kerr.OffsetMetadataTooLarge.Code
+				continue
 			}
+			g.commitAndPersist(t.Topic, p.Partition, offsetCommit{
+				offset:      p.Offset,
+				leaderEpoch: p.LeaderEpoch,
+				metadata:    p.Metadata,
+			})
+			stored = true
 		}
 	}
+	return stored
 }
 
 // fillOffsetCommitWithACL fills the response with per-topic ACL checks and
 // per-partition existence checks. A real broker's API layer rejects commits
 // for partitions its metadata does not know with UNKNOWN_TOPIC_OR_PARTITION
-// before the group coordinator ever sees them (auth is checked first); the
-// coordinator itself stores offsets blindly.
-// Returns the topics+partitions that passed and should be committed.
-func (g *group) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse) []kmsg.OffsetCommitRequestTopic {
-	var allowed []kmsg.OffsetCommitRequestTopic
+// before the group coordinator ever sees them (auth is checked first).
+// Returns the topics+partitions that passed, which the group checks, and the
+// answer of each in order; a group error goes only on these.
+func (c *Cluster) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse) ([]kmsg.OffsetCommitRequestTopic, []*kmsg.OffsetCommitResponseTopicPartition) {
+	var (
+		allowed []kmsg.OffsetCommitRequestTopic
+		answers []*kmsg.OffsetCommitResponseTopicPartition
+	)
+	misrouted := !c.isCoordinator(creq, req.Group)
 	for _, t := range req.Topics {
 		st := kmsg.NewOffsetCommitResponseTopic()
 		st.Topic = t.Topic
 		st.TopicID = t.TopicID
-		tk := faultKey{group: g.name, topic: t.Topic, topicID: t.TopicID}
-		if e := g.c.deny(creq, t.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, tk); e != nil && creq.skipsWork(e) { // a timed-out commit falls through to the per-partition checks
+		tk := faultKey{group: req.Group, topic: t.Topic, topicID: t.TopicID, misrouted: misrouted}
+		if e := c.deny(creq, t.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, tk); e != nil && creq.skipsWork(e) { // a timed-out commit falls through to the per-partition checks
 			for _, p := range t.Partitions {
 				sp := kmsg.NewOffsetCommitResponseTopicPartition()
 				sp.Partition = p.Partition
@@ -1271,10 +1412,11 @@ func (g *group) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitR
 				st.Partitions = append(st.Partitions, sp)
 			}
 		} else {
-			_, nparts, topicExists := g.c.topicInfo(t.Topic)
+			_, nparts, topicExists := c.topicInfo(t.Topic)
 			at := t
 			at.Partitions = nil
-			for _, p := range t.Partitions {
+			var passed []int
+			for j, p := range t.Partitions {
 				sp := kmsg.NewOffsetCommitResponseTopicPartition()
 				sp.Partition = p.Partition
 				e := creq.faults.check(tk.part(p.Partition))
@@ -1288,8 +1430,12 @@ func (g *group) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitR
 						sp.ErrorCode = e.Code
 					}
 					at.Partitions = append(at.Partitions, p)
+					passed = append(passed, j)
 				}
 				st.Partitions = append(st.Partitions, sp)
+			}
+			for _, j := range passed {
+				answers = append(answers, &st.Partitions[j])
 			}
 			if len(at.Partitions) > 0 {
 				allowed = append(allowed, at)
@@ -1297,71 +1443,65 @@ func (g *group) fillOffsetCommitWithACL(creq *clientReq, req *kmsg.OffsetCommitR
 		}
 		resp.Topics = append(resp.Topics, st)
 	}
-	return allowed
+	return allowed, answers
 }
 
-// Handles a commit.
-func (g *group) handleOffsetCommit(creq *clientReq) (*kmsg.OffsetCommitResponse, bool) {
+// offsetMetadataTooLarge reports whether commit metadata is over 4096,
+// Kafka's default offset.metadata.max.bytes, which Kafka counts in UTF-16
+// code units. A string has no more UTF-16 units than UTF-8 bytes.
+func offsetMetadataTooLarge(metadata *string) bool {
+	if metadata == nil || len(*metadata) <= 4096 {
+		return false
+	}
+	var n int
+	for _, r := range *metadata {
+		n += utf16.RuneLen(r)
+	}
+	return n > 4096
+}
+
+// Handles a commit to a classic group: allowed and answers are the
+// partitions that passed the topic checks. isNew is whether the commit
+// created the group. Returns whether the commit stored an offset.
+func (g *group) handleOffsetCommit(creq *clientReq, allowed []kmsg.OffsetCommitRequestTopic, answers []*kmsg.OffsetCommitResponseTopicPartition, isNew bool) bool {
 	req := creq.kreq.(*kmsg.OffsetCommitRequest)
-	resp := req.ResponseKind().(*kmsg.OffsetCommitResponse)
-
-	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
-		fillOffsetCommit(req, resp, kerr.Code)
-		return resp, false
+	fail := func(code int16) bool {
+		failOffsetCommit(answers, code)
+		return false
 	}
 
-	// ACL check: READ on GROUP (if denied, fail all topics)
-	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil && creq.skipsWork(e) {
-		fillOffsetCommit(req, resp, e.Code)
-		return resp, false
-	}
-
-	if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
-		fillOffsetCommit(req, resp, err.Code)
-		return resp, false
-	}
-
+	// A commit without a generation to an empty group is a simple
+	// commit, whatever member it names. Anything else must come from
+	// a member of this generation.
 	var m *groupMember
-	if len(g.members) > 0 {
+	switch {
+	case isNew && req.Generation >= 0:
+		if req.Version >= 9 {
+			return fail(kerr.GroupIDNotFound.Code)
+		}
+		return fail(kerr.IllegalGeneration.Code)
+	case req.Generation < 0 && g.state == groupEmpty:
+	default:
+		if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
+			return fail(err.Code)
+		}
 		var ok bool
-		m, ok = g.members[req.MemberID]
-		if !ok {
-			fillOffsetCommit(req, resp, kerr.UnknownMemberID.Code)
-			return resp, false
+		if m, ok = g.members[req.MemberID]; !ok {
+			return fail(kerr.UnknownMemberID.Code)
 		}
 		if req.Generation != g.generation {
-			fillOffsetCommit(req, resp, kerr.IllegalGeneration.Code)
-			return resp, false
+			return fail(kerr.IllegalGeneration.Code)
 		}
-	} else if req.Generation >= 0 {
-		// Empty group: only accept simple commits (generation < 0).
-		fillOffsetCommit(req, resp, kerr.IllegalGeneration.Code)
-		return resp, false
+		if g.state == groupCompletingRebalance {
+			return fail(kerr.RebalanceInProgress.Code)
+		}
 	}
 
-	switch g.state {
-	default:
-		fillOffsetCommit(req, resp, kerr.GroupIDNotFound.Code)
-		return resp, true
-	case groupEmpty, groupPreparingRebalance, groupStable:
-		allowed := g.fillOffsetCommitWithACL(creq, req, resp)
-		for _, t := range allowed {
-			for _, p := range t.Partitions {
-				g.commitAndPersist(t.Topic, p.Partition, offsetCommit{
-					offset:      p.Offset,
-					leaderEpoch: p.LeaderEpoch,
-					metadata:    p.Metadata,
-				})
-			}
-		}
-		if m != nil {
-			g.updateHeartbeat(m)
-		}
-	case groupCompletingRebalance:
-		fillOffsetCommit(req, resp, kerr.RebalanceInProgress.Code)
+	stored := g.commitAllowed(answers, allowed)
+	if m != nil {
 		g.updateHeartbeat(m)
 	}
-	return resp, true
+	return stored
 }
 
 // Transitions the group to the preparing rebalance state. We first need to
@@ -1750,12 +1890,20 @@ func (g *group) updateMemberAndRebalance(m *groupMember, waitingReply *clientReq
 		}
 		// Leaving CompletingRebalance answers every parked sync with
 		// REBALANCE_IN_PROGRESS, as Kafka does, but this member's is
-		// about to be replaced by its join.
+		// about to be replaced by its join. Kafka answers a join this
+		// one replaces NOT_COORDINATOR; the member stays counted as
+		// joining.
 		if !m.waitingReply.empty() {
-			if sync, ok := m.waitingReply.kreq.(*kmsg.SyncGroupRequest); ok {
-				resp := sync.ResponseKind().(*kmsg.SyncGroupResponse)
+			switch r := m.waitingReply.kreq.(type) {
+			case *kmsg.SyncGroupRequest:
+				resp := r.ResponseKind().(*kmsg.SyncGroupResponse)
 				resp.ErrorCode = kerr.RebalanceInProgress.Code
 				g.reply(m.waitingReply, resp, m)
+			case *kmsg.JoinGroupRequest:
+				resp := r.ResponseKind().(*kmsg.JoinGroupResponse)
+				resp.ErrorCode = kerr.NotCoordinator.Code
+				resp.MemberID = m.memberID
+				m.waitingReply.reply(resp)
 			}
 		}
 		if m.waitingReply.empty() && !waitingReply.empty() {
@@ -1780,6 +1928,9 @@ func (g *group) updateMemberAndRebalance(m *groupMember, waitingReply *clientReq
 // Adds a new member to the group and rebalances.
 func (g *group) addMemberAndRebalance(m *groupMember, waitingReply *clientReq, join *kmsg.JoinGroupRequest) {
 	g.stopPending(m)
+	if len(g.members) == 0 {
+		g.protocolType = join.ProtocolType
+	}
 	m.join = join
 	for _, p := range m.join.Protocols {
 		g.protocols[p.Name]++
@@ -1793,18 +1944,13 @@ func (g *group) addMemberAndRebalance(m *groupMember, waitingReply *clientReq, j
 // Returns if a new join can even join the group based on the join's supported
 // protocols.
 func (g *group) protocolsMatch(protocolType string, protocols []kmsg.JoinGroupRequestProtocol) bool {
-	if g.protocolType == "" {
-		if protocolType == "" || len(protocols) == 0 {
-			return false
-		}
-		g.protocolType = protocolType
-		return true
+	// Kafka lets any protocol type into an empty group; the first
+	// member to join sets the group's.
+	if g.state == groupEmpty {
+		return protocolType != "" && len(protocols) > 0
 	}
 	if protocolType != g.protocolType {
 		return false
-	}
-	if len(g.protocols) == 0 {
-		return true
 	}
 	// The joining member must support at least one protocol that
 	// is universally supported by all existing members.
@@ -2188,7 +2334,7 @@ func (g *group) consumerJoin(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRe
 	m := &consumerMember{
 		memberID:                    memberID,
 		clientID:                    creq.cid,
-		clientHost:                  creq.cc.conn.RemoteAddr().String(),
+		clientHost:                  "/" + creq.clientHost(),
 		instanceID:                  req.InstanceID,
 		rackID:                      req.RackID,
 		rebalanceTimeoutMs:          req.RebalanceTimeoutMillis,
@@ -2296,7 +2442,7 @@ func (g *group) updateMemberSubscriptions(m *consumerMember, req *kmsg.ConsumerG
 // carry; a field the request leaves null keeps its value.
 func refreshConsumerMember(creq *clientReq, req *kmsg.ConsumerGroupHeartbeatRequest, m *consumerMember) {
 	m.clientID = creq.cid
-	m.clientHost = creq.cc.conn.RemoteAddr().String()
+	m.clientHost = "/" + creq.clientHost()
 	if req.RackID != nil {
 		m.rackID = req.RackID
 	}
@@ -2383,7 +2529,7 @@ func (g *group) consumerStaticLeave(req *kmsg.ConsumerGroupHeartbeatRequest, res
 		return resp
 	}
 	g.c.cfg.logger.Logf(LogLevelInfo, "consumerStaticLeave: group=%s member=%s instance=%s epoch=%d sent=%d remaining=%d",
-		g.logName(), m.memberID, *m.instanceID, m.memberEpoch, countAssignment(m.lastReconciledSent), g.activeConsumerCount()-1)
+		g.logName(), m.memberID, *m.instanceID, m.memberEpoch, countAssignment(m.lastReconciledSent), len(g.consumerMembers)-1)
 
 	// Mark as temporarily departed - do NOT fence, do NOT
 	// delete from consumerMembers, do NOT bump generation.
@@ -3407,18 +3553,6 @@ func (*group) cancelConsumerRebalanceTimeout(m *consumerMember) {
 	}
 }
 
-// activeConsumerCount returns the number of consumer members that are
-// not temporarily departed (epoch -2).
-func (g *group) activeConsumerCount() int {
-	var n int
-	for _, m := range g.consumerMembers {
-		if m.memberEpoch != -2 {
-			n++
-		}
-	}
-	return n
-}
-
 // fenceConsumerMember stops all timers and clears partition epoch
 // entries for the member. The caller must delete the member from
 // consumerMembers separately.
@@ -3433,18 +3567,13 @@ func (g *group) fenceConsumerMember(m *consumerMember) {
 	g.removePartitionEpochs(m.partitionsPendingRevocation, m.memberID)
 }
 
-// Handles a commit for consumer groups with relaxed validation per KIP-1251.
-func (g *group) handleConsumerOffsetCommit(creq *clientReq) *kmsg.OffsetCommitResponse {
+// Handles a commit for consumer groups with relaxed validation per KIP-1251,
+// as handleOffsetCommit does for a classic group.
+func (g *group) handleConsumerOffsetCommit(creq *clientReq, allowed []kmsg.OffsetCommitRequestTopic, answers []*kmsg.OffsetCommitResponseTopicPartition) bool {
 	req := creq.kreq.(*kmsg.OffsetCommitRequest)
-	resp := req.ResponseKind().(*kmsg.OffsetCommitResponse)
-
-	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
-		fillOffsetCommit(req, resp, kerr.Code)
-		return resp
-	}
-	if e := g.c.deny(creq, req.Group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.Group}); e != nil && creq.skipsWork(e) {
-		fillOffsetCommit(req, resp, e.Code)
-		return resp
+	fail := func(code int16) bool {
+		failOffsetCommit(answers, code)
+		return false
 	}
 
 	// A commit at a negative epoch (an admin or kadm commit) is
@@ -3457,59 +3586,41 @@ func (g *group) handleConsumerOffsetCommit(creq *clientReq) *kmsg.OffsetCommitRe
 	if len(g.consumerMembers) > 0 || req.Generation >= 0 {
 		m, ok := g.consumerMembers[req.MemberID]
 		if !ok {
-			fillOffsetCommit(req, resp, kerr.UnknownMemberID.Code)
-			return resp
+			return fail(kerr.UnknownMemberID.Code)
 		}
 		// Consumer groups require OffsetCommit v9+ (KIP-848). Older
 		// versions use GenerationID which does not map to member
 		// epochs.
 		if req.Version < 9 {
-			fillOffsetCommit(req, resp, kerr.UnsupportedVersion.Code)
-			return resp
+			return fail(kerr.UnsupportedVersion.Code)
 		}
 		if req.Generation > m.memberEpoch {
 			g.c.cfg.logger.Logf(LogLevelWarn, "OffsetCommit STALE: group=%s member=%s reqEpoch=%d memberEpoch=%d",
 				g.logName(), req.MemberID, req.Generation, m.memberEpoch)
-			fillOffsetCommit(req, resp, kerr.StaleMemberEpoch.Code)
-			return resp
+			return fail(kerr.StaleMemberEpoch.Code)
 		}
 		cm = m
 	}
 
-	allowed := g.fillOffsetCommitWithACL(creq, req, resp)
-
 	// KIP-1251: a commit with an epoch older than the member's must be
-	// valid for every partition, or Kafka fails the whole commit.
+	// valid for every partition it would store, or Kafka fails the whole
+	// commit.
 	if cm != nil && req.Generation < cm.memberEpoch {
 		var stale bool
 		for _, t := range allowed {
 			id := g.c.data.t2id[t.Topic]
 			for _, p := range t.Partitions {
-				stale = stale || cm.staleCommit(req.Generation, id, p.Partition)
+				stale = stale || !offsetMetadataTooLarge(p.Metadata) && cm.staleCommit(req.Generation, id, p.Partition)
 			}
 		}
 		if stale {
 			g.c.cfg.logger.Logf(LogLevelWarn, "OffsetCommit STALE: group=%s member=%s reqEpoch=%d memberEpoch=%d, a partition is not owned at that epoch",
 				g.logName(), req.MemberID, req.Generation, cm.memberEpoch)
-			for _, t := range allowed {
-				for _, p := range t.Partitions {
-					setOffsetCommitPartitionErr(resp, t.Topic, p.Partition, kerr.StaleMemberEpoch.Code)
-				}
-			}
-			return resp
+			return fail(kerr.StaleMemberEpoch.Code)
 		}
 	}
 
-	for _, t := range allowed {
-		for _, p := range t.Partitions {
-			g.commitAndPersist(t.Topic, p.Partition, offsetCommit{
-				offset:      p.Offset,
-				leaderEpoch: p.LeaderEpoch,
-				metadata:    p.Metadata,
-			})
-		}
-	}
-	return resp
+	return g.commitAllowed(answers, allowed)
 }
 
 func copyAssignment(a map[uuid][]int32) map[uuid][]int32 {
@@ -3711,7 +3822,9 @@ func (g *group) validateMemberGeneration(memberID string, instanceID *string, ge
 		for _, t := range topics {
 			id := g.c.data.t2id[t.Topic]
 			for _, p := range t.Partitions {
-				if m.staleCommit(generation, id, p.Partition) {
+				// Kafka answers an unknown partition and oversized
+				// metadata before it checks the epoch.
+				if g.c.data.tps.checkp(t.Topic, p.Partition) && !offsetMetadataTooLarge(p.Metadata) && m.staleCommit(generation, id, p.Partition) {
 					return kerr.StaleMemberEpoch.Code
 				}
 			}
@@ -3734,14 +3847,16 @@ func (g *group) validateMemberGeneration(memberID string, instanceID *string, ge
 }
 
 // restoreClassicMembers restores classic group members from persisted
-// session state. Members whose session has expired (elapsed time since
-// shutdown >= session timeout) are skipped.
+// session state. A member whose session expired while we were down leaves
+// as its session timeout would have made it: its instance ID is released and
+// the group rebalances.
 func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGroup) {
 	// Provisionally set state to groupStable while restoring members;
 	// if the persisted sg.State was non-Stable we re-trigger the
 	// rebalance at the end of the function. See comment near the end.
 	g.state = groupStable
 	g.leader = sg.Leader
+	var expired bool
 	for _, sm := range sg.Members {
 		// Use per-member last heartbeat time if available,
 		// falling back to shutdownAt for old session files.
@@ -3751,6 +3866,8 @@ func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGro
 		}
 		remaining := time.Duration(sm.SessionTimeoutMs)*time.Millisecond - time.Since(lastHB)
 		if remaining <= 0 {
+			g.releaseStaticMember(sm.InstanceID, sm.ID)
+			expired = true
 			continue
 		}
 		m := &groupMember{
@@ -3777,7 +3894,7 @@ func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGro
 		// repeated restarts, dead members accumulate elapsed time.
 		m.last = lastHB
 	}
-	if len(g.members) == 0 {
+	if len(g.members) == 0 && !expired {
 		g.state = groupEmpty
 		g.emptyAt = time.Now()
 		g.leader = ""
@@ -3789,9 +3906,9 @@ func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGro
 	// shutdown). Re-trigger rebalance so members rejoin and the
 	// assignment reflects the current member set -- otherwise
 	// partitions owned by departed members stay orphaned. If the
-	// persisted state was Stable, the old assignment is still valid
-	// for the current members; do not force a rebalance.
-	if sg.State != groupStable && sg.State != groupEmpty {
+	// persisted state was Stable and every member is back, the old
+	// assignment is still valid; do not force a rebalance.
+	if expired || sg.State != groupStable && sg.State != groupEmpty {
 		g.rebalance()
 	}
 }

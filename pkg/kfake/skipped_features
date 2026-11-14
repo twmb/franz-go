@@ -64,8 +64,9 @@
 - SubscribedTopicRegex: RE2 syntax, not Java RE2J
 - Metadata hash: kfake uses notifyTopicChange() from the cluster run loop
   instead of hashing metadata. Functionally equivalent for in-process use.
-- Group downgrade (consumer -> classic): not supported. Once a group
-  upgrades to "consumer" type, it stays that way.
+- Classic members in a consumer group: not supported. A classic join fails
+  with INCONSISTENT_GROUP_PROTOCOL until the consumer group is empty, and
+  then turns the group classic.
 
 ## 71_get_telemetry_subscriptions, 72_push_telemetry
 - With no matching CLIENT_METRICS subscription, every metric every 30s;

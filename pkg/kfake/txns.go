@@ -109,12 +109,23 @@ type (
 	}
 )
 
-// hasUnstableOffsets returns true if any active transaction has pending
-// (uncommitted) offset commits for the given group. Used for KIP-447
-// RequireStable support in OffsetFetch.
+// hasUnstableOffsets returns whether an open transaction holds a pending
+// offset commit for the group. Offset expiry does not delete such a group.
 func (pids *pids) hasUnstableOffsets(group string) bool {
 	for pidinf := range pids.txs {
 		if _, hasGroup := pidinf.txOffsets[group]; hasGroup {
+			return true
+		}
+	}
+	return false
+}
+
+// hasUnstableOffset reports whether an open transaction holds a pending
+// offset commit for the group's partition. Kafka answers OffsetFetch
+// with RequireStable per partition.
+func (pids *pids) hasUnstableOffset(group, topic string, part int32) bool {
+	for pidinf := range pids.txs {
+		if offsets, ok := pidinf.txOffsets[group]; ok && offsets.checkp(topic, part) {
 			return true
 		}
 	}
@@ -514,6 +525,12 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 		return resp
 	}
 
+	// Like Kafka, a share group takes no offset commits.
+	if _, isShare := pids.c.shareGroups.gs[req.Group]; isShare {
+		doneall(kerr.GroupIDNotFound.Code)
+		return resp
+	}
+
 	// KIP-890 Part 2: For v5+ requests, implicitly start the transaction
 	// if not already started. For v0-4, require transaction to be active.
 	if !pidinf.inTx {
@@ -526,13 +543,9 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 
 	// Check if group exists. For generation >= 0, return
 	// ILLEGAL_GENERATION if the group doesn't exist. For
-	// generation < 0 (admin commits), Kafka creates a simple group.
+	// generation < 0 (admin commits), Kafka creates a simple group
+	// when it stores an offset.
 	g := pids.c.groups.gs[req.Group]
-	_, isShare := pids.c.shareGroups.gs[req.Group]
-	if g == nil && req.Generation < 0 && !isShare {
-		g = pids.c.groups.newGroup(req.Group)
-		pids.c.groups.gs[req.Group] = g
-	}
 	if g != nil {
 		errCode := g.validateMemberGeneration(req.MemberID, req.InstanceID, req.Generation, req.Topics)
 		// Before v6, a stale member epoch was reported as
@@ -588,7 +601,13 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 			case e != nil && creq.skipsWork(e): // a timed-out commit is still stored
 			case !pids.c.data.tps.checkp(rt.Topic, rp.Partition):
 				sp.ErrorCode = kerr.UnknownTopicOrPartition.Code
+			case offsetMetadataTooLarge(rp.Metadata):
+				sp.ErrorCode = kerr.OffsetMetadataTooLarge.Code
 			default:
+				if g == nil {
+					g = pids.c.groups.newGroup(req.Group)
+					pids.c.groups.gs[req.Group] = g
+				}
 				groupOffsets.set(rt.Topic, rp.Partition, offsetCommit{
 					offset:      rp.Offset,
 					leaderEpoch: rp.LeaderEpoch,

@@ -230,8 +230,34 @@ func TestShareGroupTypeExclusive(t *testing.T) {
 		if err := commit(group); !errors.Is(err, kerr.GroupIDNotFound) {
 			t.Fatalf("committing to a share group: got %v, want GROUP_ID_NOT_FOUND", err)
 		}
+		init := kmsg.NewPtrInitProducerIDRequest()
+		init.TransactionalID, init.TransactionTimeoutMillis = new("txn"), 60000
+		ir, err := init.RequestWith(ctx, cl)
+		if err != nil || ir.ErrorCode != 0 {
+			t.Fatalf("init producer ID: %v %v", err, ir)
+		}
+		tc := kmsg.NewPtrTxnOffsetCommitRequest()
+		tc.TransactionalID, tc.Group, tc.ProducerID, tc.ProducerEpoch, tc.Generation = "txn", group, ir.ProducerID, ir.ProducerEpoch, -1
+		tc.Topics = []kmsg.TxnOffsetCommitRequestTopic{{Topic: topic, TopicID: topicID, Partitions: []kmsg.TxnOffsetCommitRequestTopicPartition{{Offset: 1}}}}
+		if tr, err := tc.RequestWith(ctx, cl); err != nil || tr.Topics[0].Partitions[0].ErrorCode != kerr.GroupIDNotFound.Code {
+			t.Fatalf("transactional commit to a share group: %v %v, want GROUP_ID_NOT_FOUND", err, tr)
+		}
 		if got := listedTypes(group); !slices.Equal(got, []string{"share"}) {
 			t.Fatalf("listed types after a refused commit: got %v, want [share]", got)
+		}
+	})
+
+	t.Run("JoinGroup to a share group", func(t *testing.T) {
+		const group = "share-then-join"
+		if err := alterShare(group); err != nil {
+			t.Fatalf("creating the share group: %v", err)
+		}
+		resp, err := classicJoinReq(group, "").RequestWith(ctx, cl)
+		if err != nil || resp.ErrorCode != kerr.InconsistentGroupProtocol.Code {
+			t.Fatalf("joining a share group: %v %v, want INCONSISTENT_GROUP_PROTOCOL", err, resp)
+		}
+		if got := listedTypes(group); !slices.Equal(got, []string{"share"}) {
+			t.Fatalf("listed types after a refused join: got %v, want [share]", got)
 		}
 	})
 

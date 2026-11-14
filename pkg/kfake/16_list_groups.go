@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -27,21 +28,19 @@ func (c *Cluster) handleListGroups(creq *clientReq) (kmsg.Response, error) {
 
 	// Include share groups, which are tracked separately from the
 	// 'groups' struct.
+	clusterDescribe := c.allowedClusterACL(creq, kmsg.ACLOperationDescribe)
 	for _, sg := range c.shareGroups.gs {
 		if c.coordinator(sg.name).node != creq.cc.b.node {
-			continue
-		}
-		if e := c.deny(creq, sg.name, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: sg.name}); e != nil {
 			continue
 		}
 		state := "Stable"
 		if len(sg.members) == 0 {
 			state = "Empty"
 		}
-		if len(req.StatesFilter) > 0 && !containsFold(req.StatesFilter, state) {
+		if !listFilterMatch(req, state, "share") {
 			continue
 		}
-		if len(req.TypesFilter) > 0 && !containsFold(req.TypesFilter, "share") {
+		if c.listDenied(creq, clusterDescribe, sg.name) {
 			continue
 		}
 		lg := kmsg.NewListGroupsResponseGroup()
@@ -55,12 +54,23 @@ func (c *Cluster) handleListGroups(creq *clientReq) (kmsg.Response, error) {
 	return resp, nil
 }
 
-// containsFold returns true if any element in ss case-insensitively equals s.
-func containsFold(ss []string, s string) bool {
-	for _, v := range ss {
-		if strings.EqualFold(v, s) {
-			return true
-		}
+// listFilterMatch reports whether a group passes the request's filters.
+// Kafka compares states ignoring case and surrounding space, and types
+// ignoring case.
+func listFilterMatch(req *kmsg.ListGroupsRequest, state, typ string) bool {
+	if len(req.StatesFilter) > 0 && !slices.ContainsFunc(req.StatesFilter, func(s string) bool { return strings.EqualFold(strings.TrimSpace(s), state) }) {
+		return false
 	}
-	return false
+	return len(req.TypesFilter) == 0 || slices.ContainsFunc(req.TypesFilter, func(t string) bool { return strings.EqualFold(t, typ) })
+}
+
+// listDenied reports whether ListGroups leaves out group. Kafka lists
+// every group to a caller that may describe the cluster, and otherwise
+// only the groups the caller may describe.
+func (c *Cluster) listDenied(creq *clientReq, clusterDescribe bool, group string) bool {
+	k := faultKey{group: group}
+	if clusterDescribe {
+		return creq.faults.check(k) != nil
+	}
+	return c.deny(creq, group, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, k) != nil
 }

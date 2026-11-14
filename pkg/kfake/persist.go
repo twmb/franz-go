@@ -427,8 +427,7 @@ type (
 		Generation int32  `json:"gen,omitempty"`
 
 		// For meta848 entries (consumer groups)
-		Assignor   string `json:"assignor,omitempty"`
-		GroupEpoch int32  `json:"epoch848,omitempty"`
+		GroupEpoch int32 `json:"epoch848,omitempty"`
 
 		// For static member entries
 		InstanceID string `json:"instance,omitempty"`
@@ -485,6 +484,18 @@ func replayGroupsLog(entries []entryData) glReplay {
 			r.commits[glCommitKey{entry.Group, entry.Topic, entry.Part}] = e.data
 		case "delete":
 			delete(r.commits, glCommitKey{entry.Group, entry.Topic, entry.Part})
+		case "deleteGroup":
+			delete(r.metas, entry.Group)
+			for k := range r.commits {
+				if k.group == entry.Group {
+					delete(r.commits, k)
+				}
+			}
+			for k := range r.statics {
+				if k.group == entry.Group {
+					delete(r.statics, k)
+				}
+			}
 		case "meta", "meta848":
 			r.metas[entry.Group] = e.data
 		case "static":

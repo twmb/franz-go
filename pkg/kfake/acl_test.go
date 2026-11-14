@@ -150,14 +150,19 @@ func TestACLsWithPermission(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t,
 		NumBrokers(1),
-		SeedTopics(1, "test-topic"),
+		SeedTopics(1, "test-topic", "t2"),
 		EnableACLs(),
 		EnableSASL(),
+		Superuser("PLAIN", "admin", "admin"),
+		User("PLAIN", "cluster", "cluster",
+			ACL{Resource: kmsg.ACLResourceTypeCluster, Name: "kafka-cluster", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationDescribe, Allow: true},
+		),
 		User("PLAIN", "testuser", "testpass",
 			// A CIDR host matches the client's address (Kafka 4.4).
 			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-topic", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationWrite, Allow: true, Host: "127.0.0.0/8"},
 			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-topic", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationDescribe, Allow: true},
 			ACL{Resource: kmsg.ACLResourceTypeCluster, Name: "kafka-cluster", Operation: kmsg.ACLOperationIdempotentWrite, Allow: true},
+			ACL{Resource: kmsg.ACLResourceTypeGroup, Name: "g", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationDescribe, Allow: true},
 		),
 	)
 
@@ -185,6 +190,39 @@ func TestACLsWithPermission(t *testing.T) {
 	}
 	if resp.ClusterAuthorizedOperations != 0 {
 		t.Errorf("cluster authorized operations: got %b, want 0", resp.ClusterAuthorizedOperations)
+	}
+
+	sasl := func(user string) *kgo.Client {
+		return newPlainClient(t, c, kgo.SASL(plain.Auth{User: user, Pass: user}.AsMechanism()))
+	}
+	adm := kadm.NewClient(sasl("admin"))
+	var offsets kadm.Offsets
+	offsets.Add(kadm.Offset{Topic: "test-topic", At: 3})
+	offsets.Add(kadm.Offset{Topic: "t2", At: 3})
+	for _, g := range []string{"g", "h"} {
+		if err := adm.CommitAllOffsets(ctx, g, offsets); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Kafka leaves out the topics you may not describe, and fails them
+	// when you name them.
+	fetch := kmsg.NewPtrOffsetFetchRequest()
+	fetch.Groups = []kmsg.OffsetFetchRequestGroup{{Group: "g", MemberEpoch: -1}}
+	if all := faultReq(t, cl, 0, fetch).(*kmsg.OffsetFetchResponse).Groups[0]; len(all.Topics) != 1 || all.Topics[0].TopicID != c.TopicInfo("test-topic").TopicID {
+		t.Errorf("fetching all offsets: %+v, want only test-topic", all.Topics)
+	}
+	fetch.Groups[0].Topics = []kmsg.OffsetFetchRequestGroupTopic{{Topic: "t2", TopicID: c.TopicInfo("t2").TopicID, Partitions: []int32{0}}}
+	if p := faultReq(t, cl, 0, fetch).(*kmsg.OffsetFetchResponse).Groups[0].Topics[0].Partitions[0]; p.ErrorCode != kerr.TopicAuthorizationFailed.Code {
+		t.Errorf("fetching t2: %v, want TOPIC_AUTHORIZATION_FAILED", kerr.ErrorForCode(p.ErrorCode))
+	}
+
+	// Kafka lists every group to a caller that may describe the cluster.
+	if n := len(faultReq(t, cl, 0, kmsg.NewPtrListGroupsRequest()).(*kmsg.ListGroupsResponse).Groups); n != 1 {
+		t.Errorf("testuser listed %d groups, want 1", n)
+	}
+	if n := len(faultReq(t, sasl("cluster"), 0, kmsg.NewPtrListGroupsRequest()).(*kmsg.ListGroupsResponse).Groups); n != 2 {
+		t.Errorf("a cluster describer listed %d groups, want 2", n)
 	}
 }
 

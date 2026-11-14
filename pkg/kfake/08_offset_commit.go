@@ -12,7 +12,7 @@ import (
 // * v2: RetentionTimeMillis (removed in v5)
 // * v3: ThrottleMillis
 // * v6: LeaderEpoch in request
-// * v7: InstanceID - currently returns error if set
+// * v7: InstanceID
 // * v8: Flexible versions
 // * v10: TopicID replaces Topic (KIP-848 / KAFKA-19186)
 

@@ -157,7 +157,7 @@ func GroupMinSessionTimeout(d time.Duration) Opt {
 }
 
 // GroupMaxSessionTimeout sets the cluster's maximum session timeout allowed
-// for groups, overriding the default 5 minutes.
+// for groups, overriding the default 30 minutes.
 func GroupMaxSessionTimeout(d time.Duration) Opt {
 	return opt{func(cfg *cfg) { cfg.maxSessionTimeout = d }}
 }

@@ -1079,7 +1079,7 @@ var configDefaults = map[string]string{
 	"group.consumer.max.size":                   "2147483647",
 	"group.max.size":                            "2147483647",
 	"group.min.session.timeout.ms":              "6000",
-	"group.max.session.timeout.ms":              "300000",
+	"group.max.session.timeout.ms":              "1800000",
 	"log.dir":                                   defLogDir,
 	"log.segment.bytes":                         strconv.Itoa(100 << 20),
 	"log.message.timestamp.type":                "CreateTime",

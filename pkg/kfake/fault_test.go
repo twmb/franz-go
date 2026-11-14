@@ -148,6 +148,7 @@ func coverageReq(key int16, topic string, id [16]byte, group, txnID string) kmsg
 		req := kmsg.NewPtrSyncGroupRequest()
 		req.Group = group
 		req.Generation = -1
+		req.ProtocolType, req.Protocol = kmsg.StringPtr("consumer"), kmsg.StringPtr("range")
 		return req
 	case kmsg.DescribeGroups:
 		req := kmsg.NewPtrDescribeGroupsRequest()

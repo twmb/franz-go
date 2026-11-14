@@ -44,7 +44,7 @@ Assignors: uniform (default, maps to kgo sticky balancer) and range.
 - Coordinator requests look the producer up by transactional ID (`txnPid`), never by producer ID alone.
 - InitProducerID accepts epoch <= server epoch, so a stale epoch from a timeout bump recovers instead of retrying forever. Idempotent (nil txid) and unknown (expired) txids get a fresh PID.
 - Persistence: pids.log `init` entries carry the full producer state; `begin` marks an open transaction, which a crash restart aborts (bump, CompleteAbort) unless session state restores it.
-- KIP-447: OffsetFetch with `RequireStable=true` returns `UNSTABLE_OFFSET_COMMIT` when `pids.hasUnstableOffsets(group)`.
+- KIP-447: OffsetFetch with `RequireStable=true` returns `UNSTABLE_OFFSET_COMMIT` for each partition an open transaction commits (`pids.hasUnstableOffset`).
 
 **Concurrency**: everything runs on `Cluster.run()`, nothing has a goroutine of its own, and timers hand their work back through the loop. The one exception: while the loop is paused inside a `Fault.When`, `admin` runs its function inline under `whenMu`, for the `When` and for any other caller.
 

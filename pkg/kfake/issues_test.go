@@ -1128,6 +1128,7 @@ func TestGroupRebalanceOnNonLeaderMetadataChange(t *testing.T) {
 		req.Group = groupID
 		req.MemberID = memberID
 		req.Generation = gen
+		req.ProtocolType, req.Protocol = kmsg.StringPtr("consumer"), kmsg.StringPtr("cooperative-sticky")
 		if isLeader {
 			assign := kmsg.NewSyncGroupRequestGroupAssignment()
 			assign.MemberID = memberID
@@ -1278,7 +1279,7 @@ func TestKIP447RequireStable(t *testing.T) {
 
 	c := newCluster(t,
 		NumBrokers(1),
-		SeedTopics(1, testTopic),
+		SeedTopics(3, testTopic),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1289,6 +1290,7 @@ func TestKIP447RequireStable(t *testing.T) {
 	adm := kadm.NewClient(adminClient)
 	offsets := kadm.Offsets{}
 	offsets.Add(kadm.Offset{Topic: testTopic, Partition: 0, At: 0})
+	offsets.Add(kadm.Offset{Topic: testTopic, Partition: 2, At: 0})
 	if err := adm.CommitAllOffsets(ctx, groupID, offsets); err != nil {
 		t.Fatalf("CommitAllOffsets failed: %v", err)
 	}
@@ -1335,7 +1337,6 @@ func TestKIP447RequireStable(t *testing.T) {
 	topic := kmsg.NewTxnOffsetCommitRequestTopic()
 	topic.Topic, topic.TopicID = testTopic, c.TopicInfo(testTopic).TopicID
 	part := kmsg.NewTxnOffsetCommitRequestTopicPartition()
-	part.Partition = 0
 	part.Offset = 5
 	topic.Partitions = append(topic.Partitions, part)
 	txnCommitReq.Topics = append(txnCommitReq.Topics, topic)
@@ -1348,6 +1349,12 @@ func TestKIP447RequireStable(t *testing.T) {
 			t.Fatalf("TxnOffsetCommit partition error: %v", kerr.ErrorForCode(ec))
 		}
 	}
+	// Metadata over 4096 characters is refused, as in OffsetCommit, and
+	// stages nothing.
+	txnCommitReq.Topics[0].Partitions[0].Offset, txnCommitReq.Topics[0].Partitions[0].Metadata = 1, new(strings.Repeat("x", 4097))
+	if r, err := txnCommitReq.RequestWith(ctx, rawClient); err != nil || r.Topics[0].Partitions[0].ErrorCode != kerr.OffsetMetadataTooLarge.Code {
+		t.Fatalf("TxnOffsetCommit with 4097 characters of metadata: %v %v, want OFFSET_METADATA_TOO_LARGE", err, r)
+	}
 
 	// Use v8+ format with Groups field to work with auto-negotiated versions.
 	// Set TopicID for v10+ where Topic is not serialized on the wire.
@@ -1359,7 +1366,7 @@ func TestKIP447RequireStable(t *testing.T) {
 	rgt := kmsg.NewOffsetFetchRequestGroupTopic()
 	rgt.Topic = testTopic
 	rgt.TopicID = ti.TopicID
-	rgt.Partitions = []int32{0}
+	rgt.Partitions = []int32{0, 2}
 	rg.Topics = append(rg.Topics, rgt)
 	fetchReq.Groups = append(fetchReq.Groups, rg)
 
@@ -1377,8 +1384,11 @@ func TestKIP447RequireStable(t *testing.T) {
 	if len(fetchResp.Groups[0].Topics) == 0 || len(fetchResp.Groups[0].Topics[0].Partitions) == 0 {
 		t.Fatal("no partitions in RequireStable=true response")
 	}
-	if ec := fetchResp.Groups[0].Topics[0].Partitions[0].ErrorCode; ec != kerr.UnstableOffsetCommit.Code {
-		t.Errorf("Test 1: expected per-partition UNSTABLE_OFFSET_COMMIT (88), got error code %d", ec)
+	// Partition 2 has no offset in the transaction.
+	for i, want := range []int16{kerr.UnstableOffsetCommit.Code, 0} {
+		if ec := fetchResp.Groups[0].Topics[0].Partitions[i].ErrorCode; ec != want {
+			t.Errorf("Test 1: partition %d: got error code %d, want %d", i, ec, want)
+		}
 	}
 
 	// Test 2: OffsetFetch with RequireStable=false should succeed (even with pending txn)
@@ -1430,8 +1440,10 @@ func TestKIP447RequireStable(t *testing.T) {
 	if len(fetchResp.Groups[0].Topics) == 0 || len(fetchResp.Groups[0].Topics[0].Partitions) == 0 {
 		t.Fatal("no partitions in post-commit response")
 	}
-	if offset := fetchResp.Groups[0].Topics[0].Partitions[0].Offset; offset != 5 {
-		t.Errorf("expected committed offset 5, got %d", offset)
+	for i, want := range []int64{5, 0} {
+		if offset := fetchResp.Groups[0].Topics[0].Partitions[i].Offset; offset != want {
+			t.Errorf("partition %d: expected committed offset %d, got %d", i, want, offset)
+		}
 	}
 }
 
@@ -2934,44 +2946,39 @@ func TestIssue1330(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	const (
-		bareKey  = "hello-share"                          // a bare group id, as the #1330 bug sent
-		validKey = "hello-share:nT3i4OXyR0mr0my1RZx9pQ:0" // groupId:topicId:partition
-	)
+	// A key is groupId:topicId:partition, parsed as Kafka does.
+	want := map[string]error{
+		"hello-share":                                   kerr.InvalidRequest, // a bare group id, as the #1330 bug sent
+		"hello-share:nT3i4OXyR0mr0my1RZx9pQ:0":          nil,
+		"hello-share:nT3i4OXyR0mr0my1RZx9pQ:0:":         nil,                 // trailing empty tokens are dropped
+		"hello-share:nT3i4OXyR0mr0my1RZx9pQ:4294967296": kerr.InvalidRequest, // not a 32-bit partition
+		"hello-share:not-a-topic-id:0":                  kerr.InvalidRequest,
+	}
 
 	req := kmsg.NewPtrFindCoordinatorRequest()
 	req.CoordinatorType = 2 // share
-	req.CoordinatorKeys = []string{bareKey, validKey}
+	for key := range want {
+		req.CoordinatorKeys = append(req.CoordinatorKeys, key)
+	}
 	resp, err := req.RequestWith(ctx, cl)
 	if err != nil {
 		t.Fatalf("FindCoordinator: %v", err)
 	}
-	if len(resp.Coordinators) != 2 {
-		t.Fatalf("expected 2 coordinators, got %d", len(resp.Coordinators))
+	if len(resp.Coordinators) != len(want) {
+		t.Fatalf("expected %d coordinators, got %d", len(want), len(resp.Coordinators))
 	}
-
-	got := make(map[string]kmsg.FindCoordinatorResponseCoordinator, 2)
 	for _, co := range resp.Coordinators {
-		got[co.Key] = co
-	}
-
-	// The bare group id is not a valid SharePartitionKey -> INVALID_REQUEST.
-	if co, ok := got[bareKey]; !ok {
-		t.Errorf("missing coordinator entry for %q", bareKey)
-	} else if co.ErrorCode != kerr.InvalidRequest.Code {
-		t.Errorf("bare group id: got error code %d (%v), want INVALID_REQUEST",
-			co.ErrorCode, kerr.ErrorForCode(co.ErrorCode))
-	}
-
-	// A well-formed SharePartitionKey resolves to a real broker.
-	if co, ok := got[validKey]; !ok {
-		t.Errorf("missing coordinator entry for %q", validKey)
-	} else {
-		if err := kerr.ErrorForCode(co.ErrorCode); err != nil {
-			t.Errorf("valid SharePartitionKey: unexpected error %v", err)
+		w, ok := want[co.Key]
+		if !ok {
+			t.Errorf("unexpected coordinator entry for %q", co.Key)
+			continue
 		}
-		if co.NodeID < 0 {
-			t.Errorf("valid SharePartitionKey: got NodeID %d, want a real broker node", co.NodeID)
+		if got := kerr.ErrorForCode(co.ErrorCode); got != w {
+			t.Errorf("%q: got %v, want %v", co.Key, got, w)
+		}
+		// Kafka names a real broker on success and node -1 on an error.
+		if (w == nil) != (co.NodeID >= 0) {
+			t.Errorf("%q: got NodeID %d", co.Key, co.NodeID)
 		}
 	}
 }
@@ -3441,6 +3448,13 @@ func TestOffsetFetchTopicIDOldWire(t *testing.T) {
 	}
 	if ec := oresp.Topics[0].Partitions[0].ErrorCode; ec != 0 {
 		t.Fatalf("offset commit failed with code %d", ec)
+	}
+
+	// From v10, an unknown topic ID fails with UNKNOWN_TOPIC_ID.
+	unknown := kmsg.NewPtrOffsetFetchRequest()
+	unknown.Groups = []kmsg.OffsetFetchRequestGroup{{Group: group, MemberEpoch: -1, Topics: []kmsg.OffsetFetchRequestGroupTopic{{TopicID: [16]byte{1}, Partitions: []int32{0}}}}}
+	if p := faultReq(t, setup, 0, unknown).(*kmsg.OffsetFetchResponse).Groups[0].Topics[0].Partitions[0]; p.ErrorCode != kerr.UnknownTopicID.Code || p.Offset != -1 {
+		t.Fatalf("fetching an unknown topic ID: %v at %d, want UNKNOWN_TOPIC_ID", kerr.ErrorForCode(p.ErrorCode), p.Offset)
 	}
 
 	// A fresh client (empty id2t: it produces and consumes nothing),
@@ -3998,6 +4012,8 @@ func TestDeleteTopicDropsGroupCommits(t *testing.T) {
 	if got := fetched(); got != 7 {
 		t.Fatalf("fetched %d before the delete, want 7", got)
 	}
+	// The delete also drops the offset an open transaction commits.
+	commitTxn := stageTxnOffset(t, c, cl, "txn", group, topic, 9)
 
 	del := kmsg.NewPtrDeleteTopicsRequest()
 	dt := kmsg.NewDeleteTopicsRequestTopic()
@@ -4018,6 +4034,7 @@ func TestDeleteTopicDropsGroupCommits(t *testing.T) {
 		t.Fatalf("create answered %d", code)
 	}
 
+	commitTxn()
 	if got := fetched(); got != -1 {
 		t.Fatalf("fetched %d after the recreate, want -1 (the commit should have been deleted with the topic)", got)
 	}

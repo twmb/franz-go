@@ -755,73 +755,95 @@ func TestPersistSyncWritesGroupCommitCrash(t *testing.T) {
 	}
 }
 
-// TestPersistSyncWritesOffsetDeleteCrash verifies that OffsetDelete
-// entries survive a crash with SyncWrites.
-func TestPersistSyncWritesOffsetDeleteCrash(t *testing.T) {
+// TestPersistSyncWritesDeleteCrash verifies that OffsetDelete and
+// DeleteGroups entries survive a crash with SyncWrites.
+func TestPersistSyncWritesDeleteCrash(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
 
 	const topic = "del-topic"
 	const group = "del-group"
 
-	// Phase 1: produce, commit offsets, then delete them, then crash
-	{
-		c := newCluster(t,
-			DataDir(dir),
-			SyncWrites(),
-			NumBrokers(1),
-			SeedTopics(1, topic),
-		)
+	for _, tc := range []struct {
+		name      string
+		groupGone bool
+		req       func() kmsg.Request
+	}{
+		{"OffsetDelete", false, func() kmsg.Request {
+			req := kmsg.NewPtrOffsetDeleteRequest()
+			req.Group = group
+			rt := kmsg.NewOffsetDeleteRequestTopic()
+			rt.Topic = topic
+			rp := kmsg.NewOffsetDeleteRequestTopicPartition()
+			rp.Partition = 0
+			rt.Partitions = append(rt.Partitions, rp)
+			req.Topics = append(req.Topics, rt)
+			return req
+		}},
+		{"DeleteGroups", true, func() kmsg.Request {
+			req := kmsg.NewPtrDeleteGroupsRequest()
+			req.Groups = []string{group}
+			return req
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
 
-		produceN(t, c, topic, 5)
+			// Phase 1: produce, commit offsets, then delete them, then crash
+			{
+				c := newCluster(t,
+					DataDir(dir),
+					SyncWrites(),
+					NumBrokers(1),
+					SeedTopics(1, topic),
+				)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+				produceN(t, c, topic, 5)
 
-		consCl := newPlainClient(t, c,
-			kgo.ConsumeTopics(topic),
-			kgo.ConsumerGroup(group),
-			kgo.HeartbeatInterval(100*time.Millisecond),
-			kgo.FetchMaxWait(250*time.Millisecond),
-		)
-		var consumed int
-		for consumed < 5 {
-			fetches := consCl.PollFetches(ctx)
-			fetches.EachRecord(func(_ *kgo.Record) { consumed++ })
-		}
-		if err := consCl.CommitUncommittedOffsets(ctx); err != nil {
-			t.Fatal(err)
-		}
-		consCl.Close()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
 
-		// Delete the committed offset via protocol
-		cl := newPlainClient(t, c)
-		req := kmsg.NewOffsetDeleteRequest()
-		req.Group = group
-		rt := kmsg.NewOffsetDeleteRequestTopic()
-		rt.Topic = topic
-		rp := kmsg.NewOffsetDeleteRequestTopicPartition()
-		rp.Partition = 0
-		rt.Partitions = append(rt.Partitions, rp)
-		req.Topics = append(req.Topics, rt)
-		if _, err := req.RequestWith(ctx, cl); err != nil {
-			t.Fatal(err)
-		}
-		// Crash: don't call c.Close()
-	}
+				consCl := newPlainClient(t, c,
+					kgo.ConsumeTopics(topic),
+					kgo.ConsumerGroup(group),
+					kgo.HeartbeatInterval(100*time.Millisecond),
+					kgo.FetchMaxWait(250*time.Millisecond),
+				)
+				var consumed int
+				for consumed < 5 {
+					fetches := consCl.PollFetches(ctx)
+					fetches.EachRecord(func(_ *kgo.Record) { consumed++ })
+				}
+				if err := consCl.CommitUncommittedOffsets(ctx); err != nil {
+					t.Fatal(err)
+				}
+				consCl.Close()
 
-	// Phase 2: reopen, verify the offset delete survived.
-	// The group may not exist at all (GROUP_ID_NOT_FOUND) since
-	// the only commit was deleted - that's also a valid outcome.
-	{
-		c := newCluster(t,
-			DataDir(dir),
-			NumBrokers(1),
-		)
+				// Delete the committed offset via protocol
+				cl := newPlainClient(t, c)
+				if _, err := cl.Request(ctx, tc.req()); err != nil {
+					t.Fatal(err)
+				}
+				// Crash: don't call c.Close()
+			}
 
-		if _, ok := groupCommits(c, group)[topic][0]; ok {
-			t.Fatal("expected deleted offset to remain deleted after crash with SyncWrites")
-		}
+			// Phase 2: reopen, verify the delete survived. After
+			// OffsetDelete the group may not exist at all, since the
+			// only commit was deleted.
+			{
+				c := newCluster(t,
+					DataDir(dir),
+					NumBrokers(1),
+				)
+
+				if _, ok := groupCommits(c, group)[topic][0]; ok {
+					t.Fatal("expected deleted offset to remain deleted after crash with SyncWrites")
+				}
+				if tc.groupGone && c.GroupInfo(group) != nil {
+					t.Fatal("expected deleted group to remain deleted after crash with SyncWrites")
+				}
+			}
+		})
 	}
 }
 
@@ -1954,6 +1976,7 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 
 	// Phase 2: restart, verify phantom is alive (500ms < 1s), close.
 	// This advances shutdownAt to ~500ms after the real LastHeartbeat.
+	var generation int32
 	{
 		c := newCluster(t,
 			mfs.opt(),
@@ -1968,6 +1991,7 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 		if len(g.Members) != 1 {
 			t.Fatalf("phase 2: expected 1 phantom member, got %d", len(g.Members))
 		}
+		generation = g.Epoch
 		c.Close()
 	}
 
@@ -1993,6 +2017,10 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 		}
 		if len(g.Members) != 0 {
 			t.Fatalf("phase 3: expected 0 members (phantom expired), got %d", len(g.Members))
+		}
+		// The expiry rebalanced the group, as a session timeout does.
+		if g.Epoch != generation+1 {
+			t.Errorf("phase 3: generation %d, want %d", g.Epoch, generation+1)
 		}
 	}
 }
@@ -2744,7 +2772,7 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 	// metadata and committed offsets, but no live members (session state
 	// only saves Stable groups with members - none survive since the client
 	// was closed). Send a raw OffsetCommit with a stale generation - this
-	// should fail with IllegalGeneration but NOT kill the group.
+	// should fail with UNKNOWN_MEMBER_ID but NOT kill the group.
 	{
 		c := newCluster(t,
 			NumBrokers(1),
@@ -2773,8 +2801,7 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Should get an error (IllegalGeneration or UnknownMemberID) but
-		// NOT crash the group.
+		// Should get UNKNOWN_MEMBER_ID, but NOT kill the group.
 		if len(resp.Topics) == 0 || len(resp.Topics[0].Partitions) == 0 {
 			t.Fatal("expected partition response")
 		}
@@ -2782,21 +2809,15 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 		if errCode == 0 {
 			t.Fatal("expected error code for stale commit, got 0")
 		}
-		// Verify the group is still alive by sending a Heartbeat.
-		// Heartbeat goes through handleHijack - if the group was
-		// killed, handleHijack returns false and the response is
-		// GROUP_ID_NOT_FOUND.
-		hbReq := kmsg.NewPtrHeartbeatRequest()
-		hbReq.Group = group
-		hbReq.Generation = 1
-		hbReq.MemberID = "fake-member"
-
-		hbResp, err := hbReq.RequestWith(context.Background(), cl)
+		// Verify the group is still alive: DescribeGroups answers
+		// GROUP_ID_NOT_FOUND for a group that does not exist.
+		dReq := kmsg.NewPtrDescribeGroupsRequest()
+		dReq.Groups = []string{group}
+		dResp, err := dReq.RequestWith(context.Background(), cl)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ec := kerr.ErrorForCode(hbResp.ErrorCode)
-		if ec == kerr.GroupIDNotFound {
+		if dResp.Groups[0].ErrorCode == kerr.GroupIDNotFound.Code {
 			t.Fatal("group was killed after OffsetCommit - the firstJoin bug is present")
 		}
 	}

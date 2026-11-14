@@ -58,35 +58,47 @@ func (c *Cluster) handleFindCoordinator(creq *clientReq) (kmsg.Response, error) 
 		resp.Coordinators = append(resp.Coordinators, sc)
 		return &resp.Coordinators[len(resp.Coordinators)-1]
 	}
+	// Kafka names no node on an error: node -1, port -1.
+	fail := func(sc *kmsg.FindCoordinatorResponseCoordinator, e *kerr.Error) {
+		sc.ErrorCode = e.Code
+		sc.NodeID, sc.Port = -1, -1
+		if req.Version <= 3 {
+			msg := e.Description
+			sc.ErrorMessage = &msg
+		}
+	}
 
 	for _, key := range req.CoordinatorKeys {
 		sc := addc(key)
 		if unknown {
-			sc.ErrorCode = kerr.InvalidRequest.Code
+			fail(sc, kerr.InvalidRequest)
 			continue
 		}
 
 		// ACL check based on coordinator type
-		var e *kerr.Error
+		var (
+			e          *kerr.Error
+			shareKeyOK bool
+		)
 		switch req.CoordinatorType {
 		case 0: // Group
 			e = c.deny(creq, key, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: key})
 		case 1: // Transaction
 			e = c.deny(creq, key, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationDescribe, faultKey{txnID: key})
-		case 2: // Share (KIP-932): requires CLUSTER CLUSTER_ACTION
-			// (matching Java's KafkaApis.handleFindCoordinatorRequest
-			// which calls authHelper.authorizeClusterOperation(CLUSTER_ACTION)).
-			e = c.denyCluster(creq, kmsg.ACLOperationClusterAction, shareCoordinatorFaultKey(key))
+		case 2: // Share (KIP-932): Kafka requires CLUSTER_ACTION on the cluster.
+			var sk faultKey
+			sk, shareKeyOK = parseShareCoordinatorKey(key)
+			e = c.denyCluster(creq, kmsg.ACLOperationClusterAction, sk)
 		}
 		if e != nil {
-			sc.ErrorCode = e.Code
+			fail(sc, e)
 			continue
 		}
 
 		// Share keys must be groupId:topicId:partition; the real broker
 		// validates this and rejects e.g. a bare group id (#1330).
-		if req.CoordinatorType == 2 && !validShareCoordinatorKey(key) {
-			sc.ErrorCode = kerr.InvalidRequest.Code
+		if req.CoordinatorType == 2 && !shareKeyOK {
+			fail(sc, kerr.InvalidRequest)
 			continue
 		}
 
@@ -98,45 +110,32 @@ func (c *Cluster) handleFindCoordinator(creq *clientReq) (kmsg.Response, error) 
 	return resp, nil
 }
 
-// shareCoordinatorFaultKey names the group, topic, and partition of a share
-// coordinator key, as far as the key parses. The topic ID is Kafka's base64
-// form.
-func shareCoordinatorFaultKey(key string) faultKey {
+// parseShareCoordinatorKey parses a groupId:topicId:partition share
+// coordinator key as Kafka does, and returns the fault key for as much as
+// parses and whether all of it is valid. Kafka splits on ":" and drops
+// trailing empty tokens; the last token is a 32-bit partition, the one
+// before is a base64 topic ID, and the rest is a group ID that is not
+// blank.
+func parseShareCoordinatorKey(key string) (faultKey, bool) {
 	tokens := strings.Split(key, ":")
+	for len(tokens) > 0 && tokens[len(tokens)-1] == "" {
+		tokens = tokens[:len(tokens)-1]
+	}
 	n := len(tokens)
 	if n < 3 {
-		return faultKey{}
+		return faultKey{}, false
 	}
 	k := faultKey{group: strings.Join(tokens[:n-2], ":")}
-	if id, err := base64.RawURLEncoding.DecodeString(tokens[n-2]); err == nil && len(id) == len(k.topicID) {
+	ok := strings.TrimSpace(k.group) != ""
+	if id, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(tokens[n-2], "=")); err == nil && len(id) == len(k.topicID) {
 		copy(k.topicID[:], id)
+	} else {
+		ok = false
 	}
-	if p, err := strconv.Atoi(tokens[n-1]); err == nil {
+	if p, err := strconv.ParseInt(tokens[n-1], 10, 32); err == nil {
 		k = k.part(int32(p))
+	} else {
+		ok = false
 	}
-	return k
-}
-
-// validShareCoordinatorKey reports whether key is a groupId:topicId:partition
-// SharePartitionKey, mirroring SharePartitionKey.getInstance: split on ":", the
-// last token is an integer partition, the prior is the topic id, the rest a
-// non-empty group id. We do not decode the topic-id UUID.
-func validShareCoordinatorKey(key string) bool {
-	if key == "" {
-		return false
-	}
-	tokens := strings.Split(key, ":")
-	if len(tokens) < 3 {
-		return false
-	}
-	if strings.TrimSpace(strings.Join(tokens[:len(tokens)-2], ":")) == "" {
-		return false
-	}
-	if tokens[len(tokens)-2] == "" {
-		return false
-	}
-	if _, err := strconv.Atoi(tokens[len(tokens)-1]); err != nil {
-		return false
-	}
-	return true
+	return k, ok
 }

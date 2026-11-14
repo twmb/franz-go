@@ -12,7 +12,7 @@ import (
 // * v6: Flexible versions
 // * v7: RequireStable (KIP-447) - returns UNSTABLE_OFFSET_COMMIT if pending txn offsets
 // * v8: Multiple groups support in single request
-// * v9: MemberID, MemberEpoch for new consumer protocol (KIP-848) - not implemented
+// * v9: MemberID, MemberEpoch for new consumer protocol (KIP-848)
 // * v10: TopicID replaces Topic (KIP-848 / KAFKA-19186)
 
 func init() { regKey(9, 0, 10) }

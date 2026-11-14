@@ -110,7 +110,8 @@ func Test848GroupTypeIsConsumer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adm := kadm.NewClient(newClient848(t, c))
+	admCl := newClient848(t, c)
+	adm := kadm.NewClient(admCl)
 
 	// ListGroupsByType with "consumer" filter should include our group.
 	listed, err := adm.ListGroupsByType(ctx, []string{"consumer"})
@@ -119,6 +120,23 @@ func Test848GroupTypeIsConsumer(t *testing.T) {
 	}
 	if _, ok := listed[group]; !ok {
 		t.Fatalf("group %s not found in consumer-type list (got %v)", group, listed.Groups())
+	}
+
+	// Kafka matches the type filter ignoring case and names the
+	// consumer protocol type.
+	lreq := kmsg.NewPtrListGroupsRequest()
+	lreq.TypesFilter = []string{"CONSUMER"}
+	lresp, err := lreq.RequestWith(ctx, admCl)
+	if err != nil || len(lresp.Groups) != 1 || lresp.Groups[0].ProtocolType != "consumer" {
+		t.Fatalf("list by type CONSUMER: %v %+v, want the group with protocol type consumer", err, lresp)
+	}
+
+	// DescribeGroups describes only classic groups.
+	dreq := kmsg.NewPtrDescribeGroupsRequest()
+	dreq.Groups = []string{group}
+	dresp, err := dreq.RequestWith(ctx, admCl)
+	if err != nil || len(dresp.Groups) != 1 || dresp.Groups[0].ErrorCode != kerr.GroupIDNotFound.Code || dresp.Groups[0].ErrorMessage == nil {
+		t.Fatalf("describe a consumer group: %v %+v, want GROUP_ID_NOT_FOUND", err, dresp)
 	}
 
 	// ListGroupsByType with "classic" filter should NOT include our group.
@@ -142,53 +160,68 @@ func Test848GroupTypeIsConsumer(t *testing.T) {
 }
 
 // Test848DeleteGroup verifies that deleting a non-empty consumer group
-// returns NonEmptyGroup, and deleting an empty group succeeds.
+// returns NonEmptyGroup, and deleting an empty group succeeds. A static
+// member that left at epoch -2 is still a member, as in Kafka.
 func Test848DeleteGroup(t *testing.T) {
 	t.Parallel()
-	topic := "t848-delete"
-	group := "g848-delete"
+	for _, tc := range []struct {
+		name       string
+		opts       []kgo.Opt
+		closedWant error
+	}{
+		{"dynamic", nil, nil},
+		{"static", []kgo.Opt{kgo.InstanceID("i")}, kerr.NonEmptyGroup},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "t848-delete"
+			group := "g848-delete"
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	produceNStrings(t, producer, topic, 10)
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			produceNStrings(t, producer, topic, 10)
 
-	consumer := newClient848(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-	)
-	_ = consumeN(t, consumer, 10, 10*time.Second)
+			consumer := newClient848(t, c, append([]kgo.Opt{
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+			}, tc.opts...)...)
+			_ = consumeN(t, consumer, 10, 10*time.Second)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-	adm := kadm.NewClient(newClient848(t, c))
+			adm := kadm.NewClient(newClient848(t, c))
 
-	// Deleting a non-empty group should fail.
-	_, err := adm.DeleteGroup(ctx, group)
-	if err == nil {
-		t.Fatal("expected error deleting non-empty group")
-	}
-	if !errors.Is(err, kerr.NonEmptyGroup) {
-		t.Fatalf("expected NonEmptyGroup error, got %v", err)
-	}
+			// Deleting a non-empty group should fail.
+			_, err := adm.DeleteGroup(ctx, group)
+			if err == nil {
+				t.Fatal("expected error deleting non-empty group")
+			}
+			if !errors.Is(err, kerr.NonEmptyGroup) {
+				t.Fatalf("expected NonEmptyGroup error, got %v", err)
+			}
 
-	// Close consumer (sends leave heartbeat), making the group empty.
-	consumer.Close()
+			// Close consumer (sends leave heartbeat).
+			consumer.Close()
 
-	// Deleting the now-empty group should succeed.
-	_, err = adm.DeleteGroup(ctx, group)
-	if err != nil {
-		t.Fatalf("expected successful delete of empty group, got %v", err)
-	}
+			_, err = adm.DeleteGroup(ctx, group)
+			if !errors.Is(err, tc.closedWant) {
+				t.Fatalf("delete after the consumer closed: got %v, want %v", err, tc.closedWant)
+			}
+			if tc.closedWant != nil {
+				return
+			}
 
-	// Verify group is gone.
-	listed, err := adm.ListGroupsByType(ctx, []string{"consumer"})
-	if err != nil {
-		t.Fatalf("list groups failed: %v", err)
-	}
-	if _, ok := listed[group]; ok {
-		t.Fatalf("group %s should not exist after deletion", group)
+			// Verify group is gone.
+			listed, err := adm.ListGroupsByType(ctx, []string{"consumer"})
+			if err != nil {
+				t.Fatalf("list groups failed: %v", err)
+			}
+			if _, ok := listed[group]; ok {
+				t.Fatalf("group %s should not exist after deletion", group)
+			}
+		})
 	}
 }
 
@@ -1350,6 +1383,18 @@ func TestTxnAddOffsetsWithoutGroup(t *testing.T) {
 	}
 	if ec := ocResp.Topics[0].Partitions[0].ErrorCode; ec != want.Code {
 		t.Fatalf("expected %s, got: %v", want.Message, kerr.ErrorForCode(ec))
+	}
+
+	// A v4 commit for a group the transaction does not have is refused
+	// and creates no group.
+	v4 := kversion.Stable()
+	v4.SetMaxKeyVersion(int16(kmsg.TxnOffsetCommit), 4)
+	ocReq.Group = "other-group"
+	if ocResp, err = ocReq.RequestWith(ctx, newPlainClient(t, c, kgo.MaxVersions(v4))); err != nil {
+		t.Fatal(err)
+	}
+	if ec := ocResp.Topics[0].Partitions[0].ErrorCode; ec != kerr.InvalidTxnState.Code || c.GroupInfo("other-group") != nil {
+		t.Errorf("v4 commit for a group outside the transaction: got %v, group %+v; want INVALID_TXN_STATE and no group", kerr.ErrorForCode(ec), c.GroupInfo("other-group"))
 	}
 }
 
@@ -2913,10 +2958,10 @@ func TestStaticMemberClassicFencing(t *testing.T) {
 	}
 }
 
-// TestStaticMemberClassicLeaveByInstance verifies that a static member
-// can be removed from a classic group by sending a LeaveGroup request
-// with the instanceID.
-func TestStaticMemberClassicLeaveByInstance(t *testing.T) {
+// TestStaticMemberLeaveByInstance verifies that a LeaveGroup naming a static
+// member's instance ID removes the member from a classic or KIP-848 group,
+// and fences a member ID that no longer holds the instance.
+func TestStaticMemberLeaveByInstance(t *testing.T) {
 	t.Parallel()
 	topic := "static-classic-leave-inst"
 	group := "static-classic-leave-inst-group"
@@ -2937,16 +2982,28 @@ func TestStaticMemberClassicLeaveByInstance(t *testing.T) {
 
 	waitStable(t, c, group, 1)
 
-	// Send a raw LeaveGroup with instanceID (no memberID).
 	raw := newPlainClient(t, c)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// A member ID that no longer holds the instance is fenced.
+	staleReq := kmsg.NewPtrLeaveGroupRequest()
+	staleReq.Group = group
+	sm := kmsg.NewLeaveGroupRequestMember()
+	sm.MemberID, sm.InstanceID = "stale", &instanceID
+	staleReq.Members = append(staleReq.Members, sm)
+	staleResp, err := staleReq.RequestWith(ctx, raw)
+	if err != nil || len(staleResp.Members) != 1 || staleResp.Members[0].ErrorCode != kerr.FencedInstanceID.Code {
+		t.Fatalf("leave with a stale member ID: %v %+v, want FENCED_INSTANCE_ID", err, staleResp)
+	}
+
+	// Send a raw LeaveGroup with instanceID (no memberID).
 	leaveReq := kmsg.NewPtrLeaveGroupRequest()
 	leaveReq.Group = group
 	leaveReq.Version = 3
 	lm := kmsg.NewLeaveGroupRequestMember()
 	lm.InstanceID = &instanceID
 	leaveReq.Members = append(leaveReq.Members, lm)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	leaveResp, err := leaveReq.RequestWith(ctx, raw)
 	if err != nil {
 		t.Fatalf("leave request failed: %v", err)
@@ -2958,6 +3015,20 @@ func TestStaticMemberClassicLeaveByInstance(t *testing.T) {
 		if m.ErrorCode != 0 {
 			t.Fatalf("leave member error: %v", kerr.ErrorForCode(m.ErrorCode))
 		}
+		// Kafka echoes the member ID from the request.
+		if m.MemberID != "" {
+			t.Fatalf("leave answered member ID %q, want the request's empty one", m.MemberID)
+		}
+	}
+
+	// A KIP-848 member leaves by instance ID as well.
+	leaveReq.Group = group + "-848"
+	member848(ctx, t, raw, topic, leaveReq.Group, "m", &instanceID)("consumer join", 0)
+	if lr := faultReq(t, raw, 0, leaveReq).(*kmsg.LeaveGroupResponse); len(lr.Members) != 1 || lr.Members[0].ErrorCode != 0 {
+		t.Fatalf("leave of the consumer member by instance: %+v", lr.Members)
+	}
+	if g := c.GroupInfo(leaveReq.Group); g != nil && len(g.Members) != 0 {
+		t.Fatalf("the consumer member is still in the group: %+v", g.Members)
 	}
 }
 
@@ -2980,6 +3051,7 @@ func TestClassicStaticRejoinStable(t *testing.T) {
 	}
 	sync := kmsg.NewPtrSyncGroupRequest()
 	sync.Group, sync.MemberID, sync.InstanceID, sync.Generation = groupID, first.MemberID, join.InstanceID, first.Generation
+	sync.ProtocolType, sync.Protocol = kmsg.StringPtr("consumer"), kmsg.StringPtr("range")
 	if _, err := sync.RequestWith(ctx, cl); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -3083,9 +3155,11 @@ func TestClassicStaticReplaceParkedSync(t *testing.T) {
 		return ch
 	}
 	waitGroup := func(cond func(g *group) bool) {
-		for done := false; !done; {
+		t.Helper()
+		waitFor(t, 5*time.Second, "the group never reached the state", func() (done bool) {
 			onGroup(t, c, groupID, func(g *group) { done = cond(g) })
-		}
+			return done
+		})
 	}
 	static := classicJoinReq(groupID, "")
 	static.InstanceID = kmsg.StringPtr("s")
@@ -3101,6 +3175,7 @@ func TestClassicStaticReplaceParkedSync(t *testing.T) {
 
 	sync := kmsg.NewPtrSyncGroupRequest()
 	sync.Group, sync.MemberID, sync.InstanceID, sync.Generation = groupID, s.MemberID, static.InstanceID, s.Generation
+	sync.ProtocolType, sync.Protocol = kmsg.StringPtr("consumer"), kmsg.StringPtr("range")
 	synced := async(sync)
 	waitGroup(func(g *group) bool { return !g.members[s.MemberID].waitingReply.empty() })
 	var expired bool
@@ -3119,6 +3194,210 @@ func TestClassicStaticReplaceParkedSync(t *testing.T) {
 	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	classicJoin(rctx, t, cl, "leader rejoin after the replacement", groupID, leader)
+}
+
+// TestClassicGroupRequests verifies answers to classic group requests that
+// match Kafka and that no client flow above reaches.
+func TestClassicGroupRequests(t *testing.T) {
+	t.Parallel()
+	const topic = "t"
+
+	// commitReq is a simple commit of offset 3 for partition 0.
+	commitReq := func(c *Cluster, group string) *kmsg.OffsetCommitRequest {
+		req := kmsg.NewPtrOffsetCommitRequest()
+		req.Group, req.Generation = group, -1
+		rt := kmsg.NewOffsetCommitRequestTopic()
+		rt.Topic, rt.TopicID = topic, c.TopicInfo(topic).TopicID
+		rp := kmsg.NewOffsetCommitRequestTopicPartition()
+		rp.Offset = 3
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		return req
+	}
+	syncReq := func(memberID string, gen int32) *kmsg.SyncGroupRequest {
+		sync := kmsg.NewPtrSyncGroupRequest()
+		sync.Group, sync.MemberID, sync.Generation = "g", memberID, gen
+		sync.ProtocolType, sync.Protocol = kmsg.StringPtr("consumer"), kmsg.StringPtr("range")
+		return sync
+	}
+
+	for _, tc := range []struct {
+		name string
+		run  func(ctx context.Context, t *testing.T, c *Cluster, cl *kgo.Client)
+	}{
+		{"a member of a missing group is unknown", func(_ context.Context, t *testing.T, _ *Cluster, cl *kgo.Client) {
+			hb := kmsg.NewPtrHeartbeatRequest()
+			hb.Group = "missing"
+			sync := syncReq("m", 0)
+			sync.Group = "missing"
+			leave := kmsg.NewPtrLeaveGroupRequest()
+			leave.Group = "missing"
+			leave.Members = []kmsg.LeaveGroupRequestMember{{MemberID: "m"}}
+			hr := faultReq(t, cl, 0, hb).(*kmsg.HeartbeatResponse)
+			sr := faultReq(t, cl, 0, sync).(*kmsg.SyncGroupResponse)
+			lr := faultReq(t, cl, 0, leave).(*kmsg.LeaveGroupResponse)
+			unknown := kerr.UnknownMemberID.Code
+			if hr.ErrorCode != unknown || sr.ErrorCode != unknown || lr.ErrorCode != 0 || len(lr.Members) != 1 || lr.Members[0].ErrorCode != unknown {
+				t.Fatalf("heartbeat %d, sync %d, leave %d %+v: want UNKNOWN_MEMBER_ID, per member for the leave", hr.ErrorCode, sr.ErrorCode, lr.ErrorCode, lr.Members)
+			}
+			fetch := kmsg.NewPtrOffsetFetchRequest()
+			fetch.Groups = []kmsg.OffsetFetchRequestGroup{{Group: "missing", MemberEpoch: -1}}
+			if fg := faultReq(t, cl, 0, fetch).(*kmsg.OffsetFetchResponse).Groups[0]; fg.ErrorCode != 0 || len(fg.Topics) != 0 {
+				t.Fatalf("fetching the offsets of a missing group: %+v, want none and no error", fg)
+			}
+			// From v5, a sync must name the protocol type and protocol.
+			sync.ProtocolType = nil
+			if sr := faultReq(t, cl, 0, sync).(*kmsg.SyncGroupResponse); sr.ErrorCode != kerr.InconsistentGroupProtocol.Code {
+				t.Fatalf("sync without a protocol type: %v, want INCONSISTENT_GROUP_PROTOCOL", kerr.ErrorForCode(sr.ErrorCode))
+			}
+		}},
+
+		{"a classic join takes over an empty consumer group", func(ctx context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			hb := member848(ctx, t, cl, topic, "g", "m", nil)
+			hb("consumer join", 0)
+			if r := faultReq(t, cl, 0, classicJoinReq("g", "")).(*kmsg.JoinGroupResponse); r.ErrorCode != kerr.InconsistentGroupProtocol.Code {
+				t.Fatalf("classic join beside a consumer member: %v, want INCONSISTENT_GROUP_PROTOCOL", kerr.ErrorForCode(r.ErrorCode))
+			}
+			hb("consumer leave", -1)
+			faultReq(t, cl, 0, commitReq(c, "g"))
+			classicJoin(ctx, t, cl, "classic join", "g", "")
+			onGroup(t, c, "g", func(g *group) {
+				if g.typ != "classic" || !g.commits.checkp(topic, 0) {
+					t.Errorf("after the classic join: type %s, commits %v; want classic with the offset kept", g.typ, g.commits)
+				}
+			})
+		}},
+
+		{"a refused first join", func(_ context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			// Like Kafka, a new member's refused join keeps the
+			// group it created, and a join naming a member creates
+			// no group.
+			join := classicJoinReq("fresh", "")
+			join.Protocols = nil
+			if r := faultReq(t, cl, 0, join).(*kmsg.JoinGroupResponse); r.ErrorCode != kerr.InconsistentGroupProtocol.Code || c.GroupInfo("fresh") == nil {
+				t.Errorf("join without protocols to a new group: %v, group %+v; want INCONSISTENT_GROUP_PROTOCOL and an empty group", kerr.ErrorForCode(r.ErrorCode), c.GroupInfo("fresh"))
+			}
+			join = classicJoinReq("missing", "m")
+			join.Protocols = nil
+			if r := faultReq(t, cl, 0, join).(*kmsg.JoinGroupResponse); r.ErrorCode != kerr.UnknownMemberID.Code || r.MemberID != "m" || c.GroupInfo("missing") != nil {
+				t.Errorf("join naming member m to a missing group: %v for %q, group %+v; want UNKNOWN_MEMBER_ID for m and no group", kerr.ErrorForCode(r.ErrorCode), r.MemberID, c.GroupInfo("missing"))
+			}
+		}},
+
+		{"protocols in an empty group", func(ctx context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			m := classicJoin(ctx, t, cl, "join", "g", "")
+			leave := kmsg.NewPtrLeaveGroupRequest()
+			leave.Group = "g"
+			leave.Members = []kmsg.LeaveGroupRequestMember{{MemberID: m.MemberID}}
+			faultReq(t, cl, 0, leave)
+			join := classicJoinReq("g", "")
+			join.ProtocolType = "connect"
+			if r := faultReq(t, cl, 0, join).(*kmsg.JoinGroupResponse); r.ErrorCode != kerr.MemberIDRequired.Code {
+				t.Fatalf("join of a new protocol type into the empty group: %v, want MEMBER_ID_REQUIRED", kerr.ErrorForCode(r.ErrorCode))
+			}
+
+			// A group restored from disk has a protocol type and no
+			// protocols. A join with none must be refused before
+			// protocol selection.
+			faultReq(t, cl, 0, commitReq(c, "restored"))
+			onGroup(t, c, "restored", func(g *group) { g.protocolType = "consumer" })
+			join = classicJoinReq("restored", "")
+			join.Protocols = nil
+			for range 2 { // the second join names the member ID from the first
+				r := faultReq(t, cl, 0, join).(*kmsg.JoinGroupResponse)
+				if r.ErrorCode == kerr.InconsistentGroupProtocol.Code {
+					return
+				}
+				join.MemberID = r.MemberID
+			}
+			t.Fatal("a join with no protocols was not refused")
+		}},
+
+		{"a parked join or sync that its member replaces is answered", func(ctx context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			// Each parked request needs its own client: we answer
+			// one request at a time per connection. The client must
+			// not retry NOT_COORDINATOR.
+			async := func(req kmsg.Request) <-chan kmsg.Response {
+				ch := make(chan kmsg.Response, 1)
+				acl := newPlainClient(t, c)
+				go func() {
+					resp, _ := acl.Broker(0).Request(ctx, req)
+					ch <- resp
+				}()
+				return ch
+			}
+			parked := func(id string) {
+				for done := false; !done; time.Sleep(5 * time.Millisecond) {
+					if ctx.Err() != nil {
+						t.Fatalf("member %s never parked", id)
+					}
+					onGroup(t, c, "g", func(g *group) { done = g.members[id] != nil && !g.members[id].waitingReply.empty() })
+				}
+			}
+			a := classicJoin(ctx, t, cl, "a join", "g", "")
+			b := faultReq(t, cl, 0, classicJoinReq("g", "")).(*kmsg.JoinGroupResponse).MemberID
+			first := async(classicJoinReq("g", b))
+			parked(b)
+			second := async(classicJoinReq("g", b))
+			if r, _ := (<-first).(*kmsg.JoinGroupResponse); r == nil || r.ErrorCode != kerr.NotCoordinator.Code {
+				t.Fatalf("replaced join got %v, want NOT_COORDINATOR", r)
+			}
+			a = classicJoin(ctx, t, cl, "a rejoin", "g", a.MemberID)
+			if r, _ := (<-second).(*kmsg.JoinGroupResponse); r == nil || r.ErrorCode != 0 {
+				t.Fatalf("replacing join got %v", r)
+			}
+
+			first = async(syncReq(b, a.Generation))
+			parked(b)
+			second = async(syncReq(b, a.Generation))
+			if r, _ := (<-first).(*kmsg.SyncGroupResponse); r == nil || r.ErrorCode != kerr.NotCoordinator.Code {
+				t.Fatalf("replaced sync got %v, want NOT_COORDINATOR", r)
+			}
+			faultReq(t, cl, 0, syncReq(a.MemberID, a.Generation))
+			if r, _ := (<-second).(*kmsg.SyncGroupResponse); r == nil || r.ErrorCode != 0 {
+				t.Fatalf("replacing sync got %v", r)
+			}
+		}},
+
+		{"DescribeGroups during a rebalance", func(ctx context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			a := classicJoin(ctx, t, cl, "join", "g", "")
+			sync := syncReq(a.MemberID, a.Generation)
+			sync.GroupAssignment = []kmsg.SyncGroupRequestGroupAssignment{{MemberID: a.MemberID, MemberAssignment: []byte{1}}}
+			faultReq(t, cl, 0, sync)
+			onGroup(t, c, "g", func(g *group) { g.rebalance() })
+			describe := kmsg.NewPtrDescribeGroupsRequest()
+			describe.Groups = []string{"g"}
+			dg := faultReq(t, cl, 0, describe).(*kmsg.DescribeGroupsResponse).Groups[0]
+			if dg.State != "PreparingRebalance" || len(dg.Members) != 1 {
+				t.Fatalf("described %+v, want one member preparing a rebalance", dg)
+			}
+			// Kafka names the client by IP alone, after a slash.
+			if m := dg.Members[0]; string(m.MemberAssignment) != "\x01" || m.ClientHost != "/127.0.0.1" {
+				t.Fatalf("described member assignment %v, host %q; want the assignment and /127.0.0.1", m.MemberAssignment, m.ClientHost)
+			}
+		}},
+
+		{"deleting a group", func(_ context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			faultReq(t, cl, 0, commitReq(c, "g"))
+			commitTxn := stageTxnOffset(t, c, cl, "txn", "g", topic, 9)
+			del := kmsg.NewPtrDeleteGroupsRequest()
+			del.Groups = []string{"g", "g"}
+			if dr := faultReq(t, cl, 0, del).(*kmsg.DeleteGroupsResponse); len(dr.Groups) != 1 || dr.Groups[0].ErrorCode != 0 {
+				t.Fatalf("deleting g twice in one request: %+v, want it deleted and answered once", dr.Groups)
+			}
+			// The offset in the open transaction went with the group.
+			commitTxn()
+			if c.GroupInfo("g") != nil {
+				t.Fatal("committing the transaction brought the deleted group back")
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, cl, ctx := newGuardCluster(t, SeedTopics(1, topic))
+			tc.run(ctx, t, c, cl)
+		})
+	}
 }
 
 // Test848FetchOffsetsStaleEpochRetry verifies that the kgo client retries

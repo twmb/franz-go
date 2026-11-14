@@ -105,10 +105,17 @@ func TestConsumerPartitionOwnership(t *testing.T) {
 		{"m1", e1 - 1, []int32{m1Part, m2Part}, kerr.StaleMemberEpoch.Code},
 		{"m1", e1 - 1, []int32{m1Part}, 0},
 		{"m1", -1, []int32{m1Part}, kerr.StaleMemberEpoch.Code}, // a member at no epoch is older than every assignment
+		{"m1", e1 - 1, []int32{m1Part, 99}, 0},                  // partition 99 does not exist, which Kafka answers before the epoch
 	} {
+		wantp := func(p int32, want int16) int16 {
+			if p == 99 {
+				return kerr.UnknownTopicOrPartition.Code
+			}
+			return want
+		}
 		for i, code := range commit(tc.member, tc.epoch, int64(len(tc.parts)), tc.parts...) {
-			if code != tc.want {
-				t.Errorf("%s commit at epoch %d to partitions %v: partition %d got %v, want %v", tc.member, tc.epoch, tc.parts, tc.parts[i], kerr.ErrorForCode(code), kerr.ErrorForCode(tc.want))
+			if want := wantp(tc.parts[i], tc.want); code != want {
+				t.Errorf("%s commit at epoch %d to partitions %v: partition %d got %v, want %v", tc.member, tc.epoch, tc.parts, tc.parts[i], kerr.ErrorForCode(code), kerr.ErrorForCode(want))
 			}
 		}
 
@@ -132,16 +139,16 @@ func TestConsumerPartitionOwnership(t *testing.T) {
 			want = kerr.IllegalGeneration.Code // KIP-1319
 		}
 		for _, p := range tresp.Topics[0].Partitions {
-			if p.ErrorCode != want {
+			if want := wantp(p.Partition, want); p.ErrorCode != want {
 				t.Errorf("%s txn commit at epoch %d to partitions %v: partition %d got %v, want %v", tc.member, tc.epoch, tc.parts, p.Partition, kerr.ErrorForCode(p.ErrorCode), kerr.ErrorForCode(want))
 			}
 		}
 	}
-	// Only the revoking commit and the second commit, of one partition
-	// at offset 1, landed.
+	// Only the revoking commit and the commits of m1's partition landed,
+	// the last at offset 2.
 	commits := groupCommits(c, groupID)[topic]
-	if len(commits) != 2 || commits[m1Part].Offset != 1 || commits[m2Part].Offset != 5 {
-		t.Errorf("after the commits, the group holds %v, want partition %d at offset 1 and %d at 5", commits, m1Part, m2Part)
+	if len(commits) != 2 || commits[m1Part].Offset != 2 || commits[m2Part].Offset != 5 {
+		t.Errorf("after the commits, the group holds %v, want partition %d at offset 2 and %d at 5", commits, m1Part, m2Part)
 	}
 
 	onGroup(t, c, groupID, func(g *group) {

@@ -9,11 +9,11 @@ import (
 // Version notes:
 // * v1: RebalanceTimeoutMillis
 // * v4: MEMBER_ID_REQUIRED for initial join (KIP-394)
-// * v5: InstanceID for static membership (KIP-345) - not implemented
+// * v5: InstanceID for static membership (KIP-345)
 // * v6: Flexible versions
 // * v7: ProtocolType in response
 // * v8: Reason field (KIP-800)
-// * v9: SkipAssignment (KIP-814) - not implemented
+// * v9: SkipAssignment (KIP-814)
 
 func init() { regKey(11, 0, 9) }
 

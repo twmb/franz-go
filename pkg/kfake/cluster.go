@@ -147,7 +147,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		listenFn:        net.Listen,
 
 		minSessionTimeout: 6 * time.Second,
-		maxSessionTimeout: 5 * time.Minute,
+		maxSessionTimeout: 30 * time.Minute,
 
 		sasls: make(map[struct{ m, u string }]string),
 	}

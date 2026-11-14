@@ -782,7 +782,6 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 			Type:       "meta848",
 			Group:      "test-848-group",
 			GroupType:  "consumer",
-			Assignor:   "uniform",
 			GroupEpoch: 7,
 		})
 	})

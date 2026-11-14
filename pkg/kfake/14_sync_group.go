@@ -9,7 +9,7 @@ import (
 //
 // Version notes:
 // * v1: ThrottleMillis
-// * v3: InstanceID for static membership (KIP-345) - not implemented
+// * v3: InstanceID for static membership (KIP-345)
 // * v4: Flexible versions
 // * v5: ProtocolType and Protocol in request/response
 
@@ -23,9 +23,20 @@ func (c *Cluster) handleSyncGroup(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	if kresp, ok := c.groups.handleSync(creq); ok {
-		return kresp, nil
+	// From v5, Kafka requires both, and checks them before the ACL.
+	if req.Version >= 5 && (req.ProtocolType == nil || req.Protocol == nil) {
+		resp.ErrorCode = kerr.InconsistentGroupProtocol.Code
+		return resp, nil
 	}
-	resp.ErrorCode = kerr.GroupIDNotFound.Code
+
+	g, err := c.groups.memberReq(creq, req.Group, kmsg.ACLOperationRead)
+	switch {
+	case err != nil:
+		resp.ErrorCode = err.Code
+	case g == nil:
+		resp.ErrorCode = kerr.UnknownMemberID.Code
+	default:
+		return g.handleSync(creq), nil
+	}
 	return resp, nil
 }
