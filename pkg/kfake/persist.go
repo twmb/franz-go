@@ -2414,7 +2414,7 @@ func (c *Cluster) saveSessionState() error {
 		}
 	}
 
-	if len(ss.ClassicGroups) == 0 && len(ss.ConsumerGroups) == 0 && len(ss.ShareGroups) == 0 && len(ss.GroupConfigs) == 0 && len(ss.InProgressTxns) == 0 && len(ss.FetchSessions) == 0 {
+	if len(ss.ClassicGroups) == 0 && len(ss.ConsumerGroups) == 0 && len(ss.ShareGroups) == 0 && len(ss.GroupConfigs) == 0 && len(ss.ClientMetrics) == 0 && len(ss.InProgressTxns) == 0 && len(ss.FetchSessions) == 0 {
 		c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: nothing to save")
 		return nil
 	}

@@ -274,6 +274,9 @@ func (c *Cluster) createTopic(rt *kmsg.CreateTopicsRequestTopic, inReq map[strin
 
 	configs := make(map[string]*string)
 	for _, rc := range rt.Configs {
+		if !validTopicConfig(rc.Name, rc.Value) {
+			return 0, 0, nil, kerr.InvalidConfig
+		}
 		configs[rc.Name] = rc.Value
 	}
 

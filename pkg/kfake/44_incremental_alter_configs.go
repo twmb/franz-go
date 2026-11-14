@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"cmp"
 	"maps"
 	"strconv"
 
@@ -11,8 +12,8 @@ import (
 // IncrementalAlterConfigs: v0-1
 //
 // Supported resource types:
-// * BROKER (2)
-// * TOPIC (4)
+// * TOPIC (2)
+// * BROKER (4)
 // * CLIENT_METRICS (16)
 // * GROUP (32)
 //
@@ -21,6 +22,13 @@ import (
 // * DELETE (1)
 // * APPEND (2)
 // * SUBTRACT (3)
+//
+// Behavior:
+// * A resource listed twice, a config named twice in a resource, or a null
+//   value for an op other than DELETE answers INVALID_REQUEST
+// * A topic config of a known name must parse as its type; any name is
+//   accepted
+// * APPEND and SUBTRACT start from the default when the config is unset
 //
 // Version notes:
 // * v0: Initial version
@@ -58,9 +66,30 @@ func (c *Cluster) handleIncrementalAlterConfigs(creq *clientReq) (kmsg.Response,
 		resp.Resources = append(resp.Resources, st)
 	}
 
+	pre := make([]alterResource, len(req.Resources))
+	for i, rr := range req.Resources {
+		pre[i] = alterResource{typ: rr.ResourceType, name: rr.ResourceName}
+		for _, rc := range rr.Configs {
+			pre[i].keys = append(pre[i].keys, rc.Name)
+			if rc.Value == nil && rc.Op != kmsg.IncrementalAlterConfigOpDelete {
+				pre[i].nulls = append(pre[i].nulls, rc.Name)
+			}
+		}
+	}
+	preErrs := alterConfigsPrecheck(pre)
+
 outer:
 	for i := range req.Resources {
 		rr := &req.Resources[i]
+		if msg := preErrs[i]; msg != "" {
+			st := kmsg.NewIncrementalAlterConfigsResponseResource()
+			st.ResourceName = rr.ResourceName
+			st.ResourceType = rr.ResourceType
+			st.ErrorCode = kerr.InvalidRequest.Code
+			st.ErrorMessage = &msg
+			resp.Resources = append(resp.Resources, st)
+			continue
+		}
 		switch rr.ResourceType {
 		case kmsg.ConfigResourceTypeBroker:
 			if e := c.denyCluster(creq, kmsg.ACLOperationAlterConfigs, brokerConfigFaultKey(b, rr.ResourceName)); e != nil {
@@ -80,35 +109,33 @@ outer:
 			// We apply every op to a clone: a ValidateOnly request
 			// must not leave the ops it walked behind.
 			dup := maps.Clone(c.bcfgs)
-			var invalid bool
+			var code int16
 			for i := range rr.Configs {
 				rc := &rr.Configs[i]
 				switch rc.Op {
 				case kmsg.IncrementalAlterConfigOpSet:
 					if !validateBrokerConfig(rc.Name, rc.Value) {
-						invalid = true
+						code = kerr.InvalidRequest.Code
 					}
 					dup[rc.Name] = rc.Value
 				case kmsg.IncrementalAlterConfigOpDelete:
 					delete(dup, rc.Name)
-				case kmsg.IncrementalAlterConfigOpAppend:
+				case kmsg.IncrementalAlterConfigOpAppend, kmsg.IncrementalAlterConfigOpSubtract:
 					if !isListConfig(rc.Name) {
-						invalid = true
-					} else {
-						dup[rc.Name] = configListAppend(dup[rc.Name], rc.Value)
+						code = kerr.InvalidConfig.Code
+						continue
 					}
-				case kmsg.IncrementalAlterConfigOpSubtract:
-					if !isListConfig(rc.Name) {
-						invalid = true
-					} else {
-						dup[rc.Name] = configListSubtract(dup[rc.Name], rc.Value)
+					var def string
+					if _, ok := validBrokerConfigs[rc.Name]; ok {
+						def = configDefaults[rc.Name]
 					}
+					dup[rc.Name] = configListOp(rc.Op, dup[rc.Name], def, rc.Value)
 				default:
-					invalid = true
+					code = kerr.InvalidRequest.Code
 				}
 			}
-			if invalid {
-				doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
+			if code != 0 {
+				doner(rr.ResourceName, rr.ResourceType, code)
 				continue
 			}
 			doner(rr.ResourceName, rr.ResourceType, 0)
@@ -126,27 +153,33 @@ outer:
 					continue
 				}
 			}
+			if rr.ResourceName == "" { // Kafka refuses the default topic resource
+				doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
+				continue
+			}
 			if _, ok := c.data.tps.gett(rr.ResourceName); !ok {
 				doner(rr.ResourceName, rr.ResourceType, kerr.UnknownTopicOrPartition.Code)
 				continue
 			}
-			var invalid bool
+			var code int16
 			for i := range rr.Configs {
 				rc := &rr.Configs[i]
 				switch rc.Op {
 				case kmsg.IncrementalAlterConfigOpSet:
-					invalid = invalid || !c.data.setTopicConfig(rr.ResourceName, rc.Name, rc.Value, true)
+					if !c.data.setTopicConfig(rr.ResourceName, rc.Name, rc.Value, true) {
+						code = kerr.InvalidConfig.Code
+					}
 				case kmsg.IncrementalAlterConfigOpDelete:
 				case kmsg.IncrementalAlterConfigOpAppend, kmsg.IncrementalAlterConfigOpSubtract:
 					if !isListConfig(rc.Name) {
-						invalid = true
+						code = kerr.InvalidConfig.Code
 					}
 				default:
-					invalid = true
+					code = kerr.InvalidRequest.Code
 				}
 			}
-			if invalid {
-				doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
+			if code != 0 {
+				doner(rr.ResourceName, rr.ResourceType, code)
 				continue
 			}
 			doner(rr.ResourceName, rr.ResourceType, 0)
@@ -160,12 +193,13 @@ outer:
 					c.data.setTopicConfig(rr.ResourceName, rc.Name, rc.Value, false)
 				case kmsg.IncrementalAlterConfigOpDelete:
 					delete(c.data.tcfgs[rr.ResourceName], rc.Name)
-				case kmsg.IncrementalAlterConfigOpAppend:
+				case kmsg.IncrementalAlterConfigOpAppend, kmsg.IncrementalAlterConfigOpSubtract:
+					var def string
+					if _, ok := validTopicConfigs[rc.Name]; ok {
+						def = configDefaults[rc.Name]
+					}
 					current := c.data.tcfgs[rr.ResourceName][rc.Name]
-					c.data.setTopicConfig(rr.ResourceName, rc.Name, configListAppend(current, rc.Value), false)
-				case kmsg.IncrementalAlterConfigOpSubtract:
-					current := c.data.tcfgs[rr.ResourceName][rc.Name]
-					c.data.setTopicConfig(rr.ResourceName, rc.Name, configListSubtract(current, rc.Value), false)
+					c.data.setTopicConfig(rr.ResourceName, rc.Name, configListOp(rc.Op, current, def, rc.Value), false)
 				}
 			}
 			c.persistTopicsState()
@@ -221,31 +255,8 @@ outer:
 					continue
 				}
 			}
-			// Group configs are scalar (e.g. share.auto.offset.reset);
-			// the protocol's Append/Subtract ops are list-valued and
-			// not meaningful here. Reject the request if any config
-			// uses an unsupported op, an unknown config name, or a
-			// value Kafka rejects.
-			//
-			// Per-group config names are UNPREFIXED -- the "group."
-			// prefix is only for broker-level defaults. Real Kafka
-			// returns INVALID_CONFIG for unknown names.
-			var invalid bool
-			for i := range rr.Configs {
-				switch rr.Configs[i].Op {
-				case kmsg.IncrementalAlterConfigOpSet, kmsg.IncrementalAlterConfigOpDelete:
-				default:
-					invalid = true
-				}
-				if !validGroupConfigs[rr.Configs[i].Name] {
-					invalid = true
-				}
-				if rr.Configs[i].Op == kmsg.IncrementalAlterConfigOpSet && !c.validGroupConfigValue(rr.Configs[i].Name, rr.Configs[i].Value) {
-					invalid = true
-				}
-			}
-			if invalid {
-				doner(rr.ResourceName, rr.ResourceType, kerr.InvalidConfig.Code)
+			if code := c.groupConfigsCode(rr.ResourceName, rr.Configs); code != 0 {
+				doner(rr.ResourceName, rr.ResourceType, code)
 				continue
 			}
 			doner(rr.ResourceName, rr.ResourceType, 0)
@@ -264,9 +275,40 @@ outer:
 	return resp, nil
 }
 
+// groupConfigsCode returns the error Kafka answers for group config ops.
+// Group configs are scalar (e.g. share.auto.offset.reset); the protocol's
+// Append/Subtract ops are list-valued and not meaningful here.
+//
+// Per-group config names are UNPREFIXED -- the "group." prefix is only for
+// broker-level defaults. Real Kafka returns INVALID_CONFIG for unknown names
+// and values it rejects, except in a DELETE, which has nothing to remove. An
+// unknown op and the empty name are INVALID_REQUEST.
+func (c *Cluster) groupConfigsCode(group string, configs []kmsg.IncrementalAlterConfigsRequestResourceConfig) int16 {
+	var code int16
+	if group == "" {
+		code = kerr.InvalidRequest.Code
+	}
+	for i := range configs {
+		rc := &configs[i]
+		switch rc.Op {
+		case kmsg.IncrementalAlterConfigOpDelete:
+		case kmsg.IncrementalAlterConfigOpSet:
+			if !validGroupConfigs[rc.Name] || !c.validGroupConfigValue(rc.Name, rc.Value) {
+				code = cmp.Or(code, kerr.InvalidConfig.Code)
+			}
+		case kmsg.IncrementalAlterConfigOpAppend, kmsg.IncrementalAlterConfigOpSubtract:
+			code = cmp.Or(code, kerr.InvalidConfig.Code)
+		default:
+			code = kerr.InvalidRequest.Code
+		}
+	}
+	return code
+}
+
 // setGroupConfigs applies group config ops: a Set writes the value, a Delete
-// drops it. Any other op is rejected before we are called. Share group
-// behavior follows these configs, so we refresh the share sweep after.
+// drops it. Any other op is rejected before we are called. A group with no
+// config left is not listed, as in Kafka. Share group behavior follows these
+// configs, so we refresh the share sweep after.
 func (c *Cluster) setGroupConfigs(group string, configs []kmsg.IncrementalAlterConfigsRequestResourceConfig) {
 	if c.groupConfigs == nil {
 		c.groupConfigs = make(map[string]map[string]*string)
@@ -287,6 +329,9 @@ func (c *Cluster) setGroupConfigs(group string, configs []kmsg.IncrementalAlterC
 			// rejected before we are called
 		}
 	}
+	if len(gc) == 0 {
+		delete(c.groupConfigs, group)
+	}
 	c.shareGroups.refreshSweepTicker()
 }
 
@@ -305,16 +350,11 @@ func alterClientMetrics(sub map[string]*string, configs []kmsg.IncrementalAlterC
 			sub[rc.Name] = rc.Value
 		case kmsg.IncrementalAlterConfigOpDelete:
 			delete(sub, rc.Name)
-		case kmsg.IncrementalAlterConfigOpAppend:
+		case kmsg.IncrementalAlterConfigOpAppend, kmsg.IncrementalAlterConfigOpSubtract:
 			if !isListConfig(rc.Name) {
 				return kerr.InvalidConfig
 			}
-			sub[rc.Name] = configListAppend(sub[rc.Name], rc.Value)
-		case kmsg.IncrementalAlterConfigOpSubtract:
-			if !isListConfig(rc.Name) {
-				return kerr.InvalidConfig
-			}
-			sub[rc.Name] = configListSubtract(sub[rc.Name], rc.Value)
+			sub[rc.Name] = configListOp(rc.Op, sub[rc.Name], "", rc.Value)
 		default:
 			return kerr.InvalidRequest
 		}

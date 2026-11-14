@@ -841,6 +841,45 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	cl := newPlainClient(t, c)
 	adm := kadm.NewClient(cl)
 
+	// As in Kafka, the value in effect is the first synonym, and a broker
+	// value or default is named by the broker config.
+	synonyms := func(c kadm.Config) (s string) {
+		for _, syn := range c.Synonyms {
+			v := "<nil>"
+			if syn.Value != nil {
+				v = *syn.Value
+			}
+			s += syn.Key + "=" + v + "/" + syn.Source.String() + " "
+		}
+		return s
+	}
+	// expectBroker checks broker 0's value and synonyms for each key.
+	expectBroker := func(want map[string]string) {
+		t.Helper()
+		rcs, err := adm.DescribeBrokerConfigs(ctx, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rc := range rcs {
+			for _, c := range rc.Configs {
+				if w, ok := want[c.Key]; ok {
+					if got := c.MaybeValue() + " | " + synonyms(c); got != w {
+						t.Errorf("broker %s: got %q, want %q", c.Key, got, w)
+					}
+					delete(want, c.Key)
+				}
+			}
+		}
+		for k := range want {
+			t.Errorf("broker describe is missing %s", k)
+		}
+	}
+	// Kafka has no default for log.retention.ms or log.roll.ms.
+	expectBroker(map[string]string{
+		"log.retention.ms": " | ",
+		"log.roll.ms":      " | ",
+	})
+
 	// Set broker config via AlterConfigs.
 	req := kmsg.NewAlterConfigsRequest()
 	rr := kmsg.NewAlterConfigsRequestResource()
@@ -876,6 +915,36 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	if !found {
 		t.Error("log.retention.ms=3600000 not found in DescribeBrokerConfigs after AlterConfigs")
 	}
+	expectBroker(map[string]string{
+		"log.retention.ms": "3600000 | log.retention.ms=3600000/DYNAMIC_BROKER_CONFIG log.retention.hours=168/DEFAULT_CONFIG ",
+		"log.roll.ms":      " | ",
+	})
+	// The empty broker name describes only the cluster-wide dynamic
+	// configs, not every default.
+	for _, rc := range bcfgs {
+		for _, c := range rc.Configs {
+			if c.Source != kmsg.ConfigSourceDynamicDefaultBrokerConfig {
+				t.Errorf("cluster-wide describe lists %s with source %v", c.Key, c.Source)
+			}
+		}
+	}
+	// A topic reports the broker value under the topic config's name.
+	tcfgs, err := adm.DescribeTopicConfigs(ctx, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rc := range tcfgs {
+		for _, c := range rc.Configs {
+			switch c.Key {
+			case "log.retention.ms":
+				t.Error("topic describe lists the broker name log.retention.ms")
+			case "retention.ms":
+				if c.MaybeValue() != "3600000" {
+					t.Errorf("topic retention.ms = %q, want the broker's 3600000", c.MaybeValue())
+				}
+			}
+		}
+	}
 
 	// Set topic config.
 	req2 := kmsg.NewAlterConfigsRequest()
@@ -897,20 +966,39 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	}
 
 	// Read back topic config.
-	tcfgs, err := adm.DescribeTopicConfigs(ctx, topic)
+	tcfgs, err = adm.DescribeTopicConfigs(ctx, topic)
 	if err != nil {
 		t.Fatal(err)
 	}
 	found = false
 	for _, rc := range tcfgs {
 		for _, c := range rc.Configs {
+			want := map[string]string{
+				"retention.ms":  "retention.ms=86400000/DYNAMIC_TOPIC_CONFIG log.retention.ms=3600000/DYNAMIC_BROKER_CONFIG log.retention.hours=168/DEFAULT_CONFIG ",
+				"segment.bytes": "log.segment.bytes=104857600/DEFAULT_CONFIG ",
+			}[c.Key]
 			if c.Key == "retention.ms" && c.Value != nil && *c.Value == "86400000" {
 				found = true
+			}
+			if got := synonyms(c); want != "" && got != want {
+				t.Errorf("%s synonyms: got %q, want %q", c.Key, got, want)
 			}
 		}
 	}
 	if !found {
 		t.Error("retention.ms=86400000 not found after AlterConfigs on topic")
+	}
+	// Without IncludeSynonyms, the describe answers no synonyms.
+	sreq := kmsg.NewPtrDescribeConfigsRequest()
+	sreq.Resources = []kmsg.DescribeConfigsRequestResource{{ResourceType: kmsg.ConfigResourceTypeTopic, ResourceName: topic}}
+	sresp, err := sreq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rc := range sresp.Resources[0].Configs {
+		if len(rc.ConfigSynonyms) > 0 {
+			t.Errorf("%s has synonyms %+v without IncludeSynonyms", rc.Name, rc.ConfigSynonyms)
+		}
 	}
 
 	// Unknown topic -> error.
@@ -925,6 +1013,67 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	}
 	if resp3.Resources[0].ErrorCode != kerr.UnknownTopicOrPartition.Code {
 		t.Errorf("unknown topic: got %v", kerr.ErrorForCode(resp3.Resources[0].ErrorCode))
+	}
+
+	// A known topic config must parse as its type, and a null value or a
+	// resource listed twice is refused before anything applies.
+	topicReq := func(value *string) kmsg.AlterConfigsRequestResource {
+		rr := kmsg.NewAlterConfigsRequestResource()
+		rr.ResourceType = kmsg.ConfigResourceTypeTopic
+		rr.ResourceName = topic
+		rc := kmsg.NewAlterConfigsRequestResourceConfig()
+		rc.Name = "retention.ms"
+		rc.Value = value
+		rr.Configs = append(rr.Configs, rc)
+		return rr
+	}
+	oneConfig := func(typ kmsg.ConfigResourceType, name, key, value string) kmsg.AlterConfigsRequestResource {
+		rr := topicReq(&value)
+		rr.ResourceType, rr.ResourceName, rr.Configs[0].Name = typ, name, key
+		return rr
+	}
+	for _, step := range []struct {
+		name      string
+		resources []kmsg.AlterConfigsRequestResource
+		want      []int16
+	}{
+		{"bad value", []kmsg.AlterConfigsRequestResource{topicReq(new("abc"))}, []int16{kerr.InvalidConfig.Code}},
+		{"null value", []kmsg.AlterConfigsRequestResource{topicReq(nil)}, []int16{kerr.InvalidRequest.Code}},
+		{"resource twice", []kmsg.AlterConfigsRequestResource{topicReq(new("1")), topicReq(new("1"))}, []int16{kerr.InvalidRequest.Code, kerr.InvalidRequest.Code}},
+		{"empty topic", []kmsg.AlterConfigsRequestResource{func() kmsg.AlterConfigsRequestResource {
+			rr := topicReq(new("1"))
+			rr.ResourceName = ""
+			return rr
+		}()}, []int16{kerr.InvalidRequest.Code}},
+		// The configs replace the group's.
+		{"group", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeGroupConfig, "g", "share.auto.offset.reset", "earliest")}, []int16{0}},
+		{"group replaced", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeGroupConfig, "g", "share.isolation.level", "read_committed")}, []int16{0}},
+		{"bad group config", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeGroupConfig, "g", "share.isolation.level", "x")}, []int16{kerr.InvalidConfig.Code}},
+	} {
+		req := kmsg.NewAlterConfigsRequest()
+		req.Resources = step.resources
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []int16
+		for _, r := range resp.Resources {
+			got = append(got, r.ErrorCode)
+		}
+		if !slices.Equal(got, step.want) {
+			t.Errorf("%s: got %v, want %v", step.name, got, step.want)
+		}
+	}
+	c.admin(func() {
+		if g := c.groupConfigs["g"]; len(g) != 1 || g["share.isolation.level"] == nil || *g["share.isolation.level"] != "read_committed" {
+			t.Errorf("group configs %v, want only share.isolation.level=read_committed", g)
+		}
+	})
+
+	// NewCluster refuses a broker config that AlterConfigs refuses.
+	if bad, err := NewCluster(NumBrokers(1), BrokerConfigs(map[string]string{"log.retention.ms": "abc"})); err == nil {
+		bad.Close()
+		t.Error("NewCluster accepted log.retention.ms=abc")
 	}
 
 	// Unsupported resource type.
@@ -976,7 +1125,10 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 func TestIncrementalAlterConfigsOperations(t *testing.T) {
 	t.Parallel()
 	topic := "inc-alter-configs-ops"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic), BrokerConfigs(map[string]string{
+		"group.consumer.heartbeat.interval.ms": "8000",
+		"group.share.delivery.count.limit":     "7",
+	}))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -1139,13 +1291,100 @@ func TestIncrementalAlterConfigsOperations(t *testing.T) {
 	if resp6.Resources[0].ErrorCode != 0 {
 		t.Fatal(kerr.ErrorForCode(resp6.Resources[0].ErrorCode))
 	}
+
+	// Group configs: an unset key describes at its effective value, and
+	// a group whose last config is deleted is no longer listed.
+	const group = "inc-alter-group"
+	alterGroup := func(name string, op kmsg.IncrementalAlterConfigOp, value *string) {
+		t.Helper()
+		req := kmsg.NewIncrementalAlterConfigsRequest()
+		rr := kmsg.NewIncrementalAlterConfigsRequestResource()
+		rr.ResourceType = kmsg.ConfigResourceTypeGroupConfig
+		rr.ResourceName = group
+		rc := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+		rc.Name = name
+		rc.Value = value
+		rc.Op = op
+		rr.Configs = append(rr.Configs, rc)
+		req.Resources = append(req.Resources, rr)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Resources[0].ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+		}
+	}
+	listsGroup := func() bool {
+		t.Helper()
+		listed, err := kadm.NewClient(cl).ListConfigResources(ctx, kadm.ConfigResourceGroupConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.Contains(listed.Names(), group)
+	}
+	alterGroup("share.isolation.level", kmsg.IncrementalAlterConfigOpSet, new("read_committed"))
+	alterGroup("consumer.heartbeat.interval.ms", kmsg.IncrementalAlterConfigOpSet, new("6000"))
+	dreq := kmsg.NewPtrDescribeConfigsRequest()
+	dreq.IncludeSynonyms = true
+	drr := kmsg.NewDescribeConfigsRequestResource()
+	drr.ResourceType = kmsg.ConfigResourceTypeGroupConfig
+	drr.ResourceName = group
+	drr.ConfigNames = []string{} // empty, like null, describes every key
+	dreq.Resources = append(dreq.Resources, drr)
+	dresp, err := dreq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]kmsg.DescribeConfigsResponseResourceConfig)
+	for _, rc := range dresp.Resources[0].Configs {
+		got[rc.Name] = rc
+	}
+	// As in Kafka, a key with a broker config lists the broker's value
+	// and default under the broker config's name.
+	for k, want := range map[string]struct {
+		value    string
+		source   kmsg.ConfigSource
+		synonyms string
+	}{
+		"share.isolation.level":          {"read_committed", kmsg.ConfigSourceGroupConfig, "share.isolation.level=read_committed/GROUP_CONFIG share.isolation.level=read_uncommitted/DEFAULT_CONFIG "},
+		"consumer.heartbeat.interval.ms": {"6000", kmsg.ConfigSourceGroupConfig, "consumer.heartbeat.interval.ms=6000/GROUP_CONFIG group.consumer.heartbeat.interval.ms=8000/DYNAMIC_BROKER_CONFIG group.consumer.heartbeat.interval.ms=5000/DEFAULT_CONFIG "},
+		"share.delivery.count.limit":     {"7", kmsg.ConfigSourceDynamicBrokerConfig, "group.share.delivery.count.limit=7/DYNAMIC_BROKER_CONFIG group.share.delivery.count.limit=5/DEFAULT_CONFIG "},
+		"consumer.session.timeout.ms":    {"45000", kmsg.ConfigSourceDefaultConfig, "group.consumer.session.timeout.ms=45000/DEFAULT_CONFIG "},
+		"share.auto.offset.reset":        {"latest", kmsg.ConfigSourceDefaultConfig, "share.auto.offset.reset=latest/DEFAULT_CONFIG "},
+	} {
+		rc := got[k]
+		v := "<nil>"
+		if rc.Value != nil {
+			v = *rc.Value
+		}
+		var syns string
+		for _, syn := range rc.ConfigSynonyms {
+			sv := "<nil>"
+			if syn.Value != nil {
+				sv = *syn.Value
+			}
+			syns += syn.Name + "=" + sv + "/" + syn.Source.String() + " "
+		}
+		if v != want.value || rc.Source != want.source || syns != want.synonyms {
+			t.Errorf("group %s: got %q (%v) %q, want %q (%v) %q", k, v, rc.Source, syns, want.value, want.source, want.synonyms)
+		}
+	}
+	if !listsGroup() {
+		t.Error("configured group is not listed")
+	}
+	alterGroup("consumer.heartbeat.interval.ms", kmsg.IncrementalAlterConfigOpDelete, nil)
+	alterGroup("share.isolation.level", kmsg.IncrementalAlterConfigOpDelete, nil)
+	if listsGroup() {
+		t.Error("group with no configs is still listed")
+	}
 }
 
 // TestCreateTopicsEdgeCases covers various CreateTopics error paths and features.
 func TestCreateTopicsEdgeCases(t *testing.T) {
 	t.Parallel()
 	c := newCoverCluster(t, NumBrokers(2), SeedTopics(1, "existing-topic"),
-		DefaultNumPartitions(7))
+		DefaultNumPartitions(7), BrokerConfigs(map[string]string{"log.segment.bytes": "1048576"}))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cl := newPlainClient(t, c)
@@ -1341,6 +1580,10 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 	if srcs["retention.ms"] != kmsg.ConfigSourceDynamicTopicConfig || srcs["cleanup.policy"] != kmsg.ConfigSourceDefaultConfig {
 		t.Errorf("response config sources: retention.ms %v, cleanup.policy %v", srcs["retention.ms"], srcs["cleanup.policy"])
 	}
+	// A broker config shows under the topic config's name.
+	if _, ok := srcs["log.segment.bytes"]; ok || srcs["segment.bytes"] != kmsg.ConfigSourceDynamicBrokerConfig {
+		t.Errorf("response lists log.segment.bytes %v, segment.bytes from %v", ok, srcs["segment.bytes"])
+	}
 	// Verify the config was applied.
 	tcfgs, err := adm.DescribeTopicConfigs(ctx, "with-config")
 	if err != nil {
@@ -1356,6 +1599,37 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 	}
 	if !found {
 		t.Error("retention.ms config not found on created topic")
+	}
+
+	// A known config must parse as its type and must not be null; a name
+	// we do not know is accepted.
+	for _, step := range []struct {
+		topic string
+		name  string
+		value *string
+		want  int16
+	}{
+		{"bad-config", "retention.ms", new("abc"), kerr.InvalidConfig.Code},
+		{"null-config", "retention.ms", nil, kerr.InvalidConfig.Code},
+		{"custom-config", "custom.thing", new("abc"), 0},
+	} {
+		req := kmsg.NewCreateTopicsRequest()
+		rt := kmsg.NewCreateTopicsRequestTopic()
+		rt.Topic = step.topic
+		rt.NumPartitions = 1
+		rt.ReplicationFactor = 1
+		cfg := kmsg.NewCreateTopicsRequestTopicConfig()
+		cfg.Name = step.name
+		cfg.Value = step.value
+		rt.Configs = append(rt.Configs, cfg)
+		req.Topics = append(req.Topics, rt)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resp.Topics[0].ErrorCode; got != step.want {
+			t.Errorf("%s: got %v, want %v", step.topic, kerr.ErrorForCode(got), kerr.ErrorForCode(step.want))
+		}
 	}
 }
 
@@ -2312,24 +2586,17 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 	}
 	list := func(t *testing.T) []string {
 		t.Helper()
-		req := kmsg.NewPtrListConfigResourcesRequest()
-		req.ResourceTypes = []int8{int8(kmsg.ConfigResourceTypeClientMetrics)}
-		resp, err := req.RequestWith(ctx, cl)
+		listed, err := kadm.NewClient(cl).ListConfigResources(ctx, kadm.ConfigResourceClientMetrics)
+		if err == nil {
+			err = listed.Err
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.ErrorCode != 0 {
-			t.Fatal(kerr.ErrorForCode(resp.ErrorCode))
+		if other := len(listed.Resources) - len(listed.FilterTypes(kadm.ConfigResourceClientMetrics)); other > 0 {
+			t.Errorf("listed %d resources of another type: %v", other, listed.Resources)
 		}
-		var names []string
-		for _, r := range resp.ConfigResources {
-			if r.Type != int8(kmsg.ConfigResourceTypeClientMetrics) {
-				t.Errorf("listed %s with type %d", r.Name, r.Type)
-			}
-			names = append(names, r.Name)
-		}
-		slices.Sort(names)
-		return names
+		return listed.Names()
 	}
 
 	// telemetry gets this client's subscription. A push with the ID the
@@ -2495,7 +2762,7 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 			name:     "nil value",
 			alter:    "bad",
 			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{setNil("metrics")},
-			alterErr: kerr.InvalidConfig,
+			alterErr: kerr.InvalidRequest,
 		},
 		{
 			name:     "empty name",

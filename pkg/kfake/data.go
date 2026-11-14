@@ -706,9 +706,20 @@ func (c *Cluster) brokerConfigs(node int32, fn func(k string, v *string, src kms
 
 	for k, v := range configDefaults {
 		if _, ok := validBrokerConfigs[k]; ok {
-			v := v
+			// The session timeout options change these defaults.
+			switch k {
+			case "group.min.session.timeout.ms":
+				v = strconv.Itoa(int(c.cfg.minSessionTimeout.Milliseconds()))
+			case "group.max.session.timeout.ms":
+				v = strconv.Itoa(int(c.cfg.maxSessionTimeout.Milliseconds()))
+			}
 			fn(k, &v, kmsg.ConfigSourceDefaultConfig, false)
 		}
+	}
+	// Kafka has no default for these two, and falls back to
+	// log.retention.hours and log.roll.hours.
+	for _, k := range []string{"log.retention.ms", "log.roll.ms"} {
+		fn(k, nil, kmsg.ConfigSourceDefaultConfig, false)
 	}
 
 	for k, v := range c.bcfgs {
@@ -732,7 +743,7 @@ func (d *data) configs(t string, fn func(k string, v *string, src kmsg.ConfigSou
 	}
 	for k, v := range d.c.bcfgs {
 		if topicEquiv, ok := validBrokerConfigs[k]; ok && topicEquiv != "" {
-			fn(k, v, kmsg.ConfigSourceDynamicBrokerConfig, false)
+			fn(topicEquiv, v, kmsg.ConfigSourceDynamicBrokerConfig, false)
 		}
 	}
 	for k, v := range d.tcfgs[t] {
@@ -740,31 +751,76 @@ func (d *data) configs(t string, fn func(k string, v *string, src kmsg.ConfigSou
 	}
 }
 
-// configListAppend appends val to a comma-separated list config value.
-func configListAppend(current, val *string) *string {
-	if val == nil {
-		return current
-	}
-	if current == nil || *current == "" {
-		return val
-	}
-	s := *current + "," + *val
-	return &s
+// alterResource is one resource of an AlterConfigs or IncrementalAlterConfigs
+// request, for alterConfigsPrecheck: its config names, and the names whose
+// op sets a null value.
+type alterResource struct {
+	typ   kmsg.ConfigResourceType
+	name  string
+	keys  []string
+	nulls []string
 }
 
-// configListSubtract removes val from a comma-separated list config value.
-func configListSubtract(current, val *string) *string {
-	if val == nil || current == nil {
-		return current
+// alterConfigsPrecheck returns, per resource, the INVALID_REQUEST message
+// Kafka answers before it authorizes the resource, or "": every copy of a
+// resource listed twice, a config named twice, and a null value.
+func alterConfigsPrecheck(rs []alterResource) []string {
+	msgs := make([]string, len(rs))
+	type id struct {
+		typ  kmsg.ConfigResourceType
+		name string
 	}
-	parts := strings.Split(*current, ",")
-	out := parts[:0]
-	for _, p := range parts {
-		if p != *val {
-			out = append(out, p)
+	first := make(map[id]int, len(rs))
+	for i, r := range rs {
+		if j, ok := first[id{r.typ, r.name}]; ok {
+			msgs[i] = "Each resource must appear at most once."
+			msgs[j] = msgs[i]
+			continue
+		}
+		first[id{r.typ, r.name}] = i
+	}
+	for i, r := range rs {
+		if msgs[i] != "" {
+			continue
+		}
+		if len(r.keys) != len(slices.Compact(slices.Sorted(slices.Values(r.keys)))) {
+			msgs[i] = "Error due to duplicate config keys"
+		} else if len(r.nulls) > 0 {
+			msgs[i] = "Null value not supported for : " + strings.Join(r.nulls, ", ")
 		}
 	}
-	s := strings.Join(out, ",")
+	return msgs
+}
+
+// configListOp applies an APPEND or SUBTRACT of val, a comma separated list,
+// to the list config current, which is def when unset. As in Kafka, APPEND
+// adds each value not already present, and SUBTRACT removes one occurrence of
+// each value. The caller rejects a nil val.
+func configListOp(op kmsg.IncrementalAlterConfigOp, current *string, def string, val *string) *string {
+	cur := def
+	if current != nil {
+		cur = *current
+	}
+	var parts []string
+	for _, p := range strings.Split(cur, ",") {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	var vals []string // like Java's split, which drops trailing empty values
+	if t := strings.TrimRight(*val, ","); t != "" || *val == "" {
+		vals = strings.Split(t, ",")
+	}
+	for _, v := range vals {
+		i := slices.Index(parts, v)
+		switch {
+		case op == kmsg.IncrementalAlterConfigOpAppend && i < 0:
+			parts = append(parts, v)
+		case op == kmsg.IncrementalAlterConfigOpSubtract && i >= 0:
+			parts = slices.Delete(parts, i, i+1)
+		}
+	}
+	s := strings.Join(parts, ",")
 	return &s
 }
 
@@ -774,26 +830,59 @@ func isListConfig(name string) bool {
 	return ok && ct == kmsg.ConfigTypeList
 }
 
-// validateBrokerConfig returns whether v is a valid value for broker config k.
+// validateBrokerConfig returns whether v is a valid value for broker config k:
+// a value of the key's type, and for the two intervals we start tickers with,
+// one Kafka accepts. A key we do not know accepts any value.
 func validateBrokerConfig(k string, v *string) bool {
 	if v == nil {
 		return true
 	}
-	if ct, ok := configTypes[k]; ok {
-		switch ct {
-		case kmsg.ConfigTypeInt, kmsg.ConfigTypeLong:
-			if _, err := strconv.ParseInt(*v, 10, 64); err != nil {
-				return false
-			}
-		default: // Boolean, String, List, etc. accept any string value
-		}
+	if !validConfigType(k, *v) {
+		return false
+	}
+	switch k {
+	case "log.cleaner.backoff.ms": // Kafka: at least 0
+		n, _ := strconv.ParseInt(*v, 10, 64)
+		return n >= 0
+	case "offsets.retention.check.interval.ms": // Kafka: at least 1
+		n, _ := strconv.ParseInt(*v, 10, 64)
+		return n >= 1
 	}
 	return true
 }
 
+// validConfigType returns whether v parses as the type of config k. A key
+// with no type, or a type we do not parse, accepts any value.
+func validConfigType(k, v string) bool {
+	var err error
+	switch configTypes[k] {
+	case kmsg.ConfigTypeInt:
+		_, err = strconv.ParseInt(v, 10, 32)
+	case kmsg.ConfigTypeLong:
+		_, err = strconv.ParseInt(v, 10, 64)
+	default: // Boolean, String, List, etc. accept any string value
+	}
+	return err == nil
+}
+
+// validTopicConfig returns whether v is a valid value for topic config k:
+// non-nil, and of the key's type if we know the key. We accept any name,
+// so that you can stub configs we do not model.
+func validTopicConfig(k string, v *string) bool {
+	if v == nil {
+		return false
+	}
+	if _, ok := validTopicConfigs[k]; !ok {
+		return true
+	}
+	return validConfigType(k, *v)
+}
+
+// setTopicConfig sets a topic config, or with dry, only returns whether the
+// value is valid.
 func (d *data) setTopicConfig(t, k string, v *string, dry bool) bool {
 	if dry {
-		return true
+		return validTopicConfig(k, v)
 	}
 	if _, ok := d.tcfgs[t]; !ok {
 		d.tcfgs[t] = make(map[string]*string)
@@ -809,7 +898,7 @@ var validTopicConfigs = map[string]string{
 	"compression.type":       "compression.type",
 	"delete.retention.ms":    "",
 	"kfake.is_internal":      "",
-	"max.message.bytes":      "log.message.max.bytes",
+	"max.message.bytes":      "message.max.bytes",
 	"message.timestamp.type": "log.message.timestamp.type",
 	"min.insync.replicas":    "min.insync.replicas",
 	"retention.bytes":        "log.retention.bytes",
@@ -878,6 +967,14 @@ var validGroupConfigs = map[string]bool{
 	"share.renew.acknowledge.enable":   true,
 }
 
+// groupConfigDefaults are the defaults of the group configs that have no
+// broker config to fall back to.
+var groupConfigDefaults = map[string]string{
+	"share.auto.offset.reset":        "latest",
+	"share.isolation.level":          "read_uncommitted",
+	"share.renew.acknowledge.enable": "true",
+}
+
 // validClientMetricsConfigs is the set of keys a KIP-714 client metrics
 // subscription accepts, a CLIENT_METRICS config resource, with the default
 // we describe when a key is unset. The metrics and match values are comma
@@ -922,20 +1019,14 @@ func validateClientMetricsConfig(k string, v *string) *kerr.Error {
 			return kerr.InvalidRequest
 		}
 	case "match":
-		if strings.TrimSpace(*v) == "" {
-			return nil
-		}
-		for _, m := range strings.Split(*v, ",") {
-			// Kafka splits on every = and drops trailing empty
-			// pieces, so a=b=c and a= are both illegal.
-			parts := strings.Split(m, "=")
-			for len(parts) > 0 && parts[len(parts)-1] == "" {
-				parts = parts[:len(parts)-1]
-			}
-			if len(parts) != 2 || !validClientMetricsMatchKeys[strings.TrimSpace(parts[0])] {
+		for _, m := range splitConfigList(v) {
+			// Kafka splits at the first =, so the regex can hold
+			// one (KAFKA-21041).
+			k, re, ok := strings.Cut(m, "=")
+			if !ok || !validClientMetricsMatchKeys[strings.TrimSpace(k)] {
 				return kerr.InvalidConfig
 			}
-			if _, err := regexp.Compile(strings.TrimSpace(parts[1])); err != nil {
+			if _, err := regexp.Compile(strings.TrimSpace(re)); err != nil {
 				return kerr.InvalidConfig
 			}
 		}
@@ -989,10 +1080,8 @@ var configDefaults = map[string]string{
 	"group.max.session.timeout.ms":              "300000",
 	"log.dir":                                   defLogDir,
 	"log.segment.bytes":                         strconv.Itoa(100 << 20),
-	"log.roll.ms":                               "604800000",
 	"log.message.timestamp.type":                "CreateTime",
 	"log.retention.bytes":                       "-1",
-	"log.retention.ms":                          "604800000",
 	"message.max.bytes":                         strconv.Itoa(defMaxMessageBytes),
 	"offsets.retention.minutes":                 "10080",
 	"offsets.retention.check.interval.ms":       "600000",
@@ -1019,6 +1108,16 @@ var configTypes = map[string]kmsg.ConfigType{
 	"max.incremental.fetch.session.cache.slots": kmsg.ConfigTypeInt,
 	"group.consumer.heartbeat.interval.ms":      kmsg.ConfigTypeInt,
 	"interval.ms":                               kmsg.ConfigTypeInt,
+	"consumer.session.timeout.ms":               kmsg.ConfigTypeInt,
+	"consumer.heartbeat.interval.ms":            kmsg.ConfigTypeInt,
+	"share.auto.offset.reset":                   kmsg.ConfigTypeString,
+	"share.isolation.level":                     kmsg.ConfigTypeString,
+	"share.record.lock.duration.ms":             kmsg.ConfigTypeInt,
+	"share.delivery.count.limit":                kmsg.ConfigTypeInt,
+	"share.session.timeout.ms":                  kmsg.ConfigTypeInt,
+	"share.heartbeat.interval.ms":               kmsg.ConfigTypeInt,
+	"share.partition.max.record.locks":          kmsg.ConfigTypeInt,
+	"share.renew.acknowledge.enable":            kmsg.ConfigTypeBoolean,
 	"match":                                     kmsg.ConfigTypeList,
 	"metrics":                                   kmsg.ConfigTypeList,
 	"group.consumer.session.timeout.ms":         kmsg.ConfigTypeInt,

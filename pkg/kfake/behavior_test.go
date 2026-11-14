@@ -3437,8 +3437,71 @@ func TestIncrementalAlterConfigAppendSubtract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Resources[0].ErrorCode != kerr.InvalidRequest.Code {
-		t.Fatalf("expected InvalidRequest for APPEND on non-list config, got %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	if resp.Resources[0].ErrorCode != kerr.InvalidConfig.Code {
+		t.Fatalf("expected InvalidConfig for APPEND on non-list config, got %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+
+	// APPEND adds only values not present, and on an unset config it
+	// starts from the default. Like Java's split, we drop trailing empty
+	// values.
+	for _, step := range []struct {
+		cfg  kmsg.IncrementalAlterConfigsRequestResourceConfig
+		want string
+	}{
+		{mkCfg("cleanup.policy", sp("delete,compact"), kmsg.IncrementalAlterConfigOpAppend), "delete,compact"},
+		{mkCfg("cleanup.policy", nil, kmsg.IncrementalAlterConfigOpDelete), "delete"},
+		{mkCfg("cleanup.policy", sp("compact"), kmsg.IncrementalAlterConfigOpAppend), "delete,compact"},
+		{mkCfg("cleanup.policy", sp("compact,"), kmsg.IncrementalAlterConfigOpAppend), "delete,compact"},
+		{mkCfg("cleanup.policy", sp(",,"), kmsg.IncrementalAlterConfigOpAppend), "delete,compact"},
+	} {
+		resp, err = mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", step.cfg).RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Resources[0].ErrorCode != 0 {
+			t.Fatalf("op %d on cleanup.policy: %v", step.cfg.Op, kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+		}
+		if val := getConfig(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", "cleanup.policy"); val == nil || *val != step.want {
+			t.Fatalf("after op %d: cleanup.policy is not %q", step.cfg.Op, step.want)
+		}
+	}
+
+	// A known topic config must parse as its type, a name we do not know
+	// is accepted, and a null value, a key named twice, or a resource
+	// listed twice is refused before anything applies.
+	for _, step := range []struct {
+		name string
+		req  *kmsg.IncrementalAlterConfigsRequest
+		want []int16
+	}{
+		{"bad value", mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", mkCfg("retention.ms", sp("abc"), kmsg.IncrementalAlterConfigOpSet)), []int16{kerr.InvalidConfig.Code}},
+		{"unknown name", mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", mkCfg("custom.thing", sp("abc"), kmsg.IncrementalAlterConfigOpSet)), []int16{0}},
+		{"null value", mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", mkCfg("retention.ms", nil, kmsg.IncrementalAlterConfigOpSet)), []int16{kerr.InvalidRequest.Code}},
+		{"key twice", mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg",
+			mkCfg("retention.ms", sp("1"), kmsg.IncrementalAlterConfigOpSet),
+			mkCfg("retention.ms", nil, kmsg.IncrementalAlterConfigOpDelete),
+		), []int16{kerr.InvalidRequest.Code}},
+		{"resource twice", func() *kmsg.IncrementalAlterConfigsRequest {
+			req := mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", mkCfg("retention.ms", sp("1"), kmsg.IncrementalAlterConfigOpSet))
+			req.Resources = append(req.Resources, req.Resources[0])
+			return req
+		}(), []int16{kerr.InvalidRequest.Code, kerr.InvalidRequest.Code}},
+		{"empty topic", mkReq(kmsg.ConfigResourceTypeTopic, "", mkCfg("retention.ms", sp("1"), kmsg.IncrementalAlterConfigOpSet)), []int16{kerr.InvalidRequest.Code}},
+	} {
+		resp, err := step.req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []int16
+		for _, r := range resp.Resources {
+			got = append(got, r.ErrorCode)
+		}
+		if !slices.Equal(got, step.want) {
+			t.Errorf("%s: got %v, want %v", step.name, got, step.want)
+		}
+	}
+	if val := getConfig(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", "retention.ms"); val == nil || *val != "604800000" {
+		t.Error("refused alters changed retention.ms")
 	}
 
 	// APPEND on broker list config.
@@ -5154,6 +5217,7 @@ func TestRetention(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		brokerCfg    map[string]string
+		alter        map[string]string // broker configs altered after the topic exists
 		topicCfg     map[string]string
 		first        []string
 		sleep        time.Duration
@@ -5187,7 +5251,6 @@ func TestRetention(t *testing.T) {
 			brokerCfg: map[string]string{"log.cleaner.backoff.ms": "50"},
 			topicCfg:  map[string]string{"retention.ms": "1"},
 			first:     []string{"old", "keep"},
-			sleep:     200 * time.Millisecond,
 			wantStart: 1,
 		},
 		{
@@ -5201,12 +5264,28 @@ func TestRetention(t *testing.T) {
 			keepAll:  true,
 		},
 		{
+			// Kafka accepts 0, which runs the cleaner without waiting.
+			name:      "ticker-backoff-zero",
+			brokerCfg: map[string]string{"log.cleaner.backoff.ms": "0"},
+			topicCfg:  map[string]string{"retention.ms": "1"},
+			first:     []string{"old", "keep"},
+			wantStart: 1,
+		},
+		{
+			// log.cleaner.backoff.ms is dynamic: the running ticker
+			// takes the new interval.
+			name:      "ticker-altered",
+			alter:     map[string]string{"log.cleaner.backoff.ms": "50"},
+			topicCfg:  map[string]string{"retention.ms": "1"},
+			first:     []string{"old", "keep"},
+			wantStart: 1,
+		},
+		{
 			// No topic config: the ticker still runs, for the broker's
 			// log.retention.ms, as Kafka's does for its 7 day default.
 			name:      "ticker-broker-default",
 			brokerCfg: map[string]string{"log.cleaner.backoff.ms": "50", "log.retention.ms": "1"},
 			first:     []string{"old", "keep"},
-			sleep:     200 * time.Millisecond,
 			wantStart: 1,
 		},
 	} {
@@ -5222,6 +5301,15 @@ func TestRetention(t *testing.T) {
 			if err := c.CreateTopic(topic, 1, tc.topicCfg); err != nil {
 				t.Fatal(err)
 			}
+			for k, v := range tc.alter {
+				rs, err := kadm.NewClient(cl).AlterBrokerConfigs(context.Background(), []kadm.AlterConfig{{Name: k, Value: &v}})
+				if err == nil {
+					err = rs[0].Err
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 
 			for _, v := range tc.first {
 				produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte(v)})
@@ -5235,6 +5323,10 @@ func TestRetention(t *testing.T) {
 			}
 
 			pi := c.PartitionInfo(topic, 0)
+			for start := time.Now(); !tc.apply && pi.LogStartOffset < tc.wantStart && time.Since(start) < 5*time.Second; {
+				time.Sleep(10 * time.Millisecond)
+				pi = c.PartitionInfo(topic, 0)
+			}
 			if pi.LogStartOffset < tc.wantStart {
 				t.Fatalf("expected logStartOffset >= %d after retention, got %d", tc.wantStart, pi.LogStartOffset)
 			}

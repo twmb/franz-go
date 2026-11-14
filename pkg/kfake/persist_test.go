@@ -368,6 +368,23 @@ func TestPersistBrokerConfigsRestart(t *testing.T) {
 				"log.retention.ms": "86400000",
 			}),
 		)
+		// A client metrics subscription is the only session state.
+		req := kmsg.NewPtrIncrementalAlterConfigsRequest()
+		rr := kmsg.NewIncrementalAlterConfigsRequestResource()
+		rr.ResourceType = kmsg.ConfigResourceTypeClientMetrics
+		rr.ResourceName = "sub"
+		rc := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+		rc.Name = "metrics"
+		rc.Value = new("*")
+		rr.Configs = append(rr.Configs, rc)
+		req.Resources = append(req.Resources, rr)
+		resp, err := req.RequestWith(context.Background(), newPlainClient(t, c))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Resources[0].ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+		}
 		c.Close()
 	}
 
@@ -390,14 +407,22 @@ func TestPersistBrokerConfigsRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		var found bool
 		for _, r := range resp.Resources {
 			for _, c := range r.Configs {
 				if c.Name == "log.retention.ms" && c.Value != nil && *c.Value == "86400000" {
-					return // success
+					found = true
 				}
 			}
 		}
-		t.Fatal("expected log.retention.ms=86400000 to be persisted")
+		if !found {
+			t.Fatal("expected log.retention.ms=86400000 to be persisted")
+		}
+
+		listed, err := kadm.NewClient(cl).ListConfigResources(context.Background(), kadm.ConfigResourceClientMetrics)
+		if names := listed.Names(); err != nil || len(names) != 1 || names[0] != "sub" {
+			t.Fatalf("client metrics after restart: got %v (%v), want [sub]", names, err)
+		}
 	}
 }
 

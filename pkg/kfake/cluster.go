@@ -74,6 +74,7 @@ type (
 		clientMetrics      map[string]map[string]*string // subscription -> config key -> config value, see data.go
 		shareGroups        shareGroups
 		compactTicker      *time.Ticker
+		compactInterval    time.Duration // compactTicker's period, 0 when it is stopped
 		offsetExpireTicker *time.Ticker
 
 		// storageDir is the root directory for segment and index files.
@@ -207,6 +208,9 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			c.bcfgs[k] = nil
 		} else {
 			v := v
+			if !validateBrokerConfig(k, &v) {
+				return nil, fmt.Errorf("invalid broker config %s=%q", k, v)
+			}
 			c.bcfgs[k] = &v
 		}
 	}
@@ -468,7 +472,9 @@ func (c *Cluster) run() {
 			tc.t.Stop()
 		}
 	}()
-	c.offsetExpireTicker = time.NewTicker(time.Duration(c.offsetsRetentionCheckIntervalMs()) * time.Millisecond)
+	// A non-positive interval would panic NewTicker. AlterConfigs rejects
+	// one, but BrokerConfigs or an older data directory can still hold it.
+	c.offsetExpireTicker = time.NewTicker(time.Duration(max(c.offsetsRetentionCheckIntervalMs(), 1)) * time.Millisecond)
 	// Loading from disk can create share groups, and it also loads the
 	// broker configs the interval comes from.
 	c.shareGroups.refreshSweepTicker()
@@ -1617,33 +1623,42 @@ func (c *Cluster) compactTickerC() <-chan time.Time {
 	return nil
 }
 
+// compactIntervalMs returns log.cleaner.backoff.ms. Kafka accepts 0, which
+// means the cleaner does not wait between runs; a ticker needs a positive
+// period, so we run every millisecond.
 func (c *Cluster) compactIntervalMs() int64 {
 	if v, ok := c.bcfgs["log.cleaner.backoff.ms"]; ok && v != nil {
 		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
-			return n
+			return max(n, 1)
 		}
 	}
 	return 3600000
 }
 
-// refreshCompactTicker starts or stops the compaction ticker based on whether
-// any topic has cleanup.policy=compact or a retention limit. Like Kafka, a
-// topic without its own retention config uses log.retention.ms, which
-// defaults to 7 days.
+// refreshCompactTicker starts, stops, or reschedules the compaction ticker
+// based on whether any topic has cleanup.policy=compact or a retention
+// limit, and on log.cleaner.backoff.ms, which is dynamic in Kafka. Like
+// Kafka, a topic without its own retention config uses log.retention.ms,
+// which defaults to 7 days.
 // Must be called from Cluster.run().
 func (c *Cluster) refreshCompactTicker() {
-	needsTicker := false
+	var want time.Duration
 	for t := range c.data.tps {
 		if c.data.isCompactTopic(t) || c.data.retentionMs(t) >= 0 || c.data.retentionBytes(t) >= 0 {
-			needsTicker = true
+			want = time.Duration(c.compactIntervalMs()) * time.Millisecond
 			break
 		}
 	}
-	if needsTicker && c.compactTicker == nil {
-		c.compactTicker = time.NewTicker(time.Duration(c.compactIntervalMs()) * time.Millisecond)
-	} else if !needsTicker && c.compactTicker != nil {
+	if want == c.compactInterval {
+		return
+	}
+	if c.compactTicker != nil {
 		c.compactTicker.Stop()
 		c.compactTicker = nil
+	}
+	c.compactInterval = want
+	if want > 0 {
+		c.compactTicker = time.NewTicker(want)
 	}
 }
 

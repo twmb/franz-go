@@ -252,7 +252,8 @@ type ACL struct {
 }
 
 // BrokerConfigs sets initial broker-level dynamic configs. Empty values are
-// treated as deletes (reset to default). Configs most relevant for testing:
+// treated as deletes (reset to default). NewCluster fails for a value that
+// AlterConfigs would refuse. Configs most relevant for testing:
 //
 //   - group.consumer.heartbeat.interval.ms - heartbeat interval for KIP-848
 //     consumer groups (default 5000, lowered to 100 in test binaries)
