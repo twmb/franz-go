@@ -4543,11 +4543,11 @@ func (f *readCountingFile) Read(p []byte) (int, error) {
 }
 
 // TestListOffsetsTimestampSkipsDeletedBatches verifies a ListOffsets
-// timestamp lookup does not read batches that lie entirely below the log
-// start offset. A snapshot load keeps index entries for such batches, so
-// after DeleteRecords and a restart the scan would otherwise read and
-// decompress every deleted batch in the segment before reaching the first
-// live one.
+// timestamp lookup after DeleteRecords and a restart does not read the
+// deleted batches, which stay in the segment file until the whole segment
+// goes. The snapshot load drops them from the index, as DeleteRecords did
+// before the restart, and drops their bytes from the partition's size, so a
+// later DeleteRecords does not subtract them again.
 func TestListOffsetsTimestampSkipsDeletedBatches(t *testing.T) {
 	t.Parallel()
 	const topic, n = "list-offsets-skip-deleted", 200
@@ -4570,7 +4570,6 @@ func TestListOffsetsTimestampSkipsDeletedBatches(t *testing.T) {
 	}
 
 	// Delete all but the last record, then restart from the snapshot.
-	// The reloaded index lists every batch again.
 	if err := c.DeleteRecords(topic, 0, n-1); err != nil {
 		t.Fatal(err)
 	}
@@ -4578,13 +4577,12 @@ func TestListOffsetsTimestampSkipsDeletedBatches(t *testing.T) {
 	c.Close()
 	c = newCluster(t, opts...)
 	pd, _ := c.data.tps.getp(topic, 0)
-	if pd == nil || pd.totalBatches() != n || pd.logStartOffset != n-1 {
-		t.Fatalf("after reload: want %d index entries and log start offset %d, got %+v", n, n-1, pd)
+	if pd == nil || pd.totalBatches() != 1 || pd.logStartOffset != n-1 || pd.nbytes != int64(pd.segments[0].index[0].nbytes) {
+		t.Fatalf("after reload: want 1 index entry, its bytes, and log start offset %d, got %+v", n-1, pd)
 	}
 
 	// Every batch's max timestamp is at or after 0, so the scan starts
-	// at the first index entry and must skip the deleted ones without
-	// reading them.
+	// at the first index entry, which must be the live one.
 	req := kmsg.NewPtrListOffsetsRequest()
 	rt := kmsg.NewListOffsetsRequestTopic()
 	rt.Topic = topic
@@ -4606,6 +4604,15 @@ func TestListOffsetsTimestampSkipsDeletedBatches(t *testing.T) {
 	}
 	if reads := cfs.reads.Load(); reads != 1 {
 		t.Errorf("the lookup read %d times, want 1 (the one live batch)", reads)
+	}
+
+	if err := c.DeleteRecords(topic, 0, n); err != nil {
+		t.Fatal(err)
+	}
+	var nbytes int64
+	c.admin(func() { nbytes = pd.nbytes })
+	if nbytes != 0 {
+		t.Errorf("after deleting every record: got %d bytes, want 0", nbytes)
 	}
 }
 
@@ -4649,8 +4656,9 @@ func listOffsetsAt(t *testing.T, cl *kgo.Client, node int, topic string, partiti
 // up), -4 answers like -2, -5 and -6 answer -1 with no tiered storage, an
 // answer with no offset carries leader epoch -1, the debugging replica id
 // is answered by a follower, a non-consumer replica id ignores the
-// isolation level, and a timestamp or -3 answer inside an open
-// transaction is no answer under read_committed.
+// isolation level, a timestamp or -3 answer inside an open transaction is
+// no answer under read_committed, and the LSO is never below the log start
+// offset.
 func TestListOffsetsBrokerChecks(t *testing.T) {
 	t.Parallel()
 	const topic = "list-offsets-checks"
@@ -4798,6 +4806,20 @@ func TestListOffsetsBrokerChecks(t *testing.T) {
 		t.Errorf("-3 read_committed committed: got error %v offset %d timestamp %d, want offset 3 at the marker's timestamp",
 			kerr.ErrorForCode(p.ErrorCode), p.Offset, p.Timestamp)
 	}
+
+	// A new transaction holds the LSO at its record at offset 4, until
+	// DeleteRecords moves the log start offset past it, to 5.
+	if err := txn.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := txn.ProduceSync(ctx, &kgo.Record{Value: []byte("v"), Timestamp: time.UnixMilli(4_000)}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	check("latest read_committed open again", listOffsetsAt(t, cl, int(leader), topic, 0, -1, -1, 1), want{offset: 4, timestamp: -1, epoch: pd.epoch})
+	if err := c.DeleteRecords(topic, 0, -1); err != nil {
+		t.Fatal(err)
+	}
+	check("latest read_committed after delete", listOffsetsAt(t, cl, int(leader), topic, 0, -1, -1, 1), want{offset: 5, timestamp: -1, epoch: pd.epoch})
 }
 
 // TestListOffsetsNoTimestampSegments verifies the places where records

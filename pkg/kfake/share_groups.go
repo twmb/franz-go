@@ -1036,7 +1036,8 @@ func (g *shareGroup) releaseRecordsForSession(memberID string, session *shareSes
 // getSharePartition returns the share partition state for a fetch. A
 // partition without a start offset gets one from share.auto.offset.reset.
 // Like Kafka, a start offset below the log start offset (one set by
-// AlterShareGroupOffsets, say) moves up to it.
+// AlterShareGroupOffsets, or left behind by DeleteRecords or retention)
+// moves up to it here, at the fetch, and not before.
 func (g *shareGroup) getSharePartition(topic string, partition int32, pd *partData) *sharePartition {
 	sp := g.partitions.mkp(topic, partition, func() *sharePartition {
 		return &sharePartition{spso: -1, records: make(map[int64]shareRecord)}
@@ -1048,8 +1049,16 @@ func (g *shareGroup) getSharePartition(topic string, partition int32, pd *partDa
 		}
 		sp.spso, sp.scanOffset, sp.acquireEnd = spso, spso, spso
 	}
-	if sp.spso < pd.logStartOffset {
-		sp.moveStart(pd.logStartOffset)
+	if start := pd.logStartOffset; sp.spso < start {
+		for o := range sp.records {
+			if o < start {
+				delete(sp.records, o)
+			}
+		}
+		sp.spso = start
+		sp.scanOffset = max(sp.scanOffset, start)
+		sp.acquireEnd = max(sp.acquireEnd, start)
+		sp.advanceSPSO()
 	}
 	return sp
 }
@@ -1588,35 +1597,6 @@ func (sp *sharePartition) validateAndProcessAcks(memberID string, batches []ackB
 	}
 	sp.advanceSPSO()
 	return 0
-}
-
-// logStartMoved raises every share group's start offset for the partition to
-// its new log start offset, as Kafka's updateCacheAndOffsets does. Kafka
-// archives available records below it, archives an acquired one when it is
-// released or its lock expires, and skips acks below it; dropping them and
-// skipping acks below spso is the same to a client. A partition without a
-// start offset keeps none.
-func (sgs *shareGroups) logStartMoved(pd *partData) {
-	for _, g := range sgs.gs {
-		sp, ok := g.partitions.getp(pd.t, pd.p)
-		if !ok || sp.spso == -1 || pd.logStartOffset <= sp.spso {
-			continue
-		}
-		sp.moveStart(pd.logStartOffset)
-	}
-}
-
-// moveStart raises the start offset to lso, dropping record state below it.
-func (sp *sharePartition) moveStart(lso int64) {
-	for o := range sp.records {
-		if o < lso {
-			delete(sp.records, o)
-		}
-	}
-	sp.spso = lso
-	sp.scanOffset = max(sp.scanOffset, lso)
-	sp.acquireEnd = max(sp.acquireEnd, lso)
-	sp.advanceSPSO()
 }
 
 // advanceSPSO advances the SPSO past contiguous acknowledged/archived

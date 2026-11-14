@@ -1444,55 +1444,63 @@ func TestCompactBailsOnPartialReadError(t *testing.T) {
 	}
 }
 
-// TestSnapshotNbytesWithPartialTrim verifies that after a partial trim
-// (logStartOffset in the middle of a segment), snapshot reload correctly
-// computes nbytes without double-counting trimmed entries.
-func TestSnapshotNbytesWithPartialTrim(t *testing.T) {
+// TestPersistLogStartRestart verifies DeleteRecords and retention survive a
+// restart: the log start offset, the high watermark, and the partition's
+// size come back as they were, from the snapshot after a clean shutdown, or
+// from the segments and the log start offset we wrote after a crash. A
+// partial delete leaves the first segment holding deleted batches, which
+// must not count toward the size; a full delete leaves no segment files.
+func TestPersistLogStartRestart(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	for _, tc := range []struct {
+		name      string
+		deleteTo  int64
+		crash     bool // remove the snapshot before reopening
+		retention bool // every batch expires instead of deleteTo
+	}{
+		{"partial", 3, false, false},
+		{"partial-crash", 3, true, false},
+		{"all", -1, false, false},
+		{"all-crash", -1, true, false},
+		{"retention-crash", 0, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			const topic = "log-start-restart"
 
-	const topic = "nbytes-partial"
-	var savedNbytes int64
-	var savedHWM int64
+			var savedNbytes, savedHWM, savedStart int64
+			{
+				c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, topic))
+				pd, _ := c.data.tps.getp(topic, 0)
+				for range 10 {
+					b := makeTestBatch(pd.highWatermark, 1)
+					c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+				}
+				if tc.retention {
+					c.ApplyRetention()
+				} else if err := c.DeleteRecords(topic, 0, tc.deleteTo); err != nil {
+					t.Fatal(err)
+				}
+				c.admin(func() { savedNbytes, savedHWM, savedStart = pd.nbytes, pd.highWatermark, pd.logStartOffset })
+				c.Close()
+			}
+			if tc.crash {
+				if err := os.Remove(filepath.Join(dir, "partitions", topic+"-0", "snapshot.json")); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	// Phase 1: produce records, partially trim, clean shutdown.
-	{
-		c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, topic))
-
-		pd, _ := c.data.tps.getp(topic, 0)
-		for range 10 {
-			b := makeTestBatch(pd.highWatermark, 1)
-			c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
-		}
-
-		// Advance logStartOffset to trim the first 3 records.
-		// This may leave the first segment with some trimmed entries
-		// (depending on whether they share a segment file).
-		pd.logStartOffset = 3
-		c.trimLeft(pd)
-
-		savedNbytes = pd.nbytes
-		savedHWM = pd.highWatermark
-		if savedNbytes <= 0 {
-			t.Fatalf("expected positive nbytes, got %d", savedNbytes)
-		}
-		c.Close()
-	}
-
-	// Phase 2: reopen from snapshot, verify nbytes matches.
-	{
-		c := newCluster(t, DataDir(dir), NumBrokers(1))
-
-		pd, ok := c.data.tps.getp(topic, 0)
-		if !ok {
-			t.Fatal("partition missing after restart")
-		}
-		if pd.highWatermark != savedHWM {
-			t.Fatalf("HWM mismatch: got %d, want %d", pd.highWatermark, savedHWM)
-		}
-		if pd.nbytes != savedNbytes {
-			t.Fatalf("nbytes mismatch after reopen: got %d, want %d", pd.nbytes, savedNbytes)
-		}
+			c := newCluster(t, DataDir(dir), NumBrokers(1))
+			pd, ok := c.data.tps.getp(topic, 0)
+			if !ok {
+				t.Fatal("partition missing after restart")
+			}
+			if pd.highWatermark != savedHWM || pd.logStartOffset != savedStart || pd.nbytes != savedNbytes {
+				t.Fatalf("after restart: got HWM %d log start %d nbytes %d, want %d %d %d",
+					pd.highWatermark, pd.logStartOffset, pd.nbytes, savedHWM, savedStart, savedNbytes)
+			}
+		})
 	}
 }
 

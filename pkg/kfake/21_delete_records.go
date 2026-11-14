@@ -113,9 +113,6 @@ func (c *Cluster) deleteRecords(pd *partData, offset int64) (int64, *kerr.Error)
 	if to <= pd.logStartOffset {
 		return pd.logStartOffset, nil
 	}
-	// logStartOffset is not persisted live. On crash recovery without a
-	// snapshot it resets to 0, matching real Kafka unclean leader
-	// election. The snapshot captures it on clean shutdown.
 	pd.logStartOffset = to
 	c.trimLeft(pd)
 	return to, nil

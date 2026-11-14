@@ -241,6 +241,12 @@ type (
 		Segments         []persistSegmentInfo `json:"segments"`
 	}
 
+	// persistLogStart is a partition's log_start.json, the log start
+	// offset as DeleteRecords or retention last left it.
+	persistLogStart struct {
+		LogStartOffset int64 `json:"log_start_offset"`
+	}
+
 	persistAbortedTxn struct {
 		ProducerID  int64 `json:"producer_id"`
 		FirstOffset int64 `json:"first_offset"`
@@ -1222,18 +1228,63 @@ func (c *Cluster) loadPartition(fsys fs, dir, topic string, part int32, pd *part
 	}
 	slices.Sort(segFiles)
 
-	// Try using snapshot for fast startup
-	if snapData != nil && len(segFiles) > 0 {
+	// Try using snapshot for fast startup. A partition whose records
+	// were all deleted has a snapshot and no segment files.
+	loaded := false
+	if snapData != nil {
 		var snap persistPartSnapshot
 		if err := json.Unmarshal(snapData, &snap); err == nil && snap.Version <= currentPersistVersion {
 			if snapshotMatchesSegments(snap, segFiles, fsys, pdir) {
-				return c.loadPartitionFromSnapshot(pd, snap, segFiles, fsys, pdir)
+				if err := c.loadPartitionFromSnapshot(pd, snap, segFiles, fsys, pdir); err != nil {
+					return err
+				}
+				loaded = true
 			}
 		}
 	}
 
 	// Full replay - scan all segments
-	return c.loadPartitionFullReplay(pd, segFiles, fsys, pdir, crashAbortedMu, crashAbortedPIDs)
+	if !loaded {
+		if err := c.loadPartitionFullReplay(pd, segFiles, fsys, pdir, crashAbortedMu, crashAbortedPIDs); err != nil {
+			return err
+		}
+	}
+
+	// A crash leaves the log start offset DeleteRecords or retention last
+	// wrote newer than the snapshot's or the first batch's. Kafka likewise
+	// restores it from a checkpoint.
+	var ls persistLogStart
+	if found, err := readJSONFile(fsys, filepath.Join(pdir, logStartFile), &ls); err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d: %v", topic, part, err)
+	} else if found && ls.LogStartOffset > pd.logStartOffset {
+		if !pd.hasBatches() { // every record was deleted: the log ends where it starts
+			pd.highWatermark = max(pd.highWatermark, ls.LogStartOffset)
+		}
+		pd.logStartOffset = min(ls.LogStartOffset, pd.highWatermark)
+		pd.recalculateLSO()
+	}
+	if pd.hasBatches() {
+		c.dropBelowLogStart(pd)
+	}
+	return nil
+}
+
+const logStartFile = "log_start.json"
+
+// persistLogStart writes the log start offset to log_start.json, for a
+// restart after a crash: a snapshot has it only from a clean shutdown.
+func (c *Cluster) persistLogStart(pd *partData) {
+	if !c.persist() {
+		return
+	}
+	pdir := partDir(c.storageDir, pd.t, pd.p)
+	err := c.fs.MkdirAll(pdir, 0o755)
+	if err == nil {
+		err = writeJSONFile(c.fs, filepath.Join(pdir, logStartFile), persistLogStart{pd.logStartOffset})
+	}
+	if err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "persist log start %s-%d: %v", pd.t, pd.p, err)
+	}
 }
 
 func snapshotMatchesSegments(snap persistPartSnapshot, segFiles []int64, fsys fs, pdir string) bool {
@@ -1285,13 +1336,11 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	}
 	pd.pruneEmptySegments()
 
-	// Accumulate nbytes from batchMeta, skipping entries before
-	// logStartOffset (partially-trimmed segments may have stale entries).
+	// Accumulate nbytes from batchMeta. A partially-trimmed segment still
+	// holds batches below logStartOffset; loadPartition drops them, and
+	// their bytes, once the log start offset is final.
 	pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
-		finRec := m.firstOffset + int64(m.lastOffsetDelta)
-		if finRec >= pd.logStartOffset {
-			pd.nbytes += int64(m.nbytes)
-		}
+		pd.nbytes += int64(m.nbytes)
 		return true
 	})
 
@@ -1346,12 +1395,8 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 		last := &lastSeg.index[len(lastSeg.index)-1]
 		pd.highWatermark = last.firstOffset + int64(last.lastOffsetDelta) + 1
 
-		// logStartOffset: lossy reconstruction. The true value
-		// (set by DeleteRecords) is only in the snapshot. On full
-		// replay, the first batch's offset is a conservative lower
-		// bound - the true logStartOffset may point into the middle
-		// of this batch, so some "deleted" records may reappear.
-		// This matches Kafka unclean leader election behavior.
+		// logStartOffset: the first batch's offset is a lower bound,
+		// which loadPartition raises to what log_start.json has.
 		pd.logStartOffset = first.firstOffset
 
 		// epoch: use the last batch's epoch (highest seen).

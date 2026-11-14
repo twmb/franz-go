@@ -568,8 +568,18 @@ func (pd *partData) searchOffset(o int64) (segIdx, metaIdx int, found, atEnd boo
 	return si, mi, true, false
 }
 
+// trimLeft drops what lies below the log start offset after it moves. We
+// save the log start offset before we delete any segment file, so a crash
+// never restarts the log below it.
 func (c *Cluster) trimLeft(pd *partData) {
-	// Trim batchMeta segments, deleting fully-trimmed segment + index files.
+	c.persistLogStart(pd)
+	c.dropBelowLogStart(pd)
+	pd.recalculateLSO()
+}
+
+// dropBelowLogStart drops the batches below the log start offset from the
+// index, and deletes the segment and index files left with none.
+func (c *Cluster) dropBelowLogStart(pd *partData) {
 	pdir := partDir(c.storageDir, pd.t, pd.p)
 outer:
 	for len(pd.segments) > 0 {
@@ -598,7 +608,6 @@ outer:
 	}
 	pd.rebuildMaxTimestampMeta()
 	pd.trimAbortedTxns()
-	c.shareGroups.logStartMoved(pd)
 }
 
 // legacyOffsetsBefore answers ListOffsets v0 the way a broker that still
@@ -665,19 +674,17 @@ func (pd *partData) closeAllFiles(doSync bool) {
 }
 
 // recalculateLSO recalculates the last stable offset from uncommittedPIDs.
-// LSO = min of all uncommittedPIDs values, or HWM if empty.
+// LSO = min of all uncommittedPIDs values, or HWM if empty. Like Kafka, we
+// never put it below the log start offset: a read_committed consumer
+// listing the latest offset must get one it can fetch.
 func (pd *partData) recalculateLSO() {
-	if len(pd.uncommittedPIDs) == 0 {
-		pd.lastStableOffset = pd.highWatermark
-		return
-	}
 	lso := pd.highWatermark
 	for _, off := range pd.uncommittedPIDs {
 		if off < lso {
 			lso = off
 		}
 	}
-	pd.lastStableOffset = lso
+	pd.lastStableOffset = max(lso, pd.logStartOffset)
 }
 
 /////////////
@@ -1537,11 +1544,28 @@ func (pd *partData) isBatchAborted(batch *partBatch) bool {
 
 // compact removes superseded records from a compactable partition.
 // The last batch is treated as the active segment and is never compacted.
+// Like Kafka, we never move the log start offset here: a fetch below the
+// first surviving batch reads from that batch.
 func (c *Cluster) compact(pd *partData, topic string) {
 	if !pd.hasNBatches(2) { // need at least 2 batches: compaction keeps the last batch unconditionally
 		return
 	}
 	total := pd.totalBatches()
+
+	// Kafka cleans neither the active segment nor at or past the LSO. A
+	// record in an open transaction must not supersede a committed one:
+	// the transaction can still abort.
+	var cleanableEnd int
+	pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
+		if cleanableEnd == total-1 || m.firstOffset+int64(m.lastOffsetDelta) >= pd.lastStableOffset {
+			return false
+		}
+		cleanableEnd++
+		return true
+	})
+	if cleanableEnd == 0 {
+		return
+	}
 
 	// Read delete.retention.ms from topic config, falling back to default.
 	deleteRetentionMs := int64(86400000)
@@ -1554,10 +1578,8 @@ func (c *Cluster) compact(pd *partData, topic string) {
 	}
 	now := time.Now().UnixMilli()
 
-	// Cleanable range is all batches except the last (active) batch.
 	// We stream batches from disk in each pass to avoid holding all
 	// decoded batches in memory at once.
-	cleanableEnd := total - 1
 
 	// Pass 1: stream batches to build key => highest offset map.
 	keyOffsets := make(map[string]int64)
@@ -1674,23 +1696,30 @@ func (c *Cluster) compact(pd *partData, topic string) {
 	}
 	kept = filtered
 
-	// Read the last (active) batch - always kept unconditionally.
-	lastSeg := &pd.segments[len(pd.segments)-1]
-	lastIdx := len(lastSeg.index) - 1
-	lastBatch, err := c.readBatchFull(pd, len(pd.segments)-1, &lastSeg.index[lastIdx])
-	if err != nil {
-		c.cfg.logger.Logf(LogLevelWarn, "compact %s-%d: read last batch: %v", pd.t, pd.p, err)
+	// The batches past the cleanable range are kept as they are.
+	n = 0
+	pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
+		n++
+		if n <= cleanableEnd {
+			return true
+		}
+		batch, err := c.readBatchFull(pd, si, m)
+		if err != nil {
+			c.cfg.logger.Logf(LogLevelWarn, "compact %s-%d: read uncleanable batch: %v", pd.t, pd.p, err)
+			ok = false
+			return false
+		}
+		kept = append(kept, batch)
+		return true
+	})
+	if !ok {
 		return
 	}
-	kept = append(kept, lastBatch)
 
 	// Rebuild partition metadata.
 	pd.nbytes = 0
 	for _, b := range kept {
 		pd.nbytes += int64(b.nbytes)
-	}
-	if len(kept) > 0 {
-		pd.logStartOffset = kept[0].FirstOffset
 	}
 
 	// Rebuild segments and batchMeta from compacted batches.

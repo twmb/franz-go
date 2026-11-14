@@ -5703,7 +5703,8 @@ const tombstoneVal = "<tombstone>"
 
 // TestCompact drives log compaction. Every batch is one ProduceSync, so a
 // batch of several records lands on the wire as one record batch; the last
-// batch is the active segment, which compaction never touches.
+// batch is the active segment, which compaction never touches. Compaction
+// never moves the log start offset.
 func TestCompact(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -5711,6 +5712,9 @@ func TestCompact(t *testing.T) {
 		configs   map[string]string
 		batches   [][]compactRec
 		again     [][]compactRec // produced after the first Compact, then compacted again
+		txn       [][]compactRec // produced in a transaction open across Compact, which aborts after it
+		after     [][]compactRec // produced while txn is open
+		keyless   bool           // the topic turns compacted after batches, so a batch can lack a key
 		at        kgo.Offset
 		want      map[string]string
 		wantFirst string // key=value of the first record read, for a case that pins the order
@@ -5721,6 +5725,15 @@ func TestCompact(t *testing.T) {
 			batches: [][]compactRec{{{"a", "1"}}, {{"b", "2"}}, {{"a", "3"}}, {{"c", "4"}}, {{"b", "5"}}},
 			at:      kgo.NewOffset().AtStart(),
 			want:    map[string]string{"a": "3", "b": "5", "c": "4"},
+		},
+		{
+			// A record written before the topic turned compacted can
+			// lack a key, and compaction drops it.
+			name:    "null-key",
+			keyless: true,
+			batches: [][]compactRec{{{"a", "1"}}, {{"", "no-key"}}, {{"b", "2"}}},
+			at:      kgo.NewOffset().AtStart(),
+			want:    map[string]string{"a": "1", "b": "2"},
 		},
 		{
 			// A topic of one batch is all active segment: compaction is a no-op.
@@ -5769,6 +5782,17 @@ func TestCompact(t *testing.T) {
 			at:      kgo.NewOffset().AtStart(),
 			want:    map[string]string{"a": "v3", "b": "v1", "c": "v1"},
 		},
+		{
+			// Nothing at or past the LSO is cleaned: the open
+			// transaction's record must not supersede the committed
+			// one, which survives the abort.
+			name:    "open-txn",
+			batches: [][]compactRec{{{"a", "committed"}}},
+			txn:     [][]compactRec{{{"a", "aborted"}}},
+			after:   [][]compactRec{{{"b", "x"}}, {{"c", "active"}}},
+			at:      kgo.NewOffset().AtStart(),
+			want:    map[string]string{"a": "committed", "b": "x", "c": "active"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -5777,12 +5801,15 @@ func TestCompact(t *testing.T) {
 			cl := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
 
 			configs := map[string]string{"cleanup.policy": "compact"}
+			if tc.keyless {
+				configs["cleanup.policy"] = "delete"
+			}
 			maps.Copy(configs, tc.configs)
 			if err := c.CreateTopic(topic, 1, configs); err != nil {
 				t.Fatal(err)
 			}
 
-			produce := func(batches [][]compactRec) {
+			produce := func(cl *kgo.Client, batches [][]compactRec) {
 				for _, batch := range batches {
 					var rs []*kgo.Record
 					for _, cr := range batch {
@@ -5798,16 +5825,37 @@ func TestCompact(t *testing.T) {
 					produceSync(t, cl, rs...)
 				}
 			}
-			produce(tc.batches)
+			produce(cl, tc.batches)
+			if tc.keyless {
+				c.admin(func() { c.data.tcfgs[topic]["cleanup.policy"] = kmsg.StringPtr("compact") })
+			}
+			var txn *kgo.Client
+			if tc.txn != nil {
+				txn = newPlainClient(t, c, kgo.TransactionalID(topic), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+				if err := txn.BeginTransaction(); err != nil {
+					t.Fatal(err)
+				}
+				produce(txn, tc.txn)
+				produce(cl, tc.after)
+			}
 			c.Compact()
+			if txn != nil {
+				if err := txn.EndTransaction(context.Background(), kgo.TryAbort); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if tc.again != nil {
-				produce(tc.again)
+				produce(cl, tc.again)
 				c.Compact()
+			}
+			if start := c.PartitionInfo(topic, 0).LogStartOffset; start != 0 {
+				t.Fatalf("log start offset %d after compaction, want 0", start)
 			}
 
 			consumer := newPlainClient(t, c,
 				kgo.ConsumeTopics(topic),
 				kgo.ConsumeResetOffset(tc.at),
+				kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 			)
 			records := consumeN(t, consumer, len(tc.want), 5*time.Second)
 			got := make(map[string]string)
@@ -5817,6 +5865,9 @@ func TestCompact(t *testing.T) {
 					v = tombstoneVal
 				}
 				got[string(r.Key)] = v
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got keys %v, want %v", got, tc.want)
 			}
 			for k, wv := range tc.want {
 				if got[k] != wv {
