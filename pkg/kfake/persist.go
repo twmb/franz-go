@@ -1672,8 +1672,10 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 		switch meta.Type {
 		case "meta848":
 			g.typ = "consumer"
-			g.assignorName = meta.Assignor
 			g.groupEpoch = meta.GroupEpoch
+			// A group without restored members is empty, and an
+			// empty group's assignment epoch is its group epoch.
+			g.targetAssignmentEpoch = meta.GroupEpoch
 			g.consumerMembers = make(map[string]*consumerMember)
 			g.partitionEpochs = make(map[uuid]map[int32]partitionOwner)
 		default:
@@ -2199,6 +2201,7 @@ type (
 		Epoch                int32                    `json:"epoch"`
 		PrevEpoch            int32                    `json:"prevEpoch"`
 		Topics               []string                 `json:"topics"`
+		Regex                string                   `json:"regex,omitempty"`
 		Reconciled           map[uuid][]int32         `json:"reconciled"`
 		PendingRevoke        map[uuid][]int32         `json:"pendingRevoke,omitempty"`
 		Target               map[uuid][]int32         `json:"target"`
@@ -2288,6 +2291,7 @@ func (c *Cluster) saveSessionState() error {
 					Epoch:                m.memberEpoch,
 					PrevEpoch:            m.previousMemberEpoch,
 					Topics:               m.subscribedTopics,
+					Regex:                m.subscribedRegexSource,
 					Reconciled:           m.lastReconciledSent,
 					PendingRevoke:        m.partitionsPendingRevocation,
 					Target:               m.targetAssignment,

@@ -2270,14 +2270,13 @@ func TestListOffsetsReadCommittedDuringTxn(t *testing.T) {
 }
 
 // TestTxnAbortDiscardsOffsets verifies that offset commits staged in a
-// transaction are discarded when the transaction is aborted, and that a
+// transaction are discarded when the transaction is aborted, or when an
+// OffsetDelete of the partition comes before the commit, and that a
 // regular commit after a staged one keeps its offset when the transaction
 // commits.
 func TestTxnAbortDiscardsOffsets(t *testing.T) {
 	t.Parallel()
 	topic := "txn-abort-offsets"
-	group := "txn-abort-group"
-	txnID := "txn-abort-offsets-id"
 	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -2293,103 +2292,142 @@ func TestTxnAbortDiscardsOffsets(t *testing.T) {
 	// Use raw protocol for the full transactional offset commit flow.
 	rawCl := newPlainClient(t, c)
 
-	// InitProducerID.
-	initReq := kmsg.NewInitProducerIDRequest()
-	initReq.TransactionalID = &txnID
-	initReq.TransactionTimeoutMillis = 60000
-	initResp, err := initReq.RequestWith(ctx, rawCl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if initResp.ErrorCode != 0 {
-		t.Fatal(kerr.ErrorForCode(initResp.ErrorCode))
-	}
-	pid := initResp.ProducerID
-	epoch := initResp.ProducerEpoch
+	for _, tc := range []struct {
+		name         string
+		offsetDelete bool // delete the partition's offset, then commit
+	}{
+		{name: "abort"},
+		{name: "offset-delete", offsetDelete: true},
+	} {
+		group := "txn-abort-group-" + tc.name
+		txnID := "txn-abort-offsets-id-" + tc.name
 
-	// AddOffsetsToTxn.
-	addReq := kmsg.NewAddOffsetsToTxnRequest()
-	addReq.TransactionalID = txnID
-	addReq.ProducerID = pid
-	addReq.ProducerEpoch = epoch
-	addReq.Group = group
-	addResp, err := addReq.RequestWith(ctx, rawCl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if addResp.ErrorCode != 0 {
-		t.Fatal(kerr.ErrorForCode(addResp.ErrorCode))
-	}
+		// The group must exist for OffsetDelete: an admin commit
+		// creates it.
+		if tc.offsetDelete {
+			if _, err := kadm.NewClient(rawCl).CommitOffsets(ctx, group, kadm.OffsetsFromRecords(kgo.Record{Topic: topic, Offset: 1})); err != nil {
+				t.Fatalf("%s: admin commit: %v", tc.name, err)
+			}
+		}
 
-	// TxnOffsetCommit: stage offset 5 for the group.
-	commitReq := kmsg.NewTxnOffsetCommitRequest()
-	commitReq.TransactionalID = txnID
-	commitReq.Group = group
-	commitReq.ProducerID = pid
-	commitReq.ProducerEpoch = epoch
-	commitReq.Generation = -1
-	ct := kmsg.NewTxnOffsetCommitRequestTopic()
-	ct.Topic, ct.TopicID = topic, c.TopicInfo(topic).TopicID
-	cp := kmsg.NewTxnOffsetCommitRequestTopicPartition()
-	cp.Partition = 0
-	cp.Offset = 5
-	ct.Partitions = append(ct.Partitions, cp)
-	commitReq.Topics = append(commitReq.Topics, ct)
+		// InitProducerID.
+		initReq := kmsg.NewInitProducerIDRequest()
+		initReq.TransactionalID = &txnID
+		initReq.TransactionTimeoutMillis = 60000
+		initResp, err := initReq.RequestWith(ctx, rawCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if initResp.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(initResp.ErrorCode))
+		}
+		pid := initResp.ProducerID
+		epoch := initResp.ProducerEpoch
 
-	commitResp, err := commitReq.RequestWith(ctx, rawCl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if commitResp.Topics[0].Partitions[0].ErrorCode != 0 {
-		t.Fatal(kerr.ErrorForCode(commitResp.Topics[0].Partitions[0].ErrorCode))
-	}
+		// AddOffsetsToTxn.
+		addReq := kmsg.NewAddOffsetsToTxnRequest()
+		addReq.TransactionalID = txnID
+		addReq.ProducerID = pid
+		addReq.ProducerEpoch = epoch
+		addReq.Group = group
+		addResp, err := addReq.RequestWith(ctx, rawCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if addResp.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(addResp.ErrorCode))
+		}
 
-	// ABORT the transaction.
-	endReq := kmsg.NewEndTxnRequest()
-	endReq.TransactionalID = txnID
-	endReq.ProducerID = pid
-	endReq.ProducerEpoch = epoch
-	endReq.Commit = false
-	endResp, err := endReq.RequestWith(ctx, rawCl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if endResp.ErrorCode != 0 {
-		t.Fatal(kerr.ErrorForCode(endResp.ErrorCode))
-	}
+		// TxnOffsetCommit: stage offset 5 for the group.
+		commitReq := kmsg.NewTxnOffsetCommitRequest()
+		commitReq.TransactionalID = txnID
+		commitReq.Group = group
+		commitReq.ProducerID = pid
+		commitReq.ProducerEpoch = epoch
+		commitReq.Generation = -1
+		ct := kmsg.NewTxnOffsetCommitRequestTopic()
+		ct.Topic, ct.TopicID = topic, c.TopicInfo(topic).TopicID
+		cp := kmsg.NewTxnOffsetCommitRequestTopicPartition()
+		cp.Partition = 0
+		cp.Offset = 5
+		ct.Partitions = append(ct.Partitions, cp)
+		commitReq.Topics = append(commitReq.Topics, ct)
 
-	// Verify offsets were NOT committed to the group. The group was never
-	// created, because the abort discarded the staged offsets.
-	if o, ok := groupCommits(c, group)[topic][0]; ok {
-		t.Errorf("expected no committed offset after abort, got %d", o.Offset)
-	}
+		commitResp, err := commitReq.RequestWith(ctx, rawCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if commitResp.Topics[0].Partitions[0].ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(commitResp.Topics[0].Partitions[0].ErrorCode))
+		}
 
-	// The next transaction stages offset 3 (TxnOffsetCommit v5+ adds
-	// the group), then a regular commit sets 4, then the transaction
-	// commits: the newer regular commit stays.
-	commitReq.ProducerEpoch = endResp.ProducerEpoch
-	commitReq.Topics[0].Partitions[0].Offset = 3
-	if commitResp, err = commitReq.RequestWith(ctx, rawCl); err != nil {
-		t.Fatal(err)
-	}
-	if code := commitResp.Topics[0].Partitions[0].ErrorCode; code != 0 {
-		t.Fatal(kerr.ErrorForCode(code))
-	}
-	var regular kadm.Offsets
-	regular.Add(kadm.Offset{Topic: topic, Partition: 0, At: 4, LeaderEpoch: -1})
-	if err := kadm.NewClient(rawCl).CommitAllOffsets(ctx, group, regular); err != nil {
-		t.Fatal(err)
-	}
-	endReq.ProducerEpoch = endResp.ProducerEpoch
-	endReq.Commit = true
-	if endResp, err = endReq.RequestWith(ctx, rawCl); err != nil {
-		t.Fatal(err)
-	}
-	if endResp.ErrorCode != 0 {
-		t.Fatal(kerr.ErrorForCode(endResp.ErrorCode))
-	}
-	if o := groupCommits(c, group)[topic][0]; o.Offset != 4 {
-		t.Errorf("expected the regular commit's offset 4 after the transaction commits, got %d", o.Offset)
+		if tc.offsetDelete {
+			del := kmsg.NewPtrOffsetDeleteRequest()
+			del.Group = group
+			dt := kmsg.NewOffsetDeleteRequestTopic()
+			dt.Topic = topic
+			dt.Partitions = append(dt.Partitions, kmsg.NewOffsetDeleteRequestTopicPartition())
+			del.Topics = append(del.Topics, dt)
+			delResp, err := del.RequestWith(ctx, rawCl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if delResp.ErrorCode != 0 || delResp.Topics[0].Partitions[0].ErrorCode != 0 {
+				t.Fatalf("%s: offset delete: %+v", tc.name, delResp)
+			}
+		}
+
+		// End the transaction: abort, or commit after the delete.
+		endReq := kmsg.NewEndTxnRequest()
+		endReq.TransactionalID = txnID
+		endReq.ProducerID = pid
+		endReq.ProducerEpoch = epoch
+		endReq.Commit = tc.offsetDelete
+		endResp, err := endReq.RequestWith(ctx, rawCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if endResp.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(endResp.ErrorCode))
+		}
+
+		// Verify offsets were NOT committed to the group. Without the
+		// delete, the abort discarded the staged offset.
+		if o, ok := groupCommits(c, group)[topic][0]; ok {
+			t.Errorf("%s: expected no committed offset, got %d", tc.name, o.Offset)
+		}
+		if tc.offsetDelete {
+			continue
+		}
+
+		// After the abort, the next transaction stages offset 3
+		// (TxnOffsetCommit v5+ adds the group), then a regular commit
+		// sets 4, then the transaction commits: the newer regular
+		// commit stays.
+		commitReq.ProducerEpoch = endResp.ProducerEpoch
+		commitReq.Topics[0].Partitions[0].Offset = 3
+		if commitResp, err = commitReq.RequestWith(ctx, rawCl); err != nil {
+			t.Fatal(err)
+		}
+		if code := commitResp.Topics[0].Partitions[0].ErrorCode; code != 0 {
+			t.Fatal(kerr.ErrorForCode(code))
+		}
+		var regular kadm.Offsets
+		regular.Add(kadm.Offset{Topic: topic, Partition: 0, At: 4, LeaderEpoch: -1})
+		if err := kadm.NewClient(rawCl).CommitAllOffsets(ctx, group, regular); err != nil {
+			t.Fatal(err)
+		}
+		endReq.ProducerEpoch = endResp.ProducerEpoch
+		endReq.Commit = true
+		if endResp, err = endReq.RequestWith(ctx, rawCl); err != nil {
+			t.Fatal(err)
+		}
+		if endResp.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(endResp.ErrorCode))
+		}
+		if o := groupCommits(c, group)[topic][0]; o.Offset != 4 {
+			t.Errorf("expected the regular commit's offset 4 after the transaction commits, got %d", o.Offset)
+		}
 	}
 }
 

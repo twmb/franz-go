@@ -141,7 +141,7 @@ func TestGroupMaxSizeClassic(t *testing.T) {
 }
 
 // TestGroupMaxSize848 verifies that a 848 group rejects new members
-// when group.max.size is reached.
+// when group.consumer.max.size is reached.
 // Derived via LLM from testNewMemberIsRejectedWithMaximumMembersIsReached.
 func TestGroupMaxSize848(t *testing.T) {
 	t.Parallel()
@@ -150,7 +150,7 @@ func TestGroupMaxSize848(t *testing.T) {
 
 	c := newCluster(t, kfake.NumBrokers(1),
 		kfake.SeedTopics(2, topic),
-		kfake.BrokerConfigs(map[string]string{"group.max.size": "1"}),
+		kfake.BrokerConfigs(map[string]string{"group.consumer.max.size": "1"}),
 	)
 
 	// First consumer joins successfully.
@@ -162,6 +162,7 @@ func TestGroupMaxSize848(t *testing.T) {
 	raw := newClient848(t, c)
 	hbReq := kmsg.NewPtrConsumerGroupHeartbeatRequest()
 	hbReq.Group = group
+	hbReq.MemberID = "second-member"
 	hbReq.MemberEpoch = 0
 	hbReq.RebalanceTimeoutMillis = 45000
 	hbReq.SubscribedTopicNames = []string{topic}

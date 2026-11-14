@@ -760,7 +760,7 @@ func TestPersistPIDEndTxAndTimeout(t *testing.T) {
 }
 
 // TestPersistMeta848GroupReplay verifies that 848 consumer group metadata
-// (type, assignor, groupEpoch) survives a restart via groups.log replay.
+// (type and groupEpoch) survives a restart via groups.log replay.
 func TestPersistMeta848GroupReplay(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -775,7 +775,6 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 		c.groups.gs["test-848-group"] = g
 
 		g.typ = "consumer"
-		g.assignorName = "uniform"
 		g.groupEpoch = 7
 
 		// Persist the 848 metadata entry.
@@ -812,11 +811,13 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 	if g2.typ != "consumer" {
 		t.Fatalf("group type: expected consumer, got %s", g2.typ)
 	}
-	if g2.assignorName != "uniform" {
-		t.Fatalf("assignor: expected uniform, got %s", g2.assignorName)
-	}
 	if g2.groupEpoch != 7 {
 		t.Fatalf("groupEpoch: expected 7, got %d", g2.groupEpoch)
+	}
+	// The group restored no members, and an empty group's assignment
+	// epoch is its group epoch.
+	if g2.targetAssignmentEpoch != 7 {
+		t.Fatalf("targetAssignmentEpoch: expected 7, got %d", g2.targetAssignmentEpoch)
 	}
 
 	// Verify the commit coexists.

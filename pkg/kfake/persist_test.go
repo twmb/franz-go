@@ -2000,7 +2000,8 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 // TestPersistGroupPhantomMemberExpiry848 is the KIP-848 counterpart to
 // TestPersistGroupPhantomMemberExpiry. It verifies that 848 consumer
 // group members whose sessions have expired across repeated restarts
-// are correctly evicted via persisted LastHeartbeat.
+// are correctly evicted via persisted LastHeartbeat, and that a member
+// restored alive keeps its regex subscription.
 //
 // Same three-phase design: phase 2's intermediate restart advances
 // shutdownAt so that phase 3 can distinguish persisted LastHeartbeat
@@ -2050,6 +2051,7 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 		consCl := newPlainClient(t, c,
 			kgo.ServerSideBalancer(),
 			kgo.ConsumeTopics(topic),
+			kgo.ConsumeRegex(),
 			kgo.ConsumerGroup(group),
 			kgo.FetchMaxWait(50*time.Millisecond),
 			kgo.RetryTimeout(50*time.Millisecond),
@@ -2084,6 +2086,13 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 		if members != 1 {
 			t.Fatalf("phase 2: expected 1 phantom member, got %d", members)
 		}
+		c.admin(func() {
+			for _, m := range c.groups.gs[group].consumerMembers {
+				if m.subscribedTopicRegex == nil || !m.subscribedTopicRegex.MatchString(topic) {
+					t.Errorf("phase 2: the restored member lost its regex subscription %q", m.subscribedRegexSource)
+				}
+			}
+		})
 		c.Close()
 	}
 
@@ -2108,6 +2117,21 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 		if members != 0 {
 			t.Fatalf("phase 3: expected 0 members (phantom expired), got %d", members)
 		}
+		// The expired member's partition is free again, and the now
+		// empty group's assignment epoch is its group epoch.
+		c.admin(func() {
+			g := c.groups.gs[group]
+			if g == nil {
+				t.Error("phase 3: the group is missing")
+				return
+			}
+			if n := g.countPartitionEpochs(); n != 0 {
+				t.Errorf("phase 3: the expired member still owns %d partitions", n)
+			}
+			if g.targetAssignmentEpoch != g.groupEpoch {
+				t.Errorf("phase 3: assignment epoch %d, want the group epoch %d", g.targetAssignmentEpoch, g.groupEpoch)
+			}
+		})
 	}
 }
 

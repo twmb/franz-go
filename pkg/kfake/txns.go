@@ -534,22 +534,15 @@ func (pids *pids) doTxnOffsetCommit(creq *clientReq) kmsg.Response {
 		pids.c.groups.gs[req.Group] = g
 	}
 	if g != nil {
-		if req.Version >= 3 && (req.MemberID != "" || req.Generation != -1) {
-			var errCode int16
-			if err := g.validateInstanceID(req.InstanceID, req.MemberID); err != nil {
-				errCode = err.Code
-			} else {
-				errCode = g.validateMemberGeneration(req.MemberID, req.Generation)
-				// Before v6, a stale member epoch was reported as
-				// ILLEGAL_GENERATION (KIP-1319).
-				if errCode == kerr.StaleMemberEpoch.Code && req.Version < 6 {
-					errCode = kerr.IllegalGeneration.Code
-				}
-			}
-			if errCode != 0 {
-				doneall(errCode)
-				return resp
-			}
+		errCode := g.validateMemberGeneration(req.MemberID, req.InstanceID, req.Generation, req.Topics)
+		// Before v6, a stale member epoch was reported as
+		// ILLEGAL_GENERATION (KIP-1319).
+		if errCode == kerr.StaleMemberEpoch.Code && req.Version < 6 {
+			errCode = kerr.IllegalGeneration.Code
+		}
+		if errCode != 0 {
+			doneall(errCode)
+			return resp
 		}
 	} else if req.Generation >= 0 {
 		// A group that does not exist is GROUP_ID_NOT_FOUND from v6;

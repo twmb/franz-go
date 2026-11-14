@@ -129,6 +129,16 @@ func Test848GroupTypeIsConsumer(t *testing.T) {
 	if _, ok := classicListed[group]; ok {
 		t.Fatalf("group %s should not appear in classic-type list", group)
 	}
+
+	// DescribeConsumerGroups names the assigned topics.
+	described, err := adm.DescribeConsumerGroups(ctx, group)
+	if err != nil {
+		t.Fatalf("describe consumer groups failed: %v", err)
+	}
+	dg := described[group]
+	if got := dg.AssignedPartitions(); len(got) != 1 || len(got[topic]) != 1 {
+		t.Errorf("described assignment %v, want partition 0 of %s", got, topic)
+	}
 }
 
 // Test848DeleteGroup verifies that deleting a non-empty consumer group
@@ -450,33 +460,79 @@ func Test848RangeAssignorContiguousBlocks(t *testing.T) {
 	poll1FromEachClient(t, 10*time.Second, c1, c2)
 }
 
-// Test848UnsupportedAssignor verifies that an unknown server assignor
-// name is rejected with UnsupportedAssignor.
-func Test848UnsupportedAssignor(t *testing.T) {
+// Test848HeartbeatValidation verifies that we reject a malformed
+// ConsumerGroupHeartbeat with Kafka's error, and that a rejected heartbeat
+// creates no group.
+func Test848HeartbeatValidation(t *testing.T) {
 	t.Parallel()
-	group := "g848-bad-assignor"
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t"))
-
-	// Send a raw ConsumerGroupHeartbeat with an unknown assignor.
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t"), BrokerConfigs(map[string]string{"group.consumer.max.size": "1"}))
 	cl := newClient848(t, c)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req := kmsg.NewConsumerGroupHeartbeatRequest()
-	req.Group = group
-	req.MemberEpoch = 0
-	req.RebalanceTimeoutMillis = 5000
-	req.ServerAssignor = new("nonexistent")
-	req.SubscribedTopicNames = []string{"t"}
-	// Joins must carry an empty (non-null) owned-partitions list; null is
-	// rejected with INVALID_REQUEST before assignor validation runs.
-	req.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
-	resp, err := req.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*kmsg.ConsumerGroupHeartbeatRequest)
+		want   *kerr.Error
+	}{
+		{"unsupported assignor", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.ServerAssignor = new("nonexistent") }, kerr.UnsupportedAssignor},
+		{"empty member id", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.MemberID = "" }, kerr.InvalidRequest},
+		{"empty group id", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.Group = "" }, kerr.InvalidRequest},
+		{"empty instance id", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.InstanceID = new("") }, kerr.InvalidRequest},
+		{"join without rebalance timeout", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.RebalanceTimeoutMillis = -1 }, kerr.InvalidRequest},
+		{"join without subscription", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.SubscribedTopicNames = nil }, kerr.InvalidRequest},
+		{"join with null owned partitions", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.Topics = nil }, kerr.InvalidRequest},
+		{"epoch below -2", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.MemberEpoch = -3 }, kerr.InvalidRequest},
+		{"invalid regex", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.SubscribedTopicRegex = new("(") }, kerr.InvalidRegularExpression},
+		{"heartbeat to a missing group", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.MemberEpoch = 3 }, kerr.GroupIDNotFound},
+	} {
+		req := kmsg.NewConsumerGroupHeartbeatRequest()
+		req.Group = "g848-validation-" + strings.ReplaceAll(tc.name, " ", "-")
+		req.MemberID = "m"
+		req.MemberEpoch = 0
+		req.RebalanceTimeoutMillis = 5000
+		req.SubscribedTopicNames = []string{"t"}
+		req.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+		tc.mutate(&req)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatalf("%s: request failed: %v", tc.name, err)
+		}
+		if err := kerr.ErrorForCode(resp.ErrorCode); !errors.Is(err, tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, err, tc.want)
+		}
+		if g := c.GroupInfo(req.Group); g != nil {
+			t.Errorf("%s: the rejected heartbeat created group %q", tc.name, req.Group)
+		}
 	}
-	if err := kerr.ErrorForCode(resp.ErrorCode); !errors.Is(err, kerr.UnsupportedAssignor) {
-		t.Fatalf("expected UnsupportedAssignor, got %v", err)
+
+	// A transaction's commit makes an empty classic group, which a
+	// rejected join leaves classic.
+	stageTxnOffset(t, c, cl, "txn", "g848-staged", "t", 9)()
+	req := kmsg.NewPtrConsumerGroupHeartbeatRequest()
+	req.Group, req.MemberID, req.RebalanceTimeoutMillis = "g848-staged", "m", 5000
+	req.SubscribedTopicRegex, req.Topics = new("("), []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+	faultReq(t, cl, 0, req)
+	onGroup(t, c, "g848-staged", func(g *group) {
+		if g.typ != "classic" {
+			t.Errorf("after a rejected join, the empty group's type is %s, want classic", g.typ)
+		}
+	})
+
+	// Like Kafka, a full group answers a member it does not know with
+	// GROUP_MAX_SIZE_REACHED, whatever the member's epoch.
+	beat := func(member string, epoch int32) int16 {
+		hb := kmsg.NewPtrConsumerGroupHeartbeatRequest()
+		hb.Group, hb.MemberID, hb.MemberEpoch, hb.RebalanceTimeoutMillis = "g848-full", member, epoch, 5000
+		hb.SubscribedTopicNames, hb.Topics = []string{"t"}, []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+		return faultReq(t, cl, 0, hb).(*kmsg.ConsumerGroupHeartbeatResponse).ErrorCode
+	}
+	if code := beat("m", 0); code != 0 {
+		t.Fatalf("join answered %v", kerr.ErrorForCode(code))
+	}
+	if code := beat("x", 3); code != kerr.GroupMaxSizeReached.Code {
+		t.Errorf("unknown member of a full group: got %v, want GROUP_MAX_SIZE_REACHED", kerr.ErrorForCode(code))
 	}
 }
 
@@ -777,8 +833,9 @@ func Test848CooperativeRevocationDuringConsumption(t *testing.T) {
 // fences a member that does not complete partition revocation in time.
 // Member B joins via raw kmsg so we control exactly when it heartbeats.
 // After a rebalance is triggered, we send B one heartbeat (gets the
-// revocation instruction and schedules the rebalance timeout), then stop.
-// The rebalance timeout fires and fences B.
+// revocation instruction and schedules the rebalance timeout), then keep
+// heartbeating without releasing anything. The heartbeats must not push
+// the timeout back: it fires and fences B.
 func Test848RebalanceTimeout(t *testing.T) {
 	t.Parallel()
 	topic := "t848-rebal-timeout"
@@ -806,6 +863,7 @@ func Test848RebalanceTimeout(t *testing.T) {
 	ctx := context.Background()
 	join := kmsg.NewConsumerGroupHeartbeatRequest()
 	join.Group = group
+	join.MemberID = "b-" + group
 	join.MemberEpoch = 0
 	join.RebalanceTimeoutMillis = 500
 	join.ServerAssignor = new("uniform")
@@ -932,14 +990,22 @@ func Test848RebalanceTimeout(t *testing.T) {
 		t.Fatalf("B full heartbeat error: %v", kerr.ErrorForCode(fullResp.ErrorCode))
 	}
 
-	// Don't send any more heartbeats for B. The rebalance timeout
-	// (500ms) should fire and fence B.
-	time.Sleep(800 * time.Millisecond)
-
-	dg := c.GroupInfo(group)
-	for _, m := range dg.Members {
-		if m.MemberID == bMemberID {
-			t.Fatalf("member B (%s) should have been fenced by rebalance timeout, but is still in group (state=%s)", bMemberID, dg.State)
+	// B keeps heartbeating, still reporting the partitions it was told
+	// to revoke. The rebalance timeout (500ms) should fire anyway and
+	// fence B, which its next heartbeat sees.
+	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
+		resp, err := full.RequestWith(ctx, raw)
+		if err != nil {
+			t.Fatalf("B heartbeat: %v", err)
+		}
+		if resp.ErrorCode == kerr.UnknownMemberID.Code {
+			break
+		}
+		if resp.ErrorCode != 0 {
+			t.Fatalf("B heartbeat error: %v", kerr.ErrorForCode(resp.ErrorCode))
+		}
+		if time.Since(start) > 2*time.Second {
+			t.Fatalf("member B (%s) is still in the group 2s after its 500ms rebalance timeout started (state=%s)", bMemberID, c.GroupInfo(group).State)
 		}
 	}
 }

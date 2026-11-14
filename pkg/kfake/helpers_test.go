@@ -175,6 +175,40 @@ func groupCommits(c *Cluster, group string) map[string]map[int32]GroupCommit {
 	return g.Commits
 }
 
+// stageTxnOffset opens a transaction for txnID, in which the group commits
+// offset for partition 0 of topic, on broker 0. It returns a function that
+// commits the transaction.
+func stageTxnOffset(t *testing.T, c *Cluster, cl *kgo.Client, txnID, group, topic string, offset int64) (commit func()) {
+	t.Helper()
+	init := kmsg.NewPtrInitProducerIDRequest()
+	init.TransactionalID = &txnID
+	init.TransactionTimeoutMillis = 60000
+	ir := faultReq(t, cl, 0, init).(*kmsg.InitProducerIDResponse)
+	add := kmsg.NewPtrAddOffsetsToTxnRequest()
+	add.TransactionalID, add.ProducerID, add.ProducerEpoch, add.Group = txnID, ir.ProducerID, ir.ProducerEpoch, group
+	ar := faultReq(t, cl, 0, add).(*kmsg.AddOffsetsToTxnResponse)
+	tc := kmsg.NewPtrTxnOffsetCommitRequest()
+	tc.TransactionalID, tc.Group, tc.ProducerID, tc.ProducerEpoch, tc.Generation = txnID, group, ir.ProducerID, ir.ProducerEpoch, -1
+	tt := kmsg.NewTxnOffsetCommitRequestTopic()
+	tt.Topic, tt.TopicID = topic, c.TopicInfo(topic).TopicID
+	tp := kmsg.NewTxnOffsetCommitRequestTopicPartition()
+	tp.Offset = offset
+	tt.Partitions = append(tt.Partitions, tp)
+	tc.Topics = append(tc.Topics, tt)
+	tr := faultReq(t, cl, 0, tc).(*kmsg.TxnOffsetCommitResponse)
+	if ir.ErrorCode != 0 || ar.ErrorCode != 0 || tr.Topics[0].Partitions[0].ErrorCode != 0 {
+		t.Fatalf("staging a txn offset: init %d, add offsets %d, txn offset commit %d", ir.ErrorCode, ar.ErrorCode, tr.Topics[0].Partitions[0].ErrorCode)
+	}
+	return func() {
+		t.Helper()
+		end := kmsg.NewPtrEndTxnRequest()
+		end.TransactionalID, end.ProducerID, end.ProducerEpoch, end.Commit = txnID, ir.ProducerID, ir.ProducerEpoch, true
+		if code := faultReq(t, cl, 0, end).(*kmsg.EndTxnResponse).ErrorCode; code != 0 {
+			t.Fatalf("end txn answered %d", code)
+		}
+	}
+}
+
 // produceShareN creates a plain client, sets share.auto.offset.reset=earliest
 // for the given group, produces n string records to the topic, and flushes.
 func produceShareN(t *testing.T, c *Cluster, topic, group string, n int) {

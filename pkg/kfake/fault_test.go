@@ -698,6 +698,15 @@ func TestFaultGroupHeartbeat(t *testing.T) {
 	if n := h.Hits(); n != 1 {
 		t.Errorf("fault fired %d times != 1", n)
 	}
+
+	// A topic a consumer group heartbeat subscribes to carries the group.
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat}, Group: "g848", Topic: "t", Err: kerr.CoordinatorLoadInProgress})
+	hb := kmsg.NewPtrConsumerGroupHeartbeatRequest()
+	hb.Group, hb.MemberID, hb.RebalanceTimeoutMillis = "g848", "m", 5000
+	hb.SubscribedTopicNames, hb.Topics = []string{"t"}, []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+	if code := faultReq(t, cl, 0, hb).(*kmsg.ConsumerGroupHeartbeatResponse).ErrorCode; code != kerr.CoordinatorLoadInProgress.Code {
+		t.Errorf("faulted subscription answered %d", code)
+	}
 }
 
 // A group selector picks one group out of a describe.

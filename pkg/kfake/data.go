@@ -919,6 +919,7 @@ var validBrokerConfigs = map[string]string{
 	"max.incremental.fetch.session.cache.slots": "",
 	"group.consumer.heartbeat.interval.ms":      "",
 	"group.consumer.session.timeout.ms":         "",
+	"group.consumer.max.size":                   "",
 	"group.max.size":                            "",
 	"group.min.session.timeout.ms":              "",
 	"group.max.session.timeout.ms":              "",
@@ -1075,6 +1076,7 @@ var configDefaults = map[string]string{
 	"max.incremental.fetch.session.cache.slots": strconv.Itoa(defMaxFetchSessionCacheSlots),
 	"group.consumer.heartbeat.interval.ms":      strconv.Itoa(defHeartbeatInterval),
 	"group.consumer.session.timeout.ms":         strconv.Itoa(defSessionTimeout),
+	"group.consumer.max.size":                   "2147483647",
 	"group.max.size":                            "2147483647",
 	"group.min.session.timeout.ms":              "6000",
 	"group.max.session.timeout.ms":              "300000",
@@ -1121,6 +1123,7 @@ var configTypes = map[string]kmsg.ConfigType{
 	"match":                                     kmsg.ConfigTypeList,
 	"metrics":                                   kmsg.ConfigTypeList,
 	"group.consumer.session.timeout.ms":         kmsg.ConfigTypeInt,
+	"group.consumer.max.size":                   kmsg.ConfigTypeInt,
 	"group.max.size":                            kmsg.ConfigTypeInt,
 	"group.min.session.timeout.ms":              kmsg.ConfigTypeInt,
 	"group.max.session.timeout.ms":              kmsg.ConfigTypeInt,
@@ -1196,25 +1199,20 @@ func (c *Cluster) segmentBytes(topic string) int64 {
 	return 100 << 20 // 100MiB default
 }
 
-func (c *Cluster) consumerHeartbeatIntervalMs() int32 {
-	return c.brokerConfigInt("group.consumer.heartbeat.interval.ms", defHeartbeatInterval)
-}
-
-func (c *Cluster) consumerSessionTimeoutMs() int32 {
-	return c.brokerConfigInt("group.consumer.session.timeout.ms", defSessionTimeout)
-}
-
 func (c *Cluster) consumerSessionTimeoutMsForGroup(group string) int32 {
-	if v := c.groupConfig(group, "consumer.session.timeout.ms"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return int32(n)
-		}
-	}
-	return c.consumerSessionTimeoutMs()
+	return c.groupConfigInt(group, "consumer.session.timeout.ms", defSessionTimeout)
+}
+
+func (c *Cluster) consumerHeartbeatIntervalMsForGroup(group string) int32 {
+	return c.groupConfigInt(group, "consumer.heartbeat.interval.ms", defHeartbeatInterval)
 }
 
 func (c *Cluster) groupMaxSize() int32 {
 	return c.brokerConfigInt("group.max.size", 2147483647)
+}
+
+func (c *Cluster) consumerGroupMaxSize() int32 {
+	return c.brokerConfigInt("group.consumer.max.size", 2147483647)
 }
 
 func (c *Cluster) groupMinSessionTimeoutMs() int32 {
@@ -1257,9 +1255,9 @@ func (c *Cluster) offsetsRetentionCheckIntervalMs() int64 {
 	return int64(c.brokerConfigInt("offsets.retention.check.interval.ms", 600000))
 }
 
-// shareGroupConfigInt returns the group's config key, falling back to the
-// broker's "group."+key and then def, as Kafka does for share groups.
-func (c *Cluster) shareGroupConfigInt(group, key string, def int) int32 {
+// groupConfigInt returns the group's config key, falling back to the
+// broker's "group."+key and then def, as Kafka does.
+func (c *Cluster) groupConfigInt(group, key string, def int) int32 {
 	if v := c.groupConfig(group, key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return int32(n)
@@ -1269,11 +1267,11 @@ func (c *Cluster) shareGroupConfigInt(group, key string, def int) int32 {
 }
 
 func (c *Cluster) shareHeartbeatIntervalMs(group string) int32 {
-	return c.shareGroupConfigInt(group, "share.heartbeat.interval.ms", defHeartbeatInterval)
+	return c.groupConfigInt(group, "share.heartbeat.interval.ms", defHeartbeatInterval)
 }
 
 func (c *Cluster) shareSessionTimeoutMs(group string) int32 {
-	return c.shareGroupConfigInt(group, "share.session.timeout.ms", 45000)
+	return c.groupConfigInt(group, "share.session.timeout.ms", 45000)
 }
 
 func (c *Cluster) shareLockSweepIntervalMs() int32 {
@@ -1281,15 +1279,15 @@ func (c *Cluster) shareLockSweepIntervalMs() int32 {
 }
 
 func (c *Cluster) shareRecordLockDurationMs(group string) int32 {
-	return c.shareGroupConfigInt(group, "share.record.lock.duration.ms", 30000)
+	return c.groupConfigInt(group, "share.record.lock.duration.ms", 30000)
 }
 
 func (c *Cluster) shareMaxDeliveryAttempts(group string) int32 {
-	return c.shareGroupConfigInt(group, "share.delivery.count.limit", 5)
+	return c.groupConfigInt(group, "share.delivery.count.limit", 5)
 }
 
 func (c *Cluster) shareMaxRecordLocks(group string) int32 {
-	return c.shareGroupConfigInt(group, "share.partition.max.record.locks", 2000)
+	return c.groupConfigInt(group, "share.partition.max.record.locks", 2000)
 }
 
 // shareRenewEnabled returns whether the group accepts renew acks
