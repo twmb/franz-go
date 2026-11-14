@@ -5647,14 +5647,20 @@ func TestShareGroupRecyclePoolAliasing(t *testing.T) {
 // Without the fix, the consumer would zombie along (consuming but
 // unable to commit) until the heartbeat loop noticed the dead session
 // up to a heartbeat interval later.
+//
+// If the rejoin's JoinGroup also returns UNKNOWN_MEMBER_ID, the group
+// removed the member, and the partitions it still owns must be lost
+// rather than kept across a rejoin under a new member ID.
 func TestCommitFatalMemberErrorTriggersRejoin(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		name string
-		err  *kerr.Error
+		name    string
+		err     *kerr.Error
+		joinErr *kerr.Error
 	}{
-		{"UnknownMemberID", kerr.UnknownMemberID},
-		{"IllegalGeneration", kerr.IllegalGeneration},
+		{"UnknownMemberID", kerr.UnknownMemberID, nil},
+		{"IllegalGeneration", kerr.IllegalGeneration, nil},
+		{"UnknownMemberIDJoin", kerr.UnknownMemberID, kerr.UnknownMemberID},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -5677,6 +5683,9 @@ func TestCommitFatalMemberErrorTriggersRejoin(t *testing.T) {
 			// Count JoinGroups to observe the rejoin; the group is
 			// stable now, so any join from here on is the rejoin.
 			joins := c.Fault(Fault{Keys: []kmsg.Key{kmsg.JoinGroup}, Observe: true, Count: -1})
+			if test.joinErr != nil {
+				c.Fault(Fault{Keys: []kmsg.Key{kmsg.JoinGroup}, Err: test.joinErr})
+			}
 			c.Fault(Fault{Keys: []kmsg.Key{kmsg.OffsetCommit}, Err: test.err})
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -5687,11 +5696,28 @@ func TestCommitFatalMemberErrorTriggersRejoin(t *testing.T) {
 				t.Fatal("timed out waiting for a rejoin after a fatal commit error")
 			}
 
+			// Losing the partitions surfaces the join error once.
+			for test.joinErr != nil {
+				err := cl.PollFetches(ctx).Err()
+				if gs, ok := errors.AsType[*kgo.ErrGroupSession](err); ok && errors.Is(gs.Err, test.joinErr) {
+					break
+				}
+				if ctx.Err() != nil {
+					t.Fatal("timed out waiting for the lost group session to surface")
+				}
+			}
+
 			// The member must fully recover: new records are consumable
-			// and committable after the rejoin.
+			// and committable after the rejoin. A lost partition
+			// resumes from the committed offset, and nothing was
+			// committed.
 			produceNStrings(t, newPlainClient(t, c), topic, nRecords)
-			if got := consumeN(t, cl, nRecords, 15*time.Second); len(got) != nRecords {
-				t.Fatalf("expected %d records after recovery, got %d", nRecords, len(got))
+			want := nRecords
+			if test.joinErr != nil {
+				want = 2 * nRecords
+			}
+			if got := consumeN(t, cl, want, 15*time.Second); len(got) != want {
+				t.Fatalf("expected %d records after recovery, got %d", want, len(got))
 			}
 			if err := cl.CommitUncommittedOffsets(context.Background()); err != nil {
 				t.Fatalf("commit after recovery: %v", err)

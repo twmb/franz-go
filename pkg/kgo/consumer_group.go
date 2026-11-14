@@ -1592,6 +1592,16 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 			g.cfg.logger.Log(LogLevelInfo, "join returned MemberIDRequired, rejoining with response's MemberID", "group", g.cfg.group, "member_id", resp.MemberID)
 			return true, "", nil, nil
 		case kerr.UnknownMemberID:
+			// The group removed us. If we still own partitions
+			// (cooperative), another member may own them now, so we
+			// return the error and manageFailWait calls onLost and
+			// clears our uncommitted offsets. Restarting the join
+			// here would let a revoke, or a commit waiting for this
+			// join, commit our old offsets under our next member ID
+			// and rewind the new owner.
+			if len(g.nowAssigned.read()) > 0 {
+				return restart, protocol, plan, err
+			}
 			g.memberGen.storeMember("")
 			g.cfg.logger.Log(LogLevelInfo, "join returned UnknownMemberID, rejoining without a member id", "group", g.cfg.group)
 			return true, "", nil, nil
@@ -4005,8 +4015,7 @@ func (g *groupConsumer) commit(
 		// while we keep consuming as a zombie, until the heartbeat
 		// loop sees the same error up to a full heartbeat interval
 		// later. Rejoin immediately instead; the join itself repairs
-		// the session (joinAndSync clears the member id and retries
-		// if the broker rejects the join with UnknownMemberID).
+		// the session (see handleJoinResp for UnknownMemberID).
 		//
 		// Classic protocol only: in 848 mode, a forced "rejoin" does
 		// not actually rejoin. The heartbeat loop treats the signal
