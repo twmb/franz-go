@@ -2510,23 +2510,21 @@ func (g *group) consumerLeave(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kms
 // the new member inherits the assignment. If the member does not rejoin
 // within the session timeout, the session timer evicts it.
 func (g *group) consumerStaticLeave(req *kmsg.ConsumerGroupHeartbeatRequest, resp *kmsg.ConsumerGroupHeartbeatResponse) *kmsg.ConsumerGroupHeartbeatResponse {
-	if e := g.validateInstanceID(req.InstanceID, req.MemberID); e != nil {
-		resp.ErrorCode = e.Code
+	// Kafka finds a static leave's member by its instance ID, which the
+	// request must carry.
+	if req.InstanceID == nil {
+		resp.ErrorCode = kerr.InvalidRequest.Code
+		resp.ErrorMessage = kmsg.StringPtr("InstanceId can't be null.")
 		return resp
 	}
-	m, ok := g.consumerMembers[req.MemberID]
-	if !ok {
+	mid, ok := g.staticMembers[*req.InstanceID]
+	m := g.consumerMembers[mid]
+	if !ok || m == nil {
 		resp.ErrorCode = kerr.UnknownMemberID.Code
 		return resp
 	}
-	resp.MemberID = &req.MemberID
-	resp.MemberEpoch = -2
-	if m.instanceID == nil {
-		// We let a dynamic member that sends epoch -2 leave fully,
-		// although Kafka answers INVALID_REQUEST.
-		g.c.cfg.logger.Logf(LogLevelInfo, "consumerStaticLeave: dynamic member sent epoch=-2; treating as full leave; group=%s member=%s",
-			g.logName(), m.memberID)
-		g.evictConsumerMember(m)
+	if mid != req.MemberID {
+		resp.ErrorCode = kerr.FencedInstanceID.Code
 		return resp
 	}
 	g.c.cfg.logger.Logf(LogLevelInfo, "consumerStaticLeave: group=%s member=%s instance=%s epoch=%d sent=%d remaining=%d",
@@ -2554,6 +2552,9 @@ func (g *group) consumerStaticLeave(req *kmsg.ConsumerGroupHeartbeatRequest, res
 	// Keep g.staticMembers[*m.instanceID] and the session timer.
 
 	g.updateConsumerStateField()
+
+	resp.MemberID = &req.MemberID
+	resp.MemberEpoch = -2
 	return resp
 }
 

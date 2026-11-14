@@ -6699,9 +6699,23 @@ func TestStaticMemberRecovery(t *testing.T) {
 			consumeN(t, cl1, 20, 10*time.Second)
 			waitStable(t, c, group, 1)
 
+			// Kafka rejects a static leave that has no instance ID.
+			leaves := c.Fault(Fault{
+				Keys:    []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
+				Observe: true,
+				Count:   -1,
+				When: func(kreq kmsg.Request) bool {
+					req := kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
+					return req.MemberEpoch == -2 && req.InstanceID != nil && *req.InstanceID == instanceID
+				},
+			})
+
 			// A static member does not send a leave on close, except
 			// under 848 where it leaves at epoch -2.
 			cl1.Close()
+			if got := leaves.Hits(); tc.use848 && got != 1 {
+				t.Fatalf("got %d static leaves carrying the instance ID, want 1", got)
+			}
 			time.Sleep(tc.gone)
 
 			newMember()
